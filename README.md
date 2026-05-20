@@ -32,14 +32,17 @@ Run `just` with no arguments to list every recipe.
 
 | Command | What it does |
 |---------|--------------|
-| `just dev` | Run the API in watch mode (rebuild + restart on change) |
-| `just run` | Run the API in release mode |
-| `just build` | Build the release binary |
+| `just dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `just dev api` or `just dev mcp` |
+| `just run <app>` | Run an app in release mode, e.g. `just run api` |
+| `just build` | Build release binaries for every app in the workspace |
 | `just test` | Run the full test suite |
 | `just cov` | Test coverage summary (per-file %) |
 | `just lint` | Clippy (strict) + format check |
 | `just fmt` | Apply rustfmt |
 | `just check` | Fast type-check (no codegen) |
+
+`build`, `test`, `cov`, `lint`, `fmt`, and `check` always operate on the whole
+workspace. Only `dev` and `run` take a binary name.
 
 ## Docker
 
@@ -50,11 +53,11 @@ run` time:
 ```bash
 docker build -t nestrs .
 
-# Run the default app (api)
+# Run the default app (api) on port 3000
 docker run --rm -p 3000:3000 nestrs
 
-# Run a different app by overriding the entrypoint
-docker run --rm -p 3000:3000 nestrs /usr/local/bin/<other-app>
+# Run the mcp app on port 3001
+docker run --rm -p 3001:3001 nestrs /usr/local/bin/mcp
 ```
 
 Adding a new app under `apps/` requires no Dockerfile change — the builder
@@ -71,9 +74,11 @@ Security defaults baked in:
 - No `HEALTHCHECK` directive — use the Kubernetes probes exposed at
   `/health/{live,ready,startup}` (the right layer for orchestrator health).
 
-## Once the API is running
+## Applications
 
-It listens on `http://0.0.0.0:3000`:
+### `api` — HTTP + GraphQL (port 3000)
+
+Started with `just dev api`. Listens on `http://0.0.0.0:3000`:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -82,6 +87,27 @@ It listens on `http://0.0.0.0:3000`:
 | `GET  /health/live` | Kubernetes liveness probe |
 | `GET  /health/ready` | Kubernetes readiness probe |
 | `GET  /health/startup` | Kubernetes startup probe |
+
+### `mcp` — Model Context Protocol server (port 3001)
+
+Started with `just dev mcp`. Exposes a Streamable-HTTP MCP server backed by
+`rmcp`, with tools declared the same way controllers are — `#[injectable]` for
+DI, then `#[tool_router]` / `#[tool]` / `#[tool_handler]` on the controller.
+
+The bundled `current_weather` tool takes GPS coordinates and queries the
+[Open-Meteo](https://open-meteo.com) public forecast API. Latitude/longitude
+bounds are declared with `validator` annotations on the params struct and
+checked at the start of the tool handler.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /mcp` | MCP Streamable-HTTP transport |
+| `GET  /health/live` | Kubernetes liveness probe |
+| `GET  /health/ready` | Kubernetes readiness probe |
+| `GET  /health/startup` | Kubernetes startup probe |
+
+Point any MCP client (Claude Desktop, Cursor, custom integrations) at
+`http://localhost:3001/mcp`.
 
 ## License
 

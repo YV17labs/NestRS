@@ -1,0 +1,22 @@
+[package]
+name = "mcp"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+nestrs-core.workspace = true
+nestrs-mcp.workspace = true
+nestrs-health.workspace = true
+# rmcp must be a direct dep: its proc macros emit absolute `::rmcp::...` paths
+# that the compiler resolves in the crate they expand in, not at re-export.
+rmcp.workspace = true
+poem.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+async-trait.workspace = true
+validator.workspace = true
+reqwest.workspace = true

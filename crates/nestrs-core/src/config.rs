@@ -27,7 +27,11 @@ mod tests {
         name: String,
     }
 
+    // `figment::Jail::expect_with` requires a closure returning the bare
+    // `Result<(), figment::Error>` — its `Err` is ~208 bytes, but the
+    // signature is fixed by figment so the lint cannot be honored here.
     #[test]
+    #[allow(clippy::result_large_err)]
     fn load_from_env_overrides_defaults() {
         figment::Jail::expect_with(|jail| {
             jail.set_env("NESTRS_PORT", "4242");

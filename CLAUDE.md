@@ -42,6 +42,10 @@ extend ours.
   `resolver.rs`, `module.rs`, `dto.rs`, `entity.rs`. Do not invent dotted
   variants — they are not valid Rust module names.
 - A file exists only if it has real content. No placeholders for symmetry.
+- `lib.rs` is the crate's index, not its implementation. Keep it to the
+  crate-level `//!` doc, `mod` declarations, and `pub use` re-exports.
+  Logic belongs in topical modules. Exception: very small crates (~100
+  lines total) may inline everything.
 
 ## Dependency bar
 

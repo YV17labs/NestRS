@@ -1,0 +1,15 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+nestrs-core.workspace = true
+nestrs-health.workspace = true
+poem.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde.workspace = true
+async-graphql.workspace = true
+async-graphql-poem.workspace = true

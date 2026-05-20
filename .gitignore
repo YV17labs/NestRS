@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+
+# Coverage output (cargo-llvm-cov)
+*.profraw
+*.profdata
+/coverage
+lcov.info
+
+# Local environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / IDE
+.idea/
+*.iml
+*.swp
+*.swo
+
+# OS noise
+.DS_Store
+Thumbs.db

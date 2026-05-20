@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/*",
+    "apps/*",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.75"
+repository = "https://github.com/yvanitou/nestrs"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Tracing / logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+
+# Config
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# HTTP
+poem = "3"
+
+# Async traits (needed for `dyn Trait` containing async methods on Rust 1.75)
+async-trait = "0.1"
+
+# GraphQL
+async-graphql = "7"
+async-graphql-poem = "7"
+
+# Proc-macro dependencies
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+# Internal crates
+nestrs-core = { path = "crates/nestrs-core" }
+nestrs-macros = { path = "crates/nestrs-macros" }
+nestrs-health = { path = "crates/nestrs-health" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

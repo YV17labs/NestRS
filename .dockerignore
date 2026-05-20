@@ -1,0 +1,13 @@
+target/
+.git/
+.gitignore
+.github/
+.vscode/
+.claude/
+.devcontainer/
+README.md
+Justfile
+Dockerfile
+.dockerignore
+bacon.toml
+*.log

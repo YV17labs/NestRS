@@ -1,0 +1,30 @@
+{
+	"name": "nestrs",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer",
+				"vadimcn.vscode-lldb",
+				"tamasfe.even-better-toml",
+				"fill-labs.dependi",
+				"usernamehw.errorlens",
+				"Anthropic.claude-code"
+			],
+			"settings": {
+				"rust-analyzer.checkOnSave.command": "clippy",
+				"rust-analyzer.cargo.features": "all",
+				"editor.formatOnSave": true
+			}
+		}
+	},
+	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installZsh": true,
+			"configureZshAsDefaultShell": true,
+			"installOhMyZsh": true
+		}
+	}
+}

@@ -15,4 +15,6 @@ pub use error::{Error, Result};
 pub use module::Module;
 pub use transport::Transport;
 
-pub use nestrs_macros::{controller, graphql_app, injectable, interceptor, module, resolver, routes};
+pub use nestrs_macros::{
+    controller, graphql_app, injectable, interceptor, module, resolver, routes,
+};

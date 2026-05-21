@@ -32,10 +32,15 @@ impl<'a> DiscoveryService<'a> {
                 entries
                     .iter()
                     .filter_map(|entry| {
-                        entry.meta.clone().downcast::<M>().ok().map(|meta| Discovered {
-                            meta,
-                            provider_type_id: entry.provider_type_id,
-                        })
+                        entry
+                            .meta
+                            .clone()
+                            .downcast::<M>()
+                            .ok()
+                            .map(|meta| Discovered {
+                                meta,
+                                provider_type_id: entry.provider_type_id,
+                            })
                     })
                     .collect()
             })

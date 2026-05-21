@@ -44,11 +44,7 @@ pub struct HttpControllerMeta {
 }
 
 impl HttpControllerMeta {
-    pub fn new(
-        path: &'static str,
-        routes: Vec<HttpRouteMeta>,
-        mount: Arc<MountFn>,
-    ) -> Self {
+    pub fn new(path: &'static str, routes: Vec<HttpRouteMeta>, mount: Arc<MountFn>) -> Self {
         Self {
             path,
             routes,

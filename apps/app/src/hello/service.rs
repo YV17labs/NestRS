@@ -16,6 +16,6 @@ mod tests {
 
     #[test]
     fn greeting_returns_hello_world() {
-        assert_eq!(HelloService::default().greeting(), "Hello World");
+        assert_eq!(HelloService.greeting(), "Hello World");
     }
 }

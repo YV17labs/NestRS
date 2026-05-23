@@ -54,6 +54,7 @@ pub struct ContainerBuilder {
 impl ContainerBuilder {
     /// Register a value; it will be wrapped in `Arc` internally.
     pub fn provide<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        self.warn_if_replacing(TypeId::of::<T>(), std::any::type_name::<T>());
         self.providers.insert(TypeId::of::<T>(), Arc::new(value));
         self
     }
@@ -61,8 +62,25 @@ impl ContainerBuilder {
     /// Register an already-shared `Arc<T>`. Useful when the same instance must
     /// be reused across modules.
     pub fn provide_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+        self.warn_if_replacing(TypeId::of::<T>(), std::any::type_name::<T>());
         self.providers.insert(TypeId::of::<T>(), value);
         self
+    }
+
+    /// Warn when a concrete-type registration silently replaces an earlier one.
+    /// In a flat singleton container that usually means two modules registered
+    /// the same type by mistake — the kind of collision NestJS's per-module scope
+    /// hides but ours cannot. Trait-object bindings ([`provide_dyn`](Self::provide_dyn))
+    /// are deliberately exempt: last-binding-wins is their documented override
+    /// mechanism (an app replacing a library's default `dyn` provider).
+    fn warn_if_replacing(&self, id: TypeId, type_name: &'static str) {
+        if self.providers.contains_key(&id) {
+            tracing::warn!(
+                target: "nestrs::container",
+                provider = type_name,
+                "provider override: a value of this type was already registered and is being replaced",
+            );
+        }
     }
 
     /// Register a trait-object provider. Stored as `Arc<Arc<T>>` so the outer
@@ -155,6 +173,18 @@ mod tests {
     fn missing_type_returns_none() {
         let container = Container::builder().build();
         assert!(container.get::<Greeter>().is_none());
+    }
+
+    #[test]
+    fn provide_override_keeps_the_last_value() {
+        // Overriding a concrete provider logs a warning (flat container), but the
+        // last registration still wins — mirroring `provide_dyn`'s documented
+        // last-binding-wins behaviour.
+        let container = Container::builder()
+            .provide(Counter(1))
+            .provide(Counter(2))
+            .build();
+        assert_eq!(container.get::<Counter>().unwrap().0, 2);
     }
 
     #[test]

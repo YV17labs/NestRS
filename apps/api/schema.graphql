@@ -1,0 +1,33 @@
+input CreateUserInput {
+	email: String!
+	name: String!
+}
+
+type Mutation {
+	createUser(input: CreateUserInput!): UserDto!
+}
+
+type Query {
+	user(id: String!): UserDto
+	users: [UserDto!]!
+}
+
+type UserDto {
+	email: String!
+	id: String!
+	name: String!
+	namesakes: [UserDto!]!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+	mutation: Mutation
+}

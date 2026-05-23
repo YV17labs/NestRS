@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use anyhow::{anyhow, Result};
 use nestrs_core::injectable;
+use nestrs_graphql::dataloader;
 use uuid::{Uuid, Variant, Version};
 use validator::Validate;
 
@@ -56,6 +58,25 @@ impl UsersService {
             return Err(anyhow!("id must be a UUID v7"));
         }
         Ok(())
+    }
+}
+
+// Batched lookups for `#[field]` resolvers — one method per loader. `#[dataloader]`
+// generates `UsersServiceByName` + registers its `DataLoader`; with an ORM the
+// body becomes a single `WHERE name = ANY($1)` query.
+#[dataloader]
+impl UsersService {
+    async fn by_name(&self, names: &[String]) -> HashMap<String, Vec<UserDto>> {
+        let mut buckets: HashMap<String, Vec<UserDto>> = names
+            .iter()
+            .map(|name| (name.clone(), Vec::new()))
+            .collect();
+        for user in self.list().await {
+            if let Some(bucket) = buckets.get_mut(&user.name) {
+                bucket.push(user);
+            }
+        }
+        buckets
     }
 }
 

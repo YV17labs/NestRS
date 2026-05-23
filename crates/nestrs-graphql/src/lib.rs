@@ -13,12 +13,15 @@
 //! compile-time `MergedObject` tuple, which is what keeps this compatible with
 //! async-graphql's static `Schema<Q, M, S>`.
 
+mod loader;
 mod module;
 mod resolver;
 
 pub use module::GraphqlModule;
-// `pub` only so `#[resolver]`-generated code can name them; `#[doc(hidden)]` at
-// their definitions keeps them out of the app-facing surface.
+pub use resolver::schema_sdl;
+// `pub` only so `#[resolver]`/`#[dataloader]`-generated code can name them;
+// `#[doc(hidden)]` at their definitions keeps them out of the app-facing surface.
+pub use loader::LoaderRegistration;
 pub use resolver::{ResolverKind, ResolverObject, ResolverRegistration};
 
 pub use async_graphql;
@@ -27,6 +30,7 @@ pub use async_graphql_poem;
 // the framework — apps never depend on `inventory` directly.
 pub use inventory;
 
-/// GraphQL decorators (`#[resolver]`), defined in `nestrs-graphql-macros` and
-/// surfaced here so apps write `nestrs_graphql::resolver`.
-pub use nestrs_graphql_macros::resolver;
+/// GraphQL decorators (`#[resolver]`, `#[dataloader]`), defined in
+/// `nestrs-graphql-macros` and surfaced here so apps write
+/// `nestrs_graphql::resolver`.
+pub use nestrs_graphql_macros::{dataloader, resolver};

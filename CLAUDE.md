@@ -61,12 +61,43 @@ emits the single `impl Discoverable for Self` — no conflict, no central
 registry to update, third-party crates extend the system without touching
 `nestrs-macros`. **HTTP and GraphQL are the exceptions**: `#[routes]`
 orchestrates verb attributes (`#[get]`, `#[post]`, …) on a controller's impl
-block, and `#[resolver]` orchestrates `#[query]`/`#[mutation]` on a resolver's
-impl block — because regrouping endpoints (or splitting one resolver's queries
-and mutations) into a struct each would be absurd. async-graphql forces the
-split: `#[Object]` makes an entire impl one root, so method-level kind is the
-only way to keep a feature's resolver in one struct. Any *further* method-level
-decoration needs a strong justification and a written design note.
+block, and `#[resolver]` orchestrates `#[query]`/`#[mutation]`/`#[field]` on a
+resolver's impl block — because regrouping endpoints (or splitting one
+resolver's queries, mutations, and field resolvers) into a struct each would be
+absurd. async-graphql forces the split: `#[Object]` makes an entire impl one
+root, so method-level kind is the only way to keep a feature's resolver in one
+struct. `#[field]` (the field-resolver verb, NestJS's `@ResolveField`) is the
+third member of that set, justified by the same logic: a feature's root
+queries and the computed/related fields of its types belong in one resolver,
+exactly as a NestJS `@Resolver(() => T)` class holds both. Its parameters mirror
+NestJS's `@Parent`/`@Args`/`@Loader`: the first, `parent: &T`, is the resolved
+object; owned parameters are GraphQL arguments; `&`-reference parameters (a
+service, a `DataLoader<…>`) are injected from the container — unambiguous since a
+`&T` can never be a GraphQL `InputType`. The macro emits one
+`#[ComplexObject] impl T` per parent type, building the resolver from the
+container in the GraphQL context. Because async-graphql allows a single
+`ComplexObject` per type, a type's fields are owned by one resolver, and `T`
+must derive `#[graphql(complex)]`. Any *further* method-level decoration needs
+a strong justification and a written design note.
+
+Batch field-resolver fetches with `#[dataloader]` to avoid N+1s. It is an
+impl-block decorator on the **data layer** (the service — where the future ORM
+query will live), not a loose loader struct: each method
+`async fn name(&self, keys: &[K]) -> HashMap<K, V>` (optionally `Result<…, E>`)
+generates a hidden `Loader` named `<Owner><Name>` (e.g. `UsersServiceByName`)
+wrapping `Arc<Owner>` and delegating to the method — no `#[module(providers =
+[...])]` entry. The loaders are **request-scoped, like NestJS**: a schema
+extension installed by `GraphqlModule` rebuilds every discovered loader from the
+fully assembled container at the start of each request and seeds it into the
+GraphQL context, where a `#[field]` reads it back as `&DataLoader<UsersServiceByName>`.
+Concurrent `load_one` calls within one request collapse into a single
+`Loader::load` (killing the N+1); the per-request instance means no leakage
+across requests and lets a loader observe per-request state. Because the loader
+is built when a request arrives — not at module registration — `GraphqlModule`'s
+import order relative to the data modules it loads is irrelevant, preserving the
+project's order-independence guarantee. (A `#[field]` distinguishes the two
+injection scopes by type: a `&DataLoader<…>` comes from the request context, any
+other `&Service` from the container.)
 
 GraphQL composition is **discovered, not listed**. Each `#[resolver]` impl
 submits its generated query/mutation objects to a link-time `inventory`
@@ -77,7 +108,10 @@ the roots are concrete types whose `create_type_info` reads the registry (via
 `Registry::create_fake_output_type`) and whose `is_empty` reports emptiness at
 runtime. Import `GraphqlModule` to self-mount the schema at `/graphql`. The
 cost is a reliance on async-graphql's public-but-internal `registry` API —
-guarded by compile errors and tests when it shifts.
+guarded by compile errors and tests when it shifts. Field resolvers are the
+exception to this runtime merge: `#[field]` lowers to async-graphql's native
+`#[ComplexObject]`, so its fields attach to their type statically — no
+registry, no roots.
 
 ## Naming rules — strict
 
@@ -105,6 +139,20 @@ For HTTP or GraphQL changes, `cargo test --workspace` is necessary but not
 sufficient. Start the binary (`cargo run --bin <app>` in the background),
 `curl` the affected endpoints, then kill the server before returning control.
 Routing and wiring bugs do not surface in unit tests.
+
+A GraphQL app commits its schema as SDL (`apps/<app>/schema.graphql`) so the API
+surface is reviewable in diffs. After changing resolvers, regenerate it with
+`just graphql-schema <app>` (default `api`); `just graphql-schema-check <app>`
+regenerates in memory and fails if the committed file drifted — wire it into CI.
+`nestrs_graphql::schema_sdl` renders it with sorted types/fields/arguments so it
+is deterministic across builds. The schema is composed from the resolvers
+*linked into a binary*, so it can only be rendered from inside the app: each
+GraphQL app's binary exposes a `schema` subcommand (`<app> schema [--check]`,
+checked before the server boots in `main`) that calls
+`nestrs_graphql_cli::run::<AppModule>(…)` — the shared emit/drift-check logic,
+built on `App::context` (container, no transport). The path is the app's own via
+`CARGO_MANIFEST_DIR`, so it adapts to any app name. `nestrs-graphql-cli` is also
+where federation-aware schema commands will land if/when federation does.
 
 ## Engineering posture
 

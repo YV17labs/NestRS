@@ -5,6 +5,7 @@ use validator::Validate;
 use crate::users::entity::User;
 
 #[derive(Debug, Clone, Serialize, SimpleObject)]
+#[graphql(complex)]
 pub struct UserDto {
     pub id: String,
     pub name: String,

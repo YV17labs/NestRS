@@ -23,6 +23,10 @@ fn playground() -> Html<String> {
 /// registry, so the schema composes itself — there is nothing else to wire,
 /// no central resolver list, no `main.rs` mount. This is the GraphQL analog of
 /// NestJS's `GraphQLModule.forRoot()`.
+///
+/// Every `#[dataloader]` is seeded per request by a schema extension built from
+/// the fully assembled container (see `crate::loader`), so this module can be
+/// imported in any order relative to the data modules whose services it loads.
 pub struct GraphqlModule;
 
 impl Module for GraphqlModule {

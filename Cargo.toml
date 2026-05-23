@@ -52,8 +52,9 @@ poem = { version = "3", features = ["tower-compat"] }
 # Async traits (needed for `dyn Trait` containing async methods on Rust 1.75)
 async-trait = "0.1"
 
-# GraphQL
-async-graphql = "7"
+# GraphQL. `dataloader` gives us async-graphql's batching loader, surfaced via
+# the `#[dataloader]` decorator to kill field-resolver N+1s.
+async-graphql = { version = "7", features = ["dataloader"] }
 async-graphql-poem = "7"
 # Link-time registry: each `#[resolver]` submits its query/mutation objects so
 # the schema composes itself at boot with no central list.
@@ -84,6 +85,7 @@ nestrs-core = { path = "crates/nestrs-core" }
 nestrs-macro-support = { path = "crates/nestrs-macro-support" }
 nestrs-macros = { path = "crates/nestrs-macros" }
 nestrs-graphql = { path = "crates/nestrs-graphql" }
+nestrs-graphql-cli = { path = "crates/nestrs-graphql-cli" }
 nestrs-graphql-macros = { path = "crates/nestrs-graphql-macros" }
 nestrs-health = { path = "crates/nestrs-health" }
 nestrs-http = { path = "crates/nestrs-http" }

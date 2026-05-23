@@ -156,8 +156,17 @@ pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
 /// spanned error here beats the arity mismatch the generated call would
 /// otherwise raise against macro-expanded code.
 pub fn forwarded_arg_idents(sig: &Signature) -> syn::Result<Vec<Ident>> {
+    forwarded_idents(&sig.inputs)
+}
+
+/// [`forwarded_arg_idents`] over an arbitrary argument sequence rather than a
+/// whole signature. `#[resolver]`'s `#[field]` path drops the parent argument
+/// before forwarding, so it passes the trimmed tail here.
+pub fn forwarded_idents<'a>(
+    inputs: impl IntoIterator<Item = &'a FnArg>,
+) -> syn::Result<Vec<Ident>> {
     let mut idents = Vec::new();
-    for arg in &sig.inputs {
+    for arg in inputs {
         let FnArg::Typed(pat_type) = arg else {
             continue;
         };

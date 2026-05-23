@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 nestrs-core.workspace = true
 nestrs-graphql.workspace = true
+nestrs-graphql-cli.workspace = true
 nestrs-health.workspace = true
 nestrs-http.workspace = true
 nestrs-middleware.workspace = true

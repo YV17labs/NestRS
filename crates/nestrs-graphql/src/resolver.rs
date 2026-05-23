@@ -23,7 +23,7 @@ use async_graphql::parser::types::Field;
 use async_graphql::registry::{MetaType, MetaTypeId, Registry};
 use async_graphql::{
     CacheControl, ContainerType, Context, ContextSelectionSet, EmptySubscription, ObjectType,
-    OutputType, Positioned, Schema, ServerResult, Value,
+    OutputType, Positioned, SDLExportOptions, Schema, ServerResult, Value,
 };
 use nestrs_core::Container;
 
@@ -197,6 +197,23 @@ pub(crate) fn build_schema(
         DiscoveredMutation::from_registry(&container),
         EmptySubscription,
     )
-    .data(container)
+    .data(container.clone())
+    .extension(crate::loader::LoaderExtensionFactory::new(container))
     .finish()
+}
+
+/// Render the composed schema as SDL for a committed `schema.graphql`.
+///
+/// Types, fields, arguments, and enum values are sorted so the output is
+/// deterministic: the resolver registry's link-time iteration order (which is
+/// not stable across builds) cannot leak into the file and churn its diff.
+/// Building the schema constructs each resolver from `container`, so it must
+/// hold the providers the resolvers inject.
+pub fn schema_sdl(container: &Container) -> String {
+    build_schema(container.clone()).sdl_with_options(
+        SDLExportOptions::new()
+            .sorted_fields()
+            .sorted_arguments()
+            .sorted_enum_items(),
+    )
 }

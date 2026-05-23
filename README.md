@@ -44,9 +44,12 @@ Run `just` with no arguments to list every recipe.
 | `just lint` | Clippy (strict) + format check |
 | `just fmt` | Apply rustfmt |
 | `just check` | Fast type-check (no codegen) |
+| `just graphql-schema <app>` | Regenerate an app's committed GraphQL SDL (default `api`, e.g. `apps/api/schema.graphql`) |
+| `just graphql-schema-check <app>` | Fail if that committed schema drifted from the resolvers (CI guard) |
 
 `build`, `test`, `cov`, `lint`, `fmt`, and `check` always operate on the whole
-workspace. Only `dev` and `run` take a binary name.
+workspace; `dev`, `run`, and the `graphql-schema` recipes take an app name
+(`graphql-schema` defaults to `api`).
 
 ## Docker
 
@@ -94,6 +97,15 @@ Started with `just dev api`. Listens on `http://0.0.0.0:3002`:
 | `GET  /health/live` | Kubernetes liveness probe |
 | `GET  /health/ready` | Kubernetes readiness probe |
 | `GET  /health/startup` | Kubernetes startup probe |
+
+Resolvers are declared with `#[resolver]`: `#[query]`/`#[mutation]` add root
+fields, and `#[field]` adds a field resolver (NestJS's `@ResolveField`) to an
+object type — it takes the resolved object as `parent: &T` and reaches services
+through the resolver's `#[inject]` fields. The schema composes itself from every
+resolver in the binary (no central list) and is committed as SDL at
+[`apps/api/schema.graphql`](apps/api/schema.graphql), so API changes surface in
+diffs. Run `just graphql-schema` after touching a resolver; `just
+graphql-schema-check` guards against drift in CI.
 
 ### `app` — Minimal HTTP endpoint (port 3001)
 

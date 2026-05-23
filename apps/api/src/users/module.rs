@@ -2,9 +2,9 @@ use nestrs_core::module;
 
 use crate::users::service::UsersService;
 
-// The module wires the service; the resolver (`#[resolver]` in `resolver.rs`)
-// self-registers and resolves this service from the container at schema-build
-// time, so it is not listed here.
+// The module wires the service. The resolver self-registers (`#[resolver]`), and
+// its DataLoaders self-register too (`#[dataloader]` in service.rs, folded into
+// the container by GraphqlModule) — so neither is listed here.
 #[module(providers = [UsersService])]
 pub struct UsersModule;
 

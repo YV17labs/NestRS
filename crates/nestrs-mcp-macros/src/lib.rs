@@ -8,7 +8,7 @@ use quote::quote;
 use syn::{parse_macro_input, ItemStruct};
 
 use nestrs_macro_support::{
-    build_injectable_body, from_container_method, parse_path_arg, InjectableBody,
+    build_injectable_body, from_container_method, parse_named_str_arg, InjectableBody,
 };
 
 // -----------------------------------------------------------------------------
@@ -29,7 +29,7 @@ use nestrs_macro_support::{
 /// any per-session state stays fresh.
 #[proc_macro_attribute]
 pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
-    let path = match parse_path_arg(args.into(), "mcp") {
+    let path = match parse_named_str_arg(args.into(), "path", "mcp") {
         Ok(path) => path,
         Err(err) => return err.to_compile_error().into(),
     };

@@ -1,4 +1,5 @@
 mod app;
+mod auth;
 mod users;
 
 use std::process::ExitCode;

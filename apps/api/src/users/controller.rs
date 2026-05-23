@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use nestrs_http::{controller, routes, Piped, Valid};
+use nestrs_http::{controller, routes, Ctx, Piped, Valid};
 use nestrs_pipes::ParseUuidV7;
 use poem::http::StatusCode;
 use poem::web::{Json, Path};
 use poem::{Error, Result};
 
+use crate::auth::{ApiKeyGuard, Caller};
 use crate::users::dto::{CreateUserInput, UserDto};
 use crate::users::service::UsersService;
 
@@ -36,7 +37,17 @@ impl UsersController {
     }
 
     #[post("/")]
-    async fn create(&self, body: Valid<Json<CreateUserInput>>) -> Result<Json<UserDto>> {
+    #[use_guards(ApiKeyGuard)]
+    async fn create(
+        &self,
+        caller: Ctx<Caller>,
+        body: Valid<Json<CreateUserInput>>,
+    ) -> Result<Json<UserDto>> {
+        tracing::info!(
+            target: "nestrs::access",
+            api_key = %caller.api_key,
+            "authenticated create",
+        );
         self.svc
             .create(body.into_inner())
             .await

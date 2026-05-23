@@ -6,12 +6,20 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, ItemStruct, LitStr, ReturnType};
+use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, ItemStruct, LitStr, Path, ReturnType};
 
 use nestrs_macro_support::{
     build_injectable_body, dependencies_method, forwarded_arg_idents, from_container_method,
-    parse_path_arg, InjectableBody,
+    parse_named_str_arg, InjectableBody,
 };
+
+/// One route handler in a controller: its HTTP verb ident, the generated
+/// wrapper-fn ident, and the guard paths declared with `#[use_guards]`.
+type RouteHandler = (syn::Ident, syn::Ident, Vec<Path>);
+
+/// Handlers grouped by path in first-seen order — several verbs may share a path
+/// (`GET` + `POST /users`), which `#[routes]` collapses into one `RouteMethod`.
+type RoutesByPath = Vec<(LitStr, Vec<RouteHandler>)>;
 
 // -----------------------------------------------------------------------------
 // #[controller(path = "...")]
@@ -27,7 +35,7 @@ use nestrs_macro_support::{
 /// places would conflict.
 #[proc_macro_attribute]
 pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
-    let path_lit = match parse_path_arg(args.into(), "controller") {
+    let path_lit = match parse_named_str_arg(args.into(), "path", "controller") {
         Ok(path) => path,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -121,6 +129,13 @@ pub fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[delete]` or `#[patch]` is wired as a poem handler. Method signatures
 /// keep `&self` plus any poem extractors (`Path<T>`, `Json<T>`, `Query<T>`...).
 ///
+/// Tag a method with `#[use_guards(GuardA, GuardB)]` to run those guards before
+/// it — each is resolved from the container (so a guard is an `#[injectable]`
+/// provider that can inject its own dependencies) and the first listed runs
+/// outermost. A guard may attach request-scoped context the handler reads back
+/// via `nestrs_http::Ctx<T>`. Like the verb attributes, `#[use_guards]` is
+/// consumed here and needs no import.
+///
 /// Emits two impls on the controller:
 /// - `nestrs_http::Controller` — the mount entry point used by the HTTP
 ///   transport.
@@ -137,7 +152,7 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
     // Verbs grouped by path, in first-seen order. poem rejects two `.at(path,..)`
     // for the same path, so several verbs on one path (REST `GET`+`POST /users`)
     // must collapse into a single `RouteMethod` (`get(h1).post(h2)`).
-    let mut routes_by_path: Vec<(LitStr, Vec<(syn::Ident, syn::Ident)>)> = Vec::new();
+    let mut routes_by_path: RoutesByPath = Vec::new();
     let mut route_metas: Vec<TokenStream2> = Vec::new();
 
     for impl_item in item.items.iter_mut() {
@@ -195,15 +210,33 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             }
         });
 
+        // `#[use_guards(GuardA, GuardB)]` next to the verb attribute, consumed
+        // here like the verbs are. The guards are resolved from the container at
+        // mount time and wrapped around this handler's endpoint.
+        let guards: Vec<Path> = match method
+            .attrs
+            .iter()
+            .position(|a| a.path().is_ident("use_guards"))
+        {
+            Some(g_idx) => {
+                let g_attr = method.attrs.remove(g_idx);
+                match g_attr.parse_args_with(
+                    syn::punctuated::Punctuated::<Path, syn::Token![,]>::parse_terminated,
+                ) {
+                    Ok(paths) => paths.into_iter().collect(),
+                    Err(err) => return err.to_compile_error().into(),
+                }
+            }
+            None => Vec::new(),
+        };
+
+        let handler = (verb_ident.clone(), wrapper_name.clone(), guards);
         match routes_by_path
             .iter_mut()
             .find(|(path, _)| path.value() == route_path.value())
         {
-            Some((_, verbs)) => verbs.push((verb_ident.clone(), wrapper_name.clone())),
-            None => routes_by_path.push((
-                route_path.clone(),
-                vec![(verb_ident.clone(), wrapper_name.clone())],
-            )),
+            Some((_, handlers)) => handlers.push(handler),
+            None => routes_by_path.push((route_path.clone(), vec![handler])),
         }
 
         let verb_variant = match verb_ident.to_string().as_str() {
@@ -228,13 +261,15 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
     // `RouteMethod`, the rest chain onto it (`get(h1).post(h2)`).
     let route_entries: Vec<TokenStream2> = routes_by_path
         .iter()
-        .map(|(path, verbs)| {
-            let mut verbs = verbs.iter();
-            let (first_verb, first_wrapper) =
-                verbs.next().expect("each path has at least one verb");
-            let mut method = quote! { ::poem::#first_verb(#first_wrapper) };
-            for (verb, wrapper) in verbs {
-                method = quote! { #method.#verb(#wrapper) };
+        .map(|(path, handlers)| {
+            let mut handlers = handlers.iter();
+            let (first_verb, first_wrapper, first_guards) =
+                handlers.next().expect("each path has at least one verb");
+            let first = guarded_handler(first_wrapper, first_guards);
+            let mut method = quote! { ::poem::#first_verb(#first) };
+            for (verb, wrapper, guards) in handlers {
+                let ep = guarded_handler(wrapper, guards);
+                method = quote! { #method.#verb(#ep) };
             }
             quote! { .at(#path, #method) }
         })
@@ -273,4 +308,25 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+/// Wrap a route handler in its `#[use_guards]` guards, each resolved from the
+/// container at mount time. The first guard listed ends up outermost, so it runs
+/// first; with no guards the handler is emitted unchanged. Generated inside
+/// `Controller::mount`, where `container: &Container` is in scope.
+fn guarded_handler(wrapper: &syn::Ident, guards: &[Path]) -> TokenStream2 {
+    let mut expr = quote! { #wrapper };
+    for g in guards.iter().rev() {
+        expr = quote! {
+            ::nestrs_http::EndpointExt::guard(
+                #expr,
+                ::nestrs_core::Container::get::<#g>(container).expect(concat!(
+                    "#[use_guards] guard `",
+                    stringify!(#g),
+                    "` is not registered — add it to a module's providers"
+                )),
+            )
+        };
+    }
+    expr
 }

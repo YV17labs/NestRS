@@ -22,12 +22,14 @@
 //!   pipe to a handler parameter between extraction and the handler (validate
 //!   or transform); the pipes themselves live in `nestrs-pipes`.
 
+mod context;
 mod controller;
 mod endpoint;
 mod interceptor;
 mod pipe;
 mod transport;
 
+pub use context::Ctx;
 pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb};
 pub use endpoint::HttpEndpointMeta;
 pub use interceptor::HttpInterceptorMeta;
@@ -35,6 +37,13 @@ pub use pipe::{IntoInner, Piped, Valid};
 pub use transport::HttpTransport;
 
 pub use poem;
+
+// `#[routes]`-generated code names `::nestrs_http::EndpointExt` to wrap a
+// `#[use_guards]` handler, and a guard is written `#[nestrs_http::async_trait]
+// impl nestrs_http::Guard` — so both are surfaced here. The other middleware
+// categories (`Interceptor`, `Filter`) stay in `nestrs-middleware`.
+pub use async_trait::async_trait;
+pub use nestrs_middleware::{EndpointExt, Guard};
 
 /// HTTP decorators (`#[controller]`, `#[routes]`, the verb attributes,
 /// `#[interceptor]`), defined in `nestrs-http-macros` and surfaced here so

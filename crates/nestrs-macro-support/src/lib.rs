@@ -15,15 +15,16 @@ use syn::{
     Token, Type,
 };
 
-/// Parse a decorator's sole `path = "..."` argument from its attribute tokens.
-/// `attr` names the attribute (e.g. `"controller"`) for the error message.
-pub fn parse_path_arg(args: TokenStream2, attr: &str) -> syn::Result<LitStr> {
+/// Parse a decorator's sole `<key> = "..."` string argument from its attribute
+/// tokens — `#[controller(path = "…")]`, `#[cron_job(every = "…")]`, etc. `key`
+/// is the expected argument name, `attr` the attribute; both appear in the error.
+pub fn parse_named_str_arg(args: TokenStream2, key: &str, attr: &str) -> syn::Result<LitStr> {
     let parser = |input: ParseStream| -> syn::Result<LitStr> {
-        let key: Ident = input.parse()?;
-        if key != "path" {
+        let found: Ident = input.parse()?;
+        if found != key {
             return Err(syn::Error::new(
-                key.span(),
-                format!("expected `path = \"...\"` as the only #[{attr}] argument"),
+                found.span(),
+                format!("expected `{key} = \"...\"` as the only #[{attr}] argument"),
             ));
         }
         input.parse::<Token![=]>()?;

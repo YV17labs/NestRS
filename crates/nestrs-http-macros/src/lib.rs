@@ -6,13 +6,11 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{
-    parse_macro_input, FnArg, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Pat, ReturnType,
-};
+use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, ItemStruct, LitStr, ReturnType};
 
 use nestrs_macro_support::{
-    build_injectable_body, dependencies_method, from_container_method, parse_path_arg,
-    InjectableBody,
+    build_injectable_body, dependencies_method, forwarded_arg_idents, from_container_method,
+    parse_path_arg, InjectableBody,
 };
 
 // -----------------------------------------------------------------------------
@@ -168,16 +166,10 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         let wrapper_name = format_ident!("__nestrs_route_{}", method_name);
 
         let inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
-        let arg_idents: Vec<Ident> = inputs
-            .iter()
-            .filter_map(|arg| match arg {
-                FnArg::Typed(pt) => match &*pt.pat {
-                    Pat::Ident(pi) => Some(pi.ident.clone()),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect();
+        let arg_idents = match forwarded_arg_idents(&method.sig) {
+            Ok(idents) => idents,
+            Err(err) => return err.to_compile_error().into(),
+        };
 
         let return_type = match &method.sig.output {
             ReturnType::Default => quote! { () },

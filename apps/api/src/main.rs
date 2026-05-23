@@ -1,5 +1,4 @@
 mod app;
-mod graphql;
 mod users;
 
 use anyhow::Result;

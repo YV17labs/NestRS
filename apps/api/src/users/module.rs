@@ -2,9 +2,9 @@ use nestrs_core::module;
 
 use crate::users::service::UsersService;
 
-// Resolvers are not providers — they are declared once in `#[graphql]`
-// (see `crate::graphql`), which composes the schema and attaches their
-// discovery metadata.
+// The module wires the service; the resolver (`#[resolver]` in `resolver.rs`)
+// self-registers and resolves this service from the container at schema-build
+// time, so it is not listed here.
 #[module(providers = [UsersService])]
 pub struct UsersModule;
 

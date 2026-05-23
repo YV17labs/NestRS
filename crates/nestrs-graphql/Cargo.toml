@@ -10,7 +10,14 @@ description = "GraphQL resolver discovery + schema composition for nestrs apps, 
 [dependencies]
 nestrs-core.workspace = true
 nestrs-graphql-macros.workspace = true
+# GraphqlModule self-mounts over HTTP via HttpEndpointMeta — this crate serves
+# GraphQL on the HTTP transport. No cycle: nestrs-http does not depend on us.
+nestrs-http.workspace = true
 async-graphql.workspace = true
-# Re-exported so the `#[graphql(path = ...)]` mount code can name the poem
-# integration through the framework, keeping it out of every app's manifest.
+# Re-exported so the GraphqlModule mount code can name the poem integration
+# through the framework, keeping it out of every app's manifest.
 async-graphql-poem.workspace = true
+# Re-exported so `#[resolver]`-generated `inventory::submit!` resolves through
+# the framework without apps depending on `inventory` directly.
+inventory.workspace = true
+poem.workspace = true

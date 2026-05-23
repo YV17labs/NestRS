@@ -10,7 +10,10 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{ParseStream, Parser};
-use syn::{Fields, GenericArgument, Ident, ItemStruct, LitStr, PathArguments, Token, Type};
+use syn::{
+    Fields, FnArg, GenericArgument, Ident, ItemStruct, LitStr, Pat, PathArguments, Signature,
+    Token, Type,
+};
 
 /// Parse a decorator's sole `path = "..."` argument from its attribute tokens.
 /// `attr` names the attribute (e.g. `"controller"`) for the error message.
@@ -141,6 +144,35 @@ pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
             #ctor
         }
     }
+}
+
+/// The binding identifiers of a method's value arguments (the receiver is
+/// skipped), in order, for forwarding a call to it. `#[routes]` and
+/// `#[resolver]` both wrap a method in a generated one that re-invokes it by
+/// name, so both need these.
+///
+/// Errors on any argument whose pattern is not a plain identifier (e.g. a
+/// `Path(id)` destructure) — such a binding cannot be forwarded by name, and a
+/// spanned error here beats the arity mismatch the generated call would
+/// otherwise raise against macro-expanded code.
+pub fn forwarded_arg_idents(sig: &Signature) -> syn::Result<Vec<Ident>> {
+    let mut idents = Vec::new();
+    for arg in &sig.inputs {
+        let FnArg::Typed(pat_type) = arg else {
+            continue;
+        };
+        match &*pat_type.pat {
+            Pat::Ident(pat_ident) => idents.push(pat_ident.ident.clone()),
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "resolver/controller method arguments must be simple identifiers \
+                     (no destructuring patterns)",
+                ))
+            }
+        }
+    }
+    Ok(idents)
 }
 
 /// The `Discoverable::dependencies` method for eagerly-built providers, listing

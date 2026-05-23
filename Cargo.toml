@@ -55,6 +55,9 @@ async-trait = "0.1"
 # GraphQL
 async-graphql = "7"
 async-graphql-poem = "7"
+# Link-time registry: each `#[resolver]` submits its query/mutation objects so
+# the schema composes itself at boot with no central list.
+inventory = "0.3"
 
 # Input validation
 validator = { version = "0.20", features = ["derive"] }

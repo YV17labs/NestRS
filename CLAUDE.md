@@ -29,7 +29,8 @@ companion `*-macros` crate re-exported by its home crate: the
 surface-agnostic `#[injectable]`/`#[module]` in `nestrs-macros` (re-exported
 by `nestrs-core`); a surface's decorator in that surface's `*-macros` crate
 (`#[controller]`/`#[routes]`/`#[interceptor]` in `nestrs-http-macros`,
-`#[graphql]`/`#[resolver]` in `nestrs-graphql-macros`, `#[mcp]` in
+`#[resolver]` (with method-level `#[query]`/`#[mutation]`) in
+`nestrs-graphql-macros`, `#[mcp]` in
 `nestrs-mcp-macros`), re-exported by the surface so apps import it from there
 (`nestrs_http::controller`). Shared token-building helpers go in
 `nestrs-macro-support`; a `*-macros` crate must not depend on its surface
@@ -58,11 +59,25 @@ handler is a struct, an MCP tool is a struct. Each carries its own
 decorator macro (`#[cron_job]`, `#[event_handler]`, `#[mcp_tool]`, …) that
 emits the single `impl Discoverable for Self` — no conflict, no central
 registry to update, third-party crates extend the system without touching
-`nestrs-macros`. **HTTP is the exception**: `#[routes]` orchestrates
-method-level verb attributes (`#[get]`, `#[post]`, …) on a controller's
-impl block, because regrouping endpoints into one struct each would be
-absurd. Method-level decoration outside HTTP needs a strong justification
-and a written design note.
+`nestrs-macros`. **HTTP and GraphQL are the exceptions**: `#[routes]`
+orchestrates verb attributes (`#[get]`, `#[post]`, …) on a controller's impl
+block, and `#[resolver]` orchestrates `#[query]`/`#[mutation]` on a resolver's
+impl block — because regrouping endpoints (or splitting one resolver's queries
+and mutations) into a struct each would be absurd. async-graphql forces the
+split: `#[Object]` makes an entire impl one root, so method-level kind is the
+only way to keep a feature's resolver in one struct. Any *further* method-level
+decoration needs a strong justification and a written design note.
+
+GraphQL composition is **discovered, not listed**. Each `#[resolver]` impl
+submits its generated query/mutation objects to a link-time `inventory`
+registry; the schema's roots (`DiscoveredQuery`/`DiscoveredMutation`) merge
+their fields from that registry at boot, so there is no central `queries =
+[...]` list. This works *despite* async-graphql's static `Schema<Q, M, S>`:
+the roots are concrete types whose `create_type_info` reads the registry (via
+`Registry::create_fake_output_type`) and whose `is_empty` reports emptiness at
+runtime. Import `GraphqlModule` to self-mount the schema at `/graphql`. The
+cost is a reliance on async-graphql's public-but-internal `registry` API —
+guarded by compile errors and tests when it shifts.
 
 ## Naming rules — strict
 

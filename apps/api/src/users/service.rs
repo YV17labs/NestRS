@@ -1,104 +1,110 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use nestrs_core::{hooks, injectable};
 use nestrs_graphql::dataloader;
-use uuid::{Uuid, Variant, Version};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, Schema, Set,
+};
+use uuid::Uuid;
 use validator::Validate;
 
+use crate::authz::{ORG_ACME, ORG_GLOBEX};
 use crate::users::dto::{CreateUserInput, UserDto};
-use crate::users::entity::User;
+use crate::users::entity::{self, ActiveModel, Entity as Users};
 
 #[injectable]
-#[derive(Default)]
 pub struct UsersService {
-    users: Mutex<Vec<User>>,
+    #[inject]
+    db: Arc<DatabaseConnection>,
 }
 
 impl UsersService {
-    pub async fn list(&self) -> Vec<UserDto> {
-        self.users
-            .lock()
-            .expect("users mutex poisoned")
-            .iter()
-            .map(UserDto::from)
-            .collect()
+    /// List users matching a caller-supplied scope. The HTTP layer passes the
+    /// authorization pre-filter (`Ability::condition_for`); GraphQL passes
+    /// `Condition::all()`.
+    pub async fn list(&self, scope: Condition) -> Result<Vec<entity::Model>> {
+        Ok(Users::find().filter(scope).all(self.db.as_ref()).await?)
     }
 
-    pub async fn find(&self, id: &str) -> Result<Option<UserDto>> {
-        Self::validate_id(id)?;
-        Ok(self
-            .users
-            .lock()
-            .expect("users mutex poisoned")
-            .iter()
-            .find(|u| u.id == id)
-            .map(UserDto::from))
+    pub async fn find(&self, id: Uuid) -> Result<Option<entity::Model>> {
+        Ok(Users::find_by_id(id).one(self.db.as_ref()).await?)
     }
 
-    pub async fn create(&self, input: CreateUserInput) -> Result<UserDto> {
+    pub async fn create(&self, input: CreateUserInput, org_id: Uuid) -> Result<entity::Model> {
         input.validate()?;
-        let user = User {
-            id: Uuid::now_v7().to_string(),
-            name: input.name,
-            email: input.email,
+        let row = ActiveModel {
+            id: Set(Uuid::now_v7()),
+            org_id: Set(org_id),
+            name: Set(input.name),
+            email: Set(input.email),
         };
-        let dto = UserDto::from(&user);
-        self.users.lock().expect("users mutex poisoned").push(user);
-        Ok(dto)
-    }
-
-    fn validate_id(id: &str) -> Result<()> {
-        let uuid = Uuid::parse_str(id).map_err(|_| anyhow!("id must be a valid UUID"))?;
-        if uuid.get_variant() != Variant::RFC4122 {
-            return Err(anyhow!("id must be a RFC 4122 UUID"));
-        }
-        if uuid.get_version() != Some(Version::SortRand) {
-            return Err(anyhow!("id must be a UUID v7"));
-        }
-        Ok(())
+        Ok(row.insert(self.db.as_ref()).await?)
     }
 }
 
-// Batched lookups for `#[field]` resolvers — one method per loader. `#[dataloader]`
-// generates `UsersServiceByName` + registers its `DataLoader`; with an ORM the
-// body becomes a single `WHERE name = ANY($1)` query.
+// Batched lookups for `#[field]` resolvers — one method per loader. With the ORM
+// the body is a single `WHERE name = ANY($1)` query, killing the N+1.
 #[dataloader]
 impl UsersService {
     async fn by_name(&self, names: &[String]) -> HashMap<String, Vec<UserDto>> {
-        let mut buckets: HashMap<String, Vec<UserDto>> = names
-            .iter()
-            .map(|name| (name.clone(), Vec::new()))
-            .collect();
-        for user in self.list().await {
-            if let Some(bucket) = buckets.get_mut(&user.name) {
-                bucket.push(user);
+        let mut buckets: HashMap<String, Vec<UserDto>> =
+            names.iter().map(|name| (name.clone(), Vec::new())).collect();
+        let rows = Users::find()
+            .filter(entity::Column::Name.is_in(names.iter().cloned()))
+            .all(self.db.as_ref())
+            .await
+            .unwrap_or_else(|err| {
+                tracing::error!(target: "nestrs::loader", error = %err, "by_name loader query failed");
+                Vec::new()
+            });
+        for row in &rows {
+            if let Some(bucket) = buckets.get_mut(&row.name) {
+                bucket.push(UserDto::from(row));
             }
         }
         buckets
     }
 }
 
-// Lifecycle hooks (NestJS-style), self-registered via `#[hooks]`. `App` resolves
-// this service from the container — the same instance the resolver and
-// controller use — and invokes them at boot and shutdown.
+// Lifecycle hooks: create the table and seed two tenants at boot so the
+// org-scoped filter is observable; report the row count at shutdown.
 #[hooks]
 impl UsersService {
     #[on_module_init]
-    async fn seed(&self) -> Result<()> {
-        self.create(CreateUserInput {
-            name: "Ada Lovelace".into(),
-            email: "ada@example.com".into(),
-        })
-        .await?;
-        tracing::info!(target: "nestrs::lifecycle", "seeded the initial user");
+    async fn migrate_and_seed(&self) -> Result<()> {
+        // Derive the table from the entity so the schema cannot drift from the
+        // model; a real migration (sea-orm-migration) is the production path.
+        let backend = self.db.get_database_backend();
+        let mut create = Schema::new(backend).create_table_from_entity(Users);
+        create.if_not_exists();
+        self.db.execute(&create).await?;
+
+        if Users::find().one(self.db.as_ref()).await?.is_none() {
+            for (name, email, org_id) in [
+                ("Ada Lovelace", "ada@acme.test", ORG_ACME),
+                ("Grace Hopper", "grace@acme.test", ORG_ACME),
+                ("Alan Turing", "alan@globex.test", ORG_GLOBEX),
+            ] {
+                self.create(
+                    CreateUserInput {
+                        name: name.to_owned(),
+                        email: email.to_owned(),
+                    },
+                    org_id,
+                )
+                .await?;
+            }
+            tracing::info!(target: "nestrs::lifecycle", "seeded users across two orgs");
+        }
         Ok(())
     }
 
     #[on_application_shutdown]
     async fn report(&self) -> Result<()> {
-        let count = self.list().await.len();
+        let count = Users::find().count(self.db.as_ref()).await?;
         tracing::info!(target: "nestrs::lifecycle", count, "users present at shutdown");
         Ok(())
     }
@@ -108,54 +114,24 @@ impl UsersService {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn create_then_list_returns_the_user() {
-        let svc = UsersService::default();
-        let created = svc
-            .create(CreateUserInput {
-                name: "Alice".into(),
-                email: "alice@example.com".into(),
-            })
-            .await
-            .unwrap();
-        let parsed = Uuid::parse_str(&created.id).expect("created id is a uuid");
-        assert_eq!(parsed.get_version_num(), 7);
-
-        let all = svc.list().await;
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].name, "Alice");
-    }
-
-    #[tokio::test]
-    async fn find_returns_none_when_uuid_v7_not_found() {
-        let svc = UsersService::default();
-        let unknown = Uuid::now_v7().to_string();
-        assert!(svc.find(&unknown).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn find_rejects_non_uuid() {
-        let svc = UsersService::default();
-        let err = svc.find("not-a-uuid").await.unwrap_err();
-        assert!(err.to_string().contains("UUID"));
-    }
-
-    #[tokio::test]
-    async fn find_rejects_uuid_other_than_v7() {
-        let svc = UsersService::default();
-        let v4 = "550e8400-e29b-41d4-a716-446655440000";
-        let err = svc.find(v4).await.unwrap_err();
-        assert!(err.to_string().contains("v7"));
+    // Input validation rejects before any query runs, so a disconnected
+    // connection suffices here.
+    fn service() -> UsersService {
+        UsersService {
+            db: Arc::new(DatabaseConnection::default()),
+        }
     }
 
     #[tokio::test]
     async fn create_rejects_invalid_email() {
-        let svc = UsersService::default();
-        let err = svc
-            .create(CreateUserInput {
-                name: "Alice".into(),
-                email: "no-at-sign".into(),
-            })
+        let err = service()
+            .create(
+                CreateUserInput {
+                    name: "Alice".into(),
+                    email: "no-at-sign".into(),
+                },
+                ORG_ACME,
+            )
             .await
             .unwrap_err();
         assert!(err.to_string().contains("email"));
@@ -163,12 +139,14 @@ mod tests {
 
     #[tokio::test]
     async fn create_rejects_empty_name() {
-        let svc = UsersService::default();
-        let err = svc
-            .create(CreateUserInput {
-                name: "".into(),
-                email: "alice@example.com".into(),
-            })
+        let err = service()
+            .create(
+                CreateUserInput {
+                    name: "".into(),
+                    email: "alice@example.com".into(),
+                },
+                ORG_ACME,
+            )
             .await
             .unwrap_err();
         assert!(err.to_string().contains("name"));

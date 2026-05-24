@@ -19,7 +19,12 @@ mod tests {
 
     #[test]
     fn registers_users_service() {
-        let container = UsersModule::register(Container::builder()).build();
+        // `UsersService` injects a `DatabaseConnection`; seed a disconnected one
+        // so registration succeeds without a live database.
+        let container = UsersModule::register(
+            Container::builder().provide(sea_orm::DatabaseConnection::default()),
+        )
+        .build();
         let svc: Option<Arc<UsersService>> = container.get();
         assert!(svc.is_some());
     }

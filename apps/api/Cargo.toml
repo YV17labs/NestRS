@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 nestrs-core.workspace = true
+nestrs-authz.workspace = true
 nestrs-graphql.workspace = true
 nestrs-graphql-cli.workspace = true
 nestrs-health.workspace = true
@@ -25,3 +26,5 @@ anyhow.workspace = true
 thiserror.workspace = true
 validator.workspace = true
 uuid.workspace = true
+sea-orm.workspace = true
+serde_json.workspace = true

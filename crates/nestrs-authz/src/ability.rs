@@ -11,17 +11,13 @@ use crate::action::Action;
 use crate::predicate::Predicate;
 
 /// Which fields of a subject may be read back in the response.
+#[derive(Default)]
 pub enum FieldSet {
     /// No restriction — every field is permitted.
+    #[default]
     All,
     /// Only these columns (named as they serialize) are permitted.
     Only(HashSet<&'static str>),
-}
-
-impl Default for FieldSet {
-    fn default() -> Self {
-        FieldSet::All
-    }
 }
 
 /// One grant or denial. The condition is precomputed at build time (the actor's

@@ -11,8 +11,10 @@ use sea_orm::sea_query::Condition;
 use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, Value};
 
 /// A condition over entity `E`, interpreted as SQL or in memory.
+#[derive(Default)]
 pub enum Predicate<E: EntityTrait> {
     /// Matches everything — an unconditional grant.
+    #[default]
     Always,
     /// `column = value`.
     Eq(E::Column, Value),
@@ -21,12 +23,6 @@ pub enum Predicate<E: EntityTrait> {
     And(Vec<Predicate<E>>),
     Or(Vec<Predicate<E>>),
     Not(Box<Predicate<E>>),
-}
-
-impl<E: EntityTrait> Default for Predicate<E> {
-    fn default() -> Self {
-        Predicate::Always
-    }
 }
 
 impl<E: EntityTrait> Predicate<E> {

@@ -18,8 +18,9 @@ use nestrs_macro_support::{
 };
 
 /// One route handler in a controller: its HTTP verb ident, the generated
-/// wrapper-fn ident, and the guard paths declared with `#[use_guards]`.
-type RouteHandler = (syn::Ident, syn::Ident, Vec<Path>);
+/// wrapper-fn ident, the guard paths declared with `#[use_guards]`, and the
+/// `Authorize<_, _>` parameter type (if any) that drives response shaping.
+type RouteHandler = (syn::Ident, syn::Ident, Vec<Path>, Option<Type>);
 
 /// Handlers grouped by path in first-seen order — several verbs may share a path
 /// (`GET` + `POST /users`), which `#[routes]` collapses into one `RouteMethod`.
@@ -252,7 +253,18 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             None => Vec::new(),
         };
 
-        let handler = (verb_ident.clone(), wrapper_name.clone(), guards);
+        // A handler that declares an `Authorize<A, S>` parameter has its
+        // response shaped (field-masked) by that gate type — detected by name so
+        // this crate emits only `::nestrs_http::shaped` plus the app's own type,
+        // never a path into the authz crate.
+        let shaper = shaper_type(&inputs);
+
+        let handler = (
+            verb_ident.clone(),
+            wrapper_name.clone(),
+            guards,
+            shaper.clone(),
+        );
         match routes_by_path
             .iter_mut()
             .find(|(path, _)| path.value() == route_path.value())
@@ -300,11 +312,13 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             },
             None => quote! { ::core::option::Option::None },
         };
-        let response = match response_payload(&method.sig.output) {
-            Some(ty) => quote! {
+        // A shaped (masked) response has no static schema — the fields it
+        // carries depend on the caller's ability — so skip schema capture there.
+        let response = match (shaper.is_some(), response_payload(&method.sig.output)) {
+            (false, Some(ty)) => quote! {
                 ::core::option::Option::Some(::nestrs_http::schema_of::<#ty> as ::nestrs_http::SchemaFn)
             },
-            None => quote! { ::core::option::Option::None },
+            _ => quote! { ::core::option::Option::None },
         };
 
         route_metas.push(quote! {
@@ -327,12 +341,12 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         .iter()
         .map(|(path, handlers)| {
             let mut handlers = handlers.iter();
-            let (first_verb, first_wrapper, first_guards) =
+            let (first_verb, first_wrapper, first_guards, first_shaper) =
                 handlers.next().expect("each path has at least one verb");
-            let first = guarded_handler(first_wrapper, first_guards);
+            let first = guarded_handler(first_wrapper, first_guards, first_shaper);
             let mut method = quote! { ::poem::#first_verb(#first) };
-            for (verb, wrapper, guards) in handlers {
-                let ep = guarded_handler(wrapper, guards);
+            for (verb, wrapper, guards, shaper) in handlers {
+                let ep = guarded_handler(wrapper, guards, shaper);
                 method = quote! { #method.#verb(#ep) };
             }
             quote! { .at(#path, #method) }
@@ -374,12 +388,40 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Wrap a route handler in its `#[use_guards]` guards, each resolved from the
-/// container at mount time. The first guard listed ends up outermost, so it runs
-/// first; with no guards the handler is emitted unchanged. Generated inside
+/// The `Authorize<A, S>` parameter type a handler declares, if any. Found by the
+/// last path segment being `Authorize` with angle-bracketed arguments, so the
+/// macro stays free of any compile dependency on the authz crate. The first such
+/// parameter wins; importing `Authorize` under an alias is not detected, so
+/// response shaping is silently skipped for it.
+fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
+    inputs.iter().find_map(|arg| {
+        let FnArg::Typed(pt) = arg else { return None };
+        let Type::Path(tp) = pt.ty.as_ref() else {
+            return None;
+        };
+        let last = tp.path.segments.last()?;
+        match last.ident == "Authorize"
+            && matches!(last.arguments, syn::PathArguments::AngleBracketed(_))
+        {
+            true => Some((*pt.ty).clone()),
+            false => None,
+        }
+    })
+}
+
+/// Wrap a route handler in its response shaper (if any) and its `#[use_guards]`
+/// guards. The shaper sits innermost — *inside* the guards — so a guard that
+/// attached request context (the authorization ability) has run before the
+/// shaper's `capture`. Each guard is resolved from the container at mount time;
+/// the first guard listed ends up outermost. Generated inside
 /// `Controller::mount`, where `container: &Container` is in scope.
-fn guarded_handler(wrapper: &syn::Ident, guards: &[Path]) -> TokenStream2 {
-    let mut expr = quote! { #wrapper };
+fn guarded_handler(wrapper: &syn::Ident, guards: &[Path], shaper: &Option<Type>) -> TokenStream2 {
+    let mut expr = match shaper {
+        Some(ty) => quote! {
+            ::nestrs_http::shaped(#wrapper, ::core::marker::PhantomData::<#ty>)
+        },
+        None => quote! { #wrapper },
+    };
     for g in guards.iter().rev() {
         expr = quote! {
             ::nestrs_http::EndpointExt::guard(

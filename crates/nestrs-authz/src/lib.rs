@@ -21,6 +21,7 @@ mod builder;
 mod extractor;
 mod factory;
 mod predicate;
+mod shape;
 mod subject;
 
 pub use ability::{Ability, FieldSet};

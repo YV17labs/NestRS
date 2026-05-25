@@ -22,6 +22,10 @@ use crate::subject::Subject;
 /// it was not applied to this route — a wiring bug, not a client error. This is
 /// the class-level gate; the per-row filter and the response mask enforce the
 /// rule's conditions.
+///
+/// `#[routes]` also reads this parameter to mask the response transparently, by
+/// the type name `Authorize` — so importing it under an alias (`use ... as Foo`)
+/// keeps the gate working but silently disables response masking.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>

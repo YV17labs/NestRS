@@ -6,7 +6,6 @@ use nestrs_pipes::ParseUuidV7;
 use poem::http::StatusCode;
 use poem::web::{Json, Path};
 use poem::{Error, Result};
-use serde_json::Value;
 
 use crate::auth::{AuthGuard, AuthUser};
 use crate::authz::AbilityGuard;
@@ -14,6 +13,10 @@ use crate::users::dto::CreateUserInput;
 use crate::users::entity;
 use crate::users::service::UsersService;
 
+// Handlers return raw rows: the `Authorize<_, entity::Entity>` parameter makes
+// `#[routes]` shape the response through the caller's ability, dropping rows and
+// stripping fields it does not permit — so there is no `mask` call here. The
+// query pre-filter (`condition_for`) still runs in the handler.
 #[controller(path = "/users")]
 pub struct UsersController {
     #[inject]
@@ -29,12 +32,9 @@ impl UsersController {
         &self,
         _authz: Authorize<Read, entity::Entity>,
         ability: Ctx<Arc<Ability>>,
-    ) -> Result<Json<Vec<Value>>> {
+    ) -> Result<Json<Vec<entity::Model>>> {
         let scope = ability.condition_for::<entity::Entity>(Action::Read);
-        let rows = self.svc.list(scope).await.map_err(internal)?;
-        Ok(Json(
-            ability.mask_many::<entity::Entity>(Action::Read, rows.iter()),
-        ))
+        Ok(Json(self.svc.list(scope).await.map_err(internal)?))
     }
 
     #[get("/:id")]
@@ -45,11 +45,9 @@ impl UsersController {
         _authz: Authorize<Read, entity::Entity>,
         ability: Ctx<Arc<Ability>>,
         id: Piped<ParseUuidV7, Path<String>>,
-    ) -> Result<Json<Value>> {
+    ) -> Result<Json<entity::Model>> {
         match self.svc.find(id.into_inner()).await.map_err(internal)? {
-            Some(row) if ability.can::<entity::Entity>(Action::Read, &row) => {
-                Ok(Json(ability.mask::<entity::Entity>(Action::Read, &row)))
-            }
+            Some(row) if ability.can::<entity::Entity>(Action::Read, &row) => Ok(Json(row)),
             // Exists but outside the caller's org: 403, not 404.
             Some(_) => Err(Error::from_status(StatusCode::FORBIDDEN)),
             None => Err(Error::from_status(StatusCode::NOT_FOUND)),
@@ -67,15 +65,14 @@ impl UsersController {
         &self,
         _authz: Authorize<Create, entity::Entity>,
         auth: Ctx<AuthUser>,
-        ability: Ctx<Arc<Ability>>,
         body: Valid<Json<CreateUserInput>>,
-    ) -> Result<Json<Value>> {
+    ) -> Result<Json<entity::Model>> {
         let row = self
             .svc
             .create(body.into_inner(), auth.org_id)
             .await
             .map_err(internal)?;
-        Ok(Json(ability.mask::<entity::Entity>(Action::Create, &row)))
+        Ok(Json(row))
     }
 }
 

@@ -4,9 +4,11 @@
 //! `Serialize` lets the authz layer mask a row into a JSON response.
 
 use sea_orm::entity::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize)]
+// `Deserialize` lets the response shaper parse the handler's JSON body back into
+// a `Model` to mask it.
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "users")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]

@@ -22,7 +22,7 @@ use syn::{
     ItemStruct, PathArguments, ReturnType, Signature, Type,
 };
 
-use nestrs_macro_support::{
+use nestrs_codegen::{
     build_injectable_body, forwarded_arg_idents, forwarded_idents, from_container_method,
     impl_self_ident, InjectableBody,
 };

@@ -33,7 +33,7 @@ by `nestrs-core`); a surface's decorator in that surface's `*-macros` crate
 `nestrs-graphql-macros`, `#[mcp]` in
 `nestrs-mcp-macros`), re-exported by the surface so apps import it from there
 (`nestrs_http::controller`). Shared token-building helpers go in
-`nestrs-macro-support`; a `*-macros` crate must not depend on its surface
+`nestrs-codegen`; a `*-macros` crate must not depend on its surface
 crate (it emits absolute-path tokens resolved at the call site), so there is
 no cycle. The macros are the leverage the project pays to maintain; spending
 them aggressively is the point.

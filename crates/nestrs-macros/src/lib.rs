@@ -2,7 +2,7 @@
 //! `#[module]` (composition + order-independent registration). Re-exported by
 //! `nestrs-core`. Surface-specific decorators live with their surface
 //! (`nestrs-http`, `nestrs-graphql`, `nestrs-mcp`); shared token helpers live
-//! in `nestrs-macro-support`.
+//! in `nestrs-codegen`.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -14,7 +14,7 @@ use syn::{
     Token, Type,
 };
 
-use nestrs_macro_support::{
+use nestrs_codegen::{
     build_injectable_body, dependencies_method, from_container_method, impl_self_ident,
     injected_method, InjectableBody,
 };

@@ -2,13 +2,13 @@
 //! code uses absolute paths (`::nestrs_schedule::*`, `::nestrs_core::*`,
 //! `::std::*`), so this crate does not depend on them — they resolve at the call
 //! site. Token-building helpers are shared with the other decorators via
-//! `nestrs-macro-support`.
+//! `nestrs-codegen`.
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, ItemStruct, LitStr};
 
-use nestrs_macro_support::{
+use nestrs_codegen::{
     build_injectable_body, from_container_method, injected_method, parse_named_str_arg,
     InjectableBody,
 };

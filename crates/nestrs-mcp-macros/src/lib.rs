@@ -7,7 +7,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, ItemStruct};
 
-use nestrs_macro_support::{
+use nestrs_codegen::{
     build_injectable_body, from_container_method, injected_method, parse_named_str_arg,
     InjectableBody,
 };

@@ -12,7 +12,7 @@ use syn::{
     Path, ReturnType, Token, Type,
 };
 
-use nestrs_macro_support::{
+use nestrs_codegen::{
     build_injectable_body, dependencies_method, forwarded_arg_idents, from_container_method,
     impl_self_ident, injected_keys_expr, injected_method, nth_generic_type, parse_named_str_arg,
     InjectableBody,

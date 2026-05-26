@@ -3,14 +3,14 @@
 //! `::nestrs_core::*`, `::std::*`) and never names `apalis` — so an app that
 //! decorates a processor needs only `nestrs-queue`, not a direct apalis
 //! dependency. Token-building helpers are shared with the other decorators via
-//! `nestrs-macro-support`.
+//! `nestrs-codegen`.
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{parse_macro_input, Ident, ItemStruct, LitInt, LitStr, Token};
 
-use nestrs_macro_support::{build_injectable_body, injected_method, InjectableBody};
+use nestrs_codegen::{build_injectable_body, injected_method, InjectableBody};
 
 /// Mark a struct as the consumer for a named job queue.
 ///

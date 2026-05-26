@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "HTTP decorator macros for nestrs (#[controller], #[routes], verb attributes, #[interceptor]). Re-exported by nestrs-http."
+description = "Internal — HTTP decorator macros (#[controller], #[routes], verb attributes, #[interceptor]); re-exported by nestrs-http, not a direct dependency."
 
 [lib]
 proc-macro = true
@@ -14,4 +14,4 @@ proc-macro = true
 syn.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true
-nestrs-macro-support.workspace = true
+nestrs-codegen.workspace = true

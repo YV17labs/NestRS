@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "The #[expose] attribute for nestrs-resource: expose a SeaORM entity to GraphQL + OpenAPI from one declaration."
+description = "Internal — the #[expose] attribute (SeaORM entity to GraphQL + OpenAPI); re-exported by nestrs-resource, not a direct dependency."
 
 [lib]
 proc-macro = true
@@ -14,4 +14,4 @@ proc-macro = true
 syn.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true
-nestrs-macro-support.workspace = true
+nestrs-codegen.workspace = true

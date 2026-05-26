@@ -1,14 +1,36 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="nestrs logo" width="160" height="160">
+  <img src="assets/wordmark.svg" alt="NestRS" width="220">
 </p>
 
-# NestRS
-
-An opinionated Rust framework that leans on procedural macros to keep
-application code declarative. NestJS-inspired on the surface, Rust-native
-underneath.
+<p align="center">
+  <em>An opinionated Rust framework that leans on procedural macros to keep
+  application code declarative — NestJS-inspired on the surface, Rust-native
+  underneath.</em>
+</p>
 
 Applications live under `apps/`, reusable building blocks under `crates/`.
+
+## Vision
+
+A few trends made this project feel worth trying.
+
+Memory has become a serious cost. Provisioning RAM in the cloud has grown much
+more expensive in recent years, and for many services it is now the largest part
+of the bill. Managed runtimes — Node, and frameworks like NestJS built on it —
+are genuinely productive, but they reach that productivity through a runtime and
+a garbage collector with a sizeable, always-resident footprint, which also means
+more energy spent per request.
+
+At the same time, LLM-assisted coding has lowered the barrier to writing native,
+lower-level code. Much of the friction that made higher-level runtimes
+attractive — boilerplate, slower scaffolding, a steeper learning curve — is
+easier to absorb today, regardless of the language.
+
+That seems to leave room to revisit an old trade-off: keep the declarative,
+decorator-driven style that makes NestJS pleasant to work in, but build it on a
+native, compiled foundation that uses less memory and energy. NestRS is an
+experiment in that direction — not a claim to be better, just an attempt to see
+how far familiar ergonomics carry on a leaner base.
 
 ## What the framework provides
 

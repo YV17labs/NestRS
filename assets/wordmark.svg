@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 600">
+<defs>
+  <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#ff4d5f"/>
+    <stop offset="100%" stop-color="#ff7a59"/>
+  </linearGradient>
+</defs>
+
+<!-- icon: the existing logo, scaled and centered at the top -->
+<g transform="translate(46,24) scale(0.82)">
+  <g transform="translate(256,256)">
+    <!-- outer rust-inspired ring -->
+    <path d="
+    M0,-180
+    L28,-160 L65,-168 L92,-140 L130,-136
+    L146,-100 L180,-82 L176,-42 L198,0
+    L176,42 L180,82 L146,100 L130,136
+    L92,140 L65,168 L28,160 L0,180
+    L-28,160 L-65,168 L-92,140 L-130,136
+    L-146,100 L-180,82 L-176,42 L-198,0
+    L-176,-42 L-180,-82 L-146,-100 L-130,-136
+    L-92,-140 L-65,-168 L-28,-160 Z"
+    fill="#111111"/>
+
+    <circle r="120" fill="#0f0f0f"/>
+
+    <!-- modern Nest-inspired center -->
+    <path d="M0,-110
+             C60,-80 88,-25 72,55
+             L0,110
+             L-72,55
+             C-88,-25 -60,-80 0,-110Z"
+          fill="url(#grad)"/>
+
+    <!-- subtle inner cut -->
+    <path d="M0,-55
+             C25,-40 40,-10 34,30
+             L0,58
+             L-34,30
+             C-40,-10 -25,-40 0,-55Z"
+          fill="#111111"/>
+  </g>
+</g>
+
+<!-- wordmark below the icon -->
+<text x="256" y="548" text-anchor="middle"
+      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+      font-size="112" font-weight="700" letter-spacing="-2">
+  <tspan fill="#111111">Nest</tspan><tspan fill="url(#grad)">RS</tspan>
+</text>
+</svg>

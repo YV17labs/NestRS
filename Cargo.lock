@@ -101,7 +101,6 @@ dependencies = [
  "nestrs-authz",
  "nestrs-core",
  "nestrs-graphql",
- "nestrs-graphql-cli",
  "nestrs-health",
  "nestrs-http",
  "nestrs-middleware",
@@ -1808,14 +1807,7 @@ dependencies = [
  "nestrs-graphql-macros",
  "nestrs-http",
  "poem",
-]
-
-[[package]]
-name = "nestrs-graphql-cli"
-version = "0.1.0"
-dependencies = [
- "nestrs-core",
- "nestrs-graphql",
+ "tracing",
 ]
 
 [[package]]

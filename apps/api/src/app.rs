@@ -20,6 +20,8 @@ use crate::users::UsersModule;
         GraphqlModule::for_root(GraphqlOptions {
             path: "/graphql".into(),
             playground: true,
+            schema_path: concat!(env!("CARGO_MANIFEST_DIR"), "/schema.graphql").into(),
+            emit_sdl: cfg!(debug_assertions),
         }),
         HealthModule,
         OpenApiModule::for_root(OpenApiOptions {

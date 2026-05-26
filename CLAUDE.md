@@ -356,7 +356,7 @@ consumed by `#[routes]` like `#[use_guards]`, needs no import, and every field i
 optional — the default tag is the controller struct name, so routes group by
 controller. Not yet built (deliberate, noted in the crate): query-param schemas,
 path-param *types* (emitted as `string`), security schemes, and a committed
-`openapi.json` snapshot regenerated like `just graphql-schema`.
+`openapi.json` snapshot emitted on boot like the GraphQL SDL (see "Done" below).
 
 ## Naming rules — strict
 
@@ -386,22 +386,23 @@ sufficient. Start the binary (`cargo run --bin <app>` in the background),
 Routing and wiring bugs do not surface in unit tests.
 
 A GraphQL app commits its schema as SDL (`apps/<app>/schema.graphql`) so the API
-surface is reviewable in diffs. After changing resolvers, regenerate it by hand
-with `just graphql-schema <app>` (default `api`) and commit the result.
-`nestrs_graphql::schema_sdl` renders it with sorted types/fields/arguments so it
-is deterministic across builds. The schema is composed from the resolvers
-*linked into a binary*, so it can only be rendered from inside the app — and the
-server binary must do nothing but serve. So each GraphQL app is a **library plus
-two binaries**: `main.rs` (the server, no arg parsing) and `bin/schema.rs` (the
-generator), both linking the app's `lib.rs` so the generator sees the same
-resolvers the server does. `bin/schema.rs` builds the container (seeding a
-disconnected `DatabaseConnection` so the DB-injected resolvers register without
-running the async factory — the schema is described, never executed) and calls
-`nestrs_graphql_cli::write_schema(&container, path)`, the shared emit logic. The
-path is the app's own via `CARGO_MANIFEST_DIR`, so it adapts to any app name.
-`nestrs-graphql-cli` is also where federation-aware schema commands will land
-if/when federation does. There is no drift-check command: regeneration is a
-deliberate manual step, not a CI gate.
+surface is reviewable in diffs. The schema is composed from the resolvers
+*linked into a binary* and rendered from the fully assembled container, so it can
+only be emitted from inside the running app — there is no standalone generator.
+`GraphqlModule::for_root` carries this with two plain fields: `schema_path`
+(where the SDL lives) and `emit_sdl: bool` (whether to write it). When `emit_sdl`
+is `true` the server writes `schema_path` (deterministically — types, fields, and
+arguments sorted, so link-time iteration order cannot churn the diff) once at
+boot, before serving, from the same container the resolvers inject into. The app
+drives the boolean from its environment at the import site (`apps/api` uses
+`cfg!(debug_assertions)` — `true` in a dev build, `false` in a release one), so a
+dev run regenerates the committed schema while production reads it as-is. A write
+failure is logged, never fatal.
+Regenerating after changing resolvers therefore means **running the dev server**
+— there is no `bin/schema.rs`, no `nestrs-graphql-cli`, no `just graphql-schema`,
+and no drift-check: regeneration is a side effect of the dev run, not a CI gate.
+(Federation-aware schema commands, if federation lands, would reintroduce
+dedicated tooling.)
 
 ## Engineering posture
 

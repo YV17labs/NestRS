@@ -33,7 +33,3 @@ fmt:
 # Fast type-check (no codegen)
 check:
     cargo check --workspace
-
-# Regenerate an app's committed GraphQL schema (default: api). Usage: just graphql-schema api
-graphql-schema app="api":
-    cargo run --quiet -p {{app}} --bin schema

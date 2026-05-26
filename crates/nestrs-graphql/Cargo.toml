@@ -21,3 +21,5 @@ async-graphql-poem.workspace = true
 # the framework without apps depending on `inventory` directly.
 inventory.workspace = true
 poem.workspace = true
+# GraphqlModule logs the boot-time SDL emit through the framework's tracing.
+tracing.workspace = true

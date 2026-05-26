@@ -207,10 +207,10 @@ pub(crate) fn build_schema(
 /// Types, fields, arguments, and enum values are sorted so the output is
 /// deterministic: the resolver registry's link-time iteration order (which is
 /// not stable across builds) cannot leak into the file and churn its diff.
-/// Building the schema constructs each resolver from `container`, so it must
-/// hold the providers the resolvers inject.
-pub fn schema_sdl(container: &Container) -> String {
-    build_schema(container.clone()).sdl_with_options(
+pub(crate) fn render_sdl(
+    schema: &Schema<DiscoveredQuery, DiscoveredMutation, EmptySubscription>,
+) -> String {
+    schema.sdl_with_options(
         SDLExportOptions::new()
             .sorted_fields()
             .sorted_arguments()

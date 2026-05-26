@@ -18,7 +18,6 @@ mod module;
 mod resolver;
 
 pub use module::{GraphqlModule, GraphqlOptions, GraphqlSetup};
-pub use resolver::schema_sdl;
 // `pub` only so `#[resolver]`/`#[dataloader]`-generated code can name them;
 // `#[doc(hidden)]` at their definitions keeps them out of the app-facing surface.
 pub use loader::LoaderRegistration;

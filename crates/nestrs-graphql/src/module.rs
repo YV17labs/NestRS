@@ -1,5 +1,7 @@
 //! `GraphqlModule` — import it to serve the auto-discovered schema over HTTP.
 
+use std::path::PathBuf;
+
 use nestrs_core::{ContainerBuilder, DynamicModule, Module};
 use nestrs_http::HttpEndpointMeta;
 use poem::endpoint::make_sync;
@@ -19,6 +21,16 @@ pub struct GraphqlOptions {
     pub path: String,
     /// Serve the GraphQL playground on `GET <path>`. Default `true`.
     pub playground: bool,
+    /// Where the committed SDL lives — written on boot when `emit_sdl` is
+    /// `true`, ignored otherwise. Typically the app's own `schema.graphql`
+    /// (`concat!(env!("CARGO_MANIFEST_DIR"), "/schema.graphql")`).
+    pub schema_path: PathBuf,
+    /// Whether to (re)write `schema_path` from the live schema once at boot,
+    /// before serving. Drive it from the environment at the import site: `true`
+    /// in development (regenerate the committed SDL as resolvers change), `false`
+    /// in production (read the committed file as-is, never touch it). A write
+    /// failure is logged, never fatal. Default `false`.
+    pub emit_sdl: bool,
 }
 
 impl Default for GraphqlOptions {
@@ -26,6 +38,8 @@ impl Default for GraphqlOptions {
         Self {
             path: DEFAULT_PATH.into(),
             playground: true,
+            schema_path: "schema.graphql".into(),
+            emit_sdl: false,
         }
     }
 }
@@ -56,6 +70,8 @@ impl Default for GraphqlOptions {
 ///     GraphqlModule::for_root(GraphqlOptions {
 ///         path: "/graphql".into(),
 ///         playground: false,
+///         schema_path: "schema.graphql".into(),
+///         emit_sdl: false,
 ///     }),
 /// ])]
 /// ```
@@ -95,6 +111,25 @@ fn register(builder: ContainerBuilder, options: GraphqlOptions) -> ContainerBuil
         "graphql",
         move |container, route: Route| {
             let schema = build_schema(container.clone());
+            // This closure runs once at boot and is the only place GraphqlModule
+            // holds the assembled container, so the SDL emit lives here rather
+            // than in a (per-provider) lifecycle hook. Rendered from the serving
+            // schema above to avoid building it twice.
+            if options.emit_sdl {
+                let dest = &options.schema_path;
+                match std::fs::write(dest, crate::resolver::render_sdl(&schema)) {
+                    Ok(()) => tracing::info!(
+                        target: "nestrs::graphql",
+                        "wrote GraphQL SDL to {}",
+                        dest.display(),
+                    ),
+                    Err(err) => tracing::warn!(
+                        target: "nestrs::graphql",
+                        "failed to write GraphQL SDL to {}: {err}",
+                        dest.display(),
+                    ),
+                }
+            }
             let mut method = poem::post(async_graphql_poem::GraphQL::new(schema));
             if options.playground {
                 let html = async_graphql::http::playground_source(

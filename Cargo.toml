@@ -99,7 +99,6 @@ nestrs-authz = { path = "crates/nestrs-authz" }
 nestrs-macro-support = { path = "crates/nestrs-macro-support" }
 nestrs-macros = { path = "crates/nestrs-macros" }
 nestrs-graphql = { path = "crates/nestrs-graphql" }
-nestrs-graphql-cli = { path = "crates/nestrs-graphql-cli" }
 nestrs-graphql-macros = { path = "crates/nestrs-graphql-macros" }
 nestrs-health = { path = "crates/nestrs-health" }
 nestrs-http = { path = "crates/nestrs-http" }

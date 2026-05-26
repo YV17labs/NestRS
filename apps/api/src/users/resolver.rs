@@ -46,7 +46,6 @@ impl UsersResolver {
 
     #[mutation]
     async fn create_user(&self, input: CreateUserInput) -> Result<User> {
-        // GraphQL has no request principal, so new users land in the seed org.
         let row = self
             .users
             .create(input, ORG_ACME)
@@ -61,8 +60,6 @@ impl UsersResolver {
         parent: &User,
         by_name: &DataLoader<UsersServiceByName>,
     ) -> Result<Vec<User>> {
-        // `?` surfaces a real loader error; `unwrap_or_default` only covers the
-        // legitimate "no rows for this name" case (`load_one` returns `None`).
         let same_name = by_name
             .load_one(parent.name.clone())
             .await?

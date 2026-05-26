@@ -21,9 +21,6 @@ pub struct UsersService {
 }
 
 impl UsersService {
-    /// List users matching a caller-supplied scope. The HTTP layer passes the
-    /// authorization pre-filter (`Ability::condition_for`); GraphQL passes
-    /// `Condition::all()`.
     pub async fn list(&self, scope: Condition) -> Result<Vec<entity::Model>> {
         Ok(Users::find().filter(scope).all(self.db.as_ref()).await?)
     }
@@ -44,13 +41,13 @@ impl UsersService {
     }
 }
 
-// Batched lookups for `#[field]` resolvers — one method per loader. With the ORM
-// the body is a single `WHERE name = ANY($1)` query, killing the N+1.
 #[dataloader]
 impl UsersService {
     async fn by_name(&self, names: &[String]) -> HashMap<String, Vec<User>> {
-        let mut buckets: HashMap<String, Vec<User>> =
-            names.iter().map(|name| (name.clone(), Vec::new())).collect();
+        let mut buckets: HashMap<String, Vec<User>> = names
+            .iter()
+            .map(|name| (name.clone(), Vec::new()))
+            .collect();
         let rows = Users::find()
             .filter(entity::Column::Name.is_in(names.iter().cloned()))
             .all(self.db.as_ref())
@@ -68,14 +65,10 @@ impl UsersService {
     }
 }
 
-// Lifecycle hooks: create the table and seed two tenants at boot so the
-// org-scoped filter is observable; report the row count at shutdown.
 #[hooks]
 impl UsersService {
     #[on_module_init]
     async fn migrate_and_seed(&self) -> Result<()> {
-        // Derive the table from the entity so the schema cannot drift from the
-        // model; a real migration (sea-orm-migration) is the production path.
         let backend = self.db.get_database_backend();
         let mut create = Schema::new(backend).create_table_from_entity(Users);
         create.if_not_exists();
@@ -113,8 +106,6 @@ impl UsersService {
 mod tests {
     use super::*;
 
-    // Input validation rejects before any query runs, so a disconnected
-    // connection suffices here.
     fn service() -> UsersService {
         UsersService {
             db: Arc::new(DatabaseConnection::default()),

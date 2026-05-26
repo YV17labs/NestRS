@@ -108,6 +108,7 @@ nestrs-mcp = { path = "crates/nestrs-mcp" }
 nestrs-mcp-macros = { path = "crates/nestrs-mcp-macros" }
 nestrs-middleware = { path = "crates/nestrs-middleware" }
 nestrs-openapi = { path = "crates/nestrs-openapi" }
+nestrs-orm = { path = "crates/nestrs-orm" }
 nestrs-pipes = { path = "crates/nestrs-pipes" }
 nestrs-queue = { path = "crates/nestrs-queue" }
 nestrs-queue-macros = { path = "crates/nestrs-queue-macros" }

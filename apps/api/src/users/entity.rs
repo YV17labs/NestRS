@@ -1,12 +1,3 @@
-//! The `users` table as a SeaORM entity.
-//!
-//! `#[expose]` exposes it to GraphQL + OpenAPI from one declaration — it
-//! generates `User` (the GraphQL object + JSON schema) and `CreateUserInput`
-//! from the fields, then leaves the entity untouched so `#[sea_orm::model]`
-//! keeps the ORM's full power. `org_id` is the multi-tenant scope: `skip` keeps
-//! it out of the API surface (the service sets it from the authenticated
-//! caller). Routes and guards live on the controller/resolver, never here.
-
 use nestrs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};

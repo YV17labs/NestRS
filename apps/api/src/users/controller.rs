@@ -12,10 +12,6 @@ use crate::authz::AbilityGuard;
 use crate::users::entity::{self, CreateUserInput};
 use crate::users::service::UsersService;
 
-// Handlers return raw rows: the `Authorize<_, entity::Entity>` parameter makes
-// `#[routes]` shape the response through the caller's ability, dropping rows and
-// stripping fields it does not permit — so there is no `mask` call here. The
-// query pre-filter (`condition_for`) still runs in the handler.
 #[controller(path = "/users")]
 pub struct UsersController {
     #[inject]
@@ -38,7 +34,10 @@ impl UsersController {
 
     #[get("/:id")]
     #[use_guards(AuthGuard, AbilityGuard)]
-    #[api(summary = "Fetch a user by id (scoped to the caller's org)", tags("Users"))]
+    #[api(
+        summary = "Fetch a user by id (scoped to the caller's org)",
+        tags("Users")
+    )]
     async fn get(
         &self,
         _authz: Authorize<Read, entity::Entity>,

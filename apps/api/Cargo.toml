@@ -13,6 +13,7 @@ nestrs-health.workspace = true
 nestrs-http.workspace = true
 nestrs-middleware.workspace = true
 nestrs-openapi.workspace = true
+nestrs-orm.workspace = true
 nestrs-pipes.workspace = true
 nestrs-resource.workspace = true
 nestrs-server-timing.workspace = true
@@ -29,3 +30,8 @@ validator.workspace = true
 uuid.workspace = true
 sea-orm.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# `test` enables poem's in-process TestClient, used to drive the mounted
+# endpoints without binding a socket or a live database.
+poem = { workspace = true, features = ["test"] }

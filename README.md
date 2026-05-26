@@ -10,6 +10,36 @@ underneath.
 
 Applications live under `apps/`, reusable building blocks under `crates/`.
 
+## What the framework provides
+
+Capabilities ship as separate crates, so an app compiles only what it imports
+(the headless `worker` pulls in neither HTTP nor GraphQL). The developer-facing
+surface is decorator macros — reach for them first (`#[injectable]`, `#[module]`,
+`#[controller]`, `#[resolver]`, `#[processor]`, …).
+
+| Crate | What it gives you | NestJS analog |
+|-------|-------------------|---------------|
+| `nestrs-core` | IoC container, modules (`#[module]`), DI (`#[injectable]`), lifecycle hooks (`#[hooks]`), app bootstrap, boot-time module access-graph check | `@nestjs/core` |
+| `nestrs-config` | Typed config from env + TOML (`NESTRS_<DOMAIN>__<KEY>` scheme) | `@nestjs/config` |
+| `nestrs-http` | REST controllers (`#[controller]`/`#[routes]`), per-verb routing, route guards (`#[use_guards]`); poem-backed | `@nestjs/platform-express` |
+| `nestrs-graphql` | Resolvers (`#[resolver]`/`#[query]`/`#[mutation]`/`#[field]`), self-composing schema, request-scoped dataloaders (`#[dataloader]`) | `@nestjs/graphql` |
+| `nestrs-openapi` | OpenAPI 3.1 document + bundled offline Swagger UI, composed from the route table | `@nestjs/swagger` |
+| `nestrs-mcp` | Model Context Protocol server over Streamable-HTTP (`#[mcp]`) | — (`rmcp`-backed) |
+| `nestrs-orm` | SeaORM database module — async pool via `DatabaseModule::for_root` | `@nestjs/typeorm` |
+| `nestrs-queue` | Redis-backed durable job queues + workers (`#[processor]`); `apalis`-backed | `@nestjs/bullmq` |
+| `nestrs-schedule` | In-process cron / interval jobs (`#[cron_job]`) | `@nestjs/schedule` |
+| `nestrs-authz` | CASL-style authorization: one ability → access gate + query pre-filter + response masking (HTTP binding in `nestrs-authz-http`) | CASL / `@casl/ability` |
+| `nestrs-pipes` | Transport-agnostic validation & transformation (`ValidationPipe`, `Parse*`, …) | `@nestjs/common` pipes |
+| `nestrs-middleware` | Guards, interceptors, exception filters | `@nestjs/common` |
+| `nestrs-resource` | Expose a SeaORM entity to GraphQL **and** OpenAPI from one `#[expose]` | — |
+| `nestrs-health` | Kubernetes liveness / readiness / startup probes | `@nestjs/terminus` |
+| `nestrs-telemetry` | Structured logs, OpenTelemetry traces & metrics, per-request access log + `X-Trace-Id` | — (OpenTelemetry) |
+| `nestrs-server-timing` | `Server-Timing` response headers | — |
+
+Decorator macros live in companion `*-macros` crates (a Rust `proc-macro` crate
+can export only macros) with shared codegen in `nestrs-codegen`; these are
+internal plumbing, re-exported by the crates above and never depended on directly.
+
 ## Prerequisites
 
 - Rust toolchain (1.75 or newer): https://rustup.rs
@@ -83,9 +113,12 @@ Security defaults baked in:
 
 ## Applications
 
-### `api` — HTTP + GraphQL (port 3002)
+### `api` — REST + GraphQL, persisted and authorized (port 3002)
 
-Started with `just dev api`. Listens on `http://0.0.0.0:3002`:
+Started with `just dev api`. Persists to **Postgres** through SeaORM
+(`nestrs-orm`), so it needs a `DATABASE_URL` (e.g.
+`postgres://postgres:postgres@localhost/nestrs`) — boot aborts with a clear
+message if it is unset. Listens on `http://0.0.0.0:3002`:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -116,11 +149,16 @@ controller. `#[api(summary = "...", tags("..."))]` beside a verb enriches an
 operation (NestJS's `@ApiOperation`/`@ApiTags`). Swagger UI is bundled and served
 offline at `/api` (the document at `/api-json`), matching NestJS's default paths.
 
-It also exercises the request pipeline: `POST /users` is protected by an
-`#[injectable]` `ApiKeyGuard` bound with `#[use_guards]` (send an `x-api-key`
-header), which attaches a `Caller` the handler reads back via `Ctx<Caller>`. And
-a `#[cron_job]` (`UserCountReport`), ticked by the `Scheduler` transport, logs
-the user count on an interval.
+It also exercises the full request + authorization pipeline. Each `/users` route
+is bound with `#[use_guards(AuthGuard, AppAbilityGuard)]`: `AuthGuard`
+authenticates (`x-api-key` + `x-org-id` headers) and attaches an `AuthUser`, then
+`AppAbilityGuard` builds the caller's CASL-style `Ability` from it. That one
+ability drives all three of CASL's powers — the `Authorize<Action, Entity>`
+extractor gates access (`403`) and masks the response to the fields and rows the
+caller may see, `ability.condition_for::<Entity>(…)` pre-filters the SeaORM query
+to the caller's org, and `ability.can::<Entity>(…)` makes the per-row check on
+by-id reads. Inputs pass through pipes — `Valid<Json<…>>` validation and
+`Piped<ParseUuidV7, Path<…>>` parsing.
 
 ### `app` — Minimal HTTP endpoint (port 3001)
 
@@ -154,6 +192,24 @@ injects (override with `NESTRS_WEATHER__BASE_URL` / `NESTRS_WEATHER__REQUEST_TIM
 
 Point any MCP client (Claude Desktop, Cursor, custom integrations) at
 `http://localhost:3003/mcp`.
+
+### `worker` — Background jobs & scheduling (headless)
+
+Started with `just dev worker`. No HTTP surface — it runs two transports: a
+`Scheduler` (in-process cron / interval jobs) and a `QueueWorker` (Redis-backed
+durable jobs via `apalis`). Needs a Redis instance (`REDIS_URL`, default
+`redis://127.0.0.1/`).
+
+The bundled `audio` feature shows the full producer → queue → consumer loop:
+`AudioProducer`, a `#[cron_job(every = "5s")]`, enqueues a transcode job every
+five seconds, and `AudioConsumer`, a
+`#[processor(queue = "audio", concurrency = 5, retries = 3)]`, pulls and processes
+it (retried on failure). Producer and consumer are decoupled by the queue name —
+jobs survive a restart and any number of worker processes share one queue.
+
+Because it enables `nestrs-telemetry` without the `http` feature and imports no
+HTTP crate, the worker binary never compiles the poem stack — a genuinely lean
+headless build.
 
 ## License
 

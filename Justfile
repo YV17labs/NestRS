@@ -1,9 +1,8 @@
 _default:
     @just --list
 
-# Run an app with hot reload (default: app). Usage: just dev mcp
 dev app="app":
-    bacon run -- --bin {{app}}
+    bacon run-long -- --bin {{app}}
 
 # Run an app in release mode (default: app). Usage: just run mcp
 run app="app":

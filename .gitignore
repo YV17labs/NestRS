@@ -19,6 +19,9 @@ lcov.info
 *.swp
 *.swo
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # OS noise
 .DS_Store
 Thumbs.db

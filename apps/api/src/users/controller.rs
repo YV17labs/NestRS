@@ -7,8 +7,8 @@ use poem::http::StatusCode;
 use poem::web::{Json, Path};
 use poem::{Error, Result};
 
-use crate::auth::{AuthGuard, AuthUser};
-use crate::authz::AbilityGuard;
+use crate::authn::{AuthGuard, AuthUser};
+use crate::authz::AppAbilityGuard;
 use crate::users::entity::{self, CreateUserInput};
 use crate::users::service::UsersService;
 
@@ -21,7 +21,7 @@ pub struct UsersController {
 #[routes]
 impl UsersController {
     #[get("/")]
-    #[use_guards(AuthGuard, AbilityGuard)]
+    #[use_guards(AuthGuard, AppAbilityGuard)]
     #[api(summary = "List users in the caller's org", tags("Users"))]
     async fn list(
         &self,
@@ -33,7 +33,7 @@ impl UsersController {
     }
 
     #[get("/:id")]
-    #[use_guards(AuthGuard, AbilityGuard)]
+    #[use_guards(AuthGuard, AppAbilityGuard)]
     #[api(
         summary = "Fetch a user by id (scoped to the caller's org)",
         tags("Users")
@@ -53,7 +53,7 @@ impl UsersController {
     }
 
     #[post("/")]
-    #[use_guards(AuthGuard, AbilityGuard)]
+    #[use_guards(AuthGuard, AppAbilityGuard)]
     #[api(
         summary = "Create a user in the caller's org",
         description = "Requires the `x-api-key` and `x-org-id` headers.",

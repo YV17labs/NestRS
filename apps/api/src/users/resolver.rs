@@ -6,9 +6,8 @@ use nestrs_graphql::resolver;
 use sea_orm::Condition;
 use uuid::Uuid;
 
-use crate::authz::ORG_ACME;
 use crate::users::entity::{CreateUserInput, User};
-use crate::users::service::{UsersService, UsersServiceByName};
+use crate::users::service::{UsersService, UsersServiceByName, ORG_ACME};
 
 fn to_gql_error(error: impl std::fmt::Display) -> async_graphql::Error {
     async_graphql::Error::new(error.to_string())

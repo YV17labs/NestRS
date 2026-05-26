@@ -1,5 +1,5 @@
 mod app;
-mod auth;
+mod authn;
 mod authz;
 mod users;
 

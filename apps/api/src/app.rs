@@ -6,8 +6,8 @@ use nestrs_orm::{DatabaseModule, DatabaseOptions};
 use nestrs_server_timing::ServerTimingModule;
 use nestrs_telemetry::TelemetryModule;
 
-use crate::auth::AuthGuard;
-use crate::authz::{AbilityGuard, AppAbility};
+use crate::authn::AuthnModule;
+use crate::authz::AuthzModule;
 use crate::users::UsersModule;
 
 #[module(
@@ -16,6 +16,8 @@ use crate::users::UsersModule;
             url: std::env::var("DATABASE_URL").unwrap_or_default(),
             ..Default::default()
         }),
+        AuthnModule,
+        AuthzModule,
         UsersModule,
         GraphqlModule::for_root(GraphqlOptions {
             path: "/graphql".into(),
@@ -32,6 +34,5 @@ use crate::users::UsersModule;
         TelemetryModule,
         ServerTimingModule,
     ],
-    providers = [AuthGuard, AbilityGuard, AppAbility],
 )]
 pub struct AppModule;

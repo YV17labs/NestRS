@@ -1,26 +1,14 @@
+//! Authentication: the [`AuthGuard`] resolves the caller from request headers
+//! into an [`AuthUser`] and attaches it for downstream guards and handlers
+//! (header-based here; a JWT or session strategy would slot in the same way).
+
 use nestrs_core::injectable;
 use nestrs_http::{async_trait, Guard};
 use poem::http::StatusCode;
 use poem::{Request, Response};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Admin,
-    User,
-}
-
-#[derive(Debug, Clone)]
-pub struct AuthUser {
-    pub org_id: Uuid,
-    pub roles: Vec<Role>,
-}
-
-impl AuthUser {
-    pub fn is_admin(&self) -> bool {
-        self.roles.contains(&Role::Admin)
-    }
-}
+use crate::authn::principal::{AuthUser, Role};
 
 #[injectable]
 #[derive(Default)]

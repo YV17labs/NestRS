@@ -1,0 +1,6 @@
+# Use mold as the linker on Linux. Linking dominates incremental rebuild time,
+# and mold is far faster than the default GNU ld. gcc (the default `cc` link
+# driver) forwards `-fuse-ld=mold` natively since 12.1 — this devcontainer ships
+# gcc 14, and mold is installed via .devcontainer/Dockerfile.
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

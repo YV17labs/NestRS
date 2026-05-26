@@ -120,6 +120,15 @@ nestrs-schedule-macros = { path = "crates/nestrs-schedule-macros" }
 nestrs-server-timing = { path = "crates/nestrs-server-timing" }
 nestrs-telemetry = { path = "crates/nestrs-telemetry" }
 
+# Release: smallest, fastest binary. Compile time is not a concern here.
 [profile.release]
-lto = "thin"
-codegen-units = 1
+opt-level = 3       # max performance (the release default; explicit for clarity)
+lto = "fat"         # whole-program optimisation: best cross-crate dead-code elimination
+codegen-units = 1   # a single unit gives the optimiser the most to work with
+strip = true        # drop symbols from the final binary (~18 MB -> ~15 MB)
+
+# Dev: fastest possible iterative compile. opt-level = 0 and incremental = true
+# are already the defaults; the win here is dropping full debuginfo while keeping
+# file:line in backtraces, which speeds up both codegen and linking.
+[profile.dev]
+debug = "line-tables-only"

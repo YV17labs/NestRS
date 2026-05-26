@@ -2,6 +2,12 @@
 
 FROM mcr.microsoft.com/devcontainers/rust:1-trixie AS dev
 
+# mold: a fast linker — the biggest win on incremental dev rebuilds.
+# Wired up as the Linux linker in .cargo/config.toml.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends mold \
+ && rm -rf /var/lib/apt/lists/*
+
 USER vscode
 
 RUN rustup toolchain install stable \

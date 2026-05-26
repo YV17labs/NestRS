@@ -32,5 +32,23 @@ pub trait Discoverable {
         Vec::new()
     }
 
+    /// The `TypeId` of each `#[inject]` dependency this provider pulls from the
+    /// container — *whenever* it is built — for the module access-graph check
+    /// `#[module]` records it per provider so the
+    /// boot-time pass can verify the dependency is reachable through the
+    /// module's imports (or is global infrastructure).
+    ///
+    /// Distinct from [`dependencies`](Discoverable::dependencies): that gates
+    /// *registration ordering* and so is empty for a provider built later from
+    /// the fully-assembled container (a controller, MCP tool, cron job,
+    /// processor), which must not block the register-phase fixpoint. `injected`
+    /// reports the same `#[inject]` fields regardless of build timing, so the
+    /// access contract governs transport-built logic too. The default — none —
+    /// fits a provider with no injected dependencies; the decorator macros
+    /// override it from the `#[inject]` fields.
+    fn injected() -> Vec<TypeId> {
+        Vec::new()
+    }
+
     fn register(builder: ContainerBuilder) -> ContainerBuilder;
 }

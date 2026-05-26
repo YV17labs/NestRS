@@ -8,7 +8,8 @@ use quote::quote;
 use syn::{parse_macro_input, ItemStruct};
 
 use nestrs_macro_support::{
-    build_injectable_body, from_container_method, parse_named_str_arg, InjectableBody,
+    build_injectable_body, from_container_method, injected_method, parse_named_str_arg,
+    InjectableBody,
 };
 
 /// Mark a struct as an MCP server handler that mounts itself over HTTP.
@@ -31,7 +32,7 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let mut item = parse_macro_input!(input as ItemStruct);
 
-    let InjectableBody { ctor, .. } = match build_injectable_body(&mut item) {
+    let InjectableBody { ctor, dep_keys } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -39,6 +40,7 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
+    let injected = injected_method(&dep_keys);
 
     quote! {
         #item
@@ -48,6 +50,8 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl #impl_generics ::nestrs_core::Discoverable for #name #ty_generics #where_clause {
+            #injected
+
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,
             ) -> ::nestrs_core::ContainerBuilder {

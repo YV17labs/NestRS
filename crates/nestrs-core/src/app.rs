@@ -1,31 +1,21 @@
-use std::any::Any;
+use std::any::{Any, TypeId};
+use std::collections::HashSet;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use crate::access::validate_from_inventory;
 use crate::container::{Container, ContainerBuilder};
 use crate::lifecycle::{run_phase, run_phase_lenient, LifecyclePhase};
 use crate::module::Module;
 use crate::transport::Transport;
 
-/// A registration to apply once a factory has produced its value: it `provide`s
-/// the awaited result, so a factory output flows through the same path — and the
-/// same duplicate-detection — as any other provider.
-type Registrar = Box<dyn FnOnce(ContainerBuilder) -> ContainerBuilder + Send>;
-type FactoryFuture = Pin<Box<dyn Future<Output = Result<Registrar>> + Send>>;
-type BoxedFactory = Box<dyn FnOnce(Container) -> FactoryFuture + Send>;
-
 /// Entry point for a nestrs application. Builds the container from a root
 /// [`Module`], attaches zero or more [`Transport`]s, and runs them
 /// concurrently until shutdown.
-///
-/// For ops scripts (migrations, seeders) that need the container but no
-/// transport, use [`App::context`] instead — it builds the container and
-/// hands it back without starting anything.
 pub struct App {
     container: Container,
     transports: Vec<Box<dyn Transport>>,
@@ -33,19 +23,20 @@ pub struct App {
 
 impl App {
     /// Build the container from the root module and return an empty app.
-    pub fn new<M: Module>() -> Self {
+    ///
+    /// The sync path has no seeds or factories, so the access-graph check
+    /// runs against an empty global set: every provider's
+    /// dependency must be reachable through the import graph. A violation
+    /// panics here, like the register-phase fixpoint's missing-provider panic.
+    pub fn new<M: Module + 'static>() -> Self {
         let container = M::register(Container::builder()).build();
+        if let Err(err) = validate_from_inventory(&[TypeId::of::<M>()], &HashSet::new()) {
+            panic!("{err}");
+        }
         Self {
             container,
             transports: Vec::new(),
         }
-    }
-
-    /// Build only the container, with no transports attached. Use this from
-    /// `bin/migrate.rs`-style tools that need the DI graph without a server.
-    /// Equivalent to NestJS's `NestFactory.createApplicationContext`.
-    pub fn context<M: Module>() -> Container {
-        M::register(Container::builder()).build()
     }
 
     /// Start an [`AppBuilder`] for apps that must seed runtime values (a loaded
@@ -128,39 +119,50 @@ impl App {
     }
 }
 
-/// Builder for an [`App`] that needs runtime values or asynchronously-built
-/// providers in the container before the module tree is wired.
+/// The two registration entry points of a [`Module`], plus its `TypeId`,
+/// captured so [`AppBuilder::build`] can run them in separate phases and root
+/// the access-graph check at the module tree's entry points.
+struct ModuleHooks {
+    type_id: TypeId,
+    collect: fn(ContainerBuilder) -> ContainerBuilder,
+    register: fn(ContainerBuilder) -> ContainerBuilder,
+}
+
+/// Builder for an [`App`] whose module tree needs runtime values or
+/// asynchronously-built providers.
 ///
-/// Three phases run at [`build`](AppBuilder::build), independent of call order:
+/// Four phases run at [`build`](AppBuilder::build), independent of call order:
 ///
 /// 1. **Seeds** — values registered with [`provide`](AppBuilder::provide) /
 ///    [`provide_arc`](AppBuilder::provide_arc) /
-///    [`provide_dyn`](AppBuilder::provide_dyn). These are the runtime values a
-///    `main` computes — a loaded config, parsed CLI args — that the DI graph
-///    then injects.
-/// 2. **Factories** — async closures registered with
-///    [`provide_factory`](AppBuilder::provide_factory), run in registration
-///    order. Each sees the container assembled so far, so a factory may depend
-///    on a seed or an earlier factory's output. This is where a DB pool or a
-///    cache client is `await`ed at boot; a returned `Err` aborts the build.
-/// 3. **Modules** — every [`module`](AppBuilder::module) registers its
-///    providers last, so they can inject the seeds and factory outputs above.
+///    [`provide_dyn`](AppBuilder::provide_dyn): runtime values a `main` computes
+///    (a loaded config, parsed CLI args) for the DI graph to inject.
+/// 2. **Collect** — each module's [`collect`](crate::Module::collect) runs,
+///    queuing the async factories its import tree owns (a DB pool, a queue
+///    connection — a [`DynamicModule`](crate::DynamicModule) whose `collect`
+///    registers one). No provider is built yet.
+/// 3. **Factories** — every queued factory (from a module's `collect` or from
+///    [`provide_factory`](AppBuilder::provide_factory) at the root) is `await`ed.
+///    Each sees the container so far, so it may depend on a seed or an earlier
+///    factory; a returned `Err` aborts the build.
+/// 4. **Register** — each module's [`register`](crate::Module::register) builds
+///    its providers last, injecting the seeds and factory outputs above.
 ///
-/// Factories are the composition root's job: a `#[module]`'s `register` is
-/// synchronous, so it *consumes* an async-built provider but does not declare
-/// one. Apps that need no runtime values skip the builder entirely and use
-/// [`App::new`].
+/// The collect/factory split is what lets a module *own* an async resource (its
+/// `for_root` returns a `DynamicModule` whose `collect` queues the factory)
+/// while still being declared in `#[module(imports = [...])]` — `register` is
+/// synchronous and cannot `await`, so the value is produced in the factory
+/// phase before any provider needs it. Apps with no runtime values use
+/// [`App::new`] instead.
 pub struct AppBuilder {
     builder: ContainerBuilder,
-    factories: Vec<BoxedFactory>,
-    modules: Vec<fn(ContainerBuilder) -> ContainerBuilder>,
+    modules: Vec<ModuleHooks>,
 }
 
 impl AppBuilder {
     fn new() -> Self {
         Self {
             builder: Container::builder(),
-            factories: Vec::new(),
             modules: Vec::new(),
         }
     }
@@ -184,11 +186,10 @@ impl AppBuilder {
         self
     }
 
-    /// Register an async factory that builds a provider of type `T` from the
-    /// container assembled so far (phase 2 above). Its output is stored as a
-    /// provider, so the module tree can inject `Arc<T>`. The canonical use is a
-    /// resource that must be `await`ed once at boot — a database pool built from
-    /// a seeded config:
+    /// Register an async factory at the composition root — for a resource not
+    /// owned by any module (most module-owned resources expose a `for_root`
+    /// instead). Its awaited output is stored as a provider, injectable as
+    /// `Arc<T>`; a returned `Err` aborts the build:
     ///
     /// ```ignore
     /// App::builder()
@@ -207,40 +208,54 @@ impl AppBuilder {
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
-        self.factories.push(Box::new(move |container| {
-            Box::pin(async move {
-                let value = factory(container).await?;
-                let registrar: Registrar = Box::new(move |builder| builder.provide(value));
-                Ok(registrar)
-            })
-        }));
+        self.builder = self.builder.provide_factory(factory);
         self
     }
 
     /// Register a root module. May be called more than once; all modules
-    /// register after every seed and factory.
-    pub fn module<M: Module>(mut self) -> Self {
-        self.modules.push(M::register);
+    /// collect their factories and register their providers together, and each
+    /// roots the access-graph check.
+    pub fn module<M: Module + 'static>(mut self) -> Self {
+        self.modules.push(ModuleHooks {
+            type_id: TypeId::of::<M>(),
+            collect: M::collect,
+            register: M::register,
+        });
         self
     }
 
-    /// Run the three phases and return the assembled [`App`], ready for
+    /// Run the four phases and return the assembled [`App`], ready for
     /// [`transport`](App::transport) and [`run`](App::run). Propagates the first
     /// factory error.
     pub async fn build(self) -> Result<App> {
         let AppBuilder {
             mut builder,
-            factories,
             modules,
         } = self;
 
-        for factory in factories {
+        // Collect phase: every module queues the async factories its import
+        // tree owns, before any provider is built.
+        for hooks in &modules {
+            builder = (hooks.collect)(builder);
+        }
+        // Factory phase: run all queued factories (module-owned and root-level).
+        for factory in builder.take_factories() {
             let register = factory(builder.snapshot()).await?;
             builder = register(builder);
         }
-        for register in modules {
-            builder = register(builder);
+        // The global set for the access-graph check: seeds + factory outputs,
+        // i.e. everything present before any module registers. Reachable from
+        // any module.
+        let global = builder.provider_ids();
+        // Register phase: build providers, now that factory outputs are present.
+        for hooks in &modules {
+            builder = (hooks.register)(builder);
         }
+
+        // Enforce the import contract: every provider's dependency must be
+        // reachable through its module's imports or be global infrastructure.
+        let roots: Vec<TypeId> = modules.iter().map(|h| h.type_id).collect();
+        validate_from_inventory(&roots, &global)?;
 
         Ok(App {
             container: builder.build(),
@@ -351,6 +366,32 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.to_string().contains("connection refused"));
+    }
+
+    // A module that owns its provider's factory via `collect` — the hand-written
+    // equivalent of a `DatabaseModule`. `register` adds nothing.
+    struct ConfigModule;
+    impl Module for ConfigModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(Config(7)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn module_owns_a_factory_via_collect() {
+        // `ConfigModule::collect` queues the `Config` factory; `DoublerModule`
+        // injects its output in the register phase — proving collect runs, and
+        // its factory is awaited, before any provider is built.
+        let app = App::builder()
+            .module::<ConfigModule>()
+            .module::<DoublerModule>()
+            .build()
+            .await
+            .expect("build succeeds");
+        assert_eq!(app.container().get::<Doubled>().unwrap().0, 14);
     }
 
     #[tokio::test]

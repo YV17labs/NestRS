@@ -10,7 +10,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{parse_macro_input, Ident, ItemStruct, LitInt, LitStr, Token};
 
-use nestrs_macro_support::{build_injectable_body, InjectableBody};
+use nestrs_macro_support::{build_injectable_body, injected_method, InjectableBody};
 
 /// Mark a struct as the consumer for a named job queue.
 ///
@@ -36,7 +36,7 @@ pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     let mut item = parse_macro_input!(input as ItemStruct);
-    let InjectableBody { ctor, .. } = match build_injectable_body(&mut item) {
+    let InjectableBody { ctor, dep_keys } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -44,6 +44,7 @@ pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let name_lit = name.to_string();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    let injected = injected_method(&dep_keys);
 
     quote! {
         #item
@@ -56,6 +57,8 @@ pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl #impl_generics ::nestrs_core::Discoverable for #name #ty_generics #where_clause {
+            #injected
+
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,
             ) -> ::nestrs_core::ContainerBuilder {

@@ -52,3 +52,26 @@ fn internal(e: impl std::fmt::Display) -> McpError {
 
 #[tool_handler]
 impl ServerHandler for WeatherController {}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+    use std::sync::Arc;
+
+    use nestrs_core::Discoverable;
+
+    use super::WeatherController;
+    use crate::weather::service::WeatherProvider;
+
+    #[test]
+    fn mcp_tool_declares_its_injected_trait_dependency_for_the_access_graph() {
+        // An MCP tool is built per session, so `dependencies` is empty; `injected`
+        // reports the `Arc<dyn WeatherProvider>` it pulls — keyed exactly as the
+        // `provide_dyn` binding — so the access-graph check governs it.
+        assert!(WeatherController::dependencies().is_empty());
+        assert!(
+            WeatherController::injected().contains(&TypeId::of::<Arc<dyn WeatherProvider>>()),
+            "the MCP tool's injected dyn WeatherProvider is recorded for the access graph",
+        );
+    }
+}

@@ -10,13 +10,13 @@ use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
-    bracketed, parse_macro_input, Ident, ImplItem, ItemImpl, ItemStruct, Path, ReturnType, Token,
-    Type,
+    bracketed, parse_macro_input, Expr, Ident, ImplItem, ItemImpl, ItemStruct, Path, ReturnType,
+    Token, Type,
 };
 
 use nestrs_macro_support::{
     build_injectable_body, dependencies_method, from_container_method, impl_self_ident,
-    InjectableBody,
+    injected_method, InjectableBody,
 };
 
 /// Mark a struct as a provider that can be constructed from the IoC container.
@@ -42,6 +42,7 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
     let dependencies = dependencies_method(&dep_keys);
+    let injected = injected_method(&dep_keys);
 
     quote! {
         #item
@@ -52,6 +53,7 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #impl_generics ::nestrs_core::Discoverable for #name #ty_generics #where_clause {
             #dependencies
+            #injected
 
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,
@@ -194,10 +196,24 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// `#[module(imports = [...], providers = [...])]`.
 ///
-/// Both keys are optional. `imports` lists other modules to compose in,
-/// each contributing their own providers and metadata via `Module::register`.
-/// `providers` lists everything this module declares — services,
-/// controllers, interceptors, future cron jobs / event handlers / MCP tools.
+/// Both keys are optional. `imports` lists other modules to compose in, each
+/// contributing its own providers and metadata. An import is either:
+///
+/// - a **type** (`UsersModule`) — a static [`Module`](nestrs_core::Module),
+///   composed via `Module::register`, or
+/// - a **call expression** (`OpenApiModule::for_root(opts)`) — a configured
+///   [`DynamicModule`](nestrs_core::DynamicModule) value, composed via
+///   `DynamicModule::register`. This is how a module receives runtime options
+///   at its import site, the analog of NestJS's `forRoot`/`forFeature`.
+///
+/// `providers` lists everything this module declares — services, controllers,
+/// interceptors, cron jobs / event handlers / MCP tools.
+///
+/// Registration is **idempotent**: the generated `Module::register` marks the
+/// module's `TypeId` and returns early if it was already registered, so a
+/// module pulled in through several import paths (a diamond) builds its
+/// providers exactly once. (Dynamic-module imports carry their own config and
+/// are deliberately not deduplicated.)
 ///
 /// Each provider entry is one of:
 ///
@@ -222,9 +238,77 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let name_str = name.to_string();
 
-    let import_calls = args.imports.iter().map(|p| {
-        quote! { builder = <#p as ::nestrs_core::Module>::register(builder); }
+    let import_calls = args.imports.iter().map(|import| match import {
+        // A bare type path is a static `Module`, composed by its associated fn.
+        Expr::Path(p) => {
+            let path = &p.path;
+            quote! { builder = <#path as ::nestrs_core::Module>::register(builder); }
+        }
+        // Anything else — typically `Module::for_root(opts)` — evaluates to a
+        // `DynamicModule` value, composed by value.
+        other => {
+            quote! { builder = ::nestrs_core::DynamicModule::register(#other, builder); }
+        }
     });
+
+    // The collect phase mirrors the imports but only queues async factories:
+    // static modules recurse via `Module::collect`, dynamic ones via
+    // `DynamicModule::collect`. Providers are untouched here.
+    let collect_calls = args.imports.iter().map(|import| match import {
+        Expr::Path(p) => {
+            let path = &p.path;
+            quote! { builder = <#path as ::nestrs_core::Module>::collect(builder); }
+        }
+        other => {
+            quote! { builder = ::nestrs_core::DynamicModule::collect(&(#other), builder); }
+        }
+    });
+
+    // The access-graph descriptor: the bare-type imports
+    // and the providers' container keys + declared dependencies, submitted to a
+    // link-time registry so `App` can verify at boot that no provider reaches a
+    // non-imported module. Only statically-typed imports are recorded — a
+    // dynamic `for_root(...)` import contributes only global infrastructure
+    // (factory outputs) or self-mounted metadata, never an injectable.
+    let import_type_ids = args.imports.iter().filter_map(|import| match import {
+        Expr::Path(p) => {
+            let path = &p.path;
+            Some(quote! { || ::std::any::TypeId::of::<#path>() })
+        }
+        _ => None,
+    });
+    let provider_descriptors = args.providers.iter().map(|binding| match binding {
+        ProviderBinding::Concrete(p) => {
+            let name_lit = path_tail(p);
+            quote! {
+                ::nestrs_core::ProviderDescriptor {
+                    name: #name_lit,
+                    provides: || ::std::any::TypeId::of::<#p>(),
+                    injects: <#p as ::nestrs_core::Discoverable>::injected,
+                }
+            }
+        }
+        ProviderBinding::Dyn { provider, trait_ty } => {
+            let name_lit = format!("dyn {}", path_tail_of_type(trait_ty));
+            quote! {
+                ::nestrs_core::ProviderDescriptor {
+                    name: #name_lit,
+                    provides: || ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>(),
+                    injects: <#provider as ::nestrs_core::Discoverable>::injected,
+                }
+            }
+        }
+    });
+    let descriptor_submission = quote! {
+        ::nestrs_core::inventory::submit! {
+            ::nestrs_core::ModuleDescriptor {
+                module: || ::std::any::TypeId::of::<#name>(),
+                name: #name_str,
+                imports: &[ #(#import_type_ids),* ],
+                providers: &[ #(#provider_descriptors),* ],
+            }
+        }
+    };
 
     let body = if args.providers.is_empty() {
         quote! {
@@ -299,9 +383,35 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             fn register(
                 mut builder: ::nestrs_core::ContainerBuilder,
             ) -> ::nestrs_core::ContainerBuilder {
+                // Idempotent: a module imported through several paths registers
+                // its providers once. Marks before composing imports so a cycle
+                // among modules terminates rather than recursing forever.
+                if !::nestrs_core::ContainerBuilder::mark_registered(
+                    &mut builder,
+                    ::std::any::TypeId::of::<#name>(),
+                ) {
+                    return builder;
+                }
                 #body
             }
+
+            fn collect(
+                mut builder: ::nestrs_core::ContainerBuilder,
+            ) -> ::nestrs_core::ContainerBuilder {
+                // Same diamond dedup as `register`, on the collect set, so each
+                // module queues its async factories at most once.
+                if !::nestrs_core::ContainerBuilder::mark_collected(
+                    &mut builder,
+                    ::std::any::TypeId::of::<#name>(),
+                ) {
+                    return builder;
+                }
+                #(#collect_calls)*
+                builder
+            }
         }
+
+        #descriptor_submission
     }
     .into()
 }
@@ -315,9 +425,25 @@ fn path_tail(p: &Path) -> String {
         .unwrap_or_else(|| quote!(#p).to_string())
 }
 
+/// Last path segment of a trait-object type's path
+/// (`dyn crate::weather::WeatherProvider` -> `"WeatherProvider"`), for the
+/// access-graph descriptor's human-readable provider label.
+fn path_tail_of_type(ty: &Type) -> String {
+    if let Type::TraitObject(obj) = ty {
+        for bound in &obj.bounds {
+            if let syn::TypeParamBound::Trait(t) = bound {
+                if let Some(seg) = t.path.segments.last() {
+                    return seg.ident.to_string();
+                }
+            }
+        }
+    }
+    quote!(#ty).to_string()
+}
+
 #[derive(Default)]
 struct ModuleArgs {
-    imports: Vec<Path>,
+    imports: Vec<Expr>,
     providers: Vec<ProviderBinding>,
 }
 
@@ -356,9 +482,9 @@ impl Parse for ModuleArgs {
 
             match key.to_string().as_str() {
                 "imports" => {
-                    let paths: Punctuated<Path, Token![,]> =
+                    let exprs: Punctuated<Expr, Token![,]> =
                         Punctuated::parse_terminated(&content)?;
-                    args.imports.extend(paths);
+                    args.imports.extend(exprs);
                 }
                 "providers" => {
                     let bindings: Punctuated<ProviderBinding, Token![,]> =

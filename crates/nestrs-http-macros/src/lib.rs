@@ -14,7 +14,8 @@ use syn::{
 
 use nestrs_macro_support::{
     build_injectable_body, dependencies_method, forwarded_arg_idents, from_container_method,
-    impl_self_ident, nth_generic_type, parse_named_str_arg, InjectableBody,
+    impl_self_ident, injected_keys_expr, injected_method, nth_generic_type, parse_named_str_arg,
+    InjectableBody,
 };
 
 /// One route handler in a controller: its HTTP verb ident, the generated
@@ -42,7 +43,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let mut item = parse_macro_input!(input as ItemStruct);
 
-    let InjectableBody { ctor, .. } = match build_injectable_body(&mut item) {
+    let InjectableBody { ctor, dep_keys } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -50,6 +51,11 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
+    // The controller's `#[inject]` keys for the access-graph check.
+    // `#[controller]` sees the fields but `#[routes]` emits the
+    // `Discoverable`, so expose them as an inherent fn `#[routes]` reads back
+    // into `Discoverable::injected`.
+    let injected_keys = injected_keys_expr(&dep_keys);
 
     quote! {
         #item
@@ -58,6 +64,11 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             pub const PATH: &'static str = #path_lit;
 
             #from_container
+
+            #[doc(hidden)]
+            pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
+                #injected_keys
+            }
         }
     }
     .into()
@@ -88,6 +99,7 @@ pub fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
     let dependencies = dependencies_method(&dep_keys);
+    let injected = injected_method(&dep_keys);
 
     quote! {
         #item
@@ -98,6 +110,7 @@ pub fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #impl_generics ::nestrs_core::Discoverable for #name #ty_generics #where_clause {
             #dependencies
+            #injected
 
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,
@@ -361,6 +374,14 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl ::nestrs_core::Discoverable for #self_ty {
+            // The controller is built at mount time, so `dependencies` (register
+            // ordering) stays empty; `injected` reports its `#[inject]` keys for
+            // the access-graph check, read from the inherent
+            // fn `#[controller]` emits.
+            fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
+                <#self_ty>::__nestrs_injected()
+            }
+
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,
             ) -> ::nestrs_core::ContainerBuilder {

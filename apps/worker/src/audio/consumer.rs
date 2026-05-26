@@ -23,10 +23,14 @@ impl Processor for AudioConsumer {
 
 #[cfg(test)]
 mod tests {
-    use nestrs_core::{Container, DiscoveryService, Module};
+    use std::any::TypeId;
+
+    use nestrs_core::{Container, Discoverable, DiscoveryService, Module};
     use nestrs_queue::ProcessorMeta;
 
+    use super::AudioConsumer;
     use crate::audio::dto::AUDIO_QUEUE;
+    use crate::audio::transcoder::Transcoder;
     use crate::audio::AudioModule;
 
     #[test]
@@ -40,5 +44,16 @@ mod tests {
         assert_eq!(audio.meta.queue, AUDIO_QUEUE);
         assert_eq!(audio.meta.concurrency, 5);
         assert_eq!(audio.meta.retries, 3);
+    }
+
+    #[test]
+    fn consumer_declares_its_injected_dependency_for_the_access_graph() {
+        // Built by the QueueWorker transport, so `dependencies` is empty; the
+        // access-graph check reads `injected` instead.
+        assert!(AudioConsumer::dependencies().is_empty());
+        assert!(
+            AudioConsumer::injected().contains(&TypeId::of::<Transcoder>()),
+            "the processor's injected Transcoder is recorded for the access graph",
+        );
     }
 }

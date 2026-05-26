@@ -225,12 +225,36 @@ pub fn forwarded_idents<'a>(
     Ok(idents)
 }
 
+/// A `::std::vec![...]` of a provider's `#[inject]` dependency `TypeId`s — the
+/// shared body behind [`dependencies_method`] / [`injected_method`], and the form
+/// a decorator emits outside a trait method (`#[controller]` emits it as an
+/// inherent fn that `#[routes]` reads back into `Discoverable::injected`).
+pub fn injected_keys_expr(dep_keys: &[TokenStream2]) -> TokenStream2 {
+    quote! { ::std::vec![ #(#dep_keys),* ] }
+}
+
 /// The `Discoverable::dependencies` method for eagerly-built providers, listing
 /// each `#[inject]` dependency's `TypeId` so `#[module]` can order registration.
 pub fn dependencies_method(dep_keys: &[TokenStream2]) -> TokenStream2 {
+    let body = injected_keys_expr(dep_keys);
     quote! {
         fn dependencies() -> ::std::vec::Vec<::core::any::TypeId> {
-            ::std::vec![ #(#dep_keys),* ]
+            #body
+        }
+    }
+}
+
+/// The `Discoverable::injected` method: the same `#[inject]` dependency keys as
+/// [`dependencies_method`], reported for the module access-graph check. Kept
+/// distinct from `dependencies` because a provider built later
+/// from the fully-assembled container (a controller, cron job, or processor)
+/// must report what it injects *without* forcing those dependencies to precede
+/// its own registration — its `dependencies` stays empty, its `injected` does not.
+pub fn injected_method(dep_keys: &[TokenStream2]) -> TokenStream2 {
+    let body = injected_keys_expr(dep_keys);
+    quote! {
+        fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
+            #body
         }
     }
 }

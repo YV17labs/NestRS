@@ -29,9 +29,13 @@ impl Scheduled for AudioProducer {
 
 #[cfg(test)]
 mod tests {
-    use nestrs_core::{Container, DiscoveryService, Module};
+    use std::any::TypeId;
+
+    use nestrs_core::{Container, Discoverable, DiscoveryService, Module};
+    use nestrs_queue::QueueConnection;
     use nestrs_schedule::CronJobMeta;
 
+    use super::AudioProducer;
     use crate::audio::AudioModule;
 
     #[test]
@@ -41,6 +45,19 @@ mod tests {
         assert!(
             jobs.iter().any(|d| d.meta.name == "AudioProducer"),
             "AudioProducer is discovered via #[cron_job]",
+        );
+    }
+
+    #[test]
+    fn producer_declares_its_injected_dependency_for_the_access_graph() {
+        // A cron job is built by the Scheduler transport, so its `dependencies`
+        // (register ordering) is empty — but `injected` must still report the
+        // QueueConnection it pulls, so the access-graph check governs it.
+        // Before the `injected`/`dependencies` split this was dropped.
+        assert!(AudioProducer::dependencies().is_empty());
+        assert!(
+            AudioProducer::injected().contains(&TypeId::of::<QueueConnection>()),
+            "the cron job's injected QueueConnection is recorded for the access graph",
         );
     }
 }

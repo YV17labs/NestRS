@@ -1,8 +1,19 @@
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use anyhow::Result;
+
 type AnyArc = Arc<dyn Any + Send + Sync>;
+
+/// A registration applied once a factory has produced its value: it `provide`s
+/// the awaited result, so a factory output flows through the same path — and the
+/// same duplicate detection — as any other provider.
+pub(crate) type Registrar = Box<dyn FnOnce(ContainerBuilder) -> ContainerBuilder + Send>;
+type FactoryFuture = Pin<Box<dyn Future<Output = Result<Registrar>> + Send>>;
+pub(crate) type BoxedFactory = Box<dyn FnOnce(Container) -> FactoryFuture + Send>;
 
 /// A piece of metadata attached to a provider, or free-standing if no host
 /// is recorded. Discovered via [`crate::DiscoveryService::meta`].
@@ -49,6 +60,19 @@ impl Container {
 pub struct ContainerBuilder {
     providers: HashMap<TypeId, AnyArc>,
     metadata: HashMap<TypeId, Vec<MetaEntry>>,
+    /// `TypeId`s of [`Module`](crate::Module)s already registered (register
+    /// phase) through this builder. Lets the same module imported via several
+    /// paths register once.
+    registered_modules: HashSet<TypeId>,
+    /// `TypeId`s of modules already visited in the collect phase — the
+    /// equivalent dedup for [`Module::collect`](crate::Module::collect).
+    collected_modules: HashSet<TypeId>,
+    /// Async factories awaiting their turn in [`AppBuilder::build`](crate::AppBuilder::build).
+    /// Seeded by [`provide_factory`](Self::provide_factory), whether at the
+    /// composition root or by a module's [`collect`](crate::Module::collect).
+    /// Builder-only state: drained before [`build`](Self::build), never copied
+    /// into the [`Container`] or a [`snapshot`](Self::snapshot).
+    factories: Vec<BoxedFactory>,
 }
 
 impl ContainerBuilder {
@@ -125,6 +149,59 @@ impl ContainerBuilder {
     /// this before building it, so providers can be listed in any order.
     pub fn contains(&self, id: TypeId) -> bool {
         self.providers.contains_key(&id)
+    }
+
+    /// Record that a [`Module`](crate::Module) of type `id` is being registered.
+    /// Returns `true` the first time (the caller should proceed) and `false`
+    /// thereafter (the caller should skip). The `#[module]` macro calls this at
+    /// the top of every generated `Module::register`, so a module pulled in
+    /// through multiple import paths registers its providers exactly once.
+    pub fn mark_registered(&mut self, id: TypeId) -> bool {
+        self.registered_modules.insert(id)
+    }
+
+    /// The collect-phase counterpart of [`mark_registered`](Self::mark_registered):
+    /// returns `true` the first time a module is visited for collection and
+    /// `false` thereafter, so a diamond import collects its async factories once.
+    pub fn mark_collected(&mut self, id: TypeId) -> bool {
+        self.collected_modules.insert(id)
+    }
+
+    /// Queue an async factory that builds a provider of type `T` from the
+    /// container assembled so far. Its awaited output is stored as a provider
+    /// (so the module tree can inject `Arc<T>`). Called both at the composition
+    /// root ([`AppBuilder::provide_factory`](crate::AppBuilder::provide_factory))
+    /// and by a module's [`collect`](crate::Module::collect) for a resource it
+    /// owns (a DB pool). The queue is drained by
+    /// [`AppBuilder::build`](crate::AppBuilder::build) before providers are built.
+    pub fn provide_factory<T, F, Fut>(mut self, factory: F) -> Self
+    where
+        T: Any + Send + Sync,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.factories.push(Box::new(move |container| {
+            Box::pin(async move {
+                let value = factory(container).await?;
+                let registrar: Registrar = Box::new(move |builder| builder.provide(value));
+                Ok(registrar)
+            })
+        }));
+        self
+    }
+
+    /// Drain the queued async factories — called by `AppBuilder::build` once,
+    /// after the collect phase, to run them in order.
+    pub(crate) fn take_factories(&mut self) -> Vec<BoxedFactory> {
+        std::mem::take(&mut self.factories)
+    }
+
+    /// Every provider key registered so far. `AppBuilder::build` snapshots this
+    /// after the factory phase, before any module registers, to form the
+    /// **global** set (seeds + factory outputs) the access-graph check treats as
+    /// reachable from any module.
+    pub(crate) fn provider_ids(&self) -> HashSet<TypeId> {
+        self.providers.keys().copied().collect()
     }
 
     pub fn build(self) -> Container {
@@ -284,5 +361,14 @@ mod tests {
     fn metadata_returns_none_when_absent() {
         let container = Container::builder().build();
         assert!(container.metadata_entries(TypeId::of::<Marker>()).is_none());
+    }
+
+    #[test]
+    fn mark_registered_is_true_once_then_false() {
+        let mut builder = Container::builder();
+        assert!(builder.mark_registered(TypeId::of::<Host>()));
+        assert!(!builder.mark_registered(TypeId::of::<Host>()));
+        // A distinct type is independent.
+        assert!(builder.mark_registered(TypeId::of::<Marker>()));
     }
 }

@@ -8,10 +8,11 @@
 //! All runtime knobs live behind the `NESTRS_<DOMAIN>__<KEY>` env-var
 //! scheme — see [`TelemetryConfig`] for the full table.
 //!
-//! [`OtelHttp`] is the HTTP interceptor: it bridges incoming W3C
+//! [`TelemetryModule`] is the entry point — import it to activate the HTTP
+//! interceptor (`OtelHttp`, crate-private): it bridges incoming W3C
 //! `traceparent` headers into per-request `tracing` spans, records the
 //! response status, surfaces the trace id as `X-Trace-Id` on responses, and
-//! — when the `NESTRS_HTTP__ACCESS_LOG` toggle on [`OtelHttp`] is on — emits one
+//! — when the `NESTRS_HTTP__ACCESS_LOG` toggle is on — emits one
 //! `tracing::info!` event per request with the htaccess-style summary.
 //!
 //! Sibling HTTP middleware lives in its own crate when it does not drive
@@ -28,7 +29,6 @@ mod telemetry;
 
 pub use config::{LogFormat, TelemetryConfig};
 pub use error::TelemetryError;
-pub use interceptor::OtelHttp;
 #[cfg(feature = "otlp")]
 pub use module::Meter;
 pub use module::TelemetryModule;

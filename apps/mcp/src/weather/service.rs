@@ -18,12 +18,12 @@ pub enum WeatherError {
 }
 
 #[async_trait]
-pub trait WeatherProvider: Send + Sync + 'static {
+pub(crate) trait WeatherProvider: Send + Sync + 'static {
     async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReport, WeatherError>;
 }
 
 #[injectable]
-pub struct OpenMeteoClient {
+pub(in crate::weather) struct OpenMeteoClient {
     #[inject]
     http: Arc<reqwest::Client>,
     #[inject]

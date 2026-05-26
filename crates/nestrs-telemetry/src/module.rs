@@ -1,9 +1,14 @@
-use nestrs_core::{container::ContainerBuilder, module::Module};
+use nestrs_core::{container::ContainerBuilder, module::Module, Discoverable};
 
-/// Telemetry module. Compose with `#[module(imports = [TelemetryModule, ...])]`.
+use crate::interceptor::OtelHttp;
+
+/// Telemetry module — the crate's public entry point. Compose with
+/// `#[module(imports = [TelemetryModule, ...])]`.
 ///
-/// When the `otlp` feature is on, registers the global OTel [`Meter`] as a
-/// provider so services can `#[inject]` it directly:
+/// Registers the HTTP interceptor (`OtelHttp`, crate-private) so importing this
+/// module activates per-request tracing / access logging — apps never name the
+/// interceptor type. When the `otlp` feature is on, it also registers the global
+/// OTel [`Meter`] as a provider so services can `#[inject]` it directly:
 ///
 /// ```ignore
 /// #[injectable]
@@ -12,20 +17,27 @@ use nestrs_core::{container::ContainerBuilder, module::Module};
 /// }
 /// ```
 ///
-/// Without the `otlp` feature, this module is a no-op marker.
+/// Without the `otlp` feature it registers only the interceptor, not the meter.
 ///
 /// **Ordering:** [`crate::Telemetry::init`] must run before the module is
 /// registered, so the global meter provider is installed first.
 pub struct TelemetryModule;
 
 impl Module for TelemetryModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        #[cfg(feature = "otlp")]
-        {
-            let meter = opentelemetry::global::meter("nestrs");
-            return builder.provide_arc(std::sync::Arc::new(Meter(meter)));
+    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
+        // Idempotent like a macro-generated module: a diamond import registers once.
+        if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
+            return builder;
         }
-        #[allow(unreachable_code)]
+        // The interceptor is the feature's discoverable HTTP surface: its
+        // `Discoverable::register` attaches the `HttpInterceptorMeta` the transport
+        // reads, so `imports = [TelemetryModule]` wires it without the app naming it.
+        let builder = <OtelHttp as Discoverable>::register(builder);
+        #[cfg(feature = "otlp")]
+        let builder = {
+            let meter = opentelemetry::global::meter("nestrs");
+            builder.provide_arc(std::sync::Arc::new(Meter(meter)))
+        };
         builder
     }
 }

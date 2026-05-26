@@ -87,7 +87,10 @@ mod tests {
             .filter(ability(7, false).condition_for::<widget::Entity>(Action::Read))
             .build(DatabaseBackend::Postgres)
             .to_string();
-        assert!(sql.contains("org_id"), "pre-filter must scope by org_id: {sql}");
+        assert!(
+            sql.contains("org_id"),
+            "pre-filter must scope by org_id: {sql}"
+        );
     }
 
     #[test]
@@ -97,7 +100,10 @@ mod tests {
             .filter(ability(7, false).condition_for::<widget::Entity>(Action::Delete))
             .build(DatabaseBackend::Postgres)
             .to_string();
-        assert!(sql.contains("1 = 0"), "absent grant must match nothing: {sql}");
+        assert!(
+            sql.contains("1 = 0"),
+            "absent grant must match nothing: {sql}"
+        );
     }
 
     #[test]

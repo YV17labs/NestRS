@@ -6,12 +6,11 @@
 //! concern.
 //!
 //! ```ignore
-//! use nestrs_middleware::EndpointExt;
-//! use nestrs_server_timing::ServerTiming;
+//! use nestrs_core::module;
+//! use nestrs_server_timing::ServerTimingModule;
 //!
-//! Route::new()
-//!     .nest("/", controller)
-//!     .interceptor(ServerTiming::new());
+//! #[module(imports = [ServerTimingModule])]
+//! pub struct AppModule;
 //! ```
 //!
 //! Handlers can record sub-step durations by pulling the [`Timings`]
@@ -22,6 +21,7 @@
 mod entry;
 mod format;
 mod interceptor;
+mod module;
 
 pub use entry::{Entry, Timings};
-pub use interceptor::ServerTiming;
+pub use module::ServerTimingModule;

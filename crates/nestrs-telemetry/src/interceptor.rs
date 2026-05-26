@@ -35,15 +35,11 @@ use {
 /// span is always created so `traceparent` propagation and OTLP export keep
 /// working.
 ///
-/// Declare in a module — no per-call configuration needed:
-///
-/// ```ignore
-/// #[module(providers = [OtelHttp])]
-/// pub struct AppModule;
-/// ```
+/// Crate-private: registered by [`crate::TelemetryModule`], so an app activates
+/// it with `imports = [TelemetryModule]` and never names this type.
 #[interceptor]
 #[derive(Clone, Copy, Debug)]
-pub struct OtelHttp {
+pub(crate) struct OtelHttp {
     access_log: bool,
 }
 

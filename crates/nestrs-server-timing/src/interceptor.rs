@@ -13,13 +13,7 @@ const SERVER_TIMING: HeaderName = HeaderName::from_static("server-timing");
 
 #[interceptor]
 #[derive(Default)]
-pub struct ServerTiming;
-
-impl ServerTiming {
-    pub fn new() -> Self {
-        Self
-    }
-}
+pub(crate) struct ServerTiming;
 
 #[async_trait]
 impl Interceptor for ServerTiming {

@@ -17,7 +17,7 @@ nestrs-orm.workspace = true
 nestrs-pipes.workspace = true
 nestrs-resource.workspace = true
 nestrs-server-timing.workspace = true
-nestrs-telemetry.workspace = true
+nestrs-telemetry = { workspace = true, features = ["http"] }
 poem.workspace = true
 tokio.workspace = true
 tracing.workspace = true

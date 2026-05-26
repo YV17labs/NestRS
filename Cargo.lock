@@ -1703,6 +1703,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "nestrs-config",
  "nestrs-core",
  "nestrs-health",
  "nestrs-http",
@@ -1793,15 +1794,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "nestrs-codegen"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "nestrs-config"
+version = "0.1.0"
+dependencies = [
+ "figment",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "nestrs-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "figment",
  "inventory",
  "nestrs-macros",
- "serde",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -1826,7 +1843,7 @@ dependencies = [
 name = "nestrs-graphql-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-macro-support",
+ "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn",
@@ -1866,16 +1883,7 @@ dependencies = [
 name = "nestrs-http-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-macro-support",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "nestrs-macro-support"
-version = "0.1.0"
-dependencies = [
+ "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn",
@@ -1885,7 +1893,7 @@ dependencies = [
 name = "nestrs-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-macro-support",
+ "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn",
@@ -1906,7 +1914,7 @@ dependencies = [
 name = "nestrs-mcp-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-macro-support",
+ "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn",
@@ -1971,7 +1979,7 @@ dependencies = [
 name = "nestrs-queue-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-macro-support",
+ "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn",
@@ -1988,7 +1996,7 @@ dependencies = [
 name = "nestrs-resource-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-macro-support",
+ "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn",
@@ -2011,7 +2019,7 @@ dependencies = [
 name = "nestrs-schedule-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-macro-support",
+ "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn",
@@ -2033,6 +2041,7 @@ name = "nestrs-telemetry"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "nestrs-config",
  "nestrs-core",
  "nestrs-http",
  "nestrs-middleware",

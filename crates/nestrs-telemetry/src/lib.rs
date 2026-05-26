@@ -21,6 +21,7 @@
 
 mod config;
 mod error;
+#[cfg(feature = "http")]
 mod interceptor;
 mod module;
 #[cfg(feature = "otlp")]

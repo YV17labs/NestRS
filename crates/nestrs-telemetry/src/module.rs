@@ -1,5 +1,8 @@
-use nestrs_core::{container::ContainerBuilder, module::Module, Discoverable};
+use nestrs_core::{container::ContainerBuilder, module::Module};
 
+#[cfg(feature = "http")]
+use nestrs_core::Discoverable;
+#[cfg(feature = "http")]
 use crate::interceptor::OtelHttp;
 
 /// Telemetry module — the crate's public entry point. Compose with
@@ -32,6 +35,8 @@ impl Module for TelemetryModule {
         // The interceptor is the feature's discoverable HTTP surface: its
         // `Discoverable::register` attaches the `HttpInterceptorMeta` the transport
         // reads, so `imports = [TelemetryModule]` wires it without the app naming it.
+        // Gated on `http`: a headless build registers only the meter below.
+        #[cfg(feature = "http")]
         let builder = <OtelHttp as Discoverable>::register(builder);
         #[cfg(feature = "otlp")]
         let builder = {

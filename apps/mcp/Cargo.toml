@@ -12,7 +12,7 @@ nestrs-health.workspace = true
 nestrs-http.workspace = true
 nestrs-middleware.workspace = true
 nestrs-server-timing.workspace = true
-nestrs-telemetry.workspace = true
+nestrs-telemetry = { workspace = true, features = ["http"] }
 rmcp.workspace = true
 poem.workspace = true
 tokio.workspace = true

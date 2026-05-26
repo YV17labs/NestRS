@@ -8,10 +8,19 @@ repository.workspace = true
 description = "Logging, tracing, metrics and Server-Timing middleware for nestrs apps."
 
 [features]
-# OTLP exporter is the default so a dev who sets OTEL_EXPORTER_OTLP_ENDPOINT
-# gets traces out of the box. Drop default-features to ship a leaner binary
-# that only does console logging + Server-Timing.
+# OTLP exporter is default so a dev who sets OTEL_EXPORTER_OTLP_ENDPOINT gets
+# traces out of the box. The HTTP interceptor is opt-in (`http`), not default:
+# an HTTP app adds `features = ["http"]`, while a headless app (a queue worker)
+# inherits the bare default and never compiles poem / nestrs-http. (Opt-in, not
+# default-off, because a workspace member cannot disable an inherited default —
+# `default-features` is honoured only on the `[workspace.dependencies]` entry.)
 default = ["otlp"]
+# The per-request HTTP interceptor (tracing span, X-Trace-Id, access log) and
+# its poem / nestrs-http deps. Requires `otlp`: the interceptor reads the trace
+# id off the OTel span, so the whole interceptor body is otel-backed — there is
+# no useful interceptor without it. (A headless app uses `otlp` *without* `http`,
+# so it still skips poem; only the inverse is meaningless.)
+http = ["otlp", "dep:nestrs-http", "dep:nestrs-middleware", "dep:poem"]
 otlp = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",
@@ -26,9 +35,9 @@ otlp = [
 [dependencies]
 nestrs-core.workspace = true
 nestrs-config.workspace = true
-nestrs-http.workspace = true
-nestrs-middleware.workspace = true
-poem.workspace = true
+nestrs-http = { workspace = true, optional = true }
+nestrs-middleware = { workspace = true, optional = true }
+poem = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true

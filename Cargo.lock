@@ -1773,6 +1773,7 @@ dependencies = [
 name = "nestrs-authz"
 version = "0.1.0"
 dependencies = [
+ "nestrs-core",
  "nestrs-http",
  "poem",
  "sea-orm",

@@ -22,8 +22,10 @@ use crate::builder::AbilityBuilder;
 /// }
 /// ```
 pub trait AbilityFactory: Send + Sync + 'static {
-    /// The authenticated actor an ability is built for.
-    type Actor;
+    /// The authenticated actor an ability is built for. The bounds let
+    /// [`AbilityGuard`](crate::AbilityGuard) read it back out of the request
+    /// extensions an authn guard stored it in.
+    type Actor: Clone + Send + Sync + 'static;
 
     fn define(&self, actor: &Self::Actor, ability: &mut AbilityBuilder);
 }

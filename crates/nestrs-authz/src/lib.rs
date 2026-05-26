@@ -13,13 +13,16 @@
 //!
 //! Rules are declared once by an [`AbilityFactory`] for the app's actor type;
 //! the shared [`Predicate`] representation is what keeps the rows the filter
-//! returns and the rows the mask accepts from drifting apart.
+//! returns and the rows the mask accepts from drifting apart. [`AbilityGuard`]
+//! builds that ability per request — from the actor an upstream authentication
+//! guard attached — and is the prerequisite for all three layers.
 
 mod ability;
 mod action;
 mod builder;
 mod extractor;
 mod factory;
+mod guard;
 mod predicate;
 mod shape;
 mod subject;
@@ -29,6 +32,7 @@ pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, RuleSpec};
 pub use extractor::Authorize;
 pub use factory::AbilityFactory;
+pub use guard::AbilityGuard;
 pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::Subject;
 

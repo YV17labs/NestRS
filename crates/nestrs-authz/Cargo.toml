@@ -11,8 +11,12 @@ description = "CASL-style authorization for nestrs: one ability definition drivi
 # A rule's condition lowers to `sea_orm::Condition`; in-memory checks read
 # columns via `ModelTrait::get`.
 sea-orm.workspace = true
+# `AbilityGuard` is `#[injectable]` (it resolves the app's `AbilityFactory` from
+# the container).
+nestrs-core.workspace = true
 # `Authorize` is a poem extractor, and implements `RouteResponseShaper` so
 # `#[routes]` masks the response transparently — the HTTP binding of the engine.
+# `AbilityGuard` implements the `Guard` trait re-exported here.
 nestrs-http.workspace = true
 poem.workspace = true
 # Response masking serializes a model then strips disallowed keys.

@@ -45,22 +45,102 @@ maintenance bar. The container in `crates/nestrs-core` is ours and stays ours.
 **Do not propose adopting an external DI crate.** If ergonomics fall short,
 extend ours.
 
-## Runtime values and async providers go through `App::builder()`
+## `App::builder().build()` runs four phases
 
 `Module::register` is synchronous, so a `#[module]` cannot `await` a provider
-into existence (a DB pool, a cache client) or carry a value computed in `main`
-(a loaded config, parsed CLI args). `App::builder()` is the composition root for
-both. `build().await` runs three phases regardless of call order: **seeds**
-(`provide`/`provide_arc`/`provide_dyn`), then **factories**
-(`provide_factory(|c| async move { … })` — each sees the container so far, so a
-factory may depend on a seed or an earlier factory, and a failing one aborts
-boot), then **modules**, which register last and therefore inject the seeds and
-factory outputs above. Factories are the root's job: a module *consumes* an
-async-built provider but never declares one. Apps needing none of this keep
-using `App::new`. Registering the same concrete type twice logs a
-`nestrs::container` warning (the flat container makes such collisions silent
-otherwise); a `provide_dyn` rebinding is exempt — last-binding-wins is its
-documented override path.
+into existence. `App::builder().build().await` bridges that with four phases,
+independent of call order:
+
+1. **Seeds** — `provide`/`provide_arc`/`provide_dyn`: runtime values a `main`
+   computes (a loaded config, parsed CLI args) for the DI graph to inject.
+2. **Collect** — each module's generated `Module::collect` runs, queuing the
+   async factories its import tree *owns* (see the next section). No provider is
+   built yet.
+3. **Factories** — every queued factory is `await`ed (each sees the container so
+   far, so it may depend on a seed or an earlier factory; an `Err` aborts boot).
+   A root-level `provide_factory` lands here too, for a resource no module owns.
+4. **Register** — each module's `Module::register` builds its providers last,
+   injecting the seeds and factory outputs above.
+
+`main` should hold only `App::builder().module::<AppModule>()` (+ transports):
+everything a module needs, including async resources, is declared *in* the
+module tree, not in `main`. Apps needing no async/runtime values keep using
+`App::new` (fully sync — async modules require the `build().await` path).
+Registering the same concrete type twice logs a `nestrs::container` warning (the
+flat container makes such collisions silent otherwise); a `provide_dyn`
+rebinding is exempt — last-binding-wins is its documented override path.
+
+## Modules compose by type or by configured value
+
+`#[module(imports = [...])]` accepts two forms per entry. A bare **type**
+(`UsersModule`) is a static `Module`, composed via its associated `register`. A
+**call expression** (`OpenApiModule::for_root(opts)`) evaluates to a
+`DynamicModule` value — this is how a module receives configuration *at its
+import site* (NestJS's `forRoot`/`forFeature`/`forRootAsync`). The macro can't
+tell the two `for_root` flavours apart by syntax, so a `DynamicModule` has two
+phase methods, both defaulting to no-op:
+
+- `register(self, ContainerBuilder)` — **sync config**. Installs providers /
+  metadata immediately (NestJS's `forRoot`). `GraphqlModule`/`OpenApiModule` use
+  this for paths, titles, playground toggles.
+- `collect(&self, ContainerBuilder)` — **async resource** (NestJS's
+  `forRootAsync`). Queues a `provide_factory` for a value that must be `await`ed
+  — a DB pool, a queue connection. `nestrs-orm`'s `DatabaseModule` and
+  `nestrs-queue`'s `QueueModule` use this. The factory is run in the build's
+  factory phase, before any provider is built, so a service can inject the pool.
+
+The macro generates a `Module::collect` that recurses imports (calling
+`DynamicModule::collect` on each), letting an async module sit in `imports`
+exactly like a sync one — `build()` resolves the ordering. Configuration is
+therefore each module's own responsibility, declared where it is imported, never
+seeded loosely in `main`. A module also keeps an `impl Module` for its
+no-config default, so `imports = [OpenApiModule]` (bare type) still works.
+
+Module registration is **idempotent**: the macro-generated `Module::register`
+marks the module's `TypeId` via `ContainerBuilder::mark_registered` and returns
+early if already registered, so a module pulled in through several paths (a
+diamond) builds its providers exactly once — no double construction, no override
+warning. Dynamic-module imports are deliberately *not* deduplicated: each carries
+its own config, mirroring `forFeature` being called once per feature.
+**Encapsulation is compile-time, not a runtime `exports` list** (see the next
+section): `imports` registers providers and orders config, and is a
+build-time-enforced *access graph* (a provider may inject only what its module's
+transitive imports provide, plus global infrastructure). It still does not gate
+*visibility* (what a module can name); that stays the compiler's job.
+
+## Encapsulation is compile-time, via Rust visibility
+
+A module's encapsulation boundary is its Rust `mod`/crate boundary, enforced by
+the compiler — there is no runtime `exports`. The container is flat: a registered
+provider is injectable by anyone who can **name its type**. So a feature hides its
+internals the Rust way — the concrete provider is module-private
+(`pub(in crate::feature)` in an app, `pub(crate)`/private in a library crate),
+still registered by `TypeId` but unnameable, thus uninjectable, from outside — and
+exposes its surface as a `pub` **trait** bound with `Provider as dyn Trait`
+(`provide_dyn`). Consumers inject `Arc<dyn Trait>`, never the impl. This is
+NestJS's `exports`/`@Injectable` boundary moved from runtime tokens to the type
+system: stronger, zero-cost, idiomatic — NestJS needs a runtime boundary only
+because TS has no token-level privacy. The exemplar is `apps/mcp/src/weather`
+(`WeatherProvider` trait + private `OpenMeteoClient` impl). That covers axis 1
+(visibility). **Axis 2 — the import contract — is enforced at boot** by the
+access-graph check (`crates/nestrs-core/src/access.rs`):
+`#[module]` submits a `ModuleDescriptor` to the link-time `inventory` registry
+recording its statically-typed imports and, per provider, its key + injected
+`#[inject]` `TypeId`s; `App` walks the graph from the root module(s) and fails
+the boot with an `AccessGraphError` if a provider injects something its module
+neither owns, imports transitively, nor receives as **global** infrastructure
+(seeds + factory outputs — everything present before the register phase, the
+`@Global()` analog). The injection set comes from `Discoverable::injected`, kept
+**distinct from `Discoverable::dependencies`**: `dependencies` gates the
+register-phase ordering and is empty for a provider built later from the
+assembled container (a controller, MCP tool, cron job, processor), while
+`injected` reports the `#[inject]` keys regardless of build timing — so the
+contract governs transport-built logic too. **Every provider in `providers =
+[...]` is checked** (`#[injectable]`, `#[interceptor]`, guards, `#[cron_job]`,
+`#[processor]`, `#[controller]`, `#[mcp]`); the lone exception is `#[resolver]`,
+which self-composes via the GraphQL registry and belongs to no module. Dynamic
+(`for_root`) imports are not graph edges: they contribute only global infra or
+self-mounted metadata.
 
 ## Discovery is struct-level by default
 
@@ -276,7 +356,7 @@ consumed by `#[routes]` like `#[use_guards]`, needs no import, and every field i
 optional — the default tag is the controller struct name, so routes group by
 controller. Not yet built (deliberate, noted in the crate): query-param schemas,
 path-param *types* (emitted as `string`), security schemes, and a committed
-`openapi.json` snapshot + drift-check mirroring `just graphql-schema`.
+`openapi.json` snapshot regenerated like `just graphql-schema`.
 
 ## Naming rules — strict
 
@@ -306,18 +386,22 @@ sufficient. Start the binary (`cargo run --bin <app>` in the background),
 Routing and wiring bugs do not surface in unit tests.
 
 A GraphQL app commits its schema as SDL (`apps/<app>/schema.graphql`) so the API
-surface is reviewable in diffs. After changing resolvers, regenerate it with
-`just graphql-schema <app>` (default `api`); `just graphql-schema-check <app>`
-regenerates in memory and fails if the committed file drifted — wire it into CI.
+surface is reviewable in diffs. After changing resolvers, regenerate it by hand
+with `just graphql-schema <app>` (default `api`) and commit the result.
 `nestrs_graphql::schema_sdl` renders it with sorted types/fields/arguments so it
 is deterministic across builds. The schema is composed from the resolvers
-*linked into a binary*, so it can only be rendered from inside the app: each
-GraphQL app's binary exposes a `schema` subcommand (`<app> schema [--check]`,
-checked before the server boots in `main`) that calls
-`nestrs_graphql_cli::run::<AppModule>(…)` — the shared emit/drift-check logic,
-built on `App::context` (container, no transport). The path is the app's own via
-`CARGO_MANIFEST_DIR`, so it adapts to any app name. `nestrs-graphql-cli` is also
-where federation-aware schema commands will land if/when federation does.
+*linked into a binary*, so it can only be rendered from inside the app — and the
+server binary must do nothing but serve. So each GraphQL app is a **library plus
+two binaries**: `main.rs` (the server, no arg parsing) and `bin/schema.rs` (the
+generator), both linking the app's `lib.rs` so the generator sees the same
+resolvers the server does. `bin/schema.rs` builds the container (seeding a
+disconnected `DatabaseConnection` so the DB-injected resolvers register without
+running the async factory — the schema is described, never executed) and calls
+`nestrs_graphql_cli::write_schema(&container, path)`, the shared emit logic. The
+path is the app's own via `CARGO_MANIFEST_DIR`, so it adapts to any app name.
+`nestrs-graphql-cli` is also where federation-aware schema commands will land
+if/when federation does. There is no drift-check command: regeneration is a
+deliberate manual step, not a CI gate.
 
 ## Engineering posture
 

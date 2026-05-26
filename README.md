@@ -23,8 +23,8 @@
 ## Why NestRS
 
 - ⚡ **Rust-native speed.** Built on the same hyper/tokio core as the fastest Rust
-  web frameworks — multiples of a Node service's throughput, no GC pauses, and
-  tail latencies that stay flat under load.
+  web frameworks — no GC pauses and tail latencies that stay flat under load, the
+  throughput profile you'd expect from native Rust over a managed runtime.
 - 🪶 **An order of magnitude less memory.** A footprint in the tens of MB, not
   hundreds — smaller instances, higher density, a lighter cloud bill.
 - 🚀 **Boots in milliseconds.** A single static native binary with no runtime to
@@ -38,7 +38,120 @@
   scheduling, CASL-style authorization, health probes and OpenTelemetry — each an
   opt-in crate, so you compile only what you import.
 
-<sub>Performance figures describe typical native-Rust-vs-Node behaviour; NestRS's own published benchmarks are on the way.</sub>
+<sub>These describe native-Rust-vs-managed-runtime characteristics, not measured NestRS results — reproducible throughput, memory, and cold-start benchmarks are a tracked <a href="ROADMAP.md">roadmap</a> item.</sub>
+
+## What the code looks like
+
+The `app` example is a complete HTTP service — a provider, a controller that
+injects it by type, and a module that wires them together. This is the whole
+feature:
+
+```rust
+use std::sync::Arc;
+use nestrs_core::{injectable, module};
+use nestrs_http::{controller, routes};
+
+// A provider — anything injectable.
+#[injectable]
+#[derive(Default)]
+pub struct HelloService;
+
+impl HelloService {
+    pub fn greeting(&self) -> &'static str {
+        "Hello World"
+    }
+}
+
+// A controller; the service is injected by type, no token to declare.
+#[controller(path = "/")]
+pub struct HelloController {
+    #[inject]
+    svc: Arc<HelloService>,
+}
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> &'static str {
+        self.svc.greeting()
+    }
+}
+
+// A module groups providers; import order never matters.
+#[module(providers = [HelloService, HelloController])]
+pub struct HelloModule;
+```
+
+Compose modules and boot with one transport:
+
+```rust
+use nestrs_core::{module, App};
+use nestrs_http::HttpTransport;
+
+#[module(imports = [HelloModule])]
+pub struct AppModule;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    App::new::<AppModule>()
+        .transport(HttpTransport::new().bind("0.0.0.0:3001"))
+        .run()
+        .await
+}
+```
+
+`just dev` runs it; `GET /` returns `Hello World`. No reflection, no separate
+codegen step — `cargo` compiles it to a single native binary, and the DI graph
+is checked at boot.
+
+The same inject-and-decorate model carries every surface, not just HTTP. The
+`worker` example pairs a scheduled producer with a durable, Redis-backed
+consumer — each a struct that injects what it needs and implements one trait
+method for its logic:
+
+```rust
+// Runs every 5s — an in-process scheduled job.
+#[cron_job(every = "5s")]
+pub struct AudioProducer {
+    #[inject]
+    queue: Arc<QueueConnection>,
+}
+
+// A durable queue consumer — 5 jobs in flight, retried 3× on failure.
+#[processor(queue = "audio", concurrency = 5, retries = 3)]
+pub struct AudioConsumer {
+    #[inject]
+    transcoder: Arc<Transcoder>,
+}
+```
+
+GraphQL resolvers (`#[resolver]`/`#[query]`), MCP tools (`#[mcp]`) and the rest
+follow the same shape. The richest example, `api`, stacks REST + GraphQL +
+OpenAPI behind route guards, validation pipes and request-scoped dataloaders —
+see [`apps/api`](apps/api/).
+
+## How it compares
+
+NestRS sits *on top of* the same `hyper`/`tokio`/`poem` stack the leading Rust
+web frameworks use — it doesn't replace them, it gives them structure.
+
+- **vs. Axum / Actix / Poem** — those are (excellent) HTTP layers. You bring your
+  own dependency injection, module boundaries, validation, GraphQL, OpenAPI,
+  queues and scheduling, then wire them together. NestRS ships that opinionated
+  structure as one coherent set of macros, so a large codebase stays declarative
+  instead of growing a bespoke wiring layer.
+- **vs. Loco** — Loco is the closest in spirit: opinionated and batteries-included,
+  but Rails/MVC-flavoured and built around an ActiveRecord-style model. NestRS
+  follows the modules-and-providers lineage instead — a DI container, compile-time
+  module encapsulation, and per-surface decorator macros (HTTP, GraphQL, MCP,
+  queues). Pick the mental model you'd rather think in.
+- **vs. a standalone DI crate** — NestRS's container isn't bolted on; it's the
+  spine the module system, lifecycle hooks, and every transport are built around,
+  and the whole wiring is verified as a graph at boot.
+
+If you like assembling your own stack, you may not want the opinions. If you want
+a framework that makes the structural decisions for you — the way NestJS, Spring,
+or Rails do — that's the gap NestRS fills.
 
 ## Vision
 
@@ -124,6 +237,11 @@ Decorator macros live in companion `*-macros` crates (a Rust `proc-macro` crate
 can export only macros) with shared codegen in `nestrs-codegen`; these are
 internal plumbing, re-exported by the crates above and never depended on directly.
 
+Everything in the table runs in the example apps today. The rough edges and the
+deliberately-deferred gaps (cron expressions, OpenAPI security schemes, GraphQL
+federation) are tracked in the open [roadmap](ROADMAP.md) — nothing here is a
+hidden TODO.
+
 ## Getting started
 
 ### In a dev container (recommended)
@@ -195,14 +313,24 @@ Run `just` with no arguments to list every recipe.
 `build`, `test`, `cov`, `lint`, `fmt`, and `check` always operate on the whole
 workspace; `dev` and `run` take an app name (default `app`).
 
-## Applications
+## Example applications
+
+The crates under `apps/` are **examples**, not products — each is a different
+*kind* of application, there to show that several can share one workspace and the
+same building blocks. They will grow over time.
+
+| App | Kind | Port |
+|-----|------|------|
+| `api` | REST + GraphQL, persisted & authorized | 3002 |
+| `app` | Minimal HTTP baseline | 3001 |
+| `mcp` | Model Context Protocol server | 3003 |
+| `worker` | Background jobs & scheduling (headless) | — |
 
 ### `api` — REST + GraphQL, persisted and authorized (port 3002)
 
-Started with `just dev api`. Persists to **Postgres** through SeaORM
-(`nestrs-orm`), so it needs a `DATABASE_URL` (e.g.
-`postgres://postgres:postgres@localhost/nestrs`) — boot aborts with a clear
-message if it is unset. Listens on `http://0.0.0.0:3002`:
+Started with `just dev api`; persists to Postgres via SeaORM, so it needs a
+`DATABASE_URL` (boot aborts with a clear message if it is unset). Listens on
+`http://0.0.0.0:3002`:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -215,85 +343,39 @@ message if it is unset. Listens on `http://0.0.0.0:3002`:
 | `GET  /health/ready` | Kubernetes readiness probe |
 | `GET  /health/startup` | Kubernetes startup probe |
 
-Resolvers are declared with `#[resolver]`: `#[query]`/`#[mutation]` add root
-fields, and `#[field]` adds a field resolver to an object type — it takes the
-resolved object as `parent: &T` and reaches services through the resolver's
-`#[inject]` fields. The schema composes itself from every resolver in the binary
-(no central list) and is committed as SDL at
-[`apps/api/schema.graphql`](apps/api/schema.graphql), so API changes surface in
-diffs. A dev run of the server rewrites that file on boot (`GraphqlModule`'s
-`emit_sdl` is `true` under `debug_assertions`, `false` in a release build); commit
-the result after touching a resolver.
-
-The REST surface documents itself the same way: import `OpenApiModule` and the
-OpenAPI document composes from every `#[controller]` in the binary — verbs and
-paths from the route table, request/response schemas from each `Json<T>` payload
-(DTOs derive `schemars::JsonSchema`, the same trait MCP uses), grouped by
-controller. `#[api(summary = "...", tags("..."))]` beside a verb enriches an
-operation. Swagger UI is bundled and served offline at `/api` (the document at
-`/api-json`).
-
-It also exercises the full request + authorization pipeline. Each `/users` route
-is bound with `#[use_guards(AuthGuard, AppAbilityGuard)]`: `AuthGuard`
-authenticates (`x-api-key` + `x-org-id` headers) and attaches an `AuthUser`, then
-`AppAbilityGuard` builds the caller's CASL-style `Ability` from it. That one
-ability drives all three powers — the `Authorize<Action, Entity>` extractor gates
-access (`403`) and masks the response to the fields and rows the caller may see,
-`ability.condition_for::<Entity>(…)` pre-filters the SeaORM query to the caller's
-org, and `ability.can::<Entity>(…)` makes the per-row check on by-id reads. Inputs
-pass through pipes — `Valid<Json<…>>` validation and `Piped<ParseUuidV7,
-Path<…>>` parsing.
+It exercises most of the framework at once: a GraphQL schema that composes
+itself from every `#[resolver]` in the binary (committed as SDL at
+[`apps/api/schema.graphql`](apps/api/schema.graphql) so API changes show up in
+diffs), an OpenAPI document that composes itself from every `#[controller]` with
+a bundled offline Swagger UI at `/api`, and a full request pipeline — route
+guards for authentication and CASL-style authorization (one ability drives access
+gating, query pre-filtering, and response masking), with validation pipes on the
+inputs.
 
 ### `app` — Minimal HTTP endpoint (port 3001)
 
-Started with `just dev app`. Listens on `http://0.0.0.0:3001` with a single
-`GET /` returning `Hello World`. Kept deliberately bare — no health, telemetry,
-or middleware — to serve as a baseline when benchmarking the framework's
-request path.
+Started with `just dev app`. A single `GET /` returning `Hello World` on
+`http://0.0.0.0:3001`, kept deliberately bare — no health, telemetry, or
+middleware — as a baseline for benchmarking the framework's request path.
 
 ### `mcp` — Model Context Protocol server (port 3003)
 
-Started with `just dev mcp`. Exposes a Streamable-HTTP MCP server backed by
-`rmcp`, with tools declared the same way controllers are — `#[injectable]` for
-DI, then `#[tool_router]` / `#[tool]` / `#[tool_handler]` on the controller.
-
-The bundled `current_weather` tool takes GPS coordinates and queries the
-[Open-Meteo](https://open-meteo.com) public forecast API. Latitude/longitude
-bounds are declared with `validator` annotations on the params struct and
-checked at the start of the tool handler.
-
-The upstream HTTP client shows the async-provider pattern: a `WeatherConfig` is
-seeded on `App::builder()` and an async `provide_factory` builds a
-timeout-configured `reqwest::Client` from it once at boot, which the tool then
-injects (override with `NESTRS_WEATHER__BASE_URL` / `NESTRS_WEATHER__REQUEST_TIMEOUT_MS`).
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /mcp` | MCP Streamable-HTTP transport |
-| `GET  /health/live` | Kubernetes liveness probe |
-| `GET  /health/ready` | Kubernetes readiness probe |
-| `GET  /health/startup` | Kubernetes startup probe |
-
-Point any MCP client (Claude Desktop, Cursor, custom integrations) at
-`http://localhost:3003/mcp`.
+Started with `just dev mcp`. A Streamable-HTTP MCP server (`rmcp`-backed) whose
+tools are declared like controllers — `#[mcp]` handles DI and mounts the
+server, then `#[tool_router]` / `#[tool]` / `#[tool_handler]` define the tools.
+The bundled `current_weather`
+tool queries the [Open-Meteo](https://open-meteo.com) public API, with
+`validator` bounds on its GPS params. Point any MCP client (Claude Desktop,
+Cursor, …) at `http://localhost:3003/mcp`.
 
 ### `worker` — Background jobs & scheduling (headless)
 
-Started with `just dev worker`. No HTTP surface — it runs two transports: a
-`Scheduler` (in-process cron / interval jobs) and a `QueueWorker` (Redis-backed
-durable jobs via `apalis`). Needs a Redis instance (`REDIS_URL`, default
-`redis://127.0.0.1/`).
-
-The bundled `audio` feature shows the full producer → queue → consumer loop:
-`AudioProducer`, a `#[cron_job(every = "5s")]`, enqueues a transcode job every
-five seconds, and `AudioConsumer`, a
-`#[processor(queue = "audio", concurrency = 5, retries = 3)]`, pulls and processes
-it (retried on failure). Producer and consumer are decoupled by the queue name —
-jobs survive a restart and any number of worker processes share one queue.
-
-Because it enables `nestrs-telemetry` without the `http` feature and imports no
-HTTP crate, the worker binary never compiles the poem stack — a genuinely lean
-headless build.
+Started with `just dev worker`. No HTTP surface — it runs a `Scheduler`
+(in-process cron / interval jobs) and a `QueueWorker` (Redis-backed durable jobs
+via `apalis`), so it needs a `REDIS_URL`. The bundled `audio` feature shows the
+full producer → queue → consumer loop with `#[cron_job]` and `#[processor]`.
+Importing no HTTP crate, the binary never compiles the poem stack — a genuinely
+lean headless build.
 
 ## Docker
 
@@ -323,8 +405,6 @@ Security defaults baked in:
   package manager, runs as UID 65532 by default.
 - `cargo-chef` cooks dependencies in a cacheable layer, so dep changes don't
   trigger a full rebuild.
-- Rust version and `cargo-chef` version are pinned via build args:
-  `--build-arg RUST_VERSION=1.95 --build-arg CARGO_CHEF_VERSION=0.1.77`.
 - No `HEALTHCHECK` directive — use the Kubernetes probes exposed at
   `/health/{live,ready,startup}` (the right layer for orchestrator health).
 
@@ -334,11 +414,11 @@ NestRS borrows NestJS's programming model — modules, providers, decorators,
 dependency injection — and rebuilds it natively in Rust. If you already know
 Nest, this is the map; otherwise you can skip it.
 
-**Project structure.** NestJS's [monorepo mode](https://docs.nestjs.com/cli/monorepo)
-(several applications in one workspace) and its [libraries](https://docs.nestjs.com/cli/libraries)
-(shared code) map directly onto a Cargo workspace: applications under `apps/`,
-shared libraries as crates under `crates/`. There is no `nest-cli.json` —
-`cargo` is the build tool and the workspace manifest is the project definition.
+**Project structure.** NestJS's monorepo mode (several applications in one
+workspace) and its libraries (shared code) map directly onto a Cargo workspace:
+applications under `apps/`, shared libraries as crates under `crates/`. There is
+no `nest-cli.json` — `cargo` is the build tool and the workspace manifest is the
+project definition.
 
 **Decorators & concepts:**
 
@@ -381,6 +461,20 @@ shared libraries as crates under `crates/`. There is no `nest-cli.json` —
   `reflect-metadata` and no `forwardRef`.
 - **One build step.** `cargo` compiles, type-checks, and links to a single native
   binary; there is no separate transpile pass.
+
+## Community & contributing
+
+NestRS is young, and early contributors shape what it becomes — you don't have to
+write Rust to help.
+
+- 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/maltyxx/nestrs/discussions).
+- 🐛 **Report a bug or request a feature** through [issues](https://github.com/maltyxx/nestrs/issues/new/choose).
+- 🌱 **Pick up a** [`good first issue`](https://github.com/maltyxx/nestrs/labels/good%20first%20issue) — [CONTRIBUTING.md](CONTRIBUTING.md) is the short path from idea to merged PR.
+- 🗺️ **See where it's heading** in the [roadmap](ROADMAP.md).
+- 🔒 **Found a vulnerability?** Follow [SECURITY.md](SECURITY.md) — please don't open a public issue for it.
+
+If NestRS resonates, a ⭐ helps others find it and tells us the direction is worth
+pushing.
 
 ## License
 

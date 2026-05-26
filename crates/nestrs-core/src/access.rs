@@ -117,7 +117,9 @@ pub fn validate_access_graph(
     let mut provided_by: HashMap<TypeId, (&'static str, &'static str)> = HashMap::new();
     for d in descriptors {
         for p in d.providers {
-            provided_by.entry((p.provides)()).or_insert((p.name, d.name));
+            provided_by
+                .entry((p.provides)())
+                .or_insert((p.name, d.name));
         }
     }
 
@@ -364,8 +366,12 @@ mod tests {
             imports: &[], // does not import BillingModule
             providers: &[],
         };
-        validate_access_graph(&[&app, &billing], &[TypeId::of::<AppMod>()], &HashSet::new())
-            .expect("a module outside the root's import tree is not validated");
+        validate_access_graph(
+            &[&app, &billing],
+            &[TypeId::of::<AppMod>()],
+            &HashSet::new(),
+        )
+        .expect("a module outside the root's import tree is not validated");
     }
 
     #[test]

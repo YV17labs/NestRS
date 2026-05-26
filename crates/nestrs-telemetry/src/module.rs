@@ -1,9 +1,9 @@
 use nestrs_core::{container::ContainerBuilder, module::Module};
 
 #[cfg(feature = "http")]
-use nestrs_core::Discoverable;
-#[cfg(feature = "http")]
 use crate::interceptor::OtelHttp;
+#[cfg(feature = "http")]
+use nestrs_core::Discoverable;
 
 /// Telemetry module — the crate's public entry point. Compose with
 /// `#[module(imports = [TelemetryModule, ...])]`.

@@ -45,9 +45,15 @@ async fn unimported_cross_module_dependency_is_rejected_at_boot() {
         .err()
         .expect("boot must reject a dependency crossing a non-imported boundary");
     let msg = err.to_string();
-    assert!(msg.contains("ServiceB"), "names the offending provider: {msg}");
+    assert!(
+        msg.contains("ServiceB"),
+        "names the offending provider: {msg}"
+    );
     assert!(msg.contains("LeakyModuleB"), "names the module: {msg}");
-    assert!(msg.contains("ModuleA"), "suggests the module to import: {msg}");
+    assert!(
+        msg.contains("ModuleA"),
+        "suggests the module to import: {msg}"
+    );
 }
 
 // --- The same shape, but with the import declared: it must boot cleanly.
@@ -124,7 +130,10 @@ async fn lazily_built_provider_injection_is_checked_via_injected_not_dependencie
         .err()
         .expect("a lazily-built provider's injection still crosses the import boundary");
     let msg = err.to_string();
-    assert!(msg.contains("LazyConsumer"), "names the lazy provider: {msg}");
+    assert!(
+        msg.contains("LazyConsumer"),
+        "names the lazy provider: {msg}"
+    );
     assert!(msg.contains("LazyLeakyModule"), "names the module: {msg}");
     assert!(msg.contains("LazyDepModule"), "suggests the import: {msg}");
 }

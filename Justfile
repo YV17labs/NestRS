@@ -12,6 +12,9 @@ run app="app":
 build:
     cargo build --workspace --release
 
+# Database lifecycle — migrations + seeding. Usage: just db up|down|fresh|status|seed|reset
+mod db
+
 # Run the full test suite (parallel, fast)
 test:
     cargo nextest run --workspace

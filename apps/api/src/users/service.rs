@@ -5,8 +5,8 @@ use anyhow::Result;
 use nestrs_core::{hooks, injectable};
 use nestrs_graphql::dataloader;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, Schema, Set,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait,
+    QueryFilter, Set,
 };
 use uuid::Uuid;
 use validator::Validate;
@@ -14,7 +14,6 @@ use validator::Validate;
 use crate::users::entity::{self, ActiveModel, CreateUserInput, Entity as Users, User};
 
 pub const ORG_ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e);
-pub const ORG_GLOBEX: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_61b3);
 
 #[injectable]
 pub struct UsersService {
@@ -69,33 +68,6 @@ impl UsersService {
 
 #[hooks]
 impl UsersService {
-    #[on_module_init]
-    async fn migrate_and_seed(&self) -> Result<()> {
-        let backend = self.db.get_database_backend();
-        let mut create = Schema::new(backend).create_table_from_entity(Users);
-        create.if_not_exists();
-        self.db.execute(&create).await?;
-
-        if Users::find().one(self.db.as_ref()).await?.is_none() {
-            for (name, email, org_id) in [
-                ("Ada Lovelace", "ada@acme.test", ORG_ACME),
-                ("Grace Hopper", "grace@acme.test", ORG_ACME),
-                ("Alan Turing", "alan@globex.test", ORG_GLOBEX),
-            ] {
-                self.create(
-                    CreateUserInput {
-                        name: name.to_owned(),
-                        email: email.to_owned(),
-                    },
-                    org_id,
-                )
-                .await?;
-            }
-            tracing::info!(target: "nestrs::lifecycle", "seeded users across two orgs");
-        }
-        Ok(())
-    }
-
     #[on_application_shutdown]
     async fn report(&self) -> Result<()> {
         let count = Users::find().count(self.db.as_ref()).await?;

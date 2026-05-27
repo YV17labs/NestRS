@@ -71,6 +71,9 @@ uuid = { version = "1", features = ["v7", "serde"] }
 # is not yet on crates.io, so the pre-release is pinned explicitly). Postgres
 # over the rustls toolchain already used across the workspace.
 sea-orm = { version = "2.0.0-rc.38", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
+# Migration runner + schema builder. Same release line as sea-orm; the bundled
+# `cli` feature gives the `migrate` binary its up/down/fresh/status subcommands.
+sea-orm-migration = { version = "2.0.0-rc.38", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 
 # HTTP client (rustls so we avoid an OpenSSL system dep)
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

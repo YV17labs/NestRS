@@ -1,0 +1,18 @@
+[package]
+name = "db"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# The workspace's shared-database lifecycle app: the `Migrator` library plus two
+# binaries — `migrate` (SeaORM's CLI: up/down/fresh/status) and `seed` (demo
+# data). All apps share one database, so this owns its schema and seed centrally.
+
+[dependencies]
+sea-orm-migration.workspace = true
+# The seeder inserts via SeaQuery; sea-orm (with `with-uuid`) gives Uuid → Value
+# and the standalone `Database::connect` the seed binary uses.
+sea-orm.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+tokio.workspace = true

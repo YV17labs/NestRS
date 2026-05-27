@@ -6,7 +6,7 @@
 # the runtime image. Which one runs is chosen at `docker run` time by
 # overriding the entrypoint:
 #
-#   docker run --rm -p 3000:3000 nestrs                # runs the default (api)
+#   docker run --rm -p 3000:3000 nestrs                # runs the default (app)
 #   docker run --rm -p 3000:3000 nestrs /usr/local/bin/<other-app>
 #
 # Stages:
@@ -62,4 +62,4 @@ COPY --from=builder --chown=nonroot:nonroot /out/ /usr/local/bin/
 EXPOSE 3000
 USER nonroot:nonroot
 # Default app — override at runtime: `docker run ... /usr/local/bin/<app>`
-ENTRYPOINT ["/usr/local/bin/api"]
+ENTRYPOINT ["/usr/local/bin/app"]

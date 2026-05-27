@@ -402,11 +402,11 @@ run` time:
 ```bash
 docker build -t nestrs .
 
-# Run the app on port 3001
-docker run --rm -p 3001:3001 nestrs /usr/local/bin/app
+# Run the default app (the `app` baseline) on port 3001
+docker run --rm -p 3001:3001 nestrs
 
-# Run the default app (api) on port 3002
-docker run --rm -p 3002:3002 nestrs
+# Run the api app on port 3002
+docker run --rm -p 3002:3002 nestrs /usr/local/bin/api
 
 # Run the mcp app on port 3003
 docker run --rm -p 3003:3003 nestrs /usr/local/bin/mcp

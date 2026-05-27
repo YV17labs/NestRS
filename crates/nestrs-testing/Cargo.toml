@@ -1,0 +1,19 @@
+[package]
+name = "nestrs-testing"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "In-process testing harness for nestrs: boot an app's real DI graph and drive its HTTP/GraphQL/MCP surfaces with poem's TestClient, with provider overrides and no socket bound."
+
+[dependencies]
+nestrs-core.workspace = true
+nestrs-http.workspace = true
+anyhow.workspace = true
+# `test` adds poem's in-process TestClient; `tower-compat` comes from the
+# workspace default and is harmless here.
+poem = { workspace = true, features = ["test"] }
+
+[dev-dependencies]
+tokio.workspace = true

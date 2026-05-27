@@ -126,6 +126,7 @@ nestrs-schedule = { path = "crates/nestrs-schedule" }
 nestrs-schedule-macros = { path = "crates/nestrs-schedule-macros" }
 nestrs-server-timing = { path = "crates/nestrs-server-timing" }
 nestrs-telemetry = { path = "crates/nestrs-telemetry" }
+nestrs-testing = { path = "crates/nestrs-testing" }
 
 # Release: smallest, fastest binary. Compile time is not a concern here.
 [profile.release]

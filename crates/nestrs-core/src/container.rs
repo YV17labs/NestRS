@@ -91,6 +91,16 @@ impl ContainerBuilder {
         self
     }
 
+    /// Replace a concrete provider without the override warning. The intentional
+    /// counterpart of [`provide`](Self::provide) for a deliberate swap — used by
+    /// [`AppBuilder::override_value`](crate::AppBuilder::override_value) so a test
+    /// can substitute a mock without `nestrs::container` logging a collision it
+    /// asked for.
+    pub(crate) fn replace<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        self.providers.insert(TypeId::of::<T>(), Arc::new(value));
+        self
+    }
+
     /// Warn when a concrete-type registration silently replaces an earlier one.
     /// In a flat singleton container that usually means two modules registered
     /// the same type by mistake — the kind of collision NestJS's per-module scope

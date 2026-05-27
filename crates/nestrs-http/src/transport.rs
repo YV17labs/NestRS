@@ -106,6 +106,17 @@ impl HttpTransport {
         }));
         self
     }
+
+    /// Take the endpoint assembled by [`Transport::configure`] for in-process
+    /// testing — drive it with `poem`'s `TestClient` (via
+    /// [`nestrs-testing`](https://docs.rs/nestrs-testing)) instead of binding a
+    /// socket. Returns `None` before `configure` has run, and leaves the
+    /// transport without an endpoint (so it must not also be `serve`d). The
+    /// extracted endpoint carries the full discovery + interceptor / guard /
+    /// filter chain, so a test exercises exactly what production serves.
+    pub fn take_endpoint(&mut self) -> Option<BoxEndpoint<'static, Response>> {
+        self.endpoint.take()
+    }
 }
 
 #[async_trait]

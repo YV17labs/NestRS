@@ -8,7 +8,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::validate_from_inventory;
-use crate::container::{Container, ContainerBuilder};
+use crate::container::{Container, ContainerBuilder, Registrar};
 use crate::lifecycle::{run_phase, run_phase_lenient, LifecyclePhase};
 use crate::module::Module;
 use crate::transport::Transport;
@@ -52,6 +52,18 @@ impl App {
     /// resolver that lives in the container).
     pub fn container(&self) -> &Container {
         &self.container
+    }
+
+    /// Run the init lifecycle phases (`OnModuleInit`, then
+    /// `OnApplicationBootstrap`) against the built container, without serving.
+    /// [`run`](App::run) calls this internally before serving; it is exposed so a
+    /// test harness ([`nestrs-testing`](https://docs.rs/nestrs-testing)) can drive
+    /// the same startup the server performs — the NestJS `app.init()` analog. A
+    /// failing hook aborts with its error.
+    pub async fn init(&self) -> Result<()> {
+        run_phase(&self.container, LifecyclePhase::OnModuleInit).await?;
+        run_phase(&self.container, LifecyclePhase::OnApplicationBootstrap).await?;
+        Ok(())
     }
 
     pub fn transport<T: Transport>(mut self, transport: T) -> Self {
@@ -157,6 +169,11 @@ struct ModuleHooks {
 pub struct AppBuilder {
     builder: ContainerBuilder,
     modules: Vec<ModuleHooks>,
+    /// Provider replacements applied *after* the register phase, so they win
+    /// over a module's own registration. Seeded by
+    /// [`override_value`](Self::override_value) / [`override_dyn`](Self::override_dyn),
+    /// mainly for tests swapping a real provider for a mock.
+    overrides: Vec<Registrar>,
 }
 
 impl AppBuilder {
@@ -164,6 +181,7 @@ impl AppBuilder {
         Self {
             builder: Container::builder(),
             modules: Vec::new(),
+            overrides: Vec::new(),
         }
     }
 
@@ -212,6 +230,34 @@ impl AppBuilder {
         self
     }
 
+    /// Replace a concrete provider of type `T` *after* the module tree
+    /// registers, so this value wins. Intended for tests
+    /// ([`nestrs-testing`](https://docs.rs/nestrs-testing)) swapping a real
+    /// provider for a fake.
+    ///
+    /// Because the container builds providers eagerly, the override reaches any
+    /// consumer resolved from the **final** container — controllers, resolvers,
+    /// guards, transports, lifecycle hooks — but not a provider already
+    /// constructed in the register phase that captured the original `Arc` (the
+    /// same final-vs-snapshot timing every aggregating concern observes). Override
+    /// the `dyn Trait` a service is injected behind ([`override_dyn`](Self::override_dyn))
+    /// and that caveat rarely bites in practice.
+    pub fn override_value<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        self.overrides
+            .push(Box::new(move |builder| builder.replace(value)));
+        self
+    }
+
+    /// Replace a `dyn Trait` binding after the module tree registers — the test
+    /// counterpart of [`provide_dyn`](Self::provide_dyn). A consumer injecting
+    /// `Arc<dyn Trait>` from the final container resolves this value. See
+    /// [`override_value`](Self::override_value) for the eager-build caveat.
+    pub fn override_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
+        self.overrides
+            .push(Box::new(move |builder| builder.provide_dyn(value)));
+        self
+    }
+
     /// Register a root module. May be called more than once; all modules
     /// collect their factories and register their providers together, and each
     /// roots the access-graph check.
@@ -231,6 +277,7 @@ impl AppBuilder {
         let AppBuilder {
             mut builder,
             modules,
+            overrides,
         } = self;
 
         // Collect phase: every module queues the async factories its import
@@ -250,6 +297,11 @@ impl AppBuilder {
         // Register phase: build providers, now that factory outputs are present.
         for hooks in &modules {
             builder = (hooks.register)(builder);
+        }
+        // Override phase: apply test substitutions last so they win over the
+        // modules' own registrations.
+        for ov in overrides {
+            builder = ov(builder);
         }
 
         // Enforce the import contract: every provider's dependency must be

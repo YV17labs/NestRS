@@ -67,6 +67,10 @@ validator = { version = "0.20", features = ["derive"] }
 # response masker and JSON responses.
 uuid = { version = "1", features = ["v7", "serde"] }
 
+# Fake data for the shared-database seeder's factories (names, emails, company
+# names). Pulls `rand` transitively, so `.fake()` needs no direct rand dep.
+fake = "5"
+
 # ORM. SeaORM 2.0 — the latest published is the `2.0.0-rc` line (the 2.0.0 final
 # is not yet on crates.io, so the pre-release is pinned explicitly). Postgres
 # over the rustls toolchain already used across the workspace.

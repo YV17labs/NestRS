@@ -16,3 +16,5 @@ sea-orm.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
+# Fake data for the seeder factories (see `seed::factories`).
+fake.workspace = true

@@ -194,6 +194,7 @@ nestrs/
 ├─ apps/            applications — one runnable binary each
 │  ├─ api/          REST + GraphQL, persisted & authorized
 │  ├─ app/          minimal HTTP baseline
+│  ├─ db/           shared-database migrations & seeding (CLI)
 │  ├─ mcp/          Model Context Protocol server
 │  └─ worker/       background jobs & scheduling (headless)
 └─ crates/          libraries — the framework, plus your shared code
@@ -257,9 +258,10 @@ setup on any machine with Docker and a devcontainer-aware editor.
 
 That is the whole setup. The container provisions the Rust toolchain and the dev
 tooling (`just`, `bacon`, `cargo-nextest`, …), and brings up **Postgres** and
-**Redis** beside it with `DATABASE_URL` / `REDIS_URL` already pointed at them — so
-`api` and `worker` run with no further configuration. Ports 3001–3003 are
-forwarded to the host.
+**Redis** beside it with `DATABASE_URL` / `REDIS_URL` already pointed at them.
+`worker` then runs as-is; `api` needs its schema applied once first — `just db up`
+(or `just db reset` to also load demo data). Ports 3001–3003 are forwarded to the
+host.
 
 Then start an app in watch mode:
 
@@ -309,9 +311,11 @@ Run `just` with no arguments to list every recipe.
 | `just lint` | Clippy (strict) + format check |
 | `just fmt` | Apply rustfmt |
 | `just check` | Fast type-check (no codegen) |
+| `just db <verb>` | Manage the shared database: `up`, `down`, `fresh`, `status`, `seed`, `reset` (e.g. `just db up`, then `just db seed`) |
 
 `build`, `test`, `cov`, `lint`, `fmt`, and `check` always operate on the whole
-workspace; `dev` and `run` take an app name (default `app`).
+workspace; `dev` and `run` take an app name (default `app`); `just db` (run bare
+to list the verbs) manages the shared Postgres schema and seed data.
 
 ## Example applications
 
@@ -323,14 +327,16 @@ same building blocks. They will grow over time.
 |-----|------|------|
 | `api` | REST + GraphQL, persisted & authorized | 3002 |
 | `app` | Minimal HTTP baseline | 3001 |
+| `db` | Shared-database migrations & seeding (CLI) | — |
 | `mcp` | Model Context Protocol server | 3003 |
 | `worker` | Background jobs & scheduling (headless) | — |
 
 ### `api` — REST + GraphQL, persisted and authorized (port 3002)
 
 Started with `just dev api`; persists to Postgres via SeaORM, so it needs a
-`DATABASE_URL` (boot aborts with a clear message if it is unset). Listens on
-`http://0.0.0.0:3002`:
+`DATABASE_URL` (boot aborts with a clear message if it is unset). The schema is
+applied by the `db` app, not the running service — run `just db up` once first
+(or `just db reset` to also load demo users). Listens on `http://0.0.0.0:3002`:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -357,6 +363,16 @@ inputs.
 Started with `just dev app`. A single `GET /` returning `Hello World` on
 `http://0.0.0.0:3001`, kept deliberately bare — no health, telemetry, or
 middleware — as a baseline for benchmarking the framework's request path.
+
+### `db` — Shared-database migrations & seeding
+
+The workspace shares one Postgres database, so its schema and seed live in a
+single app rather than any one service. It ships two binaries — `migrate`
+(SeaORM's migration runner) and `seed` (demo data) — driven through `just db`:
+`just db up` applies pending migrations, `just db fresh` rebuilds from scratch,
+`just db seed` loads demo data, and `just db reset` does a clean rebuild then
+seed. Both binaries ship in the container image alongside the apps, so the same
+image migrates and serves.
 
 ### `mcp` — Model Context Protocol server (port 3003)
 
@@ -394,6 +410,10 @@ docker run --rm -p 3002:3002 nestrs
 
 # Run the mcp app on port 3003
 docker run --rm -p 3003:3003 nestrs /usr/local/bin/mcp
+
+# Apply migrations (and optionally seed) with the same image
+docker run --rm nestrs /usr/local/bin/migrate up
+docker run --rm nestrs /usr/local/bin/seed
 ```
 
 Adding a new app under `apps/` requires no Dockerfile change — the builder

@@ -22,11 +22,13 @@
 
 ## Why NestRS
 
-- ⚡ **Rust-native speed.** Built on the same hyper/tokio core as the fastest Rust
-  web frameworks — no GC pauses and tail latencies that stay flat under load, the
-  throughput profile you'd expect from native Rust over a managed runtime.
-- 🪶 **An order of magnitude less memory.** A footprint in the tens of MB, not
-  hundreds — smaller instances, higher density, a lighter cloud bill.
+- ⚡ **Rust-native speed.** ~25× the throughput of an equivalent NestJS service on
+  the same CPU budget (~13× per core), with a sub-millisecond p99 — built on the
+  same hyper/tokio core as the fastest Rust web frameworks, with no GC pauses and
+  tail latencies that stay flat under load. [See the benchmark.](#benchmark)
+- 🪶 **An order of magnitude less memory.** ~4 MB idle and ~6 MB under load, versus
+  ~80–120 MB for the same NestJS service — roughly 18–20× lighter, for smaller
+  instances, higher density, and a lighter cloud bill.
 - 🚀 **Boots in milliseconds.** A single static native binary with no runtime to
   warm up — friendly to autoscaling and cold starts.
 - 🧩 **Declarative by design.** `#[module]`, `#[controller]`, `#[injectable]`,
@@ -39,7 +41,32 @@
   OpenTelemetry and an in-process test harness — each an opt-in crate, so you
   compile only what you import.
 
-<sub>These describe native-Rust-vs-managed-runtime characteristics, not measured NestRS results — reproducible throughput, memory, and cold-start benchmarks are a tracked <a href="ROADMAP.md">roadmap</a> item.</sub>
+## Benchmark
+
+The same "Hello World" HTTP service — a provider, a controller, a module —
+implemented once in NestRS and once in NestJS, under an identical `wrk` load
+(`GET /`, plaintext, keep-alive). On the same CPU budget NestRS served **~25×
+more requests** while using **~18× less memory**.
+
+| Metric — `GET /` plaintext      | NestRS (Rust)  | NestJS (Node 20) | Ratio  |
+| ------------------------------- | -------------- | ---------------- | ------ |
+| Throughput (2 cores, defaults)  | ~463k req/s    | ~18k req/s       | ~25×   |
+| Throughput (1 core, per-core)   | ~212k req/s    | ~17k req/s       | ~13×   |
+| Latency, p50                    | 0.13 ms        | 3.2 ms           | ~24×   |
+| Latency, p99                    | 0.57 ms        | 6.4 ms           | ~11×   |
+| Memory, idle                    | 4 MB           | 80 MB            | ~20×   |
+| Memory, under load              | 6 MB           | 118 MB           | ~18×   |
+
+<sub><b>Machine:</b> a single dev container with <b>4 cores and 8 GiB RAM</b>
+(aarch64, Debian 13) — both the total memory and the core count are the
+container's, not the host's. <b>Method:</b> server pinned to half the cores, the
+<code>wrk</code> client (<code>-t2 -c64 -d20s</code>) to the other half; median of
+3 runs over loopback. NestRS is a release build on its default multi-threaded
+tokio runtime; NestJS 11 runs on Express, <code>NODE_ENV=production</code>, logging
+off, as a single process — the Node default, which is why it cannot use the second
+core (the per-core row is the apples-to-apples figure). Loopback on a shared host
+favours absolute numbers over a public leaderboard; treat these as order-of-
+magnitude, and reproduce them with the <code>app</code> example.</sub>
 
 ## What the code looks like
 

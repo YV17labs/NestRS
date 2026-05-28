@@ -50,8 +50,9 @@ The authoritative record of *what was decided and why* is
 
 - Settle the public API of the core crates so early adopters stop chasing
   breaking changes.
-- **Published benchmarks** — replace the "native-Rust-vs-Node" framing with
-  reproducible throughput, memory, and cold-start numbers.
+- **Published benchmarks** — reproducible throughput and memory numbers now ship
+  in the README (the `app` example versus an equivalent NestJS service); cold-start
+  numbers are still to follow.
 - Fill in crate-level docs and grow the `apps/` examples.
 
 ## Next — the documented gaps

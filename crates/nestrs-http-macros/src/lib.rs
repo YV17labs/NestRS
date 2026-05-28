@@ -19,9 +19,10 @@ use nestrs_codegen::{
 };
 
 /// One route handler in a controller: its HTTP verb ident, the generated
-/// wrapper-fn ident, the guard paths declared with `#[use_guards]`, and the
-/// `Authorize<_, _>` parameter type (if any) that drives response shaping.
-type RouteHandler = (syn::Ident, syn::Ident, Vec<Path>, Option<Type>);
+/// wrapper-fn ident, the guard paths declared with `#[use_guards]`, the
+/// `Authorize<_, _>` parameter type (if any) that drives response shaping, and
+/// the `#[meta(...)]` value expressions attached to the route.
+type RouteHandler = (syn::Ident, syn::Ident, Vec<Path>, Option<Type>, Vec<Expr>);
 
 /// Handlers grouped by path in first-seen order — several verbs may share a path
 /// (`GET` + `POST /users`), which `#[routes]` collapses into one `RouteMethod`.
@@ -148,6 +149,14 @@ pub fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// via `nestrs_http::Ctx<T>`. Like the verb attributes, `#[use_guards]` is
 /// consumed here and needs no import.
 ///
+/// Tag a method with `#[meta(EXPR)]` (repeatable) to attach a typed metadata
+/// value to the route — the `@SetMetadata` / `@Roles` analog. `EXPR` is
+/// evaluated once at mount and inserted into the request just outside the
+/// route's guards, so a `#[use_guards]` guard reads it back with
+/// `nestrs_http::Reflector::new(req).get::<T>()` to vary its decision. The value
+/// type must be `Clone + Send + Sync + 'static`. Like `#[use_guards]`, the
+/// attribute is consumed here and needs no import.
+///
 /// Tag a method with `#[api(summary = "...", description = "...", tags("a",
 /// "b"))]` to enrich its OpenAPI operation (the analog of NestJS's
 /// `@ApiOperation` / `@ApiTags`); every field is optional and, like
@@ -260,6 +269,19 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             None => Vec::new(),
         };
 
+        // `#[meta(EXPR)]` next to the verb attribute (repeatable) — a typed value
+        // inserted into the request just outside this route's guards, so a
+        // `#[use_guards]` guard reads it back with `nestrs_http::Reflector` to
+        // vary its decision (the `@Roles` / `@SetMetadata` analog).
+        let mut metas: Vec<Expr> = Vec::new();
+        while let Some(m_idx) = method.attrs.iter().position(|a| a.path().is_ident("meta")) {
+            let m_attr = method.attrs.remove(m_idx);
+            match m_attr.parse_args::<Expr>() {
+                Ok(expr) => metas.push(expr),
+                Err(err) => return err.to_compile_error().into(),
+            }
+        }
+
         // A handler that declares an `Authorize<A, S>` parameter has its
         // response shaped (field-masked) by that gate type — detected by name so
         // this crate emits only `::nestrs_http::shaped` plus the app's own type,
@@ -271,6 +293,7 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             wrapper_name.clone(),
             guards,
             shaper.clone(),
+            metas,
         );
         match routes_by_path
             .iter_mut()
@@ -348,12 +371,12 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         .iter()
         .map(|(path, handlers)| {
             let mut handlers = handlers.iter();
-            let (first_verb, first_wrapper, first_guards, first_shaper) =
+            let (first_verb, first_wrapper, first_guards, first_shaper, first_metas) =
                 handlers.next().expect("each path has at least one verb");
-            let first = guarded_handler(first_wrapper, first_guards, first_shaper);
+            let first = guarded_handler(first_wrapper, first_guards, first_shaper, first_metas);
             let mut method = quote! { ::poem::#first_verb(#first) };
-            for (verb, wrapper, guards, shaper) in handlers {
-                let ep = guarded_handler(wrapper, guards, shaper);
+            for (verb, wrapper, guards, shaper, metas) in handlers {
+                let ep = guarded_handler(wrapper, guards, shaper, metas);
                 method = quote! { #method.#verb(#ep) };
             }
             quote! { .at(#path, #method) }
@@ -424,13 +447,21 @@ fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
     })
 }
 
-/// Wrap a route handler in its response shaper (if any) and its `#[use_guards]`
-/// guards. The shaper sits innermost — *inside* the guards — so a guard that
-/// attached request context (the authorization ability) has run before the
-/// shaper's `capture`. Each guard is resolved from the container at mount time;
-/// the first guard listed ends up outermost. Generated inside
-/// `Controller::mount`, where `container: &Container` is in scope.
-fn guarded_handler(wrapper: &syn::Ident, guards: &[Path], shaper: &Option<Type>) -> TokenStream2 {
+/// Wrap a route handler in its response shaper (if any), its `#[use_guards]`
+/// guards, and its `#[meta(...)]` route metadata. The shaper sits innermost —
+/// *inside* the guards — so a guard that attached request context (the
+/// authorization ability) has run before the shaper's `capture`. Each guard is
+/// resolved from the container at mount time; the first guard listed ends up
+/// outermost. The metadata values wrap *outside* the guards, so each is inserted
+/// into the request before any guard's `check` and a guard reads it back with
+/// `nestrs_http::Reflector`. Generated inside `Controller::mount`, where
+/// `container: &Container` is in scope.
+fn guarded_handler(
+    wrapper: &syn::Ident,
+    guards: &[Path],
+    shaper: &Option<Type>,
+    metas: &[Expr],
+) -> TokenStream2 {
     let mut expr = match shaper {
         Some(ty) => quote! {
             ::nestrs_http::shaped(#wrapper, ::core::marker::PhantomData::<#ty>)
@@ -448,6 +479,11 @@ fn guarded_handler(wrapper: &syn::Ident, guards: &[Path], shaper: &Option<Type>)
                 )),
             )
         };
+    }
+    // Outermost: the value is evaluated once here at mount and inserted into the
+    // request (its extensions) before the guards run, where `Reflector` reads it.
+    for m in metas {
+        expr = quote! { ::poem::EndpointExt::data(#expr, #m) };
     }
     expr
 }

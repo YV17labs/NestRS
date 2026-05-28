@@ -27,6 +27,7 @@ mod controller;
 mod endpoint;
 mod interceptor;
 mod pipe;
+mod reflector;
 mod shaper;
 mod transport;
 
@@ -37,6 +38,7 @@ pub use controller::{
 pub use endpoint::HttpEndpointMeta;
 pub use interceptor::HttpInterceptorMeta;
 pub use pipe::{IntoInner, Piped, Valid};
+pub use reflector::Reflector;
 pub use shaper::{shaped, RouteResponseShaper, ShapedEndpoint};
 pub use transport::{join_path, HttpTransport};
 

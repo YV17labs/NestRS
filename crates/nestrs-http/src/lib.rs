@@ -28,10 +28,12 @@ mod endpoint;
 mod interceptor;
 mod pipe;
 mod reflector;
+mod scope;
 mod shaper;
 mod transport;
 
 pub use context::Ctx;
+pub use scope::{RequestScopeEndpoint, Scoped};
 pub use controller::{
     schema_of, Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, SchemaFn,
 };
@@ -40,7 +42,7 @@ pub use interceptor::HttpInterceptorMeta;
 pub use pipe::{IntoInner, Piped, Valid};
 pub use reflector::Reflector;
 pub use shaper::{shaped, RouteResponseShaper, ShapedEndpoint};
-pub use transport::{join_path, HttpTransport};
+pub use transport::{join_path, version_path, HttpTransport};
 
 pub use poem;
 
@@ -50,11 +52,11 @@ pub use poem;
 pub use schemars;
 
 // `#[routes]`-generated code names `::nestrs_http::EndpointExt` to wrap a
-// `#[use_guards]` handler, and a guard is written `#[nestrs_http::async_trait]
-// impl nestrs_http::Guard` — so both are surfaced here. The other middleware
-// categories (`Interceptor`, `Filter`) stay in `nestrs-middleware`.
+// `#[use_guards]` / `#[use_filters]` handler, and a guard or filter is written
+// `#[nestrs_http::async_trait] impl nestrs_http::Guard` (resp. `Filter`) — so
+// all are surfaced here. `Interceptor` stays in `nestrs-middleware`.
 pub use async_trait::async_trait;
-pub use nestrs_middleware::{EndpointExt, Guard};
+pub use nestrs_middleware::{EndpointExt, Filter, Guard, RequestSnapshot};
 
 /// HTTP decorators (`#[controller]`, `#[routes]`, the verb attributes,
 /// `#[interceptor]`), defined in `nestrs-http-macros` and surfaced here so

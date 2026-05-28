@@ -70,6 +70,33 @@ Registering the same concrete type twice logs a `nestrs::container` warning (the
 flat container makes such collisions silent otherwise); a `provide_dyn`
 rebinding is exempt — last-binding-wins is its documented override path.
 
+## Providers are singletons unless scoped to the request
+
+The container is a singleton store by default. The one opt-in exception is
+`#[injectable(scope = request)]` (the NestJS `Scope.REQUEST` analog): instead of
+one shared value, the macro registers a per-request **factory**
+(`ContainerBuilder::provide_scoped`) rather than a singleton, and a
+`RequestScope` builds the provider **once per request**, caching the instance for
+that request. Like a controller it builds lazily, so its register-phase
+`Discoverable::dependencies` are empty (it never gates singleton ordering) while
+`injected` still reports its `#[inject]` keys, so the access-graph governs it
+exactly as it governs an eager provider. A request-scoped provider resolves its
+dependencies from the singleton root, so the model is **one level deep**: it may
+inject singletons, but not other request-scoped providers, and a singleton may
+not inject a request-scoped one (the singleton is built before any request
+exists — doing so panics at boot with the missing-provider diagnostic). Reach a
+request-scoped provider through the request boundary, never a `#[inject]` field
+on a singleton.
+
+The request boundary today is **HTTP**: `HttpTransport` wraps the route tree in a
+`RequestScopeEndpoint` that installs a fresh `RequestScope` per request, and a
+handler reads a provider back with the `nestrs_http::Scoped<T>` extractor (which
+also resolves singletons, falling through — but prefer plain `#[inject]` for
+those). Two `Scoped<T>` reads in one request share the cached instance. GraphQL
+and MCP do not yet bridge the scope (they carry per-request state through their
+own context / DataLoaders); a `transient` scope (fresh instance per resolution)
+is likewise not built.
+
 ## Modules compose by type or by configured value
 
 `#[module(imports = [...])]` accepts two forms per entry. A bare **type**
@@ -140,7 +167,13 @@ contract governs transport-built logic too. **Every provider in `providers =
 `#[processor]`, `#[controller]`, `#[mcp]`); the lone exception is `#[resolver]`,
 which self-composes via the GraphQL registry and belongs to no module. Dynamic
 (`for_root`) imports are not graph edges: they contribute only global infra or
-self-mounted metadata.
+self-mounted metadata. The contract has **two deliberate boundaries**, named in
+`access.rs` so they don't read as total coverage: `#[resolver]` injection is
+unchecked (resolvers belong to no module — keep them thin, delegate to
+module-registered services that *are* checked), and runtime `Container::get`/
+`get_dyn` is an unchecked escape hatch (the `ModuleRef.get()` analog — a flat
+container resolves by `TypeId` with no caller identity). The contract binds the
+*declarative* `#[inject]` surface, not imperative resolution.
 
 ## Discovery is struct-level by default
 
@@ -240,7 +273,15 @@ deps) and the first listed runs outermost. `#[routes]` wraps the handler's
 endpoint with them; consumed like the verb attributes, needing no import. Global
 guards still attach imperatively via `HttpTransport::guard`. Declarative
 per-handler *metadata* a guard reads to vary behaviour (NestJS's
-`@Roles`/`Reflector`) is the natural next step on this and not yet built.
+`@Roles`/`Reflector`) ships as `#[meta(EXPR)]` + `nestrs_http::Reflector` (see
+the access-graph note above). Two siblings consumed the same way (per-route,
+container-resolved, no import): `#[use_filters(FilterA, FilterB)]` binds
+exception filters to a single handler (the `@UseFilters` analog —
+`HttpTransport::filter` stays the global form) wrapping *outside* its guards;
+and URI **API versioning** via `#[controller(version = "1")]` mounts the whole
+controller under `/v1` (`version_path` is the single source of truth so the
+served path, the boot log, and the OpenAPI document never drift). Header /
+media-type versioning is not yet built.
 
 ## Scheduling is the first concern proved out as its own crate
 

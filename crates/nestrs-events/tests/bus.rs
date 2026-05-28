@@ -53,7 +53,7 @@ struct EventsTestModule;
 
 #[tokio::test]
 async fn a_producer_emits_and_the_discovered_handler_runs() {
-    let app = App::new::<EventsTestModule>();
+    let app = App::new::<EventsTestModule>().expect("boots");
     // Bootstrap wires the discovered handler into the bus from the final container.
     app.init().await.expect("bootstrap wiring succeeds");
 
@@ -73,7 +73,7 @@ async fn emitting_an_event_with_no_handler_is_a_noop() {
     #[derive(Clone)]
     struct Unobserved;
 
-    let app = App::new::<EventsTestModule>();
+    let app = App::new::<EventsTestModule>().expect("boots");
     app.init().await.expect("bootstrap wiring succeeds");
 
     let bus = app

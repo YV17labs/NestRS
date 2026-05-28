@@ -15,9 +15,6 @@ type Mutation {
 type Org {
 	id: String!
 	name: String!
-	"""
-	The has-many side: an org's members, batched through the users loader.
-	"""
 	users: [User!]!
 }
 

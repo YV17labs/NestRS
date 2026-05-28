@@ -30,8 +30,9 @@ pub fn build_document(
 
     let mut paths: Map<String, Value> = Map::new();
     for controller in discovery.meta::<HttpControllerMeta>() {
+        let prefix = controller.meta.effective_prefix();
         for route in &controller.meta.routes {
-            let full = join_path(controller.meta.path, route.path);
+            let full = join_path(&prefix, route.path);
             let operation = operation_object(route, &path_parameters(&full), &mut generator);
             let item = paths
                 .entry(openapi_path(&full))

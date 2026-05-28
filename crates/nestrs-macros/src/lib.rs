@@ -7,7 +7,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::parse::{Parse, ParseStream};
+use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
 use syn::{
     bracketed, parse_macro_input, Expr, Ident, ImplItem, ItemImpl, ItemStruct, Path, ReturnType,
@@ -29,8 +29,22 @@ use nestrs_codegen::{
 /// Also emits `impl Discoverable for Self` so the struct is usable directly
 /// in `#[module(providers = [...])]`. The registration simply builds the
 /// value via `from_container` and stores it via `ContainerBuilder::provide`.
+///
+/// `#[injectable(scope = request)]` makes the provider **request-scoped**: it is
+/// not built as a singleton but registered as a per-request factory
+/// (`ContainerBuilder::provide_scoped`), built fresh for — and cached within —
+/// each request, resolved through a `RequestScope` (e.g. the HTTP `Scoped<T>`
+/// extractor). Like a controller it is built lazily, so its register-phase
+/// `dependencies` are empty while `injected` still reports its `#[inject]` keys
+/// for the access-graph check. Its dependencies resolve from the singleton root,
+/// so it may inject singletons but not other request-scoped providers. The
+/// default, `scope = singleton`, is the plain shared provider.
 #[proc_macro_attribute]
-pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
+    let request_scoped = match parse_injectable_scope(args.into()) {
+        Ok(scoped) => scoped,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let mut item = parse_macro_input!(input as ItemStruct);
 
     let InjectableBody {
@@ -46,10 +60,43 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    let dependencies = dependencies_method(&dep_keys);
-    let dependency_names = dependency_names_method(&dep_names);
-    let optional_dependencies = optional_dependencies_method(&opt_keys);
     let injected = injected_method(&dep_keys);
+
+    // A request-scoped provider builds lazily (per request), so — exactly like a
+    // controller — it declares no register-phase `dependencies`/ordering and
+    // registers a factory rather than a singleton value. `injected` is reported
+    // regardless so the access-graph still governs its `#[inject]` keys.
+    let (dependencies, dependency_names, optional_dependencies, register_fn) = if request_scoped {
+        (
+            dependencies_method(&[]),
+            dependency_names_method(&[]),
+            optional_dependencies_method(&[]),
+            quote! {
+                fn register(
+                    builder: ::nestrs_core::ContainerBuilder,
+                ) -> ::nestrs_core::ContainerBuilder {
+                    builder.provide_scoped::<Self, _>(|__container| {
+                        Self::from_container(__container)
+                    })
+                }
+            },
+        )
+    } else {
+        (
+            dependencies_method(&dep_keys),
+            dependency_names_method(&dep_names),
+            optional_dependencies_method(&opt_keys),
+            quote! {
+                fn register(
+                    builder: ::nestrs_core::ContainerBuilder,
+                ) -> ::nestrs_core::ContainerBuilder {
+                    let __snapshot = builder.snapshot();
+                    let __value = Self::from_container(&__snapshot);
+                    builder.provide(__value)
+                }
+            },
+        )
+    };
 
     quote! {
         #item
@@ -64,16 +111,39 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
             #optional_dependencies
             #injected
 
-            fn register(
-                builder: ::nestrs_core::ContainerBuilder,
-            ) -> ::nestrs_core::ContainerBuilder {
-                let __snapshot = builder.snapshot();
-                let __value = Self::from_container(&__snapshot);
-                builder.provide(__value)
-            }
+            #register_fn
         }
     }
     .into()
+}
+
+/// Parse the optional `#[injectable(scope = …)]` argument. Empty (or
+/// `scope = singleton`) is the default singleton provider; `scope = request`
+/// marks the provider request-scoped. Returns `true` when request-scoped.
+fn parse_injectable_scope(args: TokenStream2) -> syn::Result<bool> {
+    if args.is_empty() {
+        return Ok(false);
+    }
+    let parser = |input: ParseStream| -> syn::Result<bool> {
+        let key: Ident = input.parse()?;
+        if key != "scope" {
+            return Err(syn::Error::new(
+                key.span(),
+                "expected `scope = request` or `scope = singleton`",
+            ));
+        }
+        input.parse::<Token![=]>()?;
+        let value: Ident = input.parse()?;
+        match value.to_string().as_str() {
+            "request" => Ok(true),
+            "singleton" => Ok(false),
+            other => Err(syn::Error::new(
+                value.span(),
+                format!("unknown scope `{other}` (expected `request` or `singleton`)"),
+            )),
+        }
+    };
+    parser.parse2(args)
 }
 
 /// The phase attributes recognised inside a `#[hooks]` impl block, paired with

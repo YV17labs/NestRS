@@ -6,6 +6,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
+use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{
     parse_macro_input, Attribute, Expr, FnArg, ImplItem, ItemImpl, ItemStruct, Lit, LitStr, Meta,
@@ -15,14 +16,22 @@ use syn::{
 use nestrs_codegen::{
     build_injectable_body, dependencies_method, dependency_names_method, forwarded_arg_idents,
     from_container_method, impl_self_ident, injected_keys_expr, injected_method, nth_generic_type,
-    optional_dependencies_method, parse_named_str_arg, InjectableBody,
+    optional_dependencies_method, InjectableBody,
 };
 
 /// One route handler in a controller: its HTTP verb ident, the generated
-/// wrapper-fn ident, the guard paths declared with `#[use_guards]`, the
-/// `Authorize<_, _>` parameter type (if any) that drives response shaping, and
-/// the `#[meta(...)]` value expressions attached to the route.
-type RouteHandler = (syn::Ident, syn::Ident, Vec<Path>, Option<Type>, Vec<Expr>);
+/// wrapper-fn ident, the guard paths declared with `#[use_guards]`, the filter
+/// paths declared with `#[use_filters]`, the `Authorize<_, _>` parameter type
+/// (if any) that drives response shaping, and the `#[meta(...)]` value
+/// expressions attached to the route.
+type RouteHandler = (
+    syn::Ident,
+    syn::Ident,
+    Vec<Path>,
+    Vec<Path>,
+    Option<Type>,
+    Vec<Expr>,
+);
 
 /// Handlers grouped by path in first-seen order — several verbs may share a path
 /// (`GET` + `POST /users`), which `#[routes]` collapses into one `RouteMethod`.
@@ -33,14 +42,23 @@ type RoutesByPath = Vec<(LitStr, Vec<RouteHandler>)>;
 /// Generates a `from_container(&Container) -> Self` constructor and a
 /// `pub const PATH: &'static str` used by `#[routes]` as the route prefix.
 ///
+/// An optional `version = "1"` enables **URI API versioning** for the whole
+/// controller: every route mounts under `/v1` (the NestJS `@Version` analog with
+/// `VersioningType.URI`). The version segment flows into the route log and the
+/// OpenAPI document too — see [`version_path`](::nestrs_http::version_path).
+///
 /// The `Discoverable` impl is emitted by `#[routes]` rather than here — it
 /// needs the route table that `#[routes]` collects, and emitting it in two
 /// places would conflict.
 #[proc_macro_attribute]
 pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
-    let path_lit = match parse_named_str_arg(args.into(), "path", "controller") {
-        Ok(path) => path,
+    let (path_lit, version) = match parse_controller_args(args.into()) {
+        Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
+    };
+    let version_opt = match &version {
+        Some(v) => quote! { ::core::option::Option::Some(#v) },
+        None => quote! { ::core::option::Option::None },
     };
     let mut item = parse_macro_input!(input as ItemStruct);
 
@@ -63,6 +81,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #impl_generics #name #ty_generics #where_clause {
             pub const PATH: &'static str = #path_lit;
+            pub const VERSION: ::core::option::Option<&'static str> = #version_opt;
 
             #from_container
 
@@ -151,6 +170,12 @@ pub fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// outermost. A guard may attach request-scoped context the handler reads back
 /// via `nestrs_http::Ctx<T>`. Like the verb attributes, `#[use_guards]` is
 /// consumed here and needs no import.
+///
+/// Tag a method with `#[use_filters(FilterA, FilterB)]` to bind exception filters
+/// to just that route (the `@UseFilters` analog; `HttpTransport::filter` is the
+/// global form). Each is resolved from the container and wraps the handler
+/// *outside* its guards, so it maps an error from the handler or a guard into a
+/// response. Consumed here like `#[use_guards]`, no import needed.
 ///
 /// Tag a method with `#[meta(EXPR)]` (repeatable) to attach a typed metadata
 /// value to the route — the `@SetMetadata` / `@Roles` analog. `EXPR` is
@@ -272,6 +297,28 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             None => Vec::new(),
         };
 
+        // `#[use_filters(FilterA, FilterB)]` next to the verb attribute, consumed
+        // here like `#[use_guards]`. Each filter is resolved from the container at
+        // mount time and wraps this handler *outside* its guards, so it maps an
+        // error from the handler (or a guard) to a response — the per-route
+        // `@UseFilters` analog (`HttpTransport::filter` stays the global form).
+        let filters: Vec<Path> = match method
+            .attrs
+            .iter()
+            .position(|a| a.path().is_ident("use_filters"))
+        {
+            Some(f_idx) => {
+                let f_attr = method.attrs.remove(f_idx);
+                match f_attr.parse_args_with(
+                    syn::punctuated::Punctuated::<Path, syn::Token![,]>::parse_terminated,
+                ) {
+                    Ok(paths) => paths.into_iter().collect(),
+                    Err(err) => return err.to_compile_error().into(),
+                }
+            }
+            None => Vec::new(),
+        };
+
         // `#[meta(EXPR)]` next to the verb attribute (repeatable) — a typed value
         // inserted into the request just outside this route's guards, so a
         // `#[use_guards]` guard reads it back with `nestrs_http::Reflector` to
@@ -295,6 +342,7 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             verb_ident.clone(),
             wrapper_name.clone(),
             guards,
+            filters,
             shaper.clone(),
             metas,
         );
@@ -374,12 +422,18 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         .iter()
         .map(|(path, handlers)| {
             let mut handlers = handlers.iter();
-            let (first_verb, first_wrapper, first_guards, first_shaper, first_metas) =
+            let (first_verb, first_wrapper, first_guards, first_filters, first_shaper, first_metas) =
                 handlers.next().expect("each path has at least one verb");
-            let first = guarded_handler(first_wrapper, first_guards, first_shaper, first_metas);
+            let first = guarded_handler(
+                first_wrapper,
+                first_guards,
+                first_filters,
+                first_shaper,
+                first_metas,
+            );
             let mut method = quote! { ::poem::#first_verb(#first) };
-            for (verb, wrapper, guards, shaper, metas) in handlers {
-                let ep = guarded_handler(wrapper, guards, shaper, metas);
+            for (verb, wrapper, guards, filters, shaper, metas) in handlers {
+                let ep = guarded_handler(wrapper, guards, filters, shaper, metas);
                 method = quote! { #method.#verb(#ep) };
             }
             quote! { .at(#path, #method) }
@@ -401,7 +455,8 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 let __sub = ::poem::Route::new()
                     #(#route_entries)*
                     .data(__ctrl);
-                route.nest(<#self_ty>::PATH, __sub)
+                let __prefix = ::nestrs_http::version_path(<#self_ty>::VERSION, <#self_ty>::PATH);
+                route.nest(__prefix.as_str(), __sub)
             }
         }
 
@@ -419,6 +474,7 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             ) -> ::nestrs_core::ContainerBuilder {
                 let __meta = ::nestrs_http::HttpControllerMeta::new(
                     <#self_ty>::PATH,
+                    <#self_ty>::VERSION,
                     ::std::vec![#(#route_metas),*],
                     |__c, __r| <#self_ty as ::nestrs_http::Controller>::mount(__c, __r),
                 );
@@ -451,17 +507,20 @@ fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
 }
 
 /// Wrap a route handler in its response shaper (if any), its `#[use_guards]`
-/// guards, and its `#[meta(...)]` route metadata. The shaper sits innermost —
-/// *inside* the guards — so a guard that attached request context (the
-/// authorization ability) has run before the shaper's `capture`. Each guard is
-/// resolved from the container at mount time; the first guard listed ends up
-/// outermost. The metadata values wrap *outside* the guards, so each is inserted
-/// into the request before any guard's `check` and a guard reads it back with
-/// `nestrs_http::Reflector`. Generated inside `Controller::mount`, where
-/// `container: &Container` is in scope.
+/// guards, its `#[use_filters]` exception filters, and its `#[meta(...)]` route
+/// metadata. From inner to outer: shaper → guards → filters → metadata. The
+/// shaper sits innermost — *inside* the guards — so a guard that attached request
+/// context (the authorization ability) has run before the shaper's `capture`.
+/// Filters wrap *outside* the guards so a filter maps an error from the handler
+/// or a guard to a response; each guard/filter is resolved from the container at
+/// mount time, first listed ending up outermost within its layer. The metadata
+/// values wrap outermost, so each is inserted into the request before any guard's
+/// `check` and a guard reads it back with `nestrs_http::Reflector`. Generated
+/// inside `Controller::mount`, where `container: &Container` is in scope.
 fn guarded_handler(
     wrapper: &syn::Ident,
     guards: &[Path],
+    filters: &[Path],
     shaper: &Option<Type>,
     metas: &[Expr],
 ) -> TokenStream2 {
@@ -483,6 +542,18 @@ fn guarded_handler(
             )
         };
     }
+    for f in filters.iter().rev() {
+        expr = quote! {
+            ::nestrs_http::EndpointExt::filter(
+                #expr,
+                ::nestrs_core::Container::get::<#f>(container).expect(concat!(
+                    "#[use_filters] filter `",
+                    stringify!(#f),
+                    "` is not registered — add it to a module's providers"
+                )),
+            )
+        };
+    }
     // Outermost: the value is evaluated once here at mount and inserted into the
     // request (its extensions) before the guards run, where `Reflector` reads it.
     for m in metas {
@@ -492,6 +563,36 @@ fn guarded_handler(
 }
 
 // OpenAPI capture: `#[api(...)]` parsing and `Json<T>` payload-type extraction.
+
+/// Parse `#[controller(path = "...", version = "1")]` — `path` required,
+/// `version` optional (URI API versioning, the `@Controller({ version })`
+/// analog). Order-independent; an unknown key is rejected with a clear message.
+fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitStr>)> {
+    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
+    let mut path = None;
+    let mut version = None;
+    for meta in metas {
+        match meta {
+            Meta::NameValue(nv) if nv.path.is_ident("path") => path = Some(expr_str(&nv.value)?),
+            Meta::NameValue(nv) if nv.path.is_ident("version") => {
+                version = Some(expr_str(&nv.value)?)
+            }
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "#[controller] accepts `path = \"...\"` and an optional `version = \"...\"`",
+                ))
+            }
+        }
+    }
+    let path = path.ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[controller] requires `path = \"...\"`",
+        )
+    })?;
+    Ok((path, version))
+}
 
 /// Parsed `#[api(...)]` facets. Everything is optional; an empty attribute (or
 /// no attribute at all) leaves the route's OpenAPI defaults untouched.

@@ -36,9 +36,13 @@ pub struct ResourceModel {
     pub output_ident: Ident,
     pub create_input_ident: Ident,
     pub update_input_ident: Ident,
+    /// `<Name>Page` — the pagination envelope emitted when `paginate` is set.
+    pub page_ident: Ident,
     pub fields: Vec<ResourceField>,
     /// Emit `#[graphql(complex)]` so a bespoke `#[field]` resolver can attach.
     pub complex: bool,
+    /// Emit a `<Name>Page` envelope (`#[expose(paginate)]`) for list endpoints.
+    pub paginate: bool,
 }
 
 /// Parse the `#[expose(...)]` attribute arguments and field annotations,
@@ -46,6 +50,7 @@ pub struct ResourceModel {
 pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceModel> {
     let mut name: Option<String> = None;
     let mut complex = false;
+    let mut paginate = false;
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
             name = Some(meta.value()?.parse::<LitStr>()?.value());
@@ -53,9 +58,13 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
         } else if meta.path.is_ident("complex") {
             complex = true;
             Ok(())
+        } else if meta.path.is_ident("paginate") {
+            paginate = true;
+            Ok(())
         } else {
-            Err(meta
-                .error("unknown #[expose(...)] option (expected `name = \"...\"` or `complex`)"))
+            Err(meta.error(
+                "unknown #[expose(...)] option (expected `name = \"...\"`, `complex`, or `paginate`)",
+            ))
         }
     });
     syn::parse::Parser::parse2(parser, args)?;
@@ -140,8 +149,10 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
         output_ident: name_ident.clone(),
         create_input_ident: format_ident!("Create{}Input", name_ident),
         update_input_ident: format_ident!("Update{}Input", name_ident),
+        page_ident: format_ident!("{}Page", name_ident),
         fields,
         complex,
+        paginate,
     })
 }
 

@@ -26,7 +26,7 @@
 //! }
 //!
 //! // main.rs
-//! App::new::<AppModule>()
+//! App::new::<AppModule>()?
 //!     .transport(Scheduler::new())
 //!     .transport(HttpTransport::new())
 //!     .run().await

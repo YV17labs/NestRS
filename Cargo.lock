@@ -186,6 +186,7 @@ dependencies = [
  "nestrs-resource",
  "nestrs-server-timing",
  "nestrs-telemetry",
+ "nestrs-testing",
  "poem",
  "schemars",
  "sea-orm",
@@ -2578,7 +2579,11 @@ dependencies = [
 name = "nestrs-resource"
 version = "0.1.0"
 dependencies = [
+ "async-graphql",
  "nestrs-resource-macros",
+ "schemars",
+ "serde",
+ "validator",
 ]
 
 [[package]]

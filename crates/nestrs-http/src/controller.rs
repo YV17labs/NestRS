@@ -87,20 +87,37 @@ type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
 /// (OpenAPI rendering, route listings) without touching the transport.
 pub struct HttpControllerMeta {
     pub path: &'static str,
+    /// URI API version from `#[controller(version = "1")]`: `Some("1")` mounts
+    /// the controller under `/v1`, `None` mounts it at `path` unversioned.
+    pub version: Option<&'static str>,
     pub routes: Vec<HttpRouteMeta>,
     mount: Arc<MountFn>,
 }
 
 impl HttpControllerMeta {
-    pub fn new<F>(path: &'static str, routes: Vec<HttpRouteMeta>, mount: F) -> Self
+    pub fn new<F>(
+        path: &'static str,
+        version: Option<&'static str>,
+        routes: Vec<HttpRouteMeta>,
+        mount: F,
+    ) -> Self
     where
         F: Fn(&Container, Route) -> Route + Send + Sync + 'static,
     {
         Self {
             path,
+            version,
             routes,
             mount: Arc::new(mount),
         }
+    }
+
+    /// The controller's mount prefix with URI versioning applied — `/v1/users`
+    /// when versioned, `/users` otherwise. Readers that compose full route paths
+    /// (the boot route log, the OpenAPI document) join each route onto this so
+    /// they match what [`mount`](Self::mount) actually serves.
+    pub fn effective_prefix(&self) -> String {
+        crate::version_path(self.version, self.path)
     }
 
     /// Mount this controller's routes onto `route`, using `container` to

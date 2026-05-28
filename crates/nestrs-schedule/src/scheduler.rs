@@ -13,7 +13,7 @@ use crate::CronJobMeta;
 /// Attach it in `main` alongside other transports:
 ///
 /// ```ignore
-/// App::new::<AppModule>()
+/// App::new::<AppModule>()?
 ///     .transport(Scheduler::new())
 ///     .transport(HttpTransport::new())
 ///     .run().await

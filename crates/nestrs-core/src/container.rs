@@ -8,6 +8,12 @@ use anyhow::Result;
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
+/// Builds a fresh instance of a request-scoped provider from the (singleton)
+/// root container. Stored by [`ContainerBuilder::provide_scoped`] and invoked
+/// once per request by a [`RequestScope`](crate::RequestScope), which caches the
+/// result for the life of that request.
+pub(crate) type ScopedFactory = Arc<dyn Fn(&Container) -> AnyArc + Send + Sync>;
+
 /// A registration applied once a factory has produced its value: it `provide`s
 /// the awaited result, so a factory output flows through the same path — and the
 /// same duplicate detection — as any other provider.
@@ -27,6 +33,10 @@ pub(crate) struct MetaEntry {
 pub struct Container {
     providers: Arc<HashMap<TypeId, AnyArc>>,
     metadata: Arc<HashMap<TypeId, Vec<MetaEntry>>>,
+    /// Factories for request-scoped providers (`#[injectable(scope = request)]`).
+    /// Never built into `providers`; a [`RequestScope`](crate::RequestScope)
+    /// invokes one per request and caches the instance for that request.
+    scoped: Arc<HashMap<TypeId, ScopedFactory>>,
 }
 
 impl Container {
@@ -35,6 +45,13 @@ impl Container {
     }
 
     /// Resolve a provider by type. Returns `None` if no provider was registered for `T`.
+    ///
+    /// This is an **unchecked escape hatch** — the `ModuleRef.get()` analog. The
+    /// container is flat and resolves by `TypeId` with no caller identity, so
+    /// this bypasses the build-time access contract (see
+    /// [`crate::access`]): it can fetch any registered provider regardless of the
+    /// import graph. Prefer declarative `#[inject]`, which *is* under contract;
+    /// reach for `get` only for genuinely dynamic resolution.
     pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         self.providers
             .get(&TypeId::of::<T>())
@@ -42,6 +59,9 @@ impl Container {
     }
 
     /// Resolve a trait-object provider registered via [`ContainerBuilder::provide_dyn`].
+    ///
+    /// Like [`get`](Self::get), an **unchecked escape hatch** that bypasses the
+    /// access contract — see its note.
     pub fn get_dyn<T: ?Sized + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.providers
             .get(&TypeId::of::<Arc<T>>())
@@ -53,6 +73,13 @@ impl Container {
     /// [`crate::DiscoveryService`].
     pub(crate) fn metadata_entries(&self, key: TypeId) -> Option<&Vec<MetaEntry>> {
         self.metadata.get(&key)
+    }
+
+    /// The request-scoped factory for `id`, if one was registered. Cloned (it is
+    /// an `Arc`) so a [`RequestScope`](crate::RequestScope) can invoke it without
+    /// holding a borrow on the container.
+    pub(crate) fn scoped_factory(&self, id: TypeId) -> Option<ScopedFactory> {
+        self.scoped.get(&id).cloned()
     }
 }
 
@@ -73,6 +100,8 @@ pub struct ContainerBuilder {
     /// Builder-only state: drained before [`build`](Self::build), never copied
     /// into the [`Container`] or a [`snapshot`](Self::snapshot).
     factories: Vec<BoxedFactory>,
+    /// Request-scoped provider factories, copied into the built [`Container`].
+    scoped: HashMap<TypeId, ScopedFactory>,
 }
 
 impl ContainerBuilder {
@@ -200,6 +229,33 @@ impl ContainerBuilder {
         self
     }
 
+    /// Register a **request-scoped** provider: instead of one shared singleton,
+    /// `factory` builds a fresh `T` for each request, which a
+    /// [`RequestScope`](crate::RequestScope) caches for that request's lifetime.
+    /// Emitted by `#[injectable(scope = request)]`; the factory resolves the
+    /// provider's `#[inject]` dependencies from the (singleton) root container,
+    /// so a request-scoped provider may depend on singletons but not — in this
+    /// model — on other request-scoped providers.
+    pub fn provide_scoped<T, F>(mut self, factory: F) -> Self
+    where
+        T: Any + Send + Sync,
+        F: Fn(&Container) -> T + Send + Sync + 'static,
+    {
+        let id = TypeId::of::<T>();
+        if self.scoped.contains_key(&id) {
+            tracing::warn!(
+                target: "nestrs::container",
+                provider = std::any::type_name::<T>(),
+                "request-scoped provider override: a factory of this type was already registered and is being replaced",
+            );
+        }
+        self.scoped.insert(
+            id,
+            Arc::new(move |container| Arc::new(factory(container)) as AnyArc),
+        );
+        self
+    }
+
     /// Drain the queued async factories — called by `AppBuilder::build` once,
     /// after the collect phase, to run them in order.
     pub(crate) fn take_factories(&mut self) -> Vec<BoxedFactory> {
@@ -218,6 +274,7 @@ impl ContainerBuilder {
         Container {
             providers: Arc::new(self.providers),
             metadata: Arc::new(self.metadata),
+            scoped: Arc::new(self.scoped),
         }
     }
 
@@ -228,6 +285,7 @@ impl ContainerBuilder {
         Container {
             providers: Arc::new(self.providers.clone()),
             metadata: Arc::new(self.metadata.clone()),
+            scoped: Arc::new(self.scoped.clone()),
         }
     }
 }

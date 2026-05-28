@@ -9,3 +9,7 @@ description = "Expose a SeaORM entity to GraphQL + OpenAPI from one declaration,
 
 [dependencies]
 nestrs-resource-macros.workspace = true
+async-graphql.workspace = true
+serde.workspace = true
+schemars.workspace = true
+validator.workspace = true

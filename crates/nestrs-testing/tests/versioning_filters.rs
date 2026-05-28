@@ -1,0 +1,82 @@
+//! URI API versioning (`#[controller(version = "1")]`) and per-route exception
+//! filters (`#[use_filters(...)]`), driven end-to-end through the in-process
+//! HTTP harness.
+
+use nestrs_core::{injectable, module};
+use nestrs_http::{async_trait, controller, routes, Filter, RequestSnapshot};
+use nestrs_testing::TestApp;
+use poem::http::StatusCode;
+use poem::{Error, Response};
+
+/// Maps any error from the route it wraps to a 418, so a test can assert the
+/// filter ran (a successful response must pass through untouched).
+#[injectable]
+#[derive(Default)]
+struct TeapotFilter;
+
+#[async_trait]
+impl Filter for TeapotFilter {
+    async fn filter(&self, _req: &RequestSnapshot, _error: Error) -> Response {
+        Response::builder()
+            .status(StatusCode::IM_A_TEAPOT)
+            .body("filtered")
+    }
+}
+
+#[controller(path = "/widgets", version = "1")]
+struct WidgetController;
+
+#[routes]
+impl WidgetController {
+    #[get("/")]
+    async fn list(&self) -> &'static str {
+        "widgets"
+    }
+
+    // Always errors; the per-route filter turns the 500 into a 418.
+    #[get("/boom")]
+    #[use_filters(TeapotFilter)]
+    async fn boom(&self) -> poem::Result<&'static str> {
+        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    }
+
+    // No filter: the error surfaces as poem's default 500.
+    #[get("/raw-boom")]
+    async fn raw_boom(&self) -> poem::Result<&'static str> {
+        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    }
+}
+
+#[module(providers = [TeapotFilter, WidgetController])]
+struct WidgetModule;
+
+#[tokio::test]
+async fn versioned_controller_is_served_under_v_prefix() {
+    let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
+    let resp = app.http().get("/v1/widgets").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_text("widgets").await;
+}
+
+#[tokio::test]
+async fn unversioned_path_is_not_mounted() {
+    let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
+    // The raw path (no `/v1`) must not exist — versioning moved the whole controller.
+    let resp = app.http().get("/widgets").send().await;
+    resp.assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn per_route_filter_maps_the_error() {
+    let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
+    let resp = app.http().get("/v1/widgets/boom").send().await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    resp.assert_text("filtered").await;
+}
+
+#[tokio::test]
+async fn route_without_filter_uses_default_error() {
+    let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
+    let resp = app.http().get("/v1/widgets/raw-boom").send().await;
+    resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+}

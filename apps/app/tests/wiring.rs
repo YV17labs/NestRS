@@ -221,7 +221,7 @@ struct OptionalAbsentModule;
 
 #[test]
 fn optional_dependency_is_none_when_absent_and_does_not_fail_boot() {
-    let app = App::new::<OptionalAbsentModule>();
+    let app = App::new::<OptionalAbsentModule>().expect("boots");
     let consumer: Arc<MaybeConsumer> = app.container().get().expect("MaybeConsumer resolves");
     assert_eq!(consumer.report(), "absent");
 }
@@ -233,7 +233,7 @@ struct OptionalPresentModule;
 
 #[test]
 fn optional_dependency_is_some_when_provided_regardless_of_order() {
-    let app = App::new::<OptionalPresentModule>();
+    let app = App::new::<OptionalPresentModule>().expect("boots");
     let consumer: Arc<MaybeConsumer> = app.container().get().expect("MaybeConsumer resolves");
     assert_eq!(consumer.report(), "present");
 }

@@ -35,3 +35,4 @@ serde_json.workspace = true
 # `test` enables poem's in-process TestClient, used to drive the mounted
 # endpoints without binding a socket or a live database.
 poem = { workspace = true, features = ["test"] }
+nestrs-testing.workspace = true

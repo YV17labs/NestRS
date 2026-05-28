@@ -31,6 +31,21 @@ pub fn join_path(prefix: &str, rest: &str) -> String {
     }
 }
 
+/// Apply URI API versioning to a controller path: a declared `version` becomes a
+/// `/v{version}` segment in front of `path` (`Some("1"), "/users"` →
+/// `"/v1/users"`); an absent version leaves `path` untouched. This is the **one**
+/// place the URI strategy lives — `#[routes]` (which mounts), the boot route log,
+/// and the OpenAPI document all route through it so the served path, the logged
+/// path, and the documented path can never drift. Header / media-type versioning
+/// (NestJS's other `VersioningType`s) need request-time dispatch and are not yet
+/// implemented; URI versioning covers the common case declaratively.
+pub fn version_path(version: Option<&str>, path: &str) -> String {
+    match version {
+        Some(v) => join_path(&format!("/v{v}"), path),
+        None => path.to_string(),
+    }
+}
+
 /// HTTP [`Transport`] backed by poem. Built up imperatively in the app's
 /// `main.rs`, attached to an [`nestrs_core::App`], and configured by it.
 ///
@@ -139,12 +154,13 @@ impl Transport for HttpTransport {
         let mut route = Route::new();
 
         for d in discovery.meta::<HttpControllerMeta>() {
+            let prefix = d.meta.effective_prefix();
             for r in &d.meta.routes {
                 tracing::info!(
                     target: "nestrs::routes",
                     "{:<6} {}  ({})",
                     r.verb.as_str(),
-                    join_path(d.meta.path, r.path),
+                    join_path(&prefix, r.path),
                     r.handler,
                 );
             }
@@ -189,6 +205,11 @@ impl Transport for HttpTransport {
         if let Some(cors) = self.cors.take() {
             endpoint = endpoint.with(cors).map_to_response().boxed();
         }
+        // A fresh request scope is installed before anything else runs, so guards
+        // and handlers can resolve request-scoped providers via `Scoped<T>`.
+        endpoint = crate::RequestScopeEndpoint::new(endpoint, container.clone())
+            .map_to_response()
+            .boxed();
 
         self.endpoint = Some(endpoint);
         Ok(())

@@ -24,19 +24,21 @@ pub struct App {
 impl App {
     /// Build the container from the root module and return an empty app.
     ///
-    /// The sync path has no seeds or factories, so the access-graph check
-    /// runs against an empty global set: every provider's
-    /// dependency must be reachable through the import graph. A violation
-    /// panics here, like the register-phase fixpoint's missing-provider panic.
-    pub fn new<M: Module + 'static>() -> Self {
+    /// The sync path has no seeds or factories, so the access-graph check runs
+    /// against an empty global set: every provider's dependency must be reachable
+    /// through the import graph. A violation returns an
+    /// [`AccessGraphError`](crate::AccessGraphError), mirroring
+    /// [`AppBuilder::build`](AppBuilder::build) — `main` propagates it with `?`.
+    /// (A *missing provider* still panics inside the register-phase fixpoint,
+    /// which is sync and has no `Result` to thread through — the same in both
+    /// paths.)
+    pub fn new<M: Module + 'static>() -> Result<Self> {
         let container = M::register(Container::builder()).build();
-        if let Err(err) = validate_from_inventory(&[TypeId::of::<M>()], &HashSet::new()) {
-            panic!("{err}");
-        }
-        Self {
+        validate_from_inventory(&[TypeId::of::<M>()], &HashSet::new())?;
+        Ok(Self {
             container,
             transports: Vec::new(),
-        }
+        })
     }
 
     /// Start an [`AppBuilder`] for apps that must seed runtime values (a loaded

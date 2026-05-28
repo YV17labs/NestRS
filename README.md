@@ -94,7 +94,7 @@ pub struct AppModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    App::new::<AppModule>()
+    App::new::<AppModule>()?
         .transport(HttpTransport::new().bind("0.0.0.0:3001"))
         .run()
         .await

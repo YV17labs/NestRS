@@ -26,10 +26,30 @@
 //! guards, `#[cron_job]`, `#[processor]`, `#[controller]`, `#[mcp]` — via
 //! [`Discoverable::injected`](crate::Discoverable::injected), which reports a
 //! provider's `#[inject]` keys whether it is built eagerly or later from the
-//! assembled container. The sole exception is `#[resolver]`: it self-composes
-//! through the GraphQL schema registry and belongs to *no* module, so there is
-//! no import contract to apply — it resolves from the assembled container by
-//! design (as do its `#[dataloader]`s).
+//! assembled container.
+//!
+//! # What the contract does *not* cover (two deliberate boundaries)
+//!
+//! The contract governs **declarative `#[inject]` dependencies of module
+//! providers**. Two paths fall outside it by design — name them so callers are
+//! not misled into thinking the check is total:
+//!
+//! 1. **`#[resolver]` is exempt.** A resolver self-composes through the GraphQL
+//!    schema registry and belongs to *no* module, so there is no import closure
+//!    to check it against — it resolves its injected services from the assembled
+//!    container by design (as do its `#[dataloader]`s). A GraphQL-heavy app
+//!    therefore gets no access-graph protection on its resolver layer. The
+//!    mitigation is structural, not enforced: keep a resolver thin and delegate
+//!    domain logic to module-registered services, which *are* under contract
+//!    when injected by other module providers.
+//! 2. **Runtime [`Container::get`](crate::Container::get) /
+//!    [`get_dyn`](crate::Container::get_dyn) is an unchecked escape hatch** — the
+//!    `ModuleRef.get()` analog. The flat container resolves by `TypeId` with no
+//!    caller identity, so a provider that reaches the `Container` directly (a
+//!    `#[inject] container: Container`, a transport, a lazily-built handler) can
+//!    fetch anything registered, bypassing the import graph. This is inherent to
+//!    a flat container and is the intended override path; the contract binds the
+//!    *declarative* surface (`#[inject]`), not imperative resolution.
 
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};

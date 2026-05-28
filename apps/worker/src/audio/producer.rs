@@ -3,11 +3,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nestrs_queue::QueueConnection;
-use nestrs_schedule::{async_trait, cron_job, Scheduled};
+use nestrs_schedule::{async_trait, cron_job, CronExpression, Scheduled};
 
 use crate::audio::dto::{TranscodeJob, AUDIO_QUEUE};
 
-#[cron_job(every = "5s")]
+#[cron_job(cron = CronExpression::EVERY_5_SECONDS)]
 pub struct AudioProducer {
     #[inject]
     queue: Arc<QueueConnection>,

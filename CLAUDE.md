@@ -291,16 +291,28 @@ media-type versioning is not yet built.
 ## Scheduling is the first concern proved out as its own crate
 
 `nestrs-schedule` realizes the "new concern = new crate + decorator, no
-`nestrs-macros` change" claim above. A scheduled job is a struct:
-`#[cron_job(every = "30s")]` builds it from the container (its `#[inject]`
-fields), implements `Scheduled` for the logic, and emits the single
-`impl Discoverable` attaching a `CronJobMeta` — exactly like a controller, so a
-job is wired by listing it in `#[module(providers = [...])]`. The `Scheduler` is
-a `Transport`: it reads the discovered metas from the *fully assembled* container
-at `configure` (so a job injects any provider, import order irrelevant) and ticks
-each on its period, the first run one period in. Fixed intervals only for now
-(`ms`/`s`/`m`/`h` suffixes); cron expressions wait for a parser that clears the
-dependency-freshness bar.
+`nestrs-macros` change" claim above. A scheduled job is a struct: `#[cron_job]`
+builds it from the container (its `#[inject]` fields), implements `Scheduled` for
+the logic, and emits the single `impl Discoverable` attaching a `CronJobMeta` —
+exactly like a controller, so a job is wired by listing it in
+`#[module(providers = [...])]`. The `Scheduler` is a `Transport`: it reads the
+discovered metas from the *fully assembled* container at `configure` (so a job
+injects any provider, import order irrelevant) and runs each on its `Trigger`.
+
+`#[cron_job]` takes exactly one of three mutually-exclusive triggers, mirroring
+`@nestjs/schedule`: `every = "30s"` is a fixed interval (the `@Interval` analog,
+`ms`/`s`/`m`/`h` suffixes, first run one interval in); `cron = "0 */5 * * * *"`
+is a cron expression (the `@Cron` analog) — `croner` parses 5/6/7 fields
+(seconds optional), with `CronExpression::EVERY_MINUTE`-style presets matching
+NestJS's enum and an optional `tz = "Europe/Paris"` (IANA name, default **UTC**
+for host-independence); and `after = "10s"` runs **once** that long after boot
+(the `@Timeout` analog). The macro validates a `cron`/`tz` *string literal* at
+compile time; a `CronExpression::X` preset (a const path) and every timezone are
+parsed at the `Scheduler`'s `configure`, so a malformed value **fails the boot**
+naming the job rather than dying on first fire. The cron engine recomputes the
+next occurrence after each run (`croner` over `chrono`/`chrono-tz`); a one-shot
+idles until shutdown after its single run so it never races the app down. `croner`
+cleared the dependency-freshness bar that previously blocked this.
 
 ## Queues are Redis-backed via apalis
 

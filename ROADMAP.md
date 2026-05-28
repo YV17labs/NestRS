@@ -12,6 +12,11 @@ The authoritative record of *what was decided and why* is
 
 ## Recently shipped
 
+- **Cron expressions** — `#[cron_job(cron = "0 */5 * * * *")]` (the `@Cron` analog),
+  with `CronExpression` presets, an optional `tz` (IANA name, default UTC), and a
+  one-shot `after = "10s"` (the `@Timeout` analog) joining the existing interval
+  `every` (the `@Interval` analog). Parsed by `croner` over `chrono`; a literal is
+  validated at compile time, a preset and any timezone at boot.
 - **Request-scoped providers** — `#[injectable(scope = request)]` builds a fresh,
   per-request-cached instance (the `Scope.REQUEST` analog), resolved over HTTP via
   the `Scoped<T>` extractor.
@@ -62,8 +67,6 @@ These are known, deliberate omissions called out in the code today:
 - **OpenAPI** — query-parameter schemas, real path-parameter *types* (emitted as
   `string` for now), security schemes, and a committed `openapi.json` snapshot
   written on boot (mirroring how the GraphQL SDL is committed).
-- **Scheduling** — cron expressions. Today `#[cron_job]` takes fixed intervals
-  only (`ms` / `s` / `m` / `h`), pending a parser that clears the dependency bar.
 - **Dependency-injection scopes** — request scope already ships (see above); what
   remains is a `transient` scope (fresh per resolution), request-scoped →
   request-scoped dependencies (the model is one level deep over singletons today),

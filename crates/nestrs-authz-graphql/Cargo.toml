@@ -1,0 +1,27 @@
+[package]
+name = "nestrs-authz-graphql"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "GraphQL surface for nestrs-authz: forward the request-scoped Ability into the GraphQL context and gate resolvers with it (the GraphQL analog of nestrs-authz-http's Authorize)."
+
+[dependencies]
+nestrs-authz.workspace = true
+# Re-uses the per-request context bridge (ContextSeed) and async-graphql re-export.
+nestrs-graphql.workspace = true
+
+[dev-dependencies]
+# The test exercises the gate through a real schema booted in-process: a SeaORM
+# entity is the authorization Subject, an HTTP guard injects the Ability, a
+# resolver gates on it.
+nestrs-core.workspace = true
+nestrs-http.workspace = true
+nestrs-testing.workspace = true
+# A crate that defines `#[resolver]`s needs async-graphql as a direct dependency,
+# since the generated `#[Object]` code names `async_graphql::` paths.
+async-graphql.workspace = true
+sea-orm.workspace = true
+tokio.workspace = true
+serde_json.workspace = true

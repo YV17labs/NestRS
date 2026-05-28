@@ -51,7 +51,9 @@ enum Job {
     },
     Cron {
         name: &'static str,
-        schedule: Cron,
+        // Boxed: a parsed `Cron` is large (~330 bytes), and inlining it would
+        // bloat every `Job` to that size — `large_enum_variant`.
+        schedule: Box<Cron>,
         tz: Option<Tz>,
         run: RunFn,
     },
@@ -95,13 +97,15 @@ impl Scheduler {
                 let tz = tz
                     .map(|name_str| {
                         name_str.parse::<Tz>().map_err(|e| {
-                            anyhow::anyhow!("cron job `{name}` has an invalid timezone `{name_str}`: {e}")
+                            anyhow::anyhow!(
+                                "cron job `{name}` has an invalid timezone `{name_str}`: {e}"
+                            )
                         })
                     })
                     .transpose()?;
                 Job::Cron {
                     name,
-                    schedule,
+                    schedule: Box::new(schedule),
                     tz,
                     run: meta.run,
                 }

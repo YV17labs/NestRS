@@ -418,27 +418,34 @@ pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
 
     // One `.at(path, RouteMethod)` per path: the first verb opens the
     // `RouteMethod`, the rest chain onto it (`get(h1).post(h2)`).
-    let route_entries: Vec<TokenStream2> = routes_by_path
-        .iter()
-        .map(|(path, handlers)| {
-            let mut handlers = handlers.iter();
-            let (first_verb, first_wrapper, first_guards, first_filters, first_shaper, first_metas) =
-                handlers.next().expect("each path has at least one verb");
-            let first = guarded_handler(
-                first_wrapper,
-                first_guards,
-                first_filters,
-                first_shaper,
-                first_metas,
-            );
-            let mut method = quote! { ::poem::#first_verb(#first) };
-            for (verb, wrapper, guards, filters, shaper, metas) in handlers {
-                let ep = guarded_handler(wrapper, guards, filters, shaper, metas);
-                method = quote! { #method.#verb(#ep) };
-            }
-            quote! { .at(#path, #method) }
-        })
-        .collect();
+    let route_entries: Vec<TokenStream2> =
+        routes_by_path
+            .iter()
+            .map(|(path, handlers)| {
+                let mut handlers = handlers.iter();
+                let (
+                    first_verb,
+                    first_wrapper,
+                    first_guards,
+                    first_filters,
+                    first_shaper,
+                    first_metas,
+                ) = handlers.next().expect("each path has at least one verb");
+                let first = guarded_handler(
+                    first_wrapper,
+                    first_guards,
+                    first_filters,
+                    first_shaper,
+                    first_metas,
+                );
+                let mut method = quote! { ::poem::#first_verb(#first) };
+                for (verb, wrapper, guards, filters, shaper, metas) in handlers {
+                    let ep = guarded_handler(wrapper, guards, filters, shaper, metas);
+                    method = quote! { #method.#verb(#ep) };
+                }
+                quote! { .at(#path, #method) }
+            })
+            .collect();
 
     quote! {
         #item

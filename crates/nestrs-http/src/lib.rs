@@ -33,7 +33,6 @@ mod shaper;
 mod transport;
 
 pub use context::Ctx;
-pub use scope::{RequestScopeEndpoint, Scoped};
 pub use controller::{
     schema_of, Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, SchemaFn,
 };
@@ -41,6 +40,7 @@ pub use endpoint::HttpEndpointMeta;
 pub use interceptor::HttpInterceptorMeta;
 pub use pipe::{IntoInner, Piped, Valid};
 pub use reflector::Reflector;
+pub use scope::{RequestScopeEndpoint, Scoped};
 pub use shaper::{shaped, RouteResponseShaper, ShapedEndpoint};
 pub use transport::{join_path, version_path, HttpTransport};
 

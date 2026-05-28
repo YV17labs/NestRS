@@ -161,7 +161,10 @@ impl Trigger {
         }) = &expr
         {
             if let Err(e) = croner::Cron::from_str(&s.value()) {
-                return Err(syn::Error::new(s.span(), format!("invalid cron expression: {e}")));
+                return Err(syn::Error::new(
+                    s.span(),
+                    format!("invalid cron expression: {e}"),
+                ));
             }
         }
         Ok(Trigger::Cron { expr, tz })

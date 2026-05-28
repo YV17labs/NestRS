@@ -55,7 +55,10 @@ impl RequestScope {
         match self.root.scoped_factory(id) {
             Some(factory) => {
                 let mut cache = self.cache.lock().expect("request scope cache poisoned");
-                let any = cache.entry(id).or_insert_with(|| factory(&self.root)).clone();
+                let any = cache
+                    .entry(id)
+                    .or_insert_with(|| factory(&self.root))
+                    .clone();
                 any.downcast::<T>().ok()
             }
             None => self.root.get::<T>(),

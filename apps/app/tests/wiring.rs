@@ -189,3 +189,51 @@ async fn dynamic_module_factory_runs_via_macro_collect() {
         .expect("build succeeds");
     assert_eq!(app.container().get::<AsyncValue>().unwrap().0, 123);
 }
+
+// --- Optional dependencies (`#[inject] Option<Arc<T>>`, the @Optional analog) ---
+
+#[injectable]
+#[derive(Default)]
+struct Extra;
+
+impl Extra {
+    fn tag(&self) -> &'static str {
+        "present"
+    }
+}
+
+#[injectable]
+struct MaybeConsumer {
+    #[inject]
+    extra: Option<Arc<Extra>>,
+}
+
+impl MaybeConsumer {
+    fn report(&self) -> &'static str {
+        self.extra.as_ref().map(|e| e.tag()).unwrap_or("absent")
+    }
+}
+
+// Extra is not provided: the optional dependency resolves to `None`, and — the
+// point — the access-graph check does not fail the boot over an absent optional.
+#[module(providers = [MaybeConsumer])]
+struct OptionalAbsentModule;
+
+#[test]
+fn optional_dependency_is_none_when_absent_and_does_not_fail_boot() {
+    let app = App::new::<OptionalAbsentModule>();
+    let consumer: Arc<MaybeConsumer> = app.container().get().expect("MaybeConsumer resolves");
+    assert_eq!(consumer.report(), "absent");
+}
+
+// Extra is provided *after* the consumer in the list: the fixpoint still orders
+// the consumer last, so the optional resolves to `Some` regardless of order.
+#[module(providers = [MaybeConsumer, Extra])]
+struct OptionalPresentModule;
+
+#[test]
+fn optional_dependency_is_some_when_provided_regardless_of_order() {
+    let app = App::new::<OptionalPresentModule>();
+    let consumer: Arc<MaybeConsumer> = app.container().get().expect("MaybeConsumer resolves");
+    assert_eq!(consumer.report(), "present");
+}

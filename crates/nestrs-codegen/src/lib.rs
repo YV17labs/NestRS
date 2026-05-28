@@ -127,26 +127,36 @@ pub struct InjectableBody {
     pub ctor: TokenStream2,
     pub dep_keys: Vec<TokenStream2>,
     pub dep_names: Vec<TokenStream2>,
+    /// `TypeId` of each `#[inject] Option<Arc<…>>` optional dependency. Kept apart
+    /// from `dep_keys`: an optional dep must not gate the register-phase fixpoint
+    /// the way a required one does (it tolerates absence), but the fixpoint still
+    /// needs it to *order* the consumer after an optional provider that the same
+    /// module does supply — see `Discoverable::optional_dependencies`.
+    pub opt_keys: Vec<TokenStream2>,
 }
 
 /// Strip `#[inject]` attributes from `item`'s fields and build its
 /// `from_container` constructor expression, collecting each injected
 /// dependency's `TypeId` and label. `#[inject] Arc<dyn Trait>` resolves via
-/// `get_dyn`, `#[inject] Arc<Concrete>` via `get`; an `#[inject]` field that is
-/// not an `Arc<…>` is a hard error (a dependency is always a shared `Arc`). A
-/// field without `#[inject]` falls back to `Default::default()`.
+/// `get_dyn`, `#[inject] Arc<Concrete>` via `get`; an `#[inject] Option<Arc<…>>`
+/// is an optional dependency (resolved leniently, excluded from
+/// `dependencies`/`injected`); an `#[inject]` field that is neither is a hard
+/// error (a dependency is always a shared `Arc`). A field without `#[inject]`
+/// falls back to `Default::default()`.
 pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBody> {
     match &mut item.fields {
         Fields::Unit => Ok(InjectableBody {
             ctor: quote! { Self },
             dep_keys: Vec::new(),
             dep_names: Vec::new(),
+            opt_keys: Vec::new(),
         }),
         Fields::Named(fields) => {
             let mut has_inject = false;
             let mut field_inits = Vec::new();
             let mut dep_keys = Vec::new();
             let mut dep_names = Vec::new();
+            let mut opt_keys = Vec::new();
 
             for field in fields.named.iter_mut() {
                 let field_name = field.ident.clone().expect("named field has an ident");
@@ -161,6 +171,34 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 has_inject = true;
 
                 let field_ty = &field.ty;
+
+                // Optional dependency: `#[inject] Option<Arc<T>>` /
+                // `Option<Arc<dyn Trait>>` — the `@Optional` analog. Resolved
+                // leniently (`None` when absent, no `.expect`) and excluded from
+                // `dependencies`/`injected`, so it neither gates register ordering
+                // nor fails the access-graph check when its provider is missing.
+                if let Some(opt_inner) = nth_generic_type(field_ty, "Option", 0) {
+                    let Some(arc_inner_ty) = arc_inner(opt_inner) else {
+                        return Err(syn::Error::new_spanned(
+                            field_ty,
+                            "#[inject] `Option<…>` must wrap an `Arc<T>` or `Arc<dyn Trait>` \
+                             (the optional-dependency form)",
+                        ));
+                    };
+                    if matches!(arc_inner_ty, Type::TraitObject(_)) {
+                        field_inits.push(quote! {
+                            #field_name: container.get_dyn::<#arc_inner_ty>()
+                        });
+                        // `provide_dyn` keys the binding by `Arc<dyn Trait>`,
+                        // which is exactly `opt_inner`.
+                        opt_keys.push(quote! { ::core::any::TypeId::of::<#opt_inner>() });
+                    } else {
+                        field_inits.push(quote! { #field_name: container.get() });
+                        opt_keys.push(quote! { ::core::any::TypeId::of::<#arc_inner_ty>() });
+                    }
+                    continue;
+                }
+
                 let Some(inner_ty) = arc_inner(field_ty) else {
                     return Err(syn::Error::new_spanned(
                         field_ty,
@@ -201,6 +239,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 ctor,
                 dep_keys,
                 dep_names,
+                opt_keys,
             })
         }
         Fields::Unnamed(_) => Err(syn::Error::new_spanned(
@@ -287,6 +326,18 @@ pub fn dependency_names_method(dep_names: &[TokenStream2]) -> TokenStream2 {
     quote! {
         fn dependency_names() -> ::std::vec::Vec<&'static str> {
             ::std::vec![ #(#dep_names),* ]
+        }
+    }
+}
+
+/// The `Discoverable::optional_dependencies` method, listing each
+/// `#[inject] Option<Arc<…>>` key. The `#[module]` fixpoint uses it to order an
+/// eager provider after an optional dependency the same module *does* supply,
+/// while still building it (with `None`) when no provider supplies one.
+pub fn optional_dependencies_method(opt_keys: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        fn optional_dependencies() -> ::std::vec::Vec<::core::any::TypeId> {
+            ::std::vec![ #(#opt_keys),* ]
         }
     }
 }

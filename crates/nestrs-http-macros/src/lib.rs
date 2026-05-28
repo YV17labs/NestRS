@@ -15,7 +15,7 @@ use syn::{
 use nestrs_codegen::{
     build_injectable_body, dependencies_method, dependency_names_method, forwarded_arg_idents,
     from_container_method, impl_self_ident, injected_keys_expr, injected_method, nth_generic_type,
-    parse_named_str_arg, InjectableBody,
+    optional_dependencies_method, parse_named_str_arg, InjectableBody,
 };
 
 /// One route handler in a controller: its HTTP verb ident, the generated
@@ -95,6 +95,7 @@ pub fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
         ctor,
         dep_keys,
         dep_names,
+        opt_keys,
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
@@ -105,6 +106,7 @@ pub fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
     let from_container = from_container_method(&ctor);
     let dependencies = dependencies_method(&dep_keys);
     let dependency_names = dependency_names_method(&dep_names);
+    let optional_dependencies = optional_dependencies_method(&opt_keys);
     let injected = injected_method(&dep_keys);
 
     quote! {
@@ -117,6 +119,7 @@ pub fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
         impl #impl_generics ::nestrs_core::Discoverable for #name #ty_generics #where_clause {
             #dependencies
             #dependency_names
+            #optional_dependencies
             #injected
 
             fn register(

@@ -16,7 +16,7 @@ use syn::{
 
 use nestrs_codegen::{
     build_injectable_body, dependencies_method, dependency_names_method, from_container_method,
-    impl_self_ident, injected_method, InjectableBody,
+    impl_self_ident, injected_method, optional_dependencies_method, InjectableBody,
 };
 
 /// Mark a struct as a provider that can be constructed from the IoC container.
@@ -37,6 +37,7 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
         ctor,
         dep_keys,
         dep_names,
+        opt_keys,
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
@@ -47,6 +48,7 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
     let from_container = from_container_method(&ctor);
     let dependencies = dependencies_method(&dep_keys);
     let dependency_names = dependency_names_method(&dep_names);
+    let optional_dependencies = optional_dependencies_method(&opt_keys);
     let injected = injected_method(&dep_keys);
 
     quote! {
@@ -59,6 +61,7 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
         impl #impl_generics ::nestrs_core::Discoverable for #name #ty_generics #where_clause {
             #dependencies
             #dependency_names
+            #optional_dependencies
             #injected
 
             fn register(
@@ -360,10 +363,19 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 };
                 let step = quote! {
                     if !__done[#idx] {
-                        if <#provider as ::nestrs_core::Discoverable>::dependencies()
-                            .iter()
-                            .all(|__id| builder.contains(*__id))
-                        {
+                        // Ready when every required dependency is present and every
+                        // optional one is either present or supplied by no remaining
+                        // pending provider (so it resolves to `None` rather than
+                        // racing a same-module provider — order stays irrelevant).
+                        let __required_ready =
+                            <#provider as ::nestrs_core::Discoverable>::dependencies()
+                                .iter()
+                                .all(|__id| builder.contains(*__id));
+                        let __optional_ready =
+                            <#provider as ::nestrs_core::Discoverable>::optional_dependencies()
+                                .iter()
+                                .all(|__id| builder.contains(*__id) || !__pending_keys.contains(__id));
+                        if __required_ready && __optional_ready {
                             #register_action
                             __done[#idx] = true;
                             __progressed = true;
@@ -420,6 +432,12 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             #(#import_calls)*
             let mut __done = [false; #count];
             loop {
+                // Provided keys of providers not yet built this round — lets an
+                // optional dependency wait for a same-module provider, and (on a
+                // stall) classifies the failure.
+                let mut __pending_keys: ::std::vec::Vec<::std::any::TypeId> =
+                    ::std::vec::Vec::new();
+                #(#key_pushes)*
                 let mut __any_pending = false;
                 let mut __progressed = false;
                 #(#steps)*
@@ -429,9 +447,6 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 if !__progressed {
                     // Stalled: no provider built this round, yet some remain. Tell
                     // the two failure modes apart so the message is actionable.
-                    let mut __pending_keys: ::std::vec::Vec<::std::any::TypeId> =
-                        ::std::vec::Vec::new();
-                    #(#key_pushes)*
                     let mut __cyclic: ::std::vec::Vec<&'static str> = ::std::vec::Vec::new();
                     let mut __unprovided: ::std::vec::Vec<::std::string::String> =
                         ::std::vec::Vec::new();

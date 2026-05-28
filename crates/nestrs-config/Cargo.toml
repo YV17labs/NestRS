@@ -11,6 +11,9 @@ description = "Configuration loading for nestrs apps — the @nestjs/config anal
 figment.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+# `load_validated` runs declarative `#[validate(...)]` checks on a config struct
+# after loading — the same `validator` the HTTP `ValidationPipe` uses.
+validator.workspace = true
 
 [dev-dependencies]
 # Only the extra `test` feature for `figment::Jail`; `serde` is already a normal dep.

@@ -12,14 +12,18 @@ use figment::{
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
+use validator::Validate;
 
-/// A configuration failure — currently only a wrapped figment error.
+/// A configuration failure: a load/parse error from figment, or a violation of a
+/// config type's declarative `validator` rules ([`load_validated`]).
 // `figment::Error` is ~208 bytes; boxing it keeps every `Result<_, ConfigError>`
 // small, satisfying `clippy::result_large_err` without bloating the hot path.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("configuration error: {0}")]
     Source(Box<figment::Error>),
+    #[error("configuration validation failed: {0}")]
+    Validation(#[from] validator::ValidationErrors),
 }
 
 impl From<figment::Error> for ConfigError {
@@ -66,6 +70,17 @@ pub fn load<T: DeserializeOwned>(toml_path: Option<&str>) -> Result<T> {
     }
     figment = figment.merge(Env::prefixed("NESTRS_").split("__"));
     Ok(figment.extract()?)
+}
+
+/// Like [`load`], then run the config type's declarative `validator`
+/// `#[validate(...)]` rules — the `@nestjs/config` + class-validator combo. Fails
+/// with [`ConfigError::Validation`] when a rule is violated, so a malformed
+/// environment is caught at startup rather than at first use. Seed the result
+/// into the DI graph (`App::builder().provide(cfg)`) to inject it as `Arc<T>`.
+pub fn load_validated<T: DeserializeOwned + Validate>(toml_path: Option<&str>) -> Result<T> {
+    let value: T = load(toml_path)?;
+    value.validate()?;
+    Ok(value)
 }
 
 /// Read a single env var, treating empty strings as unset. Use this from
@@ -130,6 +145,34 @@ mod tests {
             jail.set_env("NESTRS_SERVICE__INSTANCE_ID", "abc-123");
             let cfg: NestedConfig = load(None).expect("config should load");
             assert_eq!(cfg.service.instance_id, "abc-123");
+            Ok(())
+        });
+    }
+
+    #[derive(Debug, Deserialize, Validate)]
+    struct ValidatedConfig {
+        #[validate(range(min = 1))]
+        port: u16,
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_validated_rejects_a_value_that_breaks_a_rule() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_PORT", "0");
+            let err = load_validated::<ValidatedConfig>(None).expect_err("port 0 violates min = 1");
+            assert!(matches!(err, ConfigError::Validation(_)));
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_validated_accepts_a_valid_value() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_PORT", "8080");
+            let cfg = load_validated::<ValidatedConfig>(None).expect("port 8080 is valid");
+            assert_eq!(cfg.port, 8080);
             Ok(())
         });
     }

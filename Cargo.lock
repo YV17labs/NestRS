@@ -2390,6 +2390,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "nestrs-events"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "nestrs-core",
+ "nestrs-events-macros",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nestrs-events-macros"
+version = "0.1.0"
+dependencies = [
+ "nestrs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "nestrs-graphql"
 version = "0.1.0"
 dependencies = [

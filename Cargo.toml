@@ -103,6 +103,8 @@ proc-macro2 = "1"
 # Internal crates
 nestrs-core = { path = "crates/nestrs-core" }
 nestrs-config = { path = "crates/nestrs-config" }
+nestrs-events = { path = "crates/nestrs-events" }
+nestrs-events-macros = { path = "crates/nestrs-events-macros" }
 nestrs-authz = { path = "crates/nestrs-authz" }
 nestrs-authz-graphql = { path = "crates/nestrs-authz-graphql" }
 nestrs-authz-http = { path = "crates/nestrs-authz-http" }

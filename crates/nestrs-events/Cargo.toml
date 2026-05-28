@@ -1,0 +1,18 @@
+[package]
+name = "nestrs-events"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Typed in-process event bus for nestrs: emit a typed event, dispatch to discovered #[event_handler]s — the @nestjs/event-emitter analog."
+
+[dependencies]
+nestrs-core.workspace = true
+nestrs-events-macros.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

@@ -524,9 +524,9 @@ project definition.
 NestRS is young, and early contributors shape what it becomes — you don't have to
 write Rust to help.
 
-- 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/maltyxx/nestrs/discussions).
-- 🐛 **Report a bug or request a feature** through [issues](https://github.com/maltyxx/nestrs/issues/new/choose).
-- 🌱 **Pick up a** [`good first issue`](https://github.com/maltyxx/nestrs/labels/good%20first%20issue) — [CONTRIBUTING.md](CONTRIBUTING.md) is the short path from idea to merged PR.
+- 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/NestRS/NestRS/discussions).
+- 🐛 **Report a bug or request a feature** through [issues](https://github.com/NestRS/NestRS/issues/new/choose).
+- 🌱 **Pick up a** [`good first issue`](https://github.com/NestRS/NestRS/labels/good%20first%20issue) — [CONTRIBUTING.md](CONTRIBUTING.md) is the short path from idea to merged PR.
 - 🗺️ **See where it's heading** in the [roadmap](ROADMAP.md).
 - 🔒 **Found a vulnerability?** Follow [SECURITY.md](SECURITY.md) — please don't open a public issue for it.
 

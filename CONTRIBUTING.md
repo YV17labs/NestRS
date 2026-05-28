@@ -5,21 +5,21 @@ shape what it becomes. This guide is the shortest path from *I want to help* to
 *my change is merged*.
 
 New here? Browse the
-[`good first issue`](https://github.com/maltyxx/nestrs/labels/good%20first%20issue)
+[`good first issue`](https://github.com/NestRS/NestRS/labels/good%20first%20issue)
 label, or open a thread in
-[Discussions](https://github.com/maltyxx/nestrs/discussions) and say hi.
+[Discussions](https://github.com/NestRS/NestRS/discussions) and say hi.
 
 ## Ways to contribute
 
 You don't have to write Rust to help.
 
-- **Report a bug** — open an [issue](https://github.com/maltyxx/nestrs/issues/new/choose)
+- **Report a bug** — open an [issue](https://github.com/NestRS/NestRS/issues/new/choose)
   with a minimal reproduction.
 - **Request a feature** — open an issue describing the problem first, not just a
   proposed solution.
 - **Improve the docs** — typos, unclear passages, missing examples. The README
   and crate docs are as important as the code.
-- **Answer questions** in [Discussions](https://github.com/maltyxx/nestrs/discussions).
+- **Answer questions** in [Discussions](https://github.com/NestRS/NestRS/discussions).
 - **Send a pull request** — see below.
 
 ## Before you start

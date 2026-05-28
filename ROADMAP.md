@@ -5,8 +5,8 @@ This is a *direction, not a dated commitment*; priorities move with what the
 community needs.
 
 Want to shape it? Open a
-[Discussion](https://github.com/maltyxx/nestrs/discussions) or pick up a
-[`good first issue`](https://github.com/maltyxx/nestrs/labels/good%20first%20issue).
+[Discussion](https://github.com/NestRS/NestRS/discussions) or pick up a
+[`good first issue`](https://github.com/NestRS/NestRS/labels/good%20first%20issue).
 The authoritative record of *what was decided and why* is
 [CLAUDE.md](CLAUDE.md); this file tracks *what's next*.
 

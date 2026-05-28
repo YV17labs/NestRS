@@ -8,7 +8,7 @@ body:
         Describe the **problem** first — the use case you're stuck on. Solutions
         are far easier to evaluate once the problem is clear. For anything large,
         consider opening a
-        [Discussion](https://github.com/maltyxx/nestrs/discussions) before an issue.
+        [Discussion](https://github.com/NestRS/NestRS/discussions) before an issue.
   - type: textarea
     id: problem
     attributes:

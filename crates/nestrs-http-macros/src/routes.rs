@@ -13,16 +13,18 @@ use syn::{
 
 use nestrs_codegen::{forwarded_arg_idents, impl_self_ident, nth_generic_type};
 
-use crate::attr::{expr_str, opt_str};
+use crate::attr::{expr_str, opt_str, take_use_attr};
 
 /// One route handler in a controller: its HTTP verb ident, the generated
 /// wrapper-fn ident, the guard paths declared with `#[use_guards]`, the filter
-/// paths declared with `#[use_filters]`, the `Authorize<_, _>` parameter type
-/// (if any) that drives response shaping, and the `#[meta(...)]` value
-/// expressions attached to the route.
+/// paths declared with `#[use_filters]`, the interceptor paths declared with
+/// `#[use_interceptors]`, the `Authorize<_, _>` parameter type (if any) that
+/// drives response shaping, and the `#[meta(...)]` value expressions attached to
+/// the route.
 type RouteHandler = (
     syn::Ident,
     syn::Ident,
+    Vec<Path>,
     Vec<Path>,
     Vec<Path>,
     Option<Type>,
@@ -107,46 +109,25 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             }
         });
 
-        // `#[use_guards(GuardA, GuardB)]` next to the verb attribute, consumed
-        // here like the verbs are. The guards are resolved from the container at
-        // mount time and wrapped around this handler's endpoint.
-        let guards: Vec<Path> = match method
-            .attrs
-            .iter()
-            .position(|a| a.path().is_ident("use_guards"))
-        {
-            Some(g_idx) => {
-                let g_attr = method.attrs.remove(g_idx);
-                match g_attr.parse_args_with(
-                    syn::punctuated::Punctuated::<Path, syn::Token![,]>::parse_terminated,
-                ) {
-                    Ok(paths) => paths.into_iter().collect(),
-                    Err(err) => return err.to_compile_error().into(),
-                }
-            }
-            None => Vec::new(),
+        // `#[use_guards]` / `#[use_filters]` / `#[use_interceptors]` beside the verb
+        // attribute, each consumed here like the verb is and resolved from the
+        // container at mount time. They nest around the handler per
+        // `guarded_handler`: a guard gates access, a filter wraps *outside* the
+        // guards (mapping a handler/guard error to a response), an interceptor
+        // *inside* them (so a guard may short-circuit first). A bindable
+        // interceptor is a plain `#[injectable] + impl Interceptor`; `#[interceptor]`
+        // stays the global auto-discovered form.
+        let guards = match take_use_attr(&mut method.attrs, "use_guards") {
+            Ok(paths) => paths,
+            Err(err) => return err.to_compile_error().into(),
         };
-
-        // `#[use_filters(FilterA, FilterB)]` next to the verb attribute, consumed
-        // here like `#[use_guards]`. Each filter is resolved from the container at
-        // mount time and wraps this handler *outside* its guards, so it maps an
-        // error from the handler (or a guard) to a response — the per-route
-        // `@UseFilters` analog (`HttpTransport::filter` stays the global form).
-        let filters: Vec<Path> = match method
-            .attrs
-            .iter()
-            .position(|a| a.path().is_ident("use_filters"))
-        {
-            Some(f_idx) => {
-                let f_attr = method.attrs.remove(f_idx);
-                match f_attr.parse_args_with(
-                    syn::punctuated::Punctuated::<Path, syn::Token![,]>::parse_terminated,
-                ) {
-                    Ok(paths) => paths.into_iter().collect(),
-                    Err(err) => return err.to_compile_error().into(),
-                }
-            }
-            None => Vec::new(),
+        let filters = match take_use_attr(&mut method.attrs, "use_filters") {
+            Ok(paths) => paths,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        let interceptors = match take_use_attr(&mut method.attrs, "use_interceptors") {
+            Ok(paths) => paths,
+            Err(err) => return err.to_compile_error().into(),
         };
 
         // `#[meta(EXPR)]` next to the verb attribute (repeatable) — a typed value
@@ -173,6 +154,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             wrapper_name.clone(),
             guards,
             filters,
+            interceptors,
             shaper.clone(),
             metas,
         );
@@ -258,6 +240,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                     first_wrapper,
                     first_guards,
                     first_filters,
+                    first_interceptors,
                     first_shaper,
                     first_metas,
                 ) = handlers.next().expect("each path has at least one verb");
@@ -265,12 +248,14 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                     first_wrapper,
                     first_guards,
                     first_filters,
+                    first_interceptors,
                     first_shaper,
                     first_metas,
                 );
                 let mut method = quote! { ::poem::#first_verb(#first) };
-                for (verb, wrapper, guards, filters, shaper, metas) in handlers {
-                    let ep = guarded_handler(wrapper, guards, filters, shaper, metas);
+                for (verb, wrapper, guards, filters, interceptors, shaper, metas) in handlers {
+                    let ep =
+                        guarded_handler(wrapper, guards, filters, interceptors, shaper, metas);
                     method = quote! { #method.#verb(#ep) };
                 }
                 quote! { .at(#path, #method) }
@@ -292,9 +277,10 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 let __sub = ::poem::Route::new()
                     #(#route_entries)*
                     .data(__ctrl);
-                // Wrap the whole subtree in the controller-level guards (a no-op
-                // when none are declared); they sit outside every per-route guard.
-                let __sub = <#self_ty>::__nestrs_controller_guards(container, __sub);
+                // Wrap the whole subtree in the controller-level layers
+                // (interceptors → guards → filters; a no-op when none are
+                // declared); they sit outside every per-route layer.
+                let __sub = <#self_ty>::__nestrs_controller_layers(container, __sub);
                 let __prefix = ::nestrs_http::version_path(<#self_ty>::VERSION, <#self_ty>::PATH);
                 route.nest(__prefix.as_str(), __sub)
             }
@@ -346,21 +332,27 @@ fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
     })
 }
 
-/// Wrap a route handler in its response shaper (if any), its `#[use_guards]`
-/// guards, its `#[use_filters]` exception filters, and its `#[meta(...)]` route
-/// metadata. From inner to outer: shaper → guards → filters → metadata. The
-/// shaper sits innermost — *inside* the guards — so a guard that attached request
-/// context (the authorization ability) has run before the shaper's `capture`.
-/// Filters wrap *outside* the guards so a filter maps an error from the handler
-/// or a guard to a response; each guard/filter is resolved from the container at
-/// mount time, first listed ending up outermost within its layer. The metadata
-/// values wrap outermost, so each is inserted into the request before any guard's
-/// `check` and a guard reads it back with `nestrs_http::Reflector`. Generated
-/// inside `Controller::mount`, where `container: &Container` is in scope.
+/// Wrap a route handler in its response shaper (if any), its `#[use_interceptors]`
+/// interceptors, its `#[use_guards]` guards, its `#[use_filters]` exception
+/// filters, and its `#[meta(...)]` route metadata. From inner to outer:
+/// shaper → interceptors → guards → filters → metadata. The shaper sits
+/// innermost — *inside* the guards — so a guard that attached request context
+/// (the authorization ability) has run before the shaper's `capture`.
+/// Interceptors sit just outside the shaper but *inside* the guards, so a guard
+/// runs (and may short-circuit) before an interceptor's pre-handler work — the
+/// NestJS lifecycle order (guards before interceptors), the per-route mirror of
+/// it. Filters wrap *outside* the guards so a filter maps an error from the
+/// handler or a guard to a response; each interceptor/guard/filter is resolved
+/// from the container at mount time, first listed ending up outermost within its
+/// layer. The metadata values wrap outermost, so each is inserted into the
+/// request before any guard's `check` and a guard reads it back with
+/// `nestrs_http::Reflector`. Generated inside `Controller::mount`, where
+/// `container: &Container` is in scope.
 fn guarded_handler(
     wrapper: &syn::Ident,
     guards: &[Path],
     filters: &[Path],
+    interceptors: &[Path],
     shaper: &Option<Type>,
     metas: &[Expr],
 ) -> TokenStream2 {
@@ -370,34 +362,38 @@ fn guarded_handler(
         },
         None => quote! { #wrapper },
     };
-    for g in guards.iter().rev() {
-        expr = quote! {
-            ::nestrs_http::EndpointExt::guard(
-                #expr,
-                ::nestrs_core::Container::get::<#g>(container).expect(concat!(
-                    "#[use_guards] guard `",
-                    stringify!(#g),
-                    "` is not registered — add it to a module's providers"
-                )),
-            )
-        };
-    }
-    for f in filters.iter().rev() {
-        expr = quote! {
-            ::nestrs_http::EndpointExt::filter(
-                #expr,
-                ::nestrs_core::Container::get::<#f>(container).expect(concat!(
-                    "#[use_filters] filter `",
-                    stringify!(#f),
-                    "` is not registered — add it to a module's providers"
-                )),
-            )
-        };
-    }
+    // Inner → outer, the call order *is* the nesting order.
+    expr = wrap_layer(expr, interceptors, "interceptor", "use_interceptors");
+    expr = wrap_layer(expr, guards, "guard", "use_guards");
+    expr = wrap_layer(expr, filters, "filter", "use_filters");
     // Outermost: the value is evaluated once here at mount and inserted into the
     // request (its extensions) before the guards run, where `Reflector` reads it.
     for m in metas {
         expr = quote! { ::poem::EndpointExt::data(#expr, #m) };
+    }
+    expr
+}
+
+/// Wrap a handler endpoint expression in a list of container-resolved layers via
+/// the `EndpointExt::<kind>` extension (`interceptor` / `guard` / `filter`, the
+/// method name equal to `kind`). Reversed so the first-listed entry ends up
+/// outermost within its layer; `attr` names the source attribute for the
+/// not-registered diagnostic. Composes inline (no boxing) — the per-controller
+/// counterpart that boxes to a stable type is `controller_layers` in `controller`.
+fn wrap_layer(mut expr: TokenStream2, paths: &[Path], kind: &str, attr: &str) -> TokenStream2 {
+    let method = format_ident!("{kind}");
+    let prefix = format!("#[{attr}] {kind} `");
+    for p in paths.iter().rev() {
+        expr = quote! {
+            ::nestrs_http::EndpointExt::#method(
+                #expr,
+                ::nestrs_core::Container::get::<#p>(container).expect(concat!(
+                    #prefix,
+                    stringify!(#p),
+                    "` is not registered — add it to a module's providers"
+                )),
+            )
+        };
     }
     expr
 }

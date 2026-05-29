@@ -299,19 +299,35 @@ access (return `Err(Response)` to short-circuit, typically 401/403) and may
 *attach* request-scoped context (the authenticated caller, a tenant), the
 equivalent of NestJS setting `request.user`. A handler reads it back with the
 `nestrs_http::Ctx<T>` extractor (a missing context is a 500 — the guard that
-should have set it never ran). Bind guards per route with
-`#[use_guards(GuardA, GuardB)]` beside the verb attribute: each is resolved from
-the container (so a guard is an `#[injectable]` provider that can inject its own
-deps) and the first listed runs outermost. `#[routes]` wraps the handler's
-endpoint with them; consumed like the verb attributes, needing no import. Global
-guards still attach imperatively via `HttpTransport::guard`. Declarative
-per-handler *metadata* a guard reads to vary behaviour (NestJS's
-`@Roles`/`Reflector`) ships as `#[meta(EXPR)]` + `nestrs_http::Reflector` (see
-the access-graph note above). Two siblings consumed the same way (per-route,
-container-resolved, no import): `#[use_filters(FilterA, FilterB)]` binds
-exception filters to a single handler (the `@UseFilters` analog —
-`HttpTransport::filter` stays the global form) wrapping *outside* its guards;
-and URI **API versioning** via `#[controller(version = "1")]` mounts the whole
+should have set it never ran). Bind guards with `#[use_guards(GuardA, GuardB)]`
+either **per handler** (beside the verb attribute) or **per controller** (on the
+controller struct, below `#[controller]`): each is resolved from the container
+(so a guard is an `#[injectable]` provider that can inject its own deps) and the
+first listed runs outermost; a controller-level guard wraps the whole route
+subtree, outside every per-route one. `#[routes]` wraps the handler's endpoint
+with them; consumed like the verb attributes, needing no import. Global guards
+still attach imperatively via `HttpTransport::guard`. Declarative per-handler
+*metadata* a guard reads to vary behaviour (NestJS's `@Roles`/`Reflector`) ships
+as `#[meta(EXPR)]` + `nestrs_http::Reflector` (see the access-graph note above).
+
+**Filters and interceptors bind the same three ways** (global / controller /
+handler), consumed identically (container-resolved, no import, first listed
+outermost): `#[use_filters(FilterA, FilterB)]` binds exception filters
+(`@UseFilters`, `HttpTransport::filter` the global form) wrapping *outside* the
+guards; `#[use_interceptors(IntA, IntB)]` binds interceptors (`@UseInterceptors`)
+wrapping *inside* the guards — so a guard runs (and may short-circuit) before an
+interceptor's pre-handler work, the NestJS lifecycle order. The per-route layer
+order, inner→outer, is **shaper → interceptors → guards → filters → meta**. A
+controller/handler interceptor is a plain `#[injectable] + impl Interceptor`
+(symmetric to a guard); `#[interceptor]` stays the **global** auto-discovery
+form, for infrastructure that must wrap everything. The one deliberate
+asymmetry: **global** interceptors wrap *outside* the global guards (the reverse
+of per-route), because `DbContext` must install the executor/transaction around
+the guards too (see *The data layer makes security and transactions
+transparent*) — so the global order is fixed by that requirement, not by the
+NestJS lifecycle.
+
+URI **API versioning** via `#[controller(version = "1")]` mounts the whole
 controller under `/v1` (`version_path` is the single source of truth so the
 served path, the boot log, and the OpenAPI document never drift). Header /
 media-type versioning is not yet built.

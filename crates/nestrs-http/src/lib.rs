@@ -52,11 +52,13 @@ pub use poem;
 pub use schemars;
 
 // `#[routes]`-generated code names `::nestrs_http::EndpointExt` to wrap a
-// `#[use_guards]` / `#[use_filters]` handler, and a guard or filter is written
-// `#[nestrs_http::async_trait] impl nestrs_http::Guard` (resp. `Filter`) — so
-// all are surfaced here. `Interceptor` stays in `nestrs-middleware`.
+// `#[use_guards]` / `#[use_filters]` / `#[use_interceptors]` handler, and a
+// guard, filter, or interceptor is written `#[nestrs_http::async_trait] impl
+// nestrs_http::Guard` (resp. `Filter` / `Interceptor`) — so all are surfaced
+// here. A bindable interceptor is a plain `#[injectable] + impl Interceptor`;
+// `#[interceptor]` (below) stays the global auto-discovered form.
 pub use async_trait::async_trait;
-pub use nestrs_middleware::{EndpointExt, Filter, Guard, RequestSnapshot};
+pub use nestrs_middleware::{EndpointExt, Filter, Guard, Interceptor, Next, RequestSnapshot};
 
 /// HTTP decorators (`#[controller]`, `#[routes]`, `#[crud]`, the verb
 /// attributes, `#[interceptor]`), defined in `nestrs-http-macros` and surfaced

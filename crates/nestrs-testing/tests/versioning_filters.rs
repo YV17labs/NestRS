@@ -47,7 +47,21 @@ impl WidgetController {
     }
 }
 
-#[module(providers = [TeapotFilter, WidgetController])]
+// Controller-level filter: a `#[use_filters(...)]` on the struct wraps every
+// route, so a handler error is mapped even without a per-route filter.
+#[controller(path = "/gadgets")]
+#[use_filters(TeapotFilter)]
+struct GadgetController;
+
+#[routes]
+impl GadgetController {
+    #[get("/boom")]
+    async fn gadget_boom(&self) -> poem::Result<&'static str> {
+        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    }
+}
+
+#[module(providers = [TeapotFilter, WidgetController, GadgetController])]
 struct WidgetModule;
 
 #[tokio::test]
@@ -79,4 +93,14 @@ async fn route_without_filter_uses_default_error() {
     let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
     let resp = app.http().get("/v1/widgets/raw-boom").send().await;
     resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn controller_level_filter_maps_errors_without_a_per_route_filter() {
+    let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
+    // `/gadgets/boom` declares no per-route filter; the controller-level one maps
+    // its 500 to a 418.
+    let resp = app.http().get("/gadgets/boom").send().await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    resp.assert_text("filtered").await;
 }

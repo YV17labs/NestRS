@@ -1,19 +1,20 @@
 //! `#[controller]` — the controller struct decorator (construction + `PATH`/
-//! `VERSION` consts + controller-level guard wrapping). `#[routes]` (in `routes`)
-//! emits the `Discoverable`/mount, since it owns the route table.
+//! `VERSION` consts + controller-level interceptor / guard / filter wrapping).
+//! `#[routes]` (in `routes`) emits the `Discoverable`/mount, since it owns the
+//! route table.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{parse_macro_input, Attribute, ItemStruct, LitStr, Meta, Path, Token};
+use syn::{parse_macro_input, ItemStruct, LitStr, Meta, Path, Token};
 
 use nestrs_codegen::{
     build_injectable_body, from_container_method, injected_keys_expr, InjectableBody,
 };
 
-use crate::attr::expr_str;
+use crate::attr::{expr_str, take_use_attr};
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let (path_lit, version) = match parse_controller_args(args.into()) {
@@ -26,13 +27,22 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let mut item = parse_macro_input!(input as ItemStruct);
 
-    // Controller-level guards: a `#[use_guards(GuardA, GuardB)]` attribute *on the
-    // struct* (the class-level `@UseGuards` analog, the same decorator the verb
-    // attributes use per route). It is an inert attribute consumed here — parse its
-    // paths, then strip it from the struct so it never reaches the compiler as an
-    // unknown attribute (it must sit *below* `#[controller]` for the same reason).
-    let guards = match take_use_guards(&mut item.attrs) {
-        Ok(guards) => guards,
+    // Controller-level interceptor / guard / filter attributes *on the struct*
+    // (the class-level `@UseInterceptors` / `@UseGuards` / `@UseFilters` analogs,
+    // the same decorators the verb attributes use per route). Each is an inert
+    // attribute consumed here — parse its paths, then strip it from the struct so
+    // it never reaches the compiler as an unknown attribute (each must sit *below*
+    // `#[controller]` for the same reason).
+    let interceptors = match take_use_attr(&mut item.attrs, "use_interceptors") {
+        Ok(paths) => paths,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let guards = match take_use_attr(&mut item.attrs, "use_guards") {
+        Ok(paths) => paths,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let filters = match take_use_attr(&mut item.attrs, "use_filters") {
+        Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
 
@@ -50,34 +60,21 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // into `Discoverable::injected`.
     let injected_keys = injected_keys_expr(&dep_keys);
 
-    // Controller-level guards: because `mount` is emitted by `#[routes]` (a
-    // separate impl block), the guard list can't be passed directly —
-    // `#[controller]` instead emits this inherent fn that `#[routes]`'s `mount`
-    // calls to wrap the controller's whole route subtree. Each layer is boxed to a
-    // single `BoxEndpoint` type (the same shape the transport uses for global
-    // guards), so the result type is stable regardless of guard count. The wrap
-    // sits *outside* every per-route guard/shaper, so a controller guard (e.g.
-    // `AuthGuard`) runs before any route-level one; first listed ends outermost.
-    // With no guards it just boxes the endpoint, so `#[routes]` can call it
-    // unconditionally.
-    let guard_layers: Vec<TokenStream2> = guards
-        .iter()
-        .rev()
-        .map(|g| {
-            quote! {
-                let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
-                    ::nestrs_http::EndpointExt::guard(
-                        __ep,
-                        ::nestrs_core::Container::get::<#g>(__container).expect(concat!(
-                            "#[use_guards] controller guard `",
-                            stringify!(#g),
-                            "` is not registered — add it to a module's providers"
-                        )),
-                    ),
-                ));
-            }
-        })
-        .collect();
+    // Controller-level layers: because `mount` is emitted by `#[routes]` (a
+    // separate impl block), the lists can't be passed directly — `#[controller]`
+    // instead emits an inherent fn that `#[routes]`'s `mount` calls to wrap the
+    // controller's whole route subtree. Each layer is boxed to a single
+    // `BoxEndpoint` type (the same shape the transport uses for global
+    // middleware), so the result type is stable regardless of count. The wrap sits
+    // *outside* every per-route layer, so a controller-level layer runs before any
+    // route-level one; first listed ends outermost within its layer. With nothing
+    // declared it just boxes the endpoint, so `#[routes]` can call it
+    // unconditionally. Applied inner → outer as interceptors → guards → filters,
+    // mirroring the per-route order (guards run before interceptors; filters wrap
+    // both).
+    let interceptor_layers = controller_layers(&interceptors, "interceptor", "use_interceptors");
+    let guard_layers = controller_layers(&guards, "guard", "use_guards");
+    let filter_layers = controller_layers(&filters, "filter", "use_filters");
 
     quote! {
         #item
@@ -94,7 +91,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             #[doc(hidden)]
-            pub fn __nestrs_controller_guards<__E>(
+            pub fn __nestrs_controller_layers<__E>(
                 __container: &::nestrs_core::Container,
                 __ep: __E,
             ) -> ::poem::endpoint::BoxEndpoint<'static, ::poem::Response>
@@ -102,7 +99,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
                 __E: ::poem::Endpoint + 'static,
             {
                 let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(__ep));
+                #(#interceptor_layers)*
                 #(#guard_layers)*
+                #(#filter_layers)*
                 __ep
             }
         }
@@ -140,24 +139,31 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitS
     Ok((path, version))
 }
 
-/// Extract and remove a controller-level `#[use_guards(GuardA, GuardB)]` attribute
-/// from a struct's attribute list (the class-level `@UseGuards` analog). Returns
-/// the guard paths (empty when absent). The attribute is *consumed* — removed from
-/// `attrs` so it never reaches the compiler as an unknown attribute, the same way
-/// `#[routes]` consumes the method-level form. At most one is accepted.
-fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    let Some(pos) = attrs.iter().position(|a| a.path().is_ident("use_guards")) else {
-        return Ok(Vec::new());
-    };
-    let attr = attrs.remove(pos);
-    if attrs.iter().any(|a| a.path().is_ident("use_guards")) {
-        return Err(syn::Error::new_spanned(
-            &attr,
-            "a controller takes at most one `#[use_guards(...)]`; list every guard in it",
-        ));
-    }
-    Ok(attr
-        .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?
-        .into_iter()
-        .collect())
+/// Build the `let __ep = …;` statements that wrap the controller subtree in a
+/// list of container-resolved layers via the `EndpointExt::<method>` extension
+/// (`interceptor` / `guard` / `filter`). Each layer is boxed to the stable
+/// `BoxEndpoint` shape. Reversed so the first-listed entry ends up outermost
+/// within its layer, matching the per-route convention. `attr` names the source
+/// attribute for the not-registered diagnostic.
+fn controller_layers(paths: &[Path], method: &str, attr: &str) -> Vec<TokenStream2> {
+    let method = format_ident!("{method}");
+    let prefix = format!("#[{attr}] controller layer `");
+    paths
+        .iter()
+        .rev()
+        .map(|p| {
+            quote! {
+                let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
+                    ::nestrs_http::EndpointExt::#method(
+                        __ep,
+                        ::nestrs_core::Container::get::<#p>(__container).expect(concat!(
+                            #prefix,
+                            stringify!(#p),
+                            "` is not registered — add it to a module's providers"
+                        )),
+                    ),
+                ));
+            }
+        })
+        .collect()
 }

@@ -11,6 +11,14 @@ use poem::{Endpoint, IntoResponse, Request, Response, Result};
 /// response-shaping. Equivalent to a Poem `Middleware` but with a clearer
 /// `intercept(req, next)` signature.
 ///
+/// Bind an interceptor at three levels, mirroring NestJS's `@UseInterceptors`:
+/// globally (`HttpTransport::interceptor`, or `#[interceptor]` for zero-config
+/// auto-discovery), per-controller (`#[use_interceptors(...)]` on the struct), or
+/// per-handler (`#[use_interceptors(...)]` beside the verb attribute). A
+/// controller/handler interceptor is a plain `#[injectable] + impl Interceptor`
+/// resolved from the container per route, and sits *inside* the guards — so a
+/// guard runs (and may short-circuit) before the interceptor's pre-handler work.
+///
 /// ```ignore
 /// struct LogTiming;
 ///

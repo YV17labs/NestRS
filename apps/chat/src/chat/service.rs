@@ -1,12 +1,14 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use nestrs_core::injectable;
+use nestrs_ws::WsServer;
 
 use crate::chat::dto::{ChatMessage, SendMessage};
 
 #[injectable]
-#[derive(Default)]
 pub struct RoomService {
+    #[inject]
+    server: Arc<WsServer>,
     history: Mutex<Vec<ChatMessage>>,
 }
 
@@ -18,11 +20,16 @@ impl RoomService {
         };
         let mut history = self.history.lock().unwrap();
         history.push(stored.clone());
+        let total = history.len();
+        drop(history);
+
+        let reached = self.server.broadcast("message", &stored).unwrap_or(0);
         tracing::info!(
             target: "chat",
             author = %stored.author,
-            total = history.len(),
-            "chat message recorded",
+            total,
+            reached,
+            "chat message recorded and broadcast",
         );
         stored
     }
@@ -38,7 +45,10 @@ mod tests {
 
     #[test]
     fn records_and_returns_history() {
-        let room = RoomService::default();
+        let room = RoomService {
+            server: Arc::new(WsServer::default()),
+            history: Mutex::new(Vec::new()),
+        };
         let stored = room.record(SendMessage {
             author: "ada".into(),
             text: "hello".into(),

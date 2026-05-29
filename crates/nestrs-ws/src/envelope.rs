@@ -11,6 +11,19 @@ pub struct WsEnvelope {
     pub data: serde_json::Value,
 }
 
+impl WsEnvelope {
+    /// Render an outgoing message — `{ "event": ..., "data": ... }` — from an
+    /// event name and any serializable payload. The single place the wire shape
+    /// is built, shared by the registry's server→client pushes and the gateway's
+    /// error frames.
+    pub fn encode<T: Serialize>(event: &str, data: &T) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&WsEnvelope {
+            event: event.to_string(),
+            data: serde_json::to_value(data)?,
+        })
+    }
+}
+
 /// The outcome of dispatching one incoming message — what `Gateway::dispatch`
 /// returns and the connection loop turns into a reply frame (or silence).
 pub enum WsReply {

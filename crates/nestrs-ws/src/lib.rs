@@ -30,6 +30,33 @@
 //! }
 //! ```
 //!
+//! # Server→client push
+//!
+//! Beyond replying on its own socket, a gateway pushes to *other* clients
+//! through [`WsServer`] — the `@WebSocketServer` analog, a connection registry
+//! provided as a singleton by [`WsModule`]. Import `WsModule` and a service can
+//! `#[inject] Arc<WsServer>` to broadcast in reaction to a domain event; a
+//! handler reaches the same registry by declaring a `&`[`WsClient`] parameter
+//! (the `@ConnectedSocket` analog, distinguished from the owned payload by being
+//! a reference, exactly as a `#[field]` resolver tells a `&DataLoader` from its
+//! arguments):
+//!
+//! ```ignore
+//! #[subscribe_message("join")]
+//! async fn join(&self, room: JoinRoom, client: &nestrs_ws::WsClient) {
+//!     client.join(room.name);                 // address a room later
+//! }
+//!
+//! #[subscribe_message("say")]
+//! async fn say(&self, msg: Say, client: &nestrs_ws::WsClient) {
+//!     let _ = client.to(&msg.room, "said", &msg);   // push to the room
+//! }
+//! ```
+//!
+//! Pushes (a handler's reply, a broadcast, a room emit) all funnel through one
+//! per-connection outbox drained by a writer task, so the read loop never blocks
+//! on a slow `Sink` and a service can reach a client mid-handler.
+//!
 //! # Deliberate limits of this first cut
 //!
 //! - **Guards bind at the connection level** (on the upgrade request), not
@@ -39,16 +66,21 @@
 //!   executor and the authz ability task-locals do **not** reach a handler — the
 //!   same constraint a `#[dataloader]` batch has. A gateway handler injects an
 //!   `Arc<DatabaseConnection>` and queries it directly.
-//! - **Request/response only.** A handler replies on its own socket; server→
-//!   client broadcast and a connection registry (the `@WebSocketServer` analog)
-//!   are the next brick — the one SSE and GraphQL subscriptions will reuse.
+//! - **One registry per app, not per gateway.** The flat container keys
+//!   [`WsServer`] by type, so every gateway shares one registry — a `broadcast`
+//!   reaches all of them. Scope with rooms; per-gateway namespacing (the way a
+//!   second `OAuth2Client` needs a newtype) is not built.
 //! - **No lifecycle hooks** (`OnGatewayConnection`/`Disconnect`) yet.
 
 mod envelope;
 mod gateway;
+mod module;
+mod server;
 
 pub use envelope::{WsEnvelope, WsReply};
 pub use gateway::{gateway_endpoint, Gateway, GatewayEndpoint};
+pub use module::WsModule;
+pub use server::{ConnId, WsClient, WsServer};
 
 // Re-exported so `#[messages]`-generated code resolves these through the
 // framework: the dispatcher is `#[nestrs_ws::async_trait]`, payloads go through

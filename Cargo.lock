@@ -2971,6 +2971,7 @@ dependencies = [
  "poem",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 

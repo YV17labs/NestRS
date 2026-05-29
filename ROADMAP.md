@@ -23,15 +23,19 @@ The authoritative record of *what was decided and why* is
 
 ## Next — real-time: completing the WebSocket gateway
 
-The gateway itself now ships — request/response message
-handling, discovered and self-mounted on the HTTP transport, sharing controller
-DI and connection-level guards. What remains builds on that base, and is the
-plumbing Server-Sent Events and GraphQL subscriptions will reuse:
+The gateway now ships with server→client push — request/response message
+handling, a connection registry, broadcast and rooms, discovered and
+self-mounted on the HTTP transport, sharing controller DI and connection-level
+guards. What remains builds on that base, and is the plumbing Server-Sent Events
+and GraphQL subscriptions will reuse:
 
-- **Server→client broadcast & a connection registry** — the `@WebSocketServer`
-  analog: a handle that tracks live connections (and rooms) so a handler — or a
-  service reacting to an event — can push to clients beyond the one that spoke.
-  This is the largest remaining piece and the one SSE/subscriptions reuse.
+- **Server→client broadcast & a connection registry** — *shipped*. `WsServer`
+  (the `@WebSocketServer` analog, provided by `WsModule`) tracks live connections
+  and rooms; a service injects `Arc<WsServer>` to push in reaction to a domain
+  event, and a handler reaches it through a `&WsClient` parameter (the
+  `@ConnectedSocket` analog). The remaining gap is **per-gateway namespacing**:
+  the flat container keys `WsServer` by type, so every gateway shares one registry
+  (rooms are the targeting tool); a second registry needs a newtype today.
 - **Per-message guards & lifecycle hooks** — guards bind at the connection level
   today (on the upgrade); a per-message guard seam plus `OnGatewayConnection` /
   `OnGatewayDisconnect` hooks would match the rest of the NestJS surface.

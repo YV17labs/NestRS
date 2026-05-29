@@ -36,26 +36,43 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         let method_name = method.sig.ident.clone();
 
-        // The handler's owned parameter (after `&self`) is the message payload,
-        // deserialized from the envelope's `data`. Zero or one is allowed.
-        let mut payload_tys = method
-            .sig
-            .inputs
-            .iter()
-            .skip(1)
-            .filter_map(|arg| match arg {
-                FnArg::Typed(pt) => Some(pt.ty.as_ref()),
-                FnArg::Receiver(_) => None,
-            });
-        let payload_ty = payload_tys.next();
-        if payload_tys.next().is_some() {
-            return syn::Error::new_spanned(
-                &method.sig,
-                "a #[subscribe_message] handler takes at most one payload parameter \
-                 (deserialized from the message's `data`)",
-            )
-            .to_compile_error()
-            .into();
+        // Classify the parameters after `&self`, preserving their declared order
+        // for the call. An **owned** parameter is the message payload
+        // (deserialized from the envelope's `data`); a `&`-reference parameter is
+        // the connected `WsClient` (the `@ConnectedSocket` analog) — the same
+        // owned-vs-reference split a `#[field]` resolver uses to tell a GraphQL
+        // argument from an injected `&DataLoader`. At most one of each.
+        let mut payload_ty: Option<&Type> = None;
+        let mut takes_client = false;
+        let mut call_args: Vec<TokenStream2> = Vec::new();
+        let mut arity_error: Option<syn::Error> = None;
+        for arg in method.sig.inputs.iter().skip(1) {
+            let FnArg::Typed(pt) = arg else { continue };
+            if matches!(pt.ty.as_ref(), Type::Reference(_)) {
+                if takes_client {
+                    arity_error = Some(syn::Error::new_spanned(
+                        &pt.ty,
+                        "a #[subscribe_message] handler takes at most one `&WsClient` parameter",
+                    ));
+                    break;
+                }
+                takes_client = true;
+                call_args.push(quote! { __client });
+            } else {
+                if payload_ty.is_some() {
+                    arity_error = Some(syn::Error::new_spanned(
+                        &pt.ty,
+                        "a #[subscribe_message] handler takes at most one payload parameter \
+                         (deserialized from the message's `data`)",
+                    ));
+                    break;
+                }
+                payload_ty = Some(pt.ty.as_ref());
+                call_args.push(quote! { __payload });
+            }
+        }
+        if let Some(err) = arity_error {
+            return err.to_compile_error().into();
         }
 
         // A `()`/no return sends no reply; any other return is serialized back
@@ -65,7 +82,7 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             ReturnType::Type(_, ty) => matches!(ty.as_ref(), Type::Tuple(t) if t.elems.is_empty()),
         };
 
-        let call = match payload_ty {
+        let deser = match payload_ty {
             Some(ty) => quote! {
                 let __payload: #ty = match ::nestrs_ws::serde_json::from_value(__data) {
                     ::core::result::Result::Ok(__p) => __p,
@@ -75,9 +92,12 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                         ));
                     }
                 };
-                self.#method_name(__payload).await
             },
-            None => quote! { self.#method_name().await },
+            None => quote! {},
+        };
+        let call = quote! {
+            #deser
+            self.#method_name(#(#call_args),*).await
         };
 
         let arm_body = if returns_unit {
@@ -102,10 +122,12 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         impl ::nestrs_ws::Gateway for #self_ty {
             async fn dispatch(
                 &self,
+                __client: &::nestrs_ws::WsClient,
                 __event: &str,
                 __data: ::nestrs_ws::serde_json::Value,
             ) -> ::nestrs_ws::WsReply {
                 let _ = &__data;
+                let _ = __client;
                 match __event {
                     #(#arms)*
                     __other => ::nestrs_ws::WsReply::unknown(__other),
@@ -136,7 +158,18 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                             let __gw = ::std::sync::Arc::new(
                                 <#self_ty>::from_container(__container),
                             );
-                            let __ep = ::nestrs_ws::gateway_endpoint(__gw);
+                            // The shared connection registry every connection of
+                            // this gateway registers into. Resolved from the
+                            // container (the `Container::get` escape hatch), so
+                            // the app must import `WsModule` to provide it.
+                            let __server = ::nestrs_core::Container::get::<::nestrs_ws::WsServer>(
+                                __container,
+                            )
+                            .expect(
+                                "WebSocket gateway requires the connection registry — \
+                                 add `WsModule` to a module's `imports`",
+                            );
+                            let __ep = ::nestrs_ws::gateway_endpoint(__gw, __server);
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
                             __route.at(<#self_ty>::PATH, __ep)
                         },

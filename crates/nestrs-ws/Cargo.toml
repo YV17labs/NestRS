@@ -21,6 +21,10 @@ poem = { workspace = true, features = ["websocket"] }
 serde = { workspace = true }
 serde_json.workspace = true
 async-trait.workspace = true
-# `StreamExt`/`SinkExt` to drive poem's `WebSocketStream` connection loop.
+# `StreamExt`/`SinkExt` to split and drive poem's `WebSocketStream`: the connection
+# loop reads while a spawned writer task drains the per-connection outbox.
 futures-util.workspace = true
+# `tokio::spawn` for the writer task and `mpsc` for the per-connection outbox the
+# registry pushes through.
+tokio = { workspace = true }
 tracing.workspace = true

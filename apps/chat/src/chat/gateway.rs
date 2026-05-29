@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nestrs_ws::{gateway, messages};
+use nestrs_ws::{gateway, messages, WsClient};
 
 use crate::chat::dto::{ChatMessage, SendMessage};
 use crate::chat::service::RoomService;
@@ -14,13 +14,18 @@ pub struct ChatGateway {
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
-    async fn on_message(&self, message: SendMessage) -> ChatMessage {
-        self.room.record(message)
+    async fn on_message(&self, message: SendMessage) {
+        self.room.record(message);
     }
 
     #[subscribe_message("history")]
     async fn history(&self) -> Vec<ChatMessage> {
         self.room.history()
+    }
+
+    #[subscribe_message("typing")]
+    async fn typing(&self, message: SendMessage, client: &WsClient) {
+        let _ = client.broadcast("typing", &message);
     }
 }
 

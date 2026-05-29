@@ -1,9 +1,10 @@
 use nestrs_core::module;
+use nestrs_ws::WsModule;
 
 use crate::chat::gateway::ChatGateway;
 use crate::chat::service::RoomService;
 
-#[module(providers = [RoomService, ChatGateway])]
+#[module(imports = [WsModule], providers = [RoomService, ChatGateway])]
 pub struct ChatModule;
 
 #[cfg(test)]

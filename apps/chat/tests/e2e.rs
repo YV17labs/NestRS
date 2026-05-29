@@ -74,6 +74,49 @@ async fn gateway_echoes_messages_over_a_real_socket() {
     handle.shutdown().await.expect("transport shuts down");
 }
 
+#[tokio::test]
+async fn a_message_is_broadcast_to_every_connected_client() {
+    let bind = "127.0.0.1:13345";
+
+    let app = TestApp::builder()
+        .module::<AppModule>()
+        .with_test_telemetry()
+        .build_headless()
+        .await
+        .expect("AppModule boots headless");
+    let handle = app
+        .spawn_transport(HttpTransport::new().bind(bind))
+        .await
+        .expect("HTTP transport serves");
+
+    // Two independent clients on the same gateway.
+    let mut alice = connect_with_retry(&format!("ws://{bind}/ws")).await;
+    let mut bob = connect_with_retry(&format!("ws://{bind}/ws")).await;
+
+    // Alice speaks; the RoomService broadcasts the recorded message to the whole
+    // registry, so *both* sockets receive it — not just the sender.
+    alice
+        .send(Message::Text(
+            json!({ "event": "message", "data": { "author": "alice", "text": "hi all" } })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .expect("alice sends");
+
+    let to_alice = next_json(&mut alice).await;
+    let to_bob = next_json(&mut bob).await;
+    for frame in [&to_alice, &to_bob] {
+        assert_eq!(frame["event"], "message");
+        assert_eq!(frame["data"]["author"], "alice");
+        assert_eq!(frame["data"]["text"], "hi all");
+    }
+
+    alice.close(None).await.ok();
+    bob.close(None).await.ok();
+    handle.shutdown().await.expect("transport shuts down");
+}
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 

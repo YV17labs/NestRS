@@ -31,7 +31,7 @@ use crate::error::Result;
 /// | `log`       | `nestrs-telemetry`   | `NESTRS_LOG__LEVEL`                |
 /// | `service`   | `nestrs-telemetry`   | `NESTRS_SERVICE__NAME`             |
 /// | `telemetry` | `nestrs-telemetry`   | `NESTRS_TELEMETRY__OTLP_ENDPOINT`  |
-/// | `http`      | `nestrs-telemetry`   | `NESTRS_HTTP__ACCESS_LOG` (via `OtelHttp`) |
+/// | `http`      | `nestrs-http`        | `NESTRS_HTTP__TLS_KEY_FILE` (and `NESTRS_HTTP__ACCESS_LOG`, surfaced by `nestrs-telemetry`'s `OtelHttp`) |
 ///
 /// Each crate that owns a domain documents its full key list on the relevant
 /// config type. Crates **must not** read env vars under another crate's

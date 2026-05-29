@@ -11,6 +11,10 @@ description = "HTTP transport for nestrs: HttpTransport, Controller trait and Ht
 nestrs-core.workspace = true
 nestrs-http-macros.workspace = true
 nestrs-middleware.workspace = true
+# `TlsConfig::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
+# framework-wide env scheme (`env_var`, empty-as-unset), like every other
+# per-crate `from_env` shortcut.
+nestrs-config.workspace = true
 # The pipes themselves are transport-agnostic; this crate only adapts them to
 # poem (the `Valid`/`Piped` extractors). `validator` is needed for the `Validate`
 # bound on `Valid`; `serde_json` renders a `PipeError` as a JSON 400.

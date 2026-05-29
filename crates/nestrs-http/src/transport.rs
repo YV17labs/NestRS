@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use nestrs_core::{Container, DiscoveryService, Transport};
 use nestrs_middleware::{EndpointExt as NestrsEndpointExt, Filter, Guard, Interceptor};
 use poem::endpoint::BoxEndpoint;
-use poem::listener::TcpListener;
+use poem::listener::{Listener, TcpListener};
 use poem::middleware::Cors;
 use poem::{EndpointExt, IntoEndpoint, Response, Route, Server};
 use tokio_util::sync::CancellationToken;
@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::controller::HttpControllerMeta;
 use crate::endpoint::HttpEndpointMeta;
 use crate::interceptor::HttpInterceptorMeta;
+use crate::tls::TlsConfig;
 
 type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
 
@@ -63,6 +64,7 @@ pub struct HttpTransport {
     filters: Vec<Arc<dyn Filter>>,
     mounts: Vec<MountFn>,
     cors: Option<Cors>,
+    tls: Option<TlsConfig>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -81,6 +83,7 @@ impl HttpTransport {
             filters: Vec::new(),
             mounts: Vec::new(),
             cors: None,
+            tls: None,
             endpoint: None,
         }
     }
@@ -112,6 +115,25 @@ impl HttpTransport {
     /// is answered before any guard or interceptor runs.
     pub fn cors(mut self, cors: Cors) -> Self {
         self.cors = Some(cors);
+        self
+    }
+
+    /// Terminate TLS at the transport: serve HTTPS directly from the given
+    /// [`TlsConfig`] (poem's `rustls` listener) instead of plain HTTP. Without
+    /// this call the transport stays plaintext — the dev default. Pair it with
+    /// [`TlsConfig::from_env`] so `main` opts in only when the certs are
+    /// injected:
+    ///
+    /// ```no_run
+    /// # use nestrs_http::{HttpTransport, TlsConfig};
+    /// let mut http = HttpTransport::new();
+    /// if let Some(tls) = TlsConfig::from_env()? {
+    ///     http = http.tls(tls);
+    /// }
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn tls(mut self, tls: TlsConfig) -> Self {
+        self.tls = Some(tls);
         self
     }
 
@@ -220,8 +242,19 @@ impl Transport for HttpTransport {
             .endpoint
             .expect("HttpTransport::configure must run before serve");
         let bind = self.bind;
-        tracing::info!(addr = %bind, "http transport listening");
-        Server::new(TcpListener::bind(&bind))
+        // `.boxed()` unifies the plain and rustls listeners to one `BoxListener`,
+        // so the server-run is written once whichever path is taken.
+        let listener = match self.tls {
+            Some(tls) => {
+                tracing::info!(addr = %bind, "https transport listening (TLS)");
+                TcpListener::bind(bind).rustls(tls.into_rustls()).boxed()
+            }
+            None => {
+                tracing::info!(addr = %bind, "http transport listening");
+                TcpListener::bind(bind).boxed()
+            }
+        };
+        Server::new(listener)
             .run_with_graceful_shutdown(endpoint, async move { cancel.cancelled().await }, None)
             .await?;
         Ok(())

@@ -30,6 +30,7 @@ mod pipe;
 mod reflector;
 mod scope;
 mod shaper;
+mod tls;
 mod transport;
 
 pub use context::Ctx;
@@ -42,6 +43,7 @@ pub use pipe::{IntoInner, Piped, Valid};
 pub use reflector::Reflector;
 pub use scope::{RequestScopeEndpoint, Scoped};
 pub use shaper::{shaped, RouteResponseShaper, ShapedEndpoint};
+pub use tls::TlsConfig;
 pub use transport::{join_path, version_path, HttpTransport};
 
 pub use poem;

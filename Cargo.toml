@@ -56,8 +56,10 @@ figment = { version = "0.10", features = ["toml", "env"] }
 
 # HTTP. The `anyhow` feature gives `poem::Error: From<anyhow::Error>` (→ 500), so a
 # handler can `?` a service's `anyhow::Result` straight through — no hand-written
-# error→response mapping in the app.
-poem = { version = "3", features = ["tower-compat", "anyhow"] }
+# error→response mapping in the app. `rustls` terminates TLS at the transport
+# (`HttpTransport::tls`) with no OpenSSL system dependency, keeping the
+# single-static-binary promise.
+poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
 
 # Async traits (needed for `dyn Trait` containing async methods on Rust 1.75)
 async-trait = "0.1"

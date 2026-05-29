@@ -3,8 +3,8 @@
 NestRS is in **alpha** — the foundations are in place and the API still shifts.
 This is a *direction, not a dated commitment*; priorities move with what the
 community needs. The `Next —` sections below are ordered by **integration
-priority** — TLS first, then a WebSocket transport, then correctness and parity
-work; `Later` holds what is explicitly deferred.
+priority** — a WebSocket transport first, then correctness and parity work;
+`Later` holds what is explicitly deferred.
 
 Want to shape it? Open a
 [Discussion](https://github.com/NestRS/NestRS/discussions) or pick up a
@@ -14,6 +14,14 @@ The authoritative record of *what was decided and why* is
 
 ## Recently shipped
 
+- **TLS termination** — `HttpTransport::tls(TlsConfig)` serves HTTPS directly
+  (poem's `rustls` listener, no OpenSSL system dependency), and
+  `TlsConfig::from_env()` reads the framework `NESTRS_HTTP__TLS_*` keys (a PEM
+  inline, or a `*_FILE` path it loads) so a mesh / orchestrator injects the
+  certificate with no ceremony. It returns `None` when unset — the dev default
+  stays plaintext — so `main` opts in with one line only when the certs are
+  there. `apps/api` is wired this way. Certificate hot-reload on rotation is the
+  remaining follow-up.
 - **Transparent security, conversion & transactions** — the mission's hardest
   promise, now built on one primitive: a request-scoped *data context* (two
   `tokio` task-locals carrying the current DB executor and the caller's `Ability`).
@@ -104,26 +112,6 @@ The authoritative record of *what was decided and why* is
   README (the `app` example versus an equivalent NestJS service); the cold-start
   figure is the remaining one to publish.
 - Fill in crate-level docs and grow the `apps/` examples.
-
-## Next — TLS, configurable from `main`
-
-**The highest priority.** Terminate TLS at the transport, configured where the app
-is composed. In a container (Kubernetes, a service mesh) the certificate and key
-are *injected* — mounted as files or passed as environment variables — so the
-framework must pick them up with no ceremony, and **stay plaintext when none are
-provided** (the dev default, so nothing breaks without a cert).
-
-- `HttpTransport::tls(TlsConfig)`, plus a `TlsConfig::from_env()` that reads the
-  conventional `TLS_CERT` / `TLS_KEY` (a PEM inline, or a `*_FILE` path it loads)
-  and returns `None` when unset — so `main` opts in with one line only when the
-  certs are actually there, and serves plain HTTP otherwise.
-- Built on **`rustls`** (no OpenSSL system dependency, keeping the
-  single-static-binary promise), reusing poem's rustls listener — no new
-  app-facing dependency.
-- Certificate **hot-reload** on rotation is a follow-up, not the first cut.
-
-This is what a zero-trust / mesh deployment needs (serve HTTPS directly), and it
-also covers the simpler "TLS-terminating ingress in front" case for free.
 
 ## Next — real-time: a WebSocket transport
 

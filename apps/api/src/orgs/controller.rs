@@ -1,56 +1,36 @@
 use std::sync::Arc;
 
-use nestrs_authz::{Create, Read};
-use nestrs_authz_http::{Authorize, Bind};
-use nestrs_http::{controller, routes, Valid};
-use poem::web::Json;
-use poem::Result;
+use nestrs_http::{controller, crud};
 
 use crate::authn::AuthGuard;
 use crate::authz::AppAbilityGuard;
-use crate::orgs::entity::{self, CreateOrgInput, Org};
+use crate::orgs::entity::{self, CreateOrgInput, Org, UpdateOrgInput};
 use crate::orgs::service::OrgsService;
 
+/// Orgs expose the full CRUD surface with no hand-written handler: `#[crud]`
+/// generates `list`/`get`/`create`/`update`/`delete`, all **delegating to
+/// `OrgsService`** (the entity's single ORM gateway) — the controller holds no
+/// query. Security is declared once at the controller level
+/// (`guards(AuthGuard, AppAbilityGuard)`), so every generated route inherits it
+/// with nothing repeated per operation. Orgs are the tenant root with no
+/// server-side scope column, so the service's inherited `create`/`update` map
+/// cleanly from the `#[expose]` conversions.
+///
+/// Contrast `UsersController`, whose `create` is hand-written to stamp the
+/// caller's `org_id` — but it shares the same controller-level guards.
 #[controller(path = "/orgs")]
+#[use_guards(AuthGuard, AppAbilityGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,
 }
 
-#[routes]
-impl OrgsController {
-    #[get("/")]
-    #[use_guards(AuthGuard, AppAbilityGuard)]
-    #[api(summary = "List organizations the caller may see", tags("Orgs"))]
-    async fn list(&self, _authz: Authorize<Read, entity::Entity>) -> Result<Json<Vec<Org>>> {
-        // The ambient ability scopes the `Repo` read: an admin lists every org, a
-        // tenant member only its own.
-        let rows = self.svc.list().await?;
-        Ok(Json(rows.iter().map(Org::from).collect()))
-    }
-
-    #[get("/:id")]
-    #[use_guards(AuthGuard, AppAbilityGuard)]
-    #[api(summary = "Fetch an organization by id", tags("Orgs"))]
-    async fn get(
-        &self,
-        _authz: Authorize<Read, entity::Entity>,
-        org: Bind<entity::Entity, Read>,
-    ) -> Result<Json<Org>> {
-        // `Bind` loaded the org and ran the instance check (404 if absent, 403 if
-        // the caller may not read it) before this handler.
-        Ok(Json(Org::from(&org.into_inner())))
-    }
-
-    #[post("/")]
-    #[use_guards(AuthGuard, AppAbilityGuard)]
-    #[api(summary = "Create an organization", tags("Orgs"))]
-    async fn create(
-        &self,
-        _authz: Authorize<Create, entity::Entity>,
-        body: Valid<Json<CreateOrgInput>>,
-    ) -> Result<Json<Org>> {
-        let row = self.svc.create(body.into_inner()).await?;
-        Ok(Json(Org::from(&row)))
-    }
-}
+#[crud(
+    service = svc,
+    entity = entity::Entity,
+    output = Org,
+    create = CreateOrgInput,
+    update = UpdateOrgInput,
+    paginate = cursor,
+)]
+impl OrgsController {}

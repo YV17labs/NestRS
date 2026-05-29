@@ -18,6 +18,9 @@ nestrs-http.workspace = true
 nestrs-middleware.workspace = true
 poem.workspace = true
 sea-orm.workspace = true
+# `PageParams` (the `?first&after` cursor query) derives `Deserialize` so the
+# generated `#[crud]` list handler can read it with poem's `Query<…>`.
+serde.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 tracing.workspace = true

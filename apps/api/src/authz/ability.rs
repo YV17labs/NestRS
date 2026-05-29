@@ -3,10 +3,10 @@
 //! `Ability::condition_for` query pre-filter, and the `Ability::mask` response
 //! mask.
 
+use identity::Claims;
 use nestrs_authz::{AbilityBuilder, AbilityFactory, Action};
 use nestrs_core::injectable;
 
-use crate::authn::AuthUser;
 use crate::orgs::entity as org;
 use crate::users::entity as user;
 
@@ -15,9 +15,10 @@ use crate::users::entity as user;
 pub struct AppAbility;
 
 impl AbilityFactory for AppAbility {
-    type Actor = AuthUser;
+    // The verified token `Claims` is the caller (`api` is a resource server).
+    type Actor = Claims;
 
-    fn define(&self, actor: &AuthUser, ab: &mut AbilityBuilder) {
+    fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
         // Each branch is a complete statement so the rule commits (on drop)
         // before the builder is reused.
         if actor.is_admin() {

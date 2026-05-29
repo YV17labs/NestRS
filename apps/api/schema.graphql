@@ -10,6 +10,10 @@ input CreateUserInput {
 type Mutation {
 	createOrg(input: CreateOrgInput!): Org!
 	createUser(input: CreateUserInput!): User!
+	deleteOrg(id: String!): Boolean!
+	deleteUser(id: String!): Boolean!
+	updateOrg(id: String!, input: UpdateOrgInput!): Org
+	updateUser(id: String!, input: UpdateUserInput!): User
 }
 
 type Org {
@@ -23,6 +27,15 @@ type Query {
 	orgs: [Org!]!
 	user(id: String!): User
 	users: [User!]!
+}
+
+input UpdateOrgInput {
+	name: String!
+}
+
+input UpdateUserInput {
+	email: String!
+	name: String!
 }
 
 type User {

@@ -335,11 +335,28 @@ or an OAuth `302` to the provider). A bearer/JWT strategy always authenticates o
 errors; an OAuth strategy challenges on the initiating request and authenticates
 on the callback, exactly like Passport's one guard bound to both routes.
 
+The standard bearer case needs **no app strategy at all**: `nestrs-auth` ships
+**`JwtStrategy<C>`** (the `passport-jwt` analog) — a generic `#[injectable]`
+strategy that pulls the `Bearer` token, verifies it with `JwtService`, and
+authenticates as the decoded claims `C`. It is pure *mechanism* with no business
+logic, so a resource server writes only a binding — `type AuthGuard =
+AuthGuard<JwtStrategy<Claims>>` over its shared claims type (`apps/api`'s `authn.rs`
+is exactly this, ~3 lines). This is the **authn-is-mechanism / authz-is-policy**
+split: authentication (extract + verify + attach the caller) is framework-generic;
+*authorization* (the role/permission rules) is the app's `AbilityFactory`. An app
+needing genuinely custom authentication still writes its own `Strategy` — the trait
+is the escape hatch, not the default path.
+
 **`JwtService`** (sign/verify, the `@nestjs/jwt` analog) is configured by
 `AuthModule::for_root` and provided through the **factory phase**, so it is global
 infrastructure — injectable by any strategy, guard, or service regardless of
 import order, like the database and queue connections. Construction is synchronous;
-the async factory is only the channel that makes it global.
+the async factory is only the channel that makes it global. It takes either a
+symmetric HMAC secret (`JwtOptions::new`) or an asymmetric EdDSA key pair: the
+authorization server holds the private key (`JwtOptions::eddsa`), a resource server
+holds **only the public key** (`JwtOptions::eddsa_verify`, a verify-only service
+whose `sign` errors) — so a resource-server compromise cannot mint tokens. That key
+isolation is why token issuance is its own app (see below).
 
 **OAuth2** (`OAuth2Client`, the Authorization Code flow + PKCE) keeps the
 provider-agnostic plumbing — build the redirect, exchange the code, fetch the
@@ -350,8 +367,17 @@ round-trip in a short JWT signed by `JwtService` and carried as a cookie — no
 server-side session, tamper-proof, no new storage. `oauth2`'s re-exported reqwest
 drives the exchange, so the crate adds no second HTTP client. The flat container
 keys by type, so one app wires one `OAuth2Client` today; multiple providers would
-need per-provider newtypes. `apps/api` is the exemplar (bearer login + a
-GitHub-style OAuth redirect).
+need per-provider newtypes.
+
+Token issuance is its **own app**, `apps/auth` (the exemplar): it owns the OAuth2
+endpoints on the standard paths — `POST /token` (RFC 6749 token endpoint, the
+`{access_token, token_type, expires_in}` envelope), `GET /authorize`, `GET
+/callback` — and signs EdDSA JWTs with the **private** key. `apps/api` is a pure
+**resource server**: it holds only the public key, *verifies* the bearer token
+(`JwtStrategy` + `AuthGuard`), and issues nothing. The two share the `identity`
+crate (the `Claims`/`Role` token contract both must agree on) and the workspace DB,
+but never RPC each other — a self-contained JWT is the only link. This is the
+responsibility-split-by-app the "Hard no" list endorses.
 
 ## The data layer makes security and transactions transparent
 
@@ -570,15 +596,58 @@ path-param *types* (emitted as `string`), security schemes, and a committed
 
 - Applications live under `apps/<name>/`. Not `examples/`, not `services/`.
   The first was rejected because these are real applications, not samples; the
-  second because the project is not microservices-oriented.
-- File names follow Rust snake_case: `service.rs`, `controller.rs`,
-  `resolver.rs`, `module.rs`, `dto.rs`, `entity.rs`. Do not invent dotted
-  variants — they are not valid Rust module names.
-- A file exists only if it has real content. No placeholders for symmetry.
-- `lib.rs` is the crate's index, not its implementation. Keep it to the
-  crate-level `//!` doc, `mod` declarations, and `pub use` re-exports.
-  Logic belongs in topical modules. Exception: very small crates (~100
-  lines total) may inline everything.
+  second because *every* runnable thing — including a dedicated service like the
+  `auth` app — lives under `apps/` uniformly, with no separate `services/` tier.
+- **Files are named by their ROLE**, NestJS-style, in Rust snake_case — the
+  folder supplies the feature prefix NestJS puts in the filename
+  (`orgs/service.rs` ≡ `orgs/orgs.service.ts`). The canonical role files and their
+  NestJS analog:
+
+  | Role | File | NestJS |
+  |---|---|---|
+  | DI module | `module.rs` | `*.module.ts` |
+  | service | `service.rs` | `*.service.ts` |
+  | HTTP controller | `controller.rs` | `*.controller.ts` |
+  | GraphQL resolver | `resolver.rs` | `*.resolver.ts` |
+  | SeaORM entity | `entity.rs` | `*.entity.ts` |
+  | DTOs | `dto.rs` | `*.dto.ts` |
+  | guard / strategy | `guard.rs` / `strategy.rs` | `*.guard.ts` / `*.strategy.ts` |
+  | constants | `constants.rs` | `constants.ts` |
+
+  Do not invent dotted variants (not valid Rust module names), and **never put a
+  role's declaration in a topically-named file** (a module belongs in `module.rs`,
+  not `graphql.rs`).
+- **A `#[module]`/module is declared in `module.rs`, never a topic file** (a module
+  belongs in `module.rs`, not `graphql.rs`). An app **feature** is *one module per
+  feature-folder* — never two modules in one app feature-folder (e.g. a single
+  `AuthzModule` wiring REST + GraphQL, not `AuthzModule` + `AuthzGraphqlModule`); the
+  surface split stays at the *framework-crate* level. A **library crate** is a
+  different unit: it may expose several configuration modules from its own
+  `module.rs` (e.g. `nestrs-auth` provides `AuthModule` + `OAuth2Module`, kept
+  independently composable so a resource server takes JWT without OAuth).
+- **`mod.rs`/`lib.rs` carry no business logic** — only `//!` doc, `mod`
+  declarations, and `pub use` re-exports. The one thing besides those they may hold
+  is, in a **proc-macro crate**, the `#[proc_macro*]` entry functions: Rust *forces*
+  macros to the crate root, so they live in `lib.rs` and must be **thin delegations**
+  to submodules (the implementation, helpers, and any `macro_rules!` go in topical
+  files). This is not a style exception — it is the only place the language permits a
+  proc-macro. `mod.rs` and `module.rs` are therefore different layers: `mod.rs` is
+  the Rust folder index (plumbing), `module.rs` is the DI module (content) — never
+  merge the `#[module]` into `mod.rs`.
+- **One role → one file (no folder).** A single-purpose thing is a single
+  `<name>.rs`, no directory and no `mod.rs`. A folder (with `mod.rs` + role files)
+  appears **only** when a feature genuinely has several roles — so "many files"
+  always means "many roles," never ceremony. The root `AppModule` is a file,
+  `app.rs` (the NestJS `app.module.ts` root-as-file equivalent), not a directory.
+- **No `interfaces/` directory.** A Rust trait is a first-class type: it lives in
+  the file of its concern (a trait beside its abstraction), or a `traits.rs` /
+  `types.rs` for a standalone cluster — we take the Rust norm here, not a mirrored
+  TS `interfaces/` folder.
+- A file exists only if it has real content. No placeholders for symmetry — but a
+  one-line role file (e.g. a `guard.rs` holding only a `type` alias) **is** real
+  content; this rule forbids empty/placeholder files, not small role files. There is
+  **no "small crate inlines everything" exception** — business logic always lives in
+  topical files, never `lib.rs`.
 
 ## Dependency bar
 
@@ -595,6 +664,17 @@ not sufficient: start the binary (`cargo run --bin <app>` in the background),
 `curl` the affected endpoints, then kill the server before returning control —
 real-socket behaviour and live external services are what the in-process harness
 cannot reach.
+
+**Test-file naming (strict).** An **app** has exactly one `tests/e2e.rs` that boots
+its `AppModule` end-to-end (`apps/db` has no `AppModule`, so its `e2e.rs` instead
+migrates a throwaway database with its own `Migrator` and runs the seed — still one
+`e2e.rs`, no exemption). A **crate** names its integration tests by the *behaviour*
+they exercise — `tests/<behaviour>.rs`, one scenario per file (`authorize.rs`,
+`scheduler.rs`, `resolver_guard.rs`, …) — since a crate has several. Cross-crate
+**in-process** integration tests (a feature of `nestrs-http`/`nestrs-core` driven
+through the harness) live in `nestrs-testing/tests/`, the crate that owns `TestApp`
+(`cors.rs`, `reflector.rs`, `versioning_filters.rs`, …) — so a framework crate need
+not take a dev-dependency on the harness.
 
 A GraphQL app commits its schema as SDL (`apps/<app>/schema.graphql`) so the API
 surface is reviewable in diffs. The schema is composed from the resolvers
@@ -640,8 +720,16 @@ dedicated tooling.)
 - No mocking the database in **e2e tests** — exercise a real Postgres (the dev
   container provides one; `testcontainers` in CI). Unit tests of pure logic
   (validation, field mapping) need no database and may use a default connection.
-- No splitting the workspace into microservices "for scalability". The scope
-  is multiple applications sharing libraries.
+- Multiple deployable apps, **split by responsibility** (and yes, scalability),
+  are a goal — e.g. a dedicated `auth` app (`auth.*`) issuing tokens and a pure
+  resource `api` (`api.*`) verifying them. What keeps that in scope, not a
+  forbidden microservices sprawl, is two conditions: **(1)** apps share code
+  through **crates**, never copy-paste (framework crates are `nestrs-*`;
+  business-shared contracts like the JWT claims live in a non-`nestrs-` crate such
+  as `identity`); and **(2)** the coupling stays **loose** — apps connect through a
+  self-contained token + the shared DB, not chatty runtime RPC (`api` verifies a
+  JWT locally with the *public* key; it never calls `auth`). Don't split before a
+  real boundary exists, and don't fragment without shared libraries.
 
 ## Workflow
 

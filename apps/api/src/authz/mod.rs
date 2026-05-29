@@ -1,6 +1,6 @@
 mod ability;
-mod graphql;
+mod guard;
 mod module;
 
-pub use graphql::AuthzGraphqlModule;
-pub use module::{AppAbilityGuard, AuthzModule};
+pub use guard::AppAbilityGuard;
+pub use module::AuthzModule;

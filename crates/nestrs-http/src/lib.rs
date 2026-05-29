@@ -58,7 +58,7 @@ pub use schemars;
 pub use async_trait::async_trait;
 pub use nestrs_middleware::{EndpointExt, Filter, Guard, RequestSnapshot};
 
-/// HTTP decorators (`#[controller]`, `#[routes]`, the verb attributes,
-/// `#[interceptor]`), defined in `nestrs-http-macros` and surfaced here so
-/// apps write `nestrs_http::controller` etc.
-pub use nestrs_http_macros::{controller, interceptor, routes};
+/// HTTP decorators (`#[controller]`, `#[routes]`, `#[crud]`, the verb
+/// attributes, `#[interceptor]`), defined in `nestrs-http-macros` and surfaced
+/// here so apps write `nestrs_http::controller` etc.
+pub use nestrs_http_macros::{controller, crud, interceptor, routes};

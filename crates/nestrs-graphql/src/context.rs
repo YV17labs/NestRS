@@ -132,10 +132,36 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
                 });
                 guard.around(&req, inner).await
             }
-            None => {
-                GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response()
-            }
+            None => GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response(),
         };
         Ok(response)
     }
+}
+
+/// Forward a per-request value the authentication guard attached to the request —
+/// typically the authenticated principal — into the GraphQL context, so resolvers
+/// read it with `ctx.data::<T>()`. It registers the [`ContextSeed`] for you, so an
+/// app writes one line instead of a hand-rolled `inventory::submit!` closure:
+///
+/// ```ignore
+/// nestrs_graphql::forward_principal!(MyPrincipal);
+/// ```
+///
+/// `T` must be `Clone + Send + Sync + 'static`. A request that carries no such value
+/// (anonymous) passes through untouched — the resolver's own `authorize` gate then
+/// refuses it. The ambient `Ability` itself is already forwarded by
+/// `nestrs-authz-graphql`; this is for the app's own principal type. Exported at the
+/// crate root by `#[macro_export]`, so apps call `nestrs_graphql::forward_principal!`.
+#[macro_export]
+macro_rules! forward_principal {
+    ($ty:ty) => {
+        $crate::inventory::submit! {
+            $crate::ContextSeed {
+                seed: |__req, _container, __gql| match __req.extensions().get::<$ty>() {
+                    ::core::option::Option::Some(__v) => __gql.data(::core::clone::Clone::clone(__v)),
+                    ::core::option::Option::None => __gql,
+                },
+            }
+        }
+    };
 }

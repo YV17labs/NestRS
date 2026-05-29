@@ -5,17 +5,27 @@
 //! `Migrator`) and seeds its connection — the module's connect-factory is
 //! short-circuited because a seed of the same type wins — then drops the database
 //! when the test ends. From there the in-process harness drives the live
-//! HTTP/OpenAPI surfaces: routing, the bearer-JWT auth guard, the OAuth redirect,
-//! and a real persisted round-trip through SeaORM.
+//! HTTP/OpenAPI surfaces: routing, the bearer-JWT auth guard (verify-only — `api`
+//! is a resource server, the `auth` app issues the tokens), and a real persisted
+//! round-trip through SeaORM.
 //!
 //! Requires a reachable Postgres at `DATABASE_URL` (the devcontainer provides one).
 
 use api::AppModule;
+use identity::{Claims, Role};
+use nestrs_auth::{JwtOptions, JwtService};
 use nestrs_testing::{EphemeralDatabase, TestApp};
 use poem::http::{header, StatusCode};
 use serde_json::json;
+use uuid::Uuid;
 
 const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
+
+/// **Test only.** The dev Ed25519 *private* key, matched with
+/// `identity::DEV_PUBLIC_KEY_PEM` that `api` verifies against. The `api` *binary*
+/// never holds this — only the `auth` app signs — but the e2e must mint tokens to
+/// drive the resource server, so it signs them here directly (no running `auth`).
+const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
 
 /// A fresh database + booted app per test, so the tests are fully isolated and
 /// the database is reclaimed (RAII) when the returned guard drops at scope end.
@@ -33,27 +43,30 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
     (db, app)
 }
 
-/// Mint a bearer token through the real `POST /auth/login` issuer.
+/// Mint an admin bearer token for the default org.
 async fn login(app: &TestApp) -> String {
     token_for(app, ORG_ID, "admin").await
 }
 
-/// Mint a bearer token for a specific org and role.
-async fn token_for(app: &TestApp, org_id: &str, role: &str) -> String {
-    let resp = app
-        .http()
-        .post("/auth/login")
-        .body_json(&json!({ "org_id": org_id, "roles": [role] }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    resp.json()
-        .await
-        .value()
-        .object()
-        .get("access_token")
-        .string()
-        .to_owned()
+/// Mint a bearer token for a specific org and role — signed with the dev private
+/// key exactly as the `auth` app would, so `api` (verify-only, public key) accepts
+/// it. Async only to keep call sites unchanged; it does no I/O.
+async fn token_for(_app: &TestApp, org_id: &str, role: &str) -> String {
+    let jwt = JwtService::new(JwtOptions::eddsa(
+        DEV_PRIVATE_KEY,
+        identity::DEV_PUBLIC_KEY_PEM,
+    ))
+    .expect("the dev keypair parses");
+    let roles = match role {
+        "admin" => vec![Role::Admin],
+        _ => vec![Role::User],
+    };
+    jwt.sign(&Claims {
+        org_id: Uuid::parse_str(org_id).expect("valid org uuid"),
+        roles,
+        exp: jwt.expiry(),
+    })
+    .expect("sign the test token")
 }
 
 /// Create an org (creating one needs only a valid bearer, not a matching org) and
@@ -120,10 +133,6 @@ async fn openapi_document_describes_the_routes() {
         paths.get_opt("/users").is_some(),
         "OpenAPI paths include /users",
     );
-    assert!(
-        paths.get_opt("/auth/login").is_some(),
-        "OpenAPI paths include /auth/login",
-    );
 }
 
 #[tokio::test]
@@ -183,29 +192,6 @@ async fn create_org_persists_and_is_listed_with_a_bearer_token() {
         names.contains(&name.to_string()),
         "the freshly created org appears in the list: {names:?}",
     );
-}
-
-#[tokio::test]
-async fn login_is_rate_limited() {
-    let (_db, app) = boot().await;
-    let body = json!({ "org_id": ORG_ID, "roles": ["user"] });
-
-    // `#[meta(Throttle::per_minute(5))]` on the login route: the first 5 pass.
-    for _ in 0..5 {
-        app.http()
-            .post("/auth/login")
-            .body_json(&body)
-            .send()
-            .await
-            .assert_status_is_ok();
-    }
-    // The 6th within the window is rejected by the ThrottlerGuard.
-    app.http()
-        .post("/auth/login")
-        .body_json(&body)
-        .send()
-        .await
-        .assert_status(StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
@@ -620,12 +606,117 @@ async fn graphql_namesakes_field_stays_within_the_callers_org() {
 }
 
 #[tokio::test]
-async fn oauth_begin_redirects_to_the_provider_with_a_state_cookie() {
+async fn crud_generated_update_and_delete_round_trip() {
     let (_db, app) = boot().await;
-    // The OAuth guard challenges the initiating request with a 302 to the
-    // provider and sets the signed-transaction cookie — no network call needed.
-    let resp = app.http().get("/auth/oauth").send().await;
-    resp.assert_status(StatusCode::FOUND);
-    resp.assert_header_exist(header::LOCATION);
-    resp.assert_header_exist(header::SET_COOKIE);
+    let admin = format!("Bearer {}", token_for(&app, ORG_ID, "admin").await);
+
+    // `#[crud]` generated POST /orgs (create) ...
+    let id = create_org(&app, &admin, "Before").await;
+
+    // ... PATCH /orgs/:id (update) — the generated handler binds the row, applies
+    // `UpdateOrgInput`, and commits in the request transaction.
+    let patched = app
+        .http()
+        .patch(format!("/orgs/{id}"))
+        .header(header::AUTHORIZATION, &admin)
+        .body_json(&json!({ "name": "After" }))
+        .send()
+        .await;
+    patched.assert_status_is_ok();
+    assert_eq!(
+        patched.json().await.value().object().get("name").string(),
+        "After"
+    );
+
+    // GET /orgs/:id reflects the update.
+    let got = app
+        .http()
+        .get(format!("/orgs/{id}"))
+        .header(header::AUTHORIZATION, &admin)
+        .send()
+        .await;
+    got.assert_status_is_ok();
+    assert_eq!(
+        got.json().await.value().object().get("name").string(),
+        "After"
+    );
+
+    // DELETE /orgs/:id (generated) returns 204 ...
+    app.http()
+        .delete(format!("/orgs/{id}"))
+        .header(header::AUTHORIZATION, &admin)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // ... and the row is gone (Bind finds nothing → 404).
+    app.http()
+        .get(format!("/orgs/{id}"))
+        .header(header::AUTHORIZATION, &admin)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn crud_cursor_pagination_walks_the_collection_in_order() {
+    let (_db, app) = boot().await;
+    let admin = format!("Bearer {}", token_for(&app, ORG_ID, "admin").await);
+
+    // Five orgs, created in order — UUID-v7 ids sort chronologically, so the
+    // keyset pages come back in creation order.
+    let mut created = Vec::new();
+    for i in 0..5 {
+        created.push(create_org(&app, &admin, &format!("Page{i}")).await);
+    }
+
+    // Walk in pages of 2, following the cursor (each page's last id — exactly what
+    // the `x-next-cursor` header carries).
+    let mut seen: Vec<String> = Vec::new();
+    let mut after: Option<String> = None;
+    let mut first_page = true;
+    loop {
+        let path = match &after {
+            Some(cursor) => format!("/orgs?first=2&after={cursor}"),
+            None => "/orgs?first=2".to_string(),
+        };
+        let resp = app
+            .http()
+            .get(&path)
+            .header(header::AUTHORIZATION, &admin)
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        // The first page has more behind it, so it advertises the next cursor.
+        if first_page {
+            resp.assert_header_exist("x-next-cursor");
+            first_page = false;
+        }
+        let body = resp.json().await;
+        let page: Vec<String> = body
+            .value()
+            .array()
+            .iter()
+            .map(|o| o.object().get("id").string().to_owned())
+            .collect();
+        assert!(
+            page.len() <= 2,
+            "the page respects first=2: got {}",
+            page.len()
+        );
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().cloned();
+        seen.extend(page);
+        if seen.len() >= created.len() {
+            break;
+        }
+    }
+
+    assert_eq!(seen.len(), 5, "all five orgs are paged through: {seen:?}");
+    assert_eq!(
+        seen, created,
+        "keyset pages preserve ascending-id (chronological) order",
+    );
 }

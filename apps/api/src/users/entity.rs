@@ -16,10 +16,10 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub org_id: Uuid,
-    #[expose(input(create), validate(length(min = 1)))]
+    #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
     #[sea_orm(unique)]
-    #[expose(input(create), validate(email))]
+    #[expose(input(create, update), validate(email))]
     pub email: String,
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
     #[expose(skip)]

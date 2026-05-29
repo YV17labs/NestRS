@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 nestrs-core.workspace = true
+nestrs-config.workspace = true
 nestrs-queue.workspace = true
 nestrs-schedule.workspace = true
 # Headless: inherits the bare default (otlp), so no `http` feature → no poem.

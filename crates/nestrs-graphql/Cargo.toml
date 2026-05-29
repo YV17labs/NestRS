@@ -14,6 +14,10 @@ nestrs-graphql-macros.workspace = true
 # GraphQL on the HTTP transport. No cycle: nestrs-http does not depend on us.
 nestrs-http.workspace = true
 async-graphql.workspace = true
+# `ResolverGuard` is an async trait dispatched concretely from the `#[resolver]`
+# macro; boxed via `async-trait` like `nestrs-middleware`'s HTTP `Guard`, and
+# re-exported as `nestrs_graphql::async_trait` for implementors.
+async-trait.workspace = true
 # Re-exported so the GraphqlModule mount code can name the poem integration
 # through the framework, keeping it out of every app's manifest.
 async-graphql-poem.workspace = true

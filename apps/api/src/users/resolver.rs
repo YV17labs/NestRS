@@ -2,48 +2,43 @@ use std::sync::Arc;
 
 use async_graphql::dataloader::DataLoader;
 use async_graphql::{Context, Result};
-use nestrs_authz::{Create, Read};
-use nestrs_authz_graphql::{authorize, bind};
-use nestrs_graphql::resolver;
+use nestrs_authz::Create;
+use nestrs_authz_graphql::authorize;
+use nestrs_graphql::{crud, resolver};
 use uuid::Uuid;
 
-use crate::authn::AuthUser;
+use identity::Claims;
+
 use crate::orgs::entity::Org;
 use crate::orgs::service::OrgsServiceById;
-use crate::users::entity::{self, CreateUserInput, User};
+use crate::users::entity::{self, CreateUserInput, UpdateUserInput, User};
 use crate::users::service::{UsersService, UsersServiceByName};
 
+/// `#[crud]` generates the `users`/`user` queries and the `update_user`/
+/// `delete_user` mutations, all delegating to `UsersService` (the same gateway the
+/// REST controller uses). Only `create_user` is hand-written — like the
+/// controller's `create`, a user's `org_id` comes from the authenticated caller,
+/// never the GraphQL input — plus the `#[field]` relations, which `#[crud]` does
+/// not generate. The macro keeps all of these and adds the rest.
 #[resolver]
 pub struct UsersResolver {
     #[inject]
     users: Arc<UsersService>,
 }
 
-#[resolver]
+#[crud(
+    service = users,
+    entity = entity::Entity,
+    output = User,
+    create = CreateUserInput,
+    update = UpdateUserInput,
+)]
 impl UsersResolver {
-    #[query]
-    async fn users(&self, ctx: &Context<'_>) -> Result<Vec<User>> {
-        authorize::<Read, entity::Entity>(ctx)?;
-        // Scoped to the caller's org by the ambient ability — no filter by hand.
-        let rows = self.users.list().await?;
-        Ok(rows.iter().map(User::from).collect())
-    }
-
-    #[query]
-    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        // `bind` parses the id, loads the entity, and runs the instance check —
-        // the resolver analog of the controller's `Bind` parameter.
-        Ok(bind::<entity::Entity, Read>(ctx, &id)
-            .await?
-            .as_ref()
-            .map(User::from))
-    }
-
     #[mutation]
     async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {
         authorize::<Create, entity::Entity>(ctx)?;
-        let actor = ctx.data::<AuthUser>()?;
-        let row = self.users.create(input, actor.org_id).await?;
+        let actor = ctx.data::<Claims>()?;
+        let row = self.users.create_in_org(input, actor.org_id).await?;
         Ok(User::from(&row))
     }
 

@@ -30,8 +30,8 @@ The authoritative record of *what was decided and why* is
   (`#[use_guards(ThrottlerGuard)]`) reading an optional `#[meta(Throttle::...)]`
   override (the `@nestjs/throttler` `ThrottlerGuard` + `@Throttle` analog), backed
   by an in-memory fixed-window counter keyed by client IP; over-limit requests get
-  `429` + `Retry-After`. `ThrottlerModule::for_root` sets the default. `apps/api`
-  rate-limits `POST /auth/login`. A Redis-backed store for multi-process
+  `429` + `Retry-After`. `ThrottlerModule::for_root` sets the default. `apps/auth`
+  rate-limits its `POST /token` endpoint. A Redis-backed store for multi-process
   deployments is the remaining piece.
 - **Authentication** — `nestrs-auth`: a `JwtService` (sign/verify, the `@nestjs/jwt`
   analog) made injectable everywhere by `AuthModule::for_root`; a pluggable
@@ -40,8 +40,10 @@ The authoritative record of *what was decided and why* is
   authorize; and an `OAuth2Client` for the Authorization Code flow (PKCE, with the
   CSRF/PKCE state carried in a `JwtService`-signed cookie — no server-side
   session). One `Strategy` serves both bearer tokens and the redirect-based OAuth
-  handshake. `apps/api` demos a bearer login (`POST /auth/login`) and a
-  GitHub-style OAuth redirect (`GET /auth/oauth`).
+  handshake. `JwtService` also does asymmetric EdDSA (sign vs verify-only), which
+  splits issuance from verification across apps: `apps/auth` issues tokens (OAuth2
+  `POST /token` + the redirect flow, signing with the private key) and `apps/api`
+  is a pure resource server that only verifies them with the public key.
 - **Cron expressions** — `#[cron_job(cron = "0 */5 * * * *")]` (the `@Cron` analog),
   with `CronExpression` presets, an optional `tz` (IANA name, default UTC), and a
   one-shot `after = "10s"` (the `@Timeout` analog) joining the existing interval

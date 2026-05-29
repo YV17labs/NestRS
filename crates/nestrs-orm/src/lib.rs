@@ -27,13 +27,17 @@
 //! need no hand-threading) and every read is filtered by the caller's
 //! [`Ability`](nestrs_authz::Ability) (so row-level security cannot be forgotten).
 
-mod database;
 mod executor;
 mod interceptor;
+mod module;
+mod page;
 mod repo;
+mod service;
 
-pub use database::{DatabaseModule, DatabaseOptions, DatabaseSetup};
 pub use executor::{current_executor, with_executor, Executor};
+pub use module::{DatabaseModule, DatabaseOptions, DatabaseSetup};
+pub use page::{Page, PageParams};
 pub use repo::{scope_for, Repo};
+pub use service::{Access, CreateModel, CrudService, UpdateModel};
 
 pub(crate) use interceptor::DbContext;

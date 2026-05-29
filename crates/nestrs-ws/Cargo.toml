@@ -1,0 +1,26 @@
+[package]
+name = "nestrs-ws"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "WebSocket gateways for nestrs: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport, built on poem's WebSocket upgrade."
+
+[dependencies]
+nestrs-core.workspace = true
+# The gateway self-mounts as an HttpEndpointMeta (the upgrade is an HTTP GET),
+# so it rides the existing HTTP transport — reusing its guards, CORS, port and
+# TLS — rather than opening a second server.
+nestrs-http.workspace = true
+nestrs-middleware.workspace = true
+nestrs-ws-macros.workspace = true
+# `websocket` is a non-default poem feature; enabling it here turns it on for the
+# whole build (Cargo features are additive).
+poem = { workspace = true, features = ["websocket"] }
+serde = { workspace = true }
+serde_json.workspace = true
+async-trait.workspace = true
+# `StreamExt`/`SinkExt` to drive poem's `WebSocketStream` connection loop.
+futures-util.workspace = true
+tracing.workspace = true

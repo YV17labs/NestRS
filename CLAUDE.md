@@ -608,6 +608,50 @@ controller. Not yet built (deliberate, noted in the crate): query-param schemas,
 path-param *types* (emitted as `string`), security schemes, and a committed
 `openapi.json` snapshot emitted on boot like the GraphQL SDL (see "Done" below).
 
+## WebSocket gateways ride the HTTP transport, they are not a new one
+
+`nestrs-ws` is the real-time surface (the NestJS `@WebSocketGateway` analog), and
+the decision that shapes it is that **it is not a `Transport`**. A WebSocket
+upgrade *is* an HTTP `GET` with an `Upgrade` header — poem's `WebSocket` is a
+`FromRequest` extractor used inside an ordinary handler — so there is no separate
+"WebSocket server" to start. A `#[gateway]` therefore **self-mounts on the
+existing `HttpTransport`** the same way `GraphqlModule`/`OpenApiModule` do: its
+`Discoverable::register` attaches an `HttpEndpointMeta` whose mount closure builds
+the gateway from the container and nests a poem endpoint that performs the
+upgrade. The payoff is that a gateway inherits the transport's port, CORS and TLS
+for free, is discovered by being listed in `#[module(providers = [...])]`, and is
+governed by the boot-time access graph exactly like a controller — no new
+transport, no second port, no `main.rs` wiring. (A standalone `Transport` on its
+own port was considered and rejected: poem needs an HTTP server for the handshake
+regardless, so it would only duplicate the stack.)
+
+The macro pair mirrors `#[controller]` + `#[routes]`: `#[gateway(path = "/ws")]`
+on the struct emits construction (`from_container`, `PATH`) plus the
+connection-level guard layers; `#[messages]` on the impl block orchestrates the
+method-level `#[subscribe_message("event")]` attributes (inert, consumed and
+stripped like the HTTP verb attributes), emitting two impls — the `Gateway`
+per-connection **dispatcher** and the `Discoverable` that self-mounts. Messages
+ride one JSON envelope, `{ "event": "...", "data": ... }`: a handler's single
+owned parameter is deserialized from `data`, its return serialized back under the
+same event name, and a `()` return sends nothing. The gateway is built **once at
+mount** and shared across every connection (a NestJS gateway singleton); the
+dispatcher takes `&self`. The companion-crate rule holds — `nestrs-ws-macros`
+depends on no runtime crate and emits absolute paths, routing poem through
+`::nestrs_ws::poem::*` so a WebSocket-only app needs no direct poem dependency.
+
+Three boundaries are **deliberate** and load-bearing (named in the crate docs and
+the roadmap, so they don't read as oversights): guards bind at the **connection
+level** (run on the upgrade request), not per message; the connection loop runs in
+a task *after* the upgrade request completes, so the request scope, ORM executor
+and authz ability task-locals do **not** reach a handler (the same constraint a
+`#[dataloader]` batch has — a gateway handler injects `Arc<DatabaseConnection>`);
+and the first cut is **request/response only** — server→client broadcast and a
+connection registry (the `@WebSocketServer` analog, the piece SSE/subscriptions
+will reuse) are the next brick. `apps/chat` is the exemplar, with a real-socket
+end-to-end test in its `tests/e2e.rs` (the in-process `TestClient` cannot perform
+a real upgrade, so the test spawns the real `HttpTransport` headless and drives it
+with a `tokio-tungstenite` client).
+
 ## Naming rules — strict
 
 - Applications live under `apps/<name>/`. Not `examples/`, not `services/`.

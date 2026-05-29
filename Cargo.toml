@@ -67,6 +67,9 @@ poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
 # `futures-core` the `Stream` trait the wrapper implements.
 bytes = "1"
 futures-core = "0.3"
+# `StreamExt`/`SinkExt` for driving poem's `WebSocketStream` (a `Stream` + `Sink`)
+# in the WebSocket gateway connection loop (`nestrs-ws`).
+futures-util = "0.3"
 
 # Async traits (needed for `dyn Trait` containing async methods on Rust 1.75)
 async-trait = "0.1"
@@ -166,6 +169,8 @@ nestrs-schedule-macros = { path = "crates/nestrs-schedule-macros" }
 nestrs-server-timing = { path = "crates/nestrs-server-timing" }
 nestrs-telemetry = { path = "crates/nestrs-telemetry" }
 nestrs-testing = { path = "crates/nestrs-testing" }
+nestrs-ws = { path = "crates/nestrs-ws" }
+nestrs-ws-macros = { path = "crates/nestrs-ws-macros" }
 
 # Release: smallest, fastest binary. Compile time is not a concern here.
 [profile.release]

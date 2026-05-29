@@ -3,106 +3,14 @@
 NestRS is in **alpha** — the foundations are in place and the API still shifts.
 This is a *direction, not a dated commitment*; priorities move with what the
 community needs. The `Next —` sections below are ordered by **integration
-priority** — a WebSocket transport first, then correctness and parity work;
-`Later` holds what is explicitly deferred.
+priority** — finishing real-time, then correctness and parity work; `Later`
+holds what is explicitly deferred.
 
 Want to shape it? Open a
 [Discussion](https://github.com/NestRS/NestRS/discussions) or pick up a
 [`good first issue`](https://github.com/NestRS/NestRS/labels/good%20first%20issue).
 The authoritative record of *what was decided and why* is
 [CLAUDE.md](CLAUDE.md); this file tracks *what's next*.
-
-## Recently shipped
-
-- **TLS termination** — `HttpTransport::tls(TlsConfig)` serves HTTPS directly
-  (poem's `rustls` listener, no OpenSSL system dependency), and
-  `TlsConfig::from_env()` reads the framework `NESTRS_HTTP__TLS_*` keys (a PEM
-  inline, or a `*_FILE` path it loads) so a mesh / orchestrator injects the
-  certificate with no ceremony. It returns `None` when unset — the dev default
-  stays plaintext — so `main` opts in with one line only when the certs are
-  there. `apps/api` is wired this way. Certificate hot-reload on rotation is the
-  remaining follow-up.
-- **Transparent security, conversion & transactions** — the mission's hardest
-  promise, now built on one primitive: a request-scoped *data context* (two
-  `tokio` task-locals carrying the current DB executor and the caller's `Ability`).
-  A service queries through `Repo<E>` (`nestrs-orm`) — every call runs against the
-  ambient executor and every read is filtered by the caller's `condition_for`, so
-  **row-level security and transactions need no hand-written code**. An
-  auto-installed `DbContext` interceptor (just import `DatabaseModule`) makes the
-  executor ambient and wraps each mutating request in a transaction (commit on
-  2xx/3xx, roll back otherwise). The `Bind<E, A>` extractor is **route-model
-  binding** (path id → loaded, authorized entity, with `400`/`404`/`403`
-  short-circuits), and `Scope<E, A>` yields the row filter as an explicit argument.
-  `apps/api` is the exemplar — `UsersController::get` is a single `Bind` parameter
-  and `create` is transactional with no annotation. See *The data layer makes
-  security and transactions transparent* in [CLAUDE.md](CLAUDE.md).
-- **Rate limiting** — `nestrs-throttler`: a per-route `ThrottlerGuard`
-  (`#[use_guards(ThrottlerGuard)]`) reading an optional `#[meta(Throttle::...)]`
-  override (the `@nestjs/throttler` `ThrottlerGuard` + `@Throttle` analog), backed
-  by an in-memory fixed-window counter keyed by client IP; over-limit requests get
-  `429` + `Retry-After`. `ThrottlerModule::for_root` sets the default. `apps/auth`
-  rate-limits its `POST /token` endpoint. A Redis-backed store for multi-process
-  deployments is the remaining piece.
-- **Authentication** — `nestrs-auth`: a `JwtService` (sign/verify, the `@nestjs/jwt`
-  analog) made injectable everywhere by `AuthModule::for_root`; a pluggable
-  `Strategy` trait + the request-scoped `AuthGuard<S>` (the `AuthGuard('jwt')`
-  analog) that establishes the caller and attaches it for `nestrs-authz` to
-  authorize; and an `OAuth2Client` for the Authorization Code flow (PKCE, with the
-  CSRF/PKCE state carried in a `JwtService`-signed cookie — no server-side
-  session). One `Strategy` serves both bearer tokens and the redirect-based OAuth
-  handshake. `JwtService` also does asymmetric EdDSA (sign vs verify-only), which
-  splits issuance from verification across apps: `apps/auth` issues tokens (OAuth2
-  `POST /token` + the redirect flow, signing with the private key) and `apps/api`
-  is a pure resource server that only verifies them with the public key.
-- **Cron expressions** — `#[cron_job(cron = "0 */5 * * * *")]` (the `@Cron` analog),
-  with `CronExpression` presets, an optional `tz` (IANA name, default UTC), and a
-  one-shot `after = "10s"` (the `@Timeout` analog) joining the existing interval
-  `every` (the `@Interval` analog). Parsed by `croner` over `chrono`; a literal is
-  validated at compile time, a preset and any timezone at boot.
-- **Request-scoped providers** — `#[injectable(scope = request)]` builds a fresh,
-  per-request-cached instance (the `Scope.REQUEST` analog), resolved over HTTP via
-  the `Scoped<T>` extractor.
-- **Resource pagination** — `#[expose(paginate)]` emits a `<Name>Page` envelope and
-  the shared `PageArgs` input, serving GraphQL and OpenAPI alike.
-- **URI API versioning** — `#[controller(version = "1")]` mounts a controller
-  under `/v1` (one source of truth for the served path, the boot log, and the
-  OpenAPI document).
-- **Middleware at all three levels** — guards, exception filters, and interceptors
-  now bind globally, **per controller** (on the struct), and **per handler** (beside
-  the verb), mirroring NestJS's `@UseGuards` / `@UseFilters` / `@UseInterceptors` at
-  each level. `#[use_interceptors(...)]` is the newest: a bindable interceptor is a
-  plain `#[injectable] + impl Interceptor` resolved from the container per route
-  (the global `#[interceptor]` auto-discovery stays for infrastructure — a DB
-  transaction context, tracing — that must wrap everything). Route- and
-  controller-level order follows the NestJS lifecycle: a guard runs before an
-  interceptor, a filter wraps both.
-- **`nestrs-testing` + an e2e per app** — the in-process harness boots the real
-  DI graph and drives its surfaces inside `cargo test`, with provider overrides
-  for mocking (the `Test.createTestingModule` analog). It now also boots
-  **headless** for non-HTTP transports (the queue worker) and ships fixtures: an
-  ephemeral, migrated Postgres database and the telemetry boot guard. Every
-  example app ships an end-to-end test.
-- **Richer boot diagnostics** — the DI graph names the offending provider and the
-  missing dependency, distinguishes a missing provider from a dependency cycle,
-  and rejects a non-`Arc` `#[inject]` at compile time.
-- **Per-handler metadata + `Reflector`** — `#[meta(...)]` on a handler, read back
-  by a guard via `nestrs_http::Reflector` (the `@Roles` / `@SetMetadata` analog).
-- **GraphQL authorization** — `nestrs-authz-graphql` gates resolvers with the
-  request-scoped `Ability`, carried into the GraphQL context by the generic
-  `GraphqlAbilityBridge<A, G>` — parameterised by the app's auth + ability guards
-  and bound with a one-line module, so the same guard chain as REST runs on
-  `/graphql` (`nestrs-graphql` exposes the authz-agnostic `OperationGuard` seam it
-  implements).
-- **CORS** — `HttpTransport::cors(...)` (the `app.enableCors` analog).
-- **Optional dependencies** — `#[inject] Option<Arc<T>>` (the `@Optional` analog),
-  resolved leniently and independent of `providers = [...]` order.
-- **Config validation** — `nestrs_config::load_validated` runs a config type's
-  `validator` rules at startup, so a malformed environment fails fast.
-- **Events** — `nestrs-events`: a typed in-process event bus and an
-  `#[event_handler]` decorator (the `@nestjs/event-emitter` analog), wired at
-  application bootstrap from the assembled container.
-- **Telemetry fail-fast** — importing `TelemetryModule` without `Telemetry::init`
-  now fails at boot rather than dropping traces and metrics silently.
 
 ## Now — stabilising the alpha
 
@@ -113,24 +21,35 @@ The authoritative record of *what was decided and why* is
   figure is the remaining one to publish.
 - Fill in crate-level docs and grow the `apps/` examples.
 
-## Next — real-time: a WebSocket transport
+## Next — real-time: completing the WebSocket gateway
 
-**The next transport to build** — the other surfaces (SSE, gRPC, federation) are
-explicitly *not* a priority and sit under *Later*. A WebSocket surface in the
-discovery model's shape: a `#[gateway]` / `#[subscribe_message]` analog of
-`@WebSocketGateway` / `@SubscribeMessage`, gateways discovered and mounted like
-controllers and sharing the same guards and DI, built on poem's WebSocket upgrade.
-Server-Sent Events and GraphQL subscriptions can later reuse the same
-per-connection plumbing, but WebSocket leads.
+The gateway itself now ships — request/response message
+handling, discovered and self-mounted on the HTTP transport, sharing controller
+DI and connection-level guards. What remains builds on that base, and is the
+plumbing Server-Sent Events and GraphQL subscriptions will reuse:
+
+- **Server→client broadcast & a connection registry** — the `@WebSocketServer`
+  analog: a handle that tracks live connections (and rooms) so a handler — or a
+  service reacting to an event — can push to clients beyond the one that spoke.
+  This is the largest remaining piece and the one SSE/subscriptions reuse.
+- **Per-message guards & lifecycle hooks** — guards bind at the connection level
+  today (on the upgrade); a per-message guard seam plus `OnGatewayConnection` /
+  `OnGatewayDisconnect` hooks would match the rest of the NestJS surface.
+- **An ambient data context in the socket task** — the connection loop runs
+  *after* the upgrade request completes, so the request scope, ORM executor and
+  authz ability task-locals don't reach a handler (the same constraint a
+  `#[dataloader]` batch has). A transport-agnostic installer (see *extending the
+  transparent data layer*) would let a gateway handler use `Repo` like a
+  controller.
 
 ## Next — extending the transparent data layer
 
-The transparent data context (see *Recently shipped*) covers HTTP today. What
+The transparent data context covers HTTP today. What
 remains builds on the same primitive:
 
 - **Scoped dataloaders** — GraphQL is already authorized the same as REST (the
   generic `GraphqlAbilityBridge<A, G>` runs the guard chain on `/graphql` and
-  installs the ambient ability — see *Recently shipped*), so resolver `Repo` reads
+  installs the ambient ability), so resolver `Repo` reads
   filter by org. The remaining gap is the loaders: a `#[dataloader]` batch runs
   *off* the request task, so the ambient ability never reaches it — a field-relation
   loader read is **unscoped** and must be confined by hand today (e.g. filtering to
@@ -187,28 +106,31 @@ These are known, deliberate omissions called out in the code today:
 - **OpenAPI** — query-parameter schemas, real path-parameter *types* (emitted as
   `string` for now), security schemes, and a committed `openapi.json` snapshot
   written on boot (mirroring how the GraphQL SDL is committed).
-- **Dependency-injection scopes** — request scope already ships (see above); what
+- **Dependency-injection scopes** — request scope already ships; what
   remains is a `transient` scope (fresh per resolution), request-scoped →
   request-scoped dependencies (the model is one level deep over singletons today),
   and bridging the scope into the GraphQL and MCP request paths (which carry
   per-request state through their own context / DataLoaders for now).
-- **`nestrs-resource`** — pagination already ships (see above). Relations are
+- **`nestrs-resource`** — pagination already ships. Relations are
   *not* auto-generated by design — a related field is a hand-written `#[field]`
   resolver backed by a `#[dataloader]` on the data layer (the framework's batched,
   N+1-free pattern), since the loader belongs to the service, not the entity. An
   enum column passes through as long as it derives the surface traits
   (async-graphql `Enum` + `schemars::JsonSchema`); a first-class `#[expose]` enum
   mode is the remaining gap.
-- **API versioning strategies** — URI versioning already ships (see above);
+- **API versioning strategies** — URI versioning already ships;
   header- and media-type-based selection (NestJS's other `VersioningType`s, which
   need request-time dispatch) are not yet built.
+- **TLS certificate hot-reload** — `HttpTransport::tls` loads the certificate
+  once at boot; rotating it on renewal needs a restart today. Watching the PEM
+  source and swapping the `rustls` config live would close it.
 
 ## Next — feature parity with NestJS
 
 These are NestJS building blocks an app still has to hand-roll. Listed because
 they are *load-bearing for real use*, not for completeness — each maps to a known
 NestJS name and earns its place. (Authentication and rate limiting, formerly the
-standout gaps here, now ship — see *Recently shipped*.) The verdict on what is
+standout gaps here, now ship.) The verdict on what is
 **not** worth reproducing is in *Not on the roadmap* below.
 
 - **Redis-backed rate-limit store** — `nestrs-throttler` ships with an in-memory
@@ -262,12 +184,11 @@ split would make impossible.
 
 ## Later — exploring
 
-Not current priorities — WebSocket, the one wanted transport, is promoted to
-*Next* above; these follow only when an example app genuinely needs them.
+Not current priorities — WebSocket, the one wanted transport, now ships; these follow only when an example app genuinely needs them.
 
 - **Server-Sent Events & GraphQL subscriptions** — `@Sse` and a real subscription
-  root (`EmptySubscription` today); both reuse the WebSocket transport's
-  per-connection plumbing once it exists.
+  root (`EmptySubscription` today); both reuse the WebSocket gateway's
+  per-connection plumbing once the broadcast/registry piece above lands.
 - **gRPC** and other request/response transports, as the discovery model proves out.
 - GraphQL **federation**, and the dedicated schema tooling it would reintroduce.
 

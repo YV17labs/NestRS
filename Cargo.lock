@@ -804,6 +804,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "chat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "nestrs-core",
+ "nestrs-health",
+ "nestrs-http",
+ "nestrs-telemetry",
+ "nestrs-testing",
+ "nestrs-ws",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2937,6 +2956,32 @@ dependencies = [
  "nestrs-core",
  "nestrs-http",
  "poem",
+]
+
+[[package]]
+name = "nestrs-ws"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "nestrs-core",
+ "nestrs-http",
+ "nestrs-middleware",
+ "nestrs-ws-macros",
+ "poem",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "nestrs-ws-macros"
+version = "0.1.0"
+dependencies = [
+ "nestrs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

@@ -451,6 +451,17 @@ full producer → queue → consumer loop with `#[cron_job]` and `#[processor]`.
 Importing no HTTP crate, the binary never compiles the poem stack — a genuinely
 lean headless build.
 
+### `chat` — Real-time WebSocket gateway (port 3005)
+
+Started with `just dev chat`. A WebSocket chat room declared like a controller:
+`#[gateway(path = "/ws")]` on the struct and `#[messages]` on its impl block,
+with each `#[subscribe_message("event")]` method handling a JSON envelope
+`{ "event": "...", "data": ... }`. Because a WebSocket upgrade is an HTTP `GET`,
+the gateway self-mounts on the HTTP transport — no second server, no `main.rs`
+wiring — and shares controller DI and guards. Connect any WebSocket client to
+`ws://localhost:3005/ws` and send `{"event":"message","data":{"author":"ada",
+"text":"hi"}}`; its `tests/e2e.rs` drives the full round-trip over a real socket.
+
 ## Docker
 
 A multi-stage [`Dockerfile`](Dockerfile) at the repo root builds **every

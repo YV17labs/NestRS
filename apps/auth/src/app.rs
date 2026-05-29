@@ -23,7 +23,7 @@ const DEV_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2Vw
             token_url: "https://github.com/login/oauth/access_token".into(),
             userinfo_url: "https://api.github.com/user".into(),
             redirect_url: env_var("OAUTH_REDIRECT_URL")
-                .unwrap_or_else(|| "http://localhost:3003/callback".into()),
+                .unwrap_or_else(|| "http://localhost:3002/callback".into()),
             scopes: vec!["read:user".into()],
         }),
         ThrottlerModule::for_root(Throttle::per_minute(60)),

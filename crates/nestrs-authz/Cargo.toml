@@ -17,3 +17,9 @@ serde.workspace = true
 serde_json.workspace = true
 # The ambient request `Ability` is carried in a `tokio::task_local!`.
 tokio.workspace = true
+
+[dev-dependencies]
+# `tests/ability.rs` builds a throwaway SeaORM entity and renders
+# `condition_for` to SQL; the masking tests serialize a model via serde.
+sea-orm.workspace = true
+serde.workspace = true

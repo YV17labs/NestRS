@@ -31,29 +31,15 @@
 //! these types.
 
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{parse_macro_input, ItemStruct};
 
+mod active;
 mod attr;
 mod dto;
+mod expose;
 mod input;
 
 /// Expose a SeaORM entity to GraphQL + OpenAPI. See the crate docs for grammar.
 #[proc_macro_attribute]
 pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
-    let mut item = parse_macro_input!(item as ItemStruct);
-    let model = match attr::parse(args.into(), &mut item) {
-        Ok(model) => model,
-        Err(err) => return err.to_compile_error().into(),
-    };
-
-    let output = dto::emit(&model);
-    let inputs = input::emit(&model);
-
-    quote! {
-        #item
-        #output
-        #inputs
-    }
-    .into()
+    expose::expose(args, item)
 }

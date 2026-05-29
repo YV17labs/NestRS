@@ -10,13 +10,4 @@ pub mod seed;
 
 mod migrations;
 
-pub use migrations::Migrator;
-
-/// Apply every pending migration to `conn` — the programmatic form of the
-/// `migrate up` binary. Lets a test harness bring a throwaway database up to the
-/// current schema before booting an app against it.
-pub async fn migrate(conn: &sea_orm::DatabaseConnection) -> anyhow::Result<()> {
-    use sea_orm_migration::MigratorTrait;
-    Migrator::up(conn, None).await?;
-    Ok(())
-}
+pub use migrations::{migrate, Migrator};

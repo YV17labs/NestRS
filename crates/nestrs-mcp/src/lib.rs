@@ -1,7 +1,6 @@
-use std::sync::Arc;
+mod endpoint;
 
-use poem::endpoint::TowerCompatExt;
-use poem::IntoEndpoint;
+pub use endpoint::endpoint;
 
 pub use rmcp::handler::server::router::tool::ToolRouter;
 pub use rmcp::handler::server::wrapper::Parameters;
@@ -16,18 +15,3 @@ pub use rmcp::transport::streamable_http_server::{
 /// The `#[mcp]` decorator, defined in `nestrs-mcp-macros` and surfaced here so
 /// apps write `nestrs_mcp::mcp`.
 pub use nestrs_mcp_macros::mcp;
-
-/// The factory runs on every new MCP session, so per-session state in the
-/// returned handler is fresh.
-pub fn endpoint<F, H>(factory: F) -> impl IntoEndpoint
-where
-    F: Fn() -> H + Send + Sync + 'static,
-    H: ServerHandler + Send + 'static,
-{
-    let service = StreamableHttpService::new(
-        move || Ok(factory()),
-        Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
-    );
-    service.compat()
-}

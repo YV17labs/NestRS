@@ -18,6 +18,9 @@ pub struct ResourceField {
     pub skip: bool,
     pub in_create: bool,
     pub in_update: bool,
+    /// The `#[sea_orm(primary_key)]` column — the generated `create` conversion
+    /// seeds it with a fresh UUID v7 when its type is `Uuid`.
+    pub is_pk: bool,
     /// Raw `validate(...)` bodies, re-emitted verbatim on the input field.
     pub validate: Vec<TokenStream2>,
 }
@@ -94,6 +97,23 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
         let mut in_update = false;
         let mut validate = Vec::new();
 
+        // Detect the primary key from the (untouched) `#[sea_orm(...)]` attrs, so
+        // the generated `create` conversion can seed a UUID-v7 id. Each name-value
+        // meta's value is consumed so SeaORM grammar like `from = "col"` parses;
+        // errors are ignored — a column we cannot read just is not flagged as PK.
+        let mut is_pk = false;
+        for attr in field.attrs.iter().filter(|a| a.path().is_ident("sea_orm")) {
+            let _ = attr.parse_nested_meta(|m| {
+                if m.path.is_ident("primary_key") {
+                    is_pk = true;
+                }
+                if m.input.peek(Token![=]) {
+                    let _: syn::Expr = m.value()?.parse()?;
+                }
+                Ok(())
+            });
+        }
+
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("expose")) {
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("skip") {
@@ -140,6 +160,7 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
             skip,
             in_create,
             in_update,
+            is_pk,
             validate,
         });
     }

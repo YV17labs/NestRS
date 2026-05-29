@@ -37,11 +37,13 @@
 //! registered for the event type, in registration order, each with its own clone.
 
 mod bus;
+mod handler;
+mod meta;
 mod module;
 
-use nestrs_core::Container;
-
 pub use bus::EventBus;
+pub use handler::EventHandler;
+pub use meta::EventHandlerMeta;
 pub use module::EventModule;
 
 pub use nestrs_events_macros::event_handler;
@@ -51,26 +53,3 @@ pub use nestrs_events_macros::event_handler;
 // `async_trait` dependency — and so the handler future is boxed `Send`, which the
 // bus requires.
 pub use async_trait::async_trait;
-
-/// Handles events of type [`Event`](EventHandler::Event). Implemented on an
-/// `#[event_handler]` struct; the [`EventBus`] builds the struct from the
-/// container at bootstrap and calls [`handle`](EventHandler::handle) for every
-/// matching [`emit`](EventBus::emit).
-#[async_trait]
-pub trait EventHandler: Send + Sync + 'static {
-    /// The event type this handler reacts to.
-    type Event: Clone + Send + 'static;
-
-    async fn handle(&self, event: Self::Event);
-}
-
-/// Discovery metadata attached by `#[event_handler]`. [`EventModule`]'s bootstrap
-/// hook reads these via `DiscoveryService::meta::<EventHandlerMeta>()` from the
-/// assembled container and runs each [`wire`](EventHandlerMeta::wire) to build the
-/// handler and subscribe it to the bus. Fields are `pub` only so generated code
-/// can build it.
-pub struct EventHandlerMeta {
-    pub name: &'static str,
-    /// Build the handler from the container and subscribe it to the bus.
-    pub wire: fn(&Container, &EventBus),
-}

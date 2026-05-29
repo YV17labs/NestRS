@@ -18,3 +18,8 @@ anyhow.workspace = true
 tokio.workspace = true
 # Fake data for the seeder factories (see `seed::factories`).
 fake.workspace = true
+
+[dev-dependencies]
+# `orm` provides the throwaway-Postgres `EphemeralDatabase`, which migrates with
+# this crate's own `Migrator` — the same harness the apps' e2e tests use.
+nestrs-testing = { workspace = true, features = ["orm"] }

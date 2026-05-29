@@ -2,7 +2,9 @@
 
 NestRS is in **alpha** — the foundations are in place and the API still shifts.
 This is a *direction, not a dated commitment*; priorities move with what the
-community needs.
+community needs. The `Next —` sections below are ordered by **integration
+priority** — TLS first, then a WebSocket transport, then correctness and parity
+work; `Later` holds what is explicitly deferred.
 
 Want to shape it? Open a
 [Discussion](https://github.com/NestRS/NestRS/discussions) or pick up a
@@ -54,10 +56,18 @@ The authoritative record of *what was decided and why* is
   the `Scoped<T>` extractor.
 - **Resource pagination** — `#[expose(paginate)]` emits a `<Name>Page` envelope and
   the shared `PageArgs` input, serving GraphQL and OpenAPI alike.
-- **URI API versioning & per-route filters** — `#[controller(version = "1")]`
-  mounts a controller under `/v1` (one source of truth for the served path, the
-  boot log, and the OpenAPI document); `#[use_filters(...)]` binds exception
-  filters to a single route (the `@UseFilters` analog).
+- **URI API versioning** — `#[controller(version = "1")]` mounts a controller
+  under `/v1` (one source of truth for the served path, the boot log, and the
+  OpenAPI document).
+- **Middleware at all three levels** — guards, exception filters, and interceptors
+  now bind globally, **per controller** (on the struct), and **per handler** (beside
+  the verb), mirroring NestJS's `@UseGuards` / `@UseFilters` / `@UseInterceptors` at
+  each level. `#[use_interceptors(...)]` is the newest: a bindable interceptor is a
+  plain `#[injectable] + impl Interceptor` resolved from the container per route
+  (the global `#[interceptor]` auto-discovery stays for infrastructure — a DB
+  transaction context, tracing — that must wrap everything). Route- and
+  controller-level order follows the NestJS lifecycle: a guard runs before an
+  interceptor, a filter wraps both.
 - **`nestrs-testing` + an e2e per app** — the in-process harness boots the real
   DI graph and drives its surfaces inside `cargo test`, with provider overrides
   for mocking (the `Test.createTestingModule` analog). It now also boots
@@ -70,8 +80,11 @@ The authoritative record of *what was decided and why* is
 - **Per-handler metadata + `Reflector`** — `#[meta(...)]` on a handler, read back
   by a guard via `nestrs_http::Reflector` (the `@Roles` / `@SetMetadata` analog).
 - **GraphQL authorization** — `nestrs-authz-graphql` gates resolvers with the
-  request-scoped `Ability`, carried into the GraphQL context by a per-request
-  bridge in `nestrs-graphql`.
+  request-scoped `Ability`, carried into the GraphQL context by the generic
+  `GraphqlAbilityBridge<A, G>` — parameterised by the app's auth + ability guards
+  and bound with a one-line module, so the same guard chain as REST runs on
+  `/graphql` (`nestrs-graphql` exposes the authz-agnostic `OperationGuard` seam it
+  implements).
 - **CORS** — `HttpTransport::cors(...)` (the `app.enableCors` analog).
 - **Optional dependencies** — `#[inject] Option<Arc<T>>` (the `@Optional` analog),
   resolved leniently and independent of `providers = [...]` order.
@@ -87,10 +100,97 @@ The authoritative record of *what was decided and why* is
 
 - Settle the public API of the core crates so early adopters stop chasing
   breaking changes.
-- **Published benchmarks** — reproducible throughput and memory numbers now ship
-  in the README (the `app` example versus an equivalent NestJS service); cold-start
-  numbers are still to follow.
+- **Cold-start benchmark** — throughput and memory numbers already ship in the
+  README (the `app` example versus an equivalent NestJS service); the cold-start
+  figure is the remaining one to publish.
 - Fill in crate-level docs and grow the `apps/` examples.
+
+## Next — TLS, configurable from `main`
+
+**The highest priority.** Terminate TLS at the transport, configured where the app
+is composed. In a container (Kubernetes, a service mesh) the certificate and key
+are *injected* — mounted as files or passed as environment variables — so the
+framework must pick them up with no ceremony, and **stay plaintext when none are
+provided** (the dev default, so nothing breaks without a cert).
+
+- `HttpTransport::tls(TlsConfig)`, plus a `TlsConfig::from_env()` that reads the
+  conventional `TLS_CERT` / `TLS_KEY` (a PEM inline, or a `*_FILE` path it loads)
+  and returns `None` when unset — so `main` opts in with one line only when the
+  certs are actually there, and serves plain HTTP otherwise.
+- Built on **`rustls`** (no OpenSSL system dependency, keeping the
+  single-static-binary promise), reusing poem's rustls listener — no new
+  app-facing dependency.
+- Certificate **hot-reload** on rotation is a follow-up, not the first cut.
+
+This is what a zero-trust / mesh deployment needs (serve HTTPS directly), and it
+also covers the simpler "TLS-terminating ingress in front" case for free.
+
+## Next — real-time: a WebSocket transport
+
+**The next transport to build** — the other surfaces (SSE, gRPC, federation) are
+explicitly *not* a priority and sit under *Later*. A WebSocket surface in the
+discovery model's shape: a `#[gateway]` / `#[subscribe_message]` analog of
+`@WebSocketGateway` / `@SubscribeMessage`, gateways discovered and mounted like
+controllers and sharing the same guards and DI, built on poem's WebSocket upgrade.
+Server-Sent Events and GraphQL subscriptions can later reuse the same
+per-connection plumbing, but WebSocket leads.
+
+## Next — extending the transparent data layer
+
+The transparent data context (see *Recently shipped*) covers HTTP today. What
+remains builds on the same primitive:
+
+- **Scoped dataloaders** — GraphQL is already authorized the same as REST (the
+  generic `GraphqlAbilityBridge<A, G>` runs the guard chain on `/graphql` and
+  installs the ambient ability — see *Recently shipped*), so resolver `Repo` reads
+  filter by org. The remaining gap is the loaders: a `#[dataloader]` batch runs
+  *off* the request task, so the ambient ability never reaches it — a field-relation
+  loader read is **unscoped** and must be confined by hand today (e.g. filtering to
+  the parent's org). Threading the request ability into the per-request loaders
+  would close it — the one place row-level security still leans on developer
+  discipline.
+- **Ability-scoped writes** — `Repo` auto-scopes *reads*; an update/delete could
+  likewise gate its `WHERE` on `condition_for(Update/Delete)`, so a caller cannot
+  mutate a row outside its scope even by id.
+- **A request executor for non-HTTP transports** — the `DbContext` interceptor binds
+  the executor to an HTTP request; a queue job or cron tick has no ambient executor,
+  so those paths still inject `Arc<DatabaseConnection>`. A transport-agnostic
+  installer would extend `Repo` (and per-job transactions) to the worker surfaces.
+
+## Next — hardening the guarantees
+
+The framework's promises — transparent security, a DI graph checked at boot,
+declarative wiring — hold today but lean on developer discipline at a few seams.
+Closing these is what makes the guarantees *airtight*, which is the real edge over
+a framework that only **documents** the same concerns.
+
+- **Transaction-escape safety** — the auto-transaction commits by reclaiming the
+  request's `Arc<DatabaseTransaction>` with `Arc::try_unwrap`; if a handler leaks
+  the executor to a spawned task, the unwrap fails and the request **rolls back on
+  a 2xx** — a success response with nothing persisted (logged, but not surfaced to
+  the caller). Detect the escape explicitly, so the failure mode is a loud error,
+  not silent data loss.
+- **A total access contract** — the boot-time access graph governs `#[inject]`
+  dependencies, but three declarative seams sit outside it: a `#[use_guards]` /
+  `#[use_filters]` / `#[use_interceptors]` reference resolves from the container at
+  mount (an unregistered one panics at boot instead of raising the named
+  `AccessGraphError` everything else gets), and `#[resolver]` injection is unchecked.
+  Bringing the attribute-referenced layers and the resolver layer under the same
+  check turns the last "panic / discipline" cases into the same boot diagnostic.
+- **Insulate the GraphQL schema composition** — the self-composing schema reads
+  async-graphql's public-but-internal `registry` API. It is guarded by tests, but a
+  thin adapter (one place that breaks, behind a pinned-version compile guard) would
+  keep an async-graphql bump from rippling through the crate.
+- **Keyed / multi-instance providers** — the flat container keys by type, so a
+  second instance of a type (two `OAuth2Client`s, for GitHub *and* Google) needs a
+  hand-written newtype today. A keyed registration (`provide_keyed`) would let one
+  type back several named instances without the ceremony.
+- **Compile-time guardrails for the stringly-typed seams** — a queue name is a
+  string shared between the producer and its `#[processor]`, and a dataloader's
+  generated loader type (`UsersServiceByName`) is found by naming convention; a typo
+  surfaces at runtime or as a cryptic type error. Typed queue handles and a clearer
+  loader-type surface would move both to compile time (a guard-order lint — authn
+  before authz — is the same class of guardrail).
 
 ## Next — the documented gaps
 
@@ -139,29 +239,6 @@ standout gaps here, now ship — see *Recently shipped*.) The verdict on what is
   `string`. Documenting security schemes becomes the highest-value fix once auth
   lands.
 
-## Next — extending the transparent data layer
-
-The transparent data context (see *Recently shipped*) covers HTTP today. What
-remains builds on the same primitive:
-
-- **A reusable GraphQL auth bridge + scoped dataloaders** — `apps/api` already
-  scopes GraphQL the same as REST: a `GraphqlAuth` interceptor runs the guard chain
-  on `/graphql` and installs the ambient ability, so resolver `Repo` reads filter by
-  org and `authorize::<A, S>(ctx)` gates each resolver. Two gaps remain. First, that
-  bridge is hand-wired per app; a generic `GraphqlAuth<S, F>` (parameterized by the
-  app's `Strategy` + `AbilityFactory`, like `AuthGuard<S>`) would move it into the
-  framework. Second, a `#[dataloader]` batch runs off the request task, so the
-  ambient ability never reaches it — a field-relation loader read is unscoped and
-  must be confined by hand today (e.g. filtering to the parent's org). Threading the
-  request ability into the per-request loaders would close that.
-- **Ability-scoped writes** — `Repo` auto-scopes *reads*; an update/delete could
-  likewise gate its `WHERE` on `condition_for(Update/Delete)`, so a caller cannot
-  mutate a row outside its scope even by id.
-- **A request executor for non-HTTP transports** — the `DbContext` interceptor binds
-  the executor to an HTTP request; a queue job or cron tick has no ambient executor,
-  so those paths still inject `Arc<DatabaseConnection>`. A transport-agnostic
-  installer would extend `Repo` (and per-job transactions) to the worker surfaces.
-
 ## Next — project & release infrastructure
 
 None of this exists yet; it is what turns the workspace into a project others can
@@ -197,12 +274,14 @@ split would make impossible.
 
 ## Later — exploring
 
-- **Real-time surface** — WebSocket gateways (the `@WebSocketGateway` /
-  `@SubscribeMessage` analog), Server-Sent Events (`@Sse`), and GraphQL
-  subscriptions (`EmptySubscription` today). One transport effort; built when an
-  example app genuinely needs it, not speculatively.
+Not current priorities — WebSocket, the one wanted transport, is promoted to
+*Next* above; these follow only when an example app genuinely needs them.
+
+- **Server-Sent Events & GraphQL subscriptions** — `@Sse` and a real subscription
+  root (`EmptySubscription` today); both reuse the WebSocket transport's
+  per-connection plumbing once it exists.
+- **gRPC** and other request/response transports, as the discovery model proves out.
 - GraphQL **federation**, and the dedicated schema tooling it would reintroduce.
-- More transports and surfaces as the discovery model proves out.
 
 ## Not on the roadmap
 

@@ -35,7 +35,13 @@
   `#[resolver]`, `#[processor]` — features are wired with attribute macros, not
   hand-written boilerplate.
 - 🛡️ **Verified before it serves.** The DI graph is wired by macros and checked at
-  boot — no reflection, no runtime surprises.
+  boot — a module can inject only what its imports reach (a compile-time
+  encapsulation boundary NestJS's runtime `exports` can't enforce), with no
+  reflection and no runtime surprises.
+- 🔐 **Security & transactions, transparent.** A service queries through `Repo`
+  against an ambient, request-scoped data context — so every read is filtered to
+  the caller's permissions and a mutating request runs in a transaction, with no
+  hand-written authorization filter or transaction code.
 - 📦 **Batteries included.** HTTP, GraphQL, OpenAPI, MCP, Redis-backed queues,
   scheduling, an event bus, CASL-style authorization, health probes,
   OpenTelemetry and an in-process test harness — each an opt-in crate, so you
@@ -210,7 +216,7 @@ NestRS is a **Cargo workspace** — one repository holding many crates, built an
 versioned together. Two kinds of member live in it:
 
 - **Applications** under [`apps/`](apps/) — each is a binary crate you run and
-  deploy on its own (`api`, `app`, `mcp`, `worker`). One repository, several
+  deploy on its own (`api`, `app`, `auth`, `mcp`, `worker`). One repository, several
   independently shippable services.
 - **Libraries** under [`crates/`](crates/) — ordinary library crates of reusable
   code. The framework itself ships this way (`nestrs-core`, `nestrs-http`,
@@ -222,6 +228,7 @@ nestrs/
 ├─ apps/            applications — one runnable binary each
 │  ├─ api/          REST + GraphQL, persisted & authorized
 │  ├─ app/          minimal HTTP baseline
+│  ├─ auth/         OAuth2 / JWT token issuer
 │  ├─ db/           shared-database migrations & seeding (CLI)
 │  ├─ mcp/          Model Context Protocol server
 │  └─ worker/       background jobs & scheduling (headless)
@@ -269,9 +276,9 @@ can export only macros) with shared codegen in `nestrs-codegen`; these are
 internal plumbing, re-exported by the crates above and never depended on directly.
 
 Most of the table runs in the example apps today, and every app ships an
-end-to-end test built on `nestrs-testing`; a couple of newer crates
-(`nestrs-events`, `nestrs-authz-graphql`) ship with their own tests but are not
-yet wired into an example app — doing so is a good first contribution. The rough edges and deliberately-deferred gaps (cron expressions,
+end-to-end test built on `nestrs-testing`; `nestrs-events` ships with its own
+tests but is not yet wired into an example app — doing so is a good first
+contribution. The rough edges and deliberately-deferred gaps (cron expressions,
 OpenAPI security schemes, GraphQL federation) are tracked in the open
 [roadmap](ROADMAP.md) — nothing here is a hidden TODO.
 
@@ -291,16 +298,17 @@ setup on any machine with Docker and a devcontainer-aware editor.
 That is the whole setup. The container provisions the Rust toolchain and the dev
 tooling (`just`, `bacon`, `cargo-nextest`, …), and brings up **Postgres** and
 **Redis** beside it with `DATABASE_URL` / `REDIS_URL` already pointed at them.
-`worker` then runs as-is; `api` needs its schema applied once first — `just db up`
-(or `just db reset` to also load demo data). Ports 3001–3003 are forwarded to the
-host.
+`app`, `auth`, and `mcp` run as-is; `api` needs its schema applied once first —
+`just db up` (or `just db reset` to also load demo data) — and `worker` needs
+Redis. Ports 3001–3004 are forwarded to the host.
 
 Then start an app in watch mode:
 
 ```bash
 just dev          # the bare `app` baseline on :3001
-just dev api      # REST + GraphQL on :3002
-just dev mcp      # MCP server on :3003
+just dev auth     # OAuth2 / JWT token issuer on :3002
+just dev api      # REST + GraphQL on :3003
+just dev mcp      # MCP server on :3004
 just dev worker   # background jobs & scheduling (headless)
 ```
 
@@ -327,7 +335,8 @@ rustup component add llvm-tools-preview
 | [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) | Source-based test coverage (uses LLVM, plays well with nextest) |
 
 The `api` app needs Postgres and the `worker` needs Redis; run your own and
-export `DATABASE_URL` / `REDIS_URL` (the `app` and `mcp` binaries need neither).
+export `DATABASE_URL` / `REDIS_URL` (the `app`, `auth`, and `mcp` binaries need
+neither).
 
 ## Commands
 
@@ -355,14 +364,18 @@ to list the verbs) manages the shared Postgres schema and seed data.
 
 The crates under `apps/` are **examples**, not products — each is a different
 *kind* of application, there to show that several can share one workspace and the
-same building blocks. They will grow over time.
+same building blocks. `auth` and `api` go one step further: together they
+demonstrate the **split-by-responsibility** pattern — a dedicated token issuer and
+a pure resource server that trust the same self-contained JWT and share the
+`identity` crate, never calling each other. They will grow over time.
 
 | App | Kind | Port |
 |-----|------|------|
 | `app` | Minimal HTTP baseline | 3001 |
-| `api` | REST + GraphQL, persisted & authorized | 3002 |
+| `auth` | OAuth2 / JWT token issuer | 3002 |
+| `api` | REST + GraphQL, persisted & authorized | 3003 |
 | `db` | Shared-database migrations & seeding (CLI) | — |
-| `mcp` | Model Context Protocol server | 3003 |
+| `mcp` | Model Context Protocol server | 3004 |
 | `worker` | Background jobs & scheduling (headless) | — |
 
 ### `app` — Minimal HTTP endpoint (port 3001)
@@ -371,12 +384,23 @@ Started with `just dev app`. A single `GET /` returning `Hello World` on
 `http://0.0.0.0:3001`, kept deliberately bare — no health, telemetry, or
 middleware — as a baseline for benchmarking the framework's request path.
 
-### `api` — REST + GraphQL, persisted and authorized (port 3002)
+### `auth` — OAuth2 / JWT token issuer (port 3002)
+
+Started with `just dev auth`. A dedicated authorization server: it runs the OAuth2
+Authorization Code flow (`GET /authorize` → provider, `GET /callback`) and issues
+EdDSA-signed JWTs from its token endpoint (`POST /token`), rate-limited via
+`nestrs-throttler`. It holds the **private** signing key; `api` holds only the
+matching public key and verifies tokens locally, so the two never call each
+other — they share the `identity` crate (the `Claims` / `Role` contract) and a
+self-contained JWT, nothing more. It needs no database: signing keys come from the
+environment (with dev defaults) and the OAuth provider defaults to GitHub.
+
+### `api` — REST + GraphQL, persisted and authorized (port 3003)
 
 Started with `just dev api`; persists to Postgres via SeaORM, so it needs a
 `DATABASE_URL` (boot aborts with a clear message if it is unset). The schema is
 applied by the `db` app, not the running service — run `just db up` once first
-(or `just db reset` to also load demo users). Listens on `http://0.0.0.0:3002`:
+(or `just db reset` to also load demo users). Listens on `http://0.0.0.0:3003`:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -408,7 +432,7 @@ single app rather than any one service. It ships two binaries — `migrate`
 seed. Both binaries ship in the container image alongside the apps, so the same
 image migrates and serves.
 
-### `mcp` — Model Context Protocol server (port 3003)
+### `mcp` — Model Context Protocol server (port 3004)
 
 Started with `just dev mcp`. A Streamable-HTTP MCP server (`rmcp`-backed) whose
 tools are declared like controllers — `#[mcp]` handles DI and mounts the
@@ -416,7 +440,7 @@ server, then `#[tool_router]` / `#[tool]` / `#[tool_handler]` define the tools.
 The bundled `current_weather`
 tool queries the [Open-Meteo](https://open-meteo.com) public API, with
 `validator` bounds on its GPS params. Point any MCP client (Claude Desktop,
-Cursor, …) at `http://localhost:3003/mcp`.
+Cursor, …) at `http://localhost:3004/mcp`.
 
 ### `worker` — Background jobs & scheduling (headless)
 
@@ -439,11 +463,14 @@ docker build -t nestrs .
 # Run the default app (the `app` baseline) on port 3001
 docker run --rm -p 3001:3001 nestrs
 
-# Run the api app on port 3002
-docker run --rm -p 3002:3002 nestrs /usr/local/bin/api
+# Run the auth app on port 3002
+docker run --rm -p 3002:3002 nestrs /usr/local/bin/auth
 
-# Run the mcp app on port 3003
-docker run --rm -p 3003:3003 nestrs /usr/local/bin/mcp
+# Run the api app on port 3003
+docker run --rm -p 3003:3003 nestrs /usr/local/bin/api
+
+# Run the mcp app on port 3004
+docker run --rm -p 3004:3004 nestrs /usr/local/bin/mcp
 
 # Apply migrations (and optionally seed) with the same image
 docker run --rm nestrs /usr/local/bin/migrate up

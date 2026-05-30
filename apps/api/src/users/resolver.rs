@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_graphql::dataloader::DataLoader;
 use async_graphql::{Context, Result};
-use nestrs_authz::Create;
-use nestrs_authz_graphql::authorize;
+use nestrs_authz::{Create, Read};
+use nestrs_authz_graphql::{authorize, bind};
 use nestrs_graphql::{crud, resolver};
 use uuid::Uuid;
 
@@ -36,6 +36,14 @@ impl UsersResolver {
         Ok(User::from(&row))
     }
 
+    #[query]
+    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
+        Ok(bind::<UsersService, Read>(ctx, &id)
+            .await?
+            .as_ref()
+            .map(User::from))
+    }
+
     #[field]
     async fn org(&self, parent: &User, by_id: &DataLoader<OrgsServiceById>) -> Result<Option<Org>> {
         let id = Uuid::parse_str(&parent.org_id)?;
@@ -54,7 +62,7 @@ impl UsersResolver {
             .unwrap_or_default();
         Ok(same_name
             .into_iter()
-            .filter(|u| u.id != parent.id && u.org_id == parent.org_id)
+            .filter(|u| u.id != parent.id)
             .collect())
     }
 }

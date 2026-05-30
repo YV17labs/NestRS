@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use nestrs_authz::Create;
-use nestrs_authz_http::Authorize;
+use nestrs_authz::{Create, Read};
+use nestrs_authz_http::{Authorize, Bind};
 use nestrs_http::{controller, crud, Ctx, Valid};
 use poem::http::StatusCode;
 use poem::web::Json;
@@ -50,5 +50,16 @@ impl UsersController {
                 Error::from_string(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
             })?;
         Ok(Json(User::from(&row)))
+    }
+
+    #[get("/:id")]
+    #[api(
+        summary = "Get a user in the caller's org by id",
+        description = "The id is bound to the loaded, authorized user through the \
+                       service — a row outside the caller's scope is 403, absent 404.",
+        tags("User")
+    )]
+    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+        Json(User::from(&*user))
     }
 }

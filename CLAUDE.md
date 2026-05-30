@@ -410,14 +410,36 @@ one level deep). The two task-locals are:
   or a transaction.
 - the **ability** (`nestrs-authz`'s ambient `Arc<Ability>`, read by `current_ability`).
 
+**Every data access goes through a service, and a service reaches the database
+only through `Repo`.** This is a hard invariant, not a convention: the service
+(`CrudService`, `nestrs-orm`) is the entity's API *and* the single audited choke
+point per entity — controllers, resolvers, gateways and dataloaders delegate to it,
+and **never touch `Repo` or the ORM directly** themselves. `CrudService` carries
+default `list`/`page`/`access`/`create`/`update`/`delete` methods, each expressed
+through `Repo` and each emitting a `nestrs::orm` tracing span (a denial in `access`
+logs at `warn`), so there is exactly one place per entity to secure and audit, and
+no DB touch escapes the log. `#[crud]` (HTTP and GraphQL) routes every generated
+handler through these methods; an `#[injectable]` service that needs `Repo` (a custom
+query, a dataloader batch) uses it *inside* the service, which is the gateway — the
+prohibition is on the *transport* layers reaching past the service, not on the
+service using `Repo`. **By-id route-model binding goes through the gateway too**:
+`Bind`/`bind` are generic over the *service* `S` and delegate to
+`CrudService::access` (the load + instance authorization that distinguishes a
+denied-but-existing `403` from a missing `404`), so a binding emits the same
+`nestrs::orm` audit span — a denial through `Bind` logs at `warn` like any other.
+
 A service queries through **`Repo<E>`** (`nestrs-orm`) instead of holding a
 connection: every call runs against the ambient executor (so it joins the request's
 transaction with nothing threaded through), and every *read* is filtered by
 `condition_for` from the ambient ability (so a feature cannot forget to scope its
 reads — with no ambient ability the filter is `TRUE`, i.e. unscoped). `Repo` requires
-an ambient executor and errors otherwise; a non-request context (a dataloader's
-keyed batch, a shutdown hook) keeps an injected `Arc<DatabaseConnection>` and queries
-it directly. Writes take the ambient executor with `Repo::<E>::conn()`.
+an ambient executor and errors otherwise. A request-scoped path always has one: HTTP
+and WebSocket install it, and a `#[dataloader]` batch — though it runs on a spawned
+task — has it re-installed by `LoaderScope` (see the dataloader-scoping note above),
+so a loader queries through `Repo` like any service method. A genuinely non-request
+context (a shutdown hook, a cron tick, a queue job) has no ambient executor and keeps
+an injected `Arc<DatabaseConnection>` it queries directly. Writes take the ambient
+executor with `Repo::<E>::conn()`.
 
 The two task-locals are installed at **different depths**, dictated by when each
 value exists:
@@ -441,11 +463,14 @@ value exists:
 
 Two HTTP extractors (`nestrs-authz-http`) hand the handler a ready argument:
 
-- **`Bind<E, A>`** — route-model binding: parse the path id (UUID v7 → `400`), load
-  the row through the ambient executor (`404` if absent), instance-check the caller's
-  ability (`403` if denied — existence is *not* hidden, matching the gate), else hand
-  over the loaded `E::Model`. It is an *extractor*, not a `Pipe`, because loading needs
-  the DB. A route using `Bind` must also bind an `AbilityGuard` (it reads the ability).
+- **`Bind<S, A>`** — route-model binding: parse the path id (UUID v7 → `400`),
+  resolve the entity's service `S` from the request scope and load + authorize through
+  `CrudService::access` (`404` if absent, `403` if the caller's ability denies it —
+  existence is *not* hidden, matching the gate), else hand over the loaded
+  `<S::Entity>::Model`. It is an *extractor*, not a `Pipe`, because loading needs the
+  DB; it is generic over the service (not the entity) precisely so the load stays on
+  the audited gateway. A route using `Bind` must also bind an `AbilityGuard` (it reads
+  the ability the guard attached, and installs it ambient for the `access` call).
 - **`Scope<E, A>`** — the explicit, Tier-1 counterpart to `Repo`'s transparent
   scoping: yields the `condition_for` `Condition` as an argument, for a handler that
   builds its own query.
@@ -473,12 +498,25 @@ module (`apps/api`'s `AuthzGraphqlModule`: `GraphqlAbilityBridge<AuthGuard,
 AppAbilityGuard> as dyn OperationGuard`), keeping only the actor-forwarding
 `ContextSeed` (its principal type is app-specific). Each resolver still gates with
 `nestrs_authz_graphql::authorize::<A, S>(ctx)` (no token → no ambient ability →
-`FORBIDDEN`). **The one gotcha:** a `#[dataloader]` batch runs
-*off the request task*, so the ambient ability (and executor) do **not** reach it —
-a field resolver's loader read is unscoped, and a cross-org field must be confined
-another way (e.g. `UsersResolver::namesakes` filters to the parent's org, which is
-already in the caller's scope). Scoping the loaders themselves is still open (see
-the roadmap).
+`FORBIDDEN`). **Dataloaders are scoped through the same family of seams.** A
+`#[dataloader]` batch runs *off the request task* — async-graphql spawns it so
+concurrent `load_one`s collapse into one query, and a spawned task starts with
+empty task-local storage, so the ambient ability and executor an HTTP request
+installs do **not** propagate into it (the same constraint a WebSocket message
+dispatch has). So `nestrs-graphql` exposes one more authz/orm-agnostic seam,
+**`BatchContext`** (the spawner the macro hands every per-request `DataLoader`,
+resolved via `get_dyn`): its `spawner` is built *while the loader is — inside the
+operation's `with_ability` scope*, so it snapshots the live ability there and
+returns a spawner that re-establishes it (plus a **pool** executor — never the
+request's transaction, since a batch runs concurrently off-task and reclaiming the
+txn `Arc` would race the auto-commit, exactly the WebSocket reasoning) around every
+batch future. `nestrs-authz-graphql`'s **`LoaderScope`** implements it, bound by
+listing `LoaderScope as dyn BatchContext`. So a loader's `Repo` reads scope to the
+caller transparently — `apps/api`'s `by_name`/`by_org` loaders query through
+`Repo::<Users>::scoped(Read)` with no hand-written org filter, and `namesakes`
+relies on that automatic scoping (a DB-backed cross-org e2e proves the other org's
+rows never reach the batch). With no `BatchContext` bound, loaders spawn bare on
+`tokio::spawn` and run unscoped — correct for an app without row-level security.
 
 ## Scheduling is the first concern proved out as its own crate
 

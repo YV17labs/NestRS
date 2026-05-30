@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
     ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait, IntoActiveModel,
-    ModelTrait, PrimaryKeyTrait,
+    PrimaryKeyTrait,
 };
 
 use nestrs_authz::{current_ability, Action};
@@ -131,26 +131,45 @@ where
         Ok(model)
     }
 
-    /// Apply an update-input DTO to a loaded row, in the request transaction.
+    /// Apply an update-input DTO to a loaded row, in the request transaction. The
+    /// write is ability-scoped by [`Repo::update`]: a row outside the caller's
+    /// scope is never touched and surfaces as [`DbErr::RecordNotUpdated`] (logged
+    /// at `warn`), so a caller cannot mutate by id past its scope even if it
+    /// reached this method with a row loaded some other way.
     async fn update(
         &self,
         model: <Self::Entity as EntityTrait>::Model,
         input: Self::Update,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
-        let conn = Repo::<Self::Entity>::conn()?;
-        let updated = input
-            .apply_to(model.into_active_model())
-            .update(&conn)
-            .await?;
-        tracing::info!(target: "nestrs::orm", entity = Self::entity_name(), "row updated");
-        Ok(updated)
+        let entity = Self::entity_name();
+        let active = input.apply_to(model.into_active_model());
+        match Repo::<Self::Entity>::update(active).await {
+            Ok(updated) => {
+                tracing::info!(target: "nestrs::orm", entity, "row updated");
+                Ok(updated)
+            }
+            Err(DbErr::RecordNotUpdated) => {
+                tracing::warn!(target: "nestrs::orm", entity, "update denied — row outside the caller's scope");
+                Err(DbErr::RecordNotUpdated)
+            }
+            Err(err) => Err(err),
+        }
     }
 
-    /// Delete a loaded row, in the request transaction.
+    /// Delete a loaded row, in the request transaction. The write is ability-scoped
+    /// by [`Repo::delete`]: a row outside the caller's scope is not deleted, which
+    /// surfaces as a zero-row result mapped to [`DbErr::RecordNotFound`] (logged at
+    /// `warn`) so a caller cannot delete by id past its scope.
     async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), DbErr> {
-        let conn = Repo::<Self::Entity>::conn()?;
-        model.delete(&conn).await?;
-        tracing::info!(target: "nestrs::orm", entity = Self::entity_name(), "row deleted");
+        let entity = Self::entity_name();
+        let result = Repo::<Self::Entity>::delete(model).await?;
+        if result.rows_affected == 0 {
+            tracing::warn!(target: "nestrs::orm", entity, "delete denied — row outside the caller's scope");
+            return Err(DbErr::RecordNotFound(format!(
+                "{entity} row not found or outside the caller's scope"
+            )));
+        }
+        tracing::info!(target: "nestrs::orm", entity, "row deleted");
         Ok(())
     }
 }

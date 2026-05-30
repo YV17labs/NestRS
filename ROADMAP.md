@@ -82,9 +82,16 @@ and WebSocket today. What remains builds on the same primitive:
   Bound by listing `LoaderScope as dyn BatchContext`; `apps/api` is the exemplar
   (a DB-backed cross-org `namesakes` e2e proves the other org's rows never reach the
   batch).
-- **Ability-scoped writes** — `Repo` auto-scopes *reads*; an update/delete could
-  likewise gate its `WHERE` on `condition_for(Update/Delete)`, so a caller cannot
-  mutate a row outside its scope even by id.
+- **Ability-scoped writes** — *shipped*. `Repo` auto-scopes *reads*; now
+  [`Repo::update`]/[`Repo::delete`] gate their `WHERE` on
+  `condition_for(Update/Delete)` on top of the primary key, so a caller cannot
+  mutate or delete a row outside its scope even by id — the scope-excluded write
+  touches nothing and surfaces as `RecordNotUpdated` / a zero-row result (both
+  logged at `warn`). `CrudService::update`/`delete` route through them, so every
+  surface (REST, GraphQL, gateways) inherits the gate transparently; it is defense
+  in depth behind the `access` class gate, catching any path that reaches a write
+  with a row loaded out-of-scope. `apps/api` proves it with a direct-`Repo`
+  cross-org e2e (the row survives both attempts).
 - **A request executor for non-HTTP transports** — the `DbContext` interceptor binds
   the executor to an HTTP request, and `nestrs-authz-ws`'s `SocketContext` bridge now
   binds it (and the ability) for a WebSocket message; a queue job or cron tick still

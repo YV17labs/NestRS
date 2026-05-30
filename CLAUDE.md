@@ -430,16 +430,23 @@ denied-but-existing `403` from a missing `404`), so a binding emits the same
 
 A service queries through **`Repo<E>`** (`nestrs-orm`) instead of holding a
 connection: every call runs against the ambient executor (so it joins the request's
-transaction with nothing threaded through), and every *read* is filtered by
-`condition_for` from the ambient ability (so a feature cannot forget to scope its
-reads — with no ambient ability the filter is `TRUE`, i.e. unscoped). `Repo` requires
-an ambient executor and errors otherwise. A request-scoped path always has one: HTTP
-and WebSocket install it, and a `#[dataloader]` batch — though it runs on a spawned
-task — has it re-installed by `LoaderScope` (see the dataloader-scoping note above),
-so a loader queries through `Repo` like any service method. A genuinely non-request
-context (a shutdown hook, a cron tick, a queue job) has no ambient executor and keeps
-an injected `Arc<DatabaseConnection>` it queries directly. Writes take the ambient
-executor with `Repo::<E>::conn()`.
+transaction with nothing threaded through), and both *reads* **and** the by-id
+*writes* are filtered by `condition_for` from the ambient ability (so a feature
+cannot forget to scope what the caller may touch — with no ambient ability the filter
+is `TRUE`, i.e. unscoped). A read filters on `condition_for(Read)`; `Repo::update`/
+`Repo::delete` carry `condition_for(Update/Delete)` *on top of the primary key*, so a
+row outside the caller's scope is never mutated or deleted even by id — the
+scope-excluded write touches nothing and surfaces as `RecordNotUpdated` / a zero-row
+result (both logged at `warn`). This is defense in depth behind the `access` class
+gate: any path that reaches a write with a row loaded out-of-scope (a custom service
+method, a resolver, a `Read`-scoped binding then updated) is still caught at the SQL
+`WHERE`. `Repo` requires an ambient executor and errors otherwise. A request-scoped
+path always has one: HTTP and WebSocket install it, and a `#[dataloader]` batch —
+though it runs on a spawned task — has it re-installed by `LoaderScope` (see the
+dataloader-scoping note above), so a loader queries through `Repo` like any service
+method. A genuinely non-request context (a shutdown hook, a cron tick, a queue job)
+has no ambient executor and keeps an injected `Arc<DatabaseConnection>` it queries
+directly. A custom query takes the ambient executor with `Repo::<E>::conn()`.
 
 The two task-locals are installed at **different depths**, dictated by when each
 value exists:

@@ -1,12 +1,16 @@
+use std::sync::Arc;
+
 use api::AppModule;
 use futures_util::{SinkExt, StreamExt};
 use identity::{Claims, Role};
 use nestrs_auth::{JwtOptions, JwtService};
+use nestrs_authz::{with_ability, AbilityBuilder, Action};
 use nestrs_http::HttpTransport;
+use nestrs_orm::{with_executor, Executor, Repo};
 use nestrs_testing::{EphemeralDatabase, TestApp};
 use poem::http::{header, StatusCode};
 use sea_orm::sea_query::Query;
-use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden, EntityTrait, IntoActiveModel, Set};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION as WS_AUTHORIZATION;
@@ -236,6 +240,145 @@ async fn users_are_scoped_to_their_org_and_bound_by_id() {
         got.json().await.value().object().get("name").string(),
         "Ada"
     );
+}
+
+// A throwaway entity over the real `user` table, so the direct-`Repo` part of the
+// write-scoping test can build an ability and query without reaching into the
+// app's private `users` module.
+mod user_row {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "user")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub org_id: Uuid,
+        pub name: String,
+        pub email: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[tokio::test]
+async fn writes_are_scoped_to_the_callers_ability() {
+    let (db, app) = boot().await;
+
+    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org_a = create_org(&app, &bootstrap, "Acme Writes").await;
+    let org_b = create_org(&app, &bootstrap, "Globex Writes").await;
+    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
+    let token_b = format!("Bearer {}", token_for(&org_b, "admin").await);
+    let org_b_id = Uuid::parse_str(&org_b).expect("valid org uuid");
+
+    let created = app
+        .http()
+        .post("/users")
+        .header(header::AUTHORIZATION, &token_a)
+        .body_json(&json!({ "name": "Ada", "email": "ada-writes@acme.test" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+    let user_a = created
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+    let user_a_id = Uuid::parse_str(&user_a).expect("valid user uuid");
+
+    // Happy path: the owning org updates its own user (scoped write succeeds).
+    let patched = app
+        .http()
+        .patch(format!("/users/{user_a}"))
+        .header(header::AUTHORIZATION, &token_a)
+        .body_json(&json!({ "name": "Ada L.", "email": "ada-writes@acme.test" }))
+        .send()
+        .await;
+    patched.assert_status_is_ok();
+    assert_eq!(
+        patched.json().await.value().object().get("name").string(),
+        "Ada L."
+    );
+
+    // Cross-org over HTTP: the access gate rejects a foreign org by id (403).
+    app.http()
+        .patch(format!("/users/{user_a}"))
+        .header(header::AUTHORIZATION, &token_b)
+        .body_json(&json!({ "name": "Hijacked", "email": "ada-writes@acme.test" }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    app.http()
+        .delete(format!("/users/{user_a}"))
+        .header(header::AUTHORIZATION, &token_b)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // Defense in depth: even reaching `Repo` directly with a row loaded outside the
+    // ability's scope, the scoped write touches nothing — the `WHERE` carries
+    // `condition_for(Update/Delete)` on top of the primary key.
+    let conn = db.connection();
+    let blocked = Arc::new({
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Manage, user_row::Entity)
+            .when(move |p| p.eq(user_row::Column::OrgId, org_b_id));
+        b.build()
+    });
+    let (update, delete) = with_executor(
+        Executor::Pool(conn.clone()),
+        with_ability(blocked, async move {
+            let model = user_row::Entity::find_by_id(user_a_id)
+                .one(&*conn)
+                .await
+                .expect("load user A directly")
+                .expect("user A exists");
+            let mut active = model.clone().into_active_model();
+            active.name = Set("Hacked".to_owned());
+            let update = Repo::<user_row::Entity>::update(active).await;
+            let delete = Repo::<user_row::Entity>::delete(model).await;
+            (update, delete)
+        }),
+    )
+    .await;
+    assert!(
+        matches!(update, Err(sea_orm::DbErr::RecordNotUpdated)),
+        "an out-of-scope update touches no row: {update:?}",
+    );
+    let delete = delete.expect("a delete query runs");
+    assert_eq!(
+        delete.rows_affected, 0,
+        "an out-of-scope delete removes no row",
+    );
+
+    // The row survived both attempts, with its owning-org update intact.
+    let survivor = user_row::Entity::find_by_id(user_a_id)
+        .one(&*db.connection())
+        .await
+        .expect("re-read user A")
+        .expect("user A still exists");
+    assert_eq!(survivor.name, "Ada L.", "the row was never mutated");
+
+    // And the owning org can still delete it (scoped write happy path).
+    app.http()
+        .delete(format!("/users/{user_a}"))
+        .header(header::AUTHORIZATION, &token_a)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    app.http()
+        .get(format!("/users/{user_a}"))
+        .header(header::AUTHORIZATION, &token_a)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

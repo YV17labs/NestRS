@@ -9,20 +9,26 @@
 //!   is open. The service never threads a transaction handle.
 //! - **Row-level security** — every *read* is filtered by the caller's
 //!   [`Ability`](nestrs_authz::Ability) (`condition_for`), read from the ambient
-//!   request ability. A feature cannot forget to scope its reads to what the
-//!   caller may see; with no ambient ability the filter is the SQL identity
-//!   (`TRUE`), so non-request and unauthenticated paths read unscoped.
+//!   request ability, and a [`update`](Repo::update)/[`delete`](Repo::delete) is
+//!   gated the same way: its `WHERE` carries `condition_for(Update/Delete)` on top
+//!   of the primary key, so a caller cannot mutate a row outside its scope even by
+//!   id. A feature cannot forget to scope its reads or writes to what the caller
+//!   may touch; with no ambient ability the filter is the SQL identity (`TRUE`), so
+//!   non-request and unauthenticated paths run unscoped.
 //!
 //! `Repo` requires an ambient executor (the [`DbContext`](crate::DbContext)
 //! interceptor installs it per request); a call outside that scope errors rather
-//! than silently reaching a connection it does not have. For a write or a custom
-//! query, take the ambient executor with [`Repo::conn`] and drive SeaORM directly.
+//! than silently reaching a connection it does not have. For a custom query, take
+//! the ambient executor with [`Repo::conn`] and drive SeaORM directly.
 
 use std::marker::PhantomData;
 
 use nestrs_authz::{current_ability, Action};
 use sea_orm::sea_query::Condition;
-use sea_orm::{DbErr, EntityTrait, PrimaryKeyTrait, QueryFilter, Select};
+use sea_orm::{
+    ActiveModelTrait, DbErr, Delete, DeleteResult, EntityTrait, IntoActiveModel, PrimaryKeyTrait,
+    QueryFilter, Select, Update,
+};
 
 use crate::executor::{current_executor, Executor};
 
@@ -80,5 +86,43 @@ impl<E: EntityTrait> Repo<E> {
     /// `Repo::<E>::scoped(Action::Update).all(&Repo::<E>::conn()?)`.
     pub fn scoped(action: Action) -> Select<E> {
         E::find().filter(scope_for::<E>(action))
+    }
+
+    /// Update a row from its `ActiveModel`, gated by the caller's ability: the
+    /// write's `WHERE` carries [`condition_for(Update)`](nestrs_authz::Ability::condition_for)
+    /// on top of the primary key, so a row outside the caller's scope is never
+    /// touched. When the scope excludes the row the call errors
+    /// [`DbErr::RecordNotUpdated`] — a caller cannot mutate by id past its scope.
+    /// Runs against the ambient executor (the request transaction).
+    pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
+    where
+        A: ActiveModelTrait<Entity = E> + Send,
+        E::Model: IntoActiveModel<A>,
+    {
+        let conn = Self::conn()?;
+        Update::one(active)
+            .validate()?
+            .filter(scope_for::<E>(Action::Update))
+            .exec(&conn)
+            .await
+    }
+
+    /// Delete a row, gated by the caller's ability: the write's `WHERE` carries
+    /// [`condition_for(Delete)`](nestrs_authz::Ability::condition_for) on top of
+    /// the primary key, so a row outside the caller's scope is not deleted. The
+    /// returned [`DeleteResult::rows_affected`] is `0` when the scope (or the row's
+    /// absence) excluded it — the caller decides whether that is a denial. Runs
+    /// against the ambient executor (the request transaction).
+    pub async fn delete<A, M>(model: M) -> Result<DeleteResult, DbErr>
+    where
+        A: ActiveModelTrait<Entity = E> + Send,
+        M: IntoActiveModel<A> + Send,
+    {
+        let conn = Self::conn()?;
+        Delete::one(model)
+            .validate()?
+            .filter(scope_for::<E>(Action::Delete))
+            .exec(&conn)
+            .await
     }
 }

@@ -195,18 +195,28 @@ neither owns, imports transitively, nor receives as **global** infrastructure
 register-phase ordering and is empty for a provider built later from the
 assembled container (a controller, MCP tool, cron job, processor), while
 `injected` reports the `#[inject]` keys regardless of build timing — so the
-contract governs transport-built logic too. **Every provider in `providers =
-[...]` is checked** (`#[injectable]`, `#[interceptor]`, guards, `#[cron_job]`,
-`#[processor]`, `#[controller]`, `#[mcp]`); the lone exception is `#[resolver]`,
-which self-composes via the GraphQL registry and belongs to no module. Dynamic
-(`for_root`) imports are not graph edges: they contribute only global infra or
-self-mounted metadata. The contract has **two deliberate boundaries**, named in
-`access.rs` so they don't read as total coverage: `#[resolver]` injection is
-unchecked (resolvers belong to no module — keep them thin, delegate to
-module-registered services that *are* checked), and runtime `Container::get`/
-`get_dyn` is an unchecked escape hatch (the `ModuleRef.get()` analog — a flat
-container resolves by `TypeId` with no caller identity). The contract binds the
-*declarative* `#[inject]` surface, not imperative resolution.
+contract governs transport-built logic too. `injected` also reports a provider's
+**attribute-referenced layers** — the guards/filters/interceptors a controller or
+gateway binds with `#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`, at
+both the struct and per-route/per-message scope. Each is container-resolved at
+mount (`Container::get::<P>`) exactly like an `#[inject]` field, so the macros fold
+its `TypeId` into `injected` and the same check governs it: a layer registered in a
+module the consumer does not import fails the boot with the named `AccessGraphError`
+rather than resolving silently through the flat container (the cross-module
+encapsulation breach a `#[use_guards]` reference used to slip through). **Every
+provider in `providers = [...]` is checked** (`#[injectable]`, `#[interceptor]`,
+guards, `#[cron_job]`, `#[processor]`, `#[controller]`, `#[mcp]`); the lone
+exception is `#[resolver]`, which self-composes via the GraphQL registry and
+belongs to no module. Dynamic (`for_root`) imports are not graph edges: they
+contribute only global infra or self-mounted metadata. The contract has **two
+deliberate boundaries**, named in `access.rs` so they don't read as total coverage:
+`#[resolver]` injection is unchecked (resolvers belong to no module — keep them
+thin, delegate to module-registered services that *are* checked; bringing the
+resolver layer under the contract is the remaining half of the access-contract
+work), and runtime `Container::get`/`get_dyn` is an unchecked escape hatch (the
+`ModuleRef.get()` analog — a flat container resolves by `TypeId` with no caller
+identity). The contract binds the *declarative* surface (`#[inject]` and the
+attribute-bound layers), not imperative resolution.
 
 ## Discovery is struct-level by default
 

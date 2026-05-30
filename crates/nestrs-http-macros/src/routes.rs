@@ -11,7 +11,10 @@ use syn::{
     Token, Type,
 };
 
-use nestrs_codegen::{forwarded_arg_idents, impl_self_ident, nth_generic_type};
+use nestrs_codegen::{
+    forwarded_arg_idents, impl_self_ident, injected_method_with_layers, layer_inject_keys,
+    nth_generic_type,
+};
 
 use crate::attr::{expr_str, opt_str, take_use_attr};
 
@@ -228,6 +231,23 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         });
     }
 
+    // Per-route guards / filters / interceptors fold into the controller's
+    // access-graph dependencies: each is container-resolved at mount, so a layer
+    // registered in a non-imported module must fail the boot with the same
+    // `AccessGraphError` an out-of-reach `#[inject]` gets — not be resolved
+    // silently through the flat container. Combined here (across every handler)
+    // with the controller-level layers `#[controller]` already folded into
+    // `__nestrs_injected`.
+    let route_layer_keys = layer_inject_keys(
+        routes_by_path
+            .iter()
+            .flat_map(|(_, handlers)| handlers.iter())
+            .flat_map(|(_, _, guards, filters, interceptors, _, _)| {
+                guards.iter().chain(filters).chain(interceptors)
+            }),
+    );
+    let injected_method = injected_method_with_layers(&self_ty, &route_layer_keys);
+
     // One `.at(path, RouteMethod)` per path: the first verb opens the
     // `RouteMethod`, the rest chain onto it (`get(h1).post(h2)`).
     let route_entries: Vec<TokenStream2> = routes_by_path
@@ -286,12 +306,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl ::nestrs_core::Discoverable for #self_ty {
             // The controller is built at mount time, so `dependencies` (register
-            // ordering) stays empty; `injected` reports its `#[inject]` keys for
-            // the access-graph check, read from the inherent
-            // fn `#[controller]` emits.
-            fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
-                <#self_ty>::__nestrs_injected()
-            }
+            // ordering) stays empty; `injected` reports its `#[inject]` keys *and*
+            // every container-resolved layer (controller-level, from the inherent
+            // fn `#[controller]` emits, plus the per-route guards/filters/
+            // interceptors gathered here) for the access-graph check.
+            #injected_method
 
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,

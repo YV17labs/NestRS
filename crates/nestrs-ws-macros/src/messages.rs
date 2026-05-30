@@ -10,6 +10,8 @@ use syn::{
     parse_macro_input, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Path, ReturnType, Type,
 };
 
+use nestrs_codegen::{injected_method_with_layers, layer_inject_keys};
+
 use crate::attr::take_use_attr;
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -20,6 +22,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     // `event => vec![guard, …]` inserts the mount closure runs to build the
     // per-message guard table from the container.
     let mut guard_inserts: Vec<TokenStream2> = Vec::new();
+    // Every per-message guard path, gathered for the access-graph check (folded
+    // into `Discoverable::injected` below, like the HTTP per-route layers).
+    let mut message_guards: Vec<Path> = Vec::new();
     let mut on_connect: Option<TokenStream2> = None;
     let mut on_disconnect: Option<TokenStream2> = None;
 
@@ -71,6 +76,7 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         };
         if !guards.is_empty() {
             guard_inserts.push(guard_insert(&event, &guards));
+            message_guards.extend(guards);
         }
 
         let method_name = method.sig.ident.clone();
@@ -154,6 +160,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         arms.push(quote! { #event => { #arm_body } });
     }
 
+    let message_guard_keys = layer_inject_keys(message_guards.iter());
+    let injected_method = injected_method_with_layers(&self_ty, &message_guard_keys);
+
     quote! {
         #item
 
@@ -180,10 +189,10 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         impl ::nestrs_core::Discoverable for #self_ty {
             // The gateway is built at mount time (like a controller), so
             // `dependencies` (register ordering) stays empty; `injected` reports
-            // its `#[inject]` keys for the access-graph check.
-            fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
-                <#self_ty>::__nestrs_injected()
-            }
+            // its `#[inject]` keys, its connection-level guards (from the inherent
+            // fn `#[gateway]` emits) and the per-message guards gathered here for
+            // the access-graph check.
+            #injected_method
 
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,

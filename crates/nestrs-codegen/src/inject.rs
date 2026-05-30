@@ -2,9 +2,11 @@
 //! constructor from its `#[inject]` fields, plus the `Discoverable` method bodies
 //! every decorator emits.
 
+use std::collections::HashSet;
+
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Signature};
+use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Path, Signature};
 
 use crate::ty::{arc_inner, nth_generic_type, type_label};
 
@@ -188,12 +190,65 @@ pub fn forwarded_idents<'a>(
     Ok(idents)
 }
 
+/// The `TypeId::of::<P>()` expression for each guard / filter / interceptor path a
+/// provider references through `#[use_guards]` / `#[use_filters]` /
+/// `#[use_interceptors]`, deduplicated by token text so a layer bound to several
+/// routes (or both at controller and route level) is reported once. A referenced
+/// layer is resolved from the container at mount (`Container::get::<P>`) exactly
+/// like an `#[inject]` dependency, so feeding these into `Discoverable::injected`
+/// puts an attribute-bound layer under the same boot-time access contract — a
+/// layer registered in a non-imported module then fails the boot with the named
+/// `AccessGraphError` rather than resolving silently through the flat container.
+/// Shared by `#[controller]`/`#[routes]` (HTTP) and `#[gateway]`/`#[messages]` (WS).
+pub fn layer_inject_keys<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<TokenStream2> {
+    let mut seen = HashSet::new();
+    paths
+        .into_iter()
+        .filter(|p| seen.insert(quote!(#p).to_string()))
+        .map(|p| quote! { ::core::any::TypeId::of::<#p>() })
+        .collect()
+}
+
 /// A `::std::vec![...]` of a provider's `#[inject]` dependency `TypeId`s — the
 /// shared body behind [`dependencies_method`] / [`injected_method`], and the form
 /// a decorator emits outside a trait method (`#[controller]` emits it as an
 /// inherent fn that `#[routes]` reads back into `Discoverable::injected`).
 pub fn injected_keys_expr(dep_keys: &[TokenStream2]) -> TokenStream2 {
     quote! { ::std::vec![ #(#dep_keys),* ] }
+}
+
+/// The `vec![...]` a controller/gateway *struct* macro emits for its inherent
+/// `__nestrs_injected()`: its `#[inject]` keys followed by the deduped `TypeId`s of
+/// the struct-level guard/filter/interceptor paths it binds. The companion
+/// impl-block macro reads this back and appends its per-route/per-message layers
+/// via [`injected_method_with_layers`].
+pub fn injected_keys_with_layers<'a>(
+    dep_keys: &[TokenStream2],
+    layer_paths: impl IntoIterator<Item = &'a Path>,
+) -> TokenStream2 {
+    let mut keys = dep_keys.to_vec();
+    keys.extend(layer_inject_keys(layer_paths));
+    injected_keys_expr(&keys)
+}
+
+/// The `Discoverable::injected` method an *impl-block* macro (`#[routes]` /
+/// `#[messages]`) emits: the struct's own `__nestrs_injected()` keys, extended with
+/// the per-route/per-message layer `TypeId`s gathered from the impl block. The
+/// fixed-size, explicitly-typed array makes `extend` resolve even with no
+/// per-method layers (an untyped `[]` / `vec![]` leaves the `Extend` impl ambiguous).
+pub fn injected_method_with_layers(
+    self_ty: &impl quote::ToTokens,
+    layer_keys: &[TokenStream2],
+) -> TokenStream2 {
+    let count = proc_macro2::Literal::usize_unsuffixed(layer_keys.len());
+    quote! {
+        fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
+            let mut __keys = <#self_ty>::__nestrs_injected();
+            let __layers: [::core::any::TypeId; #count] = [ #(#layer_keys),* ];
+            __keys.extend(__layers);
+            __keys
+        }
+    }
 }
 
 /// The `Discoverable::dependencies` method for eagerly-built providers, listing

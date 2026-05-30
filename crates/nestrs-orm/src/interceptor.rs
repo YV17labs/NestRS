@@ -44,24 +44,33 @@ impl Interceptor for DbContext {
 
         // The handler future has completed and its executor clone dropped, so we
         // are normally the sole owner and can take the transaction back to commit
-        // or roll it back. A lingering reference (a service that spawned a task
-        // holding it) is a bug — drop ours and let `Drop` roll back.
+        // or roll it back. A lingering reference means the executor *escaped* the
+        // request — a service leaked it into a spawned task that outlived the
+        // handler. We can no longer commit (the leaked task's eventual `Drop` will
+        // roll back), so the request's writes are lost. Drop our clone to free the
+        // transaction and fail *loudly*: a 2xx/3xx answer would otherwise report
+        // success for nothing persisted — silent data loss. A response that already
+        // failed keeps its status; its rollback matches its intent.
         let txn = match Arc::try_unwrap(txn) {
             Ok(txn) => txn,
-            Err(_) => {
+            Err(escaped) => {
+                drop(escaped);
+                if should_commit(&result) {
+                    tracing::error!(
+                        target: "nestrs::orm",
+                        "transaction escaped the request — the executor was leaked into a spawned task; rolling back and failing the otherwise-successful response so its lost writes are not reported as committed"
+                    );
+                    return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
+                }
                 tracing::error!(
                     target: "nestrs::orm",
-                    "transaction still referenced after the handler returned — rolling back"
+                    "transaction escaped the request — the executor was leaked into a spawned task; rolling back (the response had already failed)"
                 );
                 return result;
             }
         };
 
-        let commit = matches!(
-            &result,
-            Ok(resp) if resp.status().is_success() || resp.status().is_redirection()
-        );
-        if commit {
+        if should_commit(&result) {
             if let Err(err) = txn.commit().await {
                 tracing::error!(target: "nestrs::orm", error = %err, "transaction commit failed");
                 return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
@@ -79,4 +88,87 @@ fn is_safe(method: &Method) -> bool {
         *method,
         Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE
     )
+}
+
+/// Whether a handler's outcome should commit its transaction: a success (2xx) or
+/// redirect (3xx) response commits; any other status, or an `Err`, rolls back.
+fn should_commit(result: &Result<Response>) -> bool {
+    matches!(result, Ok(resp) if resp.status().is_success() || resp.status().is_redirection())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use nestrs_middleware::EndpointExt;
+    use poem::endpoint::make;
+    use poem::{Endpoint, IntoResponse};
+    use sea_orm::Database;
+
+    use super::*;
+    use crate::executor::current_executor;
+
+    async fn db() -> Arc<DatabaseConnection> {
+        let url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must point at a reachable Postgres for this test");
+        Arc::new(Database::connect(&url).await.expect("connect to Postgres"))
+    }
+
+    fn mutating_request() -> Request {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/".parse().unwrap())
+            .finish()
+    }
+
+    fn status_of(result: Result<Response>) -> StatusCode {
+        match result {
+            Ok(resp) => resp.status(),
+            Err(err) => err.into_response().status(),
+        }
+    }
+
+    // A mutating handler that *leaks* the ambient executor into a detached task
+    // outliving the request: the transaction the interceptor opened is still
+    // referenced when the handler returns, so it can never commit. The framework
+    // must turn the handler's 200 into a loud 500 rather than report success for
+    // writes that silently roll back.
+    #[tokio::test]
+    async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
+        let ctx = DbContext { db: db().await };
+
+        let endpoint = make(|_req: Request| async {
+            let escaped = current_executor().expect("the handler runs with an ambient executor");
+            // Leak the executor into a detached task that outlives this handler's
+            // return, so a clone of the transaction is still alive when the
+            // interceptor reclaims it.
+            tokio::spawn(async move {
+                let _hold = escaped;
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            });
+            StatusCode::OK.into_response()
+        });
+
+        let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a leaked transaction must surface as a 500, never a false 2xx",
+        );
+    }
+
+    // The control: a well-behaved mutating handler keeps its own status — the
+    // escape detection does not interfere with the normal commit path.
+    #[tokio::test]
+    async fn a_well_behaved_mutating_handler_keeps_its_status() {
+        let ctx = DbContext { db: db().await };
+
+        let endpoint = make(|_req: Request| async {
+            current_executor().expect("the handler runs with an ambient executor");
+            StatusCode::CREATED.into_response()
+        });
+
+        let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
+        assert_eq!(status, StatusCode::CREATED);
+    }
 }

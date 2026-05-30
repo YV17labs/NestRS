@@ -11,7 +11,7 @@ use syn::punctuated::Punctuated;
 use syn::{parse_macro_input, ItemStruct, LitStr, Meta, Path, Token};
 
 use nestrs_codegen::{
-    build_injectable_body, from_container_method, injected_keys_expr, InjectableBody,
+    build_injectable_body, from_container_method, injected_keys_with_layers, InjectableBody,
 };
 
 use crate::attr::{expr_str, take_use_attr};
@@ -54,11 +54,19 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // The controller's `#[inject]` keys for the access-graph check.
-    // `#[controller]` sees the fields but `#[routes]` emits the
-    // `Discoverable`, so expose them as an inherent fn `#[routes]` reads back
-    // into `Discoverable::injected`.
-    let injected_keys = injected_keys_expr(&dep_keys);
+    // The controller's access-graph dependencies: its `#[inject]` keys *plus* the
+    // controller-level guards / filters / interceptors it references. Each layer
+    // is resolved from the container at mount (`Container::get::<P>`), exactly like
+    // an `#[inject]` dependency, so it belongs under the same boot-time contract —
+    // a layer registered in a non-imported module is otherwise resolved silently
+    // (a flat-container encapsulation breach), never flagged. `#[controller]` sees
+    // the fields and the layer attributes but `#[routes]` emits the `Discoverable`,
+    // so expose them as an inherent fn `#[routes]` reads back (and extends with its
+    // own per-route layers) into `Discoverable::injected`.
+    let injected_keys = injected_keys_with_layers(
+        &dep_keys,
+        [&interceptors, &guards, &filters].into_iter().flatten(),
+    );
 
     // Controller-level layers: because `mount` is emitted by `#[routes]` (a
     // separate impl block), the lists can't be passed directly — `#[controller]`

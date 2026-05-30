@@ -10,7 +10,7 @@ use syn::punctuated::Punctuated;
 use syn::{parse_macro_input, ItemStruct, LitStr, Meta, Path, Token};
 
 use nestrs_codegen::{
-    build_injectable_body, from_container_method, injected_keys_expr, InjectableBody,
+    build_injectable_body, from_container_method, injected_keys_with_layers, InjectableBody,
 };
 
 use crate::attr::{expr_str, take_use_attr};
@@ -40,10 +40,15 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // The gateway's `#[inject]` keys for the access-graph check. `#[gateway]`
-    // sees the fields but `#[messages]` emits the `Discoverable`, so expose them
-    // as an inherent fn `#[messages]` reads back into `Discoverable::injected`.
-    let injected_keys = injected_keys_expr(&dep_keys);
+    // The gateway's access-graph dependencies: its `#[inject]` keys *plus* the
+    // connection-level guards it references — each container-resolved at mount
+    // (`Container::get::<P>`) on the upgrade request, so a guard registered in a
+    // non-imported module must fail the boot like an out-of-reach `#[inject]`
+    // rather than resolve silently through the flat container. `#[gateway]` sees
+    // the fields and the guard attribute but `#[messages]` emits the
+    // `Discoverable`, so expose them as an inherent fn `#[messages]` reads back
+    // (and extends with its per-message guards) into `Discoverable::injected`.
+    let injected_keys = injected_keys_with_layers(&dep_keys, guards.iter());
 
     // Connection-level guard layers, applied (boxed to a stable type) around the
     // gateway endpoint by `#[messages]`'s mount closure. First listed ends up

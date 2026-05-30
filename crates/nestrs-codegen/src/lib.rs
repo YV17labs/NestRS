@@ -16,7 +16,8 @@ pub use args::parse_named_str_arg;
 pub use crud::{parse_crud_args, singular_of, CrudConfig, Paginate};
 pub use inject::{
     build_injectable_body, dependencies_method, dependency_names_method, forwarded_arg_idents,
-    forwarded_idents, from_container_method, injected_keys_expr, injected_method,
-    optional_dependencies_method, InjectableBody,
+    forwarded_idents, from_container_method, injected_keys_expr, injected_keys_with_layers,
+    injected_method, injected_method_with_layers, layer_inject_keys, optional_dependencies_method,
+    InjectableBody,
 };
 pub use ty::{impl_self_ident, nth_generic_type};

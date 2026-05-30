@@ -111,19 +111,31 @@ declarative wiring — hold today but lean on developer discipline at a few seam
 Closing these is what makes the guarantees *airtight*, which is the real edge over
 a framework that only **documents** the same concerns.
 
-- **Transaction-escape safety** — the auto-transaction commits by reclaiming the
-  request's `Arc<DatabaseTransaction>` with `Arc::try_unwrap`; if a handler leaks
-  the executor to a spawned task, the unwrap fails and the request **rolls back on
-  a 2xx** — a success response with nothing persisted (logged, but not surfaced to
-  the caller). Detect the escape explicitly, so the failure mode is a loud error,
-  not silent data loss.
-- **A total access contract** — the boot-time access graph governs `#[inject]`
-  dependencies, but three declarative seams sit outside it: a `#[use_guards]` /
-  `#[use_filters]` / `#[use_interceptors]` reference resolves from the container at
-  mount (an unregistered one panics at boot instead of raising the named
-  `AccessGraphError` everything else gets), and `#[resolver]` injection is unchecked.
-  Bringing the attribute-referenced layers and the resolver layer under the same
-  check turns the last "panic / discipline" cases into the same boot diagnostic.
+- **Transaction-escape safety** — *shipped*. The auto-transaction commits by
+  reclaiming the request's `Arc<DatabaseTransaction>` with `Arc::try_unwrap`; if a
+  handler leaks the executor to a spawned task, the unwrap fails and the request can
+  no longer commit. Before, that **rolled back on a 2xx** — a success response with
+  nothing persisted (logged, but not surfaced to the caller). Now the `DbContext`
+  interceptor detects the escape and fails *loudly*: a 2xx/3xx answer is replaced
+  with a `500` so a lost write is never reported as committed (a response that had
+  already failed keeps its status — its rollback matches its intent). An in-process
+  test drives a handler that leaks the executor into a detached task and asserts the
+  otherwise-successful response surfaces as a `500`, not a false `2xx`.
+- **A total access contract** — *attribute-referenced layers: shipped; resolver
+  injection: remaining.* The boot-time access graph governs `#[inject]`
+  dependencies; three declarative seams used to sit outside it. The
+  `#[use_guards]` / `#[use_filters]` / `#[use_interceptors]` references (controller-
+  and per-route scope, plus the WebSocket gateway's connection- and per-message
+  guards) now fold their `TypeId`s into the consumer's `Discoverable::injected`, so
+  a layer registered in a module the consumer does not import fails the boot with
+  the same named `AccessGraphError` an out-of-reach `#[inject]` gets — closing a
+  *silent cross-module encapsulation breach* (the flat container resolved the layer
+  regardless of imports), not merely a panic. `nestrs-testing`'s `access_contract`
+  e2e proves both scopes fail the boot and a correctly-imported one passes. The
+  remaining seam is **`#[resolver]` injection**: a resolver self-composes through
+  the GraphQL registry and belongs to *no* module, so there is no import closure to
+  check it against — bringing it under the contract needs a resolver-membership
+  design decision, not just plumbing, and is deferred behind a design note.
 - **Insulate the GraphQL schema composition** — the self-composing schema reads
   async-graphql's public-but-internal `registry` API. It is guarded by tests, but a
   thin adapter (one place that breaks, behind a pinned-version compile guard) would

@@ -28,6 +28,18 @@
 //! provider's `#[inject]` keys whether it is built eagerly or later from the
 //! assembled container.
 //!
+//! `injected` also reports a provider's **attribute-referenced layers** — the
+//! guards/filters/interceptors a `#[controller]`/`#[routes]` (or a `#[gateway]`/
+//! `#[messages]`) binds with `#[use_guards]` / `#[use_filters]` /
+//! `#[use_interceptors]`, at both the controller/gateway and per-route/per-message
+//! scope. Each is resolved from the container at mount (`Container::get::<P>`)
+//! exactly like an `#[inject]` dependency, so it is held to the same contract: a
+//! layer registered in a module the consumer does not import fails the boot with
+//! the named [`AccessGraphError`] instead of being resolved silently through the
+//! flat container (a cross-module encapsulation breach). The macros fold the layer
+//! `TypeId`s into the consumer's `injected`, so the graph check below covers them
+//! with no special-casing.
+//!
 //! # What the contract does *not* cover (two deliberate boundaries)
 //!
 //! The contract governs **declarative `#[inject]` dependencies of module
@@ -68,10 +80,11 @@ pub struct ProviderDescriptor {
     pub provides: fn() -> TypeId,
     /// The provider's declared injection dependencies
     /// ([`Discoverable::injected`](crate::Discoverable::injected)) — the
-    /// `TypeId` of each `#[inject]` field, for *every* provider kind under
-    /// contract (`#[injectable]`, `#[interceptor]`, guards, `#[cron_job]`,
-    /// `#[processor]`, `#[controller]`, `#[mcp]`), regardless of whether it is
-    /// built eagerly or later from the assembled container.
+    /// `TypeId` of each `#[inject]` field *plus* each attribute-referenced layer
+    /// (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`), for *every*
+    /// provider kind under contract (`#[injectable]`, `#[interceptor]`, guards,
+    /// `#[cron_job]`, `#[processor]`, `#[controller]`, `#[mcp]`), regardless of
+    /// whether it is built eagerly or later from the assembled container.
     pub injects: fn() -> Vec<TypeId>,
 }
 

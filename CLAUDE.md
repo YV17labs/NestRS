@@ -444,9 +444,17 @@ method, a resolver, a `Read`-scoped binding then updated) is still caught at the
 path always has one: HTTP and WebSocket install it, and a `#[dataloader]` batch —
 though it runs on a spawned task — has it re-installed by `LoaderScope` (see the
 dataloader-scoping note above), so a loader queries through `Repo` like any service
-method. A genuinely non-request context (a shutdown hook, a cron tick, a queue job)
-has no ambient executor and keeps an injected `Arc<DatabaseConnection>` it queries
-directly. A custom query takes the ambient executor with `Repo::<E>::conn()`.
+method. The **worker transports** install it too: `nestrs-core` exposes an
+orm-agnostic `JobContext` seam (the cron/queue counterpart of `DbContext`/
+`SocketContext`) that the `Scheduler` and `QueueWorker` resolve from the container
+(`get_dyn`) and wrap each job through; `nestrs-orm`'s `WorkerDbContext` implements it
+to install a **pool** executor (no caller ⇒ no ambient ability ⇒ unscoped reads/
+writes, correct for system work), and `DatabaseModule` auto-binds it — so importing
+the database module gives a `#[cron_job]`/`#[processor]` an ambient `Repo` with no
+connection injected (a per-job transaction is deliberately deferred, as on a
+WebSocket message). A genuinely contextless path (a shutdown hook) still has no
+ambient executor and keeps an injected `Arc<DatabaseConnection>` it queries directly.
+A custom query takes the ambient executor with `Repo::<E>::conn()`.
 
 The two task-locals are installed at **different depths**, dictated by when each
 value exists:

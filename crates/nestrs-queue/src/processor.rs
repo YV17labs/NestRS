@@ -4,12 +4,14 @@
 //! apalis worker. All apalis types stay inside this crate — the generated code
 //! names only `::nestrs_queue::*`.
 
+use std::sync::Arc;
+
 use apalis::layers::retry::{RetryLayer, RetryPolicy};
 use apalis::layers::ErrorHandlingLayer;
 use apalis::prelude::{Data, Monitor, WorkerBuilder, WorkerFactoryFn};
 use apalis_redis::RedisStorage;
 use async_trait::async_trait;
-use nestrs_core::Container;
+use nestrs_core::{run_in_job_context, Container, JobContext};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::connection::QueueConnection;
@@ -74,10 +76,14 @@ where
     // buffer — the ceiling on in-flight jobs — not a worker count.
     let storage: RedisStorage<P::Job> =
         conn.consumer_storage::<P::Job>(meta.queue, meta.concurrency);
+    // Resolve the optional ambient-data seam once per worker, not per job — it is
+    // static for the worker's lifetime (the scheduler resolves it once too).
+    let job_context = container.get_dyn::<dyn JobContext>();
     let worker = WorkerBuilder::new(meta.queue)
         .layer(ErrorHandlingLayer::new())
         .layer(RetryLayer::new(RetryPolicy::retries(meta.retries)))
         .data(container)
+        .data(job_context)
         .backend(storage)
         .build_fn(handler::<P>);
     monitor.register(worker)
@@ -86,13 +92,20 @@ where
 /// The apalis job handler: rebuild the processor from the per-worker container
 /// and run it. A processor error becomes a boxed error apalis treats as a failed
 /// attempt (and retries per the worker's policy).
+///
+/// The job runs inside the optional [`JobContext`] seam (bound by a database
+/// module's `WorkerDbContext`), so a processor queries through `Repo` with a pool
+/// executor installed — no connection injected. Absent, it runs bare.
 async fn handler<P>(
     job: P::Job,
     container: Data<Container>,
+    job_context: Data<Option<Arc<dyn JobContext>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     P: Processor + FromContainer,
 {
     let processor = P::from_container(&container);
-    processor.process(job).await.map_err(Into::into)
+    run_in_job_context(job_context.as_ref(), processor.process(job))
+        .await
+        .map_err(Into::into)
 }

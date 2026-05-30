@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use chrono_tz::Tz;
 use croner::Cron;
-use nestrs_core::{Container, DiscoveryService, Transport};
+use nestrs_core::{run_in_job_context, Container, DiscoveryService, JobContext, Transport};
 use tokio::task::JoinSet;
 use tokio::time::{interval, sleep, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
@@ -166,11 +166,18 @@ impl Transport for Scheduler {
             return Ok(());
         }
 
+        // Resolve the optional ambient-data seam once: when a database module is
+        // imported it binds `WorkerDbContext`, so each tick runs with a pool
+        // executor installed and the job can query through `Repo`. Absent, jobs run
+        // bare (the default).
+        let ctx = container.get_dyn::<dyn JobContext>();
+
         let mut tasks = JoinSet::new();
         for job in self.jobs {
             let container = container.clone();
             let token = cancel.clone();
-            tasks.spawn(async move { run_job(job, container, token).await });
+            let ctx = ctx.clone();
+            tasks.spawn(async move { run_job(job, container, token, ctx).await });
         }
         while tasks.join_next().await.is_some() {}
         Ok(())
@@ -180,7 +187,12 @@ impl Transport for Scheduler {
 /// Drive a single job until cancellation. Each variant computes its own waits;
 /// all of them return only when `token` is cancelled (a one-shot idles after its
 /// single run so the transport doesn't race the app down).
-async fn run_job(job: Job, container: Container, token: CancellationToken) {
+async fn run_job(
+    job: Job,
+    container: Container,
+    token: CancellationToken,
+    ctx: Option<Arc<dyn JobContext>>,
+) {
     let name = job.name();
     match job {
         Job::Interval { period, run, .. } => {
@@ -193,14 +205,14 @@ async fn run_job(job: Job, container: Container, token: CancellationToken) {
             loop {
                 tokio::select! {
                     _ = token.cancelled() => break,
-                    _ = ticker.tick() => fire(name, run, &container).await,
+                    _ = ticker.tick() => fire(name, run, &container, &ctx).await,
                 }
             }
         }
         Job::Timeout { delay, run, .. } => {
             tokio::select! {
                 _ = token.cancelled() => return,
-                _ = sleep(delay) => fire(name, run, &container).await,
+                _ = sleep(delay) => fire(name, run, &container, &ctx).await,
             }
             // Run once, then idle until shutdown.
             token.cancelled().await;
@@ -222,7 +234,7 @@ async fn run_job(job: Job, container: Container, token: CancellationToken) {
             };
             tokio::select! {
                 _ = token.cancelled() => break,
-                _ = sleep(wait) => fire(name, run, &container).await,
+                _ = sleep(wait) => fire(name, run, &container, &ctx).await,
             }
         },
     }
@@ -244,8 +256,14 @@ fn next_delay(schedule: &Cron, tz: Option<Tz>) -> Option<Duration> {
     Some((next_utc - now).to_std().unwrap_or(Duration::ZERO))
 }
 
-async fn fire(name: &'static str, run: RunFn, container: &Container) {
-    if let Err(err) = run(container).await {
+async fn fire(
+    name: &'static str,
+    run: RunFn,
+    container: &Container,
+    ctx: &Option<Arc<dyn JobContext>>,
+) {
+    let result = run_in_job_context(ctx.as_ref(), run(container)).await;
+    if let Err(err) = result {
         tracing::error!(
             target: "nestrs::schedule",
             job = name,

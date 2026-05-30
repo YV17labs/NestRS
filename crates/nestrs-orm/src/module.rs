@@ -75,8 +75,15 @@ impl DynamicModule for DatabaseSetup {
     // the request interceptor that binds it to each request *is* sync to install:
     // it injects the connection lazily at `configure`, so importing the module
     // activates the ambient executor + per-request transaction with no app wiring.
+    // The worker counterpart is bound here too: `WorkerDbContext as dyn JobContext`
+    // gives a `#[cron_job]`/`#[processor]` the same ambient `Repo`. It is built
+    // eagerly from the snapshot — the pool is a factory output, present before the
+    // register phase — exactly as the `as dyn` provider lowering builds a bridge.
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        <crate::DbContext as nestrs_core::Discoverable>::register(builder)
+        let builder = <crate::DbContext as nestrs_core::Discoverable>::register(builder);
+        let snapshot = builder.snapshot();
+        let job_context = crate::WorkerDbContext::from_container(&snapshot);
+        builder.provide_dyn::<dyn nestrs_core::JobContext>(std::sync::Arc::new(job_context))
     }
 
     // The pool is async, so it is queued in the collect phase and awaited before

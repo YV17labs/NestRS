@@ -92,12 +92,17 @@ and WebSocket today. What remains builds on the same primitive:
   in depth behind the `access` class gate, catching any path that reaches a write
   with a row loaded out-of-scope. `apps/api` proves it with a direct-`Repo`
   cross-org e2e (the row survives both attempts).
-- **A request executor for non-HTTP transports** — the `DbContext` interceptor binds
-  the executor to an HTTP request, and `nestrs-authz-ws`'s `SocketContext` bridge now
-  binds it (and the ability) for a WebSocket message; a queue job or cron tick still
-  has no ambient executor, so those paths inject `Arc<DatabaseConnection>`. A
-  transport-agnostic installer would extend `Repo` (and per-job transactions) to the
-  worker surfaces too.
+- **A request executor for non-HTTP transports** — *shipped*. The `DbContext`
+  interceptor binds the executor to an HTTP request and `SocketContext` to a
+  WebSocket message; now `nestrs-core`'s orm-agnostic `JobContext` seam carries it to
+  the worker surfaces too. Both worker transports resolve an optional implementor
+  from the container (`get_dyn`) and wrap each job through it; `nestrs-orm`'s
+  `WorkerDbContext` implements it to install a **pool** executor, and `DatabaseModule`
+  auto-binds it (like `DbContext` for HTTP) — so importing the database module gives a
+  `#[cron_job]`/`#[processor]` an ambient `Repo` with no `Arc<DatabaseConnection>`
+  injected. With nothing bound a job runs bare (the default). The remaining piece is
+  **per-job transactions** (a worker job has no safe/mutating method to classify, so
+  it runs on the pool like a WebSocket message — deliberately deferred).
 
 ## Next — hardening the guarantees
 

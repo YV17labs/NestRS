@@ -5,10 +5,11 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use nestrs_core::{Container, Transport};
+use nestrs_core::{Container, JobContext, Transport};
 use nestrs_schedule::{CronExpression, CronJobMeta, Scheduler, Trigger};
 use tokio_util::sync::CancellationToken;
 
@@ -123,5 +124,68 @@ async fn invalid_cron_expression_fails_configure() {
     assert!(
         err.to_string().contains("broken"),
         "the error names the offending job: {err}",
+    );
+}
+
+// A `JobContext` bound in the container is resolved by the scheduler and wraps each
+// tick — the seam through which a database module installs a pool executor so a job
+// queries through `Repo`. Here a stub installs an ambient marker the job observes.
+tokio::task_local! {
+    static MARKER: u8;
+}
+
+static OBSERVED_MARKER: AtomicBool = AtomicBool::new(false);
+
+struct MarkerContext;
+
+impl JobContext for MarkerContext {
+    fn scope<'a>(
+        &'a self,
+        inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(MARKER.scope(7, inner))
+    }
+}
+
+fn tick_observe(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        if MARKER.try_with(|m| *m) == Ok(7) {
+            OBSERVED_MARKER.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jobs_run_inside_the_bound_job_context() {
+    struct ObserveHost;
+
+    let container = Container::builder()
+        .provide_dyn::<dyn JobContext>(Arc::new(MarkerContext))
+        .attach_meta::<ObserveHost, CronJobMeta>(CronJobMeta {
+            name: "observe",
+            trigger: Trigger::Interval(Duration::from_millis(100)),
+            run: tick_observe,
+        })
+        .build();
+
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("serve returns Ok");
+
+    assert!(
+        OBSERVED_MARKER.load(Ordering::SeqCst),
+        "the tick ran inside the bound JobContext, observing its ambient marker",
     );
 }

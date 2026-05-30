@@ -33,11 +33,13 @@ mod module;
 mod page;
 mod repo;
 mod service;
+mod worker;
 
 pub use executor::{current_executor, with_executor, Executor};
 pub use module::{DatabaseModule, DatabaseOptions, DatabaseSetup};
 pub use page::{Page, PageParams};
 pub use repo::{scope_for, Repo};
 pub use service::{Access, CreateModel, CrudService, UpdateModel};
+pub use worker::WorkerDbContext;
 
 pub(crate) use interceptor::DbContext;

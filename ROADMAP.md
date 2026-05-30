@@ -25,9 +25,10 @@ The authoritative record of *what was decided and why* is
 
 The gateway now ships with server→client push — request/response message
 handling, a connection registry, broadcast and rooms, discovered and
-self-mounted on the HTTP transport, sharing controller DI and connection-level
-guards. What remains builds on that base, and is the plumbing Server-Sent Events
-and GraphQL subscriptions will reuse:
+self-mounted on the HTTP transport, sharing controller DI, connection-level
+*and* per-message guards, and `on_connect` / `on_disconnect` lifecycle hooks.
+What remains builds on that base, and is the plumbing Server-Sent Events and
+GraphQL subscriptions will reuse:
 
 - **Server→client broadcast & a connection registry** — *shipped*. `WsServer`
   (the `@WebSocketServer` analog, provided by `WsModule`) tracks live connections
@@ -36,9 +37,13 @@ and GraphQL subscriptions will reuse:
   `@ConnectedSocket` analog). The remaining gap is **per-gateway namespacing**:
   the flat container keys `WsServer` by type, so every gateway shares one registry
   (rooms are the targeting tool); a second registry needs a newtype today.
-- **Per-message guards & lifecycle hooks** — guards bind at the connection level
-  today (on the upgrade); a per-message guard seam plus `OnGatewayConnection` /
-  `OnGatewayDisconnect` hooks would match the rest of the NestJS surface.
+- **Per-message guards & lifecycle hooks** — *shipped*. A `#[use_guards]` beside
+  a `#[subscribe_message]` binds per-message `MessageGuard`s (its context is the
+  message, not the upgrade request — an `Err` short-circuits to an error frame
+  before the handler runs), complementing the connection-level guards on the
+  gateway struct; and an `#[on_connect]` / `#[on_disconnect]` method on the
+  `#[messages]` impl block is the `OnGatewayConnection` / `OnGatewayDisconnect`
+  analog. `apps/chat` exercises both over a real socket.
 - **An ambient data context in the socket task** — the connection loop runs
   *after* the upgrade request completes, so the request scope, ORM executor and
   authz ability task-locals don't reach a handler (the same constraint a

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use nestrs_ws::{gateway, messages, WsClient};
 
 use crate::chat::dto::{ChatMessage, SendMessage};
+use crate::chat::guard::ModeratedGuard;
 use crate::chat::service::RoomService;
 
 #[gateway(path = "/ws")]
@@ -13,7 +14,19 @@ pub struct ChatGateway {
 
 #[messages]
 impl ChatGateway {
+    #[on_connect]
+    async fn joined(&self, client: &WsClient) {
+        client.join("lobby");
+        self.room.connected();
+    }
+
+    #[on_disconnect]
+    async fn left(&self) {
+        self.room.disconnected();
+    }
+
     #[subscribe_message("message")]
+    #[use_guards(ModeratedGuard)]
     async fn on_message(&self, message: SendMessage) {
         self.room.record(message);
     }
@@ -21,6 +34,11 @@ impl ChatGateway {
     #[subscribe_message("history")]
     async fn history(&self) -> Vec<ChatMessage> {
         self.room.history()
+    }
+
+    #[subscribe_message("presence")]
+    async fn presence(&self) -> usize {
+        self.room.present()
     }
 
     #[subscribe_message("typing")]

@@ -216,8 +216,8 @@ NestRS is a **Cargo workspace** — one repository holding many crates, built an
 versioned together. Two kinds of member live in it:
 
 - **Applications** under [`apps/`](apps/) — each is a binary crate you run and
-  deploy on its own (`api`, `app`, `auth`, `mcp`, `worker`). One repository, several
-  independently shippable services.
+  deploy on its own (`api`, `app`, `auth`, `chat`, `mcp`, `worker`). One repository,
+  several independently shippable services.
 - **Libraries** under [`crates/`](crates/) — ordinary library crates of reusable
   code. The framework itself ships this way (`nestrs-core`, `nestrs-http`,
   `nestrs-graphql`, …), and any code you want to share across your apps becomes a
@@ -229,6 +229,7 @@ nestrs/
 │  ├─ api/          REST + GraphQL, persisted & authorized
 │  ├─ app/          minimal HTTP baseline
 │  ├─ auth/         OAuth2 / JWT token issuer
+│  ├─ chat/         real-time WebSocket gateway
 │  ├─ db/           shared-database migrations & seeding (CLI)
 │  ├─ mcp/          Model Context Protocol server
 │  └─ worker/       background jobs & scheduling (headless)
@@ -258,6 +259,7 @@ surface is decorator macros — reach for them first (`#[injectable]`, `#[module
 | `nestrs-graphql` | Resolvers (`#[resolver]`/`#[query]`/`#[mutation]`/`#[field]`), self-composing schema, request-scoped dataloaders (`#[dataloader]`) |
 | `nestrs-openapi` | OpenAPI 3.1 document + bundled offline Swagger UI, composed from the route table |
 | `nestrs-mcp` | Model Context Protocol server over Streamable-HTTP (`#[mcp]`), `rmcp`-backed |
+| `nestrs-ws` | WebSocket gateways (`#[gateway]`/`#[messages]`/`#[subscribe_message]`), server→client push, rooms, per-message guards + `on_connect`/`on_disconnect` hooks; self-mounts on the HTTP transport |
 | `nestrs-orm` | SeaORM database module — async pool via `DatabaseModule::for_root` |
 | `nestrs-queue` | Redis-backed durable job queues + workers (`#[processor]`); `apalis`-backed |
 | `nestrs-schedule` | In-process cron / interval jobs (`#[cron_job]`) |
@@ -298,9 +300,9 @@ setup on any machine with Docker and a devcontainer-aware editor.
 That is the whole setup. The container provisions the Rust toolchain and the dev
 tooling (`just`, `bacon`, `cargo-nextest`, …), and brings up **Postgres** and
 **Redis** beside it with `DATABASE_URL` / `REDIS_URL` already pointed at them.
-`app`, `auth`, and `mcp` run as-is; `api` needs its schema applied once first —
-`just db up` (or `just db reset` to also load demo data) — and `worker` needs
-Redis. Ports 3001–3004 are forwarded to the host.
+`app`, `auth`, `mcp`, and `chat` run as-is; `api` needs its schema applied once
+first — `just db up` (or `just db reset` to also load demo data) — and `worker`
+needs Redis. Ports 3001–3005 are forwarded to the host.
 
 Then start an app in watch mode:
 
@@ -309,6 +311,7 @@ just dev          # the bare `app` baseline on :3001
 just dev auth     # OAuth2 / JWT token issuer on :3002
 just dev api      # REST + GraphQL on :3003
 just dev mcp      # MCP server on :3004
+just dev chat     # real-time WebSocket gateway on :3005
 just dev worker   # background jobs & scheduling (headless)
 ```
 
@@ -376,6 +379,7 @@ a pure resource server that trust the same self-contained JWT and share the
 | `api` | REST + GraphQL, persisted & authorized | 3003 |
 | `db` | Shared-database migrations & seeding (CLI) | — |
 | `mcp` | Model Context Protocol server | 3004 |
+| `chat` | Real-time WebSocket gateway | 3005 |
 | `worker` | Background jobs & scheduling (headless) | — |
 
 ### `app` — Minimal HTTP endpoint (port 3001)
@@ -458,7 +462,10 @@ Started with `just dev chat`. A WebSocket chat room declared like a controller:
 with each `#[subscribe_message("event")]` method handling a JSON envelope
 `{ "event": "...", "data": ... }`. Because a WebSocket upgrade is an HTTP `GET`,
 the gateway self-mounts on the HTTP transport — no second server, no `main.rs`
-wiring — and shares controller DI and guards. Connect any WebSocket client to
+wiring — and shares controller DI and guards (at the connection level on the
+upgrade, and per message beside a `#[subscribe_message]`). An `#[on_connect]` /
+`#[on_disconnect]` hook tracks presence, and a service broadcasts to the whole
+room through the connection registry. Connect any WebSocket client to
 `ws://localhost:3005/ws` and send `{"event":"message","data":{"author":"ada",
 "text":"hi"}}`; its `tests/e2e.rs` drives the full round-trip over a real socket.
 
@@ -482,6 +489,9 @@ docker run --rm -p 3003:3003 nestrs /usr/local/bin/api
 
 # Run the mcp app on port 3004
 docker run --rm -p 3004:3004 nestrs /usr/local/bin/mcp
+
+# Run the chat app on port 3005
+docker run --rm -p 3005:3005 nestrs /usr/local/bin/chat
 
 # Apply migrations (and optionally seed) with the same image
 docker run --rm nestrs /usr/local/bin/migrate up

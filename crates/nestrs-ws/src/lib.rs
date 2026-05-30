@@ -57,10 +57,25 @@
 //! per-connection outbox drained by a writer task, so the read loop never blocks
 //! on a slow `Sink` and a service can reach a client mid-handler.
 //!
-//! # Deliberate limits of this first cut
+//! # Guards and lifecycle hooks
 //!
-//! - **Guards bind at the connection level** (on the upgrade request), not
-//!   per message. A rejected handshake never opens the socket.
+//! Guards bind at two scopes. A **connection-level** guard — `#[use_guards]` on
+//! the gateway struct — reuses the HTTP [`Guard`] trait and runs on the upgrade
+//! request, so a rejected handshake never opens the socket. A **per-message**
+//! guard — `#[use_guards]` beside a `#[subscribe_message]` — implements
+//! [`MessageGuard`] (its context is the message, not a `poem::Request`) and gates
+//! that one event; an `Err` reply short-circuits to an error frame and the
+//! handler never runs.
+//!
+//! A gateway may also implement the connection **lifecycle hooks** — an
+//! `#[on_connect]` / `#[on_disconnect]` method on the `#[messages]` impl block
+//! (the `OnGatewayConnection` / `OnGatewayDisconnect` analogs). Each takes
+//! `&self` (the gateway is a singleton) and optionally the connecting
+//! `&`[`WsClient`]; `on_connect` runs before the first message, `on_disconnect`
+//! while the connection is still registered.
+//!
+//! # Deliberate limits of this cut
+//!
 //! - **No ambient request data context.** The connection loop runs in a task
 //!   *after* the upgrade request completes, so the HTTP request scope, the ORM
 //!   executor and the authz ability task-locals do **not** reach a handler — the
@@ -70,15 +85,16 @@
 //!   [`WsServer`] by type, so every gateway shares one registry — a `broadcast`
 //!   reaches all of them. Scope with rooms; per-gateway namespacing (the way a
 //!   second `OAuth2Client` needs a newtype) is not built.
-//! - **No lifecycle hooks** (`OnGatewayConnection`/`Disconnect`) yet.
 
 mod envelope;
 mod gateway;
+mod guard;
 mod module;
 mod server;
 
 pub use envelope::{WsEnvelope, WsReply};
 pub use gateway::{gateway_endpoint, Gateway, GatewayEndpoint};
+pub use guard::{MessageGuard, MessageGuardTable};
 pub use module::WsModule;
 pub use server::{ConnId, WsClient, WsServer};
 

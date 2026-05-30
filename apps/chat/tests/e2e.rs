@@ -117,8 +117,72 @@ async fn a_message_is_broadcast_to_every_connected_client() {
     handle.shutdown().await.expect("transport shuts down");
 }
 
+#[tokio::test]
+async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned_author() {
+    let bind = "127.0.0.1:13346";
+
+    let app = TestApp::builder()
+        .module::<AppModule>()
+        .with_test_telemetry()
+        .build_headless()
+        .await
+        .expect("AppModule boots headless");
+    let handle = app
+        .spawn_transport(HttpTransport::new().bind(bind))
+        .await
+        .expect("HTTP transport serves");
+
+    // `on_connect` increments presence for each socket; the count is observable
+    // through the `presence` message, so the hook is verified end-to-end.
+    let mut alice = connect_with_retry(&format!("ws://{bind}/ws")).await;
+    wait_for_presence(&mut alice, 1).await;
+    let mut bob = connect_with_retry(&format!("ws://{bind}/ws")).await;
+    wait_for_presence(&mut alice, 2).await;
+
+    // The `ModeratedGuard` bound to `message` rejects a banned author before the
+    // handler runs — the client gets an error frame, nothing is recorded.
+    bob.send(Message::Text(
+        json!({ "event": "message", "data": { "author": "banned", "text": "hi" } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .expect("bob sends");
+    let denied = next_json(&mut bob).await;
+    assert_eq!(denied["event"], "message");
+    assert!(denied["data"]["error"]
+        .as_str()
+        .expect("error string")
+        .contains("not allowed"));
+
+    // `on_disconnect` decrements presence — visible to the surviving socket.
+    bob.close(None).await.ok();
+    wait_for_presence(&mut alice, 1).await;
+
+    alice.close(None).await.ok();
+    handle.shutdown().await.expect("transport shuts down");
+}
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn wait_for_presence(socket: &mut Socket, want: u64) {
+    for _ in 0..50 {
+        socket
+            .send(Message::Text(
+                json!({ "event": "presence" }).to_string().into(),
+            ))
+            .await
+            .expect("send presence");
+        let frame = next_json(socket).await;
+        assert_eq!(frame["event"], "presence");
+        if frame["data"].as_u64().expect("presence count") == want {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("presence never reached {want}");
+}
 
 async fn connect_with_retry(url: &str) -> Socket {
     for _ in 0..50 {

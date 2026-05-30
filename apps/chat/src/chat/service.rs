@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nestrs_core::injectable;
@@ -10,9 +11,22 @@ pub struct RoomService {
     #[inject]
     server: Arc<WsServer>,
     history: Mutex<Vec<ChatMessage>>,
+    present: AtomicUsize,
 }
 
 impl RoomService {
+    pub fn connected(&self) {
+        self.present.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn disconnected(&self) {
+        self.present.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn present(&self) -> usize {
+        self.present.load(Ordering::Relaxed)
+    }
+
     pub fn record(&self, message: SendMessage) -> ChatMessage {
         let stored = ChatMessage {
             author: message.author,
@@ -48,6 +62,7 @@ mod tests {
         let room = RoomService {
             server: Arc::new(WsServer::default()),
             history: Mutex::new(Vec::new()),
+            present: AtomicUsize::new(0),
         };
         let stored = room.record(SendMessage {
             author: "ada".into(),

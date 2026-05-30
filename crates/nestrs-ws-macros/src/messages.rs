@@ -1,22 +1,50 @@
 //! `#[messages]` — bind a `#[gateway]` impl block's `#[subscribe_message]`
-//! methods to incoming WebSocket events, emitting the `Gateway` dispatcher and
-//! the `Discoverable` impl that self-mounts the gateway on the HTTP transport.
+//! methods to incoming WebSocket events, emitting the `Gateway` dispatcher (with
+//! any `#[on_connect]`/`#[on_disconnect]` lifecycle hooks) and the `Discoverable`
+//! impl that self-mounts the gateway on the HTTP transport.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, FnArg, ImplItem, ItemImpl, LitStr, ReturnType, Type};
+use syn::{
+    parse_macro_input, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Path, ReturnType, Type,
+};
+
+use crate::attr::take_use_attr;
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
     let self_ty = item.self_ty.clone();
 
     let mut arms: Vec<TokenStream2> = Vec::new();
+    // `event => vec![guard, …]` inserts the mount closure runs to build the
+    // per-message guard table from the container.
+    let mut guard_inserts: Vec<TokenStream2> = Vec::new();
+    let mut on_connect: Option<TokenStream2> = None;
+    let mut on_disconnect: Option<TokenStream2> = None;
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
+
+        // Connection lifecycle hooks (`#[on_connect]` / `#[on_disconnect]`) — the
+        // `OnGatewayConnection` / `OnGatewayDisconnect` analogs. Consume the inert
+        // attribute and emit a `Gateway` trait override delegating to the method.
+        if strip_marker(method, "on_connect") {
+            on_connect = Some(match hook_override("on_connect", method) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error().into(),
+            });
+            continue;
+        }
+        if strip_marker(method, "on_disconnect") {
+            on_disconnect = Some(match hook_override("on_disconnect", method) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error().into(),
+            });
+            continue;
+        }
 
         let Some(idx) = method
             .attrs
@@ -33,6 +61,17 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(e) => e,
             Err(err) => return err.to_compile_error().into(),
         };
+
+        // `#[use_guards(GuardA, GuardB)]` beside the verb — per-message guards,
+        // resolved from the container at mount into the event's table entry. The
+        // attribute is consumed here, exactly like the HTTP verb's `#[use_guards]`.
+        let guards = match take_use_attr(&mut method.attrs, "use_guards") {
+            Ok(paths) => paths,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        if !guards.is_empty() {
+            guard_inserts.push(guard_insert(&event, &guards));
+        }
 
         let method_name = method.sig.ident.clone();
 
@@ -133,6 +172,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                     __other => ::nestrs_ws::WsReply::unknown(__other),
                 }
             }
+
+            #on_connect
+            #on_disconnect
         }
 
         impl ::nestrs_core::Discoverable for #self_ty {
@@ -169,7 +211,11 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                                 "WebSocket gateway requires the connection registry — \
                                  add `WsModule` to a module's `imports`",
                             );
-                            let __ep = ::nestrs_ws::gateway_endpoint(__gw, __server);
+                            // The per-message guard table, resolved from the
+                            // container once and shared across every connection.
+                            let mut __guards = ::nestrs_ws::MessageGuardTable::new();
+                            #(#guard_inserts)*
+                            let __ep = ::nestrs_ws::gateway_endpoint(__gw, __server, __guards);
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
                             __route.at(<#self_ty>::PATH, __ep)
                         },
@@ -179,4 +225,79 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+/// Remove a bare marker attribute (`#[on_connect]`) from a method, returning
+/// whether it was present.
+fn strip_marker(method: &mut ImplItemFn, ident: &str) -> bool {
+    if let Some(pos) = method.attrs.iter().position(|a| a.path().is_ident(ident)) {
+        method.attrs.remove(pos);
+        true
+    } else {
+        false
+    }
+}
+
+/// Emit the `Gateway` trait override for a lifecycle hook (`on_connect` /
+/// `on_disconnect`) delegating to the user method. The hook takes `&self` and an
+/// optional single `&WsClient` parameter — passed through when declared.
+fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
+    let hook_ident = syn::Ident::new(hook, proc_macro2::Span::call_site());
+    let method_name = method.sig.ident.clone();
+
+    let mut takes_client = false;
+    for arg in method.sig.inputs.iter().skip(1) {
+        let FnArg::Typed(pt) = arg else { continue };
+        if !matches!(pt.ty.as_ref(), Type::Reference(_)) {
+            return Err(syn::Error::new_spanned(
+                &pt.ty,
+                format!("a #[{hook}] hook takes only an optional `&WsClient` parameter"),
+            ));
+        }
+        if takes_client {
+            return Err(syn::Error::new_spanned(
+                &pt.ty,
+                format!("a #[{hook}] hook takes at most one `&WsClient` parameter"),
+            ));
+        }
+        takes_client = true;
+    }
+
+    // Pass the client through only when the hook declared it; otherwise bind it
+    // to `_` so the override's parameter never warns as unused.
+    let body = if takes_client {
+        quote! { self.#method_name(__client).await; }
+    } else {
+        quote! {
+            let _ = __client;
+            self.#method_name().await;
+        }
+    };
+    Ok(quote! {
+        async fn #hook_ident(&self, __client: &::nestrs_ws::WsClient) {
+            #body
+        }
+    })
+}
+
+/// Build the `__guards.insert("event", vec![…]);` statement for a guarded
+/// handler: each path is resolved from the container and coerced to
+/// `Arc<dyn MessageGuard>`. First listed runs first (insertion order preserved).
+fn guard_insert(event: &LitStr, paths: &[Path]) -> TokenStream2 {
+    let resolved = paths.iter().map(|p| {
+        quote! {
+            {
+                let __g: ::std::sync::Arc<dyn ::nestrs_ws::MessageGuard> =
+                    ::nestrs_core::Container::get::<#p>(__container).expect(concat!(
+                        "#[use_guards] message guard `",
+                        stringify!(#p),
+                        "` is not registered — add it to a module's providers"
+                    ));
+                __g
+            }
+        }
+    });
+    quote! {
+        __guards.insert(#event, ::std::vec![ #(#resolved),* ]);
+    }
 }

@@ -628,9 +628,11 @@ regardless, so it would only duplicate the stack.)
 The macro pair mirrors `#[controller]` + `#[routes]`: `#[gateway(path = "/ws")]`
 on the struct emits construction (`from_container`, `PATH`) plus the
 connection-level guard layers; `#[messages]` on the impl block orchestrates the
-method-level `#[subscribe_message("event")]` attributes (inert, consumed and
-stripped like the HTTP verb attributes), emitting two impls — the `Gateway`
-per-connection **dispatcher** and the `Discoverable` that self-mounts. Messages
+method-level attributes (all inert, consumed and stripped like the HTTP verb
+attributes) — `#[subscribe_message("event")]`, an optional per-message
+`#[use_guards(...)]` beside it, and the `#[on_connect]` / `#[on_disconnect]`
+lifecycle hooks — emitting two impls: the `Gateway` per-connection **dispatcher**
+(carrying any hook overrides) and the `Discoverable` that self-mounts. Messages
 ride one JSON envelope, `{ "event": "...", "data": ... }`: a handler's single
 owned parameter is deserialized from `data`, its return serialized back under the
 same event name, and a `()` return sends nothing. The gateway is built **once at
@@ -639,18 +641,32 @@ dispatcher takes `&self`. The companion-crate rule holds — `nestrs-ws-macros`
 depends on no runtime crate and emits absolute paths, routing poem through
 `::nestrs_ws::poem::*` so a WebSocket-only app needs no direct poem dependency.
 
-Three boundaries are **deliberate** and load-bearing (named in the crate docs and
-the roadmap, so they don't read as oversights): guards bind at the **connection
-level** (run on the upgrade request), not per message; the connection loop runs in
-a task *after* the upgrade request completes, so the request scope, ORM executor
-and authz ability task-locals do **not** reach a handler (the same constraint a
+**Guards bind at two scopes.** A **connection-level** guard (`#[use_guards]` on the
+gateway struct) reuses the HTTP `Guard` trait and runs on the upgrade request, so a
+rejected handshake never opens the socket. A **per-message** guard (`#[use_guards]`
+beside a `#[subscribe_message]`) implements the `MessageGuard` trait instead —
+because an individual message carries no `poem::Request`, its context is the
+message (the `WsClient`, the event name, the raw `data`) — and an `Err` short-
+circuits to an error frame before the handler runs. The macro resolves the per-
+message guards from the container once at mount into a `MessageGuardTable` keyed by
+event, which the connection loop consults *generically* before dispatch (the
+`Gateway` dispatcher stays guard-unaware). `#[on_connect]` / `#[on_disconnect]` are
+the `OnGatewayConnection` / `OnGatewayDisconnect` analogs: default no-ops on the
+`Gateway` trait that the macro overrides when the method is present, each `&self`
+with an optional `&WsClient` — `on_connect` runs before the first message,
+`on_disconnect` while the connection is still registered.
+
+Two boundaries remain **deliberate** and load-bearing (named in the crate docs and
+the roadmap, so they don't read as oversights): the connection loop runs in a task
+*after* the upgrade request completes, so the request scope, ORM executor and authz
+ability task-locals do **not** reach a handler (the same constraint a
 `#[dataloader]` batch has — a gateway handler injects `Arc<DatabaseConnection>`);
-and the first cut is **request/response only** — server→client broadcast and a
-connection registry (the `@WebSocketServer` analog, the piece SSE/subscriptions
-will reuse) are the next brick. `apps/chat` is the exemplar, with a real-socket
-end-to-end test in its `tests/e2e.rs` (the in-process `TestClient` cannot perform
-a real upgrade, so the test spawns the real `HttpTransport` headless and drives it
-with a `tokio-tungstenite` client).
+and the flat container keys `WsServer` by type, so **one registry serves the whole
+app** (rooms are the targeting tool; a second registry needs a newtype). `apps/chat`
+is the exemplar — broadcast, rooms, a per-message guard and the presence hooks —
+with a real-socket end-to-end test in its `tests/e2e.rs` (the in-process
+`TestClient` cannot perform a real upgrade, so the test spawns the real
+`HttpTransport` headless and drives it with a `tokio-tungstenite` client).
 
 ## Naming rules — strict
 

@@ -5,10 +5,11 @@
 //!
 //! Each `#[proc_macro_attribute]` here is a thin entry the language requires at
 //! the crate root; the implementation lives in the topical submodules
-//! (`gateway`, `messages`, `attr`). `#[subscribe_message("event")]` is **not**
-//! a macro of its own — it is an inert attribute that `#[messages]` consumes and
-//! strips off the impl block, exactly as the HTTP verb attributes (`#[get]`, …)
-//! are consumed by `#[routes]`.
+//! (`gateway`, `messages`, `attr`). `#[subscribe_message("event")]`,
+//! `#[on_connect]`, and `#[on_disconnect]` are **not** macros of their own — they
+//! are inert attributes that `#[messages]` consumes and strips off the impl
+//! block, exactly as the HTTP verb attributes (`#[get]`, …) are consumed by
+//! `#[routes]`.
 
 use proc_macro::TokenStream;
 
@@ -29,9 +30,10 @@ mod messages;
 /// (just below `#[gateway]`) declares **connection-level guards** — the same
 /// `Guard` providers HTTP controllers use, resolved from the container, run on
 /// the WebSocket *upgrade* request (so a rejected handshake never opens the
-/// socket). First listed runs outermost. Per-message guards are not yet built.
-/// `#[use_guards]` must sit below `#[gateway]`: it is an inert attribute that
-/// `#[gateway]` consumes and strips.
+/// socket). First listed runs outermost. (Beside a `#[subscribe_message]`,
+/// `#[use_guards]` instead binds **per-message** `MessageGuard`s — see
+/// `#[messages]`.) `#[use_guards]` must sit below `#[gateway]`: it is an inert
+/// attribute that `#[gateway]` consumes and strips.
 ///
 /// The `Discoverable` impl is emitted by `#[messages]` rather than here — it
 /// needs the message table that `#[messages]` collects.
@@ -50,8 +52,16 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// and its return value is serialized back to the client under the same event
 /// name. A handler returning `()` sends no reply.
 ///
+/// A handler may also carry `#[use_guards(GuardA, GuardB)]` (per-message
+/// `MessageGuard`s, resolved from the container — an `Err` short-circuits to an
+/// error frame before the handler runs), and the impl block may declare
+/// `#[on_connect]` / `#[on_disconnect]` lifecycle hooks (the
+/// `OnGatewayConnection` / `OnGatewayDisconnect` analogs) — each `&self`, with an
+/// optional `&WsClient` parameter.
+///
 /// Emits two impls on the gateway:
-/// - `nestrs_ws::Gateway` — the per-connection message dispatcher.
+/// - `nestrs_ws::Gateway` — the per-connection message dispatcher, plus any
+///   declared lifecycle-hook overrides.
 /// - `nestrs_core::Discoverable` — attaches an `nestrs_http::HttpEndpointMeta`
 ///   so the gateway self-mounts on the HTTP transport's route tree at `PATH`
 ///   (the upgrade is an HTTP `GET`), exactly as a GraphQL or OpenAPI endpoint

@@ -2,9 +2,10 @@ use nestrs_core::module;
 use nestrs_ws::WsModule;
 
 use crate::chat::gateway::ChatGateway;
+use crate::chat::guard::ModeratedGuard;
 use crate::chat::service::RoomService;
 
-#[module(imports = [WsModule], providers = [RoomService, ChatGateway])]
+#[module(imports = [WsModule], providers = [RoomService, ModeratedGuard, ChatGateway])]
 pub struct ChatModule;
 
 #[cfg(test)]

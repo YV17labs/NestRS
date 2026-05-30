@@ -242,9 +242,6 @@ async fn users_are_scoped_to_their_org_and_bound_by_id() {
     );
 }
 
-// A throwaway entity over the real `user` table, so the direct-`Repo` part of the
-// write-scoping test can build an ability and query without reaching into the
-// app's private `users` module.
 mod user_row {
     use sea_orm::entity::prelude::*;
 
@@ -293,7 +290,6 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .to_owned();
     let user_a_id = Uuid::parse_str(&user_a).expect("valid user uuid");
 
-    // Happy path: the owning org updates its own user (scoped write succeeds).
     let patched = app
         .http()
         .patch(format!("/users/{user_a}"))
@@ -307,7 +303,6 @@ async fn writes_are_scoped_to_the_callers_ability() {
         "Ada L."
     );
 
-    // Cross-org over HTTP: the access gate rejects a foreign org by id (403).
     app.http()
         .patch(format!("/users/{user_a}"))
         .header(header::AUTHORIZATION, &token_b)
@@ -322,9 +317,6 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
-    // Defense in depth: even reaching `Repo` directly with a row loaded outside the
-    // ability's scope, the scoped write touches nothing — the `WHERE` carries
-    // `condition_for(Update/Delete)` on top of the primary key.
     let conn = db.connection();
     let blocked = Arc::new({
         let mut b = AbilityBuilder::new();
@@ -358,7 +350,6 @@ async fn writes_are_scoped_to_the_callers_ability() {
         "an out-of-scope delete removes no row",
     );
 
-    // The row survived both attempts, with its owning-org update intact.
     let survivor = user_row::Entity::find_by_id(user_a_id)
         .one(&*db.connection())
         .await
@@ -366,7 +357,6 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .expect("user A still exists");
     assert_eq!(survivor.name, "Ada L.", "the row was never mutated");
 
-    // And the owning org can still delete it (scoped write happy path).
     app.http()
         .delete(format!("/users/{user_a}"))
         .header(header::AUTHORIZATION, &token_a)
@@ -901,10 +891,6 @@ async fn ws_gateway_scopes_users_list_to_the_callers_org() {
         .await
         .expect("HTTP transport serves the self-mounted gateway");
 
-    // Org A's admin lists users over the socket: the connection guards built the
-    // ability on the upgrade request, and the `WsDataContext` bridge re-installed
-    // it (and the executor) around the dispatch — so the handler's `Repo` read is
-    // scoped to org A, exactly like the REST `/users` route.
     let token_a = format!("Bearer {}", token_for(WS_ORG_A, "admin").await);
     let mut socket_a = connect_ws(bind, &token_a).await;
     assert_eq!(
@@ -914,8 +900,6 @@ async fn ws_gateway_scopes_users_list_to_the_callers_org() {
     );
     socket_a.close(None).await.ok();
 
-    // Org B's admin sees only org B's user — the ambient scope follows the caller,
-    // proving the row-level filter reaches the socket task.
     let token_b = format!("Bearer {}", token_for(WS_ORG_B, "admin").await);
     let mut socket_b = connect_ws(bind, &token_b).await;
     assert_eq!(

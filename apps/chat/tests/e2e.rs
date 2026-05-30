@@ -89,12 +89,9 @@ async fn a_message_is_broadcast_to_every_connected_client() {
         .await
         .expect("HTTP transport serves");
 
-    // Two independent clients on the same gateway.
     let mut alice = connect_with_retry(&format!("ws://{bind}/ws")).await;
     let mut bob = connect_with_retry(&format!("ws://{bind}/ws")).await;
 
-    // Alice speaks; the RoomService broadcasts the recorded message to the whole
-    // registry, so *both* sockets receive it — not just the sender.
     alice
         .send(Message::Text(
             json!({ "event": "message", "data": { "author": "alice", "text": "hi all" } })
@@ -132,15 +129,11 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
         .await
         .expect("HTTP transport serves");
 
-    // `on_connect` increments presence for each socket; the count is observable
-    // through the `presence` message, so the hook is verified end-to-end.
     let mut alice = connect_with_retry(&format!("ws://{bind}/ws")).await;
     wait_for_presence(&mut alice, 1).await;
     let mut bob = connect_with_retry(&format!("ws://{bind}/ws")).await;
     wait_for_presence(&mut alice, 2).await;
 
-    // The `ModeratedGuard` bound to `message` rejects a banned author before the
-    // handler runs — the client gets an error frame, nothing is recorded.
     bob.send(Message::Text(
         json!({ "event": "message", "data": { "author": "banned", "text": "hi" } })
             .to_string()
@@ -155,7 +148,6 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
         .expect("error string")
         .contains("not allowed"));
 
-    // `on_disconnect` decrements presence — visible to the surviving socket.
     bob.close(None).await.ok();
     wait_for_presence(&mut alice, 1).await;
 
@@ -178,13 +170,9 @@ async fn namespaced_gateways_isolate_their_broadcasts() {
         .await
         .expect("HTTP transport serves");
 
-    // `/ws` mounts the default (Global) registry; `/notify` mounts a separate
-    // `WsServer<NotifyNs>` the namespaced gateway self-provides.
     let mut chat = connect_with_retry(&format!("ws://{bind}/ws")).await;
     let mut notify = connect_with_retry(&format!("ws://{bind}/notify")).await;
 
-    // A Global broadcast (the chat room recording a message) reaches the chat
-    // client — and never crosses into the NotifyNs registry.
     chat.send(Message::Text(
         json!({ "event": "message", "data": { "author": "ada", "text": "hi" } })
             .to_string()
@@ -195,7 +183,6 @@ async fn namespaced_gateways_isolate_their_broadcasts() {
     assert_eq!(next_json(&mut chat).await["event"], "message");
     assert_no_frame(&mut notify).await;
 
-    // A NotifyNs broadcast (the ping handler) reaches the notify client only.
     notify
         .send(Message::Text(json!({ "event": "ping" }).to_string().into()))
         .await

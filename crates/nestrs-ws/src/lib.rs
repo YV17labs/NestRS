@@ -74,17 +74,24 @@
 //! `&`[`WsClient`]; `on_connect` runs before the first message, `on_disconnect`
 //! while the connection is still registered.
 //!
-//! # Deliberate limits of this cut
+//! # Per-gateway namespacing
+//!
+//! [`WsServer`] is generic over a zero-sized namespace marker (default
+//! [`Global`], the registry [`WsModule`] provides). `#[gateway(namespace = MyNs)]`
+//! mounts the gateway against its own `WsServer<MyNs>` — a separate registry the
+//! macro self-provides — so two gateways isolate without sharing a registry (a
+//! `broadcast` on one never reaches the other's clients). The handler surface is
+//! untouched: a handler still takes `&`[`WsClient`], which carries the registry
+//! type-erased as [`Registry`]. A service that pushes to a namespaced registry
+//! injects `Arc<WsServer<MyNs>>` and must list it in a module's `providers`.
+//!
+//! # Deliberate limit of this cut
 //!
 //! - **No ambient request data context.** The connection loop runs in a task
 //!   *after* the upgrade request completes, so the HTTP request scope, the ORM
 //!   executor and the authz ability task-locals do **not** reach a handler — the
 //!   same constraint a `#[dataloader]` batch has. A gateway handler injects an
 //!   `Arc<DatabaseConnection>` and queries it directly.
-//! - **One registry per app, not per gateway.** The flat container keys
-//!   [`WsServer`] by type, so every gateway shares one registry — a `broadcast`
-//!   reaches all of them. Scope with rooms; per-gateway namespacing (the way a
-//!   second `OAuth2Client` needs a newtype) is not built.
 
 mod envelope;
 mod gateway;
@@ -96,7 +103,7 @@ pub use envelope::{WsEnvelope, WsReply};
 pub use gateway::{gateway_endpoint, Gateway, GatewayEndpoint};
 pub use guard::{MessageGuard, MessageGuardTable};
 pub use module::WsModule;
-pub use server::{ConnId, WsClient, WsServer};
+pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
 // Re-exported so `#[messages]`-generated code resolves these through the
 // framework: the dispatcher is `#[nestrs_ws::async_trait]`, payloads go through

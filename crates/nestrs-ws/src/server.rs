@@ -3,8 +3,24 @@
 //! connection (and its rooms) so a service can push to clients beyond the one
 //! that spoke — and [`WsClient`], the `@ConnectedSocket` analog handed to a
 //! handler so it can address its own socket, a room, or everyone.
+//!
+//! # Per-gateway namespacing
+//!
+//! A [`WsServer`] is generic over a zero-sized **namespace** marker `N`
+//! (defaulting to [`Global`]). The flat container keys it by type, so
+//! `WsServer<Global>` (provided by [`WsModule`]) is one shared registry, while
+//! `WsServer<MyNs>` is a wholly separate one: a `broadcast` on the first never
+//! reaches the second's clients. A `#[gateway(namespace = MyNs)]` mounts against
+//! its own registry (the macro self-provides it), so two gateways isolate without
+//! sharing a registry. A handler reaches whichever registry its gateway mounted
+//! through `&`[`WsClient`] — and because the client carries the registry as a
+//! type-erased [`Registry`], the handler surface (`Gateway`, `MessageGuard`, the
+//! lifecycle hooks) stays free of the namespace parameter.
+//!
+//! [`WsModule`]: crate::WsModule
 
 use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -18,6 +34,12 @@ use crate::envelope::WsEnvelope;
 /// reclaimed on disconnect; never reused within a process run.
 pub type ConnId = u64;
 
+/// The default namespace marker for [`WsServer`] — the single shared registry
+/// [`WsModule`] provides and every un-namespaced gateway mounts against.
+///
+/// [`WsModule`]: crate::WsModule
+pub struct Global;
+
 /// One registered connection: the channel that feeds its socket's writer task,
 /// plus the rooms it has joined (so a per-connection disconnect drops its room
 /// memberships with it).
@@ -27,19 +49,34 @@ struct Conn {
 }
 
 /// The connection registry shared across every connection of a gateway — the
-/// `@WebSocketServer` analog. Registered as a singleton by [`WsModule`], so any
-/// service can `#[inject] server: Arc<WsServer>` and push to clients in reaction
-/// to a domain event, not only inside a message handler.
+/// `@WebSocketServer` analog. Registered as a singleton by [`WsModule`] for the
+/// [`Global`] namespace, so any service can `#[inject] server: Arc<WsServer>` and
+/// push to clients in reaction to a domain event, not only inside a message
+/// handler. A `WsServer<MyNs>` is a distinct registry — see the module docs on
+/// per-gateway namespacing.
 ///
 /// [`WsModule`]: crate::WsModule
 #[injectable]
-#[derive(Default)]
-pub struct WsServer {
+pub struct WsServer<N: 'static = Global> {
     conns: Mutex<HashMap<ConnId, Conn>>,
     next: AtomicU64,
+    // The namespace marker is type-level only; `fn() -> N` keeps `WsServer<N>`
+    // `Send + Sync` without bounding `N`.
+    _ns: PhantomData<fn() -> N>,
 }
 
-impl WsServer {
+// Manual `Default` (not derived) so it does not spuriously bound `N: Default`.
+impl<N: 'static> Default for WsServer<N> {
+    fn default() -> Self {
+        Self {
+            conns: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(0),
+            _ns: PhantomData,
+        }
+    }
+}
+
+impl<N: 'static> WsServer<N> {
     /// Register a connection's outbox, returning its [`ConnId`]. Called by the
     /// connection loop on upgrade; pairs with [`disconnect`](Self::disconnect).
     pub(crate) fn connect(&self, outbox: UnboundedSender<String>) -> ConnId {
@@ -60,21 +97,6 @@ impl WsServer {
         self.conns.lock().unwrap().remove(&id);
     }
 
-    /// Add a connection to a room. A later [`emit_to`](Self::emit_to) reaches it;
-    /// a no-op if the connection has already left.
-    pub fn join(&self, id: ConnId, room: impl Into<String>) {
-        if let Some(conn) = self.conns.lock().unwrap().get_mut(&id) {
-            conn.rooms.insert(room.into());
-        }
-    }
-
-    /// Remove a connection from a room.
-    pub fn leave(&self, id: ConnId, room: &str) {
-        if let Some(conn) = self.conns.lock().unwrap().get_mut(&id) {
-            conn.rooms.remove(room);
-        }
-    }
-
     /// Send `data` under `event` to **every** live connection. Returns how many
     /// outboxes accepted the frame; an `Err` means `data` would not serialize
     /// (nothing was sent).
@@ -83,13 +105,7 @@ impl WsServer {
         event: &str,
         data: &T,
     ) -> Result<usize, serde_json::Error> {
-        let frame = WsEnvelope::encode(event, data)?;
-        let conns = self.conns.lock().unwrap();
-        let sent = conns
-            .values()
-            .filter(|conn| conn.outbox.send(frame.clone()).is_ok())
-            .count();
-        Ok(sent)
+        Ok(self.broadcast_value(event, serde_json::to_value(data)?))
     }
 
     /// Send `data` under `event` to the connections in `room`. Returns how many
@@ -100,14 +116,7 @@ impl WsServer {
         event: &str,
         data: &T,
     ) -> Result<usize, serde_json::Error> {
-        let frame = WsEnvelope::encode(event, data)?;
-        let conns = self.conns.lock().unwrap();
-        let sent = conns
-            .values()
-            .filter(|conn| conn.rooms.contains(room))
-            .filter(|conn| conn.outbox.send(frame.clone()).is_ok())
-            .count();
-        Ok(sent)
+        Ok(self.emit_to_value(room, event, serde_json::to_value(data)?))
     }
 
     /// Send `data` under `event` to a single connection. `Ok(false)` means the
@@ -118,11 +127,7 @@ impl WsServer {
         event: &str,
         data: &T,
     ) -> Result<bool, serde_json::Error> {
-        let frame = WsEnvelope::encode(event, data)?;
-        let conns = self.conns.lock().unwrap();
-        Ok(conns
-            .get(&id)
-            .is_some_and(|conn| conn.outbox.send(frame).is_ok()))
+        Ok(self.emit_value(id, event, serde_json::to_value(data)?))
     }
 
     /// Number of live connections — for diagnostics and tests.
@@ -131,20 +136,87 @@ impl WsServer {
     }
 }
 
+/// The non-generic, object-safe face of a [`WsServer`] — the push/room surface a
+/// [`WsClient`] needs without naming the namespace. Payloads cross it pre-encoded
+/// as [`serde_json::Value`] (the generic encoding happens in the [`WsServer`] /
+/// [`WsClient`] convenience methods), so the trait stays object-safe and
+/// `WsClient` can hold any namespace's registry as `Arc<dyn Registry>`.
+pub trait Registry: Send + Sync + 'static {
+    /// Add a connection to a room.
+    fn join(&self, id: ConnId, room: &str);
+    /// Remove a connection from a room.
+    fn leave(&self, id: ConnId, room: &str);
+    /// Send a pre-encoded payload to every live connection; returns the count.
+    fn broadcast_value(&self, event: &str, data: serde_json::Value) -> usize;
+    /// Send a pre-encoded payload to a room; returns the count.
+    fn emit_to_value(&self, room: &str, event: &str, data: serde_json::Value) -> usize;
+    /// Send a pre-encoded payload to one connection; `false` if it is gone.
+    fn emit_value(&self, id: ConnId, event: &str, data: serde_json::Value) -> bool;
+}
+
+impl<N: 'static> Registry for WsServer<N> {
+    fn join(&self, id: ConnId, room: &str) {
+        if let Some(conn) = self.conns.lock().unwrap().get_mut(&id) {
+            conn.rooms.insert(room.to_owned());
+        }
+    }
+
+    fn leave(&self, id: ConnId, room: &str) {
+        if let Some(conn) = self.conns.lock().unwrap().get_mut(&id) {
+            conn.rooms.remove(room);
+        }
+    }
+
+    fn broadcast_value(&self, event: &str, data: serde_json::Value) -> usize {
+        let Ok(frame) = WsEnvelope::encode(event, &data) else {
+            return 0;
+        };
+        let conns = self.conns.lock().unwrap();
+        conns
+            .values()
+            .filter(|conn| conn.outbox.send(frame.clone()).is_ok())
+            .count()
+    }
+
+    fn emit_to_value(&self, room: &str, event: &str, data: serde_json::Value) -> usize {
+        let Ok(frame) = WsEnvelope::encode(event, &data) else {
+            return 0;
+        };
+        let conns = self.conns.lock().unwrap();
+        conns
+            .values()
+            .filter(|conn| conn.rooms.contains(room))
+            .filter(|conn| conn.outbox.send(frame.clone()).is_ok())
+            .count()
+    }
+
+    fn emit_value(&self, id: ConnId, event: &str, data: serde_json::Value) -> bool {
+        let Ok(frame) = WsEnvelope::encode(event, &data) else {
+            return false;
+        };
+        let conns = self.conns.lock().unwrap();
+        conns
+            .get(&id)
+            .is_some_and(|conn| conn.outbox.send(frame).is_ok())
+    }
+}
+
 /// The per-connection handle a `#[subscribe_message]` handler receives by
 /// declaring a `&WsClient` parameter — the `@ConnectedSocket` analog. It knows
-/// its own [`ConnId`] and shares the gateway's [`WsServer`], so a handler can
-/// reply to itself, manage rooms, or address everyone without injecting anything.
+/// its own [`ConnId`] and shares its gateway's registry as a type-erased
+/// [`Registry`], so a handler can reply to itself, manage rooms, or address
+/// everyone in its namespace without injecting anything — and without the
+/// handler surface naming the namespace.
 pub struct WsClient {
     id: ConnId,
-    server: Arc<WsServer>,
+    registry: Arc<dyn Registry>,
 }
 
 impl WsClient {
     /// Build the handle the connection loop passes into dispatch. Not called by
     /// app code.
-    pub fn new(id: ConnId, server: Arc<WsServer>) -> Self {
-        Self { id, server }
+    pub fn new(id: ConnId, registry: Arc<dyn Registry>) -> Self {
+        Self { id, registry }
     }
 
     /// This connection's id.
@@ -153,23 +225,25 @@ impl WsClient {
     }
 
     /// The shared registry, for room-wide or app-wide pushes.
-    pub fn server(&self) -> &Arc<WsServer> {
-        &self.server
+    pub fn registry(&self) -> &Arc<dyn Registry> {
+        &self.registry
     }
 
     /// Join a room — subsequent [`to`](Self::to) calls (from anywhere) reach it.
-    pub fn join(&self, room: impl Into<String>) {
-        self.server.join(self.id, room);
+    pub fn join(&self, room: impl AsRef<str>) {
+        self.registry.join(self.id, room.as_ref());
     }
 
     /// Leave a room.
     pub fn leave(&self, room: &str) {
-        self.server.leave(self.id, room);
+        self.registry.leave(self.id, room);
     }
 
     /// Send `data` under `event` to this connection only.
     pub fn emit<T: Serialize>(&self, event: &str, data: &T) -> Result<bool, serde_json::Error> {
-        self.server.emit(self.id, event, data)
+        Ok(self
+            .registry
+            .emit_value(self.id, event, serde_json::to_value(data)?))
     }
 
     /// Send `data` under `event` to a room.
@@ -179,7 +253,9 @@ impl WsClient {
         event: &str,
         data: &T,
     ) -> Result<usize, serde_json::Error> {
-        self.server.emit_to(room, event, data)
+        Ok(self
+            .registry
+            .emit_to_value(room, event, serde_json::to_value(data)?))
     }
 
     /// Send `data` under `event` to every connection (including this one).
@@ -188,7 +264,9 @@ impl WsClient {
         event: &str,
         data: &T,
     ) -> Result<usize, serde_json::Error> {
-        self.server.broadcast(event, data)
+        Ok(self
+            .registry
+            .broadcast_value(event, serde_json::to_value(data)?))
     }
 }
 
@@ -207,7 +285,7 @@ mod tests {
 
     #[test]
     fn broadcast_reaches_every_connection() {
-        let server = WsServer::default();
+        let server = WsServer::<Global>::default();
         let (tx_a, mut rx_a) = unbounded_channel();
         let (tx_b, mut rx_b) = unbounded_channel();
         server.connect(tx_a);
@@ -222,7 +300,7 @@ mod tests {
 
     #[test]
     fn emit_to_scopes_by_room_and_disconnect_clears_membership() {
-        let server = WsServer::default();
+        let server = WsServer::<Global>::default();
         let (tx_a, mut rx_a) = unbounded_channel();
         let (tx_b, mut rx_b) = unbounded_channel();
         let a = server.connect(tx_a);
@@ -235,5 +313,25 @@ mod tests {
 
         server.disconnect(b);
         assert_eq!(server.connection_count(), 1);
+    }
+
+    // A distinct namespace marker keys a wholly separate registry.
+    struct OtherNs;
+
+    #[test]
+    fn distinct_namespaces_are_independent_registries() {
+        let global = WsServer::<Global>::default();
+        let other = WsServer::<OtherNs>::default();
+        let (tx, mut rx) = unbounded_channel();
+        global.connect(tx);
+
+        // A broadcast on the other namespace's registry reaches none of the
+        // Global registry's connections.
+        assert_eq!(
+            Registry::broadcast_value(&other, "ping", serde_json::json!(1)),
+            0
+        );
+        assert_eq!(recv_all(&mut rx).len(), 0);
+        assert_eq!(global.broadcast("ping", &1).expect("ok"), 1);
     }
 }

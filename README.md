@@ -259,7 +259,7 @@ surface is decorator macros — reach for them first (`#[injectable]`, `#[module
 | `nestrs-graphql` | Resolvers (`#[resolver]`/`#[query]`/`#[mutation]`/`#[field]`), self-composing schema, request-scoped dataloaders (`#[dataloader]`) |
 | `nestrs-openapi` | OpenAPI 3.1 document + bundled offline Swagger UI, composed from the route table |
 | `nestrs-mcp` | Model Context Protocol server over Streamable-HTTP (`#[mcp]`), `rmcp`-backed |
-| `nestrs-ws` | WebSocket gateways (`#[gateway]`/`#[messages]`/`#[subscribe_message]`), server→client push, rooms, per-message guards + `on_connect`/`on_disconnect` hooks; self-mounts on the HTTP transport |
+| `nestrs-ws` | WebSocket gateways (`#[gateway]`/`#[messages]`/`#[subscribe_message]`), server→client push, rooms, per-gateway namespacing, per-message guards + `on_connect`/`on_disconnect` hooks; self-mounts on the HTTP transport |
 | `nestrs-orm` | SeaORM database module — async pool via `DatabaseModule::for_root` |
 | `nestrs-queue` | Redis-backed durable job queues + workers (`#[processor]`); `apalis`-backed |
 | `nestrs-schedule` | In-process cron / interval jobs (`#[cron_job]`) |

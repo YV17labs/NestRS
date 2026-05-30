@@ -656,17 +656,33 @@ the `OnGatewayConnection` / `OnGatewayDisconnect` analogs: default no-ops on the
 with an optional `&WsClient` — `on_connect` runs before the first message,
 `on_disconnect` while the connection is still registered.
 
-Two boundaries remain **deliberate** and load-bearing (named in the crate docs and
-the roadmap, so they don't read as oversights): the connection loop runs in a task
-*after* the upgrade request completes, so the request scope, ORM executor and authz
-ability task-locals do **not** reach a handler (the same constraint a
-`#[dataloader]` batch has — a gateway handler injects `Arc<DatabaseConnection>`);
-and the flat container keys `WsServer` by type, so **one registry serves the whole
-app** (rooms are the targeting tool; a second registry needs a newtype). `apps/chat`
-is the exemplar — broadcast, rooms, a per-message guard and the presence hooks —
-with a real-socket end-to-end test in its `tests/e2e.rs` (the in-process
-`TestClient` cannot perform a real upgrade, so the test spawns the real
-`HttpTransport` headless and drives it with a `tokio-tungstenite` client).
+**Per-gateway namespacing** closes the "one registry per app" gap. `WsServer` is
+generic over a zero-sized namespace marker (`WsServer<N = Global>`); the flat
+container keys it by type, so `WsServer<Global>` (provided by `WsModule`) is the
+shared registry while `WsServer<MyNs>` is a wholly separate one. A
+`#[gateway(namespace = MyNs)]` mounts against its own `WsServer<MyNs>`, which the
+macro **self-provides** in the gateway's `register` (so listing the gateway is the
+only wiring), and resolves through two inherent helpers `#[gateway]` emits
+(`__nestrs_registry` / `__nestrs_provide_registry`) — the namespace lives entirely
+in `#[gateway]`, never leaking into `#[messages]`. The handler surface stays
+namespace-free because `WsClient` carries the registry **type-erased** as the
+object-safe `Registry` trait (payloads cross it pre-encoded as `serde_json::Value`,
+so the generic `broadcast<T>` convenience stays on `WsServer`/`WsClient`); only
+`gateway_endpoint`/`GatewayEndpoint`/`serve_connection` are generic over `N`. A
+service pushing to a namespaced registry injects `Arc<WsServer<MyNs>>` and must
+list it in `providers` (the gateway's self-provide is unchecked by the access
+graph).
+
+The one boundary that remains **deliberate** and load-bearing (named in the crate
+docs and the roadmap, so it doesn't read as an oversight): the connection loop runs
+in a task *after* the upgrade request completes, so the request scope, ORM executor
+and authz ability task-locals do **not** reach a handler (the same constraint a
+`#[dataloader]` batch has — a gateway handler injects `Arc<DatabaseConnection>`).
+`apps/chat` is the exemplar — broadcast, rooms, a per-message guard, the presence
+hooks, and a second `namespace`d gateway proving registry isolation — with a
+real-socket end-to-end test in its `tests/e2e.rs` (the in-process `TestClient`
+cannot perform a real upgrade, so the test spawns the real `HttpTransport` headless
+and drives it with a `tokio-tungstenite` client).
 
 ## Naming rules — strict
 

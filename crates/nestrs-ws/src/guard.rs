@@ -120,7 +120,7 @@ impl MessageGuardTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::WsServer;
+    use crate::server::{Global, WsServer};
     use serde_json::json;
 
     struct Allow;
@@ -151,7 +151,7 @@ mod tests {
     }
 
     fn client() -> WsClient {
-        let server = Arc::new(WsServer::default());
+        let server = Arc::new(WsServer::<Global>::default());
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let id = server.connect(tx);
         WsClient::new(id, server)

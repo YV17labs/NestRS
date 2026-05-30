@@ -16,10 +16,11 @@ use nestrs_codegen::{
 use crate::attr::{expr_str, take_use_attr};
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
-    let path_lit = match parse_gateway_args(args.into()) {
+    let GatewayArgs { path, namespace } = match parse_gateway_args(args.into()) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
+    let path_lit = path;
     let mut item = parse_macro_input!(input as ItemStruct);
 
     // Connection-level guards *on the struct* (the `@UseGuards` analog) — the
@@ -50,6 +51,29 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     // `#[messages]` can call it unconditionally.
     let guard_layers = guard_layers(&guards);
 
+    // The gateway's connection-registry namespace marker (`#[gateway(namespace =
+    // MyNs)]`), defaulting to the shared `Global` registry `WsModule` provides. A
+    // namespaced gateway owns a *separate* `WsServer<MyNs>` it self-provides, so
+    // its broadcasts never reach another gateway's clients. The namespace lives
+    // entirely here; `#[messages]` resolves and provides it through two inherent
+    // helpers, never naming the marker itself.
+    let ns_ty = match &namespace {
+        Some(path) => quote! { #path },
+        None => quote! { ::nestrs_ws::Global },
+    };
+    let provide_registry = match &namespace {
+        // A namespaced registry is self-provided so listing the gateway in
+        // `providers` is all the wiring there is.
+        Some(_) => quote! {
+            ::nestrs_core::ContainerBuilder::provide(
+                __builder,
+                <::nestrs_ws::WsServer<#ns_ty>>::default(),
+            )
+        },
+        // The `Global` registry comes from `WsModule`; nothing to provide here.
+        None => quote! { __builder },
+    };
+
     quote! {
         #item
 
@@ -61,6 +85,24 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
                 #injected_keys
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_registry(
+                __container: &::nestrs_core::Container,
+            ) -> ::std::sync::Arc<::nestrs_ws::WsServer<#ns_ty>> {
+                ::nestrs_core::Container::get::<::nestrs_ws::WsServer<#ns_ty>>(__container).expect(
+                    "WebSocket gateway requires its connection registry — add `WsModule` to a \
+                     module's `imports` for the default namespace, or the gateway self-provides \
+                     a `namespace`d one",
+                )
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_provide_registry(
+                __builder: ::nestrs_core::ContainerBuilder,
+            ) -> ::nestrs_core::ContainerBuilder {
+                #provide_registry
             }
 
             #[doc(hidden)]
@@ -82,28 +124,52 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Parse `#[gateway(path = "/ws")]` — `path` required. Order-independent; an
-/// unknown key is rejected with a clear message.
-fn parse_gateway_args(args: TokenStream2) -> syn::Result<LitStr> {
+/// Parsed `#[gateway(...)]` arguments: the required mount `path` and the optional
+/// connection-registry `namespace` marker type.
+struct GatewayArgs {
+    path: LitStr,
+    namespace: Option<Path>,
+}
+
+/// Parse `#[gateway(path = "/ws", namespace = MyNs)]` — `path` required,
+/// `namespace` optional (a marker type, default the shared `Global` registry).
+/// Order-independent; an unknown key is rejected with a clear message.
+fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut path = None;
+    let mut namespace = None;
     for meta in metas {
         match meta {
             Meta::NameValue(nv) if nv.path.is_ident("path") => path = Some(expr_str(&nv.value)?),
+            Meta::NameValue(nv) if nv.path.is_ident("namespace") => {
+                namespace = Some(expr_path(&nv.value)?)
+            }
             other => {
                 return Err(syn::Error::new_spanned(
                     other,
-                    "#[gateway] accepts `path = \"...\"`",
+                    "#[gateway] accepts `path = \"...\"` and an optional `namespace = MarkerType`",
                 ))
             }
         }
     }
-    path.ok_or_else(|| {
+    let path = path.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
             "#[gateway] requires `path = \"...\"`",
         )
-    })
+    })?;
+    Ok(GatewayArgs { path, namespace })
+}
+
+/// A `namespace = Type` value must be a bare type path.
+fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
+    match expr {
+        syn::Expr::Path(p) => Ok(p.path.clone()),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "`namespace` expects a marker type path, e.g. `namespace = ChatNs`",
+        )),
+    }
 }
 
 /// Build the `let __ep = …;` statements that wrap the gateway endpoint in a list

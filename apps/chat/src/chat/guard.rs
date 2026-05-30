@@ -26,11 +26,11 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use nestrs_ws::WsServer;
+    use nestrs_ws::{Global, WsServer};
     use serde_json::json;
 
     fn client() -> WsClient {
-        WsClient::new(0, Arc::new(WsServer::default()))
+        WsClient::new(0, Arc::new(WsServer::<Global>::default()))
     }
 
     #[tokio::test]

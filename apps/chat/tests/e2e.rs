@@ -163,8 +163,60 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
     handle.shutdown().await.expect("transport shuts down");
 }
 
+#[tokio::test]
+async fn namespaced_gateways_isolate_their_broadcasts() {
+    let bind = "127.0.0.1:13347";
+
+    let app = TestApp::builder()
+        .module::<AppModule>()
+        .with_test_telemetry()
+        .build_headless()
+        .await
+        .expect("AppModule boots headless");
+    let handle = app
+        .spawn_transport(HttpTransport::new().bind(bind))
+        .await
+        .expect("HTTP transport serves");
+
+    // `/ws` mounts the default (Global) registry; `/notify` mounts a separate
+    // `WsServer<NotifyNs>` the namespaced gateway self-provides.
+    let mut chat = connect_with_retry(&format!("ws://{bind}/ws")).await;
+    let mut notify = connect_with_retry(&format!("ws://{bind}/notify")).await;
+
+    // A Global broadcast (the chat room recording a message) reaches the chat
+    // client — and never crosses into the NotifyNs registry.
+    chat.send(Message::Text(
+        json!({ "event": "message", "data": { "author": "ada", "text": "hi" } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .expect("chat sends");
+    assert_eq!(next_json(&mut chat).await["event"], "message");
+    assert_no_frame(&mut notify).await;
+
+    // A NotifyNs broadcast (the ping handler) reaches the notify client only.
+    notify
+        .send(Message::Text(json!({ "event": "ping" }).to_string().into()))
+        .await
+        .expect("notify sends");
+    assert_eq!(next_json(&mut notify).await["event"], "pong");
+    assert_no_frame(&mut chat).await;
+
+    chat.close(None).await.ok();
+    notify.close(None).await.ok();
+    handle.shutdown().await.expect("transport shuts down");
+}
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn assert_no_frame(socket: &mut Socket) {
+    match tokio::time::timeout(std::time::Duration::from_millis(150), socket.next()).await {
+        Err(_) => {}
+        Ok(frame) => panic!("expected no cross-namespace frame, got {frame:?}"),
+    }
+}
 
 async fn wait_for_presence(socket: &mut Socket, want: u64) {
     for _ in 0..50 {

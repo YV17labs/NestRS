@@ -7,7 +7,7 @@ use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
 use crate::envelope::WsEnvelope;
 use crate::guard::MessageGuardTable;
-use crate::server::{WsClient, WsServer};
+use crate::server::{Registry, WsClient, WsServer};
 use crate::WsReply;
 
 /// The per-connection message dispatcher a gateway implements, plus its optional
@@ -47,11 +47,11 @@ pub trait Gateway: Send + Sync + 'static {
 /// connection, like a NestJS gateway singleton), the shared [`WsServer`] registry
 /// resolved alongside it, and the per-event [`MessageGuardTable`] the macro
 /// resolved from the container.
-pub fn gateway_endpoint<G: Gateway>(
+pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
-    server: Arc<WsServer>,
+    server: Arc<WsServer<N>>,
     guards: MessageGuardTable,
-) -> GatewayEndpoint<G> {
+) -> GatewayEndpoint<G, N> {
     GatewayEndpoint {
         gateway,
         server,
@@ -61,14 +61,16 @@ pub fn gateway_endpoint<G: Gateway>(
 
 /// The endpoint returned by [`gateway_endpoint`]. Extracts poem's [`WebSocket`]
 /// from the request (so a non-upgrade request fails the handshake) and, on
-/// upgrade, drives [`serve_connection`].
-pub struct GatewayEndpoint<G> {
+/// upgrade, drives [`serve_connection`]. Generic over the gateway's namespace
+/// `N` so it holds (and registers connections into) that gateway's own
+/// [`WsServer<N>`]; the namespace never escapes onto the handler surface.
+pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     gateway: Arc<G>,
-    server: Arc<WsServer>,
+    server: Arc<WsServer<N>>,
     guards: Arc<MessageGuardTable>,
 }
 
-impl<G: Gateway> Endpoint for GatewayEndpoint<G> {
+impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Response> {
@@ -90,9 +92,9 @@ impl<G: Gateway> Endpoint for GatewayEndpoint<G> {
 /// reading from. The connection registers itself for the duration and is
 /// reclaimed when the read loop ends (close frame, transport error, or a dead
 /// writer).
-async fn serve_connection<G: Gateway>(
+async fn serve_connection<G: Gateway, N: 'static>(
     gateway: Arc<G>,
-    server: Arc<WsServer>,
+    server: Arc<WsServer<N>>,
     guards: Arc<MessageGuardTable>,
     socket: poem::web::websocket::WebSocketStream,
 ) {
@@ -110,7 +112,10 @@ async fn serve_connection<G: Gateway>(
     });
 
     let conn_id = server.connect(outbox.clone());
-    let client = WsClient::new(conn_id, Arc::clone(&server));
+    // Hand the client the registry type-erased, so the namespace `N` never
+    // surfaces on the handler-facing `WsClient`.
+    let registry: Arc<dyn Registry> = server.clone();
+    let client = WsClient::new(conn_id, registry);
 
     // The connection is live and registered: fire the `on_connect` hook before
     // the first message so it can join a room or note presence.

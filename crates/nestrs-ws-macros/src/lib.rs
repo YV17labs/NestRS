@@ -24,7 +24,13 @@ mod messages;
 /// fields pulled from the container), a `pub const PATH: &'static str` used by
 /// `#[messages]` as the mount path, and the inherent helpers `#[messages]` reads
 /// back (`__nestrs_injected` for the access graph, `__nestrs_gateway_layers` for
-/// the connection-level guards).
+/// the connection-level guards, and `__nestrs_registry` / `__nestrs_provide_registry`
+/// for the connection registry).
+///
+/// An optional `namespace = MarkerType` mounts the gateway against its own
+/// `WsServer<MarkerType>` — a registry isolated from other gateways, which the
+/// macro self-provides, so a `broadcast` never crosses namespaces. Omitted, the
+/// gateway uses the shared `Global` registry `WsModule` provides.
 ///
 /// A `#[use_guards(GuardA, GuardB)]` attribute placed *on the gateway struct*
 /// (just below `#[gateway]`) declares **connection-level guards** — the same

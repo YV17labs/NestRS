@@ -24,19 +24,22 @@ The authoritative record of *what was decided and why* is
 ## Next — real-time: completing the WebSocket gateway
 
 The gateway now ships with server→client push — request/response message
-handling, a connection registry, broadcast and rooms, discovered and
-self-mounted on the HTTP transport, sharing controller DI, connection-level
-*and* per-message guards, and `on_connect` / `on_disconnect` lifecycle hooks.
-What remains builds on that base, and is the plumbing Server-Sent Events and
-GraphQL subscriptions will reuse:
+handling, a connection registry, broadcast, rooms and per-gateway namespacing,
+discovered and self-mounted on the HTTP transport, sharing controller DI,
+connection-level *and* per-message guards, and `on_connect` / `on_disconnect`
+lifecycle hooks. The one piece left is the ambient data context — the plumbing
+Server-Sent Events and GraphQL subscriptions will also reuse:
 
-- **Server→client broadcast & a connection registry** — *shipped*. `WsServer`
-  (the `@WebSocketServer` analog, provided by `WsModule`) tracks live connections
-  and rooms; a service injects `Arc<WsServer>` to push in reaction to a domain
-  event, and a handler reaches it through a `&WsClient` parameter (the
-  `@ConnectedSocket` analog). The remaining gap is **per-gateway namespacing**:
-  the flat container keys `WsServer` by type, so every gateway shares one registry
-  (rooms are the targeting tool); a second registry needs a newtype today.
+- **Server→client broadcast, a connection registry & per-gateway namespacing** —
+  *shipped*. `WsServer<N>` (the `@WebSocketServer` analog, the `Global` namespace
+  provided by `WsModule`) tracks live connections and rooms; a service injects
+  `Arc<WsServer>` to push in reaction to a domain event, and a handler reaches it
+  through a `&WsClient` parameter (the `@ConnectedSocket` analog). A
+  `#[gateway(namespace = MyNs)]` mounts against its own `WsServer<MyNs>` — a
+  separate registry the macro self-provides — so two gateways isolate without
+  sharing one; the handler surface stays namespace-free because `WsClient` carries
+  the registry type-erased as `Registry`. `apps/chat` proves the isolation over a
+  real socket.
 - **Per-message guards & lifecycle hooks** — *shipped*. A `#[use_guards]` beside
   a `#[subscribe_message]` binds per-message `MessageGuard`s (its context is the
   message, not the upgrade request — an `Err` short-circuits to an error frame
@@ -44,12 +47,22 @@ GraphQL subscriptions will reuse:
   gateway struct; and an `#[on_connect]` / `#[on_disconnect]` method on the
   `#[messages]` impl block is the `OnGatewayConnection` / `OnGatewayDisconnect`
   analog. `apps/chat` exercises both over a real socket.
-- **An ambient data context in the socket task** — the connection loop runs
-  *after* the upgrade request completes, so the request scope, ORM executor and
-  authz ability task-locals don't reach a handler (the same constraint a
-  `#[dataloader]` batch has). A transport-agnostic installer (see *extending the
-  transparent data layer*) would let a gateway handler use `Repo` like a
-  controller.
+- **An ambient data context in the socket task** — the last gap, and the
+  highest-value one. The connection loop runs *after* the upgrade request
+  completes (the global `DbContext` interceptor's executor scope and the authz
+  ability both unwind with that request), so neither task-local reaches a message
+  handler — the same constraint a `#[dataloader]` batch has. The seam is already
+  mapped: `nestrs-ws` would expose an orm/authz-agnostic per-message hook
+  (mirroring GraphQL's `OperationGuard` — capture opaque per-connection state from
+  the post-guard upgrade request, then wrap each dispatch), and a bridge crate
+  would implement it by re-installing the executor (`nestrs_orm::with_executor`,
+  pool) and ability (`nestrs_authz::with_ability`, captured from the connection
+  guards) around the handler future — letting a gateway handler use `Repo` like a
+  controller, row-level filtering included. This crosses *extending the
+  transparent data layer* (a request executor for non-HTTP transports) and is
+  security-sensitive, so it wants a deliberate design pass and a DB-backed,
+  authenticated real-socket e2e (a gateway on an app that has both a database and
+  authz) rather than a rushed landing.
 
 ## Next — extending the transparent data layer
 

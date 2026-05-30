@@ -3,6 +3,7 @@ use nestrs_health::HealthModule;
 use nestrs_telemetry::TelemetryModule;
 
 use crate::chat::ChatModule;
+use crate::notify::NotifyModule;
 
-#[module(imports = [ChatModule, HealthModule, TelemetryModule])]
+#[module(imports = [ChatModule, NotifyModule, HealthModule, TelemetryModule])]
 pub struct AppModule;

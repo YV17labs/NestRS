@@ -188,6 +188,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,
             ) -> ::nestrs_core::ContainerBuilder {
+                // A namespaced gateway self-provides its own `WsServer<Ns>`; the
+                // default `Global` registry comes from `WsModule` (no-op here).
+                let builder = <#self_ty>::__nestrs_provide_registry(builder);
                 // Self-mount on the HTTP transport's route tree: the WebSocket
                 // upgrade is an HTTP `GET`, so a gateway is just another
                 // `HttpEndpointMeta` the transport mounts at boot — no `main.rs`
@@ -200,17 +203,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                             let __gw = ::std::sync::Arc::new(
                                 <#self_ty>::from_container(__container),
                             );
-                            // The shared connection registry every connection of
-                            // this gateway registers into. Resolved from the
-                            // container (the `Container::get` escape hatch), so
-                            // the app must import `WsModule` to provide it.
-                            let __server = ::nestrs_core::Container::get::<::nestrs_ws::WsServer>(
-                                __container,
-                            )
-                            .expect(
-                                "WebSocket gateway requires the connection registry — \
-                                 add `WsModule` to a module's `imports`",
-                            );
+                            // This gateway's connection registry (its namespace
+                            // baked into the helper `#[gateway]` emitted).
+                            let __server = <#self_ty>::__nestrs_registry(__container);
                             // The per-message guard table, resolved from the
                             // container once and shared across every connection.
                             let mut __guards = ::nestrs_ws::MessageGuardTable::new();

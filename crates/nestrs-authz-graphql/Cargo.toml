@@ -23,6 +23,9 @@ nestrs-orm.workspace = true
 # The bridge runs guards against, and reads ambient state from, the poem request.
 poem.workspace = true
 sea-orm.workspace = true
+# `LoaderScope` spawns each DataLoader batch onto the runtime, re-installing the
+# ambient executor/ability on the spawned task.
+tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

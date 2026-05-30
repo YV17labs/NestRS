@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use nestrs_authz::Action;
 use nestrs_core::{hooks, injectable};
 use nestrs_graphql::dataloader;
 use nestrs_orm::{CrudService, Repo};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
+    QueryFilter, Set,
 };
 use uuid::Uuid;
 use validator::Validate;
@@ -56,14 +57,17 @@ impl UsersService {
             .iter()
             .map(|name| (name.clone(), Vec::new()))
             .collect();
-        let rows = Users::find()
-            .filter(entity::Column::Name.is_in(names.iter().cloned()))
-            .all(self.db.as_ref())
-            .await
-            .unwrap_or_else(|err| {
-                tracing::error!(target: "nestrs::loader", error = %err, "by_name loader query failed");
-                Vec::new()
-            });
+        let rows = (async {
+            Repo::<Users>::scoped(Action::Read)
+                .filter(entity::Column::Name.is_in(names.iter().cloned()))
+                .all(&Repo::<Users>::conn()?)
+                .await
+        })
+        .await
+        .unwrap_or_else(|err: DbErr| {
+            tracing::error!(target: "nestrs::loader", error = %err, "by_name loader query failed");
+            Vec::new()
+        });
         for row in &rows {
             if let Some(bucket) = buckets.get_mut(&row.name) {
                 bucket.push(User::from(row));
@@ -76,14 +80,17 @@ impl UsersService {
         tracing::debug!(target: "nestrs::loader", count = org_ids.len(), "loading users by org");
         let mut buckets: HashMap<Uuid, Vec<User>> =
             org_ids.iter().map(|org_id| (*org_id, Vec::new())).collect();
-        let rows = Users::find()
-            .filter(entity::Column::OrgId.is_in(org_ids.iter().cloned()))
-            .all(self.db.as_ref())
-            .await
-            .unwrap_or_else(|err| {
-                tracing::error!(target: "nestrs::loader", error = %err, "by_org loader query failed");
-                Vec::new()
-            });
+        let rows = (async {
+            Repo::<Users>::scoped(Action::Read)
+                .filter(entity::Column::OrgId.is_in(org_ids.iter().cloned()))
+                .all(&Repo::<Users>::conn()?)
+                .await
+        })
+        .await
+        .unwrap_or_else(|err: DbErr| {
+            tracing::error!(target: "nestrs::loader", error = %err, "by_org loader query failed");
+            Vec::new()
+        });
         for row in &rows {
             if let Some(bucket) = buckets.get_mut(&row.org_id) {
                 bucket.push(User::from(row));

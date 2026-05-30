@@ -34,7 +34,12 @@ pub use guard::ResolverGuard;
 pub use module::{GraphqlModule, GraphqlOptions, GraphqlSetup};
 // `pub` only so `#[resolver]`/`#[dataloader]`-generated code can name them;
 // `#[doc(hidden)]` at their definitions keeps them out of the app-facing surface.
-pub use loader::LoaderRegistration;
+pub use loader::{batch_spawner, LoaderRegistration};
+/// The seam that re-establishes per-request ambient state (the executor, the
+/// authorization ability) inside a DataLoader batch — a batch runs on a spawned
+/// task where the request task-locals are gone. Implemented by
+/// `nestrs-authz-graphql`, bound with `providers = [MyBridge as dyn BatchContext]`.
+pub use loader::{BatchContext, BatchFuture, BatchSpawner};
 pub use resolver::{ResolverKind, ResolverObject, ResolverRegistration};
 
 pub use async_graphql;

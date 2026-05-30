@@ -66,18 +66,22 @@ subscriptions will also reuse:
 
 ## Next — extending the transparent data layer
 
-The transparent data context covers HTTP today. What
-remains builds on the same primitive:
+The transparent data context covers HTTP, GraphQL (resolvers *and* dataloaders),
+and WebSocket today. What remains builds on the same primitive:
 
-- **Scoped dataloaders** — GraphQL is already authorized the same as REST (the
-  generic `GraphqlAbilityBridge<A, G>` runs the guard chain on `/graphql` and
-  installs the ambient ability), so resolver `Repo` reads
-  filter by org. The remaining gap is the loaders: a `#[dataloader]` batch runs
-  *off* the request task, so the ambient ability never reaches it — a field-relation
-  loader read is **unscoped** and must be confined by hand today (e.g. filtering to
-  the parent's org). Threading the request ability into the per-request loaders
-  would close it — the one place row-level security still leans on developer
-  discipline.
+- **Scoped dataloaders** — *shipped*. A `#[dataloader]` batch runs *off* the
+  request task (async-graphql spawns it to collapse concurrent `load_one`s into one
+  query), so the ambient ability never used to reach it — a field-relation loader
+  read was **unscoped** and had to be confined by hand. `nestrs-graphql` now exposes
+  the `BatchContext` seam (the spawner each per-request `DataLoader` is built with,
+  resolved via `get_dyn`), and `nestrs-authz-graphql`'s `LoaderScope` implements it:
+  built inside the operation's `with_ability` scope, it snapshots the live ability
+  and re-establishes it (plus a pool executor) around every batch future. So a
+  loader's `Repo` reads scope to the caller transparently, with no hand-written
+  filter — closing the last place row-level security leaned on developer discipline.
+  Bound by listing `LoaderScope as dyn BatchContext`; `apps/api` is the exemplar
+  (a DB-backed cross-org `namesakes` e2e proves the other org's rows never reach the
+  batch).
 - **Ability-scoped writes** — `Repo` auto-scopes *reads*; an update/delete could
   likewise gate its `WHERE` on `condition_for(Update/Delete)`, so a caller cannot
   mutate a row outside its scope even by id.

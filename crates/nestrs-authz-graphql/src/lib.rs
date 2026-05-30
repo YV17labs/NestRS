@@ -7,6 +7,10 @@
 //!   `nestrs-graphql`'s `OperationGuard` seam;
 //! - [`context`] — the per-request [`Ability`](nestrs_authz::Ability) bridge into
 //!   the GraphQL context (the `ContextSeed` + the [`ability`] accessor);
+//! - [`loader`] — [`LoaderScope`], which re-installs the ambient executor and
+//!   ability inside a `#[dataloader]` batch (which runs on a spawned task), so a
+//!   loader's `Repo` reads scope to the caller; implements `nestrs-graphql`'s
+//!   `BatchContext` seam;
 //! - [`authorize`](authorize()) — the class-level gate (analog of HTTP `Authorize`);
 //! - [`bind`](bind()) — route-model binding by id (analog of HTTP `Bind`).
 //!
@@ -23,7 +27,7 @@
 //!     }
 //!     #[query]
 //!     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-//!         Ok(bind::<users::Entity, Read>(ctx, &id).await?.as_ref().map(User::from))
+//!         Ok(bind::<UsersService, Read>(ctx, &id).await?.as_ref().map(User::from))
 //!     }
 //! }
 //! ```
@@ -35,8 +39,10 @@ mod authorize;
 mod bind;
 mod bridge;
 mod context;
+mod loader;
 
 pub use authorize::authorize;
 pub use bind::bind;
 pub use bridge::GraphqlAbilityBridge;
 pub use context::ability;
+pub use loader::LoaderScope;

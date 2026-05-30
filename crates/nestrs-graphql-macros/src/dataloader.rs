@@ -119,10 +119,14 @@ fn dataloader_for_method(
                 // makes import order irrelevant) and seeded into the request context.
                 seed: |__container, __request| {
                     let __loader = <#loader_name>::from_container(__container);
+                    // The spawner re-installs the request's ambient state (executor,
+                    // ability) around each batch — a batch runs on a spawned task where
+                    // the request task-locals are gone. Resolved from the bound
+                    // `BatchContext`, or a bare `tokio::spawn` when none is registered.
                     __request.data(
                         ::nestrs_graphql::async_graphql::dataloader::DataLoader::new(
                             __loader,
-                            ::tokio::spawn,
+                            ::nestrs_graphql::batch_spawner(__container),
                         ),
                     )
                 },

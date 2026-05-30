@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Path, Signature};
 
 use crate::ty::{arc_inner, nth_generic_type, type_label};
@@ -190,19 +190,24 @@ pub fn forwarded_idents<'a>(
     Ok(idents)
 }
 
-/// The `TypeId::of::<P>()` expression for each guard / filter / interceptor path a
-/// provider references through `#[use_guards]` / `#[use_filters]` /
-/// `#[use_interceptors]`, deduplicated by token text so a layer bound to several
-/// routes (or both at controller and route level) is reported once. A referenced
-/// layer is resolved from the container at mount (`Container::get::<P>`) exactly
-/// like an `#[inject]` dependency, so feeding these into `Discoverable::injected`
-/// puts an attribute-bound layer under the same boot-time access contract — a
-/// layer registered in a non-imported module then fails the boot with the named
-/// `AccessGraphError` rather than resolving silently through the flat container.
-/// Shared by `#[controller]`/`#[routes]` (HTTP) and `#[gateway]`/`#[messages]` (WS).
-pub fn layer_inject_keys<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<TokenStream2> {
+/// The `TypeId::of::<P>()` expression for each referenced type a provider resolves
+/// from the container outside its `#[inject]` fields — a guard / filter /
+/// interceptor `#[use_guards]` / `#[use_filters]` / `#[use_interceptors]` path, or a
+/// `#[resolver]` `#[field]`'s `&Service` dependency — deduplicated by token text so
+/// a type referenced several times (a layer bound to several routes, both at
+/// controller and route level) is reported once. Each is resolved from the
+/// container at mount (`Container::get::<P>`) exactly like an `#[inject]`
+/// dependency, so feeding these into `Discoverable::injected` puts it under the
+/// same boot-time access contract — a type registered in a non-imported module then
+/// fails the boot with the named `AccessGraphError` rather than resolving silently
+/// through the flat container. Generic over the token kind so a caller can pass
+/// `Path`s (guards) or `Type`s (resolver field deps). Shared by `#[controller]`/
+/// `#[routes]` (HTTP), `#[gateway]`/`#[messages]` (WS), and `#[resolver]` (GraphQL).
+pub fn layer_inject_keys<'a, T: ToTokens + 'a>(
+    items: impl IntoIterator<Item = &'a T>,
+) -> Vec<TokenStream2> {
     let mut seen = HashSet::new();
-    paths
+    items
         .into_iter()
         .filter(|p| seen.insert(quote!(#p).to_string()))
         .map(|p| quote! { ::core::any::TypeId::of::<#p>() })

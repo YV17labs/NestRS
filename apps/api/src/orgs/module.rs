@@ -2,9 +2,10 @@ use nestrs_core::module;
 
 use crate::authz::AuthzModule;
 use crate::orgs::controller::OrgsController;
+use crate::orgs::resolver::OrgsResolver;
 use crate::orgs::service::OrgsService;
 
-#[module(imports = [AuthzModule], providers = [OrgsService, OrgsController])]
+#[module(imports = [AuthzModule], providers = [OrgsService, OrgsController, OrgsResolver])]
 pub struct OrgsModule;
 
 #[cfg(test)]

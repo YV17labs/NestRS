@@ -9,7 +9,10 @@ pub mod module;
 pub mod scope;
 pub mod transport;
 
-pub use access::{AccessGraphError, ModuleDescriptor, ProviderDescriptor};
+pub use access::{
+    AccessGraphError, ModuleDescriptor, ProviderDescriptor, ResolverDescriptor,
+    ResolverMembershipError,
+};
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder};
 pub use discoverable::Discoverable;

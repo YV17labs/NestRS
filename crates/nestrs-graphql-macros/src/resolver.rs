@@ -12,7 +12,8 @@ use syn::{
 
 use nestrs_codegen::{
     build_injectable_body, forwarded_arg_idents, forwarded_idents, from_container_method,
-    impl_self_ident, InjectableBody,
+    impl_self_ident, injected_keys_expr, injected_method_with_layers, layer_inject_keys,
+    InjectableBody,
 };
 
 /// `#[resolver]` entry: applies to a struct (construction) or its impl block
@@ -53,21 +54,51 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         .into();
     }
 
-    let InjectableBody { ctor, .. } = match build_injectable_body(&mut item) {
+    let InjectableBody { ctor, dep_keys, .. } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
 
     let name = item.ident.clone();
+    let name_str = name.to_string();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
+    // The resolver's `#[inject]` keys, exposed for the impl-block macro to read
+    // back into `Discoverable::injected` (extended there with the operation guards
+    // and `#[field]` service dependencies the impl block declares) — the same
+    // struct/impl split `#[controller]`/`#[routes]` use. See `access.rs`.
+    let injected_keys = injected_keys_expr(&dep_keys);
+
+    // Submit the resolver-membership marker so the boot can require this resolver
+    // be listed in a reachable module's `providers` (its schema presence is
+    // unconditional via the GraphQL registry). Skipped for a generic resolver,
+    // which has no single `TypeId` and cannot be a `providers` entry anyway.
+    let descriptor = if item.generics.params.is_empty() {
+        quote! {
+            ::nestrs_core::inventory::submit! {
+                ::nestrs_core::ResolverDescriptor {
+                    resolver: || ::core::any::TypeId::of::<#name>(),
+                    name: #name_str,
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
 
     quote! {
         #item
 
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container
+
+            #[doc(hidden)]
+            pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
+                #injected_keys
+            }
         }
+
+        #descriptor
     }
     .into()
 }
@@ -181,6 +212,11 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
     // wants one `#[ComplexObject]` per type, so a resolver's `#[field]` methods
     // for the same parent are merged into a single emitted impl.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
+    // Container-resolved dependencies the access contract must see, on top of the
+    // struct's `#[inject]` fields (already in `__nestrs_injected`): every
+    // operation guard (resolver- + method-level) and every `#[field]` `&Service`.
+    let mut all_guard_paths: Vec<Path> = resolver_guards.clone();
+    let mut field_dep_types: Vec<Type> = Vec::new();
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
@@ -203,6 +239,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             Ok(guards) => guards,
             Err(err) => return err.to_compile_error().into(),
         };
+        all_guard_paths.extend(method_guards.iter().cloned());
         let op_guards: Vec<Path> = resolver_guards
             .iter()
             .cloned()
@@ -217,10 +254,12 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         let method_name = method.sig.ident.clone();
 
         if verb_attr.path().is_ident("field") {
-            let (parent_ty, deleg) = match field_method(&self_ty, &deleg_attrs, &sig, &op_guards) {
-                Ok(pair) => pair,
-                Err(err) => return err.to_compile_error().into(),
-            };
+            let (parent_ty, deleg, deps) =
+                match field_method(&self_ty, &deleg_attrs, &sig, &op_guards) {
+                    Ok(triple) => triple,
+                    Err(err) => return err.to_compile_error().into(),
+                };
+            field_dep_types.extend(deps);
             let key = quote!(#parent_ty).to_string();
             match field_groups
                 .iter_mut()
@@ -285,12 +324,32 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         }
     });
 
+    // `Discoverable::injected` = the struct's `#[inject]` keys (from
+    // `__nestrs_injected`, emitted by the struct macro) extended with the
+    // operation guards and `#[field]` `&Service` dependencies gathered here, so a
+    // resolver listed in `providers = [...]` is governed by the access contract
+    // exactly like a controller. `register` is a no-op: the schema builds the
+    // resolver from the assembled container at boot, it registers nothing.
+    let mut layer_keys = layer_inject_keys(all_guard_paths.iter());
+    layer_keys.extend(layer_inject_keys(field_dep_types.iter()));
+    let injected_method = injected_method_with_layers(&self_ty, &layer_keys);
+
     quote! {
         #item
 
         #query_block
         #mutation_block
         #(#field_blocks)*
+
+        impl ::nestrs_core::Discoverable for #self_ty {
+            #injected_method
+
+            fn register(
+                builder: ::nestrs_core::ContainerBuilder,
+            ) -> ::nestrs_core::ContainerBuilder {
+                builder
+            }
+        }
     }
     .into()
 }
@@ -308,7 +367,7 @@ fn field_method(
     deleg_attrs: &[Attribute],
     sig: &Signature,
     guards: &[Path],
-) -> syn::Result<(Type, TokenStream2)> {
+) -> syn::Result<(Type, TokenStream2, Vec<Type>)> {
     let mut inputs = sig.inputs.iter();
     match inputs.next() {
         Some(FnArg::Receiver(_)) => {}
@@ -352,6 +411,10 @@ fn field_method(
     let mut gql_args: Vec<&FnArg> = Vec::new();
     let mut call_args: Vec<TokenStream2> = Vec::new();
     let mut dep_bindings: Vec<TokenStream2> = Vec::new();
+    // The container-resolved `&Service` dependency types (dataloaders excluded —
+    // those are request-scoped, read from the context), reported up so the impl
+    // macro folds them into `Discoverable::injected` for the access contract.
+    let mut injected_deps: Vec<Type> = Vec::new();
     for (arg, ident) in rest.iter().copied().zip(&rest_idents) {
         let FnArg::Typed(pt) = arg else { continue };
         if let Type::Reference(reference) = &*pt.ty {
@@ -375,6 +438,7 @@ fn field_method(
                     let #dep = __container.get::<#dep_ty>().expect(#msg);
                 });
                 call_args.push(quote! { &#dep });
+                injected_deps.push(dep_ty.clone());
             }
         } else {
             call_args.push(quote! { #ident });
@@ -408,7 +472,7 @@ fn field_method(
             <#self_ty>::from_container(__container).#method_name(self #(, #call_args)*) #await_tok
         }
     };
-    Ok((parent_ty, method))
+    Ok((parent_ty, method, injected_deps))
 }
 
 /// Whether a `#[field]` dependency type is a `DataLoader<…>` (matched by its

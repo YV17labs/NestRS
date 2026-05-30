@@ -205,18 +205,24 @@ module the consumer does not import fails the boot with the named `AccessGraphEr
 rather than resolving silently through the flat container (the cross-module
 encapsulation breach a `#[use_guards]` reference used to slip through). **Every
 provider in `providers = [...]` is checked** (`#[injectable]`, `#[interceptor]`,
-guards, `#[cron_job]`, `#[processor]`, `#[controller]`, `#[mcp]`); the lone
-exception is `#[resolver]`, which self-composes via the GraphQL registry and
-belongs to no module. Dynamic (`for_root`) imports are not graph edges: they
-contribute only global infra or self-mounted metadata. The contract has **two
-deliberate boundaries**, named in `access.rs` so they don't read as total coverage:
-`#[resolver]` injection is unchecked (resolvers belong to no module — keep them
-thin, delegate to module-registered services that *are* checked; bringing the
-resolver layer under the contract is the remaining half of the access-contract
-work), and runtime `Container::get`/`get_dyn` is an unchecked escape hatch (the
-`ModuleRef.get()` analog — a flat container resolves by `TypeId` with no caller
-identity). The contract binds the *declarative* surface (`#[inject]` and the
-attribute-bound layers), not imperative resolution.
+guards, `#[cron_job]`, `#[processor]`, `#[controller]`, `#[mcp]`, `#[resolver]`).
+**`#[resolver]` joins the contract through module membership**: a resolver
+self-composes into the schema via the GraphQL registry — so it is *always* live,
+unlike a provider reached only when injected — and used to belong to no module. It
+is now listed in a module's `providers = [...]` like a controller; `#[resolver]`
+emits an `impl Discoverable` (a no-op `register` — the schema still builds it from
+the assembled container — and an `injected` reporting its `#[inject]` keys, its
+`#[use_guards]` guards, and its `#[field]`s' container-resolved `&Service` deps, but
+not their request-scoped `&DataLoader`s), so the graph check governs it like any
+other provider. To keep this *total* rather than opt-in, the macro also submits a
+`ResolverDescriptor`, and the boot fails with a `ResolverMembershipError` if a
+linked resolver (hence one already in the schema) is listed in no reachable module.
+Dynamic (`for_root`) imports are not graph edges: they contribute only global infra
+or self-mounted metadata. The contract has **one deliberate boundary**, named in
+`access.rs` so it doesn't read as total coverage: runtime `Container::get`/`get_dyn`
+is an unchecked escape hatch (the `ModuleRef.get()` analog — a flat container
+resolves by `TypeId` with no caller identity). The contract binds the *declarative*
+surface (`#[inject]` and the attribute-bound layers), not imperative resolution.
 
 ## Discovery is struct-level by default
 
@@ -281,7 +287,12 @@ the roots are concrete types whose `create_type_info` reads the registry (via
 `Registry::create_fake_output_type`) and whose `is_empty` reports emptiness at
 runtime. Import `GraphqlModule` to self-mount the schema at `/graphql`. The
 cost is a reliance on async-graphql's public-but-internal `registry` API —
-guarded by compile errors and tests when it shifts. Field resolvers are the
+guarded by compile errors and tests when it shifts. (Schema *fields* stay
+discovered this way — there is still no `queries = [...]` — but the resolver
+*struct* is now also listed in its feature module's `providers = [...]`, for the
+access contract only: see *Encapsulation is compile-time* above. The two are
+independent — listing a resolver does not change how its fields compose.) Field
+resolvers are the
 exception to this runtime merge: `#[field]` lowers to async-graphql's native
 `#[ComplexObject]`, so its fields attach to their type statically — no
 registry, no roots.

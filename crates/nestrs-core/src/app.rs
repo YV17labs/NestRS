@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::access::validate_from_inventory;
+use crate::access::{validate_from_inventory, validate_resolver_membership_from_inventory};
 use crate::container::{Container, ContainerBuilder, Registrar};
 use crate::lifecycle::{run_phase, run_phase_lenient, LifecyclePhase};
 use crate::module::Module;
@@ -34,7 +34,9 @@ impl App {
     /// paths.)
     pub fn new<M: Module + 'static>() -> Result<Self> {
         let container = M::register(Container::builder()).build();
-        validate_from_inventory(&[TypeId::of::<M>()], &HashSet::new())?;
+        let roots = [TypeId::of::<M>()];
+        validate_from_inventory(&roots, &HashSet::new())?;
+        validate_resolver_membership_from_inventory(&roots)?;
         Ok(Self {
             container,
             transports: Vec::new(),
@@ -321,6 +323,7 @@ impl AppBuilder {
         // reachable through its module's imports or be global infrastructure.
         let roots: Vec<TypeId> = modules.iter().map(|h| h.type_id).collect();
         validate_from_inventory(&roots, &global)?;
+        validate_resolver_membership_from_inventory(&roots)?;
 
         Ok(App {
             container: builder.build(),

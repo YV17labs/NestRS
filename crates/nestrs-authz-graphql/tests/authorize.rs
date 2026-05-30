@@ -67,7 +67,7 @@ impl WidgetResolver {
     }
 }
 
-#[module(imports = [GraphqlModule])]
+#[module(imports = [GraphqlModule], providers = [WidgetResolver])]
 struct AuthzGraphqlModule;
 
 async fn boot() -> TestApp {

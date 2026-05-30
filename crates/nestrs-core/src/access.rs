@@ -23,7 +23,8 @@
 //! Only `#[module]`-decorated modules participate; a hand-written `impl Module`
 //! emits no descriptor and is exempt. Every provider listed in a module's
 //! `providers = [...]` is under contract — `#[injectable]`, `#[interceptor]`,
-//! guards, `#[cron_job]`, `#[processor]`, `#[controller]`, `#[mcp]` — via
+//! guards, `#[cron_job]`, `#[processor]`, `#[controller]`, `#[mcp]`,
+//! `#[resolver]` — via
 //! [`Discoverable::injected`](crate::Discoverable::injected), which reports a
 //! provider's `#[inject]` keys whether it is built eagerly or later from the
 //! assembled container.
@@ -40,21 +41,34 @@
 //! `TypeId`s into the consumer's `injected`, so the graph check below covers them
 //! with no special-casing.
 //!
-//! # What the contract does *not* cover (two deliberate boundaries)
+//! # Resolvers join the contract through module membership
+//!
+//! A `#[resolver]` self-composes into the GraphQL schema through the link-time
+//! registry, so — unlike a provider, which is reached only when something injects
+//! it — *every* resolver linked into the binary is live. It used to belong to no
+//! module, leaving its `#[inject]` services outside any import closure to check
+//! against. It is now brought under the contract the same way a controller is:
+//! **declare it in a module's `providers = [...]`** (the resolver-membership
+//! decision). `#[resolver]` emits an `impl Discoverable` (a no-op `register` —
+//! the schema still builds it from the assembled container — and an `injected`
+//! reporting its `#[inject]` keys, its `#[use_guards]` resolver/operation guards,
+//! and the container-resolved `&Service` dependencies of its `#[field]`s), so a
+//! listed resolver produces a [`ProviderDescriptor`] like any other and the graph
+//! check above governs it. To keep the contract *total* rather than opt-in, the
+//! macro also submits a [`ResolverDescriptor`] per resolver, and the boot fails
+//! with a [`ResolverMembershipError`] if a linked resolver (hence one already in
+//! the schema) is not listed in any reachable module. (A `#[field]`'s
+//! `&DataLoader<…>` is request-scoped — read from the GraphQL context, not the
+//! container — so it is not an injected key and stays out of the graph, like the
+//! dataloaders themselves.)
+//!
+//! # What the contract does *not* cover (one deliberate boundary)
 //!
 //! The contract governs **declarative `#[inject]` dependencies of module
-//! providers**. Two paths fall outside it by design — name them so callers are
-//! not misled into thinking the check is total:
+//! providers** (resolvers included, per above). One path falls outside it by
+//! design — named so callers are not misled into thinking the check is total:
 //!
-//! 1. **`#[resolver]` is exempt.** A resolver self-composes through the GraphQL
-//!    schema registry and belongs to *no* module, so there is no import closure
-//!    to check it against — it resolves its injected services from the assembled
-//!    container by design (as do its `#[dataloader]`s). A GraphQL-heavy app
-//!    therefore gets no access-graph protection on its resolver layer. The
-//!    mitigation is structural, not enforced: keep a resolver thin and delegate
-//!    domain logic to module-registered services, which *are* under contract
-//!    when injected by other module providers.
-//! 2. **Runtime [`Container::get`](crate::Container::get) /
+//! 1. **Runtime [`Container::get`](crate::Container::get) /
 //!    [`get_dyn`](crate::Container::get_dyn) is an unchecked escape hatch** — the
 //!    `ModuleRef.get()` analog. The flat container resolves by `TypeId` with no
 //!    caller identity, so a provider that reaches the `Container` directly (a
@@ -105,6 +119,22 @@ pub struct ModuleDescriptor {
 
 inventory::collect!(ModuleDescriptor);
 
+/// One `#[resolver]` linked into the binary, submitted to the link-time registry
+/// by the macro. A resolver self-composes into the GraphQL schema regardless of
+/// any module (so it is always live), so — to bring its injected dependencies
+/// under the contract — it must be a member of a module (listed in
+/// `providers = [...]`), which gives it the import closure to check against. This
+/// descriptor lets the boot verify that membership exists.
+pub struct ResolverDescriptor {
+    /// The resolver struct's `TypeId` — must match a provider key of some module
+    /// reachable from the application root.
+    pub resolver: fn() -> TypeId,
+    /// The resolver struct name, for diagnostics.
+    pub name: &'static str,
+}
+
+inventory::collect!(ResolverDescriptor);
+
 /// A provider depends on something its module does not import and that is not
 /// global infrastructure. Raised at boot by the access-graph validation.
 #[derive(Debug, Error)]
@@ -123,6 +153,22 @@ pub struct AccessGraphError {
     pub dependency: &'static str,
     /// The module that provides the dependency and should be imported.
     pub owner: &'static str,
+}
+
+/// A `#[resolver]` is linked into the binary (so it is part of the GraphQL
+/// schema) but is not listed in the `providers = [...]` of any module reachable
+/// from the application root, so its injected dependencies escape the access
+/// contract. Raised at boot by the resolver-membership validation.
+#[derive(Debug, Error)]
+#[error(
+    "resolver `{resolver}` is part of the GraphQL schema but is not declared in any module \
+     reachable from the application root. Add `{resolver}` to its feature module's \
+     `#[module(providers = [...])]` (like a controller) so its injected dependencies are \
+     checked by the access contract."
+)]
+pub struct ResolverMembershipError {
+    /// The resolver missing from every reachable module's `providers`.
+    pub resolver: &'static str,
 }
 
 /// Validate the access graph: every provider's dependency must be reachable
@@ -217,14 +263,65 @@ fn reachable(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> Ha
     seen
 }
 
+/// Verify every linked resolver is a member of a module reachable from `roots`
+/// (listed in its `providers = [...]`). A resolver belongs to no module on its
+/// own yet is always live in the schema, so membership is what gives its
+/// injected dependencies an import closure for [`validate_access_graph`] to
+/// check. Pure over its inputs, like [`validate_access_graph`].
+///
+/// - `descriptors` — every module descriptor in the binary.
+/// - `roots` — the application's root module `TypeId`(s).
+/// - `resolvers` — every resolver descriptor in the binary.
+pub fn validate_resolver_membership(
+    descriptors: &[&ModuleDescriptor],
+    roots: &[TypeId],
+    resolvers: &[&ResolverDescriptor],
+) -> Result<(), ResolverMembershipError> {
+    let by_id: HashMap<TypeId, &ModuleDescriptor> =
+        descriptors.iter().map(|d| ((d.module)(), *d)).collect();
+
+    // Every provider key across the modules reachable from the roots — a
+    // listed resolver provides its own `TypeId`, so its presence here is the
+    // membership we require.
+    let mut reachable_keys = HashSet::new();
+    for module_id in reachable(roots, &by_id) {
+        if let Some(desc) = by_id.get(&module_id) {
+            for p in desc.providers {
+                reachable_keys.insert((p.provides)());
+            }
+        }
+    }
+
+    for r in resolvers {
+        if !reachable_keys.contains(&(r.resolver)()) {
+            return Err(ResolverMembershipError { resolver: r.name });
+        }
+    }
+    Ok(())
+}
+
 /// Validate the link-time module registry against the app's roots and global
-/// set. Called by [`App`](crate::App) at boot.
+/// set. Called by [`App`](crate::App) at boot, alongside
+/// [`validate_resolver_membership_from_inventory`]. Kept returning the concrete
+/// [`AccessGraphError`] (rather than a unified enum) so a caller can `downcast`
+/// the boot failure to the precise cause.
 pub(crate) fn validate_from_inventory(
     roots: &[TypeId],
     global: &HashSet<TypeId>,
 ) -> Result<(), AccessGraphError> {
     let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
     validate_access_graph(&descriptors, roots, global)
+}
+
+/// Validate resolver membership against the link-time registry: every linked
+/// resolver must be listed in a module reachable from `roots`. Called by
+/// [`App`](crate::App) at boot, after [`validate_from_inventory`].
+pub(crate) fn validate_resolver_membership_from_inventory(
+    roots: &[TypeId],
+) -> Result<(), ResolverMembershipError> {
+    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+    let resolvers: Vec<&ResolverDescriptor> = inventory::iter::<ResolverDescriptor>().collect();
+    validate_resolver_membership(&descriptors, roots, &resolvers)
 }
 
 #[cfg(test)]
@@ -243,6 +340,7 @@ mod tests {
     struct BillingService;
     struct AppGuard;
     struct Db; // stands in for a seeded / factory-built infrastructure value.
+    struct OrgsResolver; // stands in for a `#[resolver]` type.
 
     fn no_deps() -> Vec<TypeId> {
         Vec::new()
@@ -412,5 +510,77 @@ mod tests {
         // No descriptor matches the root TypeId → nothing to validate.
         validate_access_graph(&[], &[TypeId::of::<AppMod>()], &HashSet::new())
             .expect("a root with no descriptor validates trivially");
+    }
+
+    fn orgs_resolver_desc() -> ResolverDescriptor {
+        ResolverDescriptor {
+            resolver: || TypeId::of::<OrgsResolver>(),
+            name: "OrgsResolver",
+        }
+    }
+
+    #[test]
+    fn listed_resolver_passes_membership() {
+        // A resolver listed in `providers` is a member of its reachable module.
+        let app = ModuleDescriptor {
+            module: || TypeId::of::<AppMod>(),
+            name: "AppModule",
+            imports: &[],
+            providers: &[ProviderDescriptor {
+                name: "OrgsResolver",
+                provides: || TypeId::of::<OrgsResolver>(),
+                injects: no_deps,
+            }],
+        };
+        validate_resolver_membership(&[&app], &[TypeId::of::<AppMod>()], &[&orgs_resolver_desc()])
+            .expect("a resolver listed in a reachable module's providers is a member");
+    }
+
+    #[test]
+    fn unlisted_resolver_fails_membership() {
+        // The resolver is linked (hence in the schema) but listed in no module.
+        let app = ModuleDescriptor {
+            module: || TypeId::of::<AppMod>(),
+            name: "AppModule",
+            imports: &[],
+            providers: &[],
+        };
+        let err = validate_resolver_membership(
+            &[&app],
+            &[TypeId::of::<AppMod>()],
+            &[&orgs_resolver_desc()],
+        )
+        .expect_err("a resolver in no reachable module must fail the boot");
+        assert_eq!(err.resolver, "OrgsResolver");
+        assert!(err.to_string().contains("OrgsResolver"), "{err}");
+    }
+
+    #[test]
+    fn resolver_listed_only_in_unreachable_module_fails_membership() {
+        // Listed, but in a module the root does not import — it is still live in
+        // the schema (the registry is global), so membership must still fail.
+        let billing = ModuleDescriptor {
+            module: || TypeId::of::<BillingMod>(),
+            name: "BillingModule",
+            imports: &[],
+            providers: &[ProviderDescriptor {
+                name: "OrgsResolver",
+                provides: || TypeId::of::<OrgsResolver>(),
+                injects: no_deps,
+            }],
+        };
+        let app = ModuleDescriptor {
+            module: || TypeId::of::<AppMod>(),
+            name: "AppModule",
+            imports: &[], // does not import BillingModule
+            providers: &[],
+        };
+        let err = validate_resolver_membership(
+            &[&app, &billing],
+            &[TypeId::of::<AppMod>()],
+            &[&orgs_resolver_desc()],
+        )
+        .expect_err("a resolver listed only in an unimported module must fail");
+        assert_eq!(err.resolver, "OrgsResolver");
     }
 }

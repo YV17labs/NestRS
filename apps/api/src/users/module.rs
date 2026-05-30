@@ -4,9 +4,10 @@ use nestrs_ws::WsModule;
 use crate::authz::AuthzModule;
 use crate::users::controller::UsersController;
 use crate::users::gateway::UsersGateway;
+use crate::users::resolver::UsersResolver;
 use crate::users::service::UsersService;
 
-#[module(imports = [WsModule, AuthzModule], providers = [UsersService, UsersController, UsersGateway])]
+#[module(imports = [WsModule, AuthzModule], providers = [UsersService, UsersController, UsersGateway, UsersResolver])]
 pub struct UsersModule;
 
 #[cfg(test)]

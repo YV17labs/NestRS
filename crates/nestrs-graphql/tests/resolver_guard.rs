@@ -83,7 +83,7 @@ impl GuardedResolver {
     }
 }
 
-#[module(imports = [GraphqlModule], providers = [RequireAdmin])]
+#[module(imports = [GraphqlModule], providers = [RequireAdmin, GuardedResolver])]
 struct GuardedModule;
 
 async fn boot() -> TestApp {

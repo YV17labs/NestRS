@@ -1,5 +1,5 @@
 [package]
-name = "nestrs-orm"
+name = "nestrs-database"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,10 @@ description = "SeaORM database module for nestrs: DatabaseModule::for_root owns 
 
 [dependencies]
 nestrs-core.workspace = true
+# `DatabaseModule` owns its `#[config]` `DatabaseConfig` (namespace `database`),
+# loaded from `NESTRS_DATABASE__*`; `validator` backs its `#[validate]` rules.
+nestrs-config.workspace = true
+validator.workspace = true
 # `Repo` auto-applies the caller's row-level filter, read from the ambient
 # `Ability` (`condition_for`); the ambient `Ability` itself lives in nestrs-authz.
 nestrs-authz.workspace = true

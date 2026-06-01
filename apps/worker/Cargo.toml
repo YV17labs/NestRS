@@ -20,3 +20,6 @@ anyhow.workspace = true
 # The e2e boots headless against the real Redis the worker uses and drives a
 # queue round-trip through the QueueWorker transport.
 nestrs-testing.workspace = true
+
+[lints]
+workspace = true

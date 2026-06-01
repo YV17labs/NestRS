@@ -3,8 +3,8 @@
 
 use nestrs_authz::ActionMarker;
 use nestrs_core::Container;
+use nestrs_database::{Access, CrudService};
 use nestrs_graphql::async_graphql::{Context, Error, Result};
-use nestrs_orm::{Access, CrudService};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 

@@ -8,6 +8,7 @@ use worker::AppModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let _environment = nestrs_config::bootstrap_env();
     let _telemetry = Telemetry::init("worker")?;
 
     App::builder()

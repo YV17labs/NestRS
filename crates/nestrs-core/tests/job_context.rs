@@ -33,11 +33,18 @@ fn observe_marker() -> Option<u32> {
 async fn runs_inside_the_bound_context_and_preserves_the_result() {
     let ctx: Arc<dyn JobContext> = Arc::new(MarkerContext(42));
     let seen = run_in_job_context(Some(&ctx), async { observe_marker() }).await;
-    assert_eq!(seen, Some(42), "the job observes the context's ambient value");
+    assert_eq!(
+        seen,
+        Some(42),
+        "the job observes the context's ambient value"
+    );
 }
 
 #[tokio::test]
 async fn runs_bare_without_a_context() {
     let seen = run_in_job_context::<Option<u32>>(None, async { observe_marker() }).await;
-    assert_eq!(seen, None, "with no context the job runs without any ambient");
+    assert_eq!(
+        seen, None,
+        "with no context the job runs without any ambient"
+    );
 }

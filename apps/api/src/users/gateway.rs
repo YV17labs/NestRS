@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nestrs_orm::CrudService;
+use nestrs_database::CrudService;
 use nestrs_ws::{gateway, messages};
 
 use crate::authn::AuthGuard;

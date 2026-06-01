@@ -70,7 +70,7 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 /// hand-written strategy to maintain:
 ///
 /// ```ignore
-/// pub type AuthGuard = nestrs_auth::AuthGuard<nestrs_auth::JwtStrategy<MyClaims>>;
+/// pub type AuthGuard = nestrs_authn::AuthGuard<nestrs_authn::JwtStrategy<MyClaims>>;
 /// ```
 ///
 /// When an app genuinely needs custom authentication (a revocation check, mapping

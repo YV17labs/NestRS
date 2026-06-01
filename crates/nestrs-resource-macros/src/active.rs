@@ -2,7 +2,7 @@
 //! and `update` call: `impl CreateModel<Entity> for Create<Name>Input` (a fresh
 //! row, its UUID-v7 id seeded) and `impl UpdateModel<Entity> for Update<Name>Input`
 //! (the loaded row, its updatable columns overwritten). They are the
-//! `nestrs-orm` traits, so the generic `CrudService` defaults stay entity-agnostic.
+//! `nestrs-database` traits, so the generic `CrudService` defaults stay entity-agnostic.
 //!
 //! Only the columns the developer marked `input(create)` / `input(update)` are
 //! set; every other column — a server-side scope column like `org_id`, say —
@@ -52,7 +52,7 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
 
     let create = &model.create_input_ident;
     quote! {
-        impl ::nestrs_orm::CreateModel<Entity> for #create {
+        impl ::nestrs_database::CreateModel<Entity> for #create {
             fn into_active_model(self) -> ActiveModel {
                 let mut __am = <ActiveModel as ::core::default::Default>::default();
                 #pk_seed
@@ -82,7 +82,7 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
 
     let update = &model.update_input_ident;
     quote! {
-        impl ::nestrs_orm::UpdateModel<Entity> for #update {
+        impl ::nestrs_database::UpdateModel<Entity> for #update {
             fn apply_to(self, mut __am: ActiveModel) -> ActiveModel {
                 #(#setters)*
                 __am

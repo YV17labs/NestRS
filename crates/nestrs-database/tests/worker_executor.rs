@@ -8,13 +8,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nestrs_core::{Container, JobContext};
-use nestrs_orm::{current_executor, Executor, WorkerDbContext};
+use nestrs_database::{current_executor, Executor, WorkerDbContext};
 use sea_orm::{ConnectionTrait, Database};
 
 #[tokio::test]
 async fn worker_db_context_installs_a_live_pool_executor_for_a_job() {
-    let url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must point at a reachable Postgres for this test");
+    let url = std::env::var("NESTRS_DATABASE__URL")
+        .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
     let conn = Arc::new(Database::connect(&url).await.expect("connect to Postgres"));
 
     // Build the bridge the way `DatabaseModule` does — from the container.

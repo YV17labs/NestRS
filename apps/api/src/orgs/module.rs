@@ -14,11 +14,14 @@ mod tests {
     use nestrs_core::{Container, Module};
     use std::sync::Arc;
 
+    // Non-secret sample EdDSA public key, test-only.
+    const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
+
     #[test]
     fn registers_orgs_service() {
-        use nestrs_auth::{JwtOptions, JwtService};
+        use nestrs_authn::{JwtOptions, JwtService};
 
-        let jwt = JwtService::new(JwtOptions::eddsa_verify(identity::DEV_PUBLIC_KEY_PEM))
+        let jwt = JwtService::new(JwtOptions::eddsa_verify(DEV_PUBLIC_KEY))
             .expect("verify-only JwtService from the dev public key");
         let container = OrgsModule::register(
             Container::builder()

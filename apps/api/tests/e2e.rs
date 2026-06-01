@@ -3,10 +3,10 @@ use std::sync::Arc;
 use api::AppModule;
 use futures_util::{SinkExt, StreamExt};
 use identity::{Claims, Role};
-use nestrs_auth::{JwtOptions, JwtService};
+use nestrs_authn::{JwtConfig, JwtOptions, JwtService};
 use nestrs_authz::{with_ability, AbilityBuilder, Action};
+use nestrs_database::{with_executor, Executor, Repo};
 use nestrs_http::HttpTransport;
-use nestrs_orm::{with_executor, Executor, Repo};
 use nestrs_testing::{EphemeralDatabase, TestApp};
 use poem::http::{header, StatusCode};
 use sea_orm::sea_query::Query;
@@ -20,6 +20,7 @@ use uuid::Uuid;
 const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
 
 const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
+const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
 
 async fn boot() -> (EphemeralDatabase, TestApp) {
     let db = EphemeralDatabase::create::<db::Migrator>()
@@ -29,6 +30,13 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
         .module::<AppModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())
+        // Seed the resource server's verify key (the dev public key) so the boot
+        // needs no `NESTRS_AUTHN__PUBLIC_KEY` in the environment — seed wins over
+        // the env-reading factory.
+        .provide(JwtConfig {
+            public_key: Some(DEV_PUBLIC_KEY.into()),
+            ..Default::default()
+        })
         .build()
         .await
         .expect("AppModule boots against the throwaway database");
@@ -40,11 +48,8 @@ async fn login() -> String {
 }
 
 async fn token_for(org_id: &str, role: &str) -> String {
-    let jwt = JwtService::new(JwtOptions::eddsa(
-        DEV_PRIVATE_KEY,
-        identity::DEV_PUBLIC_KEY_PEM,
-    ))
-    .expect("the dev keypair parses");
+    let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
+        .expect("the dev keypair parses");
     let roles = match role {
         "admin" => vec![Role::Admin],
         _ => vec![Role::User],
@@ -883,6 +888,10 @@ async fn ws_gateway_scopes_users_list_to_the_callers_org() {
         .module::<AppModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())
+        .provide(JwtConfig {
+            public_key: Some(DEV_PUBLIC_KEY.into()),
+            ..Default::default()
+        })
         .build_headless()
         .await
         .expect("AppModule boots headless against the throwaway database");

@@ -1,5 +1,5 @@
 [package]
-name = "nestrs-auth"
+name = "nestrs-authn"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -8,9 +8,13 @@ repository.workspace = true
 description = "Authentication for nestrs: a JwtService (sign/verify), a pluggable Strategy trait, and the request-scoped AuthGuard that establishes the caller's identity."
 
 [dependencies]
-# `AuthGuard` is `#[injectable]` (it resolves the app's `Strategy`); `AuthModule`
+# `AuthGuard` is `#[injectable]` (it resolves the app's `Strategy`); `AuthnModule`
 # is a `DynamicModule` that provides the configured `JwtService` as global infra.
 nestrs-core.workspace = true
+# `AuthnModule`/`OAuth2Module` own their `#[config]` (`JwtConfig`/`OAuth2Config`,
+# namespace `authn`), loaded from `NESTRS_AUTHN__*`; `validator` backs the derives.
+nestrs-config.workspace = true
+validator.workspace = true
 # `Strategy` reads the `poem::Request`; `AuthGuard` implements the `Guard` trait
 # re-exported by the HTTP surface.
 nestrs-http.workspace = true

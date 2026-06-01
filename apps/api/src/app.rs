@@ -1,43 +1,30 @@
-use nestrs_auth::{AuthModule, JwtOptions};
-use nestrs_config::env_var;
+use nestrs_authn::AuthnModule;
+use nestrs_config::ConfigModule;
 use nestrs_core::module;
-use nestrs_graphql::{GraphqlModule, GraphqlOptions};
+use nestrs_database::DatabaseModule;
+use nestrs_graphql::GraphqlModule;
 use nestrs_health::HealthModule;
-use nestrs_openapi::{OpenApiModule, OpenApiOptions};
-use nestrs_orm::{DatabaseModule, DatabaseOptions};
+use nestrs_openapi::OpenApiModule;
 use nestrs_server_timing::ServerTimingModule;
 use nestrs_telemetry::TelemetryModule;
 
-use crate::authn::AuthnModule;
+use crate::authn::AuthnModule as LocalAuthnModule;
 use crate::authz::AuthzModule;
 use crate::orgs::OrgsModule;
 use crate::users::UsersModule;
 
 #[module(
     imports = [
-        DatabaseModule::for_root(DatabaseOptions {
-            url: env_var("DATABASE_URL").unwrap_or_default(),
-            ..Default::default()
-        }),
-        AuthModule::for_root(JwtOptions::eddsa_verify(
-            env_var("JWT_PUBLIC_KEY").unwrap_or_else(|| identity::DEV_PUBLIC_KEY_PEM.into()),
-        )),
-        AuthnModule,
+        ConfigModule::for_root(),
+        DatabaseModule::for_root(),
+        AuthnModule::for_root(),
+        LocalAuthnModule,
         AuthzModule,
         OrgsModule,
         UsersModule,
-        GraphqlModule::for_root(GraphqlOptions {
-            path: "/graphql".into(),
-            playground: true,
-            schema_path: concat!(env!("CARGO_MANIFEST_DIR"), "/schema.graphql").into(),
-            emit_sdl: cfg!(debug_assertions),
-        }),
+        GraphqlModule::for_root(),
         HealthModule,
-        OpenApiModule::for_root(OpenApiOptions {
-            title: "nestrs API".into(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            description: Some("Demo API built with nestrs".into()),
-        }),
+        OpenApiModule::for_root(),
         TelemetryModule,
         ServerTimingModule,
     ],

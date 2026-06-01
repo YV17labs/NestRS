@@ -9,6 +9,11 @@ description = "OpenAPI 3.0 document generation and bundled Swagger UI for nestrs
 
 [dependencies]
 nestrs-core.workspace = true
+# `OpenApiModule` owns its `#[config]` `OpenApiConfig` (namespace `openapi`),
+# loaded from `NESTRS_OPENAPI__*`; serde + validator back its derives.
+nestrs-config.workspace = true
+serde.workspace = true
+validator.workspace = true
 # OpenApiModule self-mounts over HTTP via HttpEndpointMeta and reads the
 # discovered HttpControllerMeta — the same pattern GraphqlModule uses. No cycle:
 # nestrs-http does not depend on us.

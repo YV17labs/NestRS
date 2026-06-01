@@ -6,7 +6,7 @@
 //! request installs is absent — a job that wants to query through `Repo` has no
 //! ambient connection. `JobContext` is the orm/authz-agnostic hook a worker
 //! transport resolves from the container ([`Container::get_dyn`](crate::Container::get_dyn))
-//! and wraps each job execution with; `nestrs-orm`'s `WorkerDbContext` implements it
+//! and wraps each job execution with; `nestrs-database`'s `WorkerDbContext` implements it
 //! to install a pool executor, so a job's `Repo` calls join a connection without
 //! injecting one. With nothing bound (no database module imported) a job runs bare
 //! — the current default.

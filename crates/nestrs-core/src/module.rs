@@ -35,11 +35,8 @@ pub trait Module {
 ///
 /// ```ignore
 /// #[module(imports = [
-///     UsersModule,                                   // static, by type
-///     OpenApiModule::for_root(OpenApiOptions {       // dynamic, configured
-///         title: "My API".into(),
-///         ..Default::default()
-///     }),
+///     UsersModule,                  // static, by type
+///     OpenApiModule::for_root(),    // dynamic, configured at its import site
 /// ])]
 /// pub struct AppModule;
 /// ```

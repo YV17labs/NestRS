@@ -146,9 +146,10 @@ identity = { path = "crates/identity" }
 
 # Internal crates (framework)
 nestrs-core = { path = "crates/nestrs-core" }
-nestrs-auth = { path = "crates/nestrs-auth" }
+nestrs-authn = { path = "crates/nestrs-authn" }
 nestrs-throttler = { path = "crates/nestrs-throttler" }
 nestrs-config = { path = "crates/nestrs-config" }
+nestrs-config-macros = { path = "crates/nestrs-config-macros" }
 nestrs-events = { path = "crates/nestrs-events" }
 nestrs-events-macros = { path = "crates/nestrs-events-macros" }
 nestrs-authz = { path = "crates/nestrs-authz" }
@@ -166,7 +167,7 @@ nestrs-mcp = { path = "crates/nestrs-mcp" }
 nestrs-mcp-macros = { path = "crates/nestrs-mcp-macros" }
 nestrs-middleware = { path = "crates/nestrs-middleware" }
 nestrs-openapi = { path = "crates/nestrs-openapi" }
-nestrs-orm = { path = "crates/nestrs-orm" }
+nestrs-database = { path = "crates/nestrs-database" }
 nestrs-pipes = { path = "crates/nestrs-pipes" }
 nestrs-queue = { path = "crates/nestrs-queue" }
 nestrs-queue-macros = { path = "crates/nestrs-queue-macros" }
@@ -179,6 +180,14 @@ nestrs-telemetry = { path = "crates/nestrs-telemetry" }
 nestrs-testing = { path = "crates/nestrs-testing" }
 nestrs-ws = { path = "crates/nestrs-ws" }
 nestrs-ws-macros = { path = "crates/nestrs-ws-macros" }
+
+# Lints opted into by the apps (via `[lints] workspace = true`). Config literals
+# always close with `..Default::default()` — the house convention that keeps an
+# import site forward-compatible as an options struct gains fields — so the
+# `needless_update` lint (which fires when every field happens to be specified
+# today) is deliberately silenced for that deliberate style.
+[workspace.lints.clippy]
+needless_update = "allow"
 
 # Release: smallest, fastest binary. Compile time is not a concern here.
 [profile.release]

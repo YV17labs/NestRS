@@ -17,8 +17,10 @@
 //! Swagger UI is vendored (`assets/`, from `swagger-ui-dist` 5.32.6) and embedded
 //! in the binary — no CDN, works offline.
 
+mod config;
 mod document;
 mod module;
 mod ui;
 
-pub use module::{OpenApiModule, OpenApiOptions, OpenApiSetup};
+pub use config::OpenApiConfig;
+pub use module::{OpenApiModule, OpenApiSetup};

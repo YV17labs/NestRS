@@ -13,6 +13,7 @@
 //! as a cookie on the redirect, hand it back on the callback. Tamper-proof, and
 //! no new storage.
 
+use nestrs_config::config;
 use oauth2::basic::BasicClient;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
@@ -20,12 +21,21 @@ use oauth2::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 use crate::error::AuthError;
 use crate::jwt::JwtService;
 
-/// A provider's OAuth2 endpoints and this app's registration with it.
-#[derive(Clone)]
+/// A provider's OAuth2 endpoints and this app's registration with it — a
+/// namespaced `#[config]` read from `NESTRS_AUTHN__*` (OAuth lives in the `authn`
+/// crate), the source a bare `OAuth2Module` uses. Demo credentials ship in the
+/// committed `.env`; real ones come from the environment. `#[serde(default)]` lets
+/// an import site spell out only the fields it overrides and close the literal
+/// with `..Default::default()`.
+// No `Debug`: `client_secret` is a secret and must not leak through a derived format.
+#[config(namespace = "authn")]
+#[derive(Clone, Default, Deserialize, Validate)]
+#[serde(default)]
 pub struct OAuth2Config {
     pub client_id: String,
     pub client_secret: String,

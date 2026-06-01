@@ -65,7 +65,7 @@ where
 
     /// The entity's table name, the `entity` field every operation log carries
     /// (the flat module path can't distinguish entities — they all log from
-    /// `nestrs_orm::service`).
+    /// `nestrs_database::service`).
     fn entity_name() -> &'static str {
         Self::Entity::default().table_name()
     }

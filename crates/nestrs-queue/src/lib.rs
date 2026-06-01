@@ -45,13 +45,15 @@
 //!     .run().await
 //! ```
 
+mod config;
 mod connection;
 mod module;
 mod processor;
 mod worker;
 
+pub use config::QueueConfig;
 pub use connection::{Queue, QueueConnection};
-pub use module::{QueueModule, QueueOptions, QueueSetup};
+pub use module::{QueueModule, QueueSetup};
 pub use processor::{Job, Processor, ProcessorMeta};
 pub use worker::QueueWorker;
 

@@ -1,23 +1,43 @@
 use auth::AppModule;
-use identity::{Claims, Role, DEV_PUBLIC_KEY_PEM};
-use nestrs_auth::{JwtOptions, JwtService};
+use identity::{Claims, Role};
+use nestrs_authn::{JwtConfig, JwtOptions, JwtService, OAuth2Config};
 use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 
 const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
 
+/// Non-secret sample EdDSA keypair, test-only — so the issuer can sign without
+/// `NESTRS_AUTHN__*` in the environment, and the matching public key verifies.
+const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
+const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
+
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<AppModule>()
         .with_test_telemetry()
+        // Seed the signing config + OAuth provider so the boot needs no
+        // `NESTRS_AUTHN__*` in the environment (seed wins over the env factory).
+        .provide(JwtConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            public_key: Some(DEV_PUBLIC_KEY.into()),
+            ..Default::default()
+        })
+        .provide(OAuth2Config {
+            client_id: "demo-client-id".into(),
+            client_secret: "demo-client-secret".into(),
+            auth_url: "https://github.com/login/oauth/authorize".into(),
+            token_url: "https://github.com/login/oauth/access_token".into(),
+            userinfo_url: "https://api.github.com/user".into(),
+            redirect_url: "http://localhost:3002/callback".into(),
+            scopes: vec!["read:user".into()],
+        })
         .build()
         .await
         .expect("the auth app boots")
 }
 
 fn resource_server_verifier() -> JwtService {
-    JwtService::new(JwtOptions::eddsa_verify(DEV_PUBLIC_KEY_PEM))
-        .expect("the dev public key parses")
+    JwtService::new(JwtOptions::eddsa_verify(DEV_PUBLIC_KEY)).expect("the dev public key parses")
 }
 
 #[tokio::test]

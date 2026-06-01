@@ -58,11 +58,7 @@ impl EventBus {
     /// registered for `E`.
     pub async fn emit<E: Clone + Send + 'static>(&self, event: E) {
         // Clone out the handler list so the lock is released before awaiting.
-        let handlers = self
-            .handlers
-            .read()
-            .get(&TypeId::of::<E>())
-            .cloned();
+        let handlers = self.handlers.read().get(&TypeId::of::<E>()).cloned();
         let Some(handlers) = handlers else { return };
         for handler in handlers {
             handler(Box::new(event.clone())).await;

@@ -1,6 +1,6 @@
 //! [`Scope<E, A>`] — the caller's row-level filter as a handler argument.
 //!
-//! The Tier-1, explicit counterpart to `nestrs-orm`'s transparent `Repo`
+//! The Tier-1, explicit counterpart to `nestrs-database`'s transparent `Repo`
 //! scoping: a handler that runs a *custom* query takes `Scope<E, A>` and passes
 //! the [`Condition`] to its service, instead of fishing the ability out of
 //! `Ctx<Arc<Ability>>` and calling `condition_for` by hand. The condition is the

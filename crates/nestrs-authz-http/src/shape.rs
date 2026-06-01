@@ -2,7 +2,7 @@
 //! keyed on the caller's ability that the guard attached:
 //!
 //! 1. **Ambient ability** — [`run`](RouteResponseShaper::run) wraps the handler in
-//!    [`with_ability`], so the data layer (`nestrs-orm`'s `Repo`) reads the
+//!    [`with_ability`], so the data layer (`nestrs-database`'s `Repo`) reads the
 //!    caller's ability via `current_ability()` and scopes every query — the
 //!    developer writes no filter.
 //! 2. **Response masking** — after the handler, the body is parsed back into

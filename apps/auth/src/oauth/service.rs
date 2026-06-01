@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nestrs_auth::JwtService;
+use nestrs_authn::JwtService;
 use nestrs_core::injectable;
 use uuid::Uuid;
 

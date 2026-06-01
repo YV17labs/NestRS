@@ -53,7 +53,7 @@ impl<E: EntityTrait> Repo<E> {
         current_executor().ok_or_else(|| {
             DbErr::Custom(
                 "no ambient database executor — a Repo query must run inside the request \
-                 scope installed by nestrs-orm's DbContext interceptor"
+                 scope installed by nestrs-database's DbContext interceptor"
                     .to_owned(),
             )
         })

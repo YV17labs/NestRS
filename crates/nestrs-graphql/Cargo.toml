@@ -10,6 +10,11 @@ description = "GraphQL resolver discovery + schema composition for nestrs apps, 
 [dependencies]
 nestrs-core.workspace = true
 nestrs-graphql-macros.workspace = true
+# `GraphqlModule` owns its `#[config]` `GraphqlConfig` (namespace `graphql`),
+# loaded from `NESTRS_GRAPHQL__*`; serde + validator back its derives.
+nestrs-config.workspace = true
+serde.workspace = true
+validator.workspace = true
 # GraphqlModule self-mounts over HTTP via HttpEndpointMeta — this crate serves
 # GraphQL on the HTTP transport. No cycle: nestrs-http does not depend on us.
 nestrs-http.workspace = true

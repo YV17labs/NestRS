@@ -176,19 +176,19 @@ dependencies = [
  "db",
  "futures-util",
  "identity",
- "nestrs-auth",
+ "nestrs-authn",
  "nestrs-authz",
  "nestrs-authz-graphql",
  "nestrs-authz-http",
  "nestrs-authz-ws",
  "nestrs-config",
  "nestrs-core",
+ "nestrs-database",
  "nestrs-graphql",
  "nestrs-health",
  "nestrs-http",
  "nestrs-middleware",
  "nestrs-openapi",
- "nestrs-orm",
  "nestrs-resource",
  "nestrs-server-timing",
  "nestrs-telemetry",
@@ -583,7 +583,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "identity",
- "nestrs-auth",
+ "nestrs-authn",
  "nestrs-config",
  "nestrs-core",
  "nestrs-health",
@@ -2564,12 +2564,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-auth"
+name = "nestrs-authn"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "jsonwebtoken",
+ "nestrs-config",
  "nestrs-core",
  "nestrs-http",
  "oauth2",
@@ -2579,6 +2580,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "validator",
 ]
 
 [[package]]
@@ -2598,10 +2600,10 @@ dependencies = [
  "async-graphql",
  "nestrs-authz",
  "nestrs-core",
+ "nestrs-database",
  "nestrs-graphql",
  "nestrs-http",
  "nestrs-middleware",
- "nestrs-orm",
  "nestrs-testing",
  "poem",
  "sea-orm",
@@ -2616,8 +2618,8 @@ version = "0.1.0"
 dependencies = [
  "nestrs-authz",
  "nestrs-core",
+ "nestrs-database",
  "nestrs-http",
- "nestrs-orm",
  "poem",
  "sea-orm",
  "serde",
@@ -2631,7 +2633,7 @@ version = "0.1.0"
 dependencies = [
  "nestrs-authz",
  "nestrs-core",
- "nestrs-orm",
+ "nestrs-database",
  "nestrs-ws",
  "poem",
  "sea-orm",
@@ -2651,10 +2653,22 @@ dependencies = [
 name = "nestrs-config"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "figment",
+ "nestrs-config-macros",
+ "nestrs-core",
  "serde",
  "thiserror 2.0.18",
  "validator",
+]
+
+[[package]]
+name = "nestrs-config-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2670,6 +2684,25 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "nestrs-database"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "nestrs-authz",
+ "nestrs-config",
+ "nestrs-core",
+ "nestrs-http",
+ "nestrs-middleware",
+ "poem",
+ "sea-orm",
+ "serde",
+ "tokio",
+ "tracing",
+ "validator",
 ]
 
 [[package]]
@@ -2703,14 +2736,17 @@ dependencies = [
  "async-graphql-poem",
  "async-trait",
  "inventory",
+ "nestrs-config",
  "nestrs-core",
  "nestrs-graphql-macros",
  "nestrs-http",
  "nestrs-testing",
  "poem",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "validator",
 ]
 
 [[package]]
@@ -2807,28 +2843,14 @@ dependencies = [
 name = "nestrs-openapi"
 version = "0.1.0"
 dependencies = [
+ "nestrs-config",
  "nestrs-core",
  "nestrs-http",
  "poem",
  "schemars",
- "serde_json",
-]
-
-[[package]]
-name = "nestrs-orm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "nestrs-authz",
- "nestrs-core",
- "nestrs-http",
- "nestrs-middleware",
- "poem",
- "sea-orm",
  "serde",
- "tokio",
- "tracing",
+ "serde_json",
+ "validator",
 ]
 
 [[package]]
@@ -2849,12 +2871,14 @@ dependencies = [
  "apalis",
  "apalis-redis",
  "async-trait",
+ "nestrs-config",
  "nestrs-core",
  "nestrs-queue-macros",
  "serde",
  "tokio",
  "tokio-util",
  "tracing",
+ "validator",
 ]
 
 [[package]]
@@ -2958,14 +2982,17 @@ name = "nestrs-testing"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "nestrs-config",
  "nestrs-core",
  "nestrs-http",
  "nestrs-telemetry",
  "poem",
  "sea-orm",
  "sea-orm-migration",
+ "serde",
  "tokio",
  "tokio-util",
+ "validator",
 ]
 
 [[package]]

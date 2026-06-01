@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nestrs_auth::{AuthError, JwtService, OAuth2Client, Outcome, Strategy};
+use nestrs_authn::{AuthError, JwtService, OAuth2Client, Outcome, Strategy};
 use nestrs_core::injectable;
 use nestrs_http::async_trait;
 use poem::http::{header, StatusCode};
@@ -83,4 +83,4 @@ fn transaction_cookie(req: &Request) -> Option<String> {
     })
 }
 
-pub type OAuthGuard = nestrs_auth::AuthGuard<OAuthStrategy>;
+pub type OAuthGuard = nestrs_authn::AuthGuard<OAuthStrategy>;

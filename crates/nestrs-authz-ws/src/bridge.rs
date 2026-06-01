@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use nestrs_authz::{with_ability, Ability};
 use nestrs_core::injectable;
-use nestrs_orm::{with_executor, Executor};
+use nestrs_database::{with_executor, Executor};
 use nestrs_ws::{BoxFuture, Captured, SocketContext, WsReply};
 use poem::Request;
 use sea_orm::DatabaseConnection;

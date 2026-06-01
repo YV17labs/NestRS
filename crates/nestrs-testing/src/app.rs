@@ -66,6 +66,13 @@ pub struct TestAppBuilder {
 
 impl TestAppBuilder {
     fn new() -> Self {
+        // Tests run in the `Test` environment: `.env.local` is skipped (hermetic)
+        // and env-aware defaults (the GraphQL playground / SDL emit, …) stay off,
+        // so an e2e never writes a stray dev artifact. Set before the build reads
+        // `NESTRS_ENV`; an explicit value (e.g. CI asserting prod behaviour) wins.
+        if std::env::var_os("NESTRS_ENV").is_none() {
+            std::env::set_var("NESTRS_ENV", "test");
+        }
         Self {
             inner: App::builder(),
             http: None,

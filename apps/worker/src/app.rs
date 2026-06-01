@@ -1,13 +1,12 @@
-use nestrs_config::env_var;
+use nestrs_config::ConfigModule;
 use nestrs_core::module;
-use nestrs_queue::{QueueModule, QueueOptions};
+use nestrs_queue::QueueModule;
 
 use crate::audio::AudioModule;
 
 #[module(imports = [
-    QueueModule::for_root(QueueOptions {
-        url: env_var("REDIS_URL").unwrap_or_else(|| "redis://127.0.0.1/".into()),
-    }),
+    ConfigModule::for_root(),
+    QueueModule::for_root(),
     AudioModule,
 ])]
 pub struct AppModule;

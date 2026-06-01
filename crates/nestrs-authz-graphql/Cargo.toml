@@ -19,7 +19,7 @@ nestrs-graphql.workspace = true
 nestrs-middleware.workspace = true
 # `bind` loads the entity through the ambient request executor — the GraphQL analog
 # of `nestrs-authz-http`'s `Bind` extractor.
-nestrs-orm.workspace = true
+nestrs-database.workspace = true
 # The bridge runs guards against, and reads ambient state from, the poem request.
 poem.workspace = true
 sea-orm.workspace = true

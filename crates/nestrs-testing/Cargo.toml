@@ -30,3 +30,9 @@ sea-orm-migration = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
+# The config DI test boots a module wiring `ConfigModule::for_feature` and a
+# service injecting the loaded config; serde + validator back the `#[config]`
+# struct's derives.
+nestrs-config.workspace = true
+serde.workspace = true
+validator.workspace = true

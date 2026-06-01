@@ -17,7 +17,7 @@ use crate::strategy::{Outcome, Strategy};
 /// Bind it per route, usually behind a `type` alias:
 ///
 /// ```ignore
-/// pub type JwtAuthGuard = nestrs_auth::AuthGuard<JwtStrategy>;
+/// pub type JwtAuthGuard = nestrs_authn::AuthGuard<JwtStrategy>;
 /// // ...
 /// #[use_guards(JwtAuthGuard, AppAbilityGuard)]
 /// ```

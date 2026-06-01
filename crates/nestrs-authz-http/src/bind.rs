@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use nestrs_authz::{with_ability, Ability, ActionMarker};
 use nestrs_core::RequestScope;
-use nestrs_orm::{Access, CrudService};
+use nestrs_database::{Access, CrudService};
 use poem::http::StatusCode;
 use poem::web::Path;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
@@ -92,7 +92,9 @@ where
         // ability installed as ambient for its instance check (and `Repo` scoping).
         let access = with_ability(ability.clone(), service.access(A::ACTION, id))
             .await
-            .map_err(|err| Error::from_string(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            .map_err(|err| {
+                Error::from_string(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
         match access {
             Access::Found(model) => Ok(Bind(model, PhantomData)),
             Access::Denied => Err(Error::from_status(StatusCode::FORBIDDEN)),

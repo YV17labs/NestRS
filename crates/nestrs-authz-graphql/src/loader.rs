@@ -27,8 +27,8 @@ use std::sync::Arc;
 
 use nestrs_authz::{current_ability, with_ability};
 use nestrs_core::injectable;
+use nestrs_database::{with_executor, Executor};
 use nestrs_graphql::{BatchContext, BatchSpawner};
-use nestrs_orm::{with_executor, Executor};
 use sea_orm::DatabaseConnection;
 
 /// Scopes every `#[dataloader]` batch to the caller, re-installing the ambient

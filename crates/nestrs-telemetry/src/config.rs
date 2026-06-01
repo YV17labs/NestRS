@@ -5,20 +5,20 @@ use nestrs_config::env_var;
 /// # Environment variables
 ///
 /// Follows the framework-wide `NESTRS_<DOMAIN>__<KEY>` scheme documented in
-/// `nestrs_config` — double underscore separates the domain, the leaf
-/// key keeps snake_case. Three domains are owned here: `log`, `service`,
+/// `nestrs_config` — double underscore separates the domain, the leaf key keeps
+/// snake_case. The domain is this crate's name: everything here lives under
 /// `telemetry`. The `http` domain is owned by the `OtelHttp` interceptor directly.
 ///
-/// | Setting              | Variable                            | Values / default                  |
-/// |----------------------|-------------------------------------|-----------------------------------|
-/// | log filter           | `NESTRS_LOG__LEVEL`                 | `EnvFilter` syntax, default `info`|
-/// | log format           | `NESTRS_LOG__FORMAT`                | `text` (default) \| `json`        |
-/// | service name         | `NESTRS_SERVICE__NAME`              | string                            |
-/// | service version      | `NESTRS_SERVICE__VERSION`           | string                            |
-/// | environment          | `NESTRS_SERVICE__ENVIRONMENT`       | string (`prod`, `staging`, …)     |
-/// | instance id          | `NESTRS_SERVICE__INSTANCE_ID`       | string (default: fresh UUID v7)   |
-/// | OTLP endpoint        | `NESTRS_TELEMETRY__OTLP_ENDPOINT`   | base URL, e.g. `http://otel:4318` |
-/// | sampler ratio        | `NESTRS_TELEMETRY__SAMPLE_RATIO`    | `[0.0, 1.0]`, default `1.0`       |
+/// | Setting              | Variable                              | Values / default                  |
+/// |----------------------|---------------------------------------|-----------------------------------|
+/// | log filter           | `NESTRS_TELEMETRY__LOG_LEVEL`         | `EnvFilter` syntax, default `info`|
+/// | log format           | `NESTRS_TELEMETRY__LOG_FORMAT`        | `text` (default) \| `json`        |
+/// | service name         | `NESTRS_TELEMETRY__SERVICE_NAME`      | string                            |
+/// | service version      | `NESTRS_TELEMETRY__SERVICE_VERSION`   | string                            |
+/// | environment          | `NESTRS_TELEMETRY__SERVICE_ENVIRONMENT`| string (`prod`, `staging`, …)    |
+/// | instance id          | `NESTRS_TELEMETRY__SERVICE_INSTANCE_ID`| string (default: fresh UUID v7)  |
+/// | OTLP endpoint        | `NESTRS_TELEMETRY__OTLP_ENDPOINT`     | base URL, e.g. `http://otel:4318` |
+/// | sampler ratio        | `NESTRS_TELEMETRY__SAMPLE_RATIO`      | `[0.0, 1.0]`, default `1.0`       |
 ///
 /// The OTel exporter is wired only when [`Self::otlp_endpoint`] is `Some`;
 /// otherwise telemetry stays console-only.
@@ -84,21 +84,21 @@ impl TelemetryConfig {
 
     /// Read every `NESTRS_*` var listed in the type-level docs. The
     /// `service_name` argument is the default — it is overridden if
-    /// `NESTRS_SERVICE__NAME` is set.
+    /// `NESTRS_TELEMETRY__SERVICE_NAME` is set.
     pub fn from_env(service_name: impl Into<String>) -> Self {
         let mut cfg = Self::new(service_name);
 
-        if let Some(v) = env_var("NESTRS_SERVICE__NAME") {
+        if let Some(v) = env_var("NESTRS_TELEMETRY__SERVICE_NAME") {
             cfg.service_name = v;
         }
-        cfg.service_version = env_var("NESTRS_SERVICE__VERSION");
-        cfg.deployment_environment = env_var("NESTRS_SERVICE__ENVIRONMENT");
-        cfg.service_instance_id = env_var("NESTRS_SERVICE__INSTANCE_ID");
+        cfg.service_version = env_var("NESTRS_TELEMETRY__SERVICE_VERSION");
+        cfg.deployment_environment = env_var("NESTRS_TELEMETRY__SERVICE_ENVIRONMENT");
+        cfg.service_instance_id = env_var("NESTRS_TELEMETRY__SERVICE_INSTANCE_ID");
 
-        if let Some(v) = env_var("NESTRS_LOG__LEVEL") {
+        if let Some(v) = env_var("NESTRS_TELEMETRY__LOG_LEVEL") {
             cfg.log_filter = v;
         }
-        if let Some(raw) = env_var("NESTRS_LOG__FORMAT") {
+        if let Some(raw) = env_var("NESTRS_TELEMETRY__LOG_FORMAT") {
             if let Some(fmt) = LogFormat::parse(&raw) {
                 cfg.log_format = fmt;
             }

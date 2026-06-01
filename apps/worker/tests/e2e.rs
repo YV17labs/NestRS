@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nestrs_core::module;
 use nestrs_queue::{
-    async_trait, processor, Processor, QueueConnection, QueueModule, QueueOptions, QueueWorker,
+    async_trait, processor, Processor, QueueConfig, QueueConnection, QueueModule, QueueWorker,
 };
 use nestrs_schedule::Scheduler;
 use nestrs_testing::TestApp;
@@ -13,7 +13,7 @@ use worker::AppModule;
 const PROBE_QUEUE: &str = "nestrs-e2e-probe";
 
 fn redis_url() -> String {
-    std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into())
+    std::env::var("NESTRS_QUEUE__URL").unwrap_or_else(|_| "redis://127.0.0.1/".into())
 }
 
 fn unique_tag() -> String {
@@ -70,7 +70,7 @@ impl Processor for ProbeConsumer {
 }
 
 #[module(
-    imports = [QueueModule::for_root(QueueOptions { url: redis_url() })],
+    imports = [QueueModule::for_root()],
     providers = [ProbeConsumer],
 )]
 struct ProbeModule;
@@ -81,6 +81,7 @@ async fn enqueued_job_is_processed_through_real_redis() {
     let _ = PROBE_TX.set(tx);
 
     let app = TestApp::builder()
+        .provide(QueueConfig { url: redis_url() })
         .module::<ProbeModule>()
         .build_headless()
         .await

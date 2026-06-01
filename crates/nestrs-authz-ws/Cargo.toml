@@ -15,7 +15,7 @@ nestrs-core.workspace = true
 nestrs-ws.workspace = true
 # The connection loop runs off the request task, so the bridge re-installs the
 # ambient executor (pool) the HTTP `DbContext` interceptor binds per request.
-nestrs-orm.workspace = true
+nestrs-database.workspace = true
 # The bridge captures the ambient state attached to the poem upgrade request.
 poem.workspace = true
 # `Executor::Pool` wraps the shared `DatabaseConnection` the bridge injects.

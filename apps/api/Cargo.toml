@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 nestrs-core.workspace = true
-nestrs-auth.workspace = true
+nestrs-authn.workspace = true
 nestrs-config.workspace = true
 nestrs-authz.workspace = true
 nestrs-authz-http.workspace = true
@@ -17,7 +17,7 @@ nestrs-health.workspace = true
 nestrs-http.workspace = true
 nestrs-middleware.workspace = true
 nestrs-openapi.workspace = true
-nestrs-orm.workspace = true
+nestrs-database.workspace = true
 nestrs-resource.workspace = true
 nestrs-server-timing.workspace = true
 nestrs-telemetry = { workspace = true, features = ["http"] }
@@ -50,3 +50,6 @@ db = { path = "../db" }
 # TestClient cannot perform an upgrade), authenticated with a bearer header.
 futures-util.workspace = true
 tokio-tungstenite = "0.27"
+
+[lints]
+workspace = true

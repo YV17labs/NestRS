@@ -13,12 +13,14 @@
 //! compile-time `MergedObject` tuple, which is what keeps this compatible with
 //! async-graphql's static `Schema<Q, M, S>`.
 
+mod config;
 mod context;
 mod guard;
 mod loader;
 mod module;
 mod resolver;
 
+pub use config::GraphqlConfig;
 /// Forward a per-request value from the poem request into the GraphQL context —
 /// the bridge a resolver (and GraphQL authorization) reads request-scoped state
 /// through. Submit one with `inventory`, or — for the common case of forwarding the
@@ -31,7 +33,7 @@ pub use context::{BoxFuture, OperationGuard};
 /// The per-resolver guard seam (`#[use_guards]` on a `#[resolver]`), the GraphQL
 /// analog of HTTP's per-route/controller guards. See [`guard`].
 pub use guard::ResolverGuard;
-pub use module::{GraphqlModule, GraphqlOptions, GraphqlSetup};
+pub use module::{GraphqlModule, GraphqlSetup};
 // `pub` only so `#[resolver]`/`#[dataloader]`-generated code can name them;
 // `#[doc(hidden)]` at their definitions keeps them out of the app-facing surface.
 pub use loader::{batch_spawner, LoaderRegistration};

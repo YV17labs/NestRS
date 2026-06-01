@@ -7,6 +7,7 @@ use auth::AppModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let _environment = nestrs_config::bootstrap_env();
     let _telemetry = Telemetry::init("auth")?;
 
     App::builder()

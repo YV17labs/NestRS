@@ -10,6 +10,10 @@ description = "Discovered Redis-backed job queues for nestrs: the #[processor] d
 [dependencies]
 nestrs-core.workspace = true
 nestrs-queue-macros.workspace = true
+# `QueueModule` owns its `#[config]` `QueueConfig` (namespace `queue`), loaded
+# from `NESTRS_QUEUE__*`; `validator` backs its `#[validate]` rules.
+nestrs-config.workspace = true
+validator.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 serde.workspace = true

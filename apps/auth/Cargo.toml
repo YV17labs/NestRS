@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 nestrs-core.workspace = true
-nestrs-auth.workspace = true
+nestrs-authn.workspace = true
 nestrs-config.workspace = true
 nestrs-health.workspace = true
 nestrs-http.workspace = true
@@ -25,3 +25,6 @@ tracing.workspace = true
 [dev-dependencies]
 poem = { workspace = true, features = ["test"] }
 nestrs-testing = { workspace = true, features = ["telemetry"] }
+
+[lints]
+workspace = true

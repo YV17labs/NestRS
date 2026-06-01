@@ -109,8 +109,8 @@ mod tests {
     use crate::executor::current_executor;
 
     async fn db() -> Arc<DatabaseConnection> {
-        let url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must point at a reachable Postgres for this test");
+        let url = std::env::var("NESTRS_DATABASE__URL")
+            .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
         Arc::new(Database::connect(&url).await.expect("connect to Postgres"))
     }
 

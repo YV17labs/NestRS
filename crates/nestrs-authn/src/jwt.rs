@@ -1,7 +1,7 @@
 //! [`JwtService`] — sign and verify JSON Web Tokens. The analog of `@nestjs/jwt`'s
 //! `JwtService`, and (like that one) a thin wrapper over the standard JWT engine.
 //!
-//! Configured once via [`AuthModule::for_root`](crate::AuthModule::for_root) and
+//! Configured once via [`AuthnModule::for_root`](crate::AuthnModule::for_root) and
 //! injected as `Arc<JwtService>` anywhere — a login handler signs the token an
 //! authenticated caller carries, a [`Strategy`](crate::Strategy) verifies it.
 
@@ -11,7 +11,9 @@ use jsonwebtoken::{
     decode, encode, errors::ErrorKind, get_current_timestamp, Algorithm, DecodingKey, EncodingKey,
     Header, Validation,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use nestrs_config::config;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use validator::Validate;
 
 use crate::error::AuthError;
 
@@ -32,7 +34,7 @@ pub enum JwtKey {
 }
 
 /// How [`JwtService`] signs and verifies. Built at the import site and handed to
-/// [`AuthModule::for_root`](crate::AuthModule::for_root).
+/// [`AuthnModule::for_root`](crate::AuthnModule::for_root).
 ///
 /// Two shapes: a symmetric [`JwtKey::Hmac`] secret (one app signs and verifies),
 /// or an asymmetric [`JwtKey::Pem`] EdDSA pair — the authorization server holds the
@@ -84,6 +86,51 @@ impl JwtOptions {
             },
             algorithm: Algorithm::EdDSA,
             expires_in: Duration::from_secs(3600),
+        }
+    }
+}
+
+/// The env-loaded form of [`JwtOptions`] — a namespaced `#[config]` read from
+/// `NESTRS_AUTHN__*`, the source a bare `AuthnModule` uses. The signing mode is
+/// **inferred** from which keys are present (see [`into_options`](Self::into_options)):
+/// a `secret` ⇒ HMAC; a `private_key` + `public_key` pair ⇒ EdDSA issuer; a
+/// `public_key` alone ⇒ EdDSA verify-only resource server. Dev keys ship in the
+/// committed `.env`; production sets a real key via the real environment.
+// No `Debug`: `secret` / `private_key` are secrets and must not leak via a derived format.
+#[config(namespace = "authn")]
+#[derive(Clone, Default, Deserialize, Validate)]
+#[serde(default)]
+pub struct JwtConfig {
+    /// HMAC shared secret (`NESTRS_AUTHN__SECRET`) — symmetric `HS256`.
+    pub secret: Option<String>,
+    /// EdDSA private key PEM (`NESTRS_AUTHN__PRIVATE_KEY`) — present only on an
+    /// authorization server that signs.
+    pub private_key: Option<String>,
+    /// EdDSA public key PEM (`NESTRS_AUTHN__PUBLIC_KEY`) — present on anyone who
+    /// verifies.
+    pub public_key: Option<String>,
+}
+
+impl JwtConfig {
+    /// Resolve the [`JwtOptions`] from the keys present in the environment: an
+    /// HMAC `secret` ⇒ HS256; a `private_key` + `public_key` pair ⇒ EdDSA (signs
+    /// and verifies); a `public_key` alone ⇒ EdDSA verify-only. Fails the boot with
+    /// a clear message if no usable combination is configured. Whether an app
+    /// signs or only verifies follows from the keys its environment carries and
+    /// the methods it calls — not from any module-level mode.
+    pub fn into_options(self) -> Result<JwtOptions, AuthError> {
+        match (self.secret, self.private_key, self.public_key) {
+            (Some(secret), _, _) => Ok(JwtOptions::new(secret)),
+            (None, Some(private), Some(public)) => Ok(JwtOptions::eddsa(private, public)),
+            (None, None, Some(public)) => Ok(JwtOptions::eddsa_verify(public)),
+            (None, Some(_), None) => Err(AuthError::Failed(
+                "NESTRS_AUTHN__PRIVATE_KEY is set without NESTRS_AUTHN__PUBLIC_KEY".into(),
+            )),
+            (None, None, None) => Err(AuthError::Failed(
+                "no JWT key configured: set NESTRS_AUTHN__SECRET (HS256) or \
+                 NESTRS_AUTHN__PUBLIC_KEY (EdDSA)"
+                    .into(),
+            )),
         }
     }
 }

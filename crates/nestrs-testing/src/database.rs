@@ -25,7 +25,7 @@ use sea_orm_migration::MigratorTrait;
 /// // `db` drops here → DROP DATABASE
 /// ```
 ///
-/// The base/admin URL comes from `DATABASE_URL` (the devcontainer provides a
+/// The base/admin URL comes from `NESTRS_DATABASE__URL` (the devcontainer provides a
 /// reachable Postgres). Each run uses a uniquely named `nestrs_e2e_*` database;
 /// any left behind by a crashed run are reaped at the next [`create`](Self::create).
 pub struct EphemeralDatabase {
@@ -37,11 +37,12 @@ pub struct EphemeralDatabase {
 
 impl EphemeralDatabase {
     /// Create and migrate a throwaway database, taking the base URL from
-    /// `DATABASE_URL`. Generic over the app's `Migrator` so the schema matches
+    /// `NESTRS_DATABASE__URL`. Generic over the app's `Migrator` so the schema matches
     /// production exactly.
     pub async fn create<M: MigratorTrait>() -> Result<Self> {
-        let admin_url = std::env::var("DATABASE_URL")
-            .map_err(|_| anyhow!("DATABASE_URL must point at a reachable Postgres for e2e"))?;
+        let admin_url = std::env::var("NESTRS_DATABASE__URL").map_err(|_| {
+            anyhow!("NESTRS_DATABASE__URL must point at a reachable Postgres for e2e")
+        })?;
         Self::create_with::<M>(&admin_url).await
     }
 

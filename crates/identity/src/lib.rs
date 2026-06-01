@@ -6,7 +6,5 @@
 //! runtime principal. Keep this crate dependency-light — no framework, no transport.
 
 mod claims;
-mod constants;
 
 pub use claims::{Claims, Role};
-pub use constants::DEV_PUBLIC_KEY_PEM;

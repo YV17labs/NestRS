@@ -1,48 +1,14 @@
 //! `GraphqlModule` — import it to serve the auto-discovered schema over HTTP.
 
-use std::path::PathBuf;
-
-use nestrs_core::{ContainerBuilder, DynamicModule, Module};
+use nestrs_config::ConfigModule;
+use nestrs_core::{ContainerBuilder, DynamicModule};
 use nestrs_http::HttpEndpointMeta;
 use poem::endpoint::make_sync;
 use poem::web::Html;
 use poem::Route;
 
+use crate::config::GraphqlConfig;
 use crate::resolver::build_schema;
-
-const DEFAULT_PATH: &str = "/graphql";
-
-/// Configuration for the GraphQL endpoint. Pass it via
-/// [`GraphqlModule::for_root`] to override the defaults.
-#[derive(Clone, Debug)]
-pub struct GraphqlOptions {
-    /// HTTP path the schema is served at (`POST` for operations, `GET` for the
-    /// playground). Default `/graphql`.
-    pub path: String,
-    /// Serve the GraphQL playground on `GET <path>`. Default `true`.
-    pub playground: bool,
-    /// Where the committed SDL lives — written on boot when `emit_sdl` is
-    /// `true`, ignored otherwise. Typically the app's own `schema.graphql`
-    /// (`concat!(env!("CARGO_MANIFEST_DIR"), "/schema.graphql")`).
-    pub schema_path: PathBuf,
-    /// Whether to (re)write `schema_path` from the live schema once at boot,
-    /// before serving. Drive it from the environment at the import site: `true`
-    /// in development (regenerate the committed SDL as resolvers change), `false`
-    /// in production (read the committed file as-is, never touch it). A write
-    /// failure is logged, never fatal. Default `false`.
-    pub emit_sdl: bool,
-}
-
-impl Default for GraphqlOptions {
-    fn default() -> Self {
-        Self {
-            path: DEFAULT_PATH.into(),
-            playground: true,
-            schema_path: "schema.graphql".into(),
-            emit_sdl: false,
-        }
-    }
-}
 
 /// Add to a `#[module(imports = [...])]` to expose GraphQL over HTTP:
 /// `POST <path>` (queries + mutations) and, when enabled, `GET <path>` (the
@@ -55,56 +21,46 @@ impl Default for GraphqlOptions {
 /// `crate::loader`), so this module can be imported in any order relative to the
 /// data modules whose services it loads.
 ///
-/// Imported **by type** it uses [`GraphqlOptions::default`]
-/// (`/graphql`, playground on):
+/// Wire it with `GraphqlModule::for_root()` (env-driven). `GraphqlConfig` loads
+/// through [`ConfigModule::for_feature`] in the factory phase; the production-safe
+/// [`GraphqlConfig::default`] keeps the playground + boot-time SDL emit **off**, and
+/// a dev run opts them in via `.env.development` (`NESTRS_GRAPHQL__PLAYGROUND=true`,
+/// `…__EMIT_SDL=true`):
 ///
 /// ```ignore
-/// #[module(imports = [GraphqlModule])]
-/// ```
-///
-/// Imported **via [`for_root`](GraphqlModule::for_root)** it takes options — the
-/// analog of NestJS's `GraphQLModule.forRoot(...)`:
-///
-/// ```ignore
-/// #[module(imports = [
-///     GraphqlModule::for_root(GraphqlOptions {
-///         path: "/graphql".into(),
-///         playground: false,
-///         schema_path: "schema.graphql".into(),
-///         emit_sdl: false,
-///     }),
-/// ])]
+/// #[module(imports = [GraphqlModule::for_root()])]
 /// ```
 pub struct GraphqlModule;
 
 impl GraphqlModule {
-    /// Configure the endpoint at the import site. Returns a [`DynamicModule`]
-    /// to list in `#[module(imports = [...])]`.
-    pub fn for_root(options: GraphqlOptions) -> GraphqlSetup {
-        GraphqlSetup { options }
+    /// Env-driven: load [`GraphqlConfig`] from `NESTRS_GRAPHQL__*` (and the `.env`
+    /// cascade) through the config system.
+    pub fn for_root() -> GraphqlSetup {
+        GraphqlSetup
     }
 }
 
-impl Module for GraphqlModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        register(builder, GraphqlOptions::default())
-    }
-}
-
-/// The configured form of [`GraphqlModule`], produced by
-/// [`GraphqlModule::for_root`].
-pub struct GraphqlSetup {
-    options: GraphqlOptions,
-}
+/// The configured form of [`GraphqlModule`]. Loads `GraphqlConfig` through the
+/// config system in the **collect** phase, then mounts the endpoint in **register**
+/// (which runs after the factory phase, so the config is available).
+pub struct GraphqlSetup;
 
 impl DynamicModule for GraphqlSetup {
+    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+        ConfigModule::for_feature::<GraphqlConfig>().collect(builder)
+    }
+
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        register(builder, self.options)
+        let config = builder
+            .snapshot()
+            .get::<GraphqlConfig>()
+            .expect("GraphqlConfig is loaded by ConfigModule::for_feature");
+        register(builder, (*config).clone())
     }
 }
 
 /// Shared registration for both the default and configured paths.
-fn register(builder: ContainerBuilder, options: GraphqlOptions) -> ContainerBuilder {
+fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuilder {
     let log_path = options.path.clone();
     builder.provide_meta(HttpEndpointMeta::new(
         log_path,

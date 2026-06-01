@@ -1,10 +1,12 @@
 //! `OpenApiModule` — import it to serve the auto-generated OpenAPI document and
 //! Swagger UI over HTTP.
 
-use nestrs_core::{ContainerBuilder, DynamicModule, Module};
+use nestrs_config::ConfigModule;
+use nestrs_core::{ContainerBuilder, DynamicModule};
 use nestrs_http::HttpEndpointMeta;
 use poem::{get, Route};
 
+use crate::config::OpenApiConfig;
 use crate::document::build_document;
 use crate::ui;
 
@@ -15,28 +17,6 @@ use crate::ui;
 const DOCS_PATH: &str = "/api";
 const SPEC_PATH: &str = "/api-json";
 
-/// Document metadata for the generated OpenAPI spec — the `info` block. Pass it
-/// via [`OpenApiModule::for_root`] to override the defaults.
-#[derive(Clone, Debug)]
-pub struct OpenApiOptions {
-    /// `info.title`.
-    pub title: String,
-    /// `info.version`.
-    pub version: String,
-    /// `info.description`, omitted when `None`.
-    pub description: Option<String>,
-}
-
-impl Default for OpenApiOptions {
-    fn default() -> Self {
-        Self {
-            title: "nestrs API".into(),
-            version: "0.1.0".into(),
-            description: None,
-        }
-    }
-}
-
 /// Add to a `#[module(imports = [...])]` to expose:
 /// - `GET /api-json` — the OpenAPI 3.1 document, and
 /// - `GET /api` — bundled Swagger UI.
@@ -46,49 +26,38 @@ impl Default for OpenApiOptions {
 /// composed from every `#[controller]` linked into the binary, so importing
 /// this module is the only step.
 ///
-/// Imported **by type** it uses [`OpenApiOptions::default`]:
+/// Wire it with `OpenApiModule::for_root()` (env-driven). The document metadata
+/// loads through [`ConfigModule::for_feature`] from `NESTRS_OPENAPI__*`:
 ///
 /// ```ignore
-/// #[module(imports = [OpenApiModule])]
-/// ```
-///
-/// Imported **via [`for_root`](OpenApiModule::for_root)** it takes document
-/// metadata — the analog of NestJS's `SwaggerModule.setup(...)`:
-///
-/// ```ignore
-/// #[module(imports = [
-///     OpenApiModule::for_root(OpenApiOptions {
-///         title: "My API".into(),
-///         version: "1.0".into(),
-///         ..Default::default()
-///     }),
-/// ])]
+/// #[module(imports = [OpenApiModule::for_root()])]
 /// ```
 pub struct OpenApiModule;
 
 impl OpenApiModule {
-    /// Configure the document metadata at the import site. Returns a
-    /// [`DynamicModule`] to list in `#[module(imports = [...])]`.
-    pub fn for_root(options: OpenApiOptions) -> OpenApiSetup {
-        OpenApiSetup { options }
+    /// Env-driven: load [`OpenApiConfig`] from `NESTRS_OPENAPI__*` (and the `.env`
+    /// cascade) through the config system.
+    pub fn for_root() -> OpenApiSetup {
+        OpenApiSetup
     }
 }
 
-impl Module for OpenApiModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        register(builder, OpenApiOptions::default())
-    }
-}
-
-/// The configured form of [`OpenApiModule`], produced by
-/// [`OpenApiModule::for_root`].
-pub struct OpenApiSetup {
-    options: OpenApiOptions,
-}
+/// The configured form of [`OpenApiModule`]. Loads `OpenApiConfig` through the
+/// config system in **collect**, then installs the endpoint in **register** (after
+/// the factory phase, so the config is available).
+pub struct OpenApiSetup;
 
 impl DynamicModule for OpenApiSetup {
+    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+        ConfigModule::for_feature::<OpenApiConfig>().collect(builder)
+    }
+
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        register(builder, self.options)
+        let config = builder
+            .snapshot()
+            .get::<OpenApiConfig>()
+            .expect("OpenApiConfig is loaded by ConfigModule::for_feature");
+        register(builder, (*config).clone())
     }
 }
 
@@ -96,7 +65,7 @@ impl DynamicModule for OpenApiSetup {
 /// self-mounting endpoint, capturing the document metadata in the mount closure
 /// (the document itself is built once at `configure`, when every controller is
 /// present).
-fn register(builder: ContainerBuilder, options: OpenApiOptions) -> ContainerBuilder {
+fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuilder {
     builder.provide_meta(HttpEndpointMeta::new(
         DOCS_PATH,
         "openapi",

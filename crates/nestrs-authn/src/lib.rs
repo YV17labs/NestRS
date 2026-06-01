@@ -3,7 +3,7 @@
 //!
 //! Three pieces, mirroring the NestJS `@nestjs/jwt` + Passport surface:
 //!
-//! - [`JwtService`] signs and verifies tokens ([`AuthModule::for_root`] makes a
+//! - [`JwtService`] signs and verifies tokens ([`AuthnModule::for_root`] makes a
 //!   configured one injectable everywhere).
 //! - [`Strategy`] turns a request into an authenticated principal; it is a plain
 //!   `#[injectable]` provider implementing one method.
@@ -24,8 +24,8 @@ mod strategy;
 
 pub use error::AuthError;
 pub use guard::AuthGuard;
-pub use jwt::{JwtKey, JwtOptions, JwtService};
-pub use module::{AuthModule, AuthSetup, OAuth2Module, OAuth2Setup};
+pub use jwt::{JwtConfig, JwtKey, JwtOptions, JwtService};
+pub use module::{AuthnModule, AuthnSetup, OAuth2Module, OAuth2Setup};
 pub use oauth::{Authorization, OAuth2Client, OAuth2Config};
 pub use strategy::{bearer_token, JwtStrategy, Outcome, Strategy};
 

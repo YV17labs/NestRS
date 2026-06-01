@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use nestrs_authz::Action;
 use nestrs_core::{hooks, injectable};
+use nestrs_database::{CrudService, Repo};
 use nestrs_graphql::dataloader;
-use nestrs_orm::{CrudService, Repo};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, Set,

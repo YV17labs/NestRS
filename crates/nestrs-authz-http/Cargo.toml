@@ -22,6 +22,6 @@ sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # `Bind` loads the entity through the ambient request executor.
-nestrs-orm.workspace = true
+nestrs-database.workspace = true
 # `Bind` parses the path id as a UUID v7.
 uuid.workspace = true

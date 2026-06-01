@@ -69,7 +69,7 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// - a **type** (`UsersModule`) — a static [`Module`](nestrs_core::Module),
 ///   composed via `Module::register`, or
-/// - a **call expression** (`OpenApiModule::for_root(opts)`) — a configured
+/// - a **call expression** (`OpenApiModule::for_root()`) — a configured
 ///   [`DynamicModule`](nestrs_core::DynamicModule) value, composed via
 ///   `DynamicModule::register`. This is how a module receives runtime options
 ///   at its import site, the analog of NestJS's `forRoot`/`forFeature`.

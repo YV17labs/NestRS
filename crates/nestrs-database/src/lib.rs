@@ -10,14 +10,14 @@
 //!
 //! ```ignore
 //! #[module(imports = [
-//!     DatabaseModule::for_root(DatabaseOptions {
-//!         url: std::env::var("DATABASE_URL").unwrap_or_default(),
-//!         ..Default::default()
-//!     }),
+//!     DatabaseModule,   // env-driven: loads DatabaseConfig from NESTRS_DATABASE__*
 //!     UsersModule,
 //! ])]
 //! pub struct AppModule;
 //! ```
+//!
+//! Pin explicit values in code with
+//! [`DatabaseModule::for_root`]`(DatabaseConfig { .. })`.
 //!
 //! Beyond the connection, the crate makes data access **transparent**. Importing
 //! the module installs the [`DbContext`] request interceptor, which binds each
@@ -27,6 +27,7 @@
 //! need no hand-threading) and every read is filtered by the caller's
 //! [`Ability`](nestrs_authz::Ability) (so row-level security cannot be forgotten).
 
+mod config;
 mod executor;
 mod interceptor;
 mod module;
@@ -35,8 +36,9 @@ mod repo;
 mod service;
 mod worker;
 
+pub use config::DatabaseConfig;
 pub use executor::{current_executor, with_executor, Executor};
-pub use module::{DatabaseModule, DatabaseOptions, DatabaseSetup};
+pub use module::{DatabaseModule, DatabaseSetup};
 pub use page::{Page, PageParams};
 pub use repo::{scope_for, Repo};
 pub use service::{Access, CreateModel, CrudService, UpdateModel};

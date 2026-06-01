@@ -299,7 +299,8 @@ setup on any machine with Docker and a devcontainer-aware editor.
 
 That is the whole setup. The container provisions the Rust toolchain and the dev
 tooling (`just`, `bacon`, `cargo-nextest`, …), and brings up **Postgres** and
-**Redis** beside it with `DATABASE_URL` / `REDIS_URL` already pointed at them.
+**Redis** beside it with `NESTRS_DATABASE__URL` / `NESTRS_QUEUE__URL` already
+pointed at them.
 `app`, `auth`, `mcp`, and `chat` run as-is; `api` needs its schema applied once
 first — `just db up` (or `just db reset` to also load demo data) — and `worker`
 needs Redis. Ports 3001–3005 are forwarded to the host.
@@ -338,7 +339,7 @@ rustup component add llvm-tools-preview
 | [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) | Source-based test coverage (uses LLVM, plays well with nextest) |
 
 The `api` app needs Postgres and the `worker` needs Redis; run your own and
-export `DATABASE_URL` / `REDIS_URL` (the `app`, `auth`, and `mcp` binaries need
+export `NESTRS_DATABASE__URL` / `NESTRS_QUEUE__URL` (the `app`, `auth`, and `mcp` binaries need
 neither).
 
 ## Commands
@@ -402,7 +403,7 @@ environment (with dev defaults) and the OAuth provider defaults to GitHub.
 ### `api` — REST + GraphQL, persisted and authorized (port 3003)
 
 Started with `just dev api`; persists to Postgres via SeaORM, so it needs a
-`DATABASE_URL` (boot aborts with a clear message if it is unset). The schema is
+`NESTRS_DATABASE__URL` (boot aborts with a clear message if it is unset). The schema is
 applied by the `db` app, not the running service — run `just db up` once first
 (or `just db reset` to also load demo users). Listens on `http://0.0.0.0:3003`:
 
@@ -450,7 +451,7 @@ Cursor, …) at `http://localhost:3004/mcp`.
 
 Started with `just dev worker`. No HTTP surface — it runs a `Scheduler`
 (in-process cron / interval jobs) and a `QueueWorker` (Redis-backed durable jobs
-via `apalis`), so it needs a `REDIS_URL`. The bundled `audio` feature shows the
+via `apalis`), so it needs a `NESTRS_QUEUE__URL`. The bundled `audio` feature shows the
 full producer → queue → consumer loop with `#[cron_job]` and `#[processor]`.
 Importing no HTTP crate, the binary never compiles the poem stack — a genuinely
 lean headless build.

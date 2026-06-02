@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use nestrs_authz::http::Authorize;
 use nestrs_authz::{Create, Read};
-use nestrs_authz_http::{Authorize, Bind};
+use nestrs_database::Bind;
 use nestrs_http::{controller, crud, Ctx, Valid};
 use poem::web::Json;
 use poem::Result;

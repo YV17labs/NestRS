@@ -178,9 +178,6 @@ dependencies = [
  "futures-util",
  "nestrs-authn",
  "nestrs-authz",
- "nestrs-authz-graphql",
- "nestrs-authz-http",
- "nestrs-authz-ws",
  "nestrs-config",
  "nestrs-core",
  "nestrs-database",
@@ -846,6 +843,7 @@ dependencies = [
  "nestrs-telemetry",
  "nestrs-testing",
  "nestrs-ws",
+ "parking_lot",
  "serde",
  "serde_json",
  "tokio",
@@ -1312,7 +1310,6 @@ dependencies = [
  "db",
  "nestrs-authn",
  "nestrs-authz",
- "nestrs-authz-http",
  "nestrs-config",
  "nestrs-core",
  "nestrs-database",
@@ -2636,39 +2633,12 @@ dependencies = [
 name = "nestrs-authz"
 version = "0.1.0"
 dependencies = [
- "sea-orm",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "nestrs-authz-graphql"
-version = "0.1.0"
-dependencies = [
  "async-graphql",
- "nestrs-authz",
  "nestrs-core",
- "nestrs-database",
  "nestrs-graphql",
  "nestrs-http",
+ "nestrs-mcp",
  "nestrs-middleware",
- "nestrs-testing",
- "poem",
- "sea-orm",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "nestrs-authz-http"
-version = "0.1.0"
-dependencies = [
- "nestrs-authz",
- "nestrs-core",
- "nestrs-database",
- "nestrs-http",
  "nestrs-resource",
  "nestrs-testing",
  "poem",
@@ -2676,32 +2646,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "uuid",
-]
-
-[[package]]
-name = "nestrs-authz-mcp"
-version = "0.1.0"
-dependencies = [
- "nestrs-authz",
- "nestrs-core",
- "nestrs-mcp",
- "nestrs-middleware",
- "poem",
-]
-
-[[package]]
-name = "nestrs-authz-ws"
-version = "0.1.0"
-dependencies = [
- "nestrs-authz",
- "nestrs-core",
- "nestrs-database",
- "nestrs-ws",
- "poem",
- "sea-orm",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -2754,17 +2698,21 @@ name = "nestrs-database"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-graphql",
  "async-trait",
  "nestrs-authz",
  "nestrs-config",
  "nestrs-core",
+ "nestrs-graphql",
  "nestrs-http",
  "nestrs-middleware",
+ "nestrs-ws",
  "poem",
  "sea-orm",
  "serde",
  "tokio",
  "tracing",
+ "uuid",
  "validator",
 ]
 

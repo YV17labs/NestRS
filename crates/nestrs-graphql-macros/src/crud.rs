@@ -83,7 +83,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 &self,
                 __ctx: &::nestrs_graphql::async_graphql::Context<'_>,
             ) -> ::nestrs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
-                ::nestrs_authz_graphql::authorize::<::nestrs_authz::Read, #entity>(__ctx)?;
+                ::nestrs_authz::graphql::authorize::<::nestrs_authz::Read, #entity>(__ctx)?;
                 let __rows = ::nestrs_database::CrudService::list(&*self.#service)
                     .await
                     .map_err(#gql_err)?;
@@ -132,7 +132,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         __ctx: &::nestrs_graphql::async_graphql::Context<'_>,
                         input: #create,
                     ) -> ::nestrs_graphql::async_graphql::Result<#output> {
-                        ::nestrs_authz_graphql::authorize::<::nestrs_authz::Create, #entity>(__ctx)?;
+                        ::nestrs_authz::graphql::authorize::<::nestrs_authz::Create, #entity>(__ctx)?;
                         let __row = ::nestrs_database::CrudService::create(&*self.#service, input)
                             .await
                             .map_err(#gql_err)?;

@@ -82,7 +82,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[api(summary = #summary, tags(#tag))]
                 async fn list(
                     &self,
-                    _authz: ::nestrs_authz_http::Authorize<::nestrs_authz::Read, #entity>,
+                    _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Read, #entity>,
                 ) -> ::poem::Result<::poem::web::Json<::std::vec::Vec<#output>>> {
                     let __rows = ::nestrs_database::CrudService::list(&*self.#service)
                         .await
@@ -100,7 +100,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[api(summary = #summary, tags(#tag))]
                 async fn list(
                     &self,
-                    _authz: ::nestrs_authz_http::Authorize<::nestrs_authz::Read, #entity>,
+                    _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Read, #entity>,
                     __page: ::poem::web::Query<::nestrs_database::PageParams>,
                 ) -> ::poem::Result<::poem::Response> {
                     let __p = ::nestrs_database::CrudService::page(
@@ -143,7 +143,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[api(summary = #summary, tags(#tag))]
             async fn get(
                 &self,
-                _authz: ::nestrs_authz_http::Authorize<::nestrs_authz::Read, #entity>,
+                _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Read, #entity>,
                 __id: ::poem::web::Path<::uuid::Uuid>,
             ) -> ::poem::Result<::poem::web::Json<#output>> {
                 #id_v7_check
@@ -178,7 +178,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     #[api(summary = #summary, tags(#tag))]
                     async fn create(
                         &self,
-                        _authz: ::nestrs_authz_http::Authorize<::nestrs_authz::Create, #entity>,
+                        _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Create, #entity>,
                         __body: ::nestrs_http::Valid<::poem::web::Json<#create>>,
                     ) -> ::poem::Result<::poem::web::Json<#output>> {
                         let __row = ::nestrs_database::CrudService::create(
@@ -201,7 +201,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     #[api(summary = #summary, tags(#tag))]
                     async fn update(
                         &self,
-                        _authz: ::nestrs_authz_http::Authorize<::nestrs_authz::Update, #entity>,
+                        _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Update, #entity>,
                         __id: ::poem::web::Path<::uuid::Uuid>,
                         __body: ::nestrs_http::Valid<::poem::web::Json<#update>>,
                     ) -> ::poem::Result<::poem::web::Json<#output>> {
@@ -243,7 +243,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[api(summary = #summary, tags(#tag))]
                 async fn delete(
                     &self,
-                    _authz: ::nestrs_authz_http::Authorize<::nestrs_authz::Delete, #entity>,
+                    _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Delete, #entity>,
                     __id: ::poem::web::Path<::uuid::Uuid>,
                 ) -> ::poem::Result<::poem::http::StatusCode> {
                     #id_v7_check

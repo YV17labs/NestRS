@@ -1,7 +1,7 @@
 use domain::Claims;
-use nestrs_authz_graphql::LoaderScope;
-use nestrs_authz_ws::WsDataContext;
 use nestrs_core::module;
+use nestrs_database::graphql::LoaderScope;
+use nestrs_database::ws::WsDataContext;
 use nestrs_graphql::{BatchContext, OperationGuard};
 use nestrs_ws::SocketContext;
 

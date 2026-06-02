@@ -5,21 +5,76 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "CASL-style authorization for nestrs: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking."
+description = "CASL-style authorization for nestrs: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`, `LoaderScope`, `WsDataContext`) live in `nestrs-database` so the engine stays free of a data-layer dependency."
+
+[features]
+default = []
+# HTTP surface: poem extractors (`Authorize`, `Scope`), the request-scoped
+# `AbilityGuard`, and the `RouteResponseShaper` that masks responses
+# transparently. The `Bind` route-model extractor lives in
+# `nestrs_database::Bind` (it must use the data layer).
+http = [
+    "dep:nestrs-core",
+    "dep:nestrs-http",
+    "dep:nestrs-resource",
+    "dep:poem",
+]
+# GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
+# accessor + `ContextSeed`, and the `authorize` class-level gate. The
+# resolver-side `bind` helper and `LoaderScope` live in
+# `nestrs_database::graphql`.
+graphql = [
+    "dep:nestrs-core",
+    "dep:nestrs-graphql",
+    "dep:nestrs-middleware",
+    "dep:poem",
+]
+# MCP surface: HTTP operation guard (`McpAbilityBridge`) + `with_request_ability`.
+mcp = [
+    "dep:nestrs-core",
+    "dep:nestrs-mcp",
+    "dep:nestrs-middleware",
+    "dep:poem",
+]
+# Enable every transport binding at once — useful for
+# `cargo test -p nestrs-authz --features full`.
+full = ["http", "graphql", "mcp"]
 
 [dependencies]
+# Engine: always required.
 # A rule's condition lowers to `sea_orm::Condition`; in-memory checks read
 # columns via `ModelTrait::get`.
 sea-orm.workspace = true
-# Response masking serializes a model then strips disallowed keys. (The poem
-# binding of this engine lives in `nestrs-authz-http`.)
+# Response masking serializes a model then strips disallowed keys.
 serde.workspace = true
 serde_json.workspace = true
 # The ambient request `Ability` is carried in a `tokio::task_local!`.
 tokio.workspace = true
 
+# Optional dependencies — pulled in by the feature flags above.
+nestrs-core = { workspace = true, optional = true }
+nestrs-http = { workspace = true, optional = true }
+nestrs-graphql = { workspace = true, optional = true }
+nestrs-mcp = { workspace = true, optional = true }
+nestrs-middleware = { workspace = true, optional = true }
+nestrs-resource = { workspace = true, optional = true }
+poem = { workspace = true, optional = true }
+
 [dev-dependencies]
-# `tests/ability.rs` builds a throwaway SeaORM entity and renders
-# `condition_for` to SQL; the masking tests serialize a model via serde.
+# Engine-only tests: `tests/ability.rs` builds a throwaway SeaORM entity and
+# renders `condition_for` to SQL; the masking tests serialize a model via serde.
 sea-orm.workspace = true
 serde.workspace = true
+# Bridge mirror tests boot the full surface (HTTP + GraphQL); compiled when the
+# corresponding feature is enabled (`cargo test -p nestrs-authz --features full`).
+nestrs-core.workspace = true
+nestrs-http.workspace = true
+nestrs-graphql.workspace = true
+nestrs-resource.workspace = true
+nestrs-testing.workspace = true
+# A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
+# since the generated `#[Object]` code names `async_graphql::` paths.
+async-graphql.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+poem.workspace = true

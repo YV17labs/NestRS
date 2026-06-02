@@ -162,10 +162,6 @@ nestrs-config-macros = { path = "crates/nestrs-config-macros" }
 nestrs-events = { path = "crates/nestrs-events" }
 nestrs-events-macros = { path = "crates/nestrs-events-macros" }
 nestrs-authz = { path = "crates/nestrs-authz" }
-nestrs-authz-graphql = { path = "crates/nestrs-authz-graphql" }
-nestrs-authz-http = { path = "crates/nestrs-authz-http" }
-nestrs-authz-mcp = { path = "crates/nestrs-authz-mcp" }
-nestrs-authz-ws = { path = "crates/nestrs-authz-ws" }
 nestrs-codegen = { path = "crates/nestrs-codegen" }
 nestrs-macros = { path = "crates/nestrs-macros" }
 nestrs-graphql = { path = "crates/nestrs-graphql" }

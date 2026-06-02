@@ -36,6 +36,13 @@ mod repo;
 mod service;
 mod worker;
 
+#[cfg(feature = "http")]
+mod bind;
+#[cfg(feature = "graphql")]
+pub mod graphql;
+#[cfg(feature = "ws")]
+pub mod ws;
+
 pub use config::DatabaseConfig;
 pub use executor::{
     current_executor, current_executor_scope, with_executor, with_job_executor,
@@ -46,5 +53,8 @@ pub use page::{Page, PageParams};
 pub use repo::{scope_for, Repo};
 pub use service::{Access, CreateModel, CrudService, UpdateModel};
 pub use worker::WorkerDbContext;
+
+#[cfg(feature = "http")]
+pub use bind::Bind;
 
 pub(crate) use interceptor::DbContext;

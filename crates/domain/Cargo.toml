@@ -11,8 +11,7 @@ description = "The product's functional core — every feature as a module (enti
 nestrs-core.workspace = true
 nestrs-database.workspace = true
 nestrs-authn.workspace = true
-nestrs-authz.workspace = true
-nestrs-authz-http.workspace = true
+nestrs-authz = { workspace = true, features = ["http"] }
 nestrs-config.workspace = true
 nestrs-graphql.workspace = true
 nestrs-resource.workspace = true

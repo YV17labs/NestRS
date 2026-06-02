@@ -5,7 +5,23 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "SeaORM database module for nestrs: DatabaseModule::for_root owns the connection, composed at App::builder()."
+description = "SeaORM database module for nestrs: DatabaseModule::for_root owns the connection, composed at App::builder(). Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features."
+
+[features]
+default = []
+# HTTP transport extractor: `Bind<S, A>` (poem extractor that loads + authorizes
+# through `CrudService::access`). Poem is already in the base deps; `uuid` is
+# pulled here because `Bind` validates UUID v7 path ids.
+http = ["dep:uuid"]
+# GraphQL transport extractors: the `bind` resolver helper and `LoaderScope`
+# (the `BatchContext` that re-installs the request executor + ability around
+# each `#[dataloader]` batch).
+graphql = ["dep:async-graphql", "dep:nestrs-graphql", "dep:uuid"]
+# WebSocket transport extractor: `WsDataContext` (the `SocketContext` that
+# re-installs the request executor + ability around each gateway message).
+ws = ["dep:nestrs-ws"]
+# Convenience for tests and exemplars.
+full = ["http", "graphql", "ws"]
 
 [dependencies]
 nestrs-core.workspace = true
@@ -30,3 +46,9 @@ async-trait.workspace = true
 tracing.workspace = true
 # The ambient executor is carried in a `tokio::task_local!`.
 tokio.workspace = true
+
+# Optional deps for transport-binding features.
+uuid = { workspace = true, optional = true }
+async-graphql = { workspace = true, optional = true }
+nestrs-graphql = { workspace = true, optional = true }
+nestrs-ws = { workspace = true, optional = true }

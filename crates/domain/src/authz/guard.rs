@@ -1,4 +1,4 @@
-use nestrs_authz_http::AbilityGuard;
+use nestrs_authz::http::AbilityGuard;
 
 use crate::authz::ability::AppAbility;
 

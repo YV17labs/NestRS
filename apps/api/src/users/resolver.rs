@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use async_graphql::{Context, Result};
+use nestrs_authz::graphql::authorize;
 use nestrs_authz::{Create, Read};
-use nestrs_authz_graphql::{authorize, bind};
+use nestrs_database::graphql::bind;
 use nestrs_graphql::{crud, resolver};
 
 use domain::users::{CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService};

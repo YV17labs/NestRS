@@ -264,7 +264,7 @@ surface is decorator macros — reach for them first (`#[injectable]`, `#[module
 | `nestrs-queue` | Redis-backed durable job queues + workers (`#[processor]`); `apalis`-backed |
 | `nestrs-schedule` | In-process cron / interval jobs (`#[cron_job]`) |
 | `nestrs-events` | Typed in-process event bus + `#[event_handler]` (the `@nestjs/event-emitter` analog) |
-| `nestrs-authz` | CASL-style authorization: one ability → access gate + query pre-filter + response masking (HTTP binding in `nestrs-authz-http`, GraphQL in `nestrs-authz-graphql`) |
+| `nestrs-authz` | CASL-style authorization: one ability → access gate + query pre-filter + response masking. Transport bindings behind Cargo features (`http`, `graphql`, `mcp`); the data-coupled extractors (`Bind`, GraphQL `bind`, `LoaderScope`, `WsDataContext`) live in `nestrs-database` |
 | `nestrs-pipes` | Transport-agnostic validation & transformation (`ValidationPipe`, `Parse*`, …) |
 | `nestrs-middleware` | Guards, interceptors, exception filters |
 | `nestrs-resource` | Expose a SeaORM entity to GraphQL **and** OpenAPI from one `#[expose]` |

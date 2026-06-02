@@ -1,18 +1,12 @@
 use std::sync::Arc;
 
-use async_graphql::dataloader::DataLoader;
 use async_graphql::{Context, Result};
 use nestrs_authz::{Create, Read};
 use nestrs_authz_graphql::{authorize, bind};
 use nestrs_graphql::{crud, resolver};
-use uuid::Uuid;
 
-use identity::Claims;
-
-use crate::orgs::entity::Org;
-use crate::orgs::service::OrgsServiceById;
-use crate::users::entity::{self, CreateUserInput, UpdateUserInput, User};
-use crate::users::service::{UsersService, UsersServiceByName};
+use domain::users::{CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService};
+use domain::Claims;
 
 #[resolver]
 pub struct UsersResolver {
@@ -22,7 +16,7 @@ pub struct UsersResolver {
 
 #[crud(
     service = users,
-    entity = entity::Entity,
+    entity = UserEntity,
     output = User,
     create = CreateUserInput,
     update = UpdateUserInput,
@@ -30,10 +24,9 @@ pub struct UsersResolver {
 impl UsersResolver {
     #[mutation]
     async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {
-        authorize::<Create, entity::Entity>(ctx)?;
+        authorize::<Create, UserEntity>(ctx)?;
         let actor = ctx.data::<Claims>()?;
-        let row = self.users.create_in_org(input, actor.org_id).await?;
-        Ok(User::from(&row))
+        Ok(self.users.create_in_org(input, actor.org_id).await?)
     }
 
     #[query]
@@ -42,27 +35,5 @@ impl UsersResolver {
             .await?
             .as_ref()
             .map(User::from))
-    }
-
-    #[field]
-    async fn org(&self, parent: &User, by_id: &DataLoader<OrgsServiceById>) -> Result<Option<Org>> {
-        let id = Uuid::parse_str(&parent.org_id)?;
-        Ok(by_id.load_one(id).await?)
-    }
-
-    #[field]
-    async fn namesakes(
-        &self,
-        parent: &User,
-        by_name: &DataLoader<UsersServiceByName>,
-    ) -> Result<Vec<User>> {
-        let same_name = by_name
-            .load_one(parent.name.clone())
-            .await?
-            .unwrap_or_default();
-        Ok(same_name
-            .into_iter()
-            .filter(|u| u.id != parent.id)
-            .collect())
     }
 }

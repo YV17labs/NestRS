@@ -1,4 +1,3 @@
-use identity::Claims;
 use nestrs_authz_graphql::LoaderScope;
 use nestrs_authz_ws::WsDataContext;
 use nestrs_core::module;
@@ -6,6 +5,7 @@ use nestrs_graphql::{BatchContext, OperationGuard};
 use nestrs_ws::SocketContext;
 
 use crate::authn::AuthnModule;
+use crate::Claims;
 use crate::authz::ability::AppAbility;
 use crate::authz::guard::{AppAbilityGuard, GraphqlAuthGuard};
 

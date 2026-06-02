@@ -3,16 +3,13 @@ use std::sync::Arc;
 use nestrs_authz::{Create, Read};
 use nestrs_authz_http::{Authorize, Bind};
 use nestrs_http::{controller, crud, Ctx, Valid};
-use poem::http::StatusCode;
 use poem::web::Json;
-use poem::{Error, Result};
+use poem::Result;
 
-use identity::Claims;
-
-use crate::authn::AuthGuard;
-use crate::authz::AppAbilityGuard;
-use crate::users::entity::{self, CreateUserInput, UpdateUserInput, User};
-use crate::users::service::UsersService;
+use domain::authn::AuthGuard;
+use domain::authz::AppAbilityGuard;
+use domain::users::{CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService};
+use domain::Claims;
 
 #[controller(path = "/users")]
 #[use_guards(AuthGuard, AppAbilityGuard)]
@@ -23,7 +20,7 @@ pub struct UsersController {
 
 #[crud(
     service = svc,
-    entity = entity::Entity,
+    entity = UserEntity,
     output = User,
     create = CreateUserInput,
     update = UpdateUserInput,
@@ -38,18 +35,13 @@ impl UsersController {
     )]
     async fn create(
         &self,
-        _authz: Authorize<Create, entity::Entity>,
+        _authz: Authorize<Create, UserEntity>,
         auth: Ctx<Claims>,
         body: Valid<Json<CreateUserInput>>,
     ) -> Result<Json<User>> {
-        let row = self
-            .svc
-            .create_in_org(body.into_inner(), auth.org_id)
-            .await
-            .map_err(|err| {
-                Error::from_string(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-            })?;
-        Ok(Json(User::from(&row)))
+        Ok(Json(
+            self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
+        ))
     }
 
     #[get("/:id")]

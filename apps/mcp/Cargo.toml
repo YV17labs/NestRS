@@ -25,6 +25,5 @@ validator.workspace = true
 reqwest.workspace = true
 
 [dev-dependencies]
-# `telemetry` satisfies the TelemetryModule boot guard in the e2e.
 nestrs-testing = { workspace = true, features = ["telemetry"] }
 serde_json.workspace = true

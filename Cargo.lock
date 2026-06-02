@@ -174,8 +174,8 @@ dependencies = [
  "anyhow",
  "async-graphql",
  "db",
+ "domain",
  "futures-util",
- "identity",
  "nestrs-authn",
  "nestrs-authz",
  "nestrs-authz-graphql",
@@ -582,10 +582,14 @@ name = "auth"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "identity",
+ "base64",
+ "db",
+ "domain",
  "nestrs-authn",
+ "nestrs-authz",
  "nestrs-config",
  "nestrs-core",
+ "nestrs-database",
  "nestrs-health",
  "nestrs-http",
  "nestrs-telemetry",
@@ -593,11 +597,13 @@ dependencies = [
  "nestrs-throttler",
  "poem",
  "schemars",
+ "sea-orm",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "uuid",
+ "validator",
 ]
 
 [[package]]
@@ -1273,6 +1279,36 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "domain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-graphql",
+ "nestrs-authn",
+ "nestrs-authz",
+ "nestrs-authz-graphql",
+ "nestrs-authz-http",
+ "nestrs-authz-ws",
+ "nestrs-config",
+ "nestrs-core",
+ "nestrs-database",
+ "nestrs-graphql",
+ "nestrs-http",
+ "nestrs-resource",
+ "nestrs-ws",
+ "poem",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "validator",
 ]
 
 [[package]]
@@ -2112,15 +2148,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
-name = "identity"
-version = "0.1.0"
-dependencies = [
- "schemars",
- "serde",
- "uuid",
-]
-
-[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2569,6 +2596,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "jsonwebtoken",
  "nestrs-config",
  "nestrs-core",

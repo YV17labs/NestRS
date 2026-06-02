@@ -17,7 +17,7 @@ pub struct Model {
     pub name: String,
     #[sea_orm(has_many)]
     #[expose(skip)]
-    pub users: HasMany<crate::users::entity::Entity>,
+    pub users: HasMany<crate::users::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

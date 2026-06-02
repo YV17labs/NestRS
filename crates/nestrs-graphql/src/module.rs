@@ -67,6 +67,10 @@ impl DynamicModule for GraphqlSetup {
 /// Shared registration for both the default and configured paths.
 fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuilder {
     let log_path = options.path.clone();
+    // Mark that the resolver schema is composed in this app, so the boot runs the
+    // resolver-membership check (it is irrelevant for apps that link resolvers
+    // transitively but compose no schema).
+    let builder = builder.provide(nestrs_core::ResolverSchemaActive);
     builder.provide_meta(HttpEndpointMeta::new(
         log_path,
         "graphql",

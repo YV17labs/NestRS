@@ -27,7 +27,7 @@ pub use guard::AuthGuard;
 pub use jwt::{JwtConfig, JwtKey, JwtOptions, JwtService};
 pub use module::{AuthnModule, AuthnSetup, OAuth2Module, OAuth2Setup};
 pub use oauth::{Authorization, OAuth2Client, OAuth2Config};
-pub use strategy::{bearer_token, JwtStrategy, Outcome, Strategy};
+pub use strategy::{basic_credentials, bearer_token, JwtStrategy, Outcome, Strategy};
 
 /// Re-exported so apps configure [`JwtOptions`] without taking a direct
 /// `jsonwebtoken` dependency.

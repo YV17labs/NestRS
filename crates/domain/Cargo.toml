@@ -1,0 +1,36 @@
+[package]
+name = "domain"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "The product's functional core — every feature as a module (entities, services, the JWT contract, the authz policy, resource-server auth wiring, token issuance). Apps depend on it and keep only their thin endpoints."
+
+[dependencies]
+nestrs-core.workspace = true
+nestrs-database.workspace = true
+nestrs-authn.workspace = true
+nestrs-authz.workspace = true
+nestrs-authz-http.workspace = true
+nestrs-authz-graphql.workspace = true
+nestrs-authz-ws.workspace = true
+nestrs-config.workspace = true
+nestrs-graphql.workspace = true
+nestrs-http.workspace = true
+nestrs-resource.workspace = true
+nestrs-ws.workspace = true
+async-graphql.workspace = true
+poem.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+uuid.workspace = true
+validator.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

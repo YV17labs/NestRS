@@ -6,16 +6,39 @@ use nestrs_authz::Action;
 use nestrs_core::{hooks, injectable};
 use nestrs_database::{CrudService, Repo};
 use nestrs_graphql::dataloader;
+use poem::error::ResponseError;
+use poem::http::StatusCode;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, Set,
 };
 use uuid::Uuid;
-use validator::Validate;
+use validator::{Validate, ValidationErrors};
 
 use crate::users::entity::{
     self, ActiveModel, CreateUserInput, Entity as Users, UpdateUserInput, User,
 };
+
+const DEFAULT_ROLE: &str = "user";
+
+/// A failure creating a user: bad input is a 422, a database error a 500.
+/// Implementing `ResponseError` lets a handler return it with `?` and no mapping.
+#[derive(Debug, thiserror::Error)]
+pub enum UserError {
+    #[error(transparent)]
+    Validation(#[from] ValidationErrors),
+    #[error(transparent)]
+    Db(#[from] DbErr),
+}
+
+impl ResponseError for UserError {
+    fn status(&self) -> StatusCode {
+        match self {
+            UserError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            UserError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
 
 #[injectable]
 pub struct UsersService {
@@ -34,17 +57,43 @@ impl UsersService {
         &self,
         input: CreateUserInput,
         org_id: Uuid,
-    ) -> Result<entity::Model> {
+    ) -> Result<User, UserError> {
         input.validate()?;
         let row = ActiveModel {
             id: Set(Uuid::now_v7()),
             org_id: Set(org_id),
             name: Set(input.name),
             email: Set(input.email),
+            role: Set(DEFAULT_ROLE.to_owned()),
         };
-        let conn = Repo::<Users>::conn()?;
-        let user = row.insert(&conn).await?;
+        let user = row.insert(&Repo::<Users>::conn()?).await?;
         tracing::info!(id = %user.id, %org_id, "user created");
+        Ok(User::from(&user))
+    }
+
+    pub async fn find_or_create(
+        &self,
+        email: &str,
+        name: &str,
+        org_id: Uuid,
+    ) -> Result<entity::Model> {
+        let conn = Repo::<Users>::conn()?;
+        if let Some(user) = Repo::<Users>::scoped(Action::Read)
+            .filter(entity::Column::Email.eq(email.to_owned()))
+            .one(&conn)
+            .await?
+        {
+            return Ok(user);
+        }
+        let row = ActiveModel {
+            id: Set(Uuid::now_v7()),
+            org_id: Set(org_id),
+            name: Set(name.to_owned()),
+            email: Set(email.to_owned()),
+            role: Set(DEFAULT_ROLE.to_owned()),
+        };
+        let user = row.insert(&conn).await?;
+        tracing::info!(target: "nestrs::auth", id = %user.id, %org_id, "provisioned a user");
         Ok(user)
     }
 }

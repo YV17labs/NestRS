@@ -1,9 +1,9 @@
-use identity::Claims;
 use nestrs_authz::{AbilityBuilder, AbilityFactory, Action};
 use nestrs_core::injectable;
 
-use crate::orgs::entity as org;
-use crate::users::entity as user;
+use crate::orgs as org;
+use crate::users as user;
+use crate::Claims;
 
 #[injectable]
 #[derive(Default)]

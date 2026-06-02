@@ -171,6 +171,16 @@ pub struct ResolverMembershipError {
     pub resolver: &'static str,
 }
 
+/// Marker the schema-composing layer registers when an app actually composes the
+/// resolver schema, so the boot knows the link-time [`ResolverDescriptor`]
+/// registry is live here. Resolver membership only matters then: a `#[resolver]`
+/// is part of *a* schema only when one is composed, so an app that links resolvers
+/// transitively (e.g. through a shared library) but composes no schema must not be
+/// forced to declare them. The surface crate that builds the schema provides this
+/// (`builder.provide(ResolverSchemaActive)`); the boot runs
+/// [`validate_resolver_membership`] only when it is present.
+pub struct ResolverSchemaActive;
+
 /// Validate the access graph: every provider's dependency must be reachable
 /// from its module's import closure or be global infrastructure. Pure over its
 /// inputs (no link-time registry access), so it is exhaustively unit-testable.

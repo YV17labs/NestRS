@@ -46,6 +46,12 @@ jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 # OAuth2 Authorization Code flow (+ PKCE); the `reqwest` backend below drives its
 # token exchange. The per-provider strategy lives in the app, like Passport.
 oauth2 = "5"
+# HTTP Basic decoding for OAuth2 client authentication (`Authorization: Basic`).
+# The de-facto standard base64 crate, already in the tree transitively via
+# oauth2/jsonwebtoken; pulled up as a direct dep for the `basic_credentials` helper.
+# NOTE: last release 0.22.1 (2024) is past the 12-month freshness bar, but the
+# crate is effectively feature-complete and ubiquitous — flagged, not silent.
+base64 = "0.22"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -139,10 +145,10 @@ syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 
-# Business-shared crates (not framework — no `nestrs-` prefix). Domain contracts
-# several apps must agree on, e.g. the JWT claims the `auth` app signs and the
-# `api` app verifies.
-identity = { path = "crates/identity" }
+# The product's functional core (not framework — no `nestrs-` prefix). All shared
+# business logic, contracts, and policy live here; apps hold only thin endpoints.
+# See CLAUDE.md "Monorepo layout".
+domain = { path = "crates/domain" }
 
 # Internal crates (framework)
 nestrs-core = { path = "crates/nestrs-core" }

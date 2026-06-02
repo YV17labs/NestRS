@@ -1,14 +1,8 @@
 use std::sync::Arc;
 
-use async_graphql::dataloader::DataLoader;
-use async_graphql::Result;
 use nestrs_graphql::{crud, resolver};
-use uuid::Uuid;
 
-use crate::orgs::entity::{self, CreateOrgInput, Org, UpdateOrgInput};
-use crate::orgs::service::OrgsService;
-use crate::users::entity::User;
-use crate::users::service::UsersServiceByOrg;
+use domain::orgs::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
 
 #[resolver]
 pub struct OrgsResolver {
@@ -18,19 +12,9 @@ pub struct OrgsResolver {
 
 #[crud(
     service = svc,
-    entity = entity::Entity,
+    entity = OrgEntity,
     output = Org,
     create = CreateOrgInput,
     update = UpdateOrgInput,
 )]
-impl OrgsResolver {
-    #[field]
-    async fn users(
-        &self,
-        parent: &Org,
-        by_org: &DataLoader<UsersServiceByOrg>,
-    ) -> Result<Vec<User>> {
-        let id = Uuid::parse_str(&parent.id)?;
-        Ok(by_org.load_one(id).await?.unwrap_or_default())
-    }
-}
+impl OrgsResolver {}

@@ -11,12 +11,65 @@ private references.
 ## What this project is
 
 nestrs is an opinionated Rust framework whose central bet is **procedural
-macros**. Crates under `crates/` provide the building blocks (IoC container,
-module trait, the decorator macros). Binaries under `apps/<name>/` are real
-applications that consume those crates.
+macros**. Crates under `crates/nestrs-*` provide the framework building blocks
+(IoC container, module trait, the decorator macros); `crates/domain` holds the
+product's shared core; binaries under `apps/<name>/` are thin entry points that
+consume both. *Monorepo layout* below is the law on which of the three a given
+file belongs to.
 
 NestJS inspired the surface; it is no longer the reference. Describe features by
 what they do, not by pointing at a Nest equivalent.
+
+## Monorepo layout — apps, domain, framework
+
+A multi-app workspace only earns its keep if the split is **a rule, not a
+habit**. Three homes, one mandate each:
+
+- **`crates/nestrs-*` — the framework.** Generic, product-agnostic mechanism
+  (container, macros, transports, the authn/authz *machinery*). It never names a
+  concrete `Claims`, entity, or policy — it is generic *over* them
+  (`JwtStrategy<C>`, `AbilityGuard<F>`).
+- **`crates/domain` — the product's functional core.** Every feature as a
+  module, and **all business logic, once**: entities, services (the entity's DB
+  gateway + logic), the JWT contract (`Claims`/`Role`), the authorization
+  **policy** (`AppAbility`), resource-server verification wiring, and the
+  relation/field resolvers. Modular *inside* — one submodule per concern
+  (`identity/`, `authn/`, `authz/`, `orgs/`, `users/`, `oauth/`…) — so
+  "centralized" is never "a junk drawer".
+- **`apps/<name>` — thin deployables.** A pure **entry point**: it composes
+  `domain` modules, attaches transports, and declares the **endpoints**
+  (`#[controller]`, root `#[resolver]` query/mutation, `#[gateway]`) exposing
+  chosen features over *this* app's transports. **An endpoint holds no logic — it
+  delegates to a domain service.** Strip an app of its `domain` imports and only
+  routing remains.
+
+**The dividing rule.** Code lives in `domain` when it is the product's
+*contract, policy, or logic* — anything another app of the same kind would
+reuse. It stays in an app only when it decides **how that app exposes** the
+domain. *Exposure is per-app; logic is shared.* A token issuer's `TokenIssuer` +
+OAuth strategy live in `domain`; its `/token` controller stays in `apps/auth` —
+another app could mint tokens from the same service without exposing the route.
+
+**The compiler draws part of the line.** A `#[field]` relation resolver expands
+to `#[ComplexObject] impl Entity`, and `#[expose]` generates the entity's GraphQL
+type — both orphan-bound to the entity's crate. So **exposed entities and
+relation/field resolvers live in `domain` with the entity; root resolvers,
+controllers, and gateways live in the app.** The boundary is enforced by Rust,
+not convention.
+
+**Naming across the split — the crate encodes the layer; the file is always
+`module.rs`.** A feature has a `domain` module *and* a thin app module, both
+named `<Feature>Module` in `<feature>/module.rs`. The **crate boundary** is the
+disambiguator (`domain::orgs::OrgsModule` vs `api::orgs::OrgsModule`) — the same
+pattern Nest uses across packages. In an app's `module.rs`, **never `use` the
+domain module of the same name**; reference it with a fully-qualified path in
+`#[module(imports = [domain::orgs::OrgsModule, …])]` instead. Controllers,
+resolvers, gateways, processors, and tools in the app folder share the feature
+prefix (`OrgsController`, `OrgsResolver`, …) since the folder supplies it.
+`app.rs` then reads `imports = [OrgsModule, UsersModule, …]` like a table of
+contents. **Never reach for `use … as` to dodge a name clash.** Default to
+promoting a feature into `domain`; an app-only struct is the justified exception
+of pure exposure.
 
 ## The two rules that shape every change
 
@@ -154,22 +207,24 @@ URI versioning via `#[controller(version = "1")]` mounts the controller under
 
 ## Authentication is mechanism; authorization is policy
 
-`nestrs-auth` answers *who the caller is*; `nestrs-authz` answers *what they may
+`nestrs-authn` answers *who the caller is*; `nestrs-authz` answers *what they may
 do*. They compose at the request boundary: bind `#[use_guards(AuthGuard,
 AppAbilityGuard)]` — `AuthGuard` attaches the principal, `AbilityGuard` builds
-the caller's `Ability`.
+the caller's `Ability`. Both the verification alias and the policy live in
+`crates/domain` (`authn/`, `authz/`); apps only mount them on their endpoints.
 
 A **`Strategy`** turns a request into a principal (a plain `#[injectable]`, no
 macro). **`AuthGuard<S>`** is generic over it. `Strategy::authenticate` returns
 an **`Outcome`**: `Authenticated` or `Challenge` (a 401, or an OAuth redirect) —
 so one trait serves bearer and OAuth. The standard resource-server case needs no
-app strategy: `JwtStrategy<C>` ships it, so an app writes only `type AuthGuard =
-AuthGuard<JwtStrategy<Claims>>`. **`JwtService`** is global infrastructure
+app strategy: `JwtStrategy<C>` ships it, so `domain` writes the alias once
+(`type AuthGuard = AuthGuard<JwtStrategy<Claims>>`) and every resource-server app
+mounts it. **`JwtService`** is global infrastructure
 (factory phase); it takes a symmetric secret or an EdDSA key pair — a resource
 server holds **only the public key** (cannot mint tokens), which is why **token
 issuance is its own app** (`apps/auth` signs with the private key; `apps/api` is
-a pure resource server that only verifies). The two share the `identity` crate
-and the DB, never RPC each other.
+a pure resource server that only verifies). The two share `crates/domain` (the
+`identity` contract lives there) and the DB, never RPC each other.
 
 ## The data layer makes security and transactions transparent
 
@@ -258,14 +313,18 @@ change" claim. Read the crate for how; here is only what was decided:
   runnable thing, including the `auth` app, lives under `apps/` uniformly.
 - **Files are named by their ROLE**, NestJS-style in snake_case; the folder
   supplies the feature prefix (`orgs/service.rs` ≡ `orgs.service.ts`). Canonical:
-  `module.rs`, `service.rs`, `controller.rs`, `resolver.rs`, `tool.rs`,
-  `entity.rs`, `dto.rs`, `guard.rs` / `strategy.rs`, `constants.rs`. No dotted
-  variants. **Never put a role's declaration in a topic file** (a module belongs
+  `module.rs` (the DI module — `<Feature>Module` in both `domain/<feature>/` and
+  an app's `<feature>/` folder; domain imports in the app side use FQ paths),
+  `service.rs`,
+  `controller.rs`, `resolver.rs`, `tool.rs`, `entity.rs`, `dto.rs`, `guard.rs` /
+  `strategy.rs`, `constants.rs`. No dotted variants. **Never put a role's declaration in a topic file** (a module belongs
   in `module.rs`, not `graphql.rs`).
-- An app **feature** is **one module per feature-folder** (a single module
-  wiring REST + GraphQL, not two). A **library crate** may expose several config
-  modules from its `module.rs` (e.g. `nestrs-auth` provides `AuthModule` +
-  `OAuth2Module`, independently composable).
+- A **feature** is **one module per feature-folder per side**: its `domain`
+  module wires the services/resolvers (a single module across REST + GraphQL,
+  not two), and the app's thin module wires that feature's endpoints and imports
+  the domain one. Never split one side's wiring into two modules. A **library
+  crate** may expose several composable modules from its `module.rs` (e.g.
+  `nestrs-authn` provides `AuthnModule` + `OAuth2Module`).
 - **`mod.rs`/`lib.rs` carry no business logic** — only `//!` doc, `mod`, and
   `pub use`. The one exception: a proc-macro crate's `#[proc_macro*]` entry
   functions (Rust forces them to the crate root) must be **thin delegations** to
@@ -324,9 +383,9 @@ before returning control**.
 - No mocking the database in e2e tests.
 - Multiple deployable apps split by responsibility are a goal (not microservices
   sprawl) under two conditions: apps share code through **crates** (never
-  copy-paste; business contracts like JWT claims live in a non-`nestrs-` crate
-  such as `identity`), and the coupling stays **loose** (a self-contained token
-  + the shared DB, never chatty RPC).
+  copy-paste — all product logic, contracts, and policy live in `crates/domain`;
+  see *Monorepo layout*), and the coupling stays **loose** (a self-contained
+  token + the shared DB, never chatty RPC).
 
 ## Workflow
 

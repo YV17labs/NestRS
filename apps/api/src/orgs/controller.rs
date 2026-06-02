@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use nestrs_http::{controller, crud};
 
-use crate::authn::AuthGuard;
-use crate::authz::AppAbilityGuard;
-use crate::orgs::entity::{self, CreateOrgInput, Org, UpdateOrgInput};
-use crate::orgs::service::OrgsService;
+use domain::authn::AuthGuard;
+use domain::authz::AppAbilityGuard;
+use domain::orgs::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
 
 #[controller(path = "/orgs")]
 #[use_guards(AuthGuard, AppAbilityGuard)]
@@ -16,7 +15,7 @@ pub struct OrgsController {
 
 #[crud(
     service = svc,
-    entity = entity::Entity,
+    entity = OrgEntity,
     output = Org,
     create = CreateOrgInput,
     update = UpdateOrgInput,

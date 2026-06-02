@@ -27,6 +27,9 @@ jsonwebtoken.workspace = true
 # `oauth2::reqwest`) drives the token exchange, so we add no second reqwest. The
 # default features (reqwest + rustls-tls) are exactly what we want.
 oauth2.workspace = true
+# Decoding `Authorization: Basic` for the `basic_credentials` helper (the building
+# block of OAuth2 client authentication, symmetric to `bearer_token`).
+base64.workspace = true
 serde.workspace = true
 # Parsing the OAuth userinfo response (oauth2's reqwest is built without its
 # `json` feature, so we read the body and deserialize it ourselves).

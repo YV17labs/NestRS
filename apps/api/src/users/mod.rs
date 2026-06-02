@@ -1,8 +1,6 @@
 pub mod controller;
-pub mod entity;
 pub mod gateway;
 pub mod module;
 pub mod resolver;
-pub mod service;
 
 pub use module::UsersModule;

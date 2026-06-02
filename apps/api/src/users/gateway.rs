@@ -3,10 +3,9 @@ use std::sync::Arc;
 use nestrs_database::CrudService;
 use nestrs_ws::{gateway, messages};
 
-use crate::authn::AuthGuard;
-use crate::authz::AppAbilityGuard;
-use crate::users::entity::User;
-use crate::users::service::UsersService;
+use domain::authn::AuthGuard;
+use domain::authz::AppAbilityGuard;
+use domain::users::{User, UsersService};
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthGuard, AppAbilityGuard)]

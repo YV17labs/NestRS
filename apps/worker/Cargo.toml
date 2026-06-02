@@ -9,7 +9,6 @@ nestrs-core.workspace = true
 nestrs-config.workspace = true
 nestrs-queue.workspace = true
 nestrs-schedule.workspace = true
-# Headless: inherits the bare default (otlp), so no `http` feature → no poem.
 nestrs-telemetry.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -17,8 +16,6 @@ serde.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-# The e2e boots headless against the real Redis the worker uses and drives a
-# queue round-trip through the QueueWorker transport.
 nestrs-testing.workspace = true
 
 [lints]

@@ -21,3 +21,11 @@ poem.workspace = true
 # `Executor::Pool` wraps the shared `DatabaseConnection` the bridge injects.
 sea-orm.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+nestrs-core.workspace = true
+nestrs-database.workspace = true
+nestrs-authz.workspace = true
+tokio.workspace = true
+sea-orm.workspace = true
+poem.workspace = true

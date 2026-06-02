@@ -1,6 +1,8 @@
-pub mod controller;
-pub mod module;
-pub mod service;
+//! Liveness/readiness probes — [`HealthModule`] mounts `GET /health/*` on the HTTP transport.
+
+mod controller;
+mod module;
+mod service;
 
 pub use controller::HealthController;
 pub use module::HealthModule;

@@ -1,6 +1,13 @@
-mod endpoint;
+//! MCP transport — `#[mcp]` mounts tools on the existing HTTP transport.
+//!
+//! Integration tests: exercised via `apps/mcp` e2e; crate-local guard seam in
+//! `tests/guard.rs`.
 
-pub use endpoint::endpoint;
+mod endpoint;
+mod guard;
+
+pub use endpoint::{endpoint, endpoint_with_guard};
+pub use guard::{BoxFuture, McpOperationGuard};
 
 pub use rmcp::handler::server::router::tool::ToolRouter;
 pub use rmcp::handler::server::wrapper::Parameters;

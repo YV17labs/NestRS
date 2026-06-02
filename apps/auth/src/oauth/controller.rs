@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use nestrs_http::{controller, routes, Ctx};
+use domain::oauth::{
+    AccessToken, AuthenticatedClient, Caller, ClientAuthGuard, LoginInput, OAuthGuard,
+    TokenIssuer,
+};
+use nestrs_http::{controller, routes, Ctx, Valid};
 use nestrs_throttler::{Throttle, ThrottlerGuard};
 use poem::web::{Form, Json};
 use poem::Result;
 use serde::Deserialize;
-
-use domain::oauth::{
-    AccessToken, AuthenticatedClient, Caller, ClientAuthGuard, OAuthGuard, TokenIssuer,
-};
 
 #[derive(Debug, Deserialize)]
 pub struct TokenRequest {
@@ -57,6 +57,26 @@ impl OAuthController {
         tags("OAuth2")
     )]
     async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessToken>> {
-        Ok(Json(self.issuer.issue(caller.org_id, caller.roles.clone())?))
+        Ok(Json(self.issuer.issue(
+            Some(caller.user_id),
+            caller.org_id,
+            caller.roles.clone(),
+        )?))
+    }
+
+    #[post("/login")]
+    #[use_guards(ThrottlerGuard)]
+    #[meta(Throttle::per_minute(10))]
+    #[api(summary = "Sign in with email and password", tags("Auth"))]
+    async fn login(
+        &self,
+        body: Valid<Json<LoginInput>>,
+    ) -> Result<Json<AccessToken>> {
+        let input = body.into_inner();
+        Ok(Json(
+            self.issuer
+                .grant_password(&input.email, &input.password)
+                .await?,
+        ))
     }
 }

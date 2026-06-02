@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use nestrs_authz::{current_ability, with_ability};
 use nestrs_core::injectable;
-use nestrs_database::{with_executor, Executor};
+use nestrs_database::{with_request_executor, Executor};
 use nestrs_graphql::{BatchContext, BatchSpawner};
 use sea_orm::DatabaseConnection;
 
@@ -48,7 +48,7 @@ impl BatchContext for LoaderScope {
             let ability = ability.clone();
             let executor = executor.clone();
             tokio::spawn(async move {
-                let scoped = with_executor(executor, fut);
+                let scoped = with_request_executor(executor, fut);
                 match ability {
                     Some(ability) => with_ability(ability, scoped).await,
                     None => scoped.await,

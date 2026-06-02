@@ -1,6 +1,7 @@
 //! [`ThrottlerGuard`] — the per-route rate-limiting guard, the `@nestjs/throttler`
 //! `ThrottlerGuard` analog.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use nestrs_core::injectable;
@@ -34,7 +35,9 @@ impl Guard for ThrottlerGuard {
             .copied()
             .unwrap_or_else(|| self.throttler.default_limit());
 
-        let decision = self.throttler.hit(&client_key(req), limit);
+        let decision = self
+            .throttler
+            .hit(&client_key(req, self.throttler.trusted_proxies()), limit);
         if decision.allowed {
             return Ok(());
         }
@@ -48,23 +51,63 @@ impl Guard for ThrottlerGuard {
     }
 }
 
-/// The rate-limit key: the first `X-Forwarded-For` hop when proxied, else the peer
-/// **IP** (never the `ip:port` — each new connection gets a fresh ephemeral port,
-/// so keying on the port would give every request its own bucket and never limit
-/// anything), else a shared key.
-fn client_key(req: &Request) -> String {
-    if let Some(forwarded) = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|chain| chain.split(',').next())
-        .map(str::trim)
-        .filter(|ip| !ip.is_empty())
-    {
-        return forwarded.to_owned();
+/// The rate-limit key. By default the direct peer IP is used. When the peer is a
+/// configured trusted proxy, the leftmost `X-Forwarded-For` hop is used instead.
+fn client_key(req: &Request, trusted_proxies: &[IpAddr]) -> String {
+    let peer = req.remote_addr().as_socket_addr().map(|addr| addr.ip());
+    client_key_from(
+        req.headers()
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok()),
+        peer,
+        trusted_proxies,
+    )
+}
+
+fn client_key_from(
+    forwarded_for: Option<&str>,
+    peer: Option<IpAddr>,
+    trusted_proxies: &[IpAddr],
+) -> String {
+    if let Some(peer) = peer {
+        if trusted_proxies.contains(&peer) {
+            if let Some(client) = forwarded_for
+                .and_then(|chain| chain.split(',').next())
+                .map(str::trim)
+                .filter(|ip| !ip.is_empty() && ip.parse::<IpAddr>().is_ok())
+            {
+                return client.to_owned();
+            }
+        }
+        return peer.to_string();
     }
-    match req.remote_addr().as_socket_addr() {
-        Some(addr) => addr.ip().to_string(),
-        None => "global".to_owned(),
+    "global".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use super::client_key_from;
+
+    #[test]
+    fn direct_clients_ignore_spoofed_x_forwarded_for() {
+        let key = client_key_from(
+            Some("203.0.113.50"),
+            Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10))),
+            &[],
+        );
+        assert_eq!(key, "192.0.2.10");
+    }
+
+    #[test]
+    fn trusted_proxies_use_the_leftmost_forwarded_client() {
+        let proxy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let key = client_key_from(
+            Some("203.0.113.50, 192.0.2.1"),
+            Some(proxy),
+            &[proxy],
+        );
+        assert_eq!(key, "203.0.113.50");
     }
 }

@@ -37,7 +37,10 @@ mod service;
 mod worker;
 
 pub use config::DatabaseConfig;
-pub use executor::{current_executor, with_executor, Executor};
+pub use executor::{
+    current_executor, current_executor_scope, with_executor, with_job_executor,
+    with_request_executor, Executor, ExecutorScope,
+};
 pub use module::{DatabaseModule, DatabaseSetup};
 pub use page::{Page, PageParams};
 pub use repo::{scope_for, Repo};

@@ -37,6 +37,7 @@ mod attr;
 mod dto;
 mod expose;
 mod input;
+mod wire;
 
 /// Expose a SeaORM entity to GraphQL + OpenAPI. See the crate docs for grammar.
 #[proc_macro_attribute]

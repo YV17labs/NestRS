@@ -1,11 +1,17 @@
 use auth::{AppModule, IssuerConfig, RegisteredClient};
 use base64::Engine as _;
 use domain::{Claims, Role};
-use nestrs_authn::{JwtConfig, JwtOptions, JwtService, OAuth2Config};
+use nestrs_authn::{hash_password, JwtConfig, JwtOptions, JwtService, OAuth2Config};
 use nestrs_testing::{EphemeralDatabase, TestApp};
 use poem::http::StatusCode;
+use sea_orm::sea_query::{OnConflict, Query};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
+use serde_json::json;
+use uuid::Uuid;
 
 const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
+const LOGIN_EMAIL: &str = "alice@example.com";
+const LOGIN_PASSWORD: &str = "correct-horse";
 const CLIENT_ID: &str = "demo-service";
 const CLIENT_SECRET: &str = "demo-service-secret";
 
@@ -67,6 +73,56 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
 
 fn resource_server_verifier() -> JwtService {
     JwtService::new(JwtOptions::eddsa_verify(DEV_PUBLIC_KEY)).expect("the dev public key parses")
+}
+
+async fn seed_org_and_user(db: &DatabaseConnection) {
+    #[derive(DeriveIden)]
+    enum Org {
+        Table,
+        Id,
+        Name,
+    }
+    #[derive(DeriveIden)]
+    enum User {
+        Table,
+        Id,
+        OrgId,
+        Name,
+        Email,
+        Role,
+        PasswordHash,
+    }
+
+    let org_id = Uuid::parse_str(ORG_ID).expect("valid org uuid");
+    let org_stmt = Query::insert()
+        .into_table(Org::Table)
+        .columns([Org::Id, Org::Name])
+        .values_panic([org_id.into(), "Demo".into()])
+        .on_conflict(OnConflict::column(Org::Id).do_nothing().to_owned())
+        .to_owned();
+    db.execute(&org_stmt).await.expect("seed org");
+
+    let hash = hash_password(LOGIN_PASSWORD).expect("hash password");
+    let user_stmt = Query::insert()
+        .into_table(User::Table)
+        .columns([
+            User::Id,
+            User::OrgId,
+            User::Name,
+            User::Email,
+            User::Role,
+            User::PasswordHash,
+        ])
+        .values_panic([
+            Uuid::now_v7().into(),
+            org_id.into(),
+            "Alice".into(),
+            LOGIN_EMAIL.into(),
+            "admin".into(),
+            hash.into(),
+        ])
+        .to_owned();
+    db.execute(&user_stmt).await.expect("seed login user");
 }
 
 #[tokio::test]
@@ -176,4 +232,61 @@ async fn the_oauth_authorize_endpoint_redirects_to_the_provider() {
     resp.assert_status(StatusCode::FOUND);
     resp.assert_header_exist("location");
     resp.assert_header_exist("set-cookie");
+}
+
+#[tokio::test]
+async fn login_issues_a_token_the_public_key_verifies() {
+    let (db, app) = boot().await;
+    seed_org_and_user(db.connection().as_ref()).await;
+
+    let resp = app
+        .http()
+        .post("/login")
+        .body_json(&json!({
+            "email": LOGIN_EMAIL,
+            "password": LOGIN_PASSWORD,
+        }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+
+    let json = resp.json().await;
+    let token = json.value().object().get("access_token").string().to_owned();
+    let claims: Claims = resource_server_verifier()
+        .verify(&token)
+        .expect("the public key verifies the privately-signed token");
+    assert_eq!(claims.org_id.to_string(), ORG_ID);
+    assert!(claims.sub.is_some());
+    assert!(claims.roles.contains(&Role::Admin));
+}
+
+#[tokio::test]
+async fn login_rejects_bad_credentials() {
+    let (db, app) = boot().await;
+    seed_org_and_user(db.connection().as_ref()).await;
+
+    app.http()
+        .post("/login")
+        .body_json(&json!({
+            "email": LOGIN_EMAIL,
+            "password": "wrong-password",
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn login_rejects_unknown_email() {
+    let (_db, app) = boot().await;
+
+    app.http()
+        .post("/login")
+        .body_json(&json!({
+            "email": "nobody@example.com",
+            "password": LOGIN_PASSWORD,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 }

@@ -13,8 +13,9 @@
 //!   gated the same way: its `WHERE` carries `condition_for(Update/Delete)` on top
 //!   of the primary key, so a caller cannot mutate a row outside its scope even by
 //!   id. A feature cannot forget to scope its reads or writes to what the caller
-//!   may touch; with no ambient ability the filter is the SQL identity (`TRUE`), so
-//!   non-request and unauthenticated paths run unscoped.
+//!   may touch. Worker jobs and other non-request paths run unscoped when no
+//!   ability is present; a **request-scoped** executor without an ability denies
+//!   every row (fail-closed) and logs a warning.
 //!
 //! `Repo` requires an ambient executor (the [`DbContext`](crate::DbContext)
 //! interceptor installs it per request); a call outside that scope errors rather
@@ -24,21 +25,31 @@
 use std::marker::PhantomData;
 
 use nestrs_authz::{current_ability, Action};
-use sea_orm::sea_query::Condition;
+use sea_orm::sea_query::{Condition, Expr};
 use sea_orm::{
     ActiveModelTrait, DbErr, Delete, DeleteResult, EntityTrait, IntoActiveModel, PrimaryKeyTrait,
     QueryFilter, Select, Update,
 };
 
-use crate::executor::{current_executor, Executor};
+use crate::executor::{current_executor, current_executor_scope, Executor, ExecutorScope};
 
 /// The caller's row-level filter for `action` on `E`, taken from the ambient
-/// [`Ability`](nestrs_authz::Ability). With no ambient ability it is
-/// [`Condition::all`] — the SQL identity (`TRUE`), i.e. unscoped.
+/// [`Ability`](nestrs_authz::Ability). Without an ability on a request-scoped
+/// executor the filter is deny-all; on worker/system paths it is unscoped.
 pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
-    current_ability()
-        .map(|ability| ability.condition_for::<E>(action))
-        .unwrap_or_else(Condition::all)
+    match current_ability() {
+        Some(ability) => ability.condition_for::<E>(action),
+        None if current_executor_scope() == Some(ExecutorScope::Request) => {
+            tracing::warn!(
+                target: "nestrs::orm",
+                entity = std::any::type_name::<E>(),
+                ?action,
+                "no ambient Ability on a request-scoped executor — denying all rows",
+            );
+            Condition::all().add(Expr::cust("1 = 0"))
+        }
+        None => Condition::all(),
+    }
 }
 
 /// Repository over entity `E`, bound to the ambient request executor and ability.

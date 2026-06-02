@@ -8,8 +8,8 @@ use nestrs_server_timing::ServerTimingModule;
 use nestrs_telemetry::TelemetryModule;
 
 use domain::authn::AuthnModule;
-use domain::authz::AuthzModule;
 
+use crate::authz::AuthzModule;
 use crate::orgs::OrgsModule;
 use crate::users::UsersModule;
 

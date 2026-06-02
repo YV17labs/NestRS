@@ -10,8 +10,10 @@ mod dotenv;
 mod environment;
 mod error;
 mod loader;
+mod module;
 
-pub use config::{Config, ConfigFeature, ConfigModule, ConfigRoot, Namespaced};
+pub use config::{Config, Namespaced};
+pub use module::{ConfigFeature, ConfigModule, ConfigRoot};
 pub use environment::Environment;
 pub use error::{ConfigError, Result};
 pub use loader::{env_var, ConfigService};

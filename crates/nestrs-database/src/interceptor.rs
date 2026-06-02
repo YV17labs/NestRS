@@ -17,7 +17,7 @@ use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-use crate::executor::{with_executor, Executor};
+use crate::executor::{with_request_executor, Executor};
 
 #[interceptor]
 pub(crate) struct DbContext {
@@ -29,7 +29,7 @@ pub(crate) struct DbContext {
 impl Interceptor for DbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
         if is_safe(req.method()) {
-            return with_executor(Executor::Pool(self.db.clone()), next.run(req)).await;
+            return with_request_executor(Executor::Pool(self.db.clone()), next.run(req)).await;
         }
 
         let txn = match self.db.begin().await {
@@ -40,7 +40,7 @@ impl Interceptor for DbContext {
             }
         };
 
-        let result = with_executor(Executor::Txn(txn.clone()), next.run(req)).await;
+        let result = with_request_executor(Executor::Txn(txn.clone()), next.run(req)).await;
 
         // The handler future has completed and its executor clone dropped, so we
         // are normally the sole owner and can take the transaction back to commit

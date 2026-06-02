@@ -1,33 +1,46 @@
-//! The authentication failure type, rendered as an HTTP challenge.
+//! Authentication failures, rendered as HTTP 401 challenges.
 
 use poem::http::{header, StatusCode};
 use poem::{IntoResponse, Response};
 
-/// Why authentication did not establish an identity. A [`Strategy`](crate::Strategy)
-/// returns it; [`AuthGuard`](crate::AuthGuard) renders it as a `401` with a
-/// `WWW-Authenticate` header.
+/// Why authentication did not establish an identity.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    /// No credential was presented (missing/blank `Authorization`, no session).
     #[error("missing credentials")]
     MissingCredentials,
-    /// A credential was presented but did not verify (bad signature, malformed).
     #[error("invalid token")]
     InvalidToken,
-    /// The credential verified but is past its `exp`.
+    #[error("invalid token signature")]
+    InvalidSignature,
+    #[error("invalid token algorithm")]
+    InvalidAlgorithm,
+    #[error("token not yet valid")]
+    NotYetValid,
     #[error("token expired")]
     Expired,
-    /// Anything strategy-specific: a failed OAuth exchange, an unknown user, a
-    /// mismatched CSRF state. The message is for logs, not the client body.
+    /// Strategy-specific or configuration failures. The message is for logs, not the client body.
     #[error("authentication failed: {0}")]
     Failed(String),
 }
 
+impl AuthError {
+    /// Message safe to return in an HTTP 401 body (no strategy/configuration detail).
+    fn client_message(&self) -> String {
+        match self {
+            Self::Failed(_) => "authentication failed".into(),
+            _ => self.to_string(),
+        }
+    }
+}
+
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
+        if let Self::Failed(ref detail) = self {
+            tracing::warn!(target: "nestrs::auth", detail = %detail, "authentication failed");
+        }
         Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(header::WWW_AUTHENTICATE, "Bearer")
-            .body(self.to_string())
+            .body(self.client_message())
     }
 }

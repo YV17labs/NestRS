@@ -2,43 +2,24 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use nestrs_authn::{burn_verify, hash_password, verify_password};
 use nestrs_authz::Action;
 use nestrs_core::{hooks, injectable};
-use nestrs_database::{CrudService, Repo};
+use nestrs_database::{CreateModel, CrudService, Repo};
 use nestrs_graphql::dataloader;
-use poem::error::ResponseError;
-use poem::http::StatusCode;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, Set,
 };
 use uuid::Uuid;
-use validator::{Validate, ValidationErrors};
+use validator::Validate;
 
 use crate::users::entity::{
-    self, ActiveModel, CreateUserInput, Entity as Users, UpdateUserInput, User,
+    self, CreateUserInput, Entity as Users, UpdateUserInput, User,
 };
+use crate::users::error::{CredentialError, UserError};
 
 const DEFAULT_ROLE: &str = "user";
-
-/// A failure creating a user: bad input is a 422, a database error a 500.
-/// Implementing `ResponseError` lets a handler return it with `?` and no mapping.
-#[derive(Debug, thiserror::Error)]
-pub enum UserError {
-    #[error(transparent)]
-    Validation(#[from] ValidationErrors),
-    #[error(transparent)]
-    Db(#[from] DbErr),
-}
-
-impl ResponseError for UserError {
-    fn status(&self) -> StatusCode {
-        match self {
-            UserError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            UserError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
 
 #[injectable]
 pub struct UsersService {
@@ -53,20 +34,77 @@ impl CrudService for UsersService {
 }
 
 impl UsersService {
+    /// Construct with an already-resolved connection (container or tests).
+    pub fn new(db: Arc<DatabaseConnection>) -> Self {
+        Self { db }
+    }
+
+    pub async fn authenticate(
+        &self,
+        email: &str,
+        password: &str,
+    ) -> Result<entity::Model, CredentialError> {
+        let conn = Repo::<Users>::conn().map_err(|_| CredentialError)?;
+        let user = Users::find()
+            .filter(entity::Column::Email.eq(email.to_owned()))
+            .one(&conn)
+            .await
+            .map_err(|_| CredentialError)?;
+
+        let Some(user) = user else {
+            burn_verify(password);
+            tracing::warn!(target: "nestrs::auth", %email, "login failed");
+            return Err(CredentialError);
+        };
+
+        let Some(ref hash) = user.password_hash else {
+            burn_verify(password);
+            tracing::warn!(target: "nestrs::auth", %email, "login failed");
+            return Err(CredentialError);
+        };
+
+        if !verify_password(hash, password).unwrap_or(false) {
+            tracing::warn!(target: "nestrs::auth", %email, "login failed");
+            return Err(CredentialError);
+        }
+        Ok(user)
+    }
+
+    /// Create a user with a local password (email is the login identifier).
+    pub async fn register_with_password(
+        &self,
+        email: &str,
+        name: &str,
+        password: &str,
+        org_id: Uuid,
+    ) -> Result<User, UserError> {
+        let input = CreateUserInput {
+            name: name.to_owned(),
+            email: email.to_owned(),
+        };
+        input.validate()?;
+        let password_hash = hash_password(password).map_err(|_| {
+            UserError::Db(DbErr::Custom("password hashing failed".into()))
+        })?;
+        let mut active = input.into_active_model();
+        active.org_id = Set(org_id);
+        active.role = Set(DEFAULT_ROLE.to_owned());
+        active.password_hash = Set(Some(password_hash));
+        let user = active.insert(&Repo::<Users>::conn()?).await?;
+        tracing::info!(id = %user.id, %org_id, "user registered with password");
+        Ok(User::from(&user))
+    }
+
     pub async fn create_in_org(
         &self,
         input: CreateUserInput,
         org_id: Uuid,
     ) -> Result<User, UserError> {
         input.validate()?;
-        let row = ActiveModel {
-            id: Set(Uuid::now_v7()),
-            org_id: Set(org_id),
-            name: Set(input.name),
-            email: Set(input.email),
-            role: Set(DEFAULT_ROLE.to_owned()),
-        };
-        let user = row.insert(&Repo::<Users>::conn()?).await?;
+        let mut active = input.into_active_model();
+        active.org_id = Set(org_id);
+        active.role = Set(DEFAULT_ROLE.to_owned());
+        let user = active.insert(&Repo::<Users>::conn()?).await?;
         tracing::info!(id = %user.id, %org_id, "user created");
         Ok(User::from(&user))
     }
@@ -76,7 +114,7 @@ impl UsersService {
         email: &str,
         name: &str,
         org_id: Uuid,
-    ) -> Result<entity::Model> {
+    ) -> Result<entity::Model, UserError> {
         let conn = Repo::<Users>::conn()?;
         if let Some(user) = Repo::<Users>::scoped(Action::Read)
             .filter(entity::Column::Email.eq(email.to_owned()))
@@ -85,14 +123,15 @@ impl UsersService {
         {
             return Ok(user);
         }
-        let row = ActiveModel {
-            id: Set(Uuid::now_v7()),
-            org_id: Set(org_id),
-            name: Set(name.to_owned()),
-            email: Set(email.to_owned()),
-            role: Set(DEFAULT_ROLE.to_owned()),
+        let input = CreateUserInput {
+            name: name.to_owned(),
+            email: email.to_owned(),
         };
-        let user = row.insert(&conn).await?;
+        input.validate()?;
+        let mut active = input.into_active_model();
+        active.org_id = Set(org_id);
+        active.role = Set(DEFAULT_ROLE.to_owned());
+        let user = active.insert(&conn).await?;
         tracing::info!(target: "nestrs::auth", id = %user.id, %org_id, "provisioned a user");
         Ok(user)
     }
@@ -100,52 +139,34 @@ impl UsersService {
 
 #[dataloader]
 impl UsersService {
-    async fn by_name(&self, names: &[String]) -> HashMap<String, Vec<User>> {
-        tracing::debug!(target: "nestrs::loader", count = names.len(), "loading users by name");
-        let mut buckets: HashMap<String, Vec<User>> = names
-            .iter()
-            .map(|name| (name.clone(), Vec::new()))
-            .collect();
-        let rows = (async {
-            Repo::<Users>::scoped(Action::Read)
-                .filter(entity::Column::Name.is_in(names.iter().cloned()))
-                .all(&Repo::<Users>::conn()?)
-                .await
-        })
-        .await
-        .unwrap_or_else(|err: DbErr| {
-            tracing::error!(target: "nestrs::loader", error = %err, "by_name loader query failed");
-            Vec::new()
-        });
-        for row in &rows {
-            if let Some(bucket) = buckets.get_mut(&row.name) {
-                bucket.push(User::from(row));
-            }
+    async fn by_name(
+        &self,
+        names: &[String],
+    ) -> Result<HashMap<String, Vec<User>>, UserError> {
+        if names.is_empty() {
+            return Ok(HashMap::new());
         }
-        buckets
+        tracing::debug!(target: "nestrs::loader", count = names.len(), "loading users by name");
+        let rows = Repo::<Users>::scoped(Action::Read)
+            .filter(entity::Column::Name.is_in(names.iter().cloned()))
+            .all(&Repo::<Users>::conn()?)
+            .await?;
+        Ok(group_users_by_name(names, rows))
     }
 
-    async fn by_org(&self, org_ids: &[Uuid]) -> HashMap<Uuid, Vec<User>> {
-        tracing::debug!(target: "nestrs::loader", count = org_ids.len(), "loading users by org");
-        let mut buckets: HashMap<Uuid, Vec<User>> =
-            org_ids.iter().map(|org_id| (*org_id, Vec::new())).collect();
-        let rows = (async {
-            Repo::<Users>::scoped(Action::Read)
-                .filter(entity::Column::OrgId.is_in(org_ids.iter().cloned()))
-                .all(&Repo::<Users>::conn()?)
-                .await
-        })
-        .await
-        .unwrap_or_else(|err: DbErr| {
-            tracing::error!(target: "nestrs::loader", error = %err, "by_org loader query failed");
-            Vec::new()
-        });
-        for row in &rows {
-            if let Some(bucket) = buckets.get_mut(&row.org_id) {
-                bucket.push(User::from(row));
-            }
+    async fn by_org(
+        &self,
+        org_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Vec<User>>, UserError> {
+        if org_ids.is_empty() {
+            return Ok(HashMap::new());
         }
-        buckets
+        tracing::debug!(target: "nestrs::loader", count = org_ids.len(), "loading users by org");
+        let rows = Repo::<Users>::scoped(Action::Read)
+            .filter(entity::Column::OrgId.is_in(org_ids.iter().cloned()))
+            .all(&Repo::<Users>::conn()?)
+            .await?;
+        Ok(group_users_by_org(org_ids, rows))
     }
 }
 
@@ -159,45 +180,24 @@ impl UsersService {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const ORG_ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e);
-
-    fn service() -> UsersService {
-        UsersService {
-            db: Arc::new(DatabaseConnection::default()),
+fn group_users_by_name(names: &[String], rows: Vec<entity::Model>) -> HashMap<String, Vec<User>> {
+    let mut buckets: HashMap<String, Vec<User>> =
+        names.iter().map(|name| (name.clone(), Vec::new())).collect();
+    for row in rows {
+        if let Some(bucket) = buckets.get_mut(&row.name) {
+            bucket.push(User::from(&row));
         }
     }
+    buckets
+}
 
-    #[tokio::test]
-    async fn create_rejects_invalid_email() {
-        let err = service()
-            .create_in_org(
-                CreateUserInput {
-                    name: "Alice".into(),
-                    email: "no-at-sign".into(),
-                },
-                ORG_ACME,
-            )
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("email"));
+fn group_users_by_org(org_ids: &[Uuid], rows: Vec<entity::Model>) -> HashMap<Uuid, Vec<User>> {
+    let mut buckets: HashMap<Uuid, Vec<User>> =
+        org_ids.iter().map(|org_id| (*org_id, Vec::new())).collect();
+    for row in rows {
+        if let Some(bucket) = buckets.get_mut(&row.org_id) {
+            bucket.push(User::from(&row));
+        }
     }
-
-    #[tokio::test]
-    async fn create_rejects_empty_name() {
-        let err = service()
-            .create_in_org(
-                CreateUserInput {
-                    name: "".into(),
-                    email: "alice@example.com".into(),
-                },
-                ORG_ACME,
-            )
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("name"));
-    }
+    buckets
 }

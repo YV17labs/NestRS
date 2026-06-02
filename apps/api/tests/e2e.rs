@@ -52,6 +52,7 @@ async fn token_for(org_id: &str, role: &str) -> String {
         _ => vec![Role::User],
     };
     jwt.sign(&Claims {
+        sub: None,
         org_id: Uuid::parse_str(org_id).expect("valid org uuid"),
         roles,
         exp: jwt.expiry(),

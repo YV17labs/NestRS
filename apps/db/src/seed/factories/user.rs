@@ -16,6 +16,7 @@ enum User {
     OrgId,
     Name,
     Email,
+    Role,
 }
 
 struct UserRow {
@@ -43,12 +44,13 @@ pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
             let row = UserRow::build(org_id, slug, n);
             let stmt = Query::insert()
                 .into_table(User::Table)
-                .columns([User::Id, User::OrgId, User::Name, User::Email])
+                .columns([User::Id, User::OrgId, User::Name, User::Email, User::Role])
                 .values_panic([
                     row.id.into(),
                     row.org_id.into(),
                     row.name.into(),
                     row.email.into(),
+                    "user".into(),
                 ])
                 .on_conflict(OnConflict::column(User::Email).do_nothing().to_owned())
                 .to_owned();

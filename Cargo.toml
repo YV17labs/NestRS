@@ -95,6 +95,9 @@ async-graphql-poem = "7"
 # the schema composes itself at boot with no central list.
 inventory = "0.3"
 
+# Password hashing (Argon2id). Used by `nestrs-authn::password` for credential storage.
+argon2 = "0.5"
+
 # Input validation
 validator = { version = "0.20", features = ["derive"] }
 
@@ -161,6 +164,7 @@ nestrs-events-macros = { path = "crates/nestrs-events-macros" }
 nestrs-authz = { path = "crates/nestrs-authz" }
 nestrs-authz-graphql = { path = "crates/nestrs-authz-graphql" }
 nestrs-authz-http = { path = "crates/nestrs-authz-http" }
+nestrs-authz-mcp = { path = "crates/nestrs-authz-mcp" }
 nestrs-authz-ws = { path = "crates/nestrs-authz-ws" }
 nestrs-codegen = { path = "crates/nestrs-codegen" }
 nestrs-macros = { path = "crates/nestrs-macros" }

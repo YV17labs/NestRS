@@ -1,17 +1,22 @@
-//! Token issuance — the OAuth strategy that turns a provider login (or client
-//! credentials) into this product's [`Claims`](crate::Claims), and [`TokenIssuer`]
-//! that signs them into an [`AccessToken`]. The `auth` app imports [`OAuthModule`]
-//! and exposes the endpoints; the logic (grant validation, scope policy, signing)
-//! lives here.
+//! Token issuance — strategies turn a provider login (or client credentials) into
+//! [`Claims`](crate::Claims); [`TokenIssuer`] signs them. The `auth` app imports
+//! [`OAuthModule`] and exposes the HTTP endpoints.
 
 mod config;
+mod dto;
+mod error;
+mod http;
 mod module;
+mod scope;
 mod service;
 mod strategy;
 
 pub use config::{IssuerConfig, RegisteredClient};
+pub use dto::LoginInput;
+pub use error::TokenError;
 pub use module::OAuthModule;
-pub use service::{AccessToken, TokenError, TokenIssuer};
+pub use scope::{role_from_db, roles_for_scope};
+pub use service::{AccessToken, TokenIssuer};
 pub use strategy::{
     AuthenticatedClient, Caller, ClientAuthGuard, ClientCredentialsStrategy, OAuthGuard,
     OAuthStrategy,

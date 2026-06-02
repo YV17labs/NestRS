@@ -4,10 +4,11 @@ use nestrs_authz::Action;
 use nestrs_core::injectable;
 use nestrs_database::{CrudService, Repo};
 use nestrs_graphql::dataloader;
-use sea_orm::{ColumnTrait, DbErr, QueryFilter};
+use sea_orm::{ColumnTrait, QueryFilter};
 use uuid::Uuid;
 
 use crate::orgs::entity::{self, CreateOrgInput, Entity as Orgs, Org, UpdateOrgInput};
+use crate::orgs::error::OrgError;
 
 #[injectable]
 #[derive(Default)]
@@ -21,19 +22,15 @@ impl CrudService for OrgsService {
 
 #[dataloader]
 impl OrgsService {
-    async fn by_id(&self, ids: &[Uuid]) -> HashMap<Uuid, Org> {
+    async fn by_id(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Org>, OrgError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
         tracing::debug!(target: "nestrs::loader", count = ids.len(), "loading orgs by id");
-        let rows = (async {
-            Repo::<Orgs>::scoped(Action::Read)
-                .filter(entity::Column::Id.is_in(ids.iter().cloned()))
-                .all(&Repo::<Orgs>::conn()?)
-                .await
-        })
-        .await
-        .unwrap_or_else(|err: DbErr| {
-            tracing::error!(target: "nestrs::loader", error = %err, "by_id loader query failed");
-            Vec::new()
-        });
-        rows.iter().map(|row| (row.id, Org::from(row))).collect()
+        let rows = Repo::<Orgs>::scoped(Action::Read)
+            .filter(entity::Column::Id.is_in(ids.iter().cloned()))
+            .all(&Repo::<Orgs>::conn()?)
+            .await?;
+        Ok(rows.into_iter().map(|row| (row.id, Org::from(&row))).collect())
     }
 }

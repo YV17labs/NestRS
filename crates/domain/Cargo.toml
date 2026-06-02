@@ -13,14 +13,11 @@ nestrs-database.workspace = true
 nestrs-authn.workspace = true
 nestrs-authz.workspace = true
 nestrs-authz-http.workspace = true
-nestrs-authz-graphql.workspace = true
-nestrs-authz-ws.workspace = true
 nestrs-config.workspace = true
 nestrs-graphql.workspace = true
-nestrs-http.workspace = true
 nestrs-resource.workspace = true
-nestrs-ws.workspace = true
 async-graphql.workspace = true
+async-trait.workspace = true
 poem.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
@@ -34,3 +31,10 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+nestrs-testing = { workspace = true, features = ["orm"] }
+nestrs-authz.workspace = true
+nestrs-database.workspace = true
+async-graphql.workspace = true
+sea-orm.workspace = true
+uuid.workspace = true
+db = { path = "../../apps/db" }

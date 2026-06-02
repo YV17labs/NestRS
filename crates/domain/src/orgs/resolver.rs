@@ -1,16 +1,22 @@
+//! GraphQL field resolvers on [`Org`] (`#[field]` — NestJS `@ResolveField`).
+//!
+//! Root `#[query]` / `#[mutation]` for this feature live in `apps/<app>/orgs/resolver.rs`
+//! (`OrgsResolver` there). Same type name, different crate.
+
 use async_graphql::dataloader::DataLoader;
 use async_graphql::Result;
 use nestrs_graphql::resolver;
 use uuid::Uuid;
 
 use crate::orgs::Org;
-use crate::users::{User, UsersServiceByOrg};
+use crate::users::UsersServiceByOrg;
+use crate::users::User;
 
 #[resolver]
-pub struct OrgRelations;
+pub struct OrgsResolver;
 
 #[resolver]
-impl OrgRelations {
+impl OrgsResolver {
     #[field]
     async fn users(
         &self,

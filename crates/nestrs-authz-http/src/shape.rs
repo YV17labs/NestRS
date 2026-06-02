@@ -5,16 +5,16 @@
 //!    [`with_ability`], so the data layer (`nestrs-database`'s `Repo`) reads the
 //!    caller's ability via `current_ability()` and scopes every query — the
 //!    developer writes no filter.
-//! 2. **Response masking** — after the handler, the body is parsed back into
-//!    `S::Model` and run through the same typed [`Ability::mask`]/
-//!    [`Ability::mask_many`] the engine already uses, dropping the rows and fields
-//!    the ability does not permit — no `mask` call in the handler, and no second
-//!    masking implementation to keep in step.
+//! 2. **Response masking** — after the handler, the wire JSON is parsed into
+//!    `S::Model` (filling columns the `#[expose]` output omits when needed) and
+//!    run through the same typed [`Ability::mask`] / [`Ability::mask_many`].
+//!    Keys absent from the wire body are stripped again so an unrestricted field
+//!    grant cannot leak skipped columns (e.g. `password_hash`).
 //!
 //! Masking is a security control, so this fails *closed*: a successful JSON body
-//! that does not deserialize into `S::Model` (a handler/subject mismatch) yields
-//! a `500` rather than shipping the data unmasked. The whole body is buffered to
-//! mask it, so masked list endpoints should be paginated.
+//! that cannot be reconciled with `S::Model` yields a `500` rather than shipping
+//! the data unmasked. The whole body is buffered to mask it, so masked list
+//! endpoints should be paginated.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -28,13 +28,14 @@ use serde::Serialize;
 use serde_json::Value;
 
 use nestrs_authz::{with_ability, Ability, Action, ActionMarker};
+use nestrs_resource::WireModelDefaults;
 
 use crate::extractor::Authorize;
 
 impl<A, S> RouteResponseShaper for Authorize<A, S>
 where
     A: ActionMarker,
-    S: EntityTrait,
+    S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned + Serialize,
 {
     type Captured = Option<Arc<Ability>>;
@@ -67,7 +68,7 @@ where
 /// fails closed (see module docs).
 async fn mask_response<S>(ability: &Ability, action: Action, mut resp: Response) -> Response
 where
-    S: EntityTrait,
+    S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned + Serialize,
 {
     if !resp.status().is_success() {
@@ -85,16 +86,47 @@ where
         Err(_) => return resp,
     };
 
-    // Deserialize straight into the typed model(s) — array vs object by the first
-    // non-whitespace byte — skipping a `Value` round-trip. `mask_many` also drops
-    // rows the actor may not see; a single object is field-masked only (the
-    // handler owns the instance-level allow/deny for a by-id route).
-    let masked = match bytes.iter().copied().find(|b| !b.is_ascii_whitespace()) {
-        Some(b'[') => serde_json::from_slice::<Vec<S::Model>>(bytes.as_ref())
-            .map(|models| Value::Array(ability.mask_many::<S>(action, models.iter()))),
-        Some(b'{') => serde_json::from_slice::<S::Model>(bytes.as_ref())
-            .map(|model| ability.mask::<S>(action, &model)),
-        // Not a maskable object/array (scalar, null, empty) — nothing to strip.
+    // Parse the wire body first so we can round-trip handler DTOs (e.g. `User`
+    // with string ids) into `S::Model` for policy, then drop any fields the wire
+    // shape never carried (skipped columns like `password_hash`).
+    let wire: Value = match serde_json::from_slice(bytes.as_ref()) {
+        Ok(wire) => wire,
+        Err(_) => {
+            resp.set_body(bytes);
+            return resp;
+        }
+    };
+
+    let masked = match &wire {
+        Value::Array(items) => {
+            let models: Result<Vec<S::Model>, _> = items
+                .iter()
+                .map(|item| wire_to_model::<S>(item))
+                .collect();
+            models.map(|models| {
+                let masked = ability.mask_many::<S>(action, models.iter());
+                if masked.len() == items.len() {
+                    Value::Array(
+                        masked
+                            .into_iter()
+                            .zip(items.iter())
+                            .map(|(mut row, wire_row)| {
+                                retain_wire_keys(&mut row, wire_row);
+                                row
+                            })
+                            .collect(),
+                    )
+                } else {
+                    Value::Array(masked)
+                }
+            })
+        }
+        Value::Object(_) => wire_to_model::<S>(&wire).map(|model| {
+                let mut masked = ability.mask::<S>(action, &model);
+                retain_wire_keys(&mut masked, &wire);
+                masked
+            }),
+        // Scalar / null — nothing to strip.
         _ => {
             resp.set_body(bytes);
             return resp;
@@ -110,4 +142,30 @@ where
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("response masking failed: body did not match the authorized subject type"),
     }
+}
+
+/// Deserialize a handler JSON object into `S::Model`, filling absent columns
+/// the wire DTO omits so policy can run without a second subject type.
+fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
+where
+    S: EntityTrait + WireModelDefaults,
+    S::Model: DeserializeOwned,
+{
+    if let Ok(model) = serde_json::from_value(wire.clone()) {
+        return Ok(model);
+    }
+    let Value::Object(mut map) = wire.clone() else {
+        return serde_json::from_value(wire.clone());
+    };
+    S::fill_wire_defaults(&mut map);
+    serde_json::from_value(Value::Object(map))
+}
+
+/// Keep only keys the handler actually exposed on the wire (DTO fields), so an
+/// unrestricted field grant cannot leak `#[expose(skip)]` columns.
+fn retain_wire_keys(masked: &mut Value, wire: &Value) {
+    let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
+        return;
+    };
+    masked_obj.retain(|key, _| wire_obj.contains_key(key));
 }

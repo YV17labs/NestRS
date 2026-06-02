@@ -1,22 +1,40 @@
+//! OAuth [`Strategy`] implementations and guard aliases (`AuthGuard<S>`).
+//!
+//! HTTP redirects/cookies here are required by `nestrs_authn::Strategy` (Poem request).
+//! Token signing and grant policy live in [`super::service::TokenIssuer`].
+
 use std::sync::Arc;
 
-use nestrs_authn::{basic_credentials, AuthError, JwtService, OAuth2Client, Outcome, Strategy};
+use async_trait::async_trait;
+use nestrs_authn::{
+    basic_credentials, AuthError, JwtService, OAuth2Client, Outcome, Strategy,
+};
 use nestrs_core::injectable;
-use nestrs_http::async_trait;
 use poem::http::{header, StatusCode};
 use poem::{Request, Response};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::oauth::config::IssuerConfig;
+use crate::oauth::scope::role_from_db;
 use crate::users::UsersService;
 use crate::Role;
 
 #[derive(Debug, Clone)]
 pub struct Caller {
+    pub user_id: Uuid,
     pub org_id: Uuid,
     pub roles: Vec<Role>,
 }
+
+#[derive(Debug, Clone)]
+pub struct AuthenticatedClient {
+    pub org_id: Uuid,
+    pub scopes: Vec<String>,
+}
+
+pub type OAuthGuard = nestrs_authn::AuthGuard<OAuthStrategy>;
+pub type ClientAuthGuard = nestrs_authn::AuthGuard<ClientCredentialsStrategy>;
 
 const TRANSACTION_COOKIE: &str = "oauth_tx";
 
@@ -55,13 +73,6 @@ impl OAuthProfile {
             .filter(|name| !name.is_empty())
             .or_else(|| self.login.clone())
             .unwrap_or_else(|| format!("user-{}", self.id))
-    }
-}
-
-fn role_from_db(role: &str) -> Role {
-    match role {
-        "admin" => Role::Admin,
-        _ => Role::User,
     }
 }
 
@@ -117,28 +128,11 @@ impl Strategy for OAuthStrategy {
             .await
             .map_err(|err| AuthError::Failed(format!("identity resolution failed: {err}")))?;
         Ok(Outcome::Authenticated(Caller {
+            user_id: user.id,
             org_id: user.org_id,
             roles: vec![role_from_db(&user.role)],
         }))
     }
-}
-
-fn transaction_cookie(req: &Request) -> Option<String> {
-    let header = req.headers().get(header::COOKIE)?.to_str().ok()?;
-    header.split(';').find_map(|pair| {
-        let pair = pair.trim();
-        pair.strip_prefix(TRANSACTION_COOKIE)?
-            .strip_prefix('=')
-            .map(str::to_owned)
-    })
-}
-
-pub type OAuthGuard = nestrs_authn::AuthGuard<OAuthStrategy>;
-
-#[derive(Debug, Clone)]
-pub struct AuthenticatedClient {
-    pub org_id: Uuid,
-    pub scopes: Vec<String>,
 }
 
 #[injectable]
@@ -173,7 +167,15 @@ impl Strategy for ClientCredentialsStrategy {
     }
 }
 
-pub type ClientAuthGuard = nestrs_authn::AuthGuard<ClientCredentialsStrategy>;
+fn transaction_cookie(req: &Request) -> Option<String> {
+    let header = req.headers().get(header::COOKIE)?.to_str().ok()?;
+    header.split(';').find_map(|pair| {
+        let pair = pair.trim();
+        pair.strip_prefix(TRANSACTION_COOKIE)?
+            .strip_prefix('=')
+            .map(str::to_owned)
+    })
+}
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

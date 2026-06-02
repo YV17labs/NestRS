@@ -88,14 +88,47 @@ tokio::task_local! {
     static EXECUTOR: Executor;
 }
 
+/// Whether the ambient executor was installed for an HTTP/GraphQL/WS request or
+/// for a worker job. Used by [`crate::repo::scope_for`] to fail closed on
+/// request paths that lack an ambient [`Ability`](nestrs_authz::Ability).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutorScope {
+    Request,
+    Job,
+}
+
+tokio::task_local! {
+    static EXECUTOR_SCOPE: ExecutorScope;
+}
+
 /// The ambient [`Executor`] for the current request, or `None` outside one (no
 /// [`DbContext`](crate::DbContext) interceptor has run — a non-request context).
 pub fn current_executor() -> Option<Executor> {
     EXECUTOR.try_with(Clone::clone).ok()
 }
 
-/// Run `fut` with `executor` installed as the ambient request executor, so
-/// [`current_executor`] (and [`Repo`](crate::Repo)) resolve to it throughout.
+/// The scope tag for the ambient executor, when one is installed.
+pub fn current_executor_scope() -> Option<ExecutorScope> {
+    EXECUTOR_SCOPE.try_with(Clone::clone).ok()
+}
+
+/// Run `fut` with `executor` installed as the ambient executor, without tagging
+/// its scope. Prefer [`with_request_executor`] / [`with_job_executor`] at
+/// framework boundaries so authorization can distinguish request from job paths.
 pub async fn with_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
     EXECUTOR.scope(executor, fut).await
+}
+
+/// Run `fut` with a request-scoped executor (HTTP, GraphQL, WebSocket, loader batches).
+pub async fn with_request_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
+    EXECUTOR
+        .scope(executor, EXECUTOR_SCOPE.scope(ExecutorScope::Request, fut))
+        .await
+}
+
+/// Run `fut` with a worker-scoped executor (cron/queue jobs).
+pub async fn with_job_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
+    EXECUTOR
+        .scope(executor, EXECUTOR_SCOPE.scope(ExecutorScope::Job, fut))
+        .await
 }

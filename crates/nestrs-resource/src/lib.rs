@@ -16,6 +16,8 @@
 //! which the macro deliberately leaves to the resolver — see the crate `ROADMAP`.
 
 mod pagination;
+mod wire;
 
 pub use nestrs_resource_macros::expose;
 pub use pagination::PageArgs;
+pub use wire::WireModelDefaults;

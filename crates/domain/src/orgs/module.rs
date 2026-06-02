@@ -1,7 +1,7 @@
 use nestrs_core::module;
 
-use crate::orgs::resolver::OrgRelations;
+use crate::orgs::resolver::OrgsResolver;
 use crate::orgs::service::OrgsService;
 
-#[module(providers = [OrgsService, OrgRelations])]
+#[module(providers = [OrgsService, OrgsResolver])]
 pub struct OrgsModule;

@@ -23,6 +23,10 @@ pub enum Role {
 /// type to define until an app needs fields the token does not carry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
+    /// The authenticated user, when the token represents a person. Omitted for
+    /// machine-only grants (`client_credentials`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub: Option<Uuid>,
     /// The org the caller acts within.
     pub org_id: Uuid,
     /// The caller's roles.

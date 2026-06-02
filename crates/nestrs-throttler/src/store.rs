@@ -7,6 +7,7 @@
 //! object then.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -32,15 +33,22 @@ struct Window {
 /// expiry natively.
 pub struct InMemoryThrottler {
     default: Throttle,
+    trusted_proxies: Vec<IpAddr>,
     windows: Mutex<HashMap<String, Window>>,
 }
 
 impl InMemoryThrottler {
-    pub fn new(default: Throttle) -> Self {
+    pub fn new(default: Throttle, trusted_proxies: Vec<IpAddr>) -> Self {
         Self {
             default,
+            trusted_proxies,
             windows: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Proxies whose direct peer address may supply a trusted `X-Forwarded-For` chain.
+    pub fn trusted_proxies(&self) -> &[IpAddr] {
+        &self.trusted_proxies
     }
 
     /// The module-wide default limit, used when a route attaches no `#[meta(Throttle)]`.
@@ -85,7 +93,7 @@ mod tests {
 
     #[test]
     fn allows_up_to_the_limit_then_denies_within_the_window() {
-        let throttler = InMemoryThrottler::new(Throttle::per_minute(60));
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
         let limit = Throttle::new(2, Duration::from_secs(60));
 
         assert!(throttler.hit("k", limit).allowed);
@@ -100,7 +108,7 @@ mod tests {
 
     #[test]
     fn resets_after_the_window_elapses() {
-        let throttler = InMemoryThrottler::new(Throttle::per_minute(60));
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
         let limit = Throttle::new(1, Duration::from_millis(20));
 
         assert!(throttler.hit("k", limit).allowed);

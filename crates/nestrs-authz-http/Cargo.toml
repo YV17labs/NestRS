@@ -23,5 +23,12 @@ serde.workspace = true
 serde_json.workspace = true
 # `Bind` loads the entity through the ambient request executor.
 nestrs-database.workspace = true
+nestrs-resource.workspace = true
 # `Bind` parses the path id as a UUID v7.
 uuid.workspace = true
+
+[dev-dependencies]
+nestrs-testing.workspace = true
+nestrs-core.workspace = true
+tokio.workspace = true
+serde_json.workspace = true

@@ -15,6 +15,13 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(User::OrgId).uuid().not_null())
                     .col(ColumnDef::new(User::Name).string().not_null())
                     .col(ColumnDef::new(User::Email).string().not_null().unique_key())
+                    .col(
+                        ColumnDef::new(User::Role)
+                            .string()
+                            .not_null()
+                            .default("user"),
+                    )
+                    .col(ColumnDef::new(User::PasswordHash).string().null())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_user_org_id")
@@ -42,6 +49,8 @@ enum User {
     OrgId,
     Name,
     Email,
+    Role,
+    PasswordHash,
 }
 
 #[derive(DeriveIden)]

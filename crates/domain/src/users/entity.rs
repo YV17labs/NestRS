@@ -20,6 +20,8 @@ pub struct Model {
     pub email: String,
     #[expose(skip)]
     pub role: String,
+    #[expose(skip)]
+    pub password_hash: Option<String>,
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
     #[expose(skip)]
     pub org: HasOne<crate::orgs::Entity>,

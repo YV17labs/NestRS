@@ -1,6 +1,4 @@
-//! [`AuthGuard<S>`] — the per-route guard that runs a [`Strategy`] and, on
-//! success, makes the authenticated principal available to the rest of the
-//! request. The analog of NestJS's `AuthGuard('name')`.
+//! Per-route guard that runs a [`Strategy`](super::Strategy) and attaches the principal.
 
 use std::sync::Arc;
 
@@ -8,28 +6,19 @@ use nestrs_core::injectable;
 use nestrs_http::{async_trait, Guard};
 use poem::{IntoResponse, Request, Response};
 
-use crate::strategy::{Outcome, Strategy};
+use crate::passport::{Outcome, Strategy};
 
-/// Generic over the app's [`Strategy`], so the wiring — run the strategy, attach
-/// the principal, or short-circuit — is identical for every scheme. Resolve the
-/// strategy from the container, so it is itself an `#[injectable]` provider.
-///
-/// Bind it per route, usually behind a `type` alias:
-///
-/// ```ignore
-/// pub type JwtAuthGuard = nestrs_authn::AuthGuard<JwtStrategy>;
-/// // ...
-/// #[use_guards(JwtAuthGuard, AppAbilityGuard)]
-/// ```
-///
-/// On [`Outcome::Authenticated`] the principal is inserted into the request
-/// extensions, where a later guard (`AbilityGuard`) or the `Ctx<Principal>`
-/// extractor reads it; on [`Outcome::Challenge`] the request short-circuits with
-/// the strategy's response (a redirect or a `401`).
 #[injectable]
 pub struct AuthGuard<S: Strategy> {
     #[inject]
     strategy: Arc<S>,
+}
+
+impl<S: Strategy> AuthGuard<S> {
+    /// Construct with an already-resolved strategy (container or tests).
+    pub fn new(strategy: Arc<S>) -> Self {
+        Self { strategy }
+    }
 }
 
 #[async_trait]

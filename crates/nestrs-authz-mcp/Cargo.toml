@@ -1,0 +1,15 @@
+[package]
+name = "nestrs-authz-mcp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "MCP surface for nestrs-authz: authenticate MCP HTTP requests and install the caller's Ability, the MCP analog of nestrs-authz-graphql's GraphqlAbilityBridge."
+
+[dependencies]
+nestrs-authz.workspace = true
+nestrs-core.workspace = true
+nestrs-mcp.workspace = true
+nestrs-middleware.workspace = true
+poem.workspace = true

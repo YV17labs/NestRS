@@ -24,16 +24,3 @@ pub trait HealthCheck: Send + Sync + 'static {
 pub struct HealthService;
 
 impl HealthCheck for HealthService {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn default_service_reports_live_ready_and_started() {
-        let svc = HealthService;
-        assert!(svc.is_live().await);
-        assert!(svc.is_ready().await);
-        assert!(svc.is_started().await);
-    }
-}

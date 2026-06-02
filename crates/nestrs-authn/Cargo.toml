@@ -35,6 +35,8 @@ serde.workspace = true
 # `json` feature, so we read the body and deserialize it ourselves).
 serde_json.workspace = true
 thiserror.workspace = true
+# Argon2id for local credential storage (`hash_password` / `verify_password`).
+argon2.workspace = true
 # `OAuth2Module::for_root` provides the client through the factory phase, whose
 # error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
@@ -44,3 +46,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
+jsonwebtoken = { workspace = true }
+serde = { workspace = true }
+base64 = { workspace = true }
+poem = { workspace = true }
+validator = { workspace = true }

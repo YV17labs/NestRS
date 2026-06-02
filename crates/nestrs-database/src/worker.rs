@@ -23,7 +23,7 @@ use nestrs_core::injectable;
 use nestrs_core::JobContext;
 use sea_orm::DatabaseConnection;
 
-use crate::executor::{with_executor, Executor};
+use crate::executor::{with_job_executor, Executor};
 
 /// Installs the request-less pool executor around a worker job. An `#[injectable]`
 /// so it is built from the container (resolving the connection) exactly like any
@@ -39,6 +39,6 @@ impl JobContext for WorkerDbContext {
         &'a self,
         inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(with_executor(Executor::Pool(self.db.clone()), inner))
+        Box::pin(with_job_executor(Executor::Pool(self.db.clone()), inner))
     }
 }

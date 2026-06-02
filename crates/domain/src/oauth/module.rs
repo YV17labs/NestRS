@@ -3,7 +3,9 @@ use nestrs_core::module;
 
 use crate::oauth::config::IssuerConfig;
 use crate::oauth::service::TokenIssuer;
-use crate::oauth::strategy::{ClientAuthGuard, ClientCredentialsStrategy, OAuthGuard, OAuthStrategy};
+use crate::oauth::strategy::{
+    ClientAuthGuard, ClientCredentialsStrategy, OAuthGuard, OAuthStrategy,
+};
 use crate::users::UsersModule;
 
 #[module(

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use nestrs_authz::{with_ability, Ability};
 use nestrs_core::injectable;
-use nestrs_database::{with_executor, Executor};
+use nestrs_database::{with_request_executor, Executor};
 use nestrs_ws::{BoxFuture, Captured, SocketContext, WsReply};
 use poem::Request;
 use sea_orm::DatabaseConnection;
@@ -57,9 +57,9 @@ impl SocketContext for WsDataContext {
             let executor = cx.executor.clone();
             match &cx.ability {
                 Some(ability) => {
-                    with_executor(executor, with_ability(ability.clone(), inner)).await
+                    with_request_executor(executor, with_ability(ability.clone(), inner)).await
                 }
-                None => with_executor(executor, inner).await,
+                None => with_request_executor(executor, inner).await,
             }
         })
     }

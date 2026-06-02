@@ -13,3 +13,10 @@ nestrs-mcp-macros.workspace = true
 poem.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
+
+[dev-dependencies]
+nestrs-core.workspace = true
+nestrs-http.workspace = true
+nestrs-middleware.workspace = true
+tokio.workspace = true
+async-trait.workspace = true

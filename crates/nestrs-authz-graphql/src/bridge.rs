@@ -13,9 +13,9 @@
 //! ```ignore
 //! type ApiGraphqlGuard = GraphqlAbilityBridge<AuthGuard, AppAbilityGuard>;
 //!
-//! #[module(imports = [AuthnModule, AuthzModule],
+//! #[module(imports = [domain::authz::AuthzModule],
 //!          providers = [ApiGraphqlGuard as dyn OperationGuard])]
-//! struct AuthzGraphqlModule;
+//! struct AuthzModule;
 //! ```
 
 use std::sync::Arc;

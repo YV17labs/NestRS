@@ -29,7 +29,7 @@ impl UsersController {
     #[post("/")]
     #[api(
         summary = "Create a user in the caller's org",
-        description = "Requires a bearer JWT (obtain one from `POST /auth/login`). The \
+        description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The \
                        user's org is taken from the caller's token, never the body.",
         tags("User")
     )]

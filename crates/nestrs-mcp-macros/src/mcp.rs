@@ -43,9 +43,13 @@ pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
                 builder.attach_meta::<#name, ::nestrs_http::HttpEndpointMeta>(
                     ::nestrs_http::HttpEndpointMeta::new(#path, "mcp", |__c, __r| {
                         let __cc = __c.clone();
+                        let __guard = __c.get_dyn::<dyn ::nestrs_mcp::McpOperationGuard>();
                         __r.nest(
                             #path,
-                            ::nestrs_mcp::endpoint(move || <#name>::from_container(&__cc)),
+                            ::nestrs_mcp::endpoint_with_guard(
+                                __guard,
+                                move || <#name>::from_container(&__cc),
+                            ),
                         )
                     }),
                 )

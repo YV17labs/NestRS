@@ -87,10 +87,12 @@ regenerate the committed SDL by running the dev server (see CLAUDE.md).
 2. **Keep it focused.** One logical change per PR. Unrelated cleanups belong in
    their own PR.
 3. **Add tests.** A bug fix gets a regression test; a feature gets coverage of
-   the new behaviour. Unit tests cover logic in isolation; persistence and wiring
-   are exercised by **e2e tests** that boot the real app against a real Postgres
-   (the dev container provides one; `testcontainers` in CI) — the database is
-   never mocked.
+   the new behaviour. **Apps**: one `tests/e2e.rs` (real Postgres, no mocks).
+   **Crates**: integration tests in a tree that **mirrors `src/`** (one
+   `tests/<short>.rs` entry, subpaths = modules — see CLAUDE.md and `nestrs-authn`
+   as the reference). Prefer that over ad-hoc `tests/<behaviour>.rs` names.
+   Use `#[cfg(test)]` in `src/` only when tests must see private code; otherwise
+   add `Type::new(...)` so integration tests can construct providers without boot.
 4. **Update the docs.** If you change behaviour, update the README, the crate
    docs, and — if you made a design decision — CLAUDE.md.
 5. **Write a clear description.** What changed, why, and how you verified it. Link

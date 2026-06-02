@@ -14,7 +14,7 @@ nestrs-health.workspace = true
 nestrs-http.workspace = true
 nestrs-telemetry = { workspace = true, features = ["http"] }
 nestrs-throttler.workspace = true
-domain.workspace = true
+features.workspace = true
 poem.workspace = true
 sea-orm.workspace = true
 tokio.workspace = true

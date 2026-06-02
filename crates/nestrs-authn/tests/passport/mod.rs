@@ -2,5 +2,5 @@
 
 mod credentials;
 mod guard;
-mod jwt_strategy;
+mod strategies;
 mod strategy;

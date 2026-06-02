@@ -8,7 +8,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    validate_from_inventory, validate_resolver_membership_from_inventory, ResolverSchemaActive,
+    reachable_provider_ids_from_inventory, validate_from_inventory,
+    warn_unreachable_resolvers_from_inventory, ReachableProviders, ResolverSchemaActive,
 };
 use crate::container::{Container, ContainerBuilder, Registrar};
 use crate::lifecycle::{run_phase, run_phase_lenient, LifecyclePhase};
@@ -35,14 +36,20 @@ impl App {
     /// which is sync and has no `Result` to thread through — the same in both
     /// paths.)
     pub fn new<M: Module + 'static>() -> Result<Self> {
-        let container = M::register(Container::builder()).build();
+        let builder = M::register(Container::builder());
         let roots = [TypeId::of::<M>()];
         validate_from_inventory(&roots, &HashSet::new())?;
-        // Resolver membership only matters when the resolver schema is actually
-        // composed (the schema-composing layer marks it). An app that links
-        // resolvers transitively but composes no schema is not their home.
+        // Seed the reachable provider set so transports can module-gate their
+        // discovery (a `#[resolver]` linked but in no reachable module is
+        // silently filtered from the GraphQL schema, not a boot failure).
+        let reachable = reachable_provider_ids_from_inventory(&roots, &HashSet::new());
+        let builder = builder.provide(ReachableProviders(reachable));
+        let container = builder.build();
+        // Surface linked-but-unreachable resolvers via warn (only meaningful
+        // when this app composes a schema; an app that links resolvers
+        // transitively but composes none is not their home).
         if container.get::<ResolverSchemaActive>().is_some() {
-            validate_resolver_membership_from_inventory(&roots)?;
+            warn_unreachable_resolvers_from_inventory(&roots);
         }
         Ok(Self {
             container,
@@ -330,12 +337,15 @@ impl AppBuilder {
         // reachable through its module's imports or be global infrastructure.
         let roots: Vec<TypeId> = modules.iter().map(|h| h.type_id).collect();
         validate_from_inventory(&roots, &global)?;
-        // Resolver membership only matters when the resolver schema is actually
-        // composed (the schema-composing layer marks it via `ResolverSchemaActive`).
-        // An app that links resolvers transitively but composes no schema is not
-        // their home.
+        // Seed the reachable provider set for transport-level discovery to
+        // module-gate against (the GraphQL schema, request-scoped loaders).
+        let reachable = reachable_provider_ids_from_inventory(&roots, &global);
+        let builder = builder.provide(ReachableProviders(reachable));
+        // Surface linked-but-unreachable resolvers via warn when this app
+        // composes a schema. An app that links resolvers transitively but
+        // composes no schema is not their home, so stays silent.
         if builder.contains(TypeId::of::<ResolverSchemaActive>()) {
-            validate_resolver_membership_from_inventory(&roots)?;
+            warn_unreachable_resolvers_from_inventory(&roots);
         }
 
         Ok(App {

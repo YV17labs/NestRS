@@ -13,7 +13,7 @@
 //! ```ignore
 //! type ApiGraphqlGuard = GraphqlAbilityBridge<AuthGuard, AppAbilityGuard>;
 //!
-//! #[module(imports = [domain::authz::AuthzModule],
+//! #[module(imports = [features::authz::AuthzModule],
 //!          providers = [ApiGraphqlGuard as dyn OperationGuard])]
 //! struct AuthzModule;
 //! ```

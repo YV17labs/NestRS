@@ -114,6 +114,11 @@ fn dataloader_for_method(
 
         ::nestrs_graphql::inventory::submit! {
             ::nestrs_graphql::LoaderRegistration {
+                // The owner service's `TypeId` — what `from_container` reads —
+                // so module-gating skips this loader's seed in an app that does
+                // not import the owner's module (its `container.get::<Owner>()`
+                // would otherwise panic on the missing provider).
+                owner_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 // Request-scoped: a fresh loader built per request from the fully
                 // assembled container (not at module registration — which is what
                 // makes import order irrelevant) and seeded into the request context.

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use api::AppModule;
 use futures_util::{SinkExt, StreamExt};
-use domain::{Claims, Role};
+use features::{Claims, Role};
 use nestrs_authn::{JwtConfig, JwtOptions, JwtService};
 use nestrs_authz::{with_ability, AbilityBuilder, Action};
 use nestrs_database::{with_executor, Executor, Repo};

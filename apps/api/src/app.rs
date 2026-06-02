@@ -7,20 +7,24 @@ use nestrs_openapi::OpenApiModule;
 use nestrs_server_timing::ServerTimingModule;
 use nestrs_telemetry::TelemetryModule;
 
-use domain::authn::AuthnModule;
-
-use crate::authz::AuthzModule;
-use crate::orgs::OrgsModule;
-use crate::users::UsersModule;
+use features::authn::AuthnCoreModule;
+use features::authz::{AuthzGraphqlModule, AuthzHttpModule, AuthzWsModule};
+use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
+use features::users::{UsersGraphqlModule, UsersHttpModule, UsersWsModule};
 
 #[module(
     imports = [
         ConfigModule::for_root(),
         DatabaseModule::for_root(None),
-        AuthnModule,
-        AuthzModule,
-        OrgsModule,
-        UsersModule,
+        AuthnCoreModule,
+        AuthzHttpModule,
+        AuthzGraphqlModule,
+        AuthzWsModule,
+        OrgsHttpModule,
+        OrgsGraphqlModule,
+        UsersHttpModule,
+        UsersGraphqlModule,
+        UsersWsModule,
         GraphqlModule::for_root(None),
         HealthModule,
         OpenApiModule::for_root(None),

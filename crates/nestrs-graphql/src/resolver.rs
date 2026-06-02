@@ -13,10 +13,22 @@
 //! `resolve_field` (instance) dispatches over the members built from the
 //! container. This mirrors what async-graphql's own `MergedObject` does over a
 //! compile-time tuple, but driven by the registry at runtime.
+//!
+//! Module-gating filters the inventory by access-graph reachability: only
+//! resolvers whose `TypeId` is in [`ReachableProviders`] (read from the
+//! container at schema-build time) end up in the schema. `create_type_info`
+//! and `is_empty` are static methods async-graphql calls during
+//! `Schema::build`, so they cannot receive the container — the reachable set
+//! lives in a thread-local installed by [`build_schema`] for the duration of
+//! the build and read by [`is_member_active`].
 
+use std::any::TypeId;
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_graphql::indexmap::IndexMap;
 use async_graphql::parser::types::Field;
@@ -25,7 +37,7 @@ use async_graphql::{
     CacheControl, ContainerType, Context, ContextSelectionSet, EmptySubscription, ObjectType,
     OutputType, Positioned, SDLExportOptions, Schema, ServerResult, Value,
 };
-use nestrs_core::Container;
+use nestrs_core::{Container, ReachableProviders};
 
 /// Which root a resolver's methods contribute to. Set per method by
 /// `#[query]` / `#[mutation]`; carried on the [`ResolverRegistration`].
@@ -64,23 +76,49 @@ impl<T: ContainerType + Send + Sync> ResolverObject for T {
 /// `#[resolver]`. `type_info` contributes the object's fields to the schema
 /// registry (it closes over the concrete type via
 /// `Registry::create_fake_output_type`); `build` constructs the resolver from
-/// the container at schema-build time.
+/// the container at schema-build time. `resolver_type_id` is the resolver
+/// struct's `TypeId` — the container key it provides — so the schema build
+/// can module-gate this entry by [`ReachableProviders`].
 #[doc(hidden)]
 pub struct ResolverRegistration {
     pub kind: ResolverKind,
+    pub resolver_type_id: fn() -> TypeId,
     pub type_info: fn(&mut Registry) -> MetaType,
     pub build: fn(&Container) -> Box<dyn ResolverObject>,
 }
 
 inventory::collect!(ResolverRegistration);
 
+thread_local! {
+    /// The reachable provider `TypeId`s for the schema being built on this
+    /// thread — installed by [`build_schema`] for the duration of the build
+    /// and read by [`is_member_active`] from the static `OutputType` methods
+    /// async-graphql calls (`create_type_info`, `is_empty`). A schema build
+    /// is synchronous and single-threaded, so a thread-local fits without
+    /// risking cross-build leakage. `None` here means no gating (a bare
+    /// `Schema::build` called outside our flow) — the prior behaviour, every
+    /// linked resolver included.
+    static REACHABLE: RefCell<Option<Arc<HashSet<TypeId>>>> = const { RefCell::new(None) };
+}
+
+/// True when this registration's resolver is reachable from the running app's
+/// module tree — every `inventory::iter` site below funnels through this so
+/// the schema sees only the resolvers an app composes.
+fn is_member_active(reg: &ResolverRegistration) -> bool {
+    REACHABLE.with(|cell| match &*cell.borrow() {
+        Some(set) => set.contains(&(reg.resolver_type_id)()),
+        None => true,
+    })
+}
+
 fn kind_has_members(kind: ResolverKind) -> bool {
-    inventory::iter::<ResolverRegistration>().any(|reg| reg.kind == kind)
+    inventory::iter::<ResolverRegistration>()
+        .any(|reg| reg.kind == kind && is_member_active(reg))
 }
 
 fn build_members(container: &Container, kind: ResolverKind) -> Vec<Box<dyn ResolverObject>> {
     inventory::iter::<ResolverRegistration>()
-        .filter(|reg| reg.kind == kind)
+        .filter(|reg| reg.kind == kind && is_member_active(reg))
         .map(|reg| (reg.build)(container))
         .collect()
 }
@@ -97,7 +135,7 @@ fn merge_type_info<T: OutputType>(
     registry.create_output_type::<T, _>(MetaTypeId::Object, |registry| {
         let mut fields = IndexMap::new();
         for reg in inventory::iter::<ResolverRegistration>() {
-            if reg.kind != kind {
+            if reg.kind != kind || !is_member_active(reg) {
                 continue;
             }
             if let MetaType::Object {
@@ -189,17 +227,30 @@ discovered_root!(DiscoveredMutation, ResolverKind::Mutation, "Mutation");
 /// subscriptions are not yet supported (`SubscriptionType` is a separate trait
 /// — tracked as follow-up). The container is attached as schema data and used
 /// to construct each resolver via its `from_container`.
+///
+/// Module-gating: reads [`ReachableProviders`] from the container and installs
+/// it in the [`REACHABLE`] thread-local for the duration of `Schema::build`,
+/// so the static `OutputType` methods async-graphql invokes filter the
+/// resolver inventory to the modules an app actually imports. Cleared on the
+/// way out so a subsequent build on the same thread (a test booting multiple
+/// apps) starts clean.
 pub(crate) fn build_schema(
     container: Container,
 ) -> Schema<DiscoveredQuery, DiscoveredMutation, EmptySubscription> {
-    Schema::build(
+    let reachable = container
+        .get::<ReachableProviders>()
+        .map(|p| Arc::new(p.0.clone()));
+    REACHABLE.with(|cell| *cell.borrow_mut() = reachable);
+    let schema = Schema::build(
         DiscoveredQuery::from_registry(&container),
         DiscoveredMutation::from_registry(&container),
         EmptySubscription,
     )
     .data(container.clone())
     .extension(crate::loader::LoaderExtensionFactory::new(container))
-    .finish()
+    .finish();
+    REACHABLE.with(|cell| *cell.borrow_mut() = None);
+    schema
 }
 
 /// Render the composed schema as SDL for a committed `schema.graphql`.

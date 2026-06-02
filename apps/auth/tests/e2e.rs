@@ -1,6 +1,6 @@
 use auth::{AppModule, IssuerConfig, RegisteredClient};
 use base64::Engine as _;
-use domain::{Claims, Role};
+use features::{Claims, Role};
 use nestrs_authn::{hash_password, JwtConfig, JwtOptions, JwtService, OAuth2Config};
 use nestrs_testing::{EphemeralDatabase, TestApp};
 use poem::http::StatusCode;

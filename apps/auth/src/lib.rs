@@ -1,5 +1,4 @@
 mod app;
-mod oauth;
 
 pub use app::AppModule;
-pub use domain::oauth::{IssuerConfig, RegisteredClient};
+pub use features::oauth::{IssuerConfig, RegisteredClient};

@@ -25,18 +25,11 @@
 //! `ParseDatePipe` — would pull in a date crate, added behind a feature once a
 //! date type is chosen.
 
-mod parse;
-mod parse_array;
-mod parse_uuid;
 mod pipe;
-mod transform;
-mod validation;
+mod pipes;
 
-pub use parse::{Parse, ParseBool, ParseFloat, ParseInt};
-pub use parse_array::ParseArray;
-pub use parse_uuid::{
-    ParseUuid, ParseUuidV3, ParseUuidV4, ParseUuidV5, ParseUuidV7, ParseUuidVersion,
-};
 pub use pipe::{Pipe, PipeError};
-pub use transform::{Lowercase, Trim, Uppercase};
-pub use validation::ValidationPipe;
+pub use pipes::{
+    Lowercase, Parse, ParseArray, ParseBool, ParseFloat, ParseInt, ParseUuid, ParseUuidV3,
+    ParseUuidV4, ParseUuidV5, ParseUuidV7, ParseUuidVersion, Trim, Uppercase, ValidationPipe,
+};

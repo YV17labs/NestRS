@@ -1,22 +1,19 @@
 //! A `#[resolver]` self-composes into the GraphQL schema through the link-time
-//! registry, so — when a schema is actually composed — it is always live, unlike a
-//! provider (reached only when injected). The access contract therefore requires
-//! it be a member of a module reachable from the root: listed in
-//! `providers = [...]`, like a controller. An unlisted resolver fails the boot with
-//! the named `ResolverMembershipError`, so its `#[inject]` dependencies can never
-//! escape the contract by sitting outside every module.
+//! registry. Module-gating filters that registry at schema-build time by the
+//! reachable provider set: a resolver listed in `providers = [...]` of a
+//! reachable module appears in the schema; a resolver in no reachable module
+//! is silently skipped (a `tracing::warn` surfaces it at boot so leftover
+//! code does not disappear without trace).
 //!
-//! The check is scoped to apps that actually compose the schema — signalled by
-//! `ResolverSchemaActive`, which the schema-composing layer (`GraphqlModule`)
-//! registers. An app that links resolvers transitively (e.g. through a shared
-//! library) but composes no schema is not their home, and boots cleanly.
-//!
-//! One resolver per test binary: the membership check sees *every* linked
-//! resolver, so the two cases below share one `LooseResolver` and differ only by
-//! whether a schema is composed.
+//! The two cases below share one `LooseResolver` and differ by whether the
+//! root module imports the resolver-owning module. When imported, the
+//! resolver's `loose` query lands in the schema; when not, it is filtered
+//! out and the app boots cleanly.
 
-use nestrs_core::{module, App, ResolverMembershipError, ResolverSchemaActive};
-use nestrs_graphql::resolver;
+use nestrs_core::module;
+use nestrs_graphql::{resolver, GraphqlModule};
+use nestrs_http::HttpTransport;
+use nestrs_testing::TestApp;
 
 #[resolver]
 struct LooseResolver;
@@ -29,42 +26,87 @@ impl LooseResolver {
     }
 }
 
-// A module that lists no providers, so `LooseResolver` — though linked — belongs
-// to no module.
-#[module]
-struct LooseModule;
+// Lists `LooseResolver` as a provider — importing this module makes the
+// resolver reachable, so its `loose` query lands in the schema.
+#[module(providers = [LooseResolver])]
+struct LooseFeatureModule;
+
+// Root that imports `LooseFeatureModule` — the resolver is reachable.
+#[module(imports = [GraphqlModule::for_root(None), LooseFeatureModule])]
+struct AppWithLoose;
+
+// Root that does NOT import `LooseFeatureModule` — the resolver is linked
+// (any test in this binary that uses `#[resolver] struct LooseResolver`
+// shares the same inventory) but unreachable, so module-gating must skip it.
+#[module(imports = [GraphqlModule::for_root(None)])]
+struct AppWithoutLoose;
 
 #[tokio::test]
-async fn an_unlisted_resolver_fails_the_boot_when_a_schema_is_composed() {
-    // `ResolverSchemaActive` stands in for the schema-composing layer: with a
-    // schema live, `LooseResolver` is in it yet declared in no module.
-    let result = App::builder()
-        .provide(ResolverSchemaActive)
-        .module::<LooseModule>()
+async fn a_reachable_resolver_appears_in_the_schema() {
+    let app = TestApp::builder()
+        .module::<AppWithLoose>()
+        .http(HttpTransport::new())
         .build()
+        .await
+        .expect("the schema boots and mounts at /graphql");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ loose }" }))
+        .send()
         .await;
-    match result {
-        Ok(_) => panic!("expected the boot to fail: the resolver is in no module's providers"),
-        Err(err) => {
-            let membership = err
-                .downcast::<ResolverMembershipError>()
-                .expect("the failure is the named resolver-membership error, not a panic");
-            assert_eq!(membership.resolver, "LooseResolver");
-            assert!(
-                membership.to_string().contains("LooseResolver"),
-                "{membership}"
-            );
-        }
-    }
+    resp.assert_status_is_ok();
+
+    let json = resp.json().await;
+    let loose = json
+        .value()
+        .object()
+        .get("data")
+        .object()
+        .get("loose")
+        .string();
+    assert_eq!(loose, "ok");
 }
 
 #[tokio::test]
-async fn an_unlisted_resolver_is_ignored_when_no_schema_is_composed() {
-    // No `ResolverSchemaActive`: this app composes no schema, so a linked-but-
-    // unlisted resolver (e.g. pulled in transitively) must not fail its boot.
-    App::builder()
-        .module::<LooseModule>()
+async fn an_unreachable_resolver_is_filtered_from_the_schema() {
+    // Boot succeeds even though `LooseResolver` is linked: module-gating
+    // skips it from the schema rather than failing the boot.
+    let app = TestApp::builder()
+        .module::<AppWithoutLoose>()
+        .http(HttpTransport::new())
         .build()
         .await
-        .expect("an app that composes no schema ignores linked resolvers");
+        .expect("an app composes only the resolvers in its reachable modules");
+
+    // The schema does not advertise the unreachable resolver — an
+    // introspection of the root Query returns no `loose` field.
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({
+            "query": "{ __type(name: \"Query\") { fields { name } } }"
+        }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+
+    let json = resp.json().await;
+    let fields = json
+        .value()
+        .object()
+        .get("data")
+        .object()
+        .get("__type")
+        .object()
+        .get("fields")
+        .array();
+    for field in fields.iter() {
+        let name = field.object().get("name").string();
+        assert_ne!(
+            name, "loose",
+            "unreachable resolver leaked into the schema",
+        );
+    }
 }

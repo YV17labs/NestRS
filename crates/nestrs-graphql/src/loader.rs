@@ -9,6 +9,7 @@
 //! point — makes module import order irrelevant: the loader is built from the
 //! fully assembled container when a request arrives, never at registration time.
 
+use std::any::TypeId;
 use std::sync::Arc;
 
 use async_graphql::async_trait::async_trait;
@@ -16,13 +17,19 @@ use async_graphql::extensions::{
     Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest,
 };
 use async_graphql::{Request, ServerResult};
-use nestrs_core::Container;
+use nestrs_core::{Container, ReachableProviders};
 
 /// One DataLoader, submitted by `#[dataloader]`. `seed` builds a fresh loader
-/// from the (complete) container and attaches it to the request as context data.
-/// `pub` only so the generated code can name it.
+/// from the (complete) container and attaches it to the request as context
+/// data. `owner_type_id` is the `TypeId` of the service the loader's
+/// `from_container` reads (the `Self` of the `#[dataloader]` impl block) —
+/// when the owner is not in [`ReachableProviders`], the loader's
+/// `container.get::<Self>()` would panic at request time, so this seed is
+/// module-gated by the owner's reachability. `pub` only so the generated code
+/// can name it.
 #[doc(hidden)]
 pub struct LoaderRegistration {
+    pub owner_type_id: fn() -> TypeId,
     pub seed: fn(&Container, Request) -> Request,
 }
 
@@ -102,7 +109,18 @@ impl Extension for LoaderExtension {
         mut request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
+        // Module-gate the inventory: seed only the loaders whose owner service
+        // is in this app's reachable provider set. A loader from an unimported
+        // module would panic on `container.get::<Owner>()` — skipping its seed
+        // mirrors the GraphQL resolver filter and keeps cross-app discovery
+        // silent.
+        let reachable = self.container.get::<ReachableProviders>();
         for reg in inventory::iter::<LoaderRegistration>() {
+            if let Some(ref r) = reachable {
+                if !r.0.contains(&(reg.owner_type_id)()) {
+                    continue;
+                }
+            }
             request = (reg.seed)(&self.container, request);
         }
         next.run(ctx, request).await

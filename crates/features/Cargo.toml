@@ -1,0 +1,42 @@
+[package]
+name = "features"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "The product's feature library — vertical slices as port + adapter modules (entities, services, controllers, resolvers, gateways). Each feature exposes a core module plus per-transport edge modules; apps compose by listing the edges they serve."
+
+[dependencies]
+nestrs-core.workspace = true
+nestrs-database = { workspace = true, features = ["http", "graphql", "ws"] }
+nestrs-authn.workspace = true
+nestrs-authz = { workspace = true, features = ["http", "graphql"] }
+nestrs-config.workspace = true
+nestrs-graphql.workspace = true
+nestrs-http.workspace = true
+nestrs-throttler.workspace = true
+nestrs-ws.workspace = true
+nestrs-resource.workspace = true
+async-graphql.workspace = true
+async-trait.workspace = true
+poem.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+uuid.workspace = true
+validator.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+nestrs-testing = { workspace = true, features = ["orm"] }
+nestrs-authz.workspace = true
+nestrs-database.workspace = true
+async-graphql.workspace = true
+sea-orm.workspace = true
+uuid.workspace = true
+db = { path = "../../apps/db" }

@@ -1,4 +1,4 @@
-//! Argon2id password hashing. Lookup, lockout, and registration policy live in `domain`.
+//! Argon2id password hashing. Lookup, lockout, and registration policy live in `product`.
 
 use std::sync::OnceLock;
 

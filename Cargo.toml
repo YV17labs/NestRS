@@ -149,9 +149,11 @@ quote = "1"
 proc-macro2 = "1"
 
 # The product's functional core (not framework — no `nestrs-` prefix). All shared
-# business logic, contracts, and policy live here; apps hold only thin endpoints.
+# business logic, contracts, policy, and the transport adapters that expose
+# them — features compose a port + edge modules (HTTP, GraphQL, WS, Queue,
+# MCP) that an app picks à la carte. Apps hold only `main.rs` + `app.rs`.
 # See CLAUDE.md "Monorepo layout".
-domain = { path = "crates/domain" }
+features = { path = "crates/features" }
 
 # Internal crates (framework)
 nestrs-core = { path = "crates/nestrs-core" }

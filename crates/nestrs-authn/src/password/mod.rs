@@ -1,4 +1,4 @@
-//! Argon2id password helpers (no DI module — policy lives in `domain`).
+//! Argon2id password helpers (no DI module — policy lives in `product`).
 
 mod hash;
 

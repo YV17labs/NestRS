@@ -24,10 +24,12 @@ hand-manage any of them is a defect in the framework, not the app's problem.
 The leverage that makes this possible is **procedural macros**: decorators
 that keep application code as declarative in Rust as it is in Nest in
 TypeScript. Crates under `crates/nestrs-*` provide the framework building
-blocks (IoC container, module trait, decorator macros); `crates/domain` holds
-the product's shared core; binaries under `apps/<name>/` are thin entry
-points that consume both. *Monorepo layout* below is the law on which of the
-three a given file belongs to.
+blocks (IoC container, module trait, decorator macros); `crates/features/`
+holds the product's vertical slices, each a port (`core/`) plus per-transport
+adapter modules (`http/`, `graphql/`, `ws/`, `queue/`, `mcp/`); binaries
+under `apps/<name>/` are `main.rs` + `app.rs` that compose the edge modules
+they serve. *Monorepo layout* below is the law on which of the three a given
+file belongs to.
 
 NestJS inspired the surface; it is the **porting mental model**, not the
 spec. Describe features by what they do in nestrs; use Nest vocabulary only
@@ -49,19 +51,17 @@ system.
    shutdown hooks).
 2. **Nest port (second).** Module/feature folders, decorator names
    (`#[module]`, `#[controller]`, `#[resolver]`, `#[field]`, `#[dataloader]`),
-   thin handlers, one `service.rs` per feature (≈ `*.service.ts`), same type
-   name across crates (`UsersModule`, `UsersResolver` in `domain` vs
-   `apps/api`). Nest explains *where* code lives; Rust explains *how* it is
-   expressed.
+   thin handlers, one `service.rs` per feature (≈ `*.service.ts`). Nest
+   explains *where* code lives; Rust explains *how* it is expressed.
 
 **Conflict examples (Rust wins):**
 
 | Nest habit | Rust / nestrs decision |
 |------------|-------------------------|
-| One `UsersResolver` class with everything | `UsersResolver` in `domain` = `#[field]` only; in `app` = root `#[query]`/`#[mutation]` — orphan rules + exposure split |
+| `UsersModule` re-exports everything an app might want | No umbrella. A feature ships `UsersCoreModule` (the port) + one `Users<Edge>Module` per transport (HTTP, GraphQL, WS, …); an app lists the edges it serves |
 | Split `users.service.ts` into many topic files | Optional; **one `service.rs`** holding the whole `UsersService` is fine — do not fragment for aesthetics |
 | Return `[]` when the DB fails (looks like "no data") | **Forbidden** — batch/loader methods return `Result` and surface the error |
-| `impl ResponseError` in `domain` for ergonomics | Prefer pure errors in `domain`; HTTP mapping in `http.rs` or the app — orphan rules apply |
+| `impl ResponseError` next to the error type | Pure errors live in `<feature>/core/error.rs`; HTTP mapping in `<feature>/http/error.rs` so a non-HTTP app does not link the poem types |
 | `@Module({ exports: [...] })` to expose a service | No `exports` list. Encapsulation is Rust visibility: module-private impl, `pub trait` injected as `Arc<dyn Trait>` |
 | `@Transactional()` on a method | No decorator. The ambient executor wraps mutating handlers automatically |
 
@@ -71,19 +71,20 @@ These are DX targets, not performance promises (Rust performance is the
 default; promising it is unserious). The framework's value is in what the
 developer does *not* write.
 
-- **A new CRUD feature costs ≤ 60 lines** of Rust across `domain` +
-  `apps/api` (entity + service + resolver + controller + module). When that
-  stops being true, the framework is missing leverage — open an issue rather
-  than write the same boilerplate a second time.
-- **Adding a feature = copying `crates/domain/src/users/`.** When that copy
+- **A new CRUD feature costs ≤ 60 lines** of Rust in
+  `crates/features/<feature>/` (entity + service + controller + resolver
+  + per-edge module). When that stops being true, the framework is missing
+  leverage — open an issue rather than write the same boilerplate a second time.
+- **Adding a feature = copying `crates/features/src/users/`.** When that copy
   is no longer enough, fix the exemplar; do not invent a second pattern.
 - **Security is wired by composition, not by ceremony.** Importing
-  `DatabaseModule` + `AuthzModule` activates row-level filtering on every
-  `Repo` read, transaction scope on every mutating handler, and response
-  masking on every returned `#[expose]` body. A handler does not opt-in to
-  these — it opts out by not importing the modules. Guards (`AuthGuard`,
-  `AbilityGuard`) still bind explicitly per route or controller, because a
-  route's principal source is a policy decision, not a default.
+  `DatabaseModule` + an `Authz<Edge>Module` activates row-level filtering on
+  every `Repo` read, transaction scope on every mutating handler, and
+  response masking on every returned `#[expose]` body. A handler does not
+  opt-in to these — it opts out by not importing the modules. Guards
+  (`AuthGuard`, `AppAbilityGuard`) still bind explicitly per route or
+  controller, because a route's principal source is a policy decision, not a
+  default.
 - **A new decorator is a defect if it adds > 0.5 s of incremental compile
   time per use site.** Decorators are leverage; the cost is paid every save.
   Measure before merging.
@@ -107,7 +108,7 @@ Intentional departures. Do not "fix" them back to Nest-style.
 | Class-based DI with reflection metadata | Type-id based DI with `#[inject]` fields | Rust has no reflection; types are the source of truth |
 | `nest generate` scaffolding | None — copy the reference feature | Scaffolding produces dead copies; a manual copy forces the contributor to read the pattern once |
 
-## Monorepo layout — apps, domain, framework
+## Monorepo layout — apps, features, framework
 
 A multi-app workspace only earns its keep if the split is **a rule, not a
 habit**. Three homes, one mandate each:
@@ -116,48 +117,61 @@ habit**. Three homes, one mandate each:
   (container, macros, transports, the authn/authz *machinery*). It never names
   a concrete `Claims`, entity, or policy — it is generic *over* them
   (`JwtStrategy<C>`, `AbilityGuard<F>`).
-- **`crates/domain` — the product's functional core.** Every feature as a
-  module, and **all business logic, once**: entities, services (the entity's
-  DB gateway + logic), the JWT contract (`Claims`/`Role`), the authorization
-  **policy** (`AppAbility`), resource-server verification wiring, and the
-  relation/field resolvers. Modular *inside* — one submodule per concern
-  (`identity/`, `authn/`, `authz/`, `orgs/`, `users/`, `oauth/`…) — so
-  "centralized" is never "a junk drawer".
-- **`apps/<name>` — thin deployables.** A pure **entry point**: it composes
-  `domain` modules, attaches transports, and declares the **endpoints**
-  (`#[controller]`, root `#[resolver]` query/mutation, `#[gateway]`) exposing
-  chosen features over *this* app's transports. **An endpoint holds no logic
-  — it delegates to a domain service.** Strip an app of its `domain` imports
-  and only routing remains.
+- **`crates/features` — the product's feature library.** Every feature is a
+  folder under `crates/features/src/`. **Hexagonal Architecture applied per
+  Vertical Slice**: each feature has a **port** (`core/`: entity, service,
+  DTOs, errors) and one **adapter** sub-folder per transport (`http/`,
+  `graphql/`, `ws/`, `queue/`, `mcp/`), each carrying its own `module.rs`.
+  Everything a feature owns lives in its folder — entity, service, contracts,
+  policy *and* the controllers / resolvers / gateways that expose them.
+- **`apps/<name>` — pure composition.** `main.rs` + `app.rs` (and nothing
+  else by default): `app.rs` is a `#[module(imports = [...])]` listing the
+  edge modules this binary serves. An app folder for a feature
+  (`apps/<x>/<feature>/`) is the **exception**, justified only when the app
+  has an endpoint that **could not live in `features`** (a glue handler over
+  several features, a one-off route specific to this deployment).
 
-**The dividing rule.** Code lives in `domain` when it is the product's
-*contract, policy, or logic* — anything another app of the same kind would
-reuse. It stays in an app only when it decides **how that app exposes** the
-domain. *Exposure is per-app; logic is shared.* A token issuer's
-`TokenIssuer` + OAuth strategy live in `domain`; its `/token` controller stays
-in `apps/auth` — another app could mint tokens from the same service without
-exposing the route.
+**The dividing rule.** A file lives in `crates/features/` when *any other
+app could reuse it*. It lives in `apps/<x>/` only when *this app's
+exposure decides something the feature cannot generalize*. Past split was
+"logic vs exposure"; the new line is "shared vs app-specific" — and almost
+everything is shared.
 
-**The compiler draws part of the line.** A `#[field]` relation resolver
-expands to `#[ComplexObject] impl Entity`, and `#[expose]` generates the
-entity's GraphQL type — both orphan-bound to the entity's crate. So **exposed
-entities and relation/field resolvers live in `domain` with the entity; root
-resolvers, controllers, and gateways live in the app.** The boundary is
-enforced by Rust, not convention.
+**Port + adapters in practice.** For a feature `users/`:
 
-**Naming across the split — the crate encodes the layer; the file is always
-`module.rs`.** A feature has a `domain` module *and* a thin app module, both
-named `<Feature>Module` in `<feature>/module.rs`. The **crate boundary** is
-the disambiguator (`domain::orgs::OrgsModule` vs `api::orgs::OrgsModule`) —
-the same pattern Nest uses across packages. In an app's `module.rs`, **never
-`use` the domain module of the same name**; reference it with a
-fully-qualified path in `#[module(imports = [domain::orgs::OrgsModule, …])]`
-instead. Controllers, resolvers, gateways, processors, and tools in the app
-folder share the feature prefix (`OrgsController`, `OrgsResolver`, …) since
-the folder supplies it. `app.rs` then reads `imports = [OrgsModule,
-UsersModule, …]` like a table of contents. **Never reach for `use … as` to
-dodge a name clash.** Default to promoting a feature into `domain`; an
-app-only struct is the justified exception of pure exposure.
+| Folder | Contents | Module struct |
+|--------|----------|---------------|
+| `users/core/` | `entity.rs`, `service.rs`, `dto.rs`, `error.rs` | `UsersCoreModule` (the port) |
+| `users/http/` | `controller.rs`, `error.rs` (HTTP error mapping) | `UsersHttpModule` (imports core) |
+| `users/graphql/` | `resolver.rs` (field + root) | `UsersGraphqlModule` (imports core) |
+| `users/ws/` | `gateway.rs` | `UsersWsModule` (imports core + WsModule) |
+| `users/queue/` | `processor.rs` | `UsersQueueModule` (imports core) |
+| `users/mcp/` | `tool.rs` | `UsersMcpModule` (imports core) |
+
+An app that needs only HTTP imports `UsersCoreModule + UsersHttpModule`.
+A worker imports `UsersCoreModule + UsersQueueModule`. The `core` module
+provides the service; importing only it gets the data layer without
+mounting any endpoint.
+
+**Composition, not inheritance.** Each adapter module imports the core
+module explicitly (`#[module(imports = [UsersCoreModule], …)]`) — the
+access graph carries the dependency, not a class hierarchy.
+
+**Orphan rules still bind co-location, but inside the same crate.** A
+`#[field]` resolver expands to `#[ComplexObject] impl Entity`; the entity
+is in `users/core/entity.rs`, the resolver in `users/graphql/resolver.rs`
+— both in the `features` crate, so the impl is local. There is no
+cross-crate split anymore: field and root resolvers merge into a single
+`UsersResolver` in `users/graphql/`.
+
+**Naming — one `#[module]` per folder, one folder per role.** The DI module
+file is **always** `module.rs`, and a `module.rs` defines **exactly one**
+`#[module]` struct. Multiple modules per feature = multiple folders, never
+multiple `#[module]`s in one file. Adapter folders are pluralized after
+the *role* when more than one variant lives there (`pipes/` for concrete
+pipe impls, `strategies/` for concrete strategy impls); the trait file
+stays at the parent level (`pipe.rs`, `strategy.rs`). No `*_module.rs`
+ever — the role goes in the folder name, the file is `module.rs`.
 
 ## Framework rules
 
@@ -270,6 +284,19 @@ roots at boot — no central `queries = [...]`. The resolver *struct* is still
 listed in `providers` for the access contract only. Batch field-resolver
 fetches with `#[dataloader]` (request-scoped loaders) to avoid N+1s.
 
+**Discovery is module-gated.** Every transport (HTTP, GraphQL, WS, Queue,
+Schedule, MCP, Events) integrates only items whose provider is *reachable*
+from the running app's root module. The boot computes a `ReachableProviders`
+set from the access graph and seeds it into the container; each transport
+filters its `inventory` / metadata against it. Linking a crate without
+importing its module = code present in the binary, **inert** in this app —
+not pollution. A linked-but-unreachable resolver fires a `tracing::warn` at
+boot (so leftover code does not disappear silently) and is skipped from the
+schema. This is what makes per-app subsets work: `apps/worker` links
+`features` for the data layer but importing only `UsersQueueModule` keeps
+the HTTP controller, the GraphQL resolver, and the WS gateway out of its
+binary's runtime surface.
+
 ## Lifecycle hooks
 
 `#[hooks]` on a provider's impl block submits each phase-tagged method
@@ -301,62 +328,76 @@ under `/v1` (`version_path` is the single source of truth).
 they may do*. They compose at the request boundary: bind
 `#[use_guards(AuthGuard, AppAbilityGuard)]` — `AuthGuard` attaches the
 principal, `AbilityGuard` builds the caller's `Ability`. Both the
-verification alias and the policy live in `crates/domain` (`authn/`,
-`authz/`); apps only mount them on their endpoints.
+verification alias and the policy live in `crates/features`
+(`authn/core/`, `authz/core/` + `authz/http/`); apps only mount them on
+their endpoints.
 
 A **`Strategy`** turns a request into a principal (a plain `#[injectable]`,
 no macro). **`AuthGuard<S>`** is generic over it. `Strategy::authenticate`
 returns an **`Outcome`**: `Authenticated` or `Challenge` (a 401, or an OAuth
 redirect) — so one trait serves bearer and OAuth. The standard
 resource-server case needs no app strategy: `JwtStrategy<C>` ships it, so
-`domain` writes the alias once
+`features::authn::core` writes the alias once
 (`type AuthGuard = AuthGuard<JwtStrategy<Claims>>`) and every
 resource-server app mounts it. **`JwtService`** is global infrastructure
 (factory phase); it takes a symmetric secret or an EdDSA key pair — a
 resource server holds **only the public key** (cannot mint tokens), which
 is why **token issuance is its own app** (`apps/auth` signs with the
 private key; `apps/api` is a pure resource server that only verifies). The
-two share `crates/domain` (the `identity` contract lives there) and the
+two share `crates/features` (the `identity` contract lives there) and the
 DB, never RPC each other.
 
-### Authz — domain policy vs app transport wiring
+### Authz follows the port + adapters pattern
 
-Authorization splits like every other feature: **policy in `domain`,
-transport bridges in the app that needs them.**
+Authz is a feature like any other: `crates/features/src/authz/` decomposes
+into a port (`core/`: the policy + `AppAbility`) and one adapter per
+transport.
 
-| Home | Owns | Must not |
-|------|------|----------|
-| `crates/domain/src/authz/` | `AppAbility` (rules), `AppAbilityGuard` (HTTP `AbilityGuard` alias), `AuthzModule` | Enable `nestrs-authz`'s `graphql`/`ws`/`mcp` features (those are an app's call), or pull `nestrs-graphql`/`nestrs-ws` directly |
-| `apps/api/src/authz/` | One **`module.rs`** (`AuthzModule`) + **`bridge.rs`** (`ApiGraphqlGuard` alias) | Redefine policy or duplicate `AppAbility` |
+| Folder | Provides |
+|--------|----------|
+| `authz/core/` | `AppAbility` (the policy), `AuthzCoreModule` |
+| `authz/http/` | `AppAbilityGuard` (`AbilityGuard<AppAbility>`), `AuthzHttpModule` |
+| `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<AuthGuard, AppAbilityGuard>`) as `dyn OperationGuard`, `GraphqlAuthGuard` (`ResolverGuard` — access-graph marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
+| `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `WsAuthGuard` (`MessageGuard` — access-graph marker), `AuthzWsModule` |
 
-**`domain::authz::AuthzModule`** registers `AppAbility` + `AppAbilityGuard`.
-REST controllers bind `AppAbilityGuard` via `#[use_guards]` on the controller
-(and feature app modules import `domain::authz::AuthzModule` in their
-`#[module(imports)]` when they need the guard in the access graph).
+There is no app-side `authz/` folder — the bridges live with the rest of
+the authz feature.
 
-**`api::authz::AuthzModule`** (app — same type name, different crate)
-imports `domain::authz::AuthzModule` with an **FQ path** and registers only
-what this app needs beyond HTTP:
+### One symmetric pattern across the three transports
 
-- `ApiGraphqlGuard` (`GraphqlAbilityBridge<AuthGuard, AppAbilityGuard>`) as
-  `dyn OperationGuard`
-- `LoaderScope` as `dyn BatchContext`
-- `WsDataContext` as `dyn SocketContext`
+Each transport surfaces its auth dep via **the same mechanism**:
+`#[use_guards(<TransportAuthGuard>)]` on the handler kind that transport
+exposes. Each feature's `<Feature><Transport>Module` then imports its
+matching `Authz<Transport>Module` — **and only that** — because the
+transport module transitively brings every layer it needs (HTTP →
+AuthzCore → AuthnCore for the underlying guards).
 
-`app.rs` lists **`crate::authz::AuthzModule` once** — do not also import
-`domain::authz::AuthzModule` at the root unless a module in the tree does
-not already reach it (today `UsersModule` / `OrgsModule` still import the
-domain module for their controllers; the app `AuthzModule` covers
-GraphQL/WS).
+| Transport | Handler decorator | Auth guard binding | Module import |
+|-----------|------------------|--------------------|---|
+| HTTP | `#[controller]` | `#[use_guards(AuthGuard, AppAbilityGuard)]` on the impl block | `imports = [<Feature>CoreModule, AuthzHttpModule]` |
+| GraphQL | `#[resolver]` | `#[use_guards(GraphqlAuthGuard)]` on the impl block | `imports = [<Feature>CoreModule, AuthzGraphqlModule]` |
+| WS gateway | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AppAbilityGuard)]` on the gateway struct (connection) + `#[use_guards(WsAuthGuard)]` on each `#[subscribe_message]` (per-message marker) | `imports = [<Feature>CoreModule, AuthzWsModule]` |
 
-**Anti-patterns (do not reintroduce):** `AuthzGraphqlModule` /
-`AuthzWsModule`, files named `graphql_module.rs` or `ws_module.rs` under a
-feature folder (`module.rs` is the only DI module file), or a third guard
-type that sounds app-specific but is only a GraphQL bridge alias — use
-`bridge.rs` and a name like `ApiGraphqlGuard`.
+Every transport reduces to the **same two-line shape**: import the
+feature's core, import the matching `Authz<Transport>Module`. The
+transport's runtime infrastructure (the framework's `WsModule` for WS,
+the GraphQL schema runtime, the HTTP transport itself) is reached
+transitively through the authz module — no extra import per feature.
 
-Apps without GraphQL/WS (e.g. `auth`) ship **no** `authz/` folder under the
-app; they use `domain::authz` on HTTP routes only.
+**Why an access-graph marker for GraphQL and WS, but real guards for HTTP?**
+HTTP guards run on `&mut Request` *before* the handler — they're the
+actual auth chain. GraphQL and WS run their authn/ability at the
+operation guard (GraphQL `dyn OperationGuard`) or connection level (WS
+HTTP upgrade guards), then seed `Ability` into the per-operation context.
+A `ResolverGuard` / `MessageGuard` bound at the handler is the
+**declarative seam** that turns this seeded-context dependency into an
+`#[inject]` the access graph can validate: omit the authz module from the
+feature's transport module and the boot fails naming the missing guard.
+
+**Public handlers** (no auth required) omit `#[use_guards(...)]` for that
+transport, and accept that their module no longer imports the matching
+`Authz<Transport>Module` transitively — the app must list it explicitly
+if any other handler in the binary needs it.
 
 ## The data layer makes security and transactions transparent
 
@@ -479,13 +520,13 @@ change" claim. Read the crate for how; here is only what was decided:
 ## Naming rules — strict
 
 The file name encodes the role; the folder supplies the feature prefix
-(`orgs/service.rs` ≡ `orgs.service.ts`). Snake_case, NestJS-style. No
+(`users/core/service.rs` ≡ `users.service.ts`). Snake_case, NestJS-style. No
 dotted variants. **No `*_module.rs`** — the DI module file is always
 `module.rs`.
 
 | Role | File name |
 |------|-----------|
-| DI module (the `<Feature>Module` struct + `#[module]`) | `module.rs` |
+| DI module (the `<…>Module` struct + `#[module]`, one per file) | `module.rs` |
 | Folder index (`pub use`, submod declarations only) | `mod.rs` |
 | Service (business + DB gateway) | `service.rs` |
 | Controller (REST endpoints) | `controller.rs` |
@@ -495,8 +536,9 @@ dotted variants. **No `*_module.rs`** — the DI module file is always
 | Tool (MCP) | `tool.rs` |
 | Entity (ORM model + `#[expose]`) | `entity.rs` |
 | DTO / Input types | `dto.rs` |
-| Errors of the feature | `error.rs` |
-| HTTP error mapping for `domain` errors | `http.rs` |
+| Errors of the feature (pure type) | `error.rs` |
+| HTTP error mapping (`impl ResponseError`) | `<feature>/http/error.rs` |
+| GraphQL bridge type alias | `<feature>/graphql/bridge.rs` |
 | Guard / Strategy (authn machinery) | `guard.rs` / `strategy.rs` |
 | Static constants | `constants.rs` |
 
@@ -507,30 +549,30 @@ dotted variants. **No `*_module.rs`** — the DI module file is always
   entry functions (Rust forces them to the crate root) must be **thin
   delegations** to submodules. `mod.rs` is the folder index; `module.rs` is
   the DI module — **never merge them**.
-- **A feature is one module per feature-folder per side**: its `domain`
-  module wires the services/resolvers (a single module across REST +
-  GraphQL, not two), and the app's thin module wires that feature's
-  endpoints and imports the domain one. Never split one side's wiring into
-  two modules. A **library crate** that bundles several composable
-  `DynamicModule`s (e.g. `nestrs-authn`'s `AuthnModule` + `OAuth2Module`)
-  gives **each concern its own feature-folder** with one `module.rs` per
-  concern — see `crates/nestrs-authn/src/{jwt,oauth,passport}/`. `lib.rs`
-  re-exports the flat surface; it never holds DI wiring itself.
-- **One role → one file at the feature level** (`service.rs`,
-  `resolver.rs`, `entity.rs`, …). A folder appears when a feature has
-  several roles (`domain/users/`, `nestrs-authn/jwt/`). Do **not** split
-  one service into `loader.rs` / `credential.rs` unless a second pattern
-  appears twice — keep the whole `UsersService` in `service.rs` (extra
-  `impl` blocks for `CrudService`, `#[dataloader]`, `#[hooks]` are
-  required by macros, not extra files). A single-role crate stays flat
-  (`nestrs-database/config.rs`). The root `AppModule` is a file, `app.rs`.
+- **One `#[module]` per folder.** A `module.rs` declares **exactly one**
+  module struct. Multiple modules per feature ⇒ multiple folders (the
+  port + adapter pattern), never multiple `#[module]`s in one file.
+- **One role → one file inside a folder.** A folder appears when a feature
+  has several roles (`users/core/service.rs`, `users/http/controller.rs`,
+  …). Do **not** split one service into `loader.rs` / `credential.rs`
+  unless a second pattern appears twice — keep the whole `UsersService` in
+  `service.rs` (extra `impl` blocks for `CrudService`, `#[dataloader]`,
+  `#[hooks]` are required by macros, not extra files). A single-role crate
+  stays flat (`nestrs-database/config.rs`).
+- **Multiple files of the same role ⇒ pluralized sub-folder.** Several
+  `Pipe` impls in `nestrs-pipes` go in `pipes/`; several `Strategy` impls
+  in `nestrs-authn/passport/` go in `strategies/`. The trait file
+  (singular) stays at the parent level (`pipe.rs`, `strategy.rs`);
+  `pipes/mod.rs` / `strategies/mod.rs` re-export the impls flat.
 - **Errors of a feature** belong in `error.rs` (or one clearly named
   module) — not scattered enums inside `service.rs`.
 - **No `interfaces/` directory** — a trait lives in the file of its concern
   (or `traits.rs` / `types.rs` for a standalone cluster).
 - **Apps live under `apps/<name>/`.** Not `examples/`, not `services/` —
-  every runnable thing, including the `auth` app, lives under `apps/`
-  uniformly.
+  every runnable thing lives under `apps/` uniformly. By default an app
+  contains only `main.rs` + `app.rs`; a feature folder under `apps/<x>/`
+  is the documented exception (an endpoint that genuinely cannot live in
+  `features`).
 - A file exists only if it has real content (a one-line role file is real
   content; this forbids empty placeholders, not small files). No "small
   crate inlines everything" exception — logic always lives in topical files.
@@ -558,7 +600,7 @@ unambiguous. Write code when it is none of the three.
 A new decorator must ship with: a doc comment showing the expanded form, a
 test in the home crate's mirror tree (or in `nestrs-testing` for
 cross-crate wiring) proving the wiring, and a use site in an app or in
-`domain` so the integration is exercised end-to-end. Measure incremental
+`features` so the integration is exercised end-to-end. Measure incremental
 compile cost per use site; > 0.5 s is a defect (see *North Star*).
 
 ## Engineering posture
@@ -659,19 +701,23 @@ then **kill the server before returning control**. The verified baseline
 ## Hard "no" list
 
 - No external DI library.
-- No renaming of `apps/`.
+- No renaming of `apps/` or `crates/features/`.
 - No feature flags for capabilities that do not yet exist.
 - No backwards-compatibility shims (no public API to preserve yet).
 - No mocking the database in e2e tests.
 - No `*_module.rs` — the DI module file is always `module.rs`.
-- No `use … as` to dodge a name clash — promote the feature into
-  `domain`, or use the crate boundary as disambiguator.
+- No multiple `#[module]` structs in one file — one folder per module.
+- No umbrella module that imports every edge of a feature. Apps list edges
+  explicitly so the imports table-of-contents reflects what the binary
+  actually serves.
+- No transport-level discovery without module-gating — every transport's
+  inventory drain must filter by access-graph reachability.
 - No two decorators that do the same thing — deprecate one before adding
   another.
 - Multiple deployable apps split by responsibility are a goal (not
   microservices sprawl) under two conditions: apps share code through
   **crates** (never copy-paste — all product logic, contracts, and policy
-  live in `crates/domain`; see *Monorepo layout*), and the coupling stays
+  live in `crates/features`; see *Monorepo layout*), and the coupling stays
   **loose** (a self-contained token + the shared DB, never chatty RPC).
 
 ## Reading order for a new agent
@@ -682,9 +728,10 @@ transcripts are not injected automatically.
 1. **This file** — durable rules.
 2. **`NOTES.md`** — current debt, open items, verified baseline commands,
    feature-exemplar pointers.
-3. **`crates/domain/src/users/`** — the reference feature; copy before
-   inventing.
-4. **`apps/api/`** — the reference app (REST + GraphQL + WS + DB + authz).
+3. **`crates/features/src/users/`** — the reference feature; copy before
+   inventing. Read `core/`, then any `<edge>/`.
+4. **`apps/api/`** — the reference app (REST + GraphQL + WS + DB + authz);
+   `app.rs` is the canonical composition example.
 5. **The relevant `crates/nestrs-<concern>/`** for whatever you are about
    to touch.
 

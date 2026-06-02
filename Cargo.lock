@@ -174,7 +174,7 @@ dependencies = [
  "anyhow",
  "async-graphql",
  "db",
- "domain",
+ "features",
  "futures-util",
  "nestrs-authn",
  "nestrs-authz",
@@ -593,7 +593,7 @@ dependencies = [
  "anyhow",
  "base64",
  "db",
- "domain",
+ "features",
  "nestrs-authn",
  "nestrs-authz",
  "nestrs-config",
@@ -1301,34 +1301,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "domain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-graphql",
- "async-trait",
- "db",
- "nestrs-authn",
- "nestrs-authz",
- "nestrs-config",
- "nestrs-core",
- "nestrs-database",
- "nestrs-graphql",
- "nestrs-resource",
- "nestrs-testing",
- "poem",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "validator",
-]
-
-[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1486,6 +1458,37 @@ name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+
+[[package]]
+name = "features"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-graphql",
+ "async-trait",
+ "db",
+ "nestrs-authn",
+ "nestrs-authz",
+ "nestrs-config",
+ "nestrs-core",
+ "nestrs-database",
+ "nestrs-graphql",
+ "nestrs-http",
+ "nestrs-resource",
+ "nestrs-testing",
+ "nestrs-throttler",
+ "nestrs-ws",
+ "poem",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "validator",
+]
 
 [[package]]
 name = "ff"

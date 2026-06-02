@@ -19,7 +19,7 @@ nestrs-resource.workspace = true
 nestrs-server-timing.workspace = true
 nestrs-telemetry = { workspace = true, features = ["http"] }
 nestrs-ws.workspace = true
-domain.workspace = true
+features.workspace = true
 poem.workspace = true
 tokio.workspace = true
 tracing.workspace = true

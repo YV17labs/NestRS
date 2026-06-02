@@ -3,7 +3,7 @@
 //! Integration tests: `tests/authn.rs` + paths mirroring `src/` (see CLAUDE.md).
 //! Gaps: `jwt/module.rs`, `oauth/module.rs` (app e2e); live OAuth HTTP (app e2e).
 //!
-//! Composable framework concerns (product wiring lives in `domain`):
+//! Composable framework concerns (product wiring lives in `product`):
 //! - [`jwt`] — token sign/verify + [`AuthnModule`]
 //! - [`oauth`] — Authorization Code client + [`OAuth2Module`]
 //! - [`passport`] — [`Strategy`], [`AuthGuard`], [`JwtStrategy`]

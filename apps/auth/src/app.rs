@@ -6,7 +6,7 @@ use nestrs_health::HealthModule;
 use nestrs_telemetry::TelemetryModule;
 use nestrs_throttler::{Throttle, ThrottlerModule};
 
-use crate::oauth::OAuthModule;
+use features::oauth::OAuthHttpModule;
 
 #[module(
     imports = [
@@ -15,7 +15,7 @@ use crate::oauth::OAuthModule;
         AuthnModule::for_root(None),
         OAuth2Module::for_root(None),
         ThrottlerModule::for_root(Throttle::per_minute(60)),
-        OAuthModule,
+        OAuthHttpModule,
         HealthModule,
         TelemetryModule,
     ],

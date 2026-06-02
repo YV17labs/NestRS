@@ -55,8 +55,8 @@
 //! `Display` for that error must be wire-safe. Avoid `#[error(transparent)]`
 //! over an ORM/sqlx error (it would forward SQL fragments to the client); use
 //! a fixed `#[error("...")]` per variant, and rely on the structured `?e`
-//! Debug log for server-side observability — `domain::users::UserError` and
-//! `domain::orgs::OrgError` are the reference shapes.
+//! Debug log for server-side observability — `features::users::UserError` and
+//! `features::orgs::OrgError` are the reference shapes.
 //!
 //! # Server→client push
 //!

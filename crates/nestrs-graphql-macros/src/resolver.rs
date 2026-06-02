@@ -511,6 +511,11 @@ fn root_object(
         ::nestrs_graphql::inventory::submit! {
             ::nestrs_graphql::ResolverRegistration {
                 kind: ::nestrs_graphql::ResolverKind::#kind,
+                // The resolver struct's `TypeId` — its container key, what the
+                // boot's reachable-provider set indexes — so module-gating can
+                // filter this entry out of an app that does not import the
+                // resolver's module.
+                resolver_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 type_info: |__r| __r.create_fake_output_type::<#obj>(),
                 build: |__c| ::std::boxed::Box::new(
                     #obj(::std::sync::Arc::new(<#self_ty>::from_container(__c)))

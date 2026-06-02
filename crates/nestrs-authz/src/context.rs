@@ -4,7 +4,7 @@
 //! filtering needs the caller's [`Ability`] reachable from inside a service
 //! method (where the query runs) without threading it through every signature.
 //! A task-local bridges that: the HTTP surface installs the ability for the
-//! duration of the handler (see `nestrs-authz-http`'s `Authorize` shaper, which
+//! duration of the handler (see [`crate::http`]'s `Authorize` shaper, which
 //! runs *inside* the route's guards, so the ability the guard built is present),
 //! and `nestrs-database`'s `Repo` reads it back via [`current_ability`] to scope every
 //! read. Outside a request the task-local is unset and [`current_ability`]

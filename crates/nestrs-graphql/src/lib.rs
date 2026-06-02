@@ -27,7 +27,7 @@ pub use config::GraphqlConfig;
 /// authenticated principal — the [`forward_principal!`] macro.
 pub use context::ContextSeed;
 /// The per-operation seam the endpoint runs around every request (authenticate,
-/// then wrap execution with ambient state). Implemented by `nestrs-authz-graphql`,
+/// then wrap execution with ambient state). Implemented by `nestrs_authz::graphql`,
 /// bound with `providers = [MyBridge as dyn OperationGuard]`.
 pub use context::{BoxFuture, OperationGuard};
 /// The per-resolver guard seam (`#[use_guards]` on a `#[resolver]`), the GraphQL
@@ -40,7 +40,8 @@ pub use loader::{batch_spawner, LoaderRegistration};
 /// The seam that re-establishes per-request ambient state (the executor, the
 /// authorization ability) inside a DataLoader batch — a batch runs on a spawned
 /// task where the request task-locals are gone. Implemented by
-/// `nestrs-authz-graphql`, bound with `providers = [MyBridge as dyn BatchContext]`.
+/// `nestrs_database::graphql::LoaderScope`, bound with
+/// `providers = [LoaderScope as dyn BatchContext]`.
 pub use loader::{BatchContext, BatchFuture, BatchSpawner};
 pub use resolver::{ResolverKind, ResolverObject, ResolverRegistration};
 

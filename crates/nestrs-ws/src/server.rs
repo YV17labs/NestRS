@@ -220,6 +220,23 @@ impl WsClient {
         Self { id, registry }
     }
 
+    /// A throwaway client backed by a fresh [`WsServer`] and a *closed* outbox
+    /// — for unit-testing a `Gateway::dispatch` impl in isolation. The
+    /// receiver is dropped immediately, so the registered outbox is closed:
+    /// the registry holds a `Sender` whose every `send(...)` call returns
+    /// `Err`. As a consequence, [`WsClient::emit`] / [`to`](Self::to) /
+    /// [`broadcast`](Self::broadcast) on a `for_test` client report `0` /
+    /// `false` (no panic, no leak — frames are silently dropped). For a test
+    /// that needs to assert on outbound frames, build the client manually
+    /// with a `WsServer` you keep around plus a `Receiver` you read.
+    pub fn for_test() -> Self {
+        let server: Arc<WsServer> = Arc::new(WsServer::default());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let id = server.connect(tx);
+        let registry: Arc<dyn Registry> = server;
+        Self { id, registry }
+    }
+
     /// This connection's id.
     pub fn id(&self) -> ConnId {
         self.id

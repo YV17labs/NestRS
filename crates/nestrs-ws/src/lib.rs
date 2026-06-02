@@ -30,6 +30,34 @@
 //! }
 //! ```
 //!
+//! # Return-type contract
+//!
+//! A `#[subscribe_message]` handler may return one of four shapes; the macro
+//! picks the dispatch shape syntactically:
+//!
+//! - `()` (or no return) — send nothing.
+//! - `T` — serialize as the reply on the request's event name.
+//! - `Result<(), E>` — `Ok(())` sends nothing; `Err(e)` becomes an error frame
+//!   `{ "event": "<event>", "data": { "error": "<Display of e>" } }`, and a
+//!   `warn!(target: "nestrs::ws", error = ?e, ...)` is emitted server-side.
+//! - `Result<T, E>` — `Ok(t)` is serialized as the reply; `Err(e)` produces
+//!   the same error frame + log as above.
+//!
+//! **`E: Display` is required** for the `Result` shapes (the wire frame uses
+//! `format!("{}", e)`). The detection is purely syntactic on the type's last
+//! path segment being `Result`: a type alias such as
+//! `pub type Outcome<T> = Result<T, MyError>;` does **not** classify as
+//! `Result` — the macro treats it as a plain `T` and serde-serializes the
+//! enum, leaking the error variant on the wire. Always return `Result` (or
+//! `std::result::Result`) directly.
+//!
+//! **Display discipline.** The `Err(e)` ships `format!("{}", e)` to the wire;
+//! `Display` for that error must be wire-safe. Avoid `#[error(transparent)]`
+//! over an ORM/sqlx error (it would forward SQL fragments to the client); use
+//! a fixed `#[error("...")]` per variant, and rely on the structured `?e`
+//! Debug log for server-side observability — `domain::users::UserError` and
+//! `domain::orgs::OrgError` are the reference shapes.
+//!
 //! # Server→client push
 //!
 //! Beyond replying on its own socket, a gateway pushes to *other* clients
@@ -93,10 +121,11 @@
 //! constraint a `#[dataloader]` batch has. The [`SocketContext`] seam closes
 //! that without `nestrs-ws` depending on the ORM or authz: it captures opaque
 //! per-connection state from the post-guard upgrade request and re-installs it
-//! around each dispatch. The `nestrs-authz-ws` bridge implements it to bind the
-//! request executor and the caller's ability, so a gateway handler uses `Repo`
-//! with row-level filtering exactly like a controller. With no bridge bound a
-//! handler still injects an `Arc<DatabaseConnection>` and queries it directly.
+//! around each dispatch. The `nestrs_database::ws` bridge implements it to
+//! bind the request executor and the caller's ability, so a gateway handler
+//! uses `Repo` with row-level filtering exactly like a controller. With no
+//! bridge bound a handler still injects an `Arc<DatabaseConnection>` and
+//! queries it directly.
 
 mod context;
 mod envelope;
@@ -114,11 +143,14 @@ pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
 // Re-exported so `#[messages]`-generated code resolves these through the
 // framework: the dispatcher is `#[nestrs_ws::async_trait]`, payloads go through
-// `nestrs_ws::serde_json`, and `#[gateway]`'s guard wrapping names
-// `nestrs_ws::EndpointExt`.
+// `nestrs_ws::serde_json`, `#[gateway]`'s guard wrapping names
+// `nestrs_ws::EndpointExt`, and a Result-returning `#[subscribe_message]`'s Err
+// branch logs through `nestrs_ws::tracing::warn!` so users without a direct
+// `tracing` dep still get the warn event.
 pub use async_trait::async_trait;
 pub use nestrs_middleware::{EndpointExt, Guard};
 pub use serde_json;
+pub use tracing;
 
 // `#[gateway]`-generated guard wrapping names poem types through the framework
 // (`::nestrs_ws::poem::*`), so a WebSocket-only app needs no direct poem dep.

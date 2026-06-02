@@ -10,10 +10,11 @@
 //! guard that attached request context (the authorization ability) has already
 //! run when `capture` reads it.
 //!
-//! The trait is implemented outside this crate — `nestrs-authz-http` installs the
-//! ambient ability and masks the body — so the HTTP surface stays unaware of any
-//! specific shaper. `#[routes]` emits only `::nestrs_http::shaped` plus the
-//! parameter type the app already wrote, never a path into the implementing crate.
+//! The trait is implemented outside this crate — `nestrs_authz::http` installs
+//! the ambient ability and masks the body — so the HTTP surface stays unaware
+//! of any specific shaper. `#[routes]` emits only `::nestrs_http::shaped` plus
+//! the parameter type the app already wrote, never a path into the
+//! implementing crate.
 
 use std::future::Future;
 use std::marker::PhantomData;

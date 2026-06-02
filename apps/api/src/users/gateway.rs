@@ -5,7 +5,7 @@ use nestrs_ws::{gateway, messages};
 
 use domain::authn::AuthGuard;
 use domain::authz::AppAbilityGuard;
-use domain::users::{User, UsersService};
+use domain::users::{User, UserError, UsersService};
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthGuard, AppAbilityGuard)]
@@ -17,13 +17,8 @@ pub struct UsersGateway {
 #[messages]
 impl UsersGateway {
     #[subscribe_message("users.list")]
-    async fn list(&self) -> Vec<User> {
-        match self.svc.list().await {
-            Ok(rows) => rows.iter().map(User::from).collect(),
-            Err(err) => {
-                tracing::error!(target: "nestrs::ws", error = %err, "users.list query failed");
-                Vec::new()
-            }
-        }
+    async fn list(&self) -> Result<Vec<User>, UserError> {
+        let rows = self.svc.list().await?;
+        Ok(rows.iter().map(User::from).collect())
     }
 }

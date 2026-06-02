@@ -6,9 +6,10 @@
 //! authz ability) have already unwound by the time a message handler runs — the
 //! same constraint a `#[dataloader]` batch has. This seam closes that gap without
 //! `nestrs-ws` knowing anything about the ORM or authz: the crate only defines
-//! the trait and resolves an optional implementor from the container; a bridge
-//! crate (`nestrs-authz-ws`) implements it to re-install the executor and the
-//! caller's ability around each dispatch.
+//! the trait and resolves an optional implementor from the container; a
+//! sibling module (`nestrs_database::ws`, behind the `ws` feature of
+//! `nestrs-database`) implements it to re-install the executor and the caller's
+//! ability around each dispatch.
 //!
 //! It is a two-phase hook, exactly like `OperationGuard`:
 //!

@@ -120,12 +120,13 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
 
-        // A `()`/no return sends no reply; any other return is serialized back
-        // to the client under the same event name.
-        let returns_unit = match &method.sig.output {
-            ReturnType::Default => true,
-            ReturnType::Type(_, ty) => matches!(ty.as_ref(), Type::Tuple(t) if t.elems.is_empty()),
-        };
+        // Classify the return to pick the dispatch shape: a `()` (or no return)
+        // sends nothing, a plain `T` is serialized as the reply, a `Result<T, E>`
+        // unwraps — `Ok(T)` becomes the reply (or `None` when `T == ()`) and
+        // `Err(E)` becomes an error frame plus a `warn` log. Detection is by the
+        // *path*'s last segment being `Result`; aliasing a different type as
+        // `Result` is out of scope.
+        let return_kind = classify_return(&method.sig.output);
 
         let deser = match payload_ty {
             Some(ty) => quote! {
@@ -145,16 +146,51 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             self.#method_name(#(#call_args),*).await
         };
 
-        let arm_body = if returns_unit {
-            quote! {
+        let arm_body = match return_kind {
+            ReturnKind::Unit => quote! {
                 { #call };
                 ::nestrs_ws::WsReply::None
-            }
-        } else {
-            quote! {
+            },
+            ReturnKind::Value => quote! {
                 let __ret = { #call };
                 ::nestrs_ws::WsReply::reply(&__ret)
-            }
+            },
+            ReturnKind::ResultUnit => quote! {
+                match { #call } {
+                    ::core::result::Result::Ok(()) => ::nestrs_ws::WsReply::None,
+                    ::core::result::Result::Err(__err) => {
+                        // `?__err` (Debug) captures the structured error for the
+                        // server log; `{}` (Display) is what ships on the wire —
+                        // the handler's error type is responsible for keeping its
+                        // Display wire-safe (no `#[error(transparent)]` over an
+                        // ORM/sqlx error). See the discipline note in
+                        // `nestrs_ws::lib.rs`.
+                        ::nestrs_ws::tracing::warn!(
+                            target: "nestrs::ws",
+                            event = #event,
+                            error = ?__err,
+                            "subscribe_message handler returned Err",
+                        );
+                        ::nestrs_ws::WsReply::error(::std::format!("{}", __err))
+                    }
+                }
+            },
+            ReturnKind::Result => quote! {
+                match { #call } {
+                    ::core::result::Result::Ok(__ret) => ::nestrs_ws::WsReply::reply(&__ret),
+                    ::core::result::Result::Err(__err) => {
+                        // See the note on `ReturnKind::ResultUnit` above —
+                        // Debug for the log, Display for the wire.
+                        ::nestrs_ws::tracing::warn!(
+                            target: "nestrs::ws",
+                            event = #event,
+                            error = ?__err,
+                            "subscribe_message handler returned Err",
+                        );
+                        ::nestrs_ws::WsReply::error(::std::format!("{}", __err))
+                    }
+                }
+            },
         };
 
         arms.push(quote! { #event => { #arm_body } });
@@ -236,6 +272,49 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+/// What a `#[subscribe_message]` handler's return type looks like — drives the
+/// shape of the generated dispatch arm.
+enum ReturnKind {
+    /// `()` (or no return). Send nothing.
+    Unit,
+    /// A plain `T`. Serialize as the reply.
+    Value,
+    /// `Result<(), E>`. `Ok(())` sends nothing; `Err(e)` becomes an error frame.
+    ResultUnit,
+    /// `Result<T, E>` with `T != ()`. `Ok(t)` is serialized as the reply; `Err(e)`
+    /// becomes an error frame (and a `warn` log on `nestrs::ws`).
+    Result,
+}
+
+fn classify_return(output: &ReturnType) -> ReturnKind {
+    let ty = match output {
+        ReturnType::Default => return ReturnKind::Unit,
+        ReturnType::Type(_, ty) => ty.as_ref(),
+    };
+    if let Type::Tuple(t) = ty {
+        if t.elems.is_empty() {
+            return ReturnKind::Unit;
+        }
+    }
+    let Type::Path(tp) = ty else {
+        return ReturnKind::Value;
+    };
+    let Some(last) = tp.path.segments.last() else {
+        return ReturnKind::Value;
+    };
+    if last.ident != "Result" {
+        return ReturnKind::Value;
+    }
+    if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
+        if let Some(syn::GenericArgument::Type(Type::Tuple(t))) = args.args.first() {
+            if t.elems.is_empty() {
+                return ReturnKind::ResultUnit;
+            }
+        }
+    }
+    ReturnKind::Result
 }
 
 /// Remove a bare marker attribute (`#[on_connect]`) from a method, returning

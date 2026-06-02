@@ -27,7 +27,7 @@ use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 /// poem request (and the container, for anything it must resolve) and attaches
 /// values to the graphql request with [`Request::data`](GqlRequest::data),
 /// returning the augmented request. `pub` so a downstream crate
-/// (`nestrs-authz-graphql`) can submit one.
+/// (`nestrs_authz::graphql`) can submit one.
 ///
 /// ```ignore
 /// nestrs_graphql::inventory::submit! {
@@ -52,7 +52,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// A per-operation guard the GraphQL endpoint runs around every request — the
 /// resolver-side analog of HTTP's `RouteResponseShaper`. The surface stays
 /// authorization-agnostic: `nestrs-graphql` only defines this seam and resolves
-/// an optional implementor from the container; `nestrs-authz-graphql`'s
+/// an optional implementor from the container; `nestrs_authz::graphql`'s
 /// `GraphqlAbilityBridge` implements it to authenticate the request and install
 /// the caller's ambient `Ability` for the whole operation.
 ///
@@ -150,7 +150,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 /// `T` must be `Clone + Send + Sync + 'static`. A request that carries no such value
 /// (anonymous) passes through untouched — the resolver's own `authorize` gate then
 /// refuses it. The ambient `Ability` itself is already forwarded by
-/// `nestrs-authz-graphql`; this is for the app's own principal type. Exported at the
+/// `nestrs_authz::graphql`; this is for the app's own principal type. Exported at the
 /// crate root by `#[macro_export]`, so apps call `nestrs_graphql::forward_principal!`.
 #[macro_export]
 macro_rules! forward_principal {

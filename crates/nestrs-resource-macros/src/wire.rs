@@ -1,9 +1,30 @@
 //! Emit `WireModelDefaults` for `#[expose(skip)]` scalar columns.
+//!
+//! These defaults are placeholders the response shaper feeds to
+//! `Model::deserialize` only so the reconstructed `Model` can run through
+//! `Ability::mask` / `mask_many`. The masker strips every skipped key from
+//! the wire body on the way back out via `retain_wire_keys`, so a
+//! placeholder's value never reaches the network.
+//!
+//! **Why the supported type set is narrow.** `Ability::mask_many` calls
+//! `Ability::can(action, &model)` per row — a rule predicated on a skipped
+//! column would compare the *placeholder* against the real value, silently
+//! filtering legitimate rows. So this macro only emits a default when the
+//! placeholder is structurally distinguishable from a real value (empty
+//! string, `null`, `false`, `0`) — types where a predicate match is
+//! coincidence rather than misleading.
+//!
+//! For `Uuid`, timestamps, `Decimal`, custom enums, and any other type the
+//! caller marks `#[expose(skip)]`: emit no default. The shaper then fails
+//! `wire_to_model` and returns `500` rather than running a predicate against
+//! a fake. If you legitimately need to skip such a column, hand-write
+//! `impl WireModelDefaults for Entity` next to the entity — picking a
+//! placeholder you have audited against your policy's predicates.
 
 use quote::quote;
 use syn::{Type, TypePath};
 
-use crate::attr::{is_uuid, ResourceField, ResourceModel};
+use crate::attr::{ResourceField, ResourceModel};
 
 fn is_relation(ty: &Type) -> bool {
     match ty {
@@ -21,9 +42,6 @@ fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStrea
     }
     let key = &field.ident;
     let ty = &field.ty;
-    if is_uuid(ty) {
-        return None;
-    }
     let last = match ty {
         Type::Path(tp) => tp.path.segments.last()?.ident.to_string(),
         _ => return None,
@@ -31,7 +49,7 @@ fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStrea
     Some(match last.as_str() {
         "String" => quote! {
             map.entry(::std::string::String::from(stringify!(#key)))
-                .or_insert_with(|| ::serde_json::Value::String(String::new()));
+                .or_insert_with(|| ::serde_json::Value::String(::std::string::String::new()));
         },
         "Option" => quote! {
             map.entry(::std::string::String::from(stringify!(#key)))
@@ -46,6 +64,11 @@ fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStrea
             map.entry(::std::string::String::from(stringify!(#key)))
                 .or_insert(::serde_json::json!(0));
         },
+        // `Uuid`, `DateTime`, `Decimal`, custom enums, and anything else fall
+        // here: emit no default, let `wire_to_model` fail closed with 500,
+        // and require the user to hand-roll `WireModelDefaults` if they need
+        // to skip such a column (auditing the placeholder against the
+        // policy's predicates).
         _ => return None,
     })
 }
@@ -56,9 +79,20 @@ pub fn emit(model: &ResourceModel) -> proc_macro2::TokenStream {
         .iter()
         .filter_map(default_value_tokens)
         .collect::<Vec<_>>();
+    // When no skipped scalar emits a default, the body is empty — name the
+    // unused parameter `_map` so user crates compiling with
+    // `#![deny(unused_variables)]` are not broken by `#[expose]` on such
+    // an entity.
+    let param = if entries.is_empty() {
+        quote!(_map)
+    } else {
+        quote!(map)
+    };
     quote! {
         impl ::nestrs_resource::WireModelDefaults for Entity {
-            fn fill_wire_defaults(map: &mut ::serde_json::Map<String, ::serde_json::Value>) {
+            fn fill_wire_defaults(
+                #param: &mut ::serde_json::Map<::std::string::String, ::serde_json::Value>,
+            ) {
                 #(#entries)*
             }
         }

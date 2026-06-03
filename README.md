@@ -50,12 +50,12 @@
 The same "Hello World" HTTP service — a provider, a controller, a module —
 implemented once in NestRS and once in NestJS, under an identical `wrk` load
 (`GET /`, plaintext, keep-alive). On the same CPU budget NestRS served **~25×
-more requests** while using **~18× less memory**.
+more requests** while using **~20× less memory**.
 
 | Metric — `GET /` plaintext      | NestRS (Rust)  | NestJS (Node 20) | Ratio  |
 | ------------------------------- | -------------- | ---------------- | ------ |
 | Throughput (2 cores, defaults)  | ~463k req/s    | ~18k req/s       | ~25×   |
-| Throughput (1 core, per-core)   | ~212k req/s    | ~17k req/s       | ~13×   |
+| Throughput (1 core, per-core)   | ~231k req/s    | ~17k req/s       | ~13×   |
 | Latency, p50                    | 0.13 ms        | 3.2 ms           | ~24×   |
 | Latency, p99                    | 0.57 ms        | 6.4 ms           | ~11×   |
 | Memory, idle                    | 4 MB           | 80 MB            | ~20×   |
@@ -126,7 +126,7 @@ pub struct AppModule;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::new::<AppModule>()?
-        .transport(HttpTransport::new().bind("0.0.0.0:3001"))
+        .transport(HttpTransport::new().bind("0.0.0.0:3000"))
         .run()
         .await
 }
@@ -305,16 +305,16 @@ tooling (`just`, `bacon`, `cargo-nextest`, …), and brings up **Postgres** and
 pointed at them.
 `app`, `auth`, `mcp`, and `chat` run as-is; `api` needs its schema applied once
 first — `just db up` (or `just db reset` to also load demo data) — and `worker`
-needs Redis. Ports 3001–3005 are forwarded to the host.
+needs Redis. Ports 3000–3004 are forwarded to the host.
 
 Then start an app in watch mode:
 
 ```bash
-just dev          # the bare `app` baseline on :3001
-just dev auth     # OAuth2 / JWT token issuer on :3002
-just dev api      # REST + GraphQL on :3003
-just dev mcp      # MCP server on :3004
-just dev chat     # real-time WebSocket gateway on :3005
+just dev          # the bare `app` baseline on :3000
+just dev auth     # OAuth2 / JWT token issuer on :3001
+just dev api      # REST + GraphQL on :3002
+just dev mcp      # MCP server on :3003
+just dev chat     # real-time WebSocket gateway on :3004
 just dev worker   # background jobs & scheduling (headless)
 ```
 
@@ -378,21 +378,21 @@ never calling each other. They will grow over time.
 
 | App | Kind | Port |
 |-----|------|------|
-| `app` | Minimal HTTP baseline | 3001 |
-| `auth` | OAuth2 / JWT token issuer | 3002 |
-| `api` | REST + GraphQL, persisted & authorized | 3003 |
+| `app` | Minimal HTTP baseline | 3000 |
+| `auth` | OAuth2 / JWT token issuer | 3001 |
+| `api` | REST + GraphQL, persisted & authorized | 3002 |
 | `db` | Shared-database migrations & seeding (CLI) | — |
-| `mcp` | Model Context Protocol server | 3004 |
-| `chat` | Real-time WebSocket gateway | 3005 |
+| `mcp` | Model Context Protocol server | 3003 |
+| `chat` | Real-time WebSocket gateway | 3004 |
 | `worker` | Background jobs & scheduling (headless) | — |
 
-### `app` — Minimal HTTP endpoint (port 3001)
+### `app` — Minimal HTTP endpoint (port 3000)
 
 Started with `just dev app`. A single `GET /` returning `Hello World` on
-`http://0.0.0.0:3001`, kept deliberately bare — no health, telemetry, or
+`http://0.0.0.0:3000`, kept deliberately bare — no health, telemetry, or
 middleware — as a baseline for benchmarking the framework's request path.
 
-### `auth` — OAuth2 / JWT token issuer (port 3002)
+### `auth` — OAuth2 / JWT token issuer (port 3001)
 
 Started with `just dev auth`. A dedicated authorization server: it runs the OAuth2
 Authorization Code flow (`GET /authorize` → provider, `GET /callback`) and issues
@@ -403,12 +403,12 @@ other — they share the `features` crate's `identity` module (`Claims`, `Role`)
 and a self-contained JWT, nothing more. It needs no database: signing keys come from the
 environment (with dev defaults) and the OAuth provider defaults to GitHub.
 
-### `api` — REST + GraphQL, persisted and authorized (port 3003)
+### `api` — REST + GraphQL, persisted and authorized (port 3002)
 
 Started with `just dev api`; persists to Postgres via SeaORM, so it needs a
 `NESTRS_DATABASE__URL` (boot aborts with a clear message if it is unset). The schema is
 applied by the `db` app, not the running service — run `just db up` once first
-(or `just db reset` to also load demo users). Listens on `http://0.0.0.0:3003`:
+(or `just db reset` to also load demo users). Listens on `http://0.0.0.0:3002`:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -440,7 +440,7 @@ single app rather than any one service. It ships two binaries — `migrate`
 seed. Both binaries ship in the container image alongside the apps, so the same
 image migrates and serves.
 
-### `mcp` — Model Context Protocol server (port 3004)
+### `mcp` — Model Context Protocol server (port 3003)
 
 Started with `just dev mcp`. A Streamable-HTTP MCP server (`rmcp`-backed) whose
 tools are declared like controllers — `#[mcp]` handles DI and mounts the
@@ -448,7 +448,7 @@ server, then `#[tool_router]` / `#[tool]` / `#[tool_handler]` define the tools.
 The bundled `current_weather`
 tool queries the [Open-Meteo](https://open-meteo.com) public API, with
 `validator` bounds on its GPS params. Point any MCP client (Claude Desktop,
-Cursor, …) at `http://localhost:3004/mcp`.
+Cursor, …) at `http://localhost:3003/mcp`.
 
 ### `worker` — Background jobs & scheduling (headless)
 
@@ -459,7 +459,7 @@ full producer → queue → consumer loop with `#[cron_job]` and `#[processor]`.
 Importing no HTTP crate, the binary never compiles the poem stack — a genuinely
 lean headless build.
 
-### `chat` — Real-time WebSocket gateway (port 3005)
+### `chat` — Real-time WebSocket gateway (port 3004)
 
 Started with `just dev chat`. A WebSocket chat room declared like a controller:
 `#[gateway(path = "/ws")]` on the struct and `#[messages]` on its impl block,
@@ -470,7 +470,7 @@ wiring — and shares controller DI and guards (at the connection level on the
 upgrade, and per message beside a `#[subscribe_message]`). An `#[on_connect]` /
 `#[on_disconnect]` hook tracks presence, and a service broadcasts to the whole
 room through the connection registry. Connect any WebSocket client to
-`ws://localhost:3005/ws` and send `{"event":"message","data":{"author":"ada",
+`ws://localhost:3004/ws` and send `{"event":"message","data":{"author":"ada",
 "text":"hi"}}`; its `tests/e2e.rs` drives the full round-trip over a real socket.
 
 ## Docker
@@ -482,20 +482,20 @@ run` time:
 ```bash
 docker build -t nestrs .
 
-# Run the default app (the `app` baseline) on port 3001
-docker run --rm -p 3001:3001 nestrs
+# Run the default app (the `app` baseline) on port 3000
+docker run --rm -p 3000:3000 nestrs
 
-# Run the auth app on port 3002
-docker run --rm -p 3002:3002 nestrs /usr/local/bin/auth
+# Run the auth app on port 3001
+docker run --rm -p 3001:3001 nestrs /usr/local/bin/auth
 
-# Run the api app on port 3003
-docker run --rm -p 3003:3003 nestrs /usr/local/bin/api
+# Run the api app on port 3002
+docker run --rm -p 3002:3002 nestrs /usr/local/bin/api
 
-# Run the mcp app on port 3004
-docker run --rm -p 3004:3004 nestrs /usr/local/bin/mcp
+# Run the mcp app on port 3003
+docker run --rm -p 3003:3003 nestrs /usr/local/bin/mcp
 
-# Run the chat app on port 3005
-docker run --rm -p 3005:3005 nestrs /usr/local/bin/chat
+# Run the chat app on port 3004
+docker run --rm -p 3004:3004 nestrs /usr/local/bin/chat
 
 # Apply migrations (and optionally seed) with the same image
 docker run --rm nestrs /usr/local/bin/migrate up

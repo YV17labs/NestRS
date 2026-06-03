@@ -54,7 +54,9 @@ FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 
 LABEL org.opencontainers.image.title="NestRS"
 LABEL org.opencontainers.image.description="Applications built on the NestRS framework"
-LABEL org.opencontainers.image.source="https://github.com/yvanitou/nestrs"
+LABEL org.opencontainers.image.url="https://nestrs.dev"
+LABEL org.opencontainers.image.documentation="https://nestrs.dev"
+LABEL org.opencontainers.image.source="https://github.com/NestRS/NestRS"
 LABEL org.opencontainers.image.licenses="MIT"
 
 COPY --from=builder --chown=nonroot:nonroot /out/ /usr/local/bin/

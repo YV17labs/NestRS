@@ -357,15 +357,24 @@ pub(crate) fn validate_from_inventory(
     validate_access_graph(&descriptors, roots, global)
 }
 
+/// Collect the names of every linked resolver living in no reachable module,
+/// against the link-time registry. The boot path uses this for both the
+/// default `warn` ([`warn_unreachable_resolvers_from_inventory`]) and the
+/// opt-in strict-mode boot error
+/// ([`AppBuilder::strict_resolver_membership`](crate::AppBuilder::strict_resolver_membership)).
+pub(crate) fn unreachable_resolvers_from_inventory(roots: &[TypeId]) -> Vec<&'static str> {
+    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+    let resolvers: Vec<&ResolverDescriptor> = inventory::iter::<ResolverDescriptor>().collect();
+    unreachable_resolvers(&descriptors, roots, &resolvers)
+}
+
 /// Log a `warn` for every linked resolver living in no reachable module — they
 /// will be silently filtered from the schema by module-gating, and the warn
 /// surfaces what was filtered (a leftover `#[resolver]` in a feature folder no
 /// app imports is almost certainly a mistake). Called by [`App`](crate::App)
 /// at boot, after [`validate_from_inventory`].
 pub(crate) fn warn_unreachable_resolvers_from_inventory(roots: &[TypeId]) {
-    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-    let resolvers: Vec<&ResolverDescriptor> = inventory::iter::<ResolverDescriptor>().collect();
-    for name in unreachable_resolvers(&descriptors, roots, &resolvers) {
+    for name in unreachable_resolvers_from_inventory(roots) {
         tracing::warn!(
             target: "nestrs::access",
             resolver = name,
@@ -375,6 +384,20 @@ pub(crate) fn warn_unreachable_resolvers_from_inventory(roots: &[TypeId]) {
         );
     }
 }
+
+/// Opt-in strict-mode boot failure raised by
+/// [`AppBuilder::strict_resolver_membership`](crate::AppBuilder::strict_resolver_membership)
+/// when any linked resolver lives in no reachable module. The default boot
+/// emits a `warn` instead — see
+/// [`warn_unreachable_resolvers_from_inventory`].
+#[derive(Debug, Error)]
+#[error(
+    "strict resolver-membership check failed: {0:?} linked into the binary but in no \
+     reachable module. Add each to a reachable feature module's \
+     `#[module(providers = [...])]`, or drop `strict_resolver_membership` if the link is \
+     intentional (e.g. a workspace ships multiple apps with different surfaces)."
+)]
+pub struct UnreachableResolversError(pub Vec<&'static str>);
 
 #[cfg(test)]
 mod tests {

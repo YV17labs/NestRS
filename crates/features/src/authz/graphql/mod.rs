@@ -12,9 +12,11 @@
 //!    `BatchContext`) — re-installs the request's ambient state around each
 //!    DataLoader batch so loaders' `Repo` reads stay scoped.
 //!
-//! Plus the `forward_principal!(Claims)` seed (registered by
-//! [`AuthzGraphqlModule`]) that forwards the authenticated principal from
-//! the poem request into the GraphQL context.
+//! Plus the `forward_principal!(Claims, GraphqlAuthGuard)` seed (registered
+//! by [`AuthzGraphqlModule`]) that forwards the authenticated principal from
+//! the poem request into the GraphQL context — gated on `GraphqlAuthGuard`
+//! reachability so a second GraphQL app with a different principal type does
+//! not have both forwarders fire.
 
 mod bridge;
 mod guard;

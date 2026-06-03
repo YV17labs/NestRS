@@ -14,9 +14,14 @@ use nestrs_graphql::ContextSeed;
 use crate::Ability;
 
 // Forward the request-scoped `Arc<Ability>` (placed on the request by the auth
-// guard chain) into every GraphQL operation's context.
+// guard chain) into every GraphQL operation's context. `owner_type_id: None`
+// because the ambient ability is framework-level — any app linking the GraphQL
+// authz bridge wants it forwarded regardless of which provider owns the
+// principal. App-specific principal types use `forward_principal!`, which is
+// module-gated by the app's auth guard.
 nestrs_graphql::inventory::submit! {
     ContextSeed {
+        owner_type_id: || None,
         seed: |req, _container, gql| match req.extensions().get::<Arc<Ability>>() {
             Some(ability) => gql.data(ability.clone()),
             None => gql,

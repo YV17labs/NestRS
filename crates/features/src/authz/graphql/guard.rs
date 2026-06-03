@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nestrs_authz::Ability;
 use nestrs_core::injectable;
-use nestrs_graphql::async_graphql::{Context, Error, Result};
+use nestrs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 use nestrs_graphql::ResolverGuard;
 
 /// The GraphQL counterpart of HTTP's `#[use_guards(AuthGuard, AppAbilityGuard)]`.
@@ -31,11 +31,13 @@ impl ResolverGuard for GraphqlAuthGuard {
     async fn check(&self, ctx: &Context<'_>) -> Result<()> {
         match ctx.data_opt::<Arc<Ability>>() {
             Some(_) => Ok(()),
-            None => Err(Error::new(
-                "unauthenticated: no ability in context — \
-                 the `AuthzGraphqlModule` operation guard did not run, \
-                 or the caller failed authentication",
-            )),
+            // Match the `extensions.code` convention `authorize()`/`bind()`
+            // use (they emit `FORBIDDEN`). A missing ability means the request
+            // never authenticated, so the standard `UNAUTHENTICATED` code is
+            // the right one — and the leaking wiring-bug detail stays out of
+            // the client-visible message.
+            None => Err(Error::new("unauthenticated")
+                .extend_with(|_, e| e.set("code", "UNAUTHENTICATED"))),
         }
     }
 }

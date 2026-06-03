@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use poem::web::websocket::{Message, WebSocket};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
-use crate::context::{Captured, SocketContext};
+use crate::context::{BoxFuture, Captured, SocketContext};
 use crate::envelope::WsEnvelope;
 use crate::guard::MessageGuardTable;
 use crate::server::{Registry, WsClient, WsServer};
@@ -178,10 +178,14 @@ async fn serve_connection<G: Gateway, N: 'static>(
 /// short-circuits to an error frame under the request's event name; the handler
 /// never runs.
 ///
-/// When a [`SocketContext`] bridge is present, the dispatch is wrapped in its
-/// [`around`](SocketContext::around) with the connection's captured state, so the
-/// handler runs with the request executor and the caller's ability installed —
-/// the data layer reaching the socket exactly as it reaches a controller.
+/// Per-message guards run **inside** a present [`SocketContext`]'s
+/// [`around`](SocketContext::around), so they see the same ambient task-locals
+/// the handler will (the request executor, the caller's ability). That is what
+/// lets a marker like `WsAuthGuard` reject a mis-wired gateway that dropped its
+/// connection-level auth guard — without the captured ability installed,
+/// `nestrs_authz::current_ability()` is `None` and the marker fails closed. The
+/// no-context path runs guards then the handler bare, so the existing message-
+/// level guards keep working.
 async fn handle_text<G: Gateway>(
     gateway: &G,
     guards: &MessageGuardTable,
@@ -193,17 +197,20 @@ async fn handle_text<G: Gateway>(
         Ok(envelope) => envelope,
         Err(err) => return Some(error_frame("error", &format!("invalid envelope: {err}"))),
     };
-    let event = envelope.event;
-    if let Err(reason) = guards.check(client, &event, &envelope.data).await {
-        return Some(error_frame(&event, &reason));
-    }
-    // `dispatch` (via `#[async_trait]`) already returns a boxed `Send` future —
-    // exactly the `BoxFuture` an `around` takes — so the bridge wraps it with no
-    // extra boxing, and the no-context path runs it directly.
-    let dispatch = gateway.dispatch(client, &event, envelope.data);
+    let WsEnvelope { event, data } = envelope;
+    // Bundle guard check + dispatch into one `BoxFuture` so `around` wraps both —
+    // a guard that reads `current_ability()` / `current_executor()` therefore
+    // sees the captured state, exactly like the handler does.
+    let event_ref = event.clone();
+    let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
+        if let Err(reason) = guards.check(client, &event_ref, &data).await {
+            return WsReply::Error(reason);
+        }
+        gateway.dispatch(client, &event_ref, data).await
+    });
     let reply = match ambient {
-        Some((ctx, captured)) => ctx.around(captured, dispatch).await,
-        None => dispatch.await,
+        Some((ctx, captured)) => ctx.around(captured, inner).await,
+        None => inner.await,
     };
     match reply {
         WsReply::Reply(data) => serde_json::to_string(&WsEnvelope { event, data }).ok(),

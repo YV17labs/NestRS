@@ -14,13 +14,14 @@
 //! parameter (which `#[query]` / `#[mutation]` forward natively) and
 //! `ctx.data_opt::<T>()` — no `#[resolver]` macro support is required.
 
+use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use async_graphql::{BatchRequest, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
-use nestrs_core::Container;
+use nestrs_core::{Container, ReachableProviders};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
 /// One per-request forwarder, submitted via `inventory`. `seed` reads from the
@@ -29,9 +30,17 @@ use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 /// returning the augmented request. `pub` so a downstream crate
 /// (`nestrs_authz::graphql`) can submit one.
 ///
+/// `owner_type_id` returns the `TypeId` of a provider whose module gates this
+/// seed: when it returns `Some(id)`, [`ContextEndpoint`] only fires the seed if
+/// the id is in `ReachableProviders`; when it returns `None`, the seed is
+/// framework-level (e.g. forwarding the ambient `Ability`) and always fires.
+/// Module-gating matches `#[resolver]` and `#[dataloader]` so two GraphQL apps
+/// in one workspace can forward *different* principal types without colliding.
+///
 /// ```ignore
 /// nestrs_graphql::inventory::submit! {
 ///     nestrs_graphql::ContextSeed {
+///         owner_type_id: || Some(std::any::TypeId::of::<MyGraphqlAuthGuard>()),
 ///         seed: |req, _container, gql| match req.extensions().get::<Arc<Ability>>() {
 ///             Some(ability) => gql.data(ability.clone()),
 ///             None => gql,
@@ -40,6 +49,7 @@ use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 /// }
 /// ```
 pub struct ContextSeed {
+    pub owner_type_id: fn() -> Option<TypeId>,
     pub seed: fn(&Request, &Container, GqlRequest) -> GqlRequest,
 }
 
@@ -101,7 +111,19 @@ impl<E> ContextEndpoint<E> {
     }
 
     fn seed(&self, req: &Request, gql: GqlRequest) -> GqlRequest {
-        inventory::iter::<ContextSeed>().fold(gql, |gql, reg| (reg.seed)(req, &self.container, gql))
+        // Module-gate the inventory the same way the resolver registry and the
+        // loader extension do. Framework-level seeds (`owner_type_id() == None`,
+        // e.g. the ambient-`Ability` forwarder) always fire. Owner-keyed seeds
+        // (`Some(id)`) fire only when the owner is in `ReachableProviders`.
+        // The production boot always seeds the gate; a missing gate (a hand-
+        // rolled container in a test) skips owner-keyed seeds — fail-closed.
+        let reachable = self.container.get::<ReachableProviders>();
+        inventory::iter::<ContextSeed>()
+            .filter(|reg| match (reg.owner_type_id)() {
+                None => true,
+                Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
+            })
+            .fold(gql, |gql, reg| (reg.seed)(req, &self.container, gql))
     }
 }
 
@@ -144,8 +166,15 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 /// app writes one line instead of a hand-rolled `inventory::submit!` closure:
 ///
 /// ```ignore
-/// nestrs_graphql::forward_principal!(MyPrincipal);
+/// nestrs_graphql::forward_principal!(MyPrincipal, MyGraphqlAuthGuard);
 /// ```
+///
+/// The second arg is the **owner provider** whose module gates the forward — pick
+/// a provider declared by the module that produces the principal on the request
+/// (typically the GraphQL auth guard). The seed only fires when that provider is
+/// reachable, so a workspace shipping two GraphQL apps with different principal
+/// types can keep both [`forward_principal!`] calls in the source tree without
+/// one app silently seeing the other's principal.
 ///
 /// `T` must be `Clone + Send + Sync + 'static`. A request that carries no such value
 /// (anonymous) passes through untouched — the resolver's own `authorize` gate then
@@ -154,9 +183,10 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 /// crate root by `#[macro_export]`, so apps call `nestrs_graphql::forward_principal!`.
 #[macro_export]
 macro_rules! forward_principal {
-    ($ty:ty) => {
+    ($ty:ty, $owner:ty) => {
         $crate::inventory::submit! {
             $crate::ContextSeed {
+                owner_type_id: || ::core::option::Option::Some(::core::any::TypeId::of::<$owner>()),
                 seed: |__req, _container, __gql| match __req.extensions().get::<$ty>() {
                     ::core::option::Option::Some(__v) => __gql.data(::core::clone::Clone::clone(__v)),
                     ::core::option::Option::None => __gql,

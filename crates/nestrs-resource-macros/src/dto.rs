@@ -1,7 +1,6 @@
-//! Emit the GraphQL output object for the entity — the `name` given to
-//! `#[expose]` — plus its `From<&Model>`. A `skip` field is absent; a `Uuid`
-//! renders as `String`. The type derives `SimpleObject` (GraphQL) and
-//! `JsonSchema` (OpenAPI), so one declaration on the entity feeds both surfaces.
+//! Emit the GraphQL output object plus its `From<&Model>`. A `skip` field is
+//! absent; a `Uuid` renders as `String`. Derives `SimpleObject` + `JsonSchema`
+//! so one declaration feeds GraphQL and OpenAPI.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -57,10 +56,8 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
     }
 }
 
-/// The `<Name>Page` pagination envelope, emitted only for `#[expose(paginate)]`.
-/// A `SimpleObject` + `JsonSchema` (so it serves GraphQL and OpenAPI like the
-/// output type), with a `new(items, total, &PageArgs)` that derives the
-/// page-count and has-more flags — the math lives here, not at each call site.
+/// `<Name>Page` for `#[expose(paginate)]`. `new(items, total, &PageArgs)`
+/// derives the page-count and has-more flags so the math lives in one place.
 fn emit_page(model: &ResourceModel) -> TokenStream2 {
     if !model.paginate {
         return quote! {};
@@ -76,19 +73,13 @@ fn emit_page(model: &ResourceModel) -> TokenStream2 {
             ::schemars::JsonSchema,
         )]
         pub struct #page {
-            /// The rows on this page.
             pub items: ::std::vec::Vec<#output>,
-            /// Total rows across all pages.
             pub total: u64,
-            /// 1-based page number this envelope represents.
             pub page: u64,
-            /// The page size that produced it.
             pub per_page: u64,
             /// `ceil(total / per_page)`.
             pub total_pages: u64,
-            /// Whether a page after this one exists.
             pub has_next_page: bool,
-            /// Whether a page before this one exists.
             pub has_previous_page: bool,
         }
 

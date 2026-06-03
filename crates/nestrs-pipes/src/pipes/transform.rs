@@ -1,6 +1,5 @@
 use crate::pipe::{Pipe, PipeError};
 
-/// Trim surrounding whitespace from a `String`.
 pub struct Trim;
 
 impl Pipe for Trim {
@@ -11,7 +10,6 @@ impl Pipe for Trim {
     }
 }
 
-/// Lower-case a `String` (e.g. normalise an email before lookup).
 pub struct Lowercase;
 
 impl Pipe for Lowercase {
@@ -22,7 +20,6 @@ impl Pipe for Lowercase {
     }
 }
 
-/// Upper-case a `String`.
 pub struct Uppercase;
 
 impl Pipe for Uppercase {

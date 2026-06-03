@@ -1,8 +1,3 @@
-//! OAuth core — the token issuer + strategies (`client_credentials`, the
-//! OAuth2 redirect flow) + the DTOs / errors / scope mapping. Importing
-//! [`OAuthCoreModule`] gives access to [`TokenIssuer`] without exposing any
-//! HTTP route.
-
 mod config;
 mod dto;
 mod error;

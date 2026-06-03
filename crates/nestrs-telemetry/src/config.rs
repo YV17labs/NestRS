@@ -2,59 +2,34 @@ use nestrs_config::env_var;
 
 /// Configuration for [`crate::Telemetry::init`].
 ///
-/// # Environment variables
-///
-/// Follows the framework-wide `NESTRS_<DOMAIN>__<KEY>` scheme documented in
-/// `nestrs_config` — double underscore separates the domain, the leaf key keeps
-/// snake_case. The domain is this crate's name: everything here lives under
-/// `telemetry`. The `http` domain is owned by the `OtelHttp` interceptor directly.
-///
-/// | Setting              | Variable                              | Values / default                  |
-/// |----------------------|---------------------------------------|-----------------------------------|
-/// | log filter           | `NESTRS_TELEMETRY__LOG_LEVEL`         | `EnvFilter` syntax, default `info`|
-/// | log format           | `NESTRS_TELEMETRY__LOG_FORMAT`        | `text` (default) \| `json`        |
-/// | service name         | `NESTRS_TELEMETRY__SERVICE_NAME`      | string                            |
-/// | service version      | `NESTRS_TELEMETRY__SERVICE_VERSION`   | string                            |
-/// | environment          | `NESTRS_TELEMETRY__SERVICE_ENVIRONMENT`| string (`prod`, `staging`, …)    |
-/// | instance id          | `NESTRS_TELEMETRY__SERVICE_INSTANCE_ID`| string (default: fresh UUID v7)  |
-/// | OTLP endpoint        | `NESTRS_TELEMETRY__OTLP_ENDPOINT`     | base URL, e.g. `http://otel:4318` |
-/// | sampler ratio        | `NESTRS_TELEMETRY__SAMPLE_RATIO`      | `[0.0, 1.0]`, default `1.0`       |
-///
-/// The OTel exporter is wired only when [`Self::otlp_endpoint`] is `Some`;
-/// otherwise telemetry stays console-only.
+/// Env vars under the `telemetry` domain
+/// (`NESTRS_TELEMETRY__{LOG_LEVEL,LOG_FORMAT,SERVICE_NAME,SERVICE_VERSION,
+/// SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO}`).
+/// OTel exporter is wired only when `otlp_endpoint` is set; otherwise
+/// telemetry stays console-only.
 #[derive(Clone, Debug)]
 pub struct TelemetryConfig {
-    /// `service.name` resource attribute.
     pub service_name: String,
-    /// `service.version` resource attribute.
     pub service_version: Option<String>,
-    /// `deployment.environment` resource attribute. Free-form (`prod`,
-    /// `staging`, `dev`).
     pub deployment_environment: Option<String>,
-    /// `service.instance.id`. Defaults to a fresh UUID v7 per process — so
-    /// restarts produce distinct identities in the backend.
+    /// Defaults to a fresh UUID v7 per process so restarts get distinct
+    /// identities in the backend.
     pub service_instance_id: Option<String>,
-    /// `EnvFilter`-syntax filter applied to the console layer **and** the
-    /// OTel log appender — same gate for both.
+    /// `EnvFilter` syntax; applied to console layer and OTel log appender.
     pub log_filter: String,
-    /// Console layer encoding. JSON for machine ingestion, text for humans.
     pub log_format: LogFormat,
-    /// OTLP base endpoint (e.g. `http://localhost:4318`). The exporter
-    /// appends `/v1/traces`, `/v1/metrics`, `/v1/logs` per signal.
+    /// Base endpoint (e.g. `http://localhost:4318`); exporter appends
+    /// `/v1/traces`, `/v1/metrics`, `/v1/logs`.
     pub otlp_endpoint: Option<String>,
-    /// Head-based sample ratio in `[0.0, 1.0]`. `1.0` keeps every trace;
-    /// pick `0.05` or `0.1` in prod. Wrapped in `ParentBased` so child
-    /// spans inherit the parent's sampling decision.
+    /// `[0.0, 1.0]`; wrapped in `ParentBased` so children inherit the
+    /// parent's sampling decision.
     pub trace_sample_ratio: f64,
 }
 
-/// Console log encoding.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LogFormat {
-    /// Human-readable single-line format (tracing-subscriber default).
     #[default]
     Text,
-    /// One JSON object per event. Suitable for `jq` and log shippers.
     Json,
 }
 
@@ -82,9 +57,7 @@ impl TelemetryConfig {
         }
     }
 
-    /// Read every `NESTRS_*` var listed in the type-level docs. The
-    /// `service_name` argument is the default — it is overridden if
-    /// `NESTRS_TELEMETRY__SERVICE_NAME` is set.
+    /// `service_name` is the default; `NESTRS_TELEMETRY__SERVICE_NAME` overrides.
     pub fn from_env(service_name: impl Into<String>) -> Self {
         let mut cfg = Self::new(service_name);
 

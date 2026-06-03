@@ -1,31 +1,21 @@
-//! SeaORM database integration for nestrs — the `@nestjs/typeorm` analog.
+//! SeaORM database integration — the `@nestjs/typeorm` analog.
 //!
-//! [`DatabaseModule`] owns the connection. A database pool is built
-//! asynchronously, which a synchronous [`Module`](nestrs_core::Module) cannot do,
-//! so it is a [`DynamicModule`](nestrs_core::DynamicModule) that owns its
-//! connection in the **collect phase**: declared in `#[module(imports = [...])]`
-//! like any other module, it queues a factory that
-//! [`AppBuilder::build`](nestrs_core::AppBuilder::build) `await`s before providers
-//! are built. The pool is registered as a `sea_orm::DatabaseConnection`:
+//! [`DatabaseModule`] is a [`DynamicModule`](nestrs_core::DynamicModule) that
+//! builds the pool in the collect phase and registers it as a
+//! `sea_orm::DatabaseConnection`. Importing it also installs the [`DbContext`]
+//! request interceptor, which binds each request to an ambient [`Executor`] —
+//! the pool for a safe method, a transaction for a mutating one. Services then
+//! query through [`Repo`] instead of holding a connection: every call runs on
+//! the ambient executor (transactions need no hand-threading) and every read
+//! is filtered by the caller's [`Ability`](nestrs_authz::Ability) (row-level
+//! security cannot be forgotten).
 //!
 //! ```ignore
-//! #[module(imports = [
-//!     DatabaseModule,   // env-driven: loads DatabaseConfig from NESTRS_DATABASE__*
-//!     UsersModule,
-//! ])]
+//! #[module(imports = [DatabaseModule, UsersModule])]
 //! pub struct AppModule;
 //! ```
 //!
-//! Pin explicit values in code with
-//! [`DatabaseModule::for_root`]`(DatabaseConfig { .. })`.
-//!
-//! Beyond the connection, the crate makes data access **transparent**. Importing
-//! the module installs the [`DbContext`] request interceptor, which binds each
-//! request to an ambient [`Executor`] — the pool for a safe method, a transaction
-//! for a mutating one. A service then queries through [`Repo`] instead of holding
-//! a connection: every call runs against that ambient executor (so transactions
-//! need no hand-threading) and every read is filtered by the caller's
-//! [`Ability`](nestrs_authz::Ability) (so row-level security cannot be forgotten).
+//! Pin explicit values with [`DatabaseModule::for_root`]`(DatabaseConfig { .. })`.
 
 mod config;
 mod executor;

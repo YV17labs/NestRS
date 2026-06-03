@@ -11,44 +11,29 @@ use crate::guard::MessageGuardTable;
 use crate::server::{Registry, WsClient, WsServer};
 use crate::WsReply;
 
-/// The per-connection message dispatcher a gateway implements, plus its optional
-/// connection lifecycle hooks. `#[messages]` emits this impl: `dispatch` matches
-/// the incoming event name against the `#[subscribe_message]` handlers,
-/// deserializes the payload, calls the handler (passing the [`WsClient`] to any
-/// handler that asks for `&WsClient`), and wraps its return in a [`WsReply`].
-/// You never write it by hand.
+/// Per-connection message dispatcher a gateway implements. `#[messages]`
+/// emits the impl: `dispatch` matches the event name, deserializes the
+/// payload, calls the handler (passing `&WsClient` if it asks for one), and
+/// wraps the return in [`WsReply`]. Never written by hand.
 ///
-/// [`on_connect`](Self::on_connect) and [`on_disconnect`](Self::on_disconnect)
-/// are the `OnGatewayConnection` / `OnGatewayDisconnect` analogs: default no-ops
-/// the macro overrides only when the impl block carries an `#[on_connect]` /
-/// `#[on_disconnect]` method. The gateway is a singleton shared across every
-/// connection, so a hook takes `&self` and is handed the connecting socket's
-/// [`WsClient`].
+/// `on_connect` / `on_disconnect` are the `OnGatewayConnection` /
+/// `OnGatewayDisconnect` analogs. The gateway is a singleton; hooks take
+/// `&self` and the connecting socket's [`WsClient`].
 #[async_trait]
 pub trait Gateway: Send + Sync + 'static {
     async fn dispatch(&self, client: &WsClient, event: &str, data: serde_json::Value) -> WsReply;
 
-    /// Runs once per connection, right after it registers and before the first
-    /// message — the place to join a default room or note presence.
     async fn on_connect(&self, client: &WsClient) {
         let _ = client;
     }
 
-    /// Runs once when the connection loop ends (close frame, transport error, or
-    /// a dead writer), while the connection is still registered — so a hook can
-    /// still reach the leaving client's rooms before they are dropped.
+    /// Runs while the connection is still registered, so a hook can reach the
+    /// leaving client's rooms before they are dropped.
     async fn on_disconnect(&self, client: &WsClient) {
         let _ = client;
     }
 }
 
-/// Build the poem endpoint that upgrades an HTTP request to a WebSocket and runs
-/// the gateway's connection loop. Called by the `#[messages]`-generated mount
-/// closure with the gateway built once from the container (shared across every
-/// connection, like a NestJS gateway singleton), the shared [`WsServer`] registry
-/// resolved alongside it, the per-event [`MessageGuardTable`] the macro resolved
-/// from the container, and the optional [`SocketContext`] bridge (`None` when no
-/// app bound one — the gateway then dispatches with no ambient data context).
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
@@ -63,18 +48,13 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
     }
 }
 
-/// The endpoint returned by [`gateway_endpoint`]. Extracts poem's [`WebSocket`]
-/// from the request (so a non-upgrade request fails the handshake) and, on
-/// upgrade, drives [`serve_connection`]. Generic over the gateway's namespace
-/// `N` so it holds (and registers connections into) that gateway's own
-/// [`WsServer<N>`]; the namespace never escapes onto the handler surface.
+/// The endpoint returned by [`gateway_endpoint`]. Generic over the gateway's
+/// namespace `N` so it holds the gateway's own [`WsServer<N>`]; `N` never
+/// escapes onto the handler surface.
 pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     guards: Arc<MessageGuardTable>,
-    /// The per-connection ambient-data bridge, resolved once from the container
-    /// at mount. `None` when no app bound one — the connection loop then
-    /// dispatches without installing any ambient executor/ability.
     ctx: Option<Arc<dyn SocketContext>>,
 }
 
@@ -84,11 +64,10 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
     async fn call(&self, req: Request) -> poem::Result<Response> {
         let (req, mut body) = req.split();
         let ws = WebSocket::from_request(&req, &mut body).await?;
-        // Capture the per-connection ambient state *here*, on the post-guard
-        // upgrade request — the connection-level guards have already attached the
-        // principal/ability to its extensions, and the request does not survive
-        // into the connection task that the upgrade spawns. The bridge and its
-        // captured state always travel together, so they ride as one `Option`.
+        // Capture per-connection ambient state on the post-guard upgrade
+        // request — connection-level guards have already attached the
+        // principal/ability, and the request does not survive into the
+        // connection task `on_upgrade` spawns.
         let ambient = self
             .ctx
             .as_ref()
@@ -102,13 +81,10 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
     }
 }
 
-/// Drive one connection. The socket is split so server→client pushes (broadcast,
-/// room emits, a handler's own replies) all funnel through one outbox channel
-/// drained by a dedicated writer task — decoupling the read/dispatch loop from
-/// the single `Sink` and letting [`WsServer`] reach a client it is not currently
-/// reading from. The connection registers itself for the duration and is
-/// reclaimed when the read loop ends (close frame, transport error, or a dead
-/// writer).
+/// Drive one connection. The socket is split so server→client pushes all
+/// funnel through one outbox drained by a writer task — decoupling the
+/// read/dispatch loop from the single `Sink` and letting [`WsServer`] reach a
+/// client it is not currently reading from.
 async fn serve_connection<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
@@ -119,8 +95,6 @@ async fn serve_connection<G: Gateway, N: 'static>(
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-    // The writer owns the sink and forwards every queued text frame until the
-    // channel closes (connection ending) or the socket errors.
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
             if sink.send(Message::Text(frame)).await.is_err() {
@@ -130,13 +104,10 @@ async fn serve_connection<G: Gateway, N: 'static>(
     });
 
     let conn_id = server.connect(outbox.clone());
-    // Hand the client the registry type-erased, so the namespace `N` never
-    // surfaces on the handler-facing `WsClient`.
+    // Type-erase the registry so `N` never surfaces on `WsClient`.
     let registry: Arc<dyn Registry> = server.clone();
     let client = WsClient::new(conn_id, registry);
 
-    // The connection is live and registered: fire the `on_connect` hook before
-    // the first message so it can join a room or note presence.
     gateway.on_connect(&client).await;
 
     while let Some(message) = stream.next().await {
@@ -145,16 +116,14 @@ async fn serve_connection<G: Gateway, N: 'static>(
                 if let Some(reply) =
                     handle_text(&*gateway, &guards, ambient.as_ref(), &client, &text).await
                 {
-                    // A handler's direct reply rides the same outbox as a push,
-                    // so ordering relative to broadcasts the handler triggered is
-                    // preserved. A closed channel means the writer is gone.
+                    // Replies ride the same outbox as pushes so ordering with
+                    // broadcasts the handler triggered is preserved.
                     if outbox.send(reply).is_err() {
                         break;
                     }
                 }
             }
             Ok(Message::Close(_)) => break,
-            // Binary/Ping/Pong are not part of the JSON envelope protocol yet.
             Ok(_) => {}
             Err(err) => {
                 tracing::debug!(target: "nestrs::ws", error = %err, "websocket read error");
@@ -163,29 +132,18 @@ async fn serve_connection<G: Gateway, N: 'static>(
         }
     }
 
-    // Fire `on_disconnect` while the connection is still registered, then drop it.
+    // Fire `on_disconnect` while still registered, then drop.
     gateway.on_disconnect(&client).await;
     server.disconnect(conn_id);
-    // Drop our outbox so the writer's channel closes and the task ends, then
-    // await it so the sink is flushed/closed before we return.
     drop(outbox);
     let _ = writer.await;
 }
 
-/// Parse one text frame as an envelope, run its event's per-message guards, and
-/// — if they pass — dispatch it (handing the handler its [`WsClient`]), rendering
-/// the reply frame (or `None` for a `()`-returning handler). A guard rejection
-/// short-circuits to an error frame under the request's event name; the handler
-/// never runs.
-///
-/// Per-message guards run **inside** a present [`SocketContext`]'s
-/// [`around`](SocketContext::around), so they see the same ambient task-locals
-/// the handler will (the request executor, the caller's ability). That is what
-/// lets a marker like `WsAuthGuard` reject a mis-wired gateway that dropped its
-/// connection-level auth guard — without the captured ability installed,
-/// `nestrs_authz::current_ability()` is `None` and the marker fails closed. The
-/// no-context path runs guards then the handler bare, so the existing message-
-/// level guards keep working.
+/// Per-message guards run **inside** a present [`SocketContext::around`], so
+/// they see the same ambient task-locals the handler does — without that, a
+/// marker like `WsAuthGuard` reading `current_ability()` would see `None` and
+/// fail closed on a mis-wired gateway. The no-context path runs guards then
+/// the handler bare.
 async fn handle_text<G: Gateway>(
     gateway: &G,
     guards: &MessageGuardTable,
@@ -198,9 +156,8 @@ async fn handle_text<G: Gateway>(
         Err(err) => return Some(error_frame("error", &format!("invalid envelope: {err}"))),
     };
     let WsEnvelope { event, data } = envelope;
-    // Bundle guard check + dispatch into one `BoxFuture` so `around` wraps both —
-    // a guard that reads `current_ability()` / `current_executor()` therefore
-    // sees the captured state, exactly like the handler does.
+    // Bundle guard + dispatch so `around` wraps both — a guard reading
+    // `current_ability()` / `current_executor()` sees the captured state.
     let event_ref = event.clone();
     let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
         if let Err(reason) = guards.check(client, &event_ref, &data).await {
@@ -219,7 +176,6 @@ async fn handle_text<G: Gateway>(
     }
 }
 
-/// Render an error reply frame: the request's event name with `data: { error }`.
 fn error_frame(event: &str, message: &str) -> String {
     WsEnvelope::encode(event, &serde_json::json!({ "error": message }))
         .unwrap_or_else(|_| String::from(r#"{"event":"error","data":{"error":"internal"}}"#))

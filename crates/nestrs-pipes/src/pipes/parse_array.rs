@@ -4,8 +4,8 @@ use std::str::FromStr;
 use crate::pipe::{Pipe, PipeError};
 
 /// Split a comma-separated `String` into `Vec<T>`, parsing each item with
-/// `T: FromStr` (surrounding whitespace trimmed). NestJS's `ParseArrayPipe`
-/// with the default comma separator; an empty input yields an empty `Vec`.
+/// `T: FromStr` (surrounding whitespace trimmed). Empty input yields an empty
+/// `Vec`.
 pub struct ParseArray<T>(PhantomData<fn() -> T>);
 
 impl<T: FromStr> Pipe for ParseArray<T> {

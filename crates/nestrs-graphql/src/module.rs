@@ -10,22 +10,14 @@ use poem::Route;
 use crate::config::GraphqlConfig;
 use crate::resolver::build_schema;
 
-/// Add to a `#[module(imports = [...])]` to expose GraphQL over HTTP:
-/// `POST <path>` (queries + mutations) and, when enabled, `GET <path>` (the
-/// playground).
+/// Mounts `POST <path>` (queries + mutations) and, when enabled, `GET <path>`
+/// (the playground). The schema composes itself from the resolver registry;
+/// dataloaders are seeded per request by an extension built from the
+/// assembled container, so this module's import order is irrelevant.
 ///
-/// Every `#[resolver]` in the binary self-registers via the link-time registry,
-/// so the schema composes itself — there is nothing else to wire, no central
-/// resolver list, no `main.rs` mount. Every `#[dataloader]` is seeded per
-/// request by a schema extension built from the fully assembled container (see
-/// `crate::loader`), so this module can be imported in any order relative to the
-/// data modules whose services it loads.
-///
-/// Wire it with `GraphqlModule::for_root()` (env-driven). `GraphqlConfig` loads
-/// through [`ConfigModule::for_feature`] in the factory phase; the production-safe
-/// [`GraphqlConfig::default`] keeps the playground + boot-time SDL emit **off**, and
-/// a dev run opts them in via `.env.development` (`NESTRS_GRAPHQL__PLAYGROUND=true`,
-/// `…__EMIT_SDL=true`):
+/// [`GraphqlConfig::default`] keeps the playground + boot-time SDL emit
+/// **off** for production safety; a dev run opts them in via
+/// `NESTRS_GRAPHQL__PLAYGROUND=true` / `…__EMIT_SDL=true`.
 ///
 /// ```ignore
 /// #[module(imports = [GraphqlModule::for_root()])]
@@ -33,9 +25,8 @@ use crate::resolver::build_schema;
 pub struct GraphqlModule;
 
 impl GraphqlModule {
-    /// Configure the endpoint. Pass `None` to load [`GraphqlConfig`] from
-    /// `NESTRS_GRAPHQL__*` (the `.env` cascade), or a `GraphqlConfig` to pin it in
-    /// code (wins over the environment).
+    /// Pass `None` to load [`GraphqlConfig`] from `NESTRS_GRAPHQL__*`, or a
+    /// `GraphqlConfig` to pin it (wins over the environment).
     pub fn for_root(config: impl Into<Option<GraphqlConfig>>) -> GraphqlSetup {
         GraphqlSetup {
             pinned: config.into(),
@@ -43,9 +34,6 @@ impl GraphqlModule {
     }
 }
 
-/// The configured form of [`GraphqlModule`]. Resolves `GraphqlConfig` in the
-/// **collect** phase (env, or the pinned value), then mounts the endpoint in
-/// **register** (which runs after the factory phase, so the config is available).
 pub struct GraphqlSetup {
     pinned: Option<GraphqlConfig>,
 }
@@ -64,22 +52,20 @@ impl DynamicModule for GraphqlSetup {
     }
 }
 
-/// Shared registration for both the default and configured paths.
 fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuilder {
     let log_path = options.path.clone();
-    // Mark that the resolver schema is composed in this app, so the boot runs the
-    // resolver-membership check (it is irrelevant for apps that link resolvers
-    // transitively but compose no schema).
+    // Marks the schema as composed in this app so the boot runs the
+    // resolver-membership check (skipped when resolvers link but no schema
+    // mounts).
     let builder = builder.provide(nestrs_core::ResolverSchemaActive);
     builder.provide_meta(HttpEndpointMeta::new(
         log_path,
         "graphql",
         move |container, route: Route| {
             let schema = build_schema(container.clone());
-            // This closure runs once at boot and is the only place GraphqlModule
-            // holds the assembled container, so the SDL emit lives here rather
-            // than in a (per-provider) lifecycle hook. Rendered from the serving
-            // schema above to avoid building it twice.
+            // SDL emit lives here — this is the only place we hold the
+            // assembled container; rendered from the serving schema to avoid
+            // building it twice.
             if options.emit_sdl {
                 let dest = &options.schema_path;
                 match std::fs::write(dest, crate::resolver::render_sdl(&schema)) {
@@ -96,8 +82,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 }
             }
             // Our endpoint instead of `async_graphql_poem::GraphQL` so each
-            // registered `ContextSeed` forwards per-request poem state into the
-            // GraphQL context (e.g. the actor's authz `Ability`).
+            // `ContextSeed` forwards per-request poem state into the context.
             let mut method = poem::post(crate::context::ContextEndpoint::new(
                 schema,
                 container.clone(),

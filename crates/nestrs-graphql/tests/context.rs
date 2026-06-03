@@ -1,6 +1,5 @@
-//! The per-request context bridge: a value an HTTP guard attaches to the request
-//! reaches a GraphQL resolver, driven end-to-end through the in-process harness.
-//! This is the seam GraphQL authorization is built on (the actor's `Ability`).
+//! Per-request context bridge: a value an HTTP guard attaches to the request
+//! reaches a GraphQL resolver — end-to-end through the harness.
 
 use nestrs_core::module;
 use nestrs_graphql::async_graphql::Context;
@@ -9,12 +8,9 @@ use nestrs_http::{async_trait, Guard, HttpTransport};
 use nestrs_testing::TestApp;
 use poem::{Request, Response};
 
-/// A per-request value an HTTP guard attaches; the bridge forwards it into the
-/// GraphQL context for the resolver to read.
 #[derive(Clone)]
 struct RequestTag(String);
 
-/// A global guard (runs before routing) attaches the value to the poem request.
 struct TagGuard;
 
 #[async_trait]
@@ -28,9 +24,6 @@ impl Guard for TagGuard {
 #[resolver]
 struct TagResolver;
 
-// Forward `RequestTag` from the poem request into the GraphQL context. Gated on
-// `TagResolver` so it fires whenever the resolver is reachable from the running
-// app — the same mechanism that gates `forward_principal!`.
 nestrs_graphql::inventory::submit! {
     ContextSeed {
         owner_type_id: || Some(std::any::TypeId::of::<TagResolver>()),
@@ -43,8 +36,6 @@ nestrs_graphql::inventory::submit! {
 
 #[resolver]
 impl TagResolver {
-    /// Reads the bridged per-request value from the context (`ctx: &Context` is
-    /// forwarded natively by `#[query]`, no macro support needed).
     #[query]
     async fn tag(&self, ctx: &Context<'_>) -> String {
         ctx.data_opt::<RequestTag>()

@@ -1,29 +1,8 @@
-//! Validation and transformation pipes for nestrs — the NestJS *pipes* concept,
-//! transport-agnostic.
-//!
-//! A [`Pipe`] is a pure transform run at a surface's request boundary, between
-//! extraction and the handler: it either reshapes a value (`String` → `i64`) or
-//! validates it, rejecting bad input with a [`PipeError`]. Pipes know nothing
-//! about HTTP — a *surface* binds them to a parameter (the HTTP transport does
-//! it with the `Valid<E>` / `Piped<P, E>` poem extractors in `nestrs-http`).
-//!
-//! Each pipe lives in its own module. The base set mirrors NestJS:
-//!
-//! | NestJS                         | here |
-//! |--------------------------------|------|
-//! | `ParseIntPipe`/`Float`/`Bool`  | [`Parse<T>`] + aliases [`ParseInt`]/[`ParseFloat`]/[`ParseBool`] |
-//! | `ParseEnumPipe`                | [`Parse<T>`] for any `T: FromStr` enum |
-//! | `ParseUUIDPipe` (`{ version }`)| [`ParseUuid`] / [`ParseUuidVersion`] + aliases |
-//! | `ParseArrayPipe`               | [`ParseArray<T>`] |
-//! | `ValidationPipe`               | [`ValidationPipe<T>`] |
-//! | (transformation)               | [`Trim`] / [`Lowercase`] / [`Uppercase`] |
-//!
-//! Deliberately omitted, with the Rust-idiomatic replacement: `DefaultValuePipe`
-//! — use `Option<T>` plus `unwrap_or`/`#[serde(default)]`, since a stateless
-//! pipe can't carry a runtime default; `ParseFilePipe` — a multipart concern
-//! that belongs to HTTP file handling, not a transport-agnostic pipe;
-//! `ParseDatePipe` — would pull in a date crate, added behind a feature once a
-//! date type is chosen.
+//! Transport-agnostic validation and transformation pipes — the NestJS *pipes*
+//! analog. A [`Pipe`] is a pure transform run at a surface's request boundary,
+//! between extraction and the handler; the surface binds it to a parameter
+//! (HTTP does so via the `Valid<E>` / `Piped<P, E>` extractors in
+//! `nestrs-http`).
 
 mod pipe;
 mod pipes;

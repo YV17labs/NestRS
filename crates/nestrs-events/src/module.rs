@@ -1,5 +1,3 @@
-//! [`EventModule`] — registers the [`EventBus`] and wires discovered handlers.
-
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -10,18 +8,12 @@ use nestrs_core::{
 
 use crate::{EventBus, EventHandlerMeta};
 
-/// Import it (`#[module(imports = [EventModule, ...])]`) to enable the event bus.
-///
-/// Registers the [`EventBus`] as a provider — inject `Arc<EventBus>` to
-/// [`emit`](EventBus::emit) — and, at application bootstrap, wires every
-/// discovered `#[on_event]` into it. Wiring runs against the fully-assembled
-/// container, so a handler may inject any provider regardless of module import
-/// order, mirroring how the `Scheduler` transport reads its jobs.
+/// Registers the [`EventBus`] and wires every discovered `#[on_event]` at
+/// application bootstrap against the fully-assembled container.
 pub struct EventModule;
 
 impl Module for EventModule {
     fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        // Idempotent like a macro-generated module: a diamond import registers once.
         if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
             return builder;
         }
@@ -29,9 +21,7 @@ impl Module for EventModule {
     }
 }
 
-// Wire handlers at bootstrap, when the container is complete. Submitted to the
-// same link-time registry `#[hooks]` uses; `App::run` / `App::init` drains it. A
-// no-op if `EventModule` was not imported (the bus is then absent).
+// No-op when EventModule was not imported (the bus is then absent).
 nestrs_core::inventory::submit! {
     LifecycleHook {
         phase: LifecyclePhase::OnApplicationBootstrap,
@@ -46,7 +36,7 @@ fn wire_handlers(
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
         let Some(bus) = container.get::<EventBus>() else {
-            return Ok(()); // EventModule not imported — nothing to wire.
+            return Ok(());
         };
         let discovery = DiscoveryService::new(container);
         for handler in discovery.meta::<EventHandlerMeta>() {

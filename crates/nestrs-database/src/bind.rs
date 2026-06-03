@@ -1,27 +1,10 @@
-//! [`Bind<S, A>`] — route-model binding for HTTP routes: turn a path id into the
-//! loaded, authorized entity, so a handler's parameter is a domain object, not a
-//! scalar. Enabled by the `http` Cargo feature.
+//! [`Bind<S, A>`] — route-model binding for HTTP routes: turn a path id into
+//! the loaded, authorized entity. Outcomes: bad UUID → 400, absent → 404,
+//! denied → 403 (existence intentionally not hidden), else the loaded model.
 //!
-//! It folds the three steps a by-id handler used to write by hand into one typed
-//! parameter — parse the id, load the row, check the caller may act on it — and
-//! short-circuits the request before the handler body runs:
-//!
-//! - the path id is not a UUID v7 → `400`;
-//! - no row with that id → `404`;
-//! - the row exists but the caller's `Ability` denies action `A` on it → `403`
-//!   (the existence is intentionally not hidden, matching the gate's semantics);
-//! - otherwise the handler receives the loaded `EntityTrait::Model`.
-//!
-//! The load runs **through the entity's service** ([`CrudService::access`]), not
-//! the ORM directly — the service is the single audited gateway, so a by-id
-//! binding emits the same `nestrs::orm` access span (a denial logs at `warn`) as
-//! every other data access. `Bind` is generic over the *service* `S`: a handler
-//! writes `user: Bind<UsersService, Read>` and the extractor resolves `Arc<S>`
-//! from the request scope. The ability is read from the request extensions,
-//! where `nestrs_authz::http::AbilityGuard` placed it, and installed as the
-//! ambient ability for the `access` call (its `Repo` load runs in the request
-//! transaction via the ambient executor); its absence is a `500` (the guard did
-//! not run — a wiring bug).
+//! Loads through the entity's service ([`CrudService::access`]), never the ORM
+//! directly, so a by-id binding emits the same `nestrs::orm` access span as
+//! every other data access.
 
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -37,10 +20,9 @@ use uuid::Uuid;
 
 use crate::{Access, CrudService};
 
-/// The loaded, authorized entity bound from a path id, through the entity's
-/// service `S`. Declare it as a handler parameter —
-/// `user: Bind<UsersService, Read>` — and read the model via [`Deref`] or own it
-/// with [`into_inner`](Bind::into_inner).
+/// The loaded, authorized entity bound from a path id, through service `S`.
+/// Declare as a handler parameter (`user: Bind<UsersService, Read>`); read the
+/// model via [`Deref`] or own it with [`into_inner`](Bind::into_inner).
 pub struct Bind<S: CrudService, A>(<S::Entity as EntityTrait>::Model, PhantomData<fn() -> A>);
 
 impl<S: CrudService, A> Bind<S, A> {
@@ -91,8 +73,6 @@ where
             )
         })?;
 
-        // Load + authorize through the service's audited gateway, with the caller's
-        // ability installed as ambient for its instance check (and `Repo` scoping).
         let access = with_ability(ability.clone(), service.access(A::ACTION, id))
             .await
             .map_err(|err| {

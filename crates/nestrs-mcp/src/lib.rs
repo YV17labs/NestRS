@@ -1,7 +1,4 @@
 //! MCP transport — `#[mcp]` mounts tools on the existing HTTP transport.
-//!
-//! Integration tests: exercised via `apps/mcp` e2e; crate-local guard seam in
-//! `tests/guard.rs`.
 
 mod endpoint;
 mod guard;
@@ -19,6 +16,4 @@ pub use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService,
 };
 
-/// The `#[mcp]` decorator, defined in `nestrs-mcp-macros` and surfaced here so
-/// apps write `nestrs_mcp::mcp`.
 pub use nestrs_mcp_macros::mcp;

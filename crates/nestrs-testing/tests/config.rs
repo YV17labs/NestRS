@@ -1,7 +1,5 @@
-//! The namespaced-config flow end to end: a `#[config]` struct loaded by
-//! `ConfigModule::for_feature`, injected into a service as `Arc<C>`, booted
-//! through the real DI graph. Also proves the testability promise — a seeded
-//! config wins over the environment-reading factory.
+//! Namespaced-config flow end-to-end: load via `ConfigModule::for_feature`,
+//! inject as `Arc<C>`, and verify a seed wins over the env-reading factory.
 
 use std::sync::Arc;
 
@@ -19,7 +17,6 @@ struct DemoConfig {
 }
 
 impl Config for DemoConfig {
-    // The explicit NESTRS_DEMOAPP__* → field mapping the module owns.
     fn from_env(env: &ConfigService) -> nestrs_config::Result<Self> {
         Ok(Self {
             url: env.get("URL").unwrap_or_default(),
@@ -49,16 +46,12 @@ impl DemoService {
 )]
 struct DemoModule;
 
-// One test with two phases rather than two parallel tests: the env vars are
-// process-global, so a single sequential test keeps the two boots from racing
-// on `NESTRS_DEMOAPP__*`.
+// One sequential test (two boots) so concurrent env mutation doesn't race.
 #[tokio::test]
 async fn for_feature_loads_injects_and_a_seed_overrides_the_environment() {
     std::env::set_var("NESTRS_DEMOAPP__URL", "postgres://from-env/app");
     std::env::set_var("NESTRS_DEMOAPP__MAX_CONNECTIONS", "7");
 
-    // Phase 1: the factory loads `DemoConfig` from the namespace prefix, and the
-    // service injects it as `Arc<DemoConfig>` — the `ConfigType` + `.KEY` collapse.
     let app = TestApp::builder()
         .module::<DemoModule>()
         .build_headless()
@@ -70,14 +63,11 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_environment() {
         .expect("DemoService is registered");
     assert_eq!(svc.url(), "postgres://from-env/app");
     assert_eq!(svc.max_connections(), 7);
-    // The loaded config is global infrastructure — injectable / resolvable anywhere.
     assert!(
         app.container().get::<DemoConfig>().is_some(),
         "the loaded config is a factory output, present in the container"
     );
 
-    // Phase 2: a seeded config wins over the env-reading factory (seed-wins), so a
-    // test pins configuration without touching the environment.
     let app = TestApp::builder()
         .module::<DemoModule>()
         .provide(DemoConfig {

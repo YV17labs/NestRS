@@ -1,6 +1,5 @@
-//! End-to-end proof: boot a real module's DI graph in-process and drive its
-//! HTTP surface, including a provider override — the wiring path that used to be
-//! reachable only by `curl`-ing a running binary.
+//! Boot a module's DI graph in-process and drive HTTP, including a `dyn`
+//! provider override.
 
 use std::sync::Arc;
 
@@ -8,8 +7,6 @@ use nestrs_core::{injectable, module};
 use nestrs_http::{controller, routes};
 use nestrs_testing::TestApp;
 
-/// The feature's public surface, exposed as a trait (the encapsulation pattern):
-/// the controller injects `Arc<dyn Greeter>`, never a concrete type.
 trait Greeter: Send + Sync {
     fn greet(&self) -> String;
 }

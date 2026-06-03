@@ -1,6 +1,4 @@
-//! End-to-end: a producer injects the bus and emits; a discovered
-//! `#[on_event]` (itself injecting a service) runs — wired at bootstrap from
-//! the fully-assembled container.
+//! End-to-end: producer emits via the bus; the discovered `#[on_event]` runs.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -8,13 +6,11 @@ use std::sync::Arc;
 use nestrs_core::{injectable, module, App};
 use nestrs_events::{async_trait, on_event, EventBus, EventHandler, EventModule};
 
-/// The event — any `Clone + Send + 'static` type.
 #[derive(Clone)]
 struct PointsAwarded {
     amount: usize,
 }
 
-/// A shared singleton the handler injects, so the test can observe dispatch.
 #[injectable]
 #[derive(Default)]
 struct Ledger {
@@ -35,7 +31,6 @@ impl EventHandler for OnPointsAwarded {
     }
 }
 
-/// A producer: injects the bus and emits.
 #[injectable]
 struct Awarder {
     #[inject]
@@ -54,7 +49,6 @@ struct EventsTestModule;
 #[tokio::test]
 async fn a_producer_emits_and_the_discovered_handler_runs() {
     let app = App::new::<EventsTestModule>().expect("boots");
-    // Bootstrap wires the discovered handler into the bus from the final container.
     app.init().await.expect("bootstrap wiring succeeds");
 
     let awarder = app
@@ -80,5 +74,5 @@ async fn emitting_an_event_with_no_handler_is_a_noop() {
         .container()
         .get::<EventBus>()
         .expect("EventBus is provided");
-    bus.emit(Unobserved).await; // no handler registered — must not panic
+    bus.emit(Unobserved).await;
 }

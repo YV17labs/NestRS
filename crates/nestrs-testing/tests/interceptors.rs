@@ -1,10 +1,5 @@
-//! Per-handler (`#[use_interceptors(...)]`) and per-controller
-//! (`#[use_interceptors(...)]` on the struct) interceptor binding, plus the
-//! guard-before-interceptor ordering, driven end-to-end through the in-process
-//! HTTP harness. A bindable interceptor is a plain `#[injectable] + impl
-//! Interceptor` (the global `#[interceptor]` auto-discovery is exercised
-//! elsewhere); it is resolved from the container at mount time exactly like a
-//! `#[use_guards]` guard.
+//! Per-handler / per-controller interceptor binding + guard-before-interceptor
+//! ordering, end-to-end through the HTTP harness.
 
 use nestrs_core::{injectable, module};
 use nestrs_http::{async_trait, controller, routes, Guard, Interceptor, Next};
@@ -12,8 +7,6 @@ use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response, Result};
 
-/// Stamps `x-trace: hit` onto the response, so a test can assert the interceptor
-/// ran by inspecting the header (and assert it did *not* run by its absence).
 #[injectable]
 #[derive(Default)]
 struct Tracer;
@@ -28,7 +21,6 @@ impl Interceptor for Tracer {
     }
 }
 
-/// Always denies with a 403, so an interceptor bound *inside* it must never run.
 #[injectable]
 #[derive(Default)]
 struct DenyGuard;
@@ -42,7 +34,6 @@ impl Guard for DenyGuard {
     }
 }
 
-// Per-handler binding: only `traced` carries the interceptor.
 #[controller(path = "/a")]
 struct PerHandlerController;
 
@@ -59,8 +50,6 @@ impl PerHandlerController {
         "ok"
     }
 
-    // The interceptor sits inside the guard, so a denied guard short-circuits
-    // before the interceptor runs — the response must not be stamped.
     #[get("/denied")]
     #[use_guards(DenyGuard)]
     #[use_interceptors(Tracer)]
@@ -69,7 +58,6 @@ impl PerHandlerController {
     }
 }
 
-// Per-controller binding: every route under it is stamped.
 #[controller(path = "/b")]
 #[use_interceptors(Tracer)]
 struct PerControllerController;
@@ -126,6 +114,5 @@ async fn guard_short_circuits_before_the_interceptor() {
 
     let resp = app.http().get("/a/denied").send().await;
     resp.assert_status(StatusCode::FORBIDDEN);
-    // The interceptor is inside the guard, so a denied guard means it never ran.
     resp.assert_header_is_not_exist("x-trace");
 }

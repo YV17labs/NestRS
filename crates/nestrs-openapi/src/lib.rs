@@ -1,21 +1,9 @@
-//! OpenAPI 3.1 + Swagger UI for nestrs — the REST analog of
-//! [`nestrs_graphql::GraphqlModule`].
+//! OpenAPI 3.1 + Swagger UI for nestrs.
 //!
-//! Import [`OpenApiModule`] in a `#[module(imports = [...])]` and the HTTP
-//! transport serves (at the NestJS-convention paths — the spec mandates none):
-//! - `GET /api-json` — the OpenAPI document, composed from the controllers
-//!   linked into the binary (no central route list).
-//! - `GET /api` — a bundled, offline Swagger UI rendering that document.
-//!
-//! The document is built from the same `HttpControllerMeta`s the transport
-//! mounts (read via [`nestrs_core::DiscoveryService`]), so any route added to a
-//! `#[controller]` appears in the docs with no extra wiring. The request/response
-//! schemas come from the `Json<T>` payload types the `#[routes]` macro records;
-//! `T` must implement [`schemars::JsonSchema`] (typically via `#[derive]`), the
-//! same trait MCP tool parameters use.
-//!
-//! Swagger UI is vendored (`assets/`, from `swagger-ui-dist` 5.32.6) and embedded
-//! in the binary — no CDN, works offline.
+//! Import [`OpenApiModule`] and the HTTP transport serves `GET /api-json` (the
+//! document, composed from every `#[controller]` linked into the binary) and
+//! `GET /api` (bundled, offline Swagger UI). Request/response schemas come from
+//! the `Json<T>` payload types via [`schemars::JsonSchema`].
 
 mod config;
 mod document;

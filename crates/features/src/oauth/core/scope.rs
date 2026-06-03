@@ -1,6 +1,5 @@
 use crate::Role;
 
-/// Map a stored role string to the JWT [`Role`] enum.
 pub fn role_from_db(role: &str) -> Role {
     match role {
         "admin" => Role::Admin,
@@ -8,9 +7,8 @@ pub fn role_from_db(role: &str) -> Role {
     }
 }
 
-/// Resolve a requested OAuth `scope` to the roles it grants, constrained to the
-/// client's `allowed` scopes. Empty or absent grants the client's full set; an
-/// unknown scope yields `None` (rejected upstream as `invalid_scope`).
+/// Empty/absent `requested` grants the client's full `allowed` set; an unknown
+/// scope yields `None` (rejected upstream as `invalid_scope`).
 pub fn roles_for_scope(requested: Option<&str>, allowed: &[String]) -> Option<Vec<Role>> {
     let granted: Vec<&str> = match requested {
         Some(raw) if !raw.trim().is_empty() => {

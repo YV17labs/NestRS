@@ -3,10 +3,9 @@ use std::str::FromStr;
 
 use crate::pipe::{Pipe, PipeError};
 
-/// Parse a `String` into any `T: FromStr` — the general parse pipe. One generic
-/// covers NestJS's `ParseIntPipe` / `ParseFloatPipe` / `ParseBoolPipe` (the
-/// aliases below) and `ParseEnumPipe` (any enum implementing `FromStr`, e.g.
-/// derived with `strum::EnumString`). Rejects unparseable input with a `400`.
+/// Parse a `String` into any `T: FromStr`. Covers NestJS's
+/// `ParseIntPipe`/`ParseFloatPipe`/`ParseBoolPipe` (aliases below) and
+/// `ParseEnumPipe` (any enum implementing `FromStr`).
 pub struct Parse<T>(PhantomData<fn() -> T>);
 
 impl<T: FromStr> Pipe for Parse<T> {
@@ -19,15 +18,10 @@ impl<T: FromStr> Pipe for Parse<T> {
     }
 }
 
-/// `String` → `i64`. NestJS's `ParseIntPipe`.
 pub type ParseInt = Parse<i64>;
-/// `String` → `f64`. NestJS's `ParseFloatPipe`.
 pub type ParseFloat = Parse<f64>;
-/// `String` → `bool`. NestJS's `ParseBoolPipe`.
 pub type ParseBool = Parse<bool>;
 
-/// Last path segment of a type name (`app::Color` → `Color`, `i64` → `i64`),
-/// for a readable rejection message.
 fn short_type_name<T>() -> &'static str {
     let name = std::any::type_name::<T>();
     name.rsplit("::").next().unwrap_or(name)

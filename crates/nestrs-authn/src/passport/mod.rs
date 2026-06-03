@@ -1,12 +1,7 @@
-//! [`Strategy`], [`AuthGuard`], and ready-made generic strategies.
-//!
-//! Unlike `jwt/` and `oauth/`, this folder has **no `module.rs`**: every type
-//! here is generic over a caller-chosen parameter (`AuthGuard<S>`,
-//! `JwtStrategy<C>`) that only the application knows at composition time.
-//! Apps register the concrete instances they need directly in their own
-//! `<Feature>Module`. Strategies that are *not* generic — an app's custom
-//! OAuth flow, for example — live next to that app's `service.rs` /
-//! `strategy.rs`, not here.
+//! [`Strategy`], [`AuthGuard`], and ready-made generic strategies. No
+//! `module.rs`: every type here is generic over a caller-chosen parameter only
+//! the app knows at composition time. App-specific strategies (a custom OAuth
+//! flow) live next to that app's `service.rs`, not here.
 
 mod credentials;
 mod guard;

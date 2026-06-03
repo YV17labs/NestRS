@@ -1,14 +1,5 @@
-//! A `#[resolver]` self-composes into the GraphQL schema through the link-time
-//! registry. Module-gating filters that registry at schema-build time by the
-//! reachable provider set: a resolver listed in `providers = [...]` of a
-//! reachable module appears in the schema; a resolver in no reachable module
-//! is silently skipped (a `tracing::warn` surfaces it at boot so leftover
-//! code does not disappear without trace).
-//!
-//! The two cases below share one `LooseResolver` and differ by whether the
-//! root module imports the resolver-owning module. When imported, the
-//! resolver's `loose` query lands in the schema; when not, it is filtered
-//! out and the app boots cleanly.
+//! Module-gating: a resolver in a reachable module appears in the schema; a
+//! resolver in no reachable module is silently skipped.
 
 use nestrs_core::module;
 use nestrs_graphql::{resolver, GraphqlModule};
@@ -26,18 +17,14 @@ impl LooseResolver {
     }
 }
 
-// Lists `LooseResolver` as a provider — importing this module makes the
-// resolver reachable, so its `loose` query lands in the schema.
 #[module(providers = [LooseResolver])]
 struct LooseFeatureModule;
 
-// Root that imports `LooseFeatureModule` — the resolver is reachable.
 #[module(imports = [GraphqlModule::for_root(None), LooseFeatureModule])]
 struct AppWithLoose;
 
-// Root that does NOT import `LooseFeatureModule` — the resolver is linked
-// (any test in this binary that uses `#[resolver] struct LooseResolver`
-// shares the same inventory) but unreachable, so module-gating must skip it.
+// The resolver is linked (the inventory is shared with the other test in
+// this binary) but unreachable here — module-gating must skip it.
 #[module(imports = [GraphqlModule::for_root(None)])]
 struct AppWithoutLoose;
 
@@ -71,8 +58,6 @@ async fn a_reachable_resolver_appears_in_the_schema() {
 
 #[tokio::test]
 async fn an_unreachable_resolver_is_filtered_from_the_schema() {
-    // Boot succeeds even though `LooseResolver` is linked: module-gating
-    // skips it from the schema rather than failing the boot.
     let app = TestApp::builder()
         .module::<AppWithoutLoose>()
         .http(HttpTransport::new())
@@ -80,8 +65,6 @@ async fn an_unreachable_resolver_is_filtered_from_the_schema() {
         .await
         .expect("an app composes only the resolvers in its reachable modules");
 
-    // The schema does not advertise the unreachable resolver — an
-    // introspection of the root Query returns no `loose` field.
     let resp = app
         .http()
         .post("/graphql")

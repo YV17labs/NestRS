@@ -1,18 +1,8 @@
-//! `#[crud]` — generate a controller's standard REST operations.
-//!
-//! Placed on a `#[controller]`-marked struct's impl block, it synthesises the
-//! operations the developer did not hand-write — `list` + `get` (always), plus
-//! `create`/`update`/`delete` unless `readonly` — and re-emits the block under
-//! `#[routes]`, so the generated routes flow through the same guard, shaper, and
-//! OpenAPI-capture machinery as hand-written ones.
-//!
-//! Every handler **delegates to the entity's [`CrudService`]** (the `service =`
-//! field), never `Repo`/the ORM directly: `list`/`page` for the collection,
-//! `access` for the by-id route-model binding (load + 403/404 authorization),
-//! `create`/`update`/`delete` for the writes. The route still carries
-//! `Authorize<Action, E>` — the class gate that also installs the ambient ability
-//! the service reads. Override by writing the method: a present
-//! `list`/`get`/`create`/`update`/`delete` is kept and not regenerated.
+//! `#[crud]` — generate standard REST operations on a `#[controller]` impl
+//! block (`list` + `get` always; `create`/`update`/`delete` unless `readonly`)
+//! and re-emit under `#[routes]`. Handlers delegate to the entity's
+//! [`CrudService`] (`access` for by-id route-model binding); a hand-written
+//! method overrides its generated counterpart.
 
 use std::collections::HashSet;
 
@@ -23,7 +13,6 @@ use syn::{parse_macro_input, parse_quote, ImplItem, ItemImpl};
 
 use nestrs_codegen::{impl_self_ident, parse_crud_args, Paginate};
 
-/// The `#[crud]` proc-macro entry: parse the impl block and delegate to [`crud`].
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
     match crud(args.into(), item) {
@@ -37,7 +26,6 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     let self_ty = item.self_ty.clone();
     let base = impl_self_ident(&self_ty, "#[crud]")?;
 
-    // Methods the developer hand-wrote — kept as overrides, never regenerated.
     let existing: HashSet<String> = item
         .items
         .iter()
@@ -56,13 +44,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         .map(|s| s.ident.to_string())
         .unwrap_or_else(|| "Resource".to_owned());
 
-    // A per-controller `DbErr` → 500 mapper (uniquely named to avoid collisions
-    // between two controllers in one module).
+    // Per-controller name avoids collisions between two controllers in one module.
     let internal = format_ident!("__nestrs_crud_internal_{}", base);
 
-    // Reject a non-UUID-v7 path id with 400 before loading (a bad format never
-    // reaches the database) — the validation half of route-model binding, the
-    // load half being the service's `access`.
+    // Reject non-UUID-v7 ids before loading — validation half of route-model binding.
     let id_v7_check: TokenStream2 = quote! {
         if __id.0.get_version_num() != 7 {
             return ::core::result::Result::Err(::poem::Error::from_string(
@@ -92,9 +77,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     ))
                 }
             },
-            // Keyset pagination: `?first=&after=` → a JSON array of at most
-            // `first` rows, the next cursor in the `x-next-cursor` header so the
-            // body stays a plain (maskable) array.
+            // Keyset pagination: next cursor in `x-next-cursor` so the body
+            // stays a plain (maskable) array.
             Some(Paginate::Cursor) => parse_quote! {
                 #[get("/")]
                 #[api(summary = #summary, tags(#tag))]

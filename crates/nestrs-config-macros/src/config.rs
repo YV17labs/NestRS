@@ -1,7 +1,3 @@
-//! `#[config]` implementation: parse the `namespace`, then emit the struct
-//! unchanged plus an `impl Namespaced` carrying the namespace constant. The crate
-//! writes the `impl Config { fn from_env }` mapping itself.
-
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -30,9 +26,6 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Parse the single required `namespace = "..."` argument and validate that it is
-/// a lowercase env-domain segment, so a bad value is a compile error rather than
-/// a silent mismatch with the `NESTRS_<DOMAIN>__<KEY>` scheme.
 fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
     let metas = Punctuated::<MetaNameValue, Token![,]>::parse_terminated.parse2(args)?;
 
@@ -78,10 +71,7 @@ fn as_str_lit(value: &Expr) -> syn::Result<LitStr> {
     }
 }
 
-/// A namespace is one env-domain segment: lowercase, starting with a letter, then
-/// lowercase letters / digits / underscores. It is upper-cased into the
-/// `NESTRS_<DOMAIN>__` prefix, so anything else (uppercase, leading digit, dots)
-/// would not round-trip cleanly.
+/// Lowercase env-domain segment so it round-trips into `NESTRS_<DOMAIN>__`.
 fn validate_namespace(lit: &LitStr) -> syn::Result<()> {
     let value = lit.value();
     let valid = !value.is_empty()

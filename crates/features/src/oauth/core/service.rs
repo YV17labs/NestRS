@@ -12,9 +12,6 @@ use super::scope::{role_from_db, roles_for_scope};
 use crate::users::UsersService;
 use crate::{Claims, Role};
 
-/// The principal an OAuth Authorization Code login resolves to — the same shape
-/// `Strategy::authenticate` returns, attached to the request so a downstream
-/// handler can read it back.
 #[derive(Debug, Clone)]
 pub struct Caller {
     pub user_id: Uuid,
@@ -22,18 +19,15 @@ pub struct Caller {
     pub roles: Vec<Role>,
 }
 
-/// A machine principal authenticated through a `client_credentials` grant —
-/// the same shape `Strategy::authenticate` returns for the client-credentials
-/// strategy, attached to the request for the controller to read back.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedClient {
     pub org_id: Uuid,
     pub scopes: Vec<String>,
 }
 
-/// Subset of an OAuth provider's `userinfo` we consume. `id` is the only field
-/// providers always return; the rest is best-effort and falls back to derived
-/// values so a missing email or display name does not block account creation.
+/// `id` is the only field providers always return; the rest falls back to
+/// derived values so a missing email or display name does not block account
+/// creation.
 #[derive(Debug, Clone, Deserialize)]
 struct OAuthProfile {
     id: i64,
@@ -74,7 +68,6 @@ pub struct TokenIssuer {
     users: Arc<UsersService>,
 }
 
-/// The OAuth2 token response — the signed bearer token and its lifetime.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct AccessToken {
     pub access_token: String,
@@ -83,12 +76,11 @@ pub struct AccessToken {
 }
 
 impl TokenIssuer {
-    /// Construct with already-resolved dependencies (container or tests).
     pub fn new(jwt: Arc<JwtService>, users: Arc<UsersService>) -> Self {
         Self { jwt, users }
     }
 
-    /// Sign an access token. `sub` is set for human principals; machine grants
+    /// `sub` is set for human principals; machine grants
     /// (`client_credentials`) omit it.
     pub fn issue(
         &self,
@@ -116,7 +108,6 @@ impl TokenIssuer {
         })
     }
 
-    /// Authenticate with email + password and issue a bearer token.
     pub async fn grant_password(
         &self,
         email: &str,
@@ -131,8 +122,6 @@ impl TokenIssuer {
         self.issue(Some(user.id), user.org_id, roles)
     }
 
-    /// The `client_credentials` grant: validate the grant type, resolve the
-    /// requested scope to roles within the client's grant, then issue a token.
     pub fn grant_client_credentials(
         &self,
         grant_type: &str,
@@ -147,13 +136,6 @@ impl TokenIssuer {
     }
 }
 
-/// Grant-resolution for OAuth flows — the business core the [`Strategy`]
-/// adapters delegate to. Each method takes already-parsed inputs (the HTTP
-/// glue lives in `strategy.rs`) and returns a typed principal or an
-/// [`AuthError`], keeping the strategies thin and the policy testable
-/// without booting Poem.
-///
-/// [`Strategy`]: nestrs_authn::Strategy
 #[injectable]
 pub struct OAuthFlow {
     #[inject]
@@ -167,7 +149,6 @@ pub struct OAuthFlow {
 }
 
 impl OAuthFlow {
-    /// Construct with already-resolved dependencies (container or tests).
     pub fn new(
         jwt: Arc<JwtService>,
         oauth: Arc<OAuth2Client>,
@@ -182,15 +163,10 @@ impl OAuthFlow {
         }
     }
 
-    /// Begin the Authorization Code flow: return the provider redirect URL and
-    /// the opaque transaction value the caller will round-trip via cookie.
     pub fn authorize(&self) -> Result<Authorization, AuthError> {
         self.oauth.authorize(&self.jwt)
     }
 
-    /// Complete the Authorization Code flow: exchange the code for an access
-    /// token, fetch the user profile, find-or-create the local account, and
-    /// return the resolved [`Caller`].
     pub async fn resolve_caller(
         &self,
         transaction: &str,
@@ -218,9 +194,7 @@ impl OAuthFlow {
         })
     }
 
-    /// Validate a `client_credentials` Basic-auth pair against the configured
-    /// registry, in constant time. Returns the matching client's grant scopes
-    /// + org binding when valid.
+    /// Constant-time comparison against the configured client registry.
     pub fn authenticate_client(
         &self,
         client_id: &str,

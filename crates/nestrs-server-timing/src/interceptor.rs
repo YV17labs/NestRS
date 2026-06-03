@@ -26,10 +26,9 @@ impl Interceptor for ServerTiming {
         let total = start.elapsed();
 
         if let Some(value) = format_header(&timings.drain(), total) {
-            // `append` (not `insert`): the spec explicitly allows multiple
-            // `Server-Timing` headers in one response and requires the UA to
-            // process all of them. Insert would clobber a header set by the
-            // handler or a downstream interceptor.
+            // `append` (not `insert`): the spec allows multiple `Server-Timing`
+            // headers and a downstream interceptor or the handler may already
+            // have set one.
             res.headers_mut().append(SERVER_TIMING, value);
         }
         Ok(res)

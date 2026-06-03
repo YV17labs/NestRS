@@ -1,28 +1,15 @@
-//! [`LoaderScope`] — re-installs the request's ambient data context inside a
-//! `#[dataloader]` batch, so a loader's `Repo` reads scope to the caller
-//! exactly like a resolver. It implements `nestrs-graphql`'s [`BatchContext`]
-//! seam, the loader-side counterpart to `nestrs_authz::graphql`'s per-operation
-//! bridge.
+//! [`LoaderScope`] — re-installs the ambient data context inside a
+//! `#[dataloader]` batch. async-graphql runs every batch on a spawned task
+//! (the whole point of a DataLoader), which starts with empty task-local
+//! storage — the ambient ability and executor would be gone, and a loader
+//! would read unscoped. `LoaderScope::spawner` runs while the per-request
+//! loader is built (the ability is still live), snapshots it, and re-installs
+//! both around each batch future.
 //!
-//! async-graphql runs every batch on a *spawned* task (concurrent `load_one`s
-//! collapse into one query — the point of a DataLoader), and a spawned task
-//! starts with empty task-local storage. So the ambient `Ability` the
-//! operation bridge installs, and the ambient `Executor` the `DbContext`
-//! interceptor installs, are both gone by the time a batch loads — a loader's
-//! `Repo` would read unscoped. `LoaderScope` closes that: its
-//! [`spawner`](BatchContext::spawner) runs while each per-request loader is
-//! built (inside the operation's ambient scope, so the ability is live),
-//! snapshots that state, and returns a spawner that re-establishes it around
-//! every batch future.
-//!
-//! It binds the connection **pool**, never the request's transaction: a batch
-//! runs concurrently off the request task, and reclaiming the transaction
-//! `Arc` to commit would race the auto-commit's `Arc::try_unwrap`. Loader
-//! reads do not need the request's transaction — this mirrors the WebSocket
-//! data context, which binds the pool for the same reason.
-//!
-//! Bind it by listing `LoaderScope as dyn BatchContext` in the app's GraphQL
-//! authorization module, beside the operation bridge.
+//! Binds the **pool**, never the request transaction: a batch runs off the
+//! request task, and reclaiming the txn `Arc` to commit would race the
+//! auto-commit's `Arc::try_unwrap`. Mirrors the WS data context for the same
+//! reason.
 
 use std::sync::Arc;
 
@@ -33,9 +20,8 @@ use sea_orm::DatabaseConnection;
 
 use crate::{with_request_executor, Executor};
 
-/// Scopes every `#[dataloader]` batch to the caller, re-installing the ambient
-/// ability and a pool executor on the batch's spawned task. Inject it by
-/// listing `LoaderScope as dyn BatchContext`.
+/// Scopes every `#[dataloader]` batch to the caller. List
+/// `LoaderScope as dyn BatchContext` on the GraphQL authz module.
 #[injectable]
 pub struct LoaderScope {
     #[inject]

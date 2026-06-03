@@ -1,7 +1,3 @@
-//! `#[expose]` implementation: parse the entity, then emit the GraphQL output
-//! object, the `Create`/`Update` inputs, and the `ActiveModel` conversions, and
-//! re-emit the entity untouched.
-
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, ItemStruct};

@@ -1,21 +1,18 @@
-//! The verbs an ability authorizes, plus the compile-time markers that let a
-//! route name one as a type parameter of [`crate::Authorize`].
+//! Action verbs + compile-time markers for routes that name one as a type
+//! parameter (`Authorize<Read, _>`).
 
-/// The verbs an ability can grant or deny. [`Action::Manage`] is the wildcard
-/// that matches every other action (CASL's `manage`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
     Read,
     Create,
     Update,
     Delete,
-    /// Matches every action — the CASL `manage` wildcard.
+    /// CASL `manage` — matches every action.
     Manage,
 }
 
-/// A zero-sized marker for an [`Action`], so a route can declare the action it
-/// requires as a type argument (`Authorize<Read, _>`) on stable Rust — enum
-/// const generics still need nightly `adt_const_params`.
+/// Lets a route name an [`Action`] as a type argument on stable Rust (enum
+/// const generics still need nightly `adt_const_params`).
 pub trait ActionMarker: Send + Sync + 'static {
     const ACTION: Action;
 }

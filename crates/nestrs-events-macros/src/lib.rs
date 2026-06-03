@@ -1,7 +1,4 @@
-//! The `#[on_event]` decorator, re-exported by `nestrs-events`. The generated
-//! code uses absolute paths (`::nestrs_events::*`, `::nestrs_core::*`, `::std::*`),
-//! so this crate does not depend on them — they resolve at the call site.
-//! Token-building helpers are shared with the other decorators via `nestrs-codegen`.
+//! The `#[on_event]` decorator, re-exported by `nestrs-events`.
 
 use proc_macro::TokenStream;
 
@@ -9,13 +6,8 @@ mod on_event;
 
 /// Mark a struct as an event handler, discovered like a controller or cron job.
 ///
-/// Construction mirrors `#[injectable]` — fields tagged `#[inject]` are resolved
-/// from the container, others default, and the macro emits `from_container`. It
-/// additionally emits `impl Discoverable` attaching an `EventHandlerMeta` whose
-/// thunk builds the handler from the (fully-assembled) container and subscribes it
-/// to the [`EventBus`](../nestrs_events/struct.EventBus.html). The struct must
-/// implement [`EventHandler`](../nestrs_events/trait.EventHandler.html), which
-/// declares the `Event` type it handles.
+/// `#[inject]` fields resolve from the container; the struct must implement
+/// [`EventHandler`](../nestrs_events/trait.EventHandler.html).
 ///
 /// ```ignore
 /// #[on_event]

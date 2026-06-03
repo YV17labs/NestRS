@@ -8,11 +8,10 @@ use serde_json::{json, Map, Value};
 
 /// Build the OpenAPI document for everything mounted on the HTTP transport.
 ///
-/// Called once at the transport's `configure` step, when the container is fully
-/// assembled, so it sees every controller. It reads the same
-/// [`HttpControllerMeta`]s the transport mounts and drives a single
-/// [`SchemaGenerator`] across all routes so every `Json<T>` payload contributes
-/// its definitions to a shared `components/schemas`.
+/// Called once at the transport's `configure` step (container fully assembled),
+/// so it sees every controller. A single [`SchemaGenerator`] runs across all
+/// routes so every `Json<T>` payload contributes to a shared
+/// `components/schemas`.
 pub fn build_document(
     container: &Container,
     title: &str,
@@ -20,10 +19,9 @@ pub fn build_document(
     description: Option<&str>,
 ) -> Value {
     let discovery = DiscoveryService::new(container);
-    // OpenAPI 3.1 schema objects *are* JSON Schema 2020-12, so we use schemars'
-    // 2020-12 dialect (no `nullable`/single-type rewrites — those are the 3.0
-    // `openapi3()` transforms we explicitly do not want) and only relocate
-    // `$ref`s from the default `#/$defs/...` to `#/components/schemas/...`.
+    // OpenAPI 3.1 schema objects *are* JSON Schema 2020-12. The 3.0
+    // `openapi3()` transforms (nullable/single-type rewrites) would corrupt the
+    // output. Only `$ref`s are relocated to `#/components/schemas/...`.
     let mut settings = SchemaSettings::draft2020_12();
     settings.definitions_path = "/components/schemas".into();
     let mut generator = settings.into_generator();
@@ -43,12 +41,8 @@ pub fn build_document(
         }
     }
 
-    // Drain the schemas every `schema_of::<T>` recorded above.
     let schemas = generator.take_definitions(true);
 
-    // 3.1.2 is the latest 3.1.x patch; its schema dialect is JSON Schema
-    // 2020-12, matching the generator above. (`jsonSchemaDialect` is omitted —
-    // 2020-12 is its default.)
     let mut info = json!({ "title": title, "version": version });
     if let (Some(description), Value::Object(info)) = (description, &mut info) {
         info.insert("description".into(), json!(description));
@@ -62,8 +56,6 @@ pub fn build_document(
     })
 }
 
-/// The OpenAPI operation object for one route: tags, optional summary /
-/// description, path parameters, the `Json<T>` request body and response.
 fn operation_object(
     route: &HttpRouteMeta,
     parameters: &[Value],
@@ -92,8 +84,7 @@ fn operation_object(
     }
 
     let mut ok = Map::new();
-    // OpenAPI requires a response description; per-response text isn't modeled
-    // yet (a v1 non-goal), so emit the spec-mandated minimum, not the summary.
+    // OpenAPI requires a response description; per-response text isn't modeled yet.
     ok.insert("description".into(), json!("OK"));
     if let Some(schema_fn) = route.response {
         ok.insert(
@@ -106,9 +97,6 @@ fn operation_object(
     Value::Object(op)
 }
 
-/// One `{name}` path parameter per `:name` segment, typed as `string` for now
-/// (the handler's `Path<T>` type is not yet threaded through — see the crate's
-/// v1 non-goals).
 fn path_parameters(path: &str) -> Vec<Value> {
     path.split('/')
         .filter_map(|seg| seg.strip_prefix(':'))

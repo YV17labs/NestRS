@@ -1,5 +1,5 @@
 //! The compiled rule set for one actor, and the four reads the three
-//! authorization layers perform against it.
+//! authorization layers (gate, query filter, response mask) perform against it.
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};

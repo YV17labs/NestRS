@@ -1,9 +1,7 @@
-//! The one condition representation that feeds both authorization layers that
-//! need it: [`Predicate::to_condition`] lowers it to a SQL `WHERE` fragment for
-//! the query pre-filter, and [`Predicate::matches`] evaluates it in memory
-//! against a loaded model for the response check. Sharing a single AST is what
-//! keeps the rows a query returns and the rows the response check accepts from
-//! drifting apart.
+//! Single condition AST shared by the query pre-filter
+//! ([`Predicate::to_condition`] → SQL `WHERE`) and the response check
+//! ([`Predicate::matches`] → in-memory). Sharing one AST keeps the rows a
+//! query returns and the rows the response check accepts from drifting apart.
 
 use std::marker::PhantomData;
 
@@ -13,12 +11,9 @@ use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, Value};
 /// A condition over entity `E`, interpreted as SQL or in memory.
 #[derive(Default)]
 pub enum Predicate<E: EntityTrait> {
-    /// Matches everything — an unconditional grant.
     #[default]
     Always,
-    /// `column = value`.
     Eq(E::Column, Value),
-    /// `column IN (values)`.
     In(E::Column, Vec<Value>),
     And(Vec<Predicate<E>>),
     Or(Vec<Predicate<E>>),
@@ -26,9 +21,8 @@ pub enum Predicate<E: EntityTrait> {
 }
 
 impl<E: EntityTrait> Predicate<E> {
-    /// Lower to a [`sea_orm::Condition`] for the query pre-filter. An empty
-    /// `Condition::all()` is the SQL identity (`TRUE`), so [`Predicate::Always`]
-    /// imposes no constraint.
+    /// Lower to a [`sea_orm::Condition`]. `Condition::all()` is SQL `TRUE`, so
+    /// [`Predicate::Always`] imposes no constraint.
     pub fn to_condition(&self) -> Condition {
         match self {
             Predicate::Always => Condition::all(),
@@ -44,9 +38,9 @@ impl<E: EntityTrait> Predicate<E> {
         }
     }
 
-    /// Evaluate in memory against a loaded model — the response-side check.
     /// Reads each column with [`ModelTrait::get`], which returns the same
-    /// [`Value`] the SQL side compares against.
+    /// [`Value`] the SQL side compares against — so the in-memory check and
+    /// the SQL filter cannot disagree.
     pub fn matches(&self, model: &E::Model) -> bool {
         match self {
             Predicate::Always => true,
@@ -62,9 +56,8 @@ impl<E: EntityTrait> Predicate<E> {
     }
 }
 
-/// Fluent constructor handed to the `when(|p| …)` closure of a rule, so a rule's
-/// condition reads `p.eq(Column::OrgId, actor.org_id)` without naming
-/// [`Predicate`] or [`Value`] directly.
+/// Handed to a rule's `when(|p| …)` closure so the condition reads
+/// `p.eq(Column::OrgId, actor.org_id)`.
 pub struct PredicateBuilder<E: EntityTrait>(PhantomData<fn() -> E>);
 
 impl<E: EntityTrait> PredicateBuilder<E> {

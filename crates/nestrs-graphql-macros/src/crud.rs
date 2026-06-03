@@ -1,17 +1,7 @@
-//! `#[crud]` — generate a resolver's standard GraphQL operations.
-//!
-//! Placed on a `#[resolver]`-shaped impl block, it synthesises the operations the
-//! developer did not hand-write — the `<plural>` list query + the `<singular>(id)`
-//! query (always), plus `create_<s>`/`update_<s>`/`delete_<s>` mutations unless
-//! `readonly` — and re-emits the block under `#[resolver]`. Operation names derive
-//! from the output type (`User` → `users`/`user`/`create_user`/…).
-//!
-//! Every operation **delegates to the entity's [`CrudService`]** (the `service =`
-//! field), never `Repo`/the ORM directly. `list`/`create` gate first with
-//! `authorize::<Action, E>` (no ambient ability → `FORBIDDEN`, and a bare service
-//! read would otherwise be unscoped); `get`/`update`/`delete` use the service's
-//! `access` (load + instance authorization). Override by writing the matching
-//! method — the macro keeps it and skips its own.
+//! `#[crud]` — synthesise the standard resolver operations the developer did
+//! not hand-write, then re-emit under `#[resolver]`. Every operation
+//! delegates to the entity's [`CrudService`] — never `Repo` directly.
+//! Override by writing the matching method.
 
 use std::collections::HashSet;
 
@@ -22,7 +12,6 @@ use syn::{parse_macro_input, parse_quote, ImplItem, ItemImpl};
 
 use nestrs_codegen::{parse_crud_args, singular_of};
 
-/// `#[crud]` entry: applies to a `#[resolver]`-shaped impl block.
 pub fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
     match crud(TokenStream2::from(args), item) {
@@ -53,9 +42,8 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let update_op = format_ident!("update_{}", singular);
     let delete_op = format_ident!("delete_{}", singular);
 
-    // Parse the by-id argument into a validated UUID v7 (a bad format / version is
-    // a GraphQL error before any load) — the validation half of route-model
-    // binding; the load + authorization half is the service's `access`.
+    // Validation half of route-model binding (bad format/version => GraphQL
+    // error before any load); the load + authz half is the service's `access`.
     let parse_id: TokenStream2 = quote! {
         let __id = ::uuid::Uuid::parse_str(&id)
             .map_err(|__e| ::nestrs_graphql::async_graphql::Error::new(

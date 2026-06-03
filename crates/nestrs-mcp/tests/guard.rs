@@ -1,5 +1,3 @@
-//! `McpOperationGuard` seam — optional guard resolved from the container at mount.
-
 use std::sync::Arc;
 
 use nestrs_mcp::{endpoint_with_guard, tool_handler, tool_router, McpOperationGuard, ServerHandler};

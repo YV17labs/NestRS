@@ -17,10 +17,10 @@ use crate::tls::TlsConfig;
 
 type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
 
-/// Join a controller prefix with a route path the way `poem`'s nesting does:
-/// `("/health", "/live") -> "/health/live"`, `("/", "/") -> "/"`. Public so the
-/// OpenAPI document (`nestrs-openapi`) composes paths identically to how this
-/// transport mounts them — the two must not drift.
+/// Join a controller prefix with a route path the way poem's nesting does:
+/// `("/health", "/live") -> "/health/live"`. Public so `nestrs-openapi`
+/// composes paths identically to how this transport mounts them — the served
+/// path and the documented path must not drift.
 pub fn join_path(prefix: &str, rest: &str) -> String {
     let p = prefix.trim_end_matches('/');
     let r = rest.trim_start_matches('/');
@@ -32,14 +32,10 @@ pub fn join_path(prefix: &str, rest: &str) -> String {
     }
 }
 
-/// Apply URI API versioning to a controller path: a declared `version` becomes a
-/// `/v{version}` segment in front of `path` (`Some("1"), "/users"` →
-/// `"/v1/users"`); an absent version leaves `path` untouched. This is the **one**
-/// place the URI strategy lives — `#[routes]` (which mounts), the boot route log,
-/// and the OpenAPI document all route through it so the served path, the logged
-/// path, and the documented path can never drift. Header / media-type versioning
-/// (NestJS's other `VersioningType`s) need request-time dispatch and are not yet
-/// implemented; URI versioning covers the common case declaratively.
+/// Apply URI API versioning: `Some("1"), "/users"` → `"/v1/users"`. The single
+/// place the URI strategy lives — `#[routes]`, the boot route log, and the
+/// OpenAPI document all route through it so the served/logged/documented paths
+/// can never drift.
 pub fn version_path(version: Option<&str>, path: &str) -> String {
     match version {
         Some(v) => join_path(&format!("/v{v}"), path),
@@ -47,16 +43,10 @@ pub fn version_path(version: Option<&str>, path: &str) -> String {
     }
 }
 
-/// HTTP [`Transport`] backed by poem. Built up imperatively in the app's
-/// `main.rs`, attached to an [`nestrs_core::App`], and configured by it.
-///
-/// At [`Transport::configure`] time, the transport queries the container's
-/// [`DiscoveryService`] for every [`HttpControllerMeta`] and every
-/// [`HttpEndpointMeta`] declared via `#[module(providers = [...])]` — the
-/// latter is how a GraphQL schema or MCP service mounts itself — then mounts
-/// any extra endpoints registered imperatively via [`HttpTransport::mount`],
-/// then folds the interceptor / guard / filter chain around the assembled
-/// route.
+/// HTTP [`Transport`] backed by poem. At [`Transport::configure`] time, mounts
+/// every `#[module(providers = [...])]`-declared [`HttpControllerMeta`] and
+/// [`HttpEndpointMeta`], then any imperative [`HttpTransport::mount`], then
+/// folds the interceptor / guard / filter chain around the assembled route.
 pub struct HttpTransport {
     bind: String,
     interceptors: Vec<Arc<dyn Interceptor>>,
@@ -108,30 +98,16 @@ impl HttpTransport {
         self
     }
 
-    /// Enable CORS with a configured `poem` [`Cors`] middleware — the analog of
-    /// NestJS's `app.enableCors(...)`. Build it from the re-exported poem
-    /// (`nestrs_http::poem::middleware::Cors::new().allow_origin("https://app.example")…`).
-    /// It wraps the whole route tree **outermost**, so a CORS preflight (`OPTIONS`)
-    /// is answered before any guard or interceptor runs.
+    /// Enable CORS with a configured poem [`Cors`] middleware. Wraps the route
+    /// tree outermost so a preflight (`OPTIONS`) is answered before any guard
+    /// or interceptor runs.
     pub fn cors(mut self, cors: Cors) -> Self {
         self.cors = Some(cors);
         self
     }
 
-    /// Terminate TLS at the transport: serve HTTPS directly from the given
-    /// [`TlsConfig`] (poem's `rustls` listener) instead of plain HTTP. Without
-    /// this call the transport stays plaintext — the dev default. Pair it with
-    /// [`TlsConfig::from_env`] so `main` opts in only when the certs are
-    /// injected:
-    ///
-    /// ```no_run
-    /// # use nestrs_http::{HttpTransport, TlsConfig};
-    /// let mut http = HttpTransport::new();
-    /// if let Some(tls) = TlsConfig::from_env()? {
-    ///     http = http.tls(tls);
-    /// }
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
+    /// Serve HTTPS directly from [`TlsConfig`] (poem's `rustls` listener)
+    /// instead of plain HTTP. Without this call the transport stays plaintext.
     pub fn tls(mut self, tls: TlsConfig) -> Self {
         self.tls = Some(tls);
         self
@@ -139,9 +115,7 @@ impl HttpTransport {
 
     /// Mount an extra endpoint at `path`. The builder closure runs at
     /// [`Transport::configure`] time with the live container, so it can
-    /// resolve services to construct framework-specific endpoints (a
-    /// GraphQL schema built from container-resolved resolvers, an MCP
-    /// streamable HTTP service, …).
+    /// resolve services to construct framework-specific endpoints.
     pub fn mount<F, E>(mut self, path: impl Into<String>, build: F) -> Self
     where
         F: Fn(&Container) -> E + Send + Sync + 'static,
@@ -157,13 +131,9 @@ impl HttpTransport {
         self
     }
 
-    /// Take the endpoint assembled by [`Transport::configure`] for in-process
-    /// testing — drive it with `poem`'s `TestClient` (via
-    /// [`nestrs-testing`](https://docs.rs/nestrs-testing)) instead of binding a
-    /// socket. Returns `None` before `configure` has run, and leaves the
-    /// transport without an endpoint (so it must not also be `serve`d). The
-    /// extracted endpoint carries the full discovery + interceptor / guard /
-    /// filter chain, so a test exercises exactly what production serves.
+    /// Take the assembled endpoint for in-process testing (drive with poem's
+    /// `TestClient`). Returns `None` before `configure` has run, and leaves
+    /// the transport without an endpoint (so it must not also be `serve`d).
     pub fn take_endpoint(&mut self) -> Option<BoxEndpoint<'static, Response>> {
         self.endpoint.take()
     }
@@ -227,8 +197,8 @@ impl Transport for HttpTransport {
         if let Some(cors) = self.cors.take() {
             endpoint = endpoint.with(cors).map_to_response().boxed();
         }
-        // A fresh request scope is installed before anything else runs, so guards
-        // and handlers can resolve request-scoped providers via `Scoped<T>`.
+        // Request scope installs before anything else so guards/handlers can
+        // resolve `#[injectable(scope = request)]` providers via `Scoped<T>`.
         endpoint = crate::RequestScopeEndpoint::new(endpoint, container.clone())
             .map_to_response()
             .boxed();
@@ -242,8 +212,6 @@ impl Transport for HttpTransport {
             .endpoint
             .expect("HttpTransport::configure must run before serve");
         let bind = self.bind;
-        // `.boxed()` unifies the plain and rustls listeners to one `BoxListener`,
-        // so the server-run is written once whichever path is taken.
         let listener = match self.tls {
             Some(tls) => {
                 tracing::info!(addr = %bind, "https transport listening (TLS)");

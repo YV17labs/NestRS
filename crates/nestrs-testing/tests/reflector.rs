@@ -1,6 +1,5 @@
-//! `#[meta(...)]` + `Reflector`: a per-route guard reads declarative route
-//! metadata to vary its decision (the `@Roles` pattern), driven end-to-end
-//! through the in-process HTTP harness.
+//! `#[meta(...)]` + `Reflector`: guard reads route metadata (the `@Roles`
+//! pattern), end-to-end through the HTTP harness.
 
 use nestrs_core::{injectable, module};
 use nestrs_http::{async_trait, controller, routes, Guard, Reflector};
@@ -8,8 +7,6 @@ use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response};
 
-/// Route metadata: the roles allowed to call a handler. Attached with
-/// `#[meta(RequiredRoles(...))]`, read back by the guard via [`Reflector`].
 #[derive(Clone)]
 struct RequiredRoles(&'static [&'static str]);
 

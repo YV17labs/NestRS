@@ -32,7 +32,6 @@ impl CrudService for UsersService {
 }
 
 impl UsersService {
-    /// Construct with an already-resolved connection (container or tests).
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
     }
@@ -68,7 +67,6 @@ impl UsersService {
         Ok(user)
     }
 
-    /// Create a user with a local password (email is the login identifier).
     pub async fn register_with_password(
         &self,
         email: &str,

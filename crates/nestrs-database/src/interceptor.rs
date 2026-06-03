@@ -1,12 +1,11 @@
-//! [`DbContext`] — the request boundary that installs the ambient executor.
+//! [`DbContext`] — request boundary that installs the ambient executor.
 //!
 //! Auto-installed by [`DatabaseModule`](crate::DatabaseModule), it wraps every
-//! request *outside* the route's guards, so guards and handlers alike resolve the
-//! same ambient [`Executor`](crate::Executor) via [`Repo`](crate::Repo). A **safe**
-//! method (GET/HEAD/OPTIONS/TRACE) runs on the pool; a **mutating** method runs in
-//! a transaction opened here, committed when the handler answers with a success
-//! (2xx) or redirect (3xx) and rolled back otherwise — so a developer never writes
-//! a transaction by hand, and a failed mutation never half-persists.
+//! request *outside* the route's guards, so guards and handlers resolve the same
+//! ambient [`Executor`](crate::Executor) via [`Repo`](crate::Repo). Safe methods
+//! (GET/HEAD/OPTIONS/TRACE) run on the pool; mutating methods run in a
+//! transaction committed on 2xx/3xx and rolled back otherwise — a failed
+//! mutation never half-persists.
 
 use std::sync::Arc;
 
@@ -42,15 +41,9 @@ impl Interceptor for DbContext {
 
         let result = with_request_executor(Executor::Txn(txn.clone()), next.run(req)).await;
 
-        // The handler future has completed and its executor clone dropped, so we
-        // are normally the sole owner and can take the transaction back to commit
-        // or roll it back. A lingering reference means the executor *escaped* the
-        // request — a service leaked it into a spawned task that outlived the
-        // handler. We can no longer commit (the leaked task's eventual `Drop` will
-        // roll back), so the request's writes are lost. Drop our clone to free the
-        // transaction and fail *loudly*: a 2xx/3xx answer would otherwise report
-        // success for nothing persisted — silent data loss. A response that already
-        // failed keeps its status; its rollback matches its intent.
+        // A lingering Arc means the executor escaped into a task outliving the
+        // handler — we can't commit (the leaked task's eventual Drop rolls back),
+        // so an otherwise-successful response is silent data loss. Fail it loud.
         let txn = match Arc::try_unwrap(txn) {
             Ok(txn) => txn,
             Err(escaped) => {
@@ -82,7 +75,6 @@ impl Interceptor for DbContext {
     }
 }
 
-/// HTTP methods that must not mutate state, so they need no transaction.
 fn is_safe(method: &Method) -> bool {
     matches!(
         *method,
@@ -90,8 +82,7 @@ fn is_safe(method: &Method) -> bool {
     )
 }
 
-/// Whether a handler's outcome should commit its transaction: a success (2xx) or
-/// redirect (3xx) response commits; any other status, or an `Err`, rolls back.
+/// 2xx and 3xx commit; any other status or an `Err` rolls back.
 fn should_commit(result: &Result<Response>) -> bool {
     matches!(result, Ok(resp) if resp.status().is_success() || resp.status().is_redirection())
 }
@@ -128,20 +119,15 @@ mod tests {
         }
     }
 
-    // A mutating handler that *leaks* the ambient executor into a detached task
-    // outliving the request: the transaction the interceptor opened is still
-    // referenced when the handler returns, so it can never commit. The framework
-    // must turn the handler's 200 into a loud 500 rather than report success for
-    // writes that silently roll back.
+    // Leaking the ambient executor into a detached task that outlives the
+    // handler must turn the would-be 200 into a loud 500 — silent rollback of
+    // a "successful" mutation is data loss.
     #[tokio::test]
     async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
         let ctx = DbContext { db: db().await };
 
         let endpoint = make(|_req: Request| async {
             let escaped = current_executor().expect("the handler runs with an ambient executor");
-            // Leak the executor into a detached task that outlives this handler's
-            // return, so a clone of the transaction is still alive when the
-            // interceptor reclaims it.
             tokio::spawn(async move {
                 let _hold = escaped;
                 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -157,8 +143,6 @@ mod tests {
         );
     }
 
-    // The control: a well-behaved mutating handler keeps its own status — the
-    // escape detection does not interfere with the normal commit path.
     #[tokio::test]
     async fn a_well_behaved_mutating_handler_keeps_its_status() {
         let ctx = DbContext { db: db().await };

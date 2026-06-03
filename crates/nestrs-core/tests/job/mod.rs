@@ -1,6 +1,6 @@
-//! The [`JobContext`] seam exercised through its public helper: a bound context
-//! wraps the job (its ambient is visible inside) and the job's result is preserved
-//! across the unit-returning `scope`; with no context the job runs bare.
+//! [`JobContext`] exercised through `run_in_job_context`: a bound context
+//! installs its ambient for the wrapped job and the job's result is preserved
+//! across the unit-returning `scope`; no context runs the job bare.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -12,8 +12,6 @@ tokio::task_local! {
     static MARKER: u32;
 }
 
-// A stub bridge that installs an ambient value for the wrapped job's duration —
-// standing in for the ORM executor a real `WorkerDbContext` would install.
 struct MarkerContext(u32);
 
 impl JobContext for MarkerContext {

@@ -1,6 +1,3 @@
-//! `#[cron_job]` implementation: parse the trigger, then emit the construction +
-//! `Discoverable` (attaching a `CronJobMeta`).
-
 use std::str::FromStr;
 
 use proc_macro::TokenStream;
@@ -64,10 +61,6 @@ pub(crate) fn cron_job(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// The parsed trigger argument. `Interval`/`Timeout` carry whole milliseconds
-/// computed at expansion time; `Cron` keeps the expression as a `syn::Expr` (a
-/// string literal or a `CronExpression::X` path) plus an optional timezone
-/// literal, emitted as `&'static str`s the `Scheduler` parses at boot.
 enum Trigger {
     Interval(u64),
     Timeout(u64),
@@ -131,8 +124,7 @@ impl Trigger {
         }
 
         let expr = cron.expect("cron is set when every/after are not");
-        // A string literal can be validated now; a `CronExpression::X` path is a
-        // const resolved at the call site, so its validation waits for boot.
+        // Literals validate now; `CronExpression::X` paths wait for boot.
         if let Expr::Lit(ExprLit {
             lit: Lit::Str(s), ..
         }) = &expr
@@ -168,7 +160,6 @@ impl Trigger {
     }
 }
 
-/// Extract a string literal from an argument value, naming the key on mismatch.
 fn as_str_lit(value: &Expr, key: &str) -> syn::Result<LitStr> {
     if let Expr::Lit(ExprLit {
         lit: Lit::Str(s), ..
@@ -187,9 +178,6 @@ fn err(message: &str) -> syn::Error {
     syn::Error::new(proc_macro2::Span::call_site(), message)
 }
 
-/// The duration in whole milliseconds for an `every`/`after` literal, parsed at
-/// macro-expansion time so a bad literal is a compile error. Accepts an
-/// `ms`/`s`/`m`/`h` suffix.
 fn period_millis(lit: &LitStr) -> syn::Result<u64> {
     let raw = lit.value();
     let s = raw.trim();
@@ -200,7 +188,7 @@ fn period_millis(lit: &LitStr) -> syn::Result<u64> {
              (e.g. \"500ms\", \"30s\", \"5m\", \"1h\")",
         )
     };
-    // `ms` before the single-char `s` so "500ms" is not mis-read as "500m".
+    // `ms` before `s` so "500ms" is not mis-read as "500m".
     let (number, multiplier) = if let Some(n) = s.strip_suffix("ms") {
         (n, 1u64)
     } else if let Some(n) = s.strip_suffix('s') {

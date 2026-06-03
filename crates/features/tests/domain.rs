@@ -1,8 +1,5 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md).
-//!
-//! Documented gaps: `authn/` and `authz/` DI modules; `oauth/strategy.rs`
-//! (Poem HTTP). See each submodule's `mod.rs` for the pointer to where the
-//! behaviour is actually exercised.
+//! Documented gaps: `authn/` and `authz/` DI modules; `oauth/strategy.rs`.
+//! See each submodule's `mod.rs` for where behaviour is exercised instead.
 
 mod authn;
 mod authz;

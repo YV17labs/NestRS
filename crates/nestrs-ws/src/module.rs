@@ -1,8 +1,6 @@
-//! [`WsModule`] — provides the [`WsServer`] connection registry as a singleton.
-//! Import it (`imports = [WsModule]`) in any module whose gateways broadcast or
-//! whose services push to clients, so an `#[inject] Arc<WsServer>` resolves and
-//! passes the boot-time access graph — the same explicit-import contract
-//! `DatabaseModule` and `GraphqlModule` use for their surface infrastructure.
+//! [`WsModule`] — provides the [`WsServer`] connection registry. Import it in
+//! any module whose gateways broadcast or whose services push to clients, so
+//! `#[inject] Arc<WsServer>` resolves and passes the access graph.
 
 use nestrs_core::module;
 

@@ -1,44 +1,13 @@
-//! Shared helpers for nestrs decorator macros.
+//! Shared token-building helpers for nestrs decorator macros.
 //!
-//! A procedural macro must live in a `proc-macro = true` crate, which can
-//! export nothing but macros — so the token-building logic every decorator
-//! shares (`#[injectable]`-style construction, the `from_container`
-//! constructor, the `Discoverable::dependencies` list) lives here, in a plain
-//! library crate that each `nestrs-*-macros` crate depends on. Third-party
-//! decorator crates can depend on it too.
+//! Proc-macro crates can only export macros, so the logic every decorator
+//! shares lives here (a plain library crate) and each `nestrs-*-macros` crate
+//! depends on it. New decorators should reuse the helpers below — and add
+//! new ones here rather than in a `*-macros` crate, so third-party decorators
+//! can use them too.
 //!
-//! # Modules
-//!
-//! - [`mod@args`] — attribute-argument parsing. Today: `parse_named_str_arg`
-//!   for the common single-string decorator (`#[controller(path = "…")]`,
-//!   `#[cron_job(every = "…")]`). Use it instead of hand-writing a parser
-//!   when a new decorator takes one `key = "value"` argument.
-//! - [`mod@crud`] — the shared parser for `#[crud(...)]`, consumed by both
-//!   `nestrs-http-macros` and `nestrs-graphql-macros`. Adds new options
-//!   *once* (`readonly`, `paginate`, …) and every CRUD generator sees them.
-//! - [`mod@inject`] — `#[injectable]` body construction, the
-//!   `from_container` / `dependencies` / `injected` methods every
-//!   provider-emitting decorator must produce. The biggest module: any
-//!   decorator that produces a `Discoverable` provider goes through here
-//!   so the access graph sees its injected types.
-//! - [`mod@ty`] — type-path inspection (peel a `Path<Uuid>` from a poem
-//!   extractor, label `dyn Trait` for a diagnostic, find the `Arc<T>`
-//!   inner). Stateless, no token emission.
-//!
-//! # When to extend
-//!
-//! When writing a new decorator macro:
-//! 1. Use the existing helpers (`build_injectable_body`,
-//!    `dependencies_method`, `parse_named_str_arg`, `nth_generic_type`) so
-//!    the new decorator's emitted code agrees with everyone else's on
-//!    constructor name, dependency list, and error wording.
-//! 2. If a helper does not exist, **add it here**, not in the macro crate.
-//!    A shared helper is reusable by third-party decorators; a private
-//!    helper in `*-macros` is not.
-//! 3. Keep this crate token-only — never depend on `nestrs-core` or any
-//!    `nestrs-*` surface crate. The path tokens emitted (`::nestrs_core::*`)
-//!    are resolved at the macro's *call site*, so there is no compile-time
-//!    cycle.
+//! This crate never depends on `nestrs-core` or any other surface crate:
+//! emitted absolute-path tokens (`::nestrs_core::*`) resolve at the call site.
 
 mod args;
 mod crud;

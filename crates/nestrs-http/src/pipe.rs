@@ -1,18 +1,12 @@
 //! HTTP binding for nestrs pipes — the poem adapter that applies a
 //! [`nestrs_pipes::Pipe`] to a handler parameter between extraction and the
-//! handler. The pipes themselves (`ParseInt`, `ParseUuid`, `Trim`,
-//! `ValidationPipe`, …) are transport-agnostic and live in `nestrs-pipes`; this
-//! module only bridges them to poem's request lifecycle, the way NestJS binds a
-//! pipe to a route argument.
+//! handler.
 //!
-//! - [`Valid<E>`] (e.g. `Valid<Json<T>>`) validates the extracted value with
-//!   `validator::Validate` and rejects invalid input with a field-level JSON
-//!   `400` before the handler runs — the validation pipe.
-//! - [`Piped<P, E>`] applies pipe `P` to the value extractor `E` produced and
-//!   hands the handler the transformed `P::Out`.
+//! - [`Valid<E>`] (e.g. `Valid<Json<T>>`) validates with `validator::Validate`.
+//! - [`Piped<P, E>`] applies pipe `P` to what `E` produced.
 //!
-//! Both reject with a JSON `400` carrying the [`PipeError`]'s message (and any
-//! structured `details`); everything else flows through untouched.
+//! Both reject with a JSON `400` carrying the [`PipeError`]'s message and any
+//! structured `details`.
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -25,8 +19,8 @@ use poem::web::{Json, Path, Query};
 use poem::{Error, FromRequest, Request, RequestBody, Response, Result};
 use validator::Validate;
 
-/// Owned-unwrap for the standard poem extractors, so a pipe can take the value
-/// they carry without cloning. Implemented for [`Json`], [`Path`], [`Query`].
+/// Owned-unwrap for poem extractors, so a pipe can take the value they carry
+/// without cloning.
 pub trait IntoInner {
     type Inner;
     fn into_inner(self) -> Self::Inner;
@@ -53,7 +47,6 @@ impl<T> IntoInner for Query<T> {
     }
 }
 
-/// Render a [`PipeError`] as a JSON `400`, the shape every pipe rejection takes.
 fn reject(err: PipeError) -> Error {
     let mut body = serde_json::json!({
         "statusCode": 400,
@@ -71,12 +64,10 @@ fn reject(err: PipeError) -> Error {
     )
 }
 
-/// Extract `E` and unwrap it to its inner value — the shared first step of both
-/// pipe extractors below. The inner future is erased to `dyn Future + Send`
-/// before awaiting: a generic `async fn` delegating to another's future trips
-/// rustc#100013 ("lifetime bound not satisfied"). Boxing it once here keeps that
-/// workaround in a single place (poem does the same for its `Option<T>`/
-/// `Result<T>` extractors).
+/// Extract `E` and unwrap it to its inner value. The inner future is erased to
+/// `dyn Future + Send` before awaiting: a generic `async fn` delegating to
+/// another's future trips rustc#100013 ("lifetime bound not satisfied"). Boxing
+/// it once here keeps the workaround in a single place.
 async fn extract_inner<'a, E>(req: &'a Request, body: &mut RequestBody) -> Result<E::Inner>
 where
     E: FromRequest<'a> + IntoInner,
@@ -86,9 +77,8 @@ where
     Ok(extract.await?.into_inner())
 }
 
-/// Applies pipe `P` to the value extractor `E` produces, handing the handler the
-/// transformed `P::Out`. Read it via [`Deref`] or own it via
-/// [`into_inner`](Piped::into_inner).
+/// Applies pipe `P` to the value extractor `E` produces, handing the handler
+/// the transformed `P::Out`.
 pub struct Piped<P: Pipe, E> {
     value: P::Out,
     _marker: PhantomData<fn() -> E>,
@@ -122,10 +112,9 @@ where
     }
 }
 
-/// Validation pipe: extract `E`, validate its value with `validator::Validate`,
-/// and reject invalid input with a field-level JSON `400`. Holds the validated,
-/// owned value — read via [`Deref`] or own via [`into_inner`](Valid::into_inner).
-/// `Valid<Json<T>>` is the ergonomic form of `Piped<ValidationPipe<T>, Json<T>>`.
+/// Validation pipe: extract `E`, validate with `validator::Validate`, reject
+/// invalid input with a field-level JSON `400`. `Valid<Json<T>>` is the
+/// ergonomic form of `Piped<ValidationPipe<T>, Json<T>>`.
 pub struct Valid<E: IntoInner>(E::Inner);
 
 impl<E: IntoInner> Valid<E> {

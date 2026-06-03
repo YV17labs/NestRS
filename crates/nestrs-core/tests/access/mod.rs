@@ -1,17 +1,11 @@
-//! End-to-end check of the module access graph through the
-//! real `#[module]` / `#[injectable]` macros and the `App` boot path.
-//!
-//! Each `#[module]` submits its descriptor to the link-time registry, which is
-//! shared across a test binary — so this file is its own integration-test crate
-//! (separate binary), and the two graphs below use disjoint types so their
-//! validations never interfere.
+//! End-to-end check of the module access graph through the real `#[module]` /
+//! `#[injectable]` macros and the `App` boot path. The link-time registry is
+//! shared across a test binary, so the graphs below use disjoint types.
 
 use std::any::TypeId;
 use std::sync::Arc;
 
 use nestrs_core::{injectable, module, App, ContainerBuilder, Discoverable};
-
-// --- A leaky graph: a provider reaches a module its own module never imports.
 
 #[injectable]
 struct ServiceA;
@@ -26,13 +20,12 @@ struct ServiceB {
 #[module(providers = [ServiceA])]
 struct ModuleA;
 
-// `ServiceB` injects `ServiceA`, but `LeakyModuleB` does not import `ModuleA`.
 #[module(providers = [ServiceB])]
 struct LeakyModuleB;
 
-// Imports `ModuleA` *before* `LeakyModuleB`, so the flat container's
-// registration-order fixpoint happens to resolve `ServiceA` — the silent,
-// order-dependent success the access check turns into a deterministic boot error.
+// `ModuleA` listed first lets the flat container's order-dependent fixpoint
+// silently resolve `ServiceA`; the access check turns that into a deterministic
+// boot error.
 #[module(imports = [ModuleA, LeakyModuleB])]
 struct LeakyRoot;
 
@@ -55,8 +48,6 @@ async fn unimported_cross_module_dependency_is_rejected_at_boot() {
         "suggests the module to import: {msg}"
     );
 }
-
-// --- The same shape, but with the import declared: it must boot cleanly.
 
 #[injectable]
 struct FixedServiceA;
@@ -86,17 +77,12 @@ async fn imported_cross_module_dependency_boots() {
         .expect("declaring the import makes the cross-module dependency legal");
 }
 
-// --- A *lazily-built* provider (a controller / cron job / processor shape):
-// empty `dependencies` (it does not block register ordering), but a non-empty
-// `injected`. The access graph reads `injected`, so this is still checked — the
-// hole that motivated splitting the two methods.
-
+// A lazily-built provider (controller / cron job / processor shape): empty
+// `dependencies`, non-empty `injected`. The graph reads `injected`, so this is
+// still under contract.
 #[injectable]
 struct LazyDep;
 
-// Hand-written `Discoverable` mirroring what `#[controller]`/`#[cron_job]`/
-// `#[processor]` emit: registers nothing eagerly (`dependencies` empty, so it is
-// built later from the assembled container) yet declares its injected key.
 struct LazyConsumer;
 impl Discoverable for LazyConsumer {
     fn injected() -> Vec<TypeId> {
@@ -110,7 +96,6 @@ impl Discoverable for LazyConsumer {
 #[module(providers = [LazyDep])]
 struct LazyDepModule;
 
-// Injects `LazyDep` but does not import `LazyDepModule`.
 #[module(providers = [LazyConsumer])]
 struct LazyLeakyModule;
 

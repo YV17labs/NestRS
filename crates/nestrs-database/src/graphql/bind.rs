@@ -9,27 +9,16 @@ use uuid::Uuid;
 
 use crate::{Access, CrudService};
 
-/// A GraphQL `forbidden` error (code `FORBIDDEN`), matching the one used by the
-/// `nestrs_authz::graphql` gate so callers see the same shape on a denial.
+/// Matches the `nestrs_authz::graphql` gate's denial shape (code `FORBIDDEN`).
 fn forbidden() -> Error {
     Error::new("forbidden").extend_with(|_, e| e.set("code", "FORBIDDEN"))
 }
 
-/// Turn a by-id argument into the loaded, authorized entity, so a by-id
-/// resolver is a single call instead of a manual parse + load + ability check —
-/// the resolver analog of the controller's `Bind<S, A>` parameter. Parses the
-/// id as a UUID v7 (a bad id errors), then loads + authorizes **through the
-/// entity's service** ([`CrudService::access`]) — the single audited gateway,
-/// so the load joins the request transaction and the denial is logged like any
-/// other access — resolving `Arc<S>` from the container in the GraphQL context:
-///
-/// - no such row → `Ok(None)` (a nullable `user(id)` field resolves to `null`);
-/// - the row exists but the ability denies it → a `FORBIDDEN` error (existence
-///   is not hidden, matching the HTTP `Bind`);
-/// - otherwise → `Ok(Some(model))`.
-///
-/// Requires the ambient ability (so it doubles as the auth gate — no ability
-/// means `FORBIDDEN`); the route needs the GraphQL auth bridge that installs it.
+/// Turn a by-id argument into the loaded, authorized entity (the resolver
+/// analog of [`crate::Bind`]). Outcomes: no row → `Ok(None)`; denied →
+/// `FORBIDDEN` (existence not hidden, matching the HTTP `Bind`); else
+/// `Ok(Some(model))`. Requires the ambient ability; without one this returns an
+/// error so a missing auth bridge cannot silently behave as anonymous.
 pub async fn bind<S, A>(
     ctx: &Context<'_>,
     id: &str,
@@ -39,8 +28,7 @@ where
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     A: ActionMarker,
 {
-    // Gate: no ambient ability (anonymous, or the auth bridge is not installed)
-    // → FORBIDDEN, before any load. The bridge installs it ambient for `access`.
+    // No ambient ability ⇒ fail closed before any load.
     if ctx.data_opt::<std::sync::Arc<nestrs_authz::Ability>>().is_none() {
         return Err(Error::new(
             "missing request `Ability` — is the GraphQL auth bridge installed on /graphql?",

@@ -1,12 +1,6 @@
-//! [`Scope<E, A>`] — the caller's row-level filter as a handler argument.
-//!
-//! The Tier-1, explicit counterpart to `nestrs-database`'s transparent `Repo`
-//! scoping: a handler that runs a *custom* query takes `Scope<E, A>` and passes
-//! the [`Condition`] to its service, instead of fishing the ability out of
-//! `Ctx<Arc<Ability>>` and calling `condition_for` by hand. The condition is the
-//! one the caller's [`Ability`] permits for action `A` on entity `E`
-//! ([`Ability::condition_for`]); with the framework's `Repo`, prefer letting the
-//! read scope itself and reach for `Scope` only when you build the query yourself.
+//! [`Scope<E, A>`] — the caller's row-level filter as a handler argument, for a
+//! handler that builds its own query. Prefer letting `Repo` scope itself; reach
+//! for `Scope` only when a custom query is unavoidable.
 
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -19,9 +13,7 @@ use sea_orm::EntityTrait;
 
 use crate::{Ability, ActionMarker};
 
-/// The row-level [`Condition`] the caller may apply for action `A` on entity `E`.
-/// Read it via [`Deref`] or own it with [`into_inner`](Scope::into_inner) to pass
-/// to a service query.
+/// The row-level [`Condition`] the caller may apply for action `A` on `E`.
 pub struct Scope<E, A>(Condition, PhantomData<fn() -> (E, A)>);
 
 impl<E, A> Scope<E, A> {

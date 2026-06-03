@@ -1,7 +1,3 @@
-//! Users core — the port (entity + service + DTOs + errors). Importing
-//! [`UsersCoreModule`] from another feature gives access to [`UsersService`]
-//! without exposing any transport surface.
-
 mod entity;
 mod error;
 mod module;

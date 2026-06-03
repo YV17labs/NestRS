@@ -1,6 +1,3 @@
-//! GraphQL adapter for the orgs feature: a field resolver on [`Org`]
-//! (`users`) plus the `#[crud]`-generated `org` / `orgs` / mutations.
-
 use std::sync::Arc;
 
 use async_graphql::dataloader::DataLoader;

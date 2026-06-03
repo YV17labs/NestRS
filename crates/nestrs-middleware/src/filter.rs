@@ -4,8 +4,8 @@ use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
 /// Read-only view of the request handed to a [`Filter`]. The original
 /// `poem::Request` has been consumed by the inner endpoint by the time the
-/// filter runs (it isn't `Clone`), so we capture the routing-relevant bits
-/// up front.
+/// filter runs (and is not `Clone`), so the routing-relevant bits are
+/// captured up front.
 #[derive(Debug, Clone)]
 pub struct RequestSnapshot {
     pub method: Method,
@@ -23,24 +23,8 @@ impl RequestSnapshot {
     }
 }
 
-/// A `Filter` converts errors produced by the inner endpoint into a
-/// response. Use this to map domain errors / panics-as-errors to a uniform
-/// HTTP shape (problem+json, error envelope, etc.).
-///
-/// Filters run only on the error path — successful responses pass through.
-///
-/// ```ignore
-/// struct DomainErrorMapper;
-///
-/// #[async_trait::async_trait]
-/// impl nestrs_middleware::Filter for DomainErrorMapper {
-///     async fn filter(&self, _req: &RequestSnapshot, err: poem::Error) -> Response {
-///         Response::builder()
-///             .status(err.status())
-///             .body(format!("{{\"error\":\"{}\"}}", err))
-///     }
-/// }
-/// ```
+/// Maps errors returned by the inner endpoint to a response. Runs only on the
+/// error path; successful responses pass through.
 #[async_trait]
 pub trait Filter: Send + Sync + 'static {
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
@@ -53,7 +37,6 @@ impl<T: Filter + ?Sized> Filter for std::sync::Arc<T> {
     }
 }
 
-/// Endpoint wrapper produced by [`EndpointExt::filter`](crate::EndpointExt::filter).
 pub struct FilterEndpoint<E, F> {
     inner: E,
     filter: F,

@@ -1,5 +1,4 @@
-//! `QueueWorker` transport — configure fail-fast and `JobContext` wrapping,
-//! driven against a hand-built container (no Redis required for these paths).
+//! `QueueWorker` configure fail-fast and `JobContext` wrapping; no Redis.
 
 use std::future::Future;
 use std::pin::Pin;

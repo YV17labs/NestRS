@@ -1,11 +1,8 @@
 //! Page-based pagination primitives shared by every `#[expose(paginate)]`
-//! entity. [`PageArgs`] is the request side (a GraphQL `InputObject`, an OpenAPI
-//! schema, and `validator`-checked — so one type binds a `#[query]` argument and
-//! a `Valid<Json<…>>` / query extractor identically), while the per-entity
-//! `<Name>Page` envelope (emitted by the macro) is the response side. The macro
-//! builds the envelope with `<Name>Page::new(items, total, &args)`, which derives
-//! the page-count / has-more flags from these args, so the math lives in one
-//! place rather than being recomputed at every list endpoint.
+//! entity. [`PageArgs`] is the request side (one type binds a GraphQL
+//! `#[query]` argument and a REST `Valid<Json<…>>` / query extractor); the
+//! per-entity `<Name>Page` envelope (emitted by the macro) is the response
+//! side.
 
 use async_graphql::InputObject;
 use schemars::JsonSchema;
@@ -20,11 +17,9 @@ fn default_per_page() -> u64 {
     20
 }
 
-/// Page-based list arguments: a 1-based `page` and a `per_page` size. Defaults
-/// (page 1, 20 per page) apply on both surfaces — GraphQL via `#[graphql(default
-/// = …)]`, REST via `#[serde(default = …)]` — so a caller may omit either. The
-/// `validator` bounds are enforced wherever the value crosses a boundary
-/// (`Valid<…>` for REST; a resolver calls [`PageArgs::validate`] for GraphQL).
+/// 1-based `page` and `per_page` size. Defaults (1, 20) apply on both surfaces.
+/// `validator` bounds enforce at the boundary (`Valid<…>` for REST; resolvers
+/// call [`PageArgs::validate`]).
 #[derive(Debug, Clone, Deserialize, InputObject, JsonSchema, Validate)]
 pub struct PageArgs {
     #[graphql(default = 1)]
@@ -47,13 +42,11 @@ impl Default for PageArgs {
 }
 
 impl PageArgs {
-    /// SQL `OFFSET` for this page (`(page - 1) * per_page`), saturating so an
-    /// out-of-range `page` of `0` cannot underflow.
+    /// `(page - 1) * per_page`, saturating so `page = 0` does not underflow.
     pub fn offset(&self) -> u64 {
         self.page.saturating_sub(1) * self.per_page
     }
 
-    /// SQL `LIMIT` for this page — the page size.
     pub fn limit(&self) -> u64 {
         self.per_page
     }

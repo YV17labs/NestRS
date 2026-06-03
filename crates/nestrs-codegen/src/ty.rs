@@ -3,11 +3,9 @@
 use quote::quote;
 use syn::{GenericArgument, Ident, PathArguments, Type, TypeParamBound};
 
-/// The base ident of an impl block's self type — the last path segment of
-/// `impl Foo` / `impl path::to::Foo`. The impl-block decorators (`#[routes]`,
-/// `#[resolver]`, `#[dataloader]`, `#[hooks]`) need it to name generated items
-/// and to reject a non-path self type. `decorator` names the caller for the
-/// error message.
+/// The base ident of an impl block's self type — last path segment of
+/// `impl Foo` / `impl path::to::Foo`. Errors on a non-path self type;
+/// `decorator` names the caller for the error.
 pub fn impl_self_ident(self_ty: &Type, decorator: &str) -> syn::Result<Ident> {
     match self_ty {
         Type::Path(tp) => tp.path.segments.last().map(|seg| seg.ident.clone()),
@@ -21,8 +19,8 @@ pub fn impl_self_ident(self_ty: &Type, decorator: &str) -> syn::Result<Ident> {
     })
 }
 
-/// If `ty` syntactically matches `Arc<Inner>`, return `Inner`. Only the last
-/// path segment is inspected (`std::sync::Arc<T>` works as well as `Arc<T>`).
+/// If `ty` syntactically matches `Arc<Inner>`, return `Inner`. Inspects only
+/// the last path segment, so `std::sync::Arc<T>` works as well as `Arc<T>`.
 pub(crate) fn arc_inner(ty: &Type) -> Option<&Type> {
     let Type::Path(tp) = ty else { return None };
     let seg = tp.path.segments.last()?;
@@ -41,9 +39,8 @@ pub(crate) fn arc_inner(ty: &Type) -> Option<&Type> {
     Some(inner)
 }
 
-/// A short, human-readable label for a dependency type, used in boot
-/// diagnostics: the last path segment (`crate::a::Dep` → `Dep`), or `dyn Trait`
-/// for a trait object. Falls back to the token rendering for anything exotic.
+/// Short label for a dependency type in diagnostics: last path segment, or
+/// `dyn Trait` for a trait object, or the token rendering otherwise.
 pub(crate) fn type_label(ty: &Type) -> String {
     match ty {
         Type::Path(tp) => tp
@@ -66,10 +63,9 @@ pub(crate) fn type_label(ty: &Type) -> String {
     }
 }
 
-/// The `idx`-th generic type argument of `ty` when its last path segment is
-/// `name<...>` — the building block for peeling a transport wrapper (`Json`,
-/// `Result`, `Valid`, `Piped`) off a payload type. The wrapper-name-parameterised
-/// generalisation of the `Arc`-specific `arc_inner`.
+/// The `idx`-th generic type argument of `ty` when its last segment is
+/// `name<...>` — peels a transport wrapper (`Json`, `Result`, `Valid`,
+/// `Piped`) off a payload type.
 pub fn nth_generic_type<'a>(ty: &'a Type, name: &str, idx: usize) -> Option<&'a Type> {
     let Type::Path(tp) = ty else { return None };
     let seg = tp.path.segments.last()?;

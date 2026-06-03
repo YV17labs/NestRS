@@ -1,28 +1,19 @@
-//! Request-scoped context: the typed value a guard or interceptor attaches to a
-//! request for the handler to read back. The HTTP analog of NestJS's
+//! Request-scoped context: the typed value a guard or interceptor attaches to
+//! a request for the handler to read back. The HTTP analog of NestJS's
 //! `request.user`.
-//!
-//! An upstream [`Guard`](nestrs_middleware::Guard) (which borrows the request
-//! mutably) or interceptor inserts a value with
-//! `req.extensions_mut().insert(value)`; a handler then declares [`Ctx<T>`] as a
-//! parameter to read it back. Keeping the wire-up in the request extensions —
-//! rather than threading the value through every signature — is what lets a
-//! cross-cutting guard (auth, tenancy) hand data to handlers it knows nothing
-//! about.
 
 use std::ops::Deref;
 
 use poem::http::StatusCode;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
 
-/// Extracts a request-scoped value of type `T` that an upstream guard or
-/// interceptor attached. Read it via [`Deref`] or own it with
-/// [`into_inner`](Ctx::into_inner).
+/// Extracts a request-scoped value of type `T` an upstream guard or
+/// interceptor attached.
 ///
-/// Rejects with `500` if absent: a missing context means the guard that should
-/// have set it never ran on this route — a wiring bug, not a client error. `T`
-/// is cloned out of the request (store an `Arc<_>` for a cheap clone of a large
-/// value).
+/// Rejects with `500` if absent — a missing context means the guard that
+/// should have set it never ran on this route (a wiring bug, not a client
+/// error). `T` is cloned out of the request; store an `Arc<_>` for a large
+/// value.
 pub struct Ctx<T>(pub T);
 
 impl<T> Ctx<T> {

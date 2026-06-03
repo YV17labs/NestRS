@@ -1,26 +1,15 @@
 //! Runtime schema composition from a link-time resolver registry.
 //!
-//! `#[resolver]` on an impl block splits its `#[query]`/`#[mutation]` methods
-//! into generated `#[Object]` structs and submits each to the [`inventory`]
-//! registry below. The schema then composes itself at boot — no central
-//! `queries = [...]` list, no `main.rs` wiring.
+//! `#[resolver]` splits its `#[query]`/`#[mutation]` methods into generated
+//! `#[Object]` structs and submits each to the [`inventory`] registry. The
+//! roots [`DiscoveredQuery`] / [`DiscoveredMutation`] are static types whose
+//! fields are merged from the registry at build time — the runtime analog of
+//! async-graphql's compile-time `MergedObject`.
 //!
-//! The trick: async-graphql's roots are static types (`Schema<Q, M, S>`), but
-//! `Q`/`M` here are *our* types ([`DiscoveredQuery`]/[`DiscoveredMutation`])
-//! whose fields are merged from the registry. `create_type_info` (static) reads
-//! the registry to merge each member's fields under one root type; `is_empty`
-//! reads it to behave like `EmptyMutation` when nothing registered;
-//! `resolve_field` (instance) dispatches over the members built from the
-//! container. This mirrors what async-graphql's own `MergedObject` does over a
-//! compile-time tuple, but driven by the registry at runtime.
-//!
-//! Module-gating filters the inventory by access-graph reachability: only
-//! resolvers whose `TypeId` is in [`ReachableProviders`] (read from the
-//! container at schema-build time) end up in the schema. `create_type_info`
-//! and `is_empty` are static methods async-graphql calls during
-//! `Schema::build`, so they cannot receive the container — the reachable set
-//! lives in a thread-local installed by [`build_schema`] for the duration of
-//! the build and read by [`is_member_active`].
+//! Module-gating filters the inventory by access-graph reachability. Because
+//! `create_type_info` / `is_empty` are static methods async-graphql calls
+//! during `Schema::build` (no container access), the reachable set lives in a
+//! thread-local installed by [`build_schema`] for the build's duration.
 
 use std::any::TypeId;
 use std::borrow::Cow;
@@ -39,10 +28,7 @@ use async_graphql::{
 };
 use nestrs_core::{Container, ReachableProviders};
 
-/// Which root a resolver's methods contribute to. Set per method by
-/// `#[query]` / `#[mutation]`; carried on the [`ResolverRegistration`].
-///
-/// `pub` only so `#[resolver]`-generated code can name it; not app-facing.
+/// Which root a resolver's methods contribute to.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolverKind {
@@ -52,9 +38,8 @@ pub enum ResolverKind {
 
 /// Object-safe view of a code-first resolver. `ContainerType`/`OutputType`
 /// aren't object-safe (static `type_name`/`create_type_info`), so the runtime
-/// roots store members behind this boxed-future shim instead. Blanket-impl'd
-/// for every `#[Object]` type, so `#[resolver]` boxes its generated objects
-/// without the app seeing this trait.
+/// roots store members behind this boxed-future shim. Blanket-impl'd for
+/// every `#[Object]` type.
 #[doc(hidden)]
 pub trait ResolverObject: Send + Sync {
     fn resolve_field<'a>(
@@ -72,13 +57,9 @@ impl<T: ContainerType + Send + Sync> ResolverObject for T {
     }
 }
 
-/// One generated resolver object, submitted to the [`inventory`] registry by
-/// `#[resolver]`. `type_info` contributes the object's fields to the schema
-/// registry (it closes over the concrete type via
-/// `Registry::create_fake_output_type`); `build` constructs the resolver from
-/// the container at schema-build time. `resolver_type_id` is the resolver
-/// struct's `TypeId` — the container key it provides — so the schema build
-/// can module-gate this entry by [`ReachableProviders`].
+/// One generated resolver object, submitted by `#[resolver]`.
+/// `resolver_type_id` keys the entry against [`ReachableProviders`] for
+/// module-gating.
 #[doc(hidden)]
 pub struct ResolverRegistration {
     pub kind: ResolverKind,
@@ -90,20 +71,12 @@ pub struct ResolverRegistration {
 inventory::collect!(ResolverRegistration);
 
 thread_local! {
-    /// The reachable provider `TypeId`s for the schema being built on this
-    /// thread — installed by [`build_schema`] for the duration of the build
-    /// and read by [`is_member_active`] from the static `OutputType` methods
-    /// async-graphql calls (`create_type_info`, `is_empty`). A schema build
-    /// is synchronous and single-threaded, so a thread-local fits without
-    /// risking cross-build leakage. `None` here means no gating (a bare
-    /// `Schema::build` called outside our flow) — the prior behaviour, every
-    /// linked resolver included.
+    // Reachable provider `TypeId`s installed by [`build_schema`] for the
+    // build's duration. `None` => no gating (bare `Schema::build` outside
+    // our flow includes every linked resolver).
     static REACHABLE: RefCell<Option<Arc<HashSet<TypeId>>>> = const { RefCell::new(None) };
 }
 
-/// True when this registration's resolver is reachable from the running app's
-/// module tree — every `inventory::iter` site below funnels through this so
-/// the schema sees only the resolvers an app composes.
 fn is_member_active(reg: &ResolverRegistration) -> bool {
     REACHABLE.with(|cell| match &*cell.borrow() {
         Some(set) => set.contains(&(reg.resolver_type_id)()),
@@ -123,10 +96,10 @@ fn build_members(container: &Container, kind: ResolverKind) -> Vec<Box<dyn Resol
         .collect()
 }
 
-/// Merge the fields of every registered object of `kind` into one root object
-/// named `type_name`. The member object types are registered as a side effect
-/// of `create_fake_output_type` but go unreferenced, so async-graphql's
-/// `remove_unused_types` drops them — only the merged root remains in the SDL.
+/// Merge fields of every registered object of `kind` into one root object.
+/// Member object types register as a side effect of `create_fake_output_type`
+/// but go unreferenced, so `remove_unused_types` drops them — only the merged
+/// root remains in the SDL.
 fn merge_type_info<T: OutputType>(
     registry: &mut Registry,
     kind: ResolverKind,
@@ -169,8 +142,6 @@ fn merge_type_info<T: OutputType>(
 
 macro_rules! discovered_root {
     ($name:ident, $kind:expr, $type_name:literal) => {
-        // Runtime-merged root, internal to the crate; only `build_schema` and
-        // `GraphqlModule` name it.
         pub(crate) struct $name {
             members: Vec<Box<dyn ResolverObject>>,
         }
@@ -223,18 +194,12 @@ macro_rules! discovered_root {
 discovered_root!(DiscoveredQuery, ResolverKind::Query, "Query");
 discovered_root!(DiscoveredMutation, ResolverKind::Mutation, "Mutation");
 
-/// Build the discovered schema. Queries and mutations come from the registry;
-/// subscriptions are not yet supported (`SubscriptionType` is a separate trait
-/// — tracked as follow-up). The container is attached as schema data and used
-/// to construct each resolver via its `from_container`.
+/// Build the discovered schema. Subscriptions are not yet supported.
 ///
-/// Module-gating: reads [`ReachableProviders`] from the container and installs
-/// it in the [`REACHABLE`] thread-local for the duration of `Schema::build`,
-/// so the static `OutputType` methods async-graphql invokes filter the
-/// resolver inventory to the modules an app actually imports. A drop guard
-/// clears the thread-local even if `Schema::build` panics — a leak would
-/// otherwise carry the previous app's reachable set into the next build on the
-/// same thread (a test booting multiple apps) and silently widen its schema.
+/// Installs [`ReachableProviders`] in [`REACHABLE`] for the duration of
+/// `Schema::build`. The drop guard restores the previous value even on panic —
+/// a leak would otherwise carry one test's reachable set into another's
+/// build on the same thread.
 pub(crate) fn build_schema(
     container: Container,
 ) -> Schema<DiscoveredQuery, DiscoveredMutation, EmptySubscription> {
@@ -252,11 +217,8 @@ pub(crate) fn build_schema(
     .finish()
 }
 
-/// RAII guard that swaps a new value into [`REACHABLE`] on construction and
-/// restores the previous value on drop — including on a panic during
-/// `Schema::build`. The previous value is restored (not cleared) so a nested
-/// build inside an outer schema build (theoretical, not exercised) does not
-/// leak the inner's set to the outer's pending work.
+/// RAII swap on [`REACHABLE`]: install on construction, restore (not clear) on
+/// drop — so a nested build cannot strand the outer build's set.
 struct ReachableResetGuard(Option<Arc<HashSet<TypeId>>>);
 
 impl ReachableResetGuard {
@@ -273,11 +235,9 @@ impl Drop for ReachableResetGuard {
     }
 }
 
-/// Render the composed schema as SDL for a committed `schema.graphql`.
-///
-/// Types, fields, arguments, and enum values are sorted so the output is
-/// deterministic: the resolver registry's link-time iteration order (which is
-/// not stable across builds) cannot leak into the file and churn its diff.
+/// Render the composed schema as SDL. Types, fields, arguments, and enum
+/// values are sorted: the resolver registry's link-time iteration order is
+/// not stable, and would otherwise churn the committed SDL diff.
 pub(crate) fn render_sdl(
     schema: &Schema<DiscoveredQuery, DiscoveredMutation, EmptySubscription>,
 ) -> String {

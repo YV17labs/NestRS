@@ -5,7 +5,8 @@ description: Typed, namespaced configuration loaded from environment variables �
 
 import { Aside } from '@astrojs/starlight/components';
 
-A configuration is a typed struct that:
+You write configuration as a typed struct — one file, env-mapped, validated
+on the way in. Each one:
 
 1. Declares a **namespace** with `#[config(namespace = "…")]` — its
    fields read from `NESTRS_<NAMESPACE>__<KEY>` environment variables;

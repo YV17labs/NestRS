@@ -5,9 +5,9 @@ description: A self-composing schema, resolvers as structs, queries / mutations 
 
 import { Aside } from '@astrojs/starlight/components';
 
-A resolver is a struct decorated with `#[resolver]`. Each `#[resolver]`
-submits its operations to a registry merged into the schema roots at
-boot — there is no central `queries = [...]` list. Root resolvers
+Write a resolver as a struct and decorate it with `#[resolver]`; its
+operations register themselves into the schema at boot — there is no central
+`queries = [...]` list to keep in sync. Root resolvers
 (`#[query]`, `#[mutation]`) and entity-field resolvers (`#[field]`) live
 on the same impl block.
 

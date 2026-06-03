@@ -5,7 +5,7 @@ description: In-process cron and interval jobs — declared as structs, validate
 
 import { Aside } from '@astrojs/starlight/components';
 
-A scheduled job is a struct with `#[cron_job(...)]`, the same DI shape
+A scheduled job is just a struct with `#[cron_job(...)]` — the same DI shape
 as every other provider. The `Scheduler` transport drains the registry
 at boot, validates each trigger, and dispatches the jobs in-process —
 no broker, no second binary.

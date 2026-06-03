@@ -2,15 +2,21 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 
-const site = 'https://nestrs.dev';
+// GitHub Pages project sites live under /NestRS/; nestrs.dev (custom domain) uses /.
+// CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
+const base = process.env.ASTRO_BASE || '/';
+const site = process.env.ASTRO_SITE || 'https://nestrs.dev';
+const asset = (path) => `${base}${path.replace(/^\//, '')}`;
+
 const defaultDescription =
   'Scalable Rust backend apps with native performance.';
-const ogImage = `${site}/social-preview.png`;
+const ogImage = new URL(asset('social-preview.png'), site).href;
 const ogImageAlt =
   'NestRS — Scalable Rust backend apps with native performance';
 
 export default defineConfig({
   site,
+  base,
   integrations: [
     starlight({
       title: 'NestRS',
@@ -22,7 +28,7 @@ export default defineConfig({
           tag: 'link',
           attrs: {
             rel: 'apple-touch-icon',
-            href: '/apple-touch-icon.png',
+            href: asset('apple-touch-icon.png'),
             sizes: '180x180',
           },
         },
@@ -31,7 +37,7 @@ export default defineConfig({
           attrs: {
             rel: 'icon',
             type: 'image/png',
-            href: '/apple-touch-icon.png',
+            href: asset('apple-touch-icon.png'),
           },
         },
         { tag: 'meta', attrs: { property: 'og:image', content: ogImage } },

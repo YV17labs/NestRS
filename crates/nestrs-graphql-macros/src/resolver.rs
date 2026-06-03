@@ -1,5 +1,5 @@
-//! `#[resolver]`: construction on a struct, operation orchestration on its impl
-//! block. See the entry doc in `lib.rs` and the crate-level module docs.
+//! `#[resolver]`: construction on a struct, operation orchestration on its
+//! impl block.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -16,8 +16,6 @@ use nestrs_codegen::{
     InjectableBody,
 };
 
-/// `#[resolver]` entry: applies to a struct (construction) or its impl block
-/// (query/mutation/field methods).
 pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     if !args.is_empty() {
@@ -43,8 +41,8 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// `#[resolver]` on the struct: construction only, like `#[injectable]`.
 fn resolver_struct(mut item: ItemStruct) -> TokenStream {
-    // Guards bind to the impl block (where the operations are), not the struct —
-    // the impl-form macro can't see the struct's attributes. Catch the mistake.
+    // Guards bind to the impl block, not the struct — catch the mistake here
+    // because the impl-form macro can't see the struct's attributes.
     if let Some(attr) = item.attrs.iter().find(|a| a.path().is_ident("use_guards")) {
         return syn::Error::new_spanned(
             attr,
@@ -63,16 +61,16 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let name_str = name.to_string();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // The resolver's `#[inject]` keys, exposed for the impl-block macro to read
-    // back into `Discoverable::injected` (extended there with the operation guards
-    // and `#[field]` service dependencies the impl block declares) — the same
-    // struct/impl split `#[controller]`/`#[routes]` use. See `access.rs`.
+    // The struct's `#[inject]` keys, exposed for the impl-block macro to fold
+    // into `Discoverable::injected` together with operation guards and
+    // `#[field]` `&Service` deps. Same struct/impl split as
+    // `#[controller]`/`#[routes]`.
     let injected_keys = injected_keys_expr(&dep_keys);
 
-    // Submit the resolver-membership marker so the boot can require this resolver
-    // be listed in a reachable module's `providers` (its schema presence is
-    // unconditional via the GraphQL registry). Skipped for a generic resolver,
-    // which has no single `TypeId` and cannot be a `providers` entry anyway.
+    // Resolver-membership marker so the boot can require this resolver be
+    // listed in a reachable module's `providers` (its schema presence is
+    // unconditional via the registry). A generic resolver has no single
+    // `TypeId` so it can't be a `providers` entry.
     let descriptor = if item.generics.params.is_empty() {
         quote! {
             ::nestrs_core::inventory::submit! {
@@ -103,10 +101,9 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     .into()
 }
 
-/// Extract and remove a `#[use_guards(GuardA, GuardB)]` attribute from an
-/// attribute list, returning the guard paths (empty when absent). Like
-/// `nestrs-http-macros`, the attribute is *consumed* — removed so it never reaches
-/// the compiler as an unknown attribute. At most one per item.
+/// Extract and remove a `#[use_guards(...)]` attribute, returning its paths.
+/// The attribute is consumed so it never reaches the compiler as an unknown
+/// attribute. At most one per item.
 fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident("use_guards")) else {
         return Ok(Vec::new());
@@ -124,9 +121,8 @@ fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
         .collect())
 }
 
-/// The ident of a method's `&Context<'_>` parameter, if it declares one (matched
-/// by the last path segment being `Context`). Lets guard injection reuse the
-/// operation's own context rather than add a second one.
+/// The ident of a method's `&Context<'_>` parameter (matched on the last
+/// path segment), so guard injection reuses it instead of adding a second.
 fn ctx_param_ident(sig: &Signature) -> Option<Ident> {
     sig.inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };
@@ -146,10 +142,8 @@ fn ctx_param_ident(sig: &Signature) -> Option<Ident> {
     })
 }
 
-/// Ensure an operation's delegating signature exposes a `&Context` — reuse its own
-/// if present, else append a dedicated `__guard_ctx` (async-graphql injects every
-/// `&Context<'_>` param, so an added one is not a schema argument). Returns the
-/// (possibly extended) signature and the context ident guards should read.
+/// Ensure the delegating signature has a `&Context` (async-graphql injects
+/// every `&Context<'_>` param so an added one is not a schema argument).
 fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
     if let Some(ident) = ctx_param_ident(sig) {
         return (sig.clone(), ident);
@@ -161,13 +155,9 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
     (sig, ident)
 }
 
-/// Emit the guard checks that run before a resolver operation: resolve each guard
-/// from the container in the context and run it, `?`-propagating a denial as the
-/// operation's GraphQL error. `ctx` is the in-scope `&Context` ident.
-///
-/// A missing provider should already have been caught by the access graph at
-/// boot, but a slip-through must not panic the request worker — it converts to
-/// a GraphQL error (and logs at `error`, since it signals a wiring bug).
+/// Emit guard checks before a resolver operation. A missing provider should
+/// have been caught by the access graph at boot; a slip-through converts to a
+/// GraphQL error rather than panicking the worker.
 fn guard_checks(guards: &[Path], ctx: &Ident) -> TokenStream2 {
     let checks = guards.iter().map(|g| {
         let msg = format!(
@@ -208,10 +198,9 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    // The generated root submits `TypeId::of::<Self>()` for module-gating, so
-    // `Self` must be `'static`. Reject a generic / lifetime-parameterised impl
-    // with a friendly span up here — otherwise the user sees a confusing deep-
-    // in-macro `T: 'static` failure on the inventory submission.
+    // Module-gating uses `TypeId::of::<Self>()` so `Self` must be `'static`.
+    // Reject generics here for a friendly span — otherwise the user sees a
+    // deep-in-macro `T: 'static` failure on the inventory submission.
     if !item.generics.params.is_empty() {
         return syn::Error::new_spanned(
             &item.generics,
@@ -223,10 +212,8 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         .into();
     }
 
-    // Resolver-level guards: `#[use_guards(...)]` on the impl block runs before
-    // every operation of this resolver (the `@UseGuards` on a `@Resolver` class
-    // analog). It is an inert attribute consumed here — stripped from the block.
-    // Per-operation guards (on a `#[query]`/`#[mutation]`/`#[field]`) stack inside.
+    // `#[use_guards(...)]` on the impl block — `@UseGuards` on a `@Resolver`
+    // class analog. Per-method guards stack inside.
     let resolver_guards = match take_use_guards(&mut item.attrs) {
         Ok(guards) => guards,
         Err(err) => return err.to_compile_error().into(),
@@ -237,13 +224,11 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
 
     let mut query_methods: Vec<TokenStream2> = Vec::new();
     let mut mutation_methods: Vec<TokenStream2> = Vec::new();
-    // Field resolvers grouped by the parent type they extend: async-graphql
-    // wants one `#[ComplexObject]` per type, so a resolver's `#[field]` methods
-    // for the same parent are merged into a single emitted impl.
+    // async-graphql wants one `#[ComplexObject]` per parent type, so a
+    // resolver's `#[field]` methods for the same parent merge into one impl.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
-    // Container-resolved dependencies the access contract must see, on top of the
-    // struct's `#[inject]` fields (already in `__nestrs_injected`): every
-    // operation guard (resolver- + method-level) and every `#[field]` `&Service`.
+    // Extra access-contract deps on top of the struct's `#[inject]` keys:
+    // operation guards + `#[field]` `&Service` injections.
     let mut all_guard_paths: Vec<Path> = resolver_guards.clone();
     let mut field_dep_types: Vec<Type> = Vec::new();
 
@@ -261,25 +246,18 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
 
         let verb_attr = method.attrs.remove(idx);
 
-        // Per-operation guards (`#[use_guards(...)]` on this method), consumed here
-        // so they leave neither the delegating attrs nor the inherent method.
         let method_guards = match take_use_guards(&mut method.attrs) {
             Ok(guards) => guards,
             Err(err) => return err.to_compile_error().into(),
         };
         all_guard_paths.extend(method_guards.iter().cloned());
-        // Effective guard chain for this method. For `#[query]`/`#[mutation]`,
-        // resolver-level guards stack inside method-level (resolver-level run
-        // first). For `#[field]`, resolver-level guards are **skipped**: a
-        // field resolver runs per-row in list results, and the operation's
-        // auth posture is already enforced by the operation guard (the
-        // `dyn OperationGuard` bridge) plus the resolver-level guard already
-        // run on the root query/mutation. Running it per row would just probe
-        // `ctx.data_opt::<Ability>()` once for every element returned. A
-        // `#[field]` that needs its own gate still binds `#[use_guards]` at
-        // the method level. The access graph still sees the resolver-level
-        // dependency through `all_guard_paths`, so importing the guard's
-        // module remains required.
+        // `#[field]` skips resolver-level guards: a field resolver runs
+        // per-row, and the operation's auth posture is already enforced by
+        // the operation guard plus the resolver-level guard on the root
+        // query/mutation. Running it per row would just re-probe the
+        // ability for every element. A `#[field]` needing its own gate
+        // still binds `#[use_guards]` at the method level. The access graph
+        // still sees the resolver-level dependency via `all_guard_paths`.
         let is_field = verb_attr.path().is_ident("field");
         let op_guards: Vec<Path> = if is_field {
             method_guards
@@ -291,9 +269,8 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                 .collect()
         };
 
-        // The delegating method keeps the (cleaned) signature and any remaining
-        // attrs — async-graphql's `#[graphql(...)]` belongs there. The inherent
-        // method, kept clean, holds the real body.
+        // The delegating method keeps the signature and any remaining attrs
+        // (`#[graphql(...)]` belongs there); the inherent method holds the body.
         let deleg_attrs = method.attrs.clone();
         let sig = method.sig.clone();
         let method_name = method.sig.ident.clone();
@@ -324,11 +301,6 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             } else {
                 quote! { self.0.#method_name(#(#arg_idents),*) }
             };
-            // With guards, run them before delegating. They need the context (for
-            // the container + the seeded principal/ability); reuse the method's own
-            // `&Context` param when it has one, else inject a dedicated one. A
-            // guard's `Err` short-circuits via `?`, so a guarded op returns a
-            // `Result`.
             let delegating = if op_guards.is_empty() {
                 quote! {
                     #(#deleg_attrs)*
@@ -349,7 +321,6 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             }
         }
 
-        // Clean the inherent method: keep only doc comments, drop arg attrs.
         method.attrs.retain(|a| a.path().is_ident("doc"));
         for input in method.sig.inputs.iter_mut() {
             if let FnArg::Typed(pt) = input {
@@ -369,12 +340,9 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         }
     });
 
-    // `Discoverable::injected` = the struct's `#[inject]` keys (from
-    // `__nestrs_injected`, emitted by the struct macro) extended with the
-    // operation guards and `#[field]` `&Service` dependencies gathered here, so a
-    // resolver listed in `providers = [...]` is governed by the access contract
-    // exactly like a controller. `register` is a no-op: the schema builds the
-    // resolver from the assembled container at boot, it registers nothing.
+    // `Discoverable::injected` = struct `#[inject]` keys + operation guards +
+    // `#[field]` deps. `register` is a no-op: the schema builds the resolver
+    // from the assembled container at boot.
     let mut layer_keys = layer_inject_keys(all_guard_paths.iter());
     layer_keys.extend(layer_inject_keys(field_dep_types.iter()));
     let injected_method = injected_method_with_layers(&self_ty, &layer_keys);
@@ -399,14 +367,12 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
     .into()
 }
 
-/// Build a field resolver's `#[ComplexObject]` method from the inherent method's
-/// signature. The inherent method's first value argument is the parent object
-/// (`parent: &ParentType`); the generated method takes the parent as its
-/// `&self`, builds the resolver from the container, and delegates. Of the
-/// remaining arguments, owned ones become GraphQL field arguments while
-/// `&`-reference ones are injected dependencies — a `&Service` from the
-/// container, a `&DataLoader<…>` from the request context — so they never leak
-/// into the schema. Returns the parent type so the caller can group methods by it.
+/// Build a field resolver's `#[ComplexObject]` method. The inherent method's
+/// first value argument is the parent (`parent: &ParentType`); the generated
+/// method takes the parent as `&self`, builds the resolver from the container,
+/// and delegates. Owned args become GraphQL field arguments; `&`-reference
+/// args are injected (a `&Service` from the container or a `&DataLoader<…>`
+/// from the request context) and never leak into the schema.
 fn field_method(
     self_ty: &Type,
     deleg_attrs: &[Attribute],
@@ -449,16 +415,15 @@ fn field_method(
 
     let method_name = &sig.ident;
 
-    // Split the post-parent arguments: an owned one is a GraphQL field argument;
-    // a `&`-reference one is an injected dependency, unambiguous since a `&T` is
-    // never a GraphQL `InputType`. A `&DataLoader<…>` injects request-scoped from
-    // the context; any other `&service` is a singleton from the container.
+    // An owned post-parent arg is a GraphQL field argument; a `&`-reference
+    // is an injected dep (a `&T` is never a GraphQL `InputType`). A
+    // `&DataLoader<…>` comes from the request context; any other `&service`
+    // is a container singleton.
     let mut gql_args: Vec<&FnArg> = Vec::new();
     let mut call_args: Vec<TokenStream2> = Vec::new();
     let mut dep_bindings: Vec<TokenStream2> = Vec::new();
-    // The container-resolved `&Service` dependency types (dataloaders excluded —
-    // those are request-scoped, read from the context), reported up so the impl
-    // macro folds them into `Discoverable::injected` for the access contract.
+    // Container-resolved `&Service` types (dataloaders excluded), reported up
+    // so the impl macro folds them into `Discoverable::injected`.
     let mut injected_deps: Vec<Type> = Vec::new();
     for (arg, ident) in rest.iter().copied().zip(&rest_idents) {
         let FnArg::Typed(pt) = arg else { continue };
@@ -466,9 +431,8 @@ fn field_method(
             let dep_ty = &*reference.elem;
             let dep = format_ident!("__dep_{}", ident);
             if is_dataloader(dep_ty) {
-                // `data_unchecked` hands back the `&DataLoader<…>` the extension
-                // seeded for this request; it panics only if `GraphqlModule` (and
-                // thus the extension) was never imported.
+                // `data_unchecked` panics only if `GraphqlModule` (and thus
+                // the loader extension) was never imported.
                 dep_bindings.push(quote! {
                     let #dep = __ctx.data_unchecked::<#dep_ty>();
                 });
@@ -501,8 +465,6 @@ fn field_method(
         quote!()
     };
 
-    // The generated method always has `__ctx`, so guards run against it before any
-    // dependency is resolved or the body delegates.
     let checks = guard_checks(guards, &format_ident!("__ctx"));
     let method = quote! {
         #(#deleg_attrs)*
@@ -520,11 +482,8 @@ fn field_method(
     Ok((parent_ty, method, injected_deps))
 }
 
-/// Whether a `#[field]` dependency type is a `DataLoader<…>` (matched by its
-/// final path segment, so both `DataLoader<L>` and the fully-qualified
-/// `async_graphql::dataloader::DataLoader<L>` are recognised). DataLoaders are
-/// request-scoped — read from the request context — while every other injected
-/// dependency is a container singleton.
+/// `DataLoader<…>` matched on the final path segment, so both bare and
+/// fully-qualified forms are recognised.
 fn is_dataloader(ty: &Type) -> bool {
     matches!(ty, Type::Path(tp) if tp
         .path
@@ -533,8 +492,6 @@ fn is_dataloader(ty: &Type) -> bool {
         .is_some_and(|s| s.ident == "DataLoader"))
 }
 
-/// Emit one generated `#[Object]` root + its registry submission, or nothing
-/// when the resolver has no methods of that kind.
 fn root_object(
     obj: &Ident,
     self_ty: &Type,
@@ -556,10 +513,6 @@ fn root_object(
         ::nestrs_graphql::inventory::submit! {
             ::nestrs_graphql::ResolverRegistration {
                 kind: ::nestrs_graphql::ResolverKind::#kind,
-                // The resolver struct's `TypeId` — its container key, what the
-                // boot's reachable-provider set indexes — so module-gating can
-                // filter this entry out of an app that does not import the
-                // resolver's module.
                 resolver_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 type_info: |__r| __r.create_fake_output_type::<#obj>(),
                 build: |__c| ::std::boxed::Box::new(

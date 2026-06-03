@@ -1,19 +1,13 @@
-//! The boot-time access contract now governs **attribute-referenced layers**, not
-//! just `#[inject]` fields: a `#[use_guards]` / `#[use_filters]` /
-//! `#[use_interceptors]` reference is resolved from the container at mount, so a
-//! layer registered in a module the controller does *not* import must fail the
-//! boot with the named `AccessGraphError` — never be resolved silently through the
-//! flat container (an encapsulation breach) or panic at mount. Both scopes
-//! (controller-level on the struct, per-route beside the verb) fold into the
-//! controller's `Discoverable::injected`, so the existing graph check covers them.
+//! Attribute-referenced layers (`#[use_guards/filters/interceptors]`) must
+//! satisfy the access contract: binding a layer whose module isn't imported
+//! fails the boot with `AccessGraphError`, never silently resolves or panics
+//! at mount.
 
 use nestrs_core::{injectable, module, AccessGraphError, App};
 use nestrs_http::{async_trait, controller, routes, Guard};
 use poem::http::StatusCode;
 use poem::{Request, Response};
 
-/// A trivial guard, registered only by `GuardModule`. A controller that binds it
-/// without importing that module is the breach the contract must catch.
 #[injectable]
 #[derive(Default)]
 struct AuthzGuard;
@@ -27,8 +21,6 @@ impl Guard for AuthzGuard {
 
 #[module(providers = [AuthzGuard])]
 struct GuardModule;
-
-// --- The breach: a per-route guard whose module is not imported. ---
 
 #[controller(path = "/loose")]
 struct LooseController;
@@ -45,8 +37,6 @@ impl LooseController {
 #[module(providers = [LooseController])]
 struct LooseModule;
 
-// --- The breach via a controller-level guard (on the struct). ---
-
 #[controller(path = "/loose-ctrl")]
 #[use_guards(AuthzGuard)]
 struct LooseCtrlController;
@@ -61,8 +51,6 @@ impl LooseCtrlController {
 
 #[module(providers = [LooseCtrlController])]
 struct LooseCtrlModule;
-
-// --- Correctly wired: the controller's module imports the guard's module. ---
 
 #[controller(path = "/tight")]
 struct TightController;
@@ -79,8 +67,7 @@ impl TightController {
 #[module(imports = [GuardModule], providers = [TightController])]
 struct TightModule;
 
-/// `App::new` does not implement `Debug`, so `expect_err` is unavailable — pull
-/// the error out by hand, asserting boot failed rather than succeeded.
+/// `App` is not `Debug`, so `expect_err` is unavailable.
 fn boot_error<M: nestrs_core::Module + 'static>(scenario: &str) -> AccessGraphError {
     match App::new::<M>() {
         Ok(_) => panic!("{scenario}: expected the boot to fail with an access violation"),

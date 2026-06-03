@@ -1,20 +1,8 @@
 //! W3C [Server-Timing] interceptor for nestrs.
 //!
-//! Adds a `Server-Timing` response header so Chrome DevTools (and every
-//! other modern browser) renders per-request server cost natively in the
-//! Network panel. Independent of OpenTelemetry — this is purely a W3C HTTP
-//! concern.
-//!
-//! ```ignore
-//! use nestrs_core::module;
-//! use nestrs_server_timing::ServerTimingModule;
-//!
-//! #[module(imports = [ServerTimingModule])]
-//! pub struct AppModule;
-//! ```
-//!
-//! Handlers can record sub-step durations by pulling the [`Timings`]
-//! accumulator out of request extensions and calling [`Timings::record`].
+//! Importing [`ServerTimingModule`] adds a `Server-Timing` header to every
+//! response (browsers render the cost in their Network panel). Handlers record
+//! sub-step durations by pulling [`Timings`] out of request extensions.
 //!
 //! [Server-Timing]: https://www.w3.org/TR/server-timing/
 

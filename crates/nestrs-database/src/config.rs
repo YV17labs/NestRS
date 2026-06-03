@@ -1,7 +1,6 @@
-//! [`DatabaseConfig`] — the connection settings for [`DatabaseModule`], a
-//! namespaced `#[config]` whose `from_env` maps `NESTRS_DATABASE__*` to fields
-//! explicitly. The single, typed source of truth: this file shows which variable
-//! feeds each field and the default when unset.
+//! [`DatabaseConfig`] — connection settings for [`DatabaseModule`]. The
+//! `from_env` mapping below is the single source of truth for which
+//! `NESTRS_DATABASE__*` variable feeds each field.
 
 use std::time::Duration;
 
@@ -12,21 +11,15 @@ use validator::Validate;
 #[config(namespace = "database")]
 #[derive(Clone, Debug, Default, Validate)]
 pub struct DatabaseConfig {
-    /// The database URL, e.g. `postgres://user:pass@host/db`. Empty aborts the
-    /// build with a clear message.
+    /// e.g. `postgres://user:pass@host/db`. Empty aborts the build.
     pub url: String,
-    /// Maximum pooled connections (SeaORM default when unset).
     pub max_connections: Option<u32>,
-    /// Minimum idle connections.
     pub min_connections: Option<u32>,
-    /// Connection-acquire timeout in whole seconds.
     pub connect_timeout_secs: Option<u64>,
-    /// Log SQL via SeaORM's `sqlx` logging.
     pub sqlx_logging: bool,
 }
 
 impl Config for DatabaseConfig {
-    /// The explicit `NESTRS_DATABASE__*` → field mapping.
     fn from_env(env: &ConfigService) -> Result<Self> {
         Ok(Self {
             url: env.get("URL").unwrap_or_default(), //                NESTRS_DATABASE__URL

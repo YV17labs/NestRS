@@ -1,16 +1,10 @@
-//! `#[interceptor]` — mark a struct as a **global** HTTP interceptor the framework
-//! discovers and wraps around the whole route tree (for infrastructure that must
-//! wrap everything: a DB-transaction context, tracing). It attaches an
+//! `#[interceptor]` — mark a struct as a **global** HTTP interceptor (for
+//! infrastructure that must wrap everything: a DB-transaction context,
+//! tracing). The macro attaches an
 //! [`HttpInterceptorMeta`](::nestrs_http::HttpInterceptorMeta) but does *not*
-//! register the concrete type as a provider, so it is mounted automatically and
-//! is not referenced by name.
-//!
-//! To bind an interceptor to a single controller or handler instead, do *not*
-//! use this macro: write a plain `#[injectable] + impl Interceptor` (symmetric to
-//! how a guard is `#[injectable] + impl Guard`) and list it in
-//! `#[use_interceptors(...)]` on the controller struct or beside a verb attribute.
-//! It is then resolved from the container at mount time, exactly like a
-//! `#[use_guards]` guard.
+//! register the type as a provider — it is mounted automatically. To bind
+//! per-controller/handler, write a plain `#[injectable] + impl Interceptor`
+//! and list it in `#[use_interceptors(...)]`.
 
 use proc_macro::TokenStream;
 use quote::quote;

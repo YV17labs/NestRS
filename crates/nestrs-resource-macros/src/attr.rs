@@ -1,55 +1,43 @@
-//! Parse `#[expose(...)]` on a SeaORM entity into a [`ResourceModel`] the
-//! emitters consume, and strip the per-field `#[expose(...)]` annotations from
-//! the struct so the ORM macros (`#[sea_orm::model]` / `DeriveEntityModel`) see
-//! a clean entity. The grammar is deliberately small and NestJS-shaped: it
-//! declares only how the *type* is exposed (which fields, which inputs) — never
-//! routes or guards, which belong on controllers/resolvers.
+//! Parse `#[expose(...)]` into a [`ResourceModel`] and strip the per-field
+//! annotations so the ORM macros see a clean entity.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::format_ident;
 use syn::parse::Parse;
 use syn::{Fields, Ident, ItemStruct, LitStr, Token, Type};
 
-/// One column of the entity with its resolved exposure flags.
 pub struct ResourceField {
     pub ident: Ident,
     pub ty: Type,
-    /// Excluded from the GraphQL output type (e.g. a server-side scope column).
+    /// Excluded from the GraphQL output type.
     pub skip: bool,
     pub in_create: bool,
     pub in_update: bool,
-    /// The `#[sea_orm(primary_key)]` column — the generated `create` conversion
-    /// seeds it with a fresh UUID v7 when its type is `Uuid`.
+    /// The `#[sea_orm(primary_key)]` column — seeded with UUID v7 by the
+    /// generated `create` when its type is `Uuid`.
     pub is_pk: bool,
-    /// Raw `validate(...)` bodies, re-emitted verbatim on the input field.
+    /// Re-emitted verbatim as `#[validate(...)]` on the input field.
     pub validate: Vec<TokenStream2>,
 }
 
 impl ResourceField {
-    /// Present in the GraphQL output object?
     pub fn in_output(&self) -> bool {
         !self.skip
     }
 }
 
-/// The resolved exposure: the generated item names plus the per-field flags.
 pub struct ResourceModel {
-    /// The entity struct the `From` conversion reads from (SeaORM's `Model`).
     pub source_ident: Ident,
     pub output_ident: Ident,
     pub create_input_ident: Ident,
     pub update_input_ident: Ident,
-    /// `<Name>Page` — the pagination envelope emitted when `paginate` is set.
     pub page_ident: Ident,
     pub fields: Vec<ResourceField>,
     /// Emit `#[graphql(complex)]` so a bespoke `#[field]` resolver can attach.
     pub complex: bool,
-    /// Emit a `<Name>Page` envelope (`#[expose(paginate)]`) for list endpoints.
     pub paginate: bool,
 }
 
-/// Parse the `#[expose(...)]` attribute arguments and field annotations,
-/// removing the field annotations from `item` in place.
 pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceModel> {
     let mut name: Option<String> = None;
     let mut complex = false;
@@ -97,10 +85,10 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
         let mut in_update = false;
         let mut validate = Vec::new();
 
-        // Detect the primary key from the (untouched) `#[sea_orm(...)]` attrs, so
-        // the generated `create` conversion can seed a UUID-v7 id. Each name-value
-        // meta's value is consumed so SeaORM grammar like `from = "col"` parses;
-        // errors are ignored — a column we cannot read just is not flagged as PK.
+        // Detect the PK from the untouched `#[sea_orm(...)]` attrs so `create`
+        // can seed a UUID v7. Name-value pairs (e.g. `from = "col"`) must be
+        // consumed for the meta parser to advance; errors are ignored — an
+        // unreadable column simply is not flagged as PK.
         let mut is_pk = false;
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("sea_orm")) {
             let _ = attr.parse_nested_meta(|m| {
@@ -151,7 +139,6 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
             ));
         }
 
-        // Strip our annotations so the ORM macros see a clean entity.
         field.attrs.retain(|a| !a.path().is_ident("expose"));
 
         fields.push(ResourceField {
@@ -178,9 +165,8 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
 }
 
 /// `true` when the type's last path segment is `Uuid` (rendered as `String` in
-/// the GraphQL output object, mirroring the hand-written DTOs). Purely
-/// syntactic: `Option<Uuid>` and aliases of `Uuid` are *not* matched (their last
-/// segment isn't `Uuid`), so they pass through with their native type.
+/// the GraphQL output). Purely syntactic: `Option<Uuid>` and aliases pass
+/// through with their native type.
 pub fn is_uuid(ty: &Type) -> bool {
     matches!(ty, Type::Path(tp) if tp.path.segments.last().is_some_and(|s| s.ident == "Uuid"))
 }

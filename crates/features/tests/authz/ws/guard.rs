@@ -1,7 +1,5 @@
-//! `WsAuthGuard::can_activate` must fail closed when the connection's authz
-//! state was not installed — the access-graph marker is only a *compile-time*
-//! seam, this runtime check is what keeps a mis-wired gateway from serving
-//! cross-tenant data through an unscoped `Repo` read.
+//! Fail-closed runtime check: a mis-wired gateway must not serve cross-tenant
+//! data through an unscoped `Repo` read.
 
 use std::sync::Arc;
 

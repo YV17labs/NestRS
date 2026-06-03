@@ -23,9 +23,8 @@ pub(crate) fn format_header(entries: &[Entry], total: Duration) -> Option<Header
 fn write_entry(buf: &mut String, e: &Entry) {
     let _ = write!(buf, "{};dur={:.2}", e.name, as_millis_f64(e.dur));
     if let Some(desc) = &e.desc {
-        // `desc` lands in a `server-timing-param-value`, which is `token /
-        // quoted-string`. Anything outside the token charset is quoted;
-        // backslashes and double-quotes are escaped per RFC 7230.
+        // `server-timing-param-value` is `token / quoted-string` (RFC 7230);
+        // non-token chars require quoting + `\`/`"` escaping.
         if is_valid_token(desc) {
             buf.push_str(";desc=");
             buf.push_str(desc);
@@ -49,9 +48,8 @@ fn as_millis_f64(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
 
-/// RFC 7230 token: visible ASCII minus separators. Server-Timing names live
-/// in a header so they must conform; we silently drop anything that doesn't
-/// rather than fail the response.
+/// RFC 7230 token: visible ASCII minus separators. Non-conforming names are
+/// silently dropped rather than failing the response.
 fn is_valid_token(s: &str) -> bool {
     !s.is_empty()
         && s.bytes().all(|b| {

@@ -1,7 +1,6 @@
-//! Emit the GraphQL/REST input types — `Create<Name>Input` and
-//! `Update<Name>Input` — from the fields marked `#[expose(input(...))]`.
-//! `validate(...)` bodies are re-emitted verbatim as `#[validate(...)]`, so the
-//! `Valid<Json<…>>` extractor and the service both enforce the same rules.
+//! Emit `Create<Name>Input` / `Update<Name>Input` from `#[expose(input(...))]`
+//! fields. `validate(...)` bodies are re-emitted verbatim as `#[validate(...)]`
+//! so REST `Valid<Json<…>>` and the service enforce the same rules.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

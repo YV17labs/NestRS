@@ -1,8 +1,3 @@
-//! GraphQL adapter for the users feature: field resolvers on [`User`]
-//! (`#[field]` — NestJS `@ResolveField`), root queries / mutations
-//! (`#[query]` / `#[mutation]`), and the `#[crud]`-generated paginated
-//! `users` query + `update_user` / `delete_user` mutations.
-
 use std::sync::Arc;
 
 use async_graphql::dataloader::DataLoader;

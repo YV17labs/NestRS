@@ -1,16 +1,8 @@
-//! GraphQL transport bindings for the data layer. Enabled by the `graphql`
-//! Cargo feature.
-//!
-//! - [`bind`] — by-id route-model binding for resolvers (the analog of
-//!   `nestrs_authz::http::Bind`).
-//! - [`LoaderScope`] — re-installs the request's ambient executor and ability
-//!   inside each `#[dataloader]` batch (implements `nestrs-graphql`'s
-//!   `BatchContext` seam).
-//!
-//! These live in `nestrs-database` rather than `nestrs-authz` because the
-//! engine cannot depend on the data layer (`nestrs-database` already depends
-//! on `nestrs-authz`). They are nonetheless the data-side counterparts to the
-//! authz bindings in `nestrs_authz::graphql`.
+//! GraphQL data-layer bindings (feature `graphql`). [`bind`] is the resolver
+//! analog of `nestrs_authz::http::Bind`; [`LoaderScope`] re-installs the
+//! ambient executor and ability inside each `#[dataloader]` batch. They live
+//! here rather than `nestrs-authz` because the engine cannot depend on the
+//! data layer.
 
 mod bind;
 mod loader;

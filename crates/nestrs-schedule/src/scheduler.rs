@@ -14,30 +14,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{CronJobMeta, RunFn, Trigger};
 
-/// A [`Transport`] that runs every `#[cron_job]` discovered in the module tree.
-/// Attach it in `main` alongside other transports:
-///
-/// ```ignore
-/// App::new::<AppModule>()?
-///     .transport(Scheduler::new())
-///     .transport(HttpTransport::new())
-///     .run().await
-/// ```
-///
-/// At [`configure`](Transport::configure) it reads every [`CronJobMeta`] from the
-/// fully-assembled container and resolves it into a runnable [`Job`] — parsing a
-/// cron expression and its timezone here, so a malformed value **fails the boot**
-/// with a message naming the job. [`serve`](Transport::serve) spawns one task per
-/// job and runs it until shutdown is signalled. Each run rebuilds the job from the
-/// container; an error is logged and the schedule continues.
+/// Cron expressions and timezones are parsed in `configure` so a bad value
+/// fails boot (not the first fire); each tick is cheap.
 pub struct Scheduler {
     jobs: Vec<Job>,
     container: Option<Container>,
 }
 
-/// A [`CronJobMeta`] resolved into something runnable: the cron expression and
-/// timezone are parsed once at configure time so each tick is cheap and a bad
-/// value is caught at boot rather than on the first fire.
 enum Job {
     Interval {
         name: &'static str,
@@ -51,8 +34,7 @@ enum Job {
     },
     Cron {
         name: &'static str,
-        // Boxed: a parsed `Cron` is large (~330 bytes), and inlining it would
-        // bloat every `Job` to that size — `large_enum_variant`.
+        // Boxed because a parsed Cron is ~330 bytes (large_enum_variant).
         schedule: Box<Cron>,
         tz: Option<Tz>,
         run: RunFn,
@@ -75,8 +57,6 @@ impl Scheduler {
         }
     }
 
-    /// Resolve a discovered meta into a runnable [`Job`], parsing a cron
-    /// expression and timezone up front. An invalid value is a boot failure.
     fn resolve(meta: &Arc<CronJobMeta>) -> Result<Job> {
         let name = meta.name;
         Ok(match meta.trigger {
@@ -159,17 +139,15 @@ impl Transport for Scheduler {
         let container = self
             .container
             .expect("Scheduler::configure must run before serve");
-        // No jobs: idle until shutdown rather than returning, so this transport
-        // doesn't race the app down when it is the only one attached.
+        // No jobs: idle until shutdown so this transport doesn't race the app
+        // down when it is the only one attached.
         if self.jobs.is_empty() {
             cancel.cancelled().await;
             return Ok(());
         }
 
-        // Resolve the optional ambient-data seam once: when a database module is
-        // imported it binds `WorkerDbContext`, so each tick runs with a pool
-        // executor installed and the job can query through `Repo`. Absent, jobs run
-        // bare (the default).
+        // Resolve once: a database module's `WorkerDbContext` binds this so
+        // each tick runs with a pool executor and the job queries through Repo.
         let ctx = container.get_dyn::<dyn JobContext>();
 
         let mut tasks = JoinSet::new();
@@ -184,9 +162,9 @@ impl Transport for Scheduler {
     }
 }
 
-/// Drive a single job until cancellation. Each variant computes its own waits;
-/// all of them return only when `token` is cancelled (a one-shot idles after its
-/// single run so the transport doesn't race the app down).
+/// Each variant computes its own waits; all return only when `token` is
+/// cancelled (one-shot idles after its single run so the transport doesn't
+/// race the app down).
 async fn run_job(
     job: Job,
     container: Container,
@@ -197,10 +175,9 @@ async fn run_job(
     match job {
         Job::Interval { period, run, .. } => {
             let mut ticker = interval(period);
-            // A skipped slow tick must not burst-fire to catch up.
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            // Drop the immediate first tick so the first run lands one period in,
-            // matching "every N" rather than "now, then every N".
+            // Drop the immediate first tick — semantics is "every N", not
+            // "now, then every N".
             ticker.tick().await;
             loop {
                 tokio::select! {
@@ -214,7 +191,6 @@ async fn run_job(
                 _ = token.cancelled() => return,
                 _ = sleep(delay) => fire(name, run, &container, &ctx).await,
             }
-            // Run once, then idle until shutdown.
             token.cancelled().await;
         }
         Job::Cron {
@@ -240,8 +216,7 @@ async fn run_job(
     }
 }
 
-/// The duration from now until the schedule's next occurrence, in the job's
-/// timezone (UTC when unset). `None` if the schedule has no future occurrence.
+/// `None` if the schedule has no future occurrence.
 fn next_delay(schedule: &Cron, tz: Option<Tz>) -> Option<Duration> {
     let now = Utc::now();
     let next_utc = match tz {
@@ -251,8 +226,8 @@ fn next_delay(schedule: &Cron, tz: Option<Tz>) -> Option<Duration> {
             .map(|dt| dt.with_timezone(&Utc)),
         None => schedule.find_next_occurrence(&now, false).ok(),
     }?;
-    // `find_next_occurrence(.., false)` is strictly after `now`, so the delta is
-    // positive; clamp to zero defensively rather than unwrap a negative span.
+    // `find_next_occurrence(.., false)` is strictly after `now`; clamp
+    // defensively rather than unwrap a negative span.
     Some((next_utc - now).to_std().unwrap_or(Duration::ZERO))
 }
 

@@ -6,8 +6,7 @@ use crate::pipe::{Pipe, PipeError};
 
 /// Validate a value with `validator::Validate`, returning it unchanged on
 /// success and a field-level [`PipeError`] (the `validator` errors as `details`)
-/// on failure. NestJS's `ValidationPipe`. The HTTP transport exposes this
-/// ergonomically as `Valid<Json<T>>`, so apps rarely name it directly.
+/// on failure. The HTTP transport exposes this as `Valid<Json<T>>`.
 pub struct ValidationPipe<T>(PhantomData<fn() -> T>);
 
 impl<T: Validate> Pipe for ValidationPipe<T> {

@@ -1,10 +1,6 @@
-//! [`AbilityGuard<F>`] — the request-scoped bridge that turns the authenticated
-//! actor into the [`Ability`](crate::Ability) the enforcement layers read.
-//!
-//! It is generic over the app's [`AbilityFactory`], so the only app-specific
-//! parts (the policy and the actor type) stay in the app; the wiring — read the
-//! actor, run the factory, attach the ability — is the same everywhere and lives
-//! here.
+//! [`AbilityGuard<F>`] — request-scoped bridge from the authenticated actor to
+//! the [`Ability`](crate::Ability) the enforcement layers read. Generic over
+//! the app's [`AbilityFactory`].
 
 use std::sync::Arc;
 
@@ -15,15 +11,9 @@ use poem::{Request, Response};
 
 use crate::{AbilityBuilder, AbilityFactory};
 
-/// Bind it per route after the authentication guard, parameterized by the app's
-/// factory: `#[use_guards(AuthGuard, AbilityGuard<AppAbility>)]`. It resolves the
-/// factory from the container, builds the actor's [`Ability`](crate::Ability),
-/// and stores it as `Arc<Ability>` for the [`Authorize`](super::Authorize)
-/// extractor and handlers to read.
-///
-/// The actor (`F::Actor`) is read from the request extensions, so an
-/// authentication guard must run first and insert it; its absence is a `500`
-/// (the authn guard was not applied to this route — a wiring bug).
+/// Bind after the auth guard: `#[use_guards(AuthGuard, AbilityGuard<AppAbility>)]`.
+/// `F::Actor` is read from request extensions; its absence is a `500` (an
+/// authn guard must run first — a wiring bug).
 #[injectable]
 pub struct AbilityGuard<F: AbilityFactory> {
     #[inject]

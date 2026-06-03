@@ -1,6 +1,3 @@
-//! `#[mcp]` implementation: construction + `Discoverable` attaching an
-//! `HttpEndpointMeta` that self-mounts the MCP streamable-HTTP endpoint.
-
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, ItemStruct};

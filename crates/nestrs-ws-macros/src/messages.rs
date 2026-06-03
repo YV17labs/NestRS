@@ -1,7 +1,6 @@
 //! `#[messages]` — bind a `#[gateway]` impl block's `#[subscribe_message]`
-//! methods to incoming WebSocket events, emitting the `Gateway` dispatcher (with
-//! any `#[on_connect]`/`#[on_disconnect]` lifecycle hooks) and the `Discoverable`
-//! impl that self-mounts the gateway on the HTTP transport.
+//! methods to WebSocket events; emit the `Gateway` dispatcher and the
+//! `Discoverable` impl that self-mounts on the HTTP transport.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -19,11 +18,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     let self_ty = item.self_ty.clone();
 
     let mut arms: Vec<TokenStream2> = Vec::new();
-    // `event => vec![guard, …]` inserts the mount closure runs to build the
-    // per-message guard table from the container.
     let mut guard_inserts: Vec<TokenStream2> = Vec::new();
-    // Every per-message guard path, gathered for the access-graph check (folded
-    // into `Discoverable::injected` below, like the HTTP per-route layers).
+    // Folded into `Discoverable::injected` for the access-graph check, same
+    // as HTTP per-route layer keys.
     let mut message_guards: Vec<Path> = Vec::new();
     let mut on_connect: Option<TokenStream2> = None;
     let mut on_disconnect: Option<TokenStream2> = None;
@@ -33,9 +30,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        // Connection lifecycle hooks (`#[on_connect]` / `#[on_disconnect]`) — the
-        // `OnGatewayConnection` / `OnGatewayDisconnect` analogs. Consume the inert
-        // attribute and emit a `Gateway` trait override delegating to the method.
+        // `#[on_connect]` / `#[on_disconnect]` — `OnGatewayConnection` /
+        // `OnGatewayDisconnect` analogs. Consume the marker and emit a
+        // `Gateway` trait override delegating to the method.
         if strip_marker(method, "on_connect") {
             on_connect = Some(match hook_override("on_connect", method) {
                 Ok(tokens) => tokens,
@@ -59,17 +56,12 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        // `#[subscribe_message("event")]` — consume it (so it never reaches the
-        // compiler as an unknown attribute) and read the event name.
         let attr = method.attrs.remove(idx);
         let event: LitStr = match attr.parse_args() {
             Ok(e) => e,
             Err(err) => return err.to_compile_error().into(),
         };
 
-        // `#[use_guards(GuardA, GuardB)]` beside the verb — per-message guards,
-        // resolved from the container at mount into the event's table entry. The
-        // attribute is consumed here, exactly like the HTTP verb's `#[use_guards]`.
         let guards = match take_use_attr(&mut method.attrs, "use_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
@@ -81,12 +73,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         let method_name = method.sig.ident.clone();
 
-        // Classify the parameters after `&self`, preserving their declared order
-        // for the call. An **owned** parameter is the message payload
-        // (deserialized from the envelope's `data`); a `&`-reference parameter is
-        // the connected `WsClient` (the `@ConnectedSocket` analog) — the same
-        // owned-vs-reference split a `#[field]` resolver uses to tell a GraphQL
-        // argument from an injected `&DataLoader`. At most one of each.
+        // Owned arg = the payload (deserialized from the envelope's `data`);
+        // `&`-reference arg = the connected `WsClient`. At most one of each —
+        // same owned/reference split a `#[field]` resolver uses.
         let mut payload_ty: Option<&Type> = None;
         let mut takes_client = false;
         let mut call_args: Vec<TokenStream2> = Vec::new();
@@ -120,12 +109,6 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
 
-        // Classify the return to pick the dispatch shape: a `()` (or no return)
-        // sends nothing, a plain `T` is serialized as the reply, a `Result<T, E>`
-        // unwraps — `Ok(T)` becomes the reply (or `None` when `T == ()`) and
-        // `Err(E)` becomes an error frame plus a `warn` log. Detection is by the
-        // *path*'s last segment being `Result`; aliasing a different type as
-        // `Result` is out of scope.
         let return_kind = classify_return(&method.sig.output);
 
         let deser = match payload_ty {
@@ -159,12 +142,8 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                 match { #call } {
                     ::core::result::Result::Ok(()) => ::nestrs_ws::WsReply::None,
                     ::core::result::Result::Err(__err) => {
-                        // `?__err` (Debug) captures the structured error for the
-                        // server log; `{}` (Display) is what ships on the wire —
-                        // the handler's error type is responsible for keeping its
-                        // Display wire-safe (no `#[error(transparent)]` over an
-                        // ORM/sqlx error). See the discipline note in
-                        // `nestrs_ws::lib.rs`.
+                        // Debug for the server log, Display for the wire —
+                        // handler's error type owns Display wire-safety.
                         ::nestrs_ws::tracing::warn!(
                             target: "nestrs::ws",
                             event = #event,
@@ -179,8 +158,6 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                 match { #call } {
                     ::core::result::Result::Ok(__ret) => ::nestrs_ws::WsReply::reply(&__ret),
                     ::core::result::Result::Err(__err) => {
-                        // See the note on `ReturnKind::ResultUnit` above —
-                        // Debug for the log, Display for the wire.
                         ::nestrs_ws::tracing::warn!(
                             target: "nestrs::ws",
                             event = #event,
@@ -223,23 +200,16 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl ::nestrs_core::Discoverable for #self_ty {
-            // The gateway is built at mount time (like a controller), so
-            // `dependencies` (register ordering) stays empty; `injected` reports
-            // its `#[inject]` keys, its connection-level guards (from the inherent
-            // fn `#[gateway]` emits) and the per-message guards gathered here for
-            // the access-graph check.
             #injected_method
 
             fn register(
                 builder: ::nestrs_core::ContainerBuilder,
             ) -> ::nestrs_core::ContainerBuilder {
-                // A namespaced gateway self-provides its own `WsServer<Ns>`; the
-                // default `Global` registry comes from `WsModule` (no-op here).
+                // A namespaced gateway self-provides its own `WsServer<Ns>`;
+                // `Global` comes from `WsModule` (no-op here).
                 let builder = <#self_ty>::__nestrs_provide_registry(builder);
-                // Self-mount on the HTTP transport's route tree: the WebSocket
-                // upgrade is an HTTP `GET`, so a gateway is just another
-                // `HttpEndpointMeta` the transport mounts at boot — no `main.rs`
-                // wiring, exactly like a GraphQL or OpenAPI endpoint.
+                // Self-mount on HTTP: a WS upgrade is an HTTP `GET`, so a
+                // gateway is just another `HttpEndpointMeta` at boot.
                 builder.attach_meta::<#self_ty, ::nestrs_http::HttpEndpointMeta>(
                     ::nestrs_http::HttpEndpointMeta::new(
                         <#self_ty>::PATH,
@@ -248,17 +218,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                             let __gw = ::std::sync::Arc::new(
                                 <#self_ty>::from_container(__container),
                             );
-                            // This gateway's connection registry (its namespace
-                            // baked into the helper `#[gateway]` emitted).
                             let __server = <#self_ty>::__nestrs_registry(__container);
-                            // The per-message guard table, resolved from the
-                            // container once and shared across every connection.
                             let mut __guards = ::nestrs_ws::MessageGuardTable::new();
                             #(#guard_inserts)*
-                            // The optional ambient-data bridge (the executor +
-                            // ability re-installer), resolved once at mount. With
-                            // none bound, the connection loop dispatches without
-                            // any ambient context.
                             let __ctx = ::nestrs_core::Container::get_dyn::<
                                 dyn ::nestrs_ws::SocketContext,
                             >(__container);
@@ -274,17 +236,10 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// What a `#[subscribe_message]` handler's return type looks like — drives the
-/// shape of the generated dispatch arm.
 enum ReturnKind {
-    /// `()` (or no return). Send nothing.
     Unit,
-    /// A plain `T`. Serialize as the reply.
     Value,
-    /// `Result<(), E>`. `Ok(())` sends nothing; `Err(e)` becomes an error frame.
     ResultUnit,
-    /// `Result<T, E>` with `T != ()`. `Ok(t)` is serialized as the reply; `Err(e)`
-    /// becomes an error frame (and a `warn` log on `nestrs::ws`).
     Result,
 }
 
@@ -317,8 +272,6 @@ fn classify_return(output: &ReturnType) -> ReturnKind {
     ReturnKind::Result
 }
 
-/// Remove a bare marker attribute (`#[on_connect]`) from a method, returning
-/// whether it was present.
 fn strip_marker(method: &mut ImplItemFn, ident: &str) -> bool {
     if let Some(pos) = method.attrs.iter().position(|a| a.path().is_ident(ident)) {
         method.attrs.remove(pos);
@@ -328,9 +281,8 @@ fn strip_marker(method: &mut ImplItemFn, ident: &str) -> bool {
     }
 }
 
-/// Emit the `Gateway` trait override for a lifecycle hook (`on_connect` /
-/// `on_disconnect`) delegating to the user method. The hook takes `&self` and an
-/// optional single `&WsClient` parameter — passed through when declared.
+/// Emit the `Gateway` override for `on_connect` / `on_disconnect` delegating
+/// to the user method. The hook may declare an optional `&WsClient` parameter.
 fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
     let hook_ident = syn::Ident::new(hook, proc_macro2::Span::call_site());
     let method_name = method.sig.ident.clone();
@@ -353,8 +305,6 @@ fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
         takes_client = true;
     }
 
-    // Pass the client through only when the hook declared it; otherwise bind it
-    // to `_` so the override's parameter never warns as unused.
     let body = if takes_client {
         quote! { self.#method_name(__client).await; }
     } else {
@@ -370,9 +320,8 @@ fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
     })
 }
 
-/// Build the `__guards.insert("event", vec![…]);` statement for a guarded
-/// handler: each path is resolved from the container and coerced to
-/// `Arc<dyn MessageGuard>`. First listed runs first (insertion order preserved).
+/// Build the `__guards.insert("event", vec![…])` for a guarded handler.
+/// First listed runs first.
 fn guard_insert(event: &LitStr, paths: &[Path]) -> TokenStream2 {
     let resolved = paths.iter().map(|p| {
         quote! {

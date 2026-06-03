@@ -1,13 +1,7 @@
-//! Emit the input → `ActiveModel` conversions `CrudService`'s default `create`
-//! and `update` call: `impl CreateModel<Entity> for Create<Name>Input` (a fresh
-//! row, its UUID-v7 id seeded) and `impl UpdateModel<Entity> for Update<Name>Input`
-//! (the loaded row, its updatable columns overwritten). They are the
-//! `nestrs-database` traits, so the generic `CrudService` defaults stay entity-agnostic.
-//!
-//! Only the columns the developer marked `input(create)` / `input(update)` are
-//! set; every other column — a server-side scope column like `org_id`, say —
-//! stays `NotSet`. So an entity whose insert needs such a column overrides
-//! `create`/`update` on its service (the trait method) and supplies the value.
+//! Emit `CreateModel` / `UpdateModel` impls — the conversions `CrudService`'s
+//! default `create`/`update` call. Only `input(create)` / `input(update)`
+//! columns are set; server-side columns (`org_id`, etc.) stay `NotSet`, so an
+//! entity needing them overrides the service method.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -23,9 +17,6 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
     }
 }
 
-/// `Create<Name>Input::into_active_model` — set the create columns and seed a
-/// UUID-v7 primary key. Emitted only when there is at least one create column
-/// (mirroring the input struct, which is omitted when empty).
 fn emit_create(model: &ResourceModel) -> TokenStream2 {
     let setters: Vec<TokenStream2> = model
         .fields
@@ -40,8 +31,7 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
         return quote! {};
     }
 
-    // Seed a fresh UUID-v7 id; a non-`Uuid` primary key (e.g. auto-increment) is
-    // left `NotSet` for the database to assign.
+    // A non-`Uuid` PK (e.g. auto-increment) is left `NotSet` for the DB.
     let pk_seed = match model.fields.iter().find(|f| f.is_pk) {
         Some(pk) if is_uuid(&pk.ty) => {
             let id = &pk.ident;
@@ -63,9 +53,6 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
     }
 }
 
-/// `Update<Name>Input::apply_to` — overwrite the update columns on an already
-/// loaded `ActiveModel` (from the route-model `Bind`). Emitted only when there is
-/// at least one update column.
 fn emit_update(model: &ResourceModel) -> TokenStream2 {
     let setters: Vec<TokenStream2> = model
         .fields

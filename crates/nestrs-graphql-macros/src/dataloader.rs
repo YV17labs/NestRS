@@ -1,5 +1,4 @@
-//! `#[dataloader]`: turn a data-layer impl block into batched DataLoaders, one
-//! per method. See the entry doc in `lib.rs` and the crate-level module docs.
+//! `#[dataloader]`: one batched DataLoader per method.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -11,7 +10,6 @@ use syn::{
 
 use nestrs_codegen::impl_self_ident;
 
-/// `#[dataloader]` entry: applies to a data-layer impl block.
 pub fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     if !args.is_empty() {
@@ -31,7 +29,6 @@ pub fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-/// `#[dataloader]` on an impl: one generated `Loader` per method.
 fn dataloader_impl(item: ItemImpl) -> TokenStream {
     let self_ty = item.self_ty.clone();
     let base = match impl_self_ident(&self_ty, "#[dataloader]") {
@@ -58,9 +55,8 @@ fn dataloader_impl(item: ItemImpl) -> TokenStream {
     .into()
 }
 
-/// Generate one loader (struct + `Loader` impl + registry submission) from a
-/// batch method `async fn name(&self, keys: &[K]) -> HashMap<K, V>` (the return
-/// may be wrapped in `Result<_, E>`; a bare map loads infallibly).
+/// Generate one loader from `async fn name(&self, keys: &[K]) -> HashMap<K, V>`
+/// (optionally wrapped in `Result<_, E>`).
 fn dataloader_for_method(
     self_ty: &Type,
     base: &Ident,
@@ -114,20 +110,14 @@ fn dataloader_for_method(
 
         ::nestrs_graphql::inventory::submit! {
             ::nestrs_graphql::LoaderRegistration {
-                // The owner service's `TypeId` — what `from_container` reads —
-                // so module-gating skips this loader's seed in an app that does
-                // not import the owner's module (its `container.get::<Owner>()`
-                // would otherwise panic on the missing provider).
                 owner_type_id: || ::core::any::TypeId::of::<#self_ty>(),
-                // Request-scoped: a fresh loader built per request from the fully
-                // assembled container (not at module registration — which is what
-                // makes import order irrelevant) and seeded into the request context.
+                // Built per request from the assembled container (so the
+                // module's import order is irrelevant).
                 seed: |__container, __request| {
                     let __loader = <#loader_name>::from_container(__container);
-                    // The spawner re-installs the request's ambient state (executor,
-                    // ability) around each batch — a batch runs on a spawned task where
-                    // the request task-locals are gone. Resolved from the bound
-                    // `BatchContext`, or a bare `tokio::spawn` when none is registered.
+                    // Spawner re-installs the request's ambient executor +
+                    // ability around each batch — a batch runs on a spawned
+                    // task where task-locals are gone.
                     __request.data(
                         ::nestrs_graphql::async_graphql::dataloader::DataLoader::new(
                             __loader,
@@ -140,7 +130,6 @@ fn dataloader_for_method(
     })
 }
 
-/// `snake_case` → `PascalCase`, for naming a method's generated loader.
 fn pascal_case(ident: &Ident) -> Ident {
     let mut out = String::new();
     let mut upper = true;
@@ -157,7 +146,6 @@ fn pascal_case(ident: &Ident) -> Ident {
     Ident::new(&out, ident.span())
 }
 
-/// The `K` in a batch method's `keys: &[K]` argument (after `&self`).
 fn loader_key_type(sig: &Signature) -> syn::Result<Type> {
     let mut inputs = sig.inputs.iter();
     if !matches!(inputs.next(), Some(FnArg::Receiver(_))) {
@@ -190,8 +178,6 @@ fn loader_key_type(sig: &Signature) -> syn::Result<Type> {
     Ok((*slice.elem).clone())
 }
 
-/// The value type `V` (and optional error `E`) of a batch method returning
-/// `HashMap<K, V>` or `Result<HashMap<K, V>, E>`.
 fn loader_value_and_error(output: &ReturnType) -> syn::Result<(Type, Option<Type>)> {
     let ReturnType::Type(_, ty) = output else {
         return Err(syn::Error::new_spanned(
@@ -205,7 +191,6 @@ fn loader_value_and_error(output: &ReturnType) -> syn::Result<(Type, Option<Type
     }
 }
 
-/// The value type of a `HashMap<K, V>` (its second type argument).
 fn hashmap_value(ty: &Type) -> syn::Result<Type> {
     match generic_args(ty, "HashMap") {
         Some(args) if args.len() == 2 => Ok(args[1].clone()),
@@ -216,8 +201,6 @@ fn hashmap_value(ty: &Type) -> syn::Result<Type> {
     }
 }
 
-/// The angle-bracketed type arguments of `ty` when its last path segment is
-/// `expected` (e.g. `Result`, `HashMap`).
 fn generic_args(ty: &Type, expected: &str) -> Option<Vec<Type>> {
     let Type::Path(tp) = ty else { return None };
     let seg = tp.path.segments.last()?;

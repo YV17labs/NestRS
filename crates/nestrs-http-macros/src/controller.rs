@@ -1,7 +1,6 @@
-//! `#[controller]` — the controller struct decorator (construction + `PATH`/
-//! `VERSION` consts + controller-level interceptor / guard / filter wrapping).
-//! `#[routes]` (in `routes`) emits the `Discoverable`/mount, since it owns the
-//! route table.
+//! `#[controller]` — struct decorator (construction + `PATH`/`VERSION` consts +
+//! controller-level interceptor/guard/filter wrapping). `#[routes]` owns the
+//! route table and emits the `Discoverable`/mount.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -27,12 +26,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let mut item = parse_macro_input!(input as ItemStruct);
 
-    // Controller-level interceptor / guard / filter attributes *on the struct*
-    // (the class-level `@UseInterceptors` / `@UseGuards` / `@UseFilters` analogs,
-    // the same decorators the verb attributes use per route). Each is an inert
-    // attribute consumed here — parse its paths, then strip it from the struct so
-    // it never reaches the compiler as an unknown attribute (each must sit *below*
-    // `#[controller]` for the same reason).
+    // Inert class-level attributes consumed here; each must sit below `#[controller]`.
     let interceptors = match take_use_attr(&mut item.attrs, "use_interceptors") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
@@ -54,32 +48,22 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // The controller's access-graph dependencies: its `#[inject]` keys *plus* the
-    // controller-level guards / filters / interceptors it references. Each layer
-    // is resolved from the container at mount (`Container::get::<P>`), exactly like
-    // an `#[inject]` dependency, so it belongs under the same boot-time contract —
-    // a layer registered in a non-imported module is otherwise resolved silently
-    // (a flat-container encapsulation breach), never flagged. `#[controller]` sees
-    // the fields and the layer attributes but `#[routes]` emits the `Discoverable`,
-    // so expose them as an inherent fn `#[routes]` reads back (and extends with its
-    // own per-route layers) into `Discoverable::injected`.
+    // Access-graph dependencies: `#[inject]` keys + controller-level layers.
+    // Each layer is `Container::get::<P>` at mount, so it must be checked under
+    // the same boot contract as a field — otherwise a layer registered in a
+    // non-imported module resolves silently (flat-container leak). `#[routes]`
+    // owns `Discoverable`, so the keys are exposed via an inherent fn it reads.
     let injected_keys = injected_keys_with_layers(
         &dep_keys,
         [&interceptors, &guards, &filters].into_iter().flatten(),
     );
 
-    // Controller-level layers: because `mount` is emitted by `#[routes]` (a
-    // separate impl block), the lists can't be passed directly — `#[controller]`
-    // instead emits an inherent fn that `#[routes]`'s `mount` calls to wrap the
-    // controller's whole route subtree. Each layer is boxed to a single
-    // `BoxEndpoint` type (the same shape the transport uses for global
-    // middleware), so the result type is stable regardless of count. The wrap sits
-    // *outside* every per-route layer, so a controller-level layer runs before any
-    // route-level one; first listed ends outermost within its layer. With nothing
-    // declared it just boxes the endpoint, so `#[routes]` can call it
-    // unconditionally. Applied inner → outer as interceptors → guards → filters,
-    // mirroring the per-route order (guards run before interceptors; filters wrap
-    // both).
+    // `mount` is emitted by `#[routes]` (separate impl), so the layer lists are
+    // exposed via an inherent fn `#[routes]` calls. Each layer is boxed to a
+    // single `BoxEndpoint` so the result type stays stable regardless of count;
+    // wrap sits outside every per-route layer (first listed outermost within its
+    // layer). Applied inner→outer as interceptors → guards → filters, matching
+    // the per-route order.
     let interceptor_layers = controller_layers(&interceptors, "interceptor", "use_interceptors");
     let guard_layers = controller_layers(&guards, "guard", "use_guards");
     let filter_layers = controller_layers(&filters, "filter", "use_filters");
@@ -118,8 +102,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Parse `#[controller(path = "...", version = "1")]` — `path` required,
-/// `version` optional (URI API versioning, the `@Controller({ version })`
-/// analog). Order-independent; an unknown key is rejected with a clear message.
+/// `version` optional. Order-independent; unknown keys rejected.
 fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitStr>)> {
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut path = None;
@@ -147,12 +130,9 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitS
     Ok((path, version))
 }
 
-/// Build the `let __ep = …;` statements that wrap the controller subtree in a
-/// list of container-resolved layers via the `EndpointExt::<method>` extension
-/// (`interceptor` / `guard` / `filter`). Each layer is boxed to the stable
-/// `BoxEndpoint` shape. Reversed so the first-listed entry ends up outermost
-/// within its layer, matching the per-route convention. `attr` names the source
-/// attribute for the not-registered diagnostic.
+/// Build wrap statements for a list of container-resolved layers via
+/// `EndpointExt::<method>`. Each layer is boxed to `BoxEndpoint`; reversed so
+/// the first-listed entry ends up outermost within its layer.
 fn controller_layers(paths: &[Path], method: &str, attr: &str) -> Vec<TokenStream2> {
     let method = format_ident!("{method}");
     let prefix = format!("#[{attr}] controller layer `");

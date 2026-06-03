@@ -6,22 +6,8 @@ use nestrs_core::injectable;
 use nestrs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 use nestrs_graphql::ResolverGuard;
 
-/// The GraphQL counterpart of HTTP's `#[use_guards(AuthGuard, AppAbilityGuard)]`.
-///
-/// Each `#[resolver]` binds `#[use_guards(GraphqlAuthGuard)]` so the **access
-/// graph** sees the dependency on `AuthzGraphqlModule` — without this, a
-/// resolver would compile fine yet panic at runtime when [`Ability`] is
-/// missing from the context (the `dyn OperationGuard` bridge that builds it
-/// runs from a different module, and `Ability` lives on the GraphQL context
-/// rather than in the container, so the contract is otherwise invisible).
-///
-/// The check itself is a one-shot **read** of the seeded context: it returns
-/// `Ok(())` when the `OperationGuard` bridge has installed an `Arc<Ability>`
-/// (an authenticated caller) and `Err` otherwise — anonymous GraphQL is
-/// closed by default, mirroring the HTTP `AppAbilityGuard` posture. Per-route
-/// or per-operation policy decisions (admin-only operations, maintenance
-/// gating) live in feature-specific `ResolverGuard`s that compose with this
-/// one, just as a stacking HTTP guard would.
+/// Access-graph marker + fail-closed read of the seeded `Ability` — anonymous
+/// GraphQL is denied by default, mirroring the HTTP `AppAbilityGuard` posture.
 #[injectable]
 #[derive(Default)]
 pub struct GraphqlAuthGuard;
@@ -31,11 +17,6 @@ impl ResolverGuard for GraphqlAuthGuard {
     async fn check(&self, ctx: &Context<'_>) -> Result<()> {
         match ctx.data_opt::<Arc<Ability>>() {
             Some(_) => Ok(()),
-            // Match the `extensions.code` convention `authorize()`/`bind()`
-            // use (they emit `FORBIDDEN`). A missing ability means the request
-            // never authenticated, so the standard `UNAUTHENTICATED` code is
-            // the right one — and the leaking wiring-bug detail stays out of
-            // the client-visible message.
             None => Err(Error::new("unauthenticated")
                 .extend_with(|_, e| e.set("code", "UNAUTHENTICATED"))),
         }

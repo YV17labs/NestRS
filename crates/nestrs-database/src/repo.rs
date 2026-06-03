@@ -1,26 +1,13 @@
 //! [`Repo`] — the query entry point that makes security and transactions
-//! transparent.
-//!
-//! A service queries through `Repo::<E>` instead of holding a connection, so two
-//! cross-cutting concerns disappear from its code:
-//!
-//! - **Transactions** — every `Repo` call runs against the *ambient*
-//!   [`Executor`](crate::Executor), which is the request's transaction when one
-//!   is open. The service never threads a transaction handle.
-//! - **Row-level security** — every *read* is filtered by the caller's
-//!   [`Ability`](nestrs_authz::Ability) (`condition_for`), read from the ambient
-//!   request ability, and a [`update`](Repo::update)/[`delete`](Repo::delete) is
-//!   gated the same way: its `WHERE` carries `condition_for(Update/Delete)` on top
-//!   of the primary key, so a caller cannot mutate a row outside its scope even by
-//!   id. A feature cannot forget to scope its reads or writes to what the caller
-//!   may touch. Worker jobs and other non-request paths run unscoped when no
-//!   ability is present; a **request-scoped** executor without an ability denies
-//!   every row (fail-closed) and logs a warning.
-//!
-//! `Repo` requires an ambient executor (the [`DbContext`](crate::DbContext)
-//! interceptor installs it per request); a call outside that scope errors rather
-//! than silently reaching a connection it does not have. For a custom query, take
-//! the ambient executor with [`Repo::conn`] and drive SeaORM directly.
+//! transparent. Every call runs against the ambient
+//! [`Executor`](crate::Executor) (the request's transaction when open) and is
+//! filtered by the caller's [`Ability`](nestrs_authz::Ability): reads via
+//! `condition_for(Read)`, by-id writes via `condition_for(Update/Delete)` ANDed
+//! with the primary key — so a caller cannot mutate a row outside its scope
+//! even by id. Worker/system paths run unscoped (no ability ⇒ TRUE); a
+//! request-scoped executor without an ability denies every row (fail-closed).
+//! A call outside the executor scope errors rather than silently reaching a
+//! connection it does not have.
 
 use std::marker::PhantomData;
 
@@ -33,9 +20,8 @@ use sea_orm::{
 
 use crate::executor::{current_executor, current_executor_scope, Executor, ExecutorScope};
 
-/// The caller's row-level filter for `action` on `E`, taken from the ambient
-/// [`Ability`](nestrs_authz::Ability). Without an ability on a request-scoped
-/// executor the filter is deny-all; on worker/system paths it is unscoped.
+/// Row-level filter for `action` on `E` from the ambient ability. Deny-all on a
+/// request-scoped executor without an ability; unscoped on worker/system paths.
 pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
     match current_ability() {
         Some(ability) => ability.condition_for::<E>(action),
@@ -53,13 +39,11 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
 }
 
 /// Repository over entity `E`, bound to the ambient request executor and ability.
-/// Zero-sized — its methods are associated functions named at the call site
-/// (`Repo::<users::Entity>::all()`).
 pub struct Repo<E: EntityTrait>(PhantomData<fn() -> E>);
 
 impl<E: EntityTrait> Repo<E> {
-    /// The ambient request executor (the transaction when one is open, else the
-    /// pool), for a write or a custom query: `active.insert(&Repo::<E>::conn()?)`.
+    /// The ambient executor (transaction when open, else the pool), for a write
+    /// or a custom query: `active.insert(&Repo::<E>::conn()?)`.
     pub fn conn() -> Result<Executor, DbErr> {
         current_executor().ok_or_else(|| {
             DbErr::Custom(
@@ -79,9 +63,9 @@ impl<E: EntityTrait> Repo<E> {
             .await
     }
 
-    /// A row by primary key, returned only if the caller may [`Read`](Action::Read)
-    /// it — a row outside the caller's scope reads as `None`, never leaking its
-    /// existence.
+    /// A row by primary key, returned only if the caller may
+    /// [`Read`](Action::Read) it. A row outside the caller's scope reads as
+    /// `None` — never leaking its existence.
     pub async fn find_by_id(
         id: <E::PrimaryKey as PrimaryKeyTrait>::ValueType,
     ) -> Result<Option<E::Model>, DbErr> {
@@ -93,18 +77,15 @@ impl<E: EntityTrait> Repo<E> {
     }
 
     /// A [`Select`] pre-filtered to what the caller may `action`, for a custom
-    /// query. Chain further constraints and execute against [`Repo::conn`], e.g.
-    /// `Repo::<E>::scoped(Action::Update).all(&Repo::<E>::conn()?)`.
+    /// query. Chain further constraints and execute against [`Repo::conn`].
     pub fn scoped(action: Action) -> Select<E> {
         E::find().filter(scope_for::<E>(action))
     }
 
-    /// Update a row from its `ActiveModel`, gated by the caller's ability: the
-    /// write's `WHERE` carries [`condition_for(Update)`](nestrs_authz::Ability::condition_for)
-    /// on top of the primary key, so a row outside the caller's scope is never
-    /// touched. When the scope excludes the row the call errors
-    /// [`DbErr::RecordNotUpdated`] — a caller cannot mutate by id past its scope.
-    /// Runs against the ambient executor (the request transaction).
+    /// Update a row, gated by `condition_for(Update)` ANDed with the primary
+    /// key: a row outside the caller's scope is never touched and surfaces as
+    /// [`DbErr::RecordNotUpdated`], so a caller cannot mutate by id past its
+    /// scope.
     pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
     where
         A: ActiveModelTrait<Entity = E> + Send,
@@ -118,12 +99,10 @@ impl<E: EntityTrait> Repo<E> {
             .await
     }
 
-    /// Delete a row, gated by the caller's ability: the write's `WHERE` carries
-    /// [`condition_for(Delete)`](nestrs_authz::Ability::condition_for) on top of
-    /// the primary key, so a row outside the caller's scope is not deleted. The
-    /// returned [`DeleteResult::rows_affected`] is `0` when the scope (or the row's
-    /// absence) excluded it — the caller decides whether that is a denial. Runs
-    /// against the ambient executor (the request transaction).
+    /// Delete a row, gated by `condition_for(Delete)` ANDed with the primary
+    /// key. A row outside the caller's scope is not deleted; the returned
+    /// [`DeleteResult::rows_affected`] is `0` when the scope (or the row's
+    /// absence) excluded it — the caller decides whether that is a denial.
     pub async fn delete<A, M>(model: M) -> Result<DeleteResult, DbErr>
     where
         A: ActiveModelTrait<Entity = E> + Send,

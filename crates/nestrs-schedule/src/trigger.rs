@@ -1,31 +1,20 @@
-//! When a cron job fires: the trigger kinds and the cron-expression presets.
-
 use std::time::Duration;
 
-/// When a [`CronJobMeta`](crate::CronJobMeta) fires. The `#[cron_job]` decorator
-/// picks the variant from its argument (`every` → [`Interval`](Trigger::Interval),
-/// `after` → [`Timeout`](Trigger::Timeout), `cron` → [`Cron`](Trigger::Cron)); the
-/// [`Scheduler`](crate::Scheduler) reads it to decide how to tick the job.
 pub enum Trigger {
-    /// Fixed interval — the `@Interval` analog. First run one interval in.
+    /// First run one interval in (matches `@Interval`).
     Interval(Duration),
-    /// Run once, this long after boot — the `@Timeout` analog.
     Timeout(Duration),
-    /// A cron expression evaluated by `croner` — the `@Cron` analog. `expr` is a
-    /// 5/6/7-field pattern; `tz` is an optional IANA timezone name (e.g.
-    /// `"Europe/Paris"`), defaulting to UTC when `None`. Both strings are parsed
-    /// once at [`Scheduler`](crate::Scheduler) configure time, so a malformed value
-    /// fails the boot.
+    /// `expr` is a 5/6/7-field croner pattern; `tz` is an optional IANA name
+    /// (UTC when `None`). Both parsed at `Scheduler` configure, so a bad value
+    /// fails boot.
     Cron {
         expr: &'static str,
         tz: Option<&'static str>,
     },
 }
 
-/// Cron-expression presets, mirroring NestJS's `CronExpression` enum so a job
-/// reads `#[cron_job(cron = CronExpression::EVERY_MINUTE)]`. Each value is a
-/// 6-field `croner` pattern (`sec min hour day month weekday`), so every preset
-/// fires at a defined second. A test in this crate parses them all.
+/// 6-field `sec min hour day month weekday` patterns — every preset fires at
+/// a defined second.
 pub struct CronExpression;
 
 impl CronExpression {
@@ -61,8 +50,7 @@ mod tests {
     use croner::Cron;
     use std::str::FromStr;
 
-    /// Every preset must be a valid `croner` pattern with a future occurrence —
-    /// guards the table against a typo that would only surface at a user's boot.
+    /// Guards the table against a typo that would only surface at a user's boot.
     #[test]
     fn every_preset_parses_and_has_a_next_occurrence() {
         let presets = [

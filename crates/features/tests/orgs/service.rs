@@ -1,5 +1,3 @@
-//! `OrgsService` DB paths against live Postgres.
-
 use std::sync::Arc;
 
 use features::orgs::{ActiveModel, Column, Entity, OrgsService};

@@ -4,22 +4,17 @@ use tokio_util::sync::CancellationToken;
 
 use crate::container::Container;
 
-/// A `Transport` is anything that accepts inbound requests on behalf of the
-/// app — an HTTP server, an MCP-over-stdio loop, a gRPC server, …
+/// Anything that accepts inbound requests on behalf of the app — an HTTP
+/// server, MCP-over-stdio loop, gRPC server, ….
 ///
-/// The trait is intentionally thin: lifecycle (`configure`, `serve`) only.
-/// It does **not** define a message-pattern matcher, retry policy, or ack
-/// semantics — those are concerns of the specific protocol/SDK and live in
-/// the transport's own crate, not in this core abstraction.
+/// Lifecycle only: protocol-level concerns (message patterns, retries, ack
+/// semantics) live in the transport's own crate.
 ///
-/// Boot sequence orchestrated by [`crate::App::run`]:
-///
-/// 1. `configure(&container)` is awaited on each transport, in registration
-///    order. A transport reads the container's metadata via
-///    [`DiscoveryService`](crate::DiscoveryService) here to discover its surfaces.
-/// 2. Each transport's `serve` future is spawned with a shared
-///    [`CancellationToken`]. SIGTERM/SIGINT cancels the token; transports
-///    must observe it and shut down gracefully.
+/// [`crate::App::run`] awaits `configure` on each transport in registration
+/// order (a transport scans its surfaces via
+/// [`DiscoveryService`](crate::DiscoveryService) here), then spawns every
+/// `serve` future with a shared [`CancellationToken`] that SIGTERM/SIGINT
+/// triggers.
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
     async fn configure(&mut self, container: &Container) -> Result<()>;

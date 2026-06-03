@@ -1,13 +1,7 @@
-//! HTTP binding for request-scoped providers.
-//!
-//! [`RequestScopeEndpoint`] wraps the route tree so each request gets a fresh
-//! [`RequestScope`] in its extensions; the [`Scoped<T>`] extractor reads it back
-//! to resolve a `#[injectable(scope = request)]` provider (built once per
-//! request, cached for that request). Because the scope falls through to the
-//! singleton container, `Scoped<T>` also resolves an ordinary singleton — but
-//! prefer plain `#[inject]` for those; reach for `Scoped<T>` for a value whose
-//! lifetime is the request (a per-request correlation id, the authenticated
-//! caller as a service, a request-scoped unit of work).
+//! HTTP binding for request-scoped providers — [`RequestScopeEndpoint`] installs
+//! a fresh [`RequestScope`] per request; [`Scoped<T>`] reads it back to resolve
+//! an `#[injectable(scope = request)]` provider (or, falling through, a
+//! singleton — prefer plain `#[inject]` for those).
 
 use std::any::type_name;
 use std::ops::Deref;
@@ -17,10 +11,10 @@ use nestrs_core::{Container, RequestScope};
 use poem::http::StatusCode;
 use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, RequestBody, Response, Result};
 
-/// Endpoint wrapper that installs a fresh [`RequestScope`] (over the singleton
-/// container) into each request's extensions before delegating inward, so guards
-/// and handlers can resolve request-scoped providers via [`Scoped<T>`]. Applied
-/// outermost by [`HttpTransport`](crate::HttpTransport).
+/// Installs a fresh [`RequestScope`] (over the singleton container) into each
+/// request's extensions before delegating inward, so guards and handlers can
+/// resolve request-scoped providers via [`Scoped<T>`]. Applied outermost by
+/// [`HttpTransport`](crate::HttpTransport).
 pub struct RequestScopeEndpoint<E> {
     inner: E,
     container: Container,
@@ -46,13 +40,9 @@ where
     }
 }
 
-/// Resolves a provider of type `T` from the current request's [`RequestScope`] —
-/// a `#[injectable(scope = request)]` provider (fresh per request, cached for the
-/// request) or, falling through, a singleton. Read it via [`Deref`] or own the
-/// `Arc` with [`into_inner`](Scoped::into_inner).
-///
-/// Rejects with `500` if the scope is absent (the [`RequestScopeEndpoint`] did
-/// not run — a transport wiring bug) or if no provider is registered for `T`.
+/// Resolves a provider of type `T` from the current request's
+/// [`RequestScope`]. Rejects with `500` if the scope is absent (a transport
+/// wiring bug) or if no provider is registered for `T`.
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {

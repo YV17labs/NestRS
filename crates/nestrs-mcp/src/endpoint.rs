@@ -10,8 +10,7 @@ use rmcp::ServerHandler;
 
 use crate::guard::McpOperationGuard;
 
-/// The factory runs on every new MCP session, so per-session state in the
-/// returned handler is fresh.
+/// `factory` runs on every new MCP session, so per-session state stays fresh.
 pub fn endpoint<F, H>(factory: F) -> impl IntoEndpoint
 where
     F: Fn() -> H + Send + Sync + 'static,
@@ -20,7 +19,6 @@ where
     endpoint_with_guard(None, factory)
 }
 
-/// Like [`endpoint`] but runs an optional [`McpOperationGuard`] before each request.
 pub fn endpoint_with_guard<F, H>(
     guard: Option<Arc<dyn McpOperationGuard>>,
     factory: F,

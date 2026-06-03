@@ -1,5 +1,4 @@
-//! The [`QueueWorker`] transport: runs an apalis worker for every discovered
-//! `#[processor]`, all on one [`Monitor`] sharing the app's Redis connection.
+//! Runs one apalis worker per discovered `#[processor]` on a shared [`Monitor`].
 
 use anyhow::{Context, Result};
 use apalis::prelude::Monitor;
@@ -11,23 +10,6 @@ use tokio_util::sync::CancellationToken;
 use crate::connection::QueueConnection;
 use crate::processor::ProcessorMeta;
 
-/// A [`Transport`] that consumes every `#[processor]` discovered in the module
-/// tree. Attach it in `main` alongside the others:
-///
-/// ```ignore
-/// App::builder()
-///     .provide_factory(|_| QueueConnection::connect("redis://127.0.0.1/"))
-///     .module::<AppModule>()
-///     .build().await?
-///     .transport(HttpTransport::new().bind("0.0.0.0:3002"))
-///     .transport(QueueWorker::new())
-///     .run().await
-/// ```
-///
-/// At [`configure`](Transport::configure) it reads every [`ProcessorMeta`] from
-/// the fully-assembled container and resolves the shared [`QueueConnection`];
-/// [`serve`](Transport::serve) builds an apalis [`Monitor`] with one worker per
-/// processor and runs it until shutdown is signalled.
 pub struct QueueWorker {
     processors: Vec<Arc<ProcessorMeta>>,
     container: Option<Container>,
@@ -58,8 +40,7 @@ impl Transport for QueueWorker {
             .map(|d| d.meta)
             .collect();
 
-        // Fail fast at boot if there are processors to run but nothing seeded the
-        // shared connection — an app with no processors attaches this harmlessly.
+        // Fail fast at boot if processors exist but no connection is seeded.
         if !self.processors.is_empty() {
             container.get::<QueueConnection>().context(
                 "QueueWorker found #[processor]s but no QueueConnection in the container — \
@@ -82,8 +63,8 @@ impl Transport for QueueWorker {
     }
 
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()> {
-        // No processors: idle until shutdown rather than returning, so this
-        // transport doesn't race the app down when it is the only one attached.
+        // No processors: idle until shutdown so this transport doesn't race
+        // the app down when it is the only one attached.
         if self.processors.is_empty() {
             cancel.cancelled().await;
             return Ok(());
@@ -92,7 +73,6 @@ impl Transport for QueueWorker {
         let container = self
             .container
             .expect("QueueWorker::configure must run before serve");
-        // Present because configure checked it whenever processors is non-empty.
         let connection = container
             .get::<QueueConnection>()
             .expect("QueueConnection presence is verified in configure");

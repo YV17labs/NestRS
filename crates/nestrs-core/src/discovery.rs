@@ -3,17 +3,9 @@ use std::sync::Arc;
 
 use crate::container::Container;
 
-/// Read-side façade over the container's metadata index. Transports
-/// (`HttpTransport`, future MCP/gRPC ones) and applicative scanners (a cron
-/// scheduler, an event bus, an OpenAPI generator, …) use this to find what
-/// they care about without coupling to a specific transport.
-///
-/// Each piece of metadata is attached at registration time via
-/// [`crate::ContainerBuilder::attach_meta`] (host-bound) or
-/// [`crate::ContainerBuilder::provide_meta`] (free-standing). The macros that
-/// describe a provider — `#[routes]` for an HTTP controller, future
-/// `#[cron_job]`, `#[mcp]`, … — emit the `attach_meta` call so the
-/// developer never touches it by hand.
+/// Read-side facade over the container's metadata index, used by transports
+/// and applicative scanners (OpenAPI, cron, MCP, …) without coupling to a
+/// specific transport.
 pub struct DiscoveryService<'a> {
     container: &'a Container,
 }
@@ -23,8 +15,7 @@ impl<'a> DiscoveryService<'a> {
         Self { container }
     }
 
-    /// Every piece of metadata of type `M` registered in the container, in
-    /// registration order.
+    /// Every piece of metadata of type `M` in registration order.
     pub fn meta<M: Any + Send + Sync>(&self) -> Vec<Discovered<M>> {
         self.container
             .metadata_entries(TypeId::of::<M>())
@@ -48,10 +39,9 @@ impl<'a> DiscoveryService<'a> {
     }
 }
 
-/// A discovered piece of metadata, paired with the `TypeId` of the provider
-/// it describes (when host-bound). Scanners that need to invoke methods on
-/// the live provider use the closures embedded inside `meta` — the macros
-/// generate them with the concrete type in scope.
+/// A discovered piece of metadata, paired with the host provider's `TypeId`
+/// when host-bound. Scanners invoke the live provider through closures
+/// embedded in `meta`.
 pub struct Discovered<M> {
     pub meta: Arc<M>,
     pub provider_type_id: Option<TypeId>,

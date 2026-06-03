@@ -1,6 +1,5 @@
-//! URI API versioning (`#[controller(version = "1")]`) and per-route exception
-//! filters (`#[use_filters(...)]`), driven end-to-end through the in-process
-//! HTTP harness.
+//! URI versioning (`#[controller(version = "1")]`) and exception filters
+//! (`#[use_filters]`), end-to-end through the HTTP harness.
 
 use nestrs_core::{injectable, module};
 use nestrs_http::{async_trait, controller, routes, Filter, RequestSnapshot};
@@ -8,8 +7,6 @@ use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Error, Response};
 
-/// Maps any error from the route it wraps to a 418, so a test can assert the
-/// filter ran (a successful response must pass through untouched).
 #[injectable]
 #[derive(Default)]
 struct TeapotFilter;
@@ -33,22 +30,18 @@ impl WidgetController {
         "widgets"
     }
 
-    // Always errors; the per-route filter turns the 500 into a 418.
     #[get("/boom")]
     #[use_filters(TeapotFilter)]
     async fn boom(&self) -> poem::Result<&'static str> {
         Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
 
-    // No filter: the error surfaces as poem's default 500.
     #[get("/raw-boom")]
     async fn raw_boom(&self) -> poem::Result<&'static str> {
         Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
 }
 
-// Controller-level filter: a `#[use_filters(...)]` on the struct wraps every
-// route, so a handler error is mapped even without a per-route filter.
 #[controller(path = "/gadgets")]
 #[use_filters(TeapotFilter)]
 struct GadgetController;
@@ -75,7 +68,6 @@ async fn versioned_controller_is_served_under_v_prefix() {
 #[tokio::test]
 async fn unversioned_path_is_not_mounted() {
     let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
-    // The raw path (no `/v1`) must not exist — versioning moved the whole controller.
     let resp = app.http().get("/widgets").send().await;
     resp.assert_status(StatusCode::NOT_FOUND);
 }
@@ -98,8 +90,6 @@ async fn route_without_filter_uses_default_error() {
 #[tokio::test]
 async fn controller_level_filter_maps_errors_without_a_per_route_filter() {
     let app = TestApp::for_module::<WidgetModule>().await.expect("boots");
-    // `/gadgets/boom` declares no per-route filter; the controller-level one maps
-    // its 500 to a 418.
     let resp = app.http().get("/gadgets/boom").send().await;
     resp.assert_status(StatusCode::IM_A_TEAPOT);
     resp.assert_text("filtered").await;

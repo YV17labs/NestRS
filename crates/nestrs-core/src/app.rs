@@ -26,32 +26,20 @@ pub struct App {
 }
 
 impl App {
-    /// Build the container from the root module and return an empty app.
-    ///
-    /// The sync path has no seeds or factories, so the access-graph check runs
-    /// against an empty global set: every provider's dependency must be reachable
-    /// through the import graph. A violation returns an
-    /// [`AccessGraphError`](crate::AccessGraphError), mirroring
-    /// [`AppBuilder::build`](AppBuilder::build) — `main` propagates it with `?`.
-    /// (A *missing provider* still panics inside the register-phase fixpoint,
-    /// which is sync and has no `Result` to thread through — the same in both
-    /// paths.)
+    /// Build the container from the root module synchronously. Returns
+    /// [`AccessGraphError`](crate::AccessGraphError) on contract violations.
+    /// A missing provider still panics inside the sync register-phase fixpoint.
     pub fn new<M: Module + 'static>() -> Result<Self> {
         let builder = M::register(Container::builder());
         let roots = [TypeId::of::<M>()];
-        // `ReachableProviders` is seeded after register but counts as global
-        // infrastructure for the access graph (anything that injects
-        // `Arc<ReachableProviders>` lives in a reachable position). Listing
-        // its TypeId in `global` up front makes the contract honest about
-        // what's available, independent of seed ordering.
+        // `ReachableProviders` is seeded after register but is global
+        // infrastructure for the access graph, so it must be in `global` up
+        // front regardless of seed ordering.
         let global: HashSet<TypeId> = HashSet::from([TypeId::of::<ReachableProviders>()]);
         validate_from_inventory(&roots, &global)?;
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder.provide(ReachableProviders(reachable));
         let container = builder.build();
-        // Surface linked-but-unreachable resolvers via warn (only meaningful
-        // when this app composes a schema; an app that links resolvers
-        // transitively but composes none is not their home).
         if container.get::<ResolverSchemaActive>().is_some() {
             warn_unreachable_resolvers_from_inventory(&roots);
         }
@@ -61,27 +49,20 @@ impl App {
         })
     }
 
-    /// Start an [`AppBuilder`] for apps that must seed runtime values (a loaded
-    /// config, parsed CLI args) or build providers asynchronously (a DB pool, a
-    /// cache client) before the module tree is wired. Apps that need none of
-    /// that use [`App::new`].
+    /// Start an [`AppBuilder`] for apps that must seed runtime values or build
+    /// providers asynchronously before the module tree is wired.
     pub fn builder() -> AppBuilder {
         AppBuilder::new()
     }
 
-    /// Container reference, in case the caller needs to resolve services
-    /// before attaching transports (e.g. to build a GraphQL schema from a
-    /// resolver that lives in the container).
     pub fn container(&self) -> &Container {
         &self.container
     }
 
     /// Run the init lifecycle phases (`OnModuleInit`, then
     /// `OnApplicationBootstrap`) against the built container, without serving.
-    /// [`run`](App::run) calls this internally before serving; it is exposed so a
-    /// test harness ([`nestrs-testing`](https://docs.rs/nestrs-testing)) can drive
-    /// the same startup the server performs — the NestJS `app.init()` analog. A
-    /// failing hook aborts with its error.
+    /// The NestJS `app.init()` analog, exposed so a test harness can drive the
+    /// same startup the server performs.
     pub async fn init(&self) -> Result<()> {
         run_phase(&self.container, LifecyclePhase::OnModuleInit).await?;
         run_phase(&self.container, LifecyclePhase::OnApplicationBootstrap).await?;
@@ -107,8 +88,8 @@ impl App {
             t.configure(&container).await?;
         }
 
-        // Init phases run after wiring, before serving. A failure here aborts
-        // the boot — nothing is listening yet, so there is nothing to tear down.
+        // Init phases run after wiring, before serving — nothing is listening
+        // yet, so a failure here aborts cleanly.
         run_phase(&container, LifecyclePhase::OnModuleInit).await?;
         run_phase(&container, LifecyclePhase::OnApplicationBootstrap).await?;
 
@@ -140,8 +121,8 @@ impl App {
             }
         }
 
-        // Shutdown phases run after the transports have stopped, best-effort, so
-        // every provider's cleanup runs even if one fails or a transport errored.
+        // Shutdown is best-effort: every provider's cleanup runs even if one
+        // fails or a transport errored.
         run_phase_lenient(&container, LifecyclePhase::OnModuleDestroy).await;
         run_phase_lenient(&container, LifecyclePhase::BeforeApplicationShutdown).await;
         run_phase_lenient(&container, LifecyclePhase::OnApplicationShutdown).await;
@@ -153,9 +134,6 @@ impl App {
     }
 }
 
-/// The two registration entry points of a [`Module`], plus its `TypeId`,
-/// captured so [`AppBuilder::build`] can run them in separate phases and root
-/// the access-graph check at the module tree's entry points.
 struct ModuleHooks {
     type_id: TypeId,
     collect: fn(ContainerBuilder) -> ContainerBuilder,
@@ -169,40 +147,23 @@ struct ModuleHooks {
 ///
 /// 1. **Seeds** — values registered with [`provide`](AppBuilder::provide) /
 ///    [`provide_arc`](AppBuilder::provide_arc) /
-///    [`provide_dyn`](AppBuilder::provide_dyn): runtime values a `main` computes
-///    (a loaded config, parsed CLI args) for the DI graph to inject.
-/// 2. **Collect** — each module's [`collect`](crate::Module::collect) runs,
-///    queuing the async factories its import tree owns (a DB pool, a queue
-///    connection — a [`DynamicModule`](crate::DynamicModule) whose `collect`
-///    registers one). No provider is built yet.
-/// 3. **Factories** — every queued factory (from a module's `collect` or from
-///    [`provide_factory`](AppBuilder::provide_factory) at the root) is `await`ed.
-///    Each sees the container so far, so it may depend on a seed or an earlier
-///    factory; a returned `Err` aborts the build. A factory whose output type a
-///    seed already supplies is **skipped** — a seed wins over a module's
-///    `for_root` factory, the path a test takes to inject a pre-built resource.
+///    [`provide_dyn`](AppBuilder::provide_dyn).
+/// 2. **Collect** — each module's [`collect`](crate::Module::collect) queues
+///    the async factories its import tree owns. No provider is built yet.
+/// 3. **Factories** — every queued factory is `await`ed; each sees the
+///    container so far. A factory whose output type a seed already supplies is
+///    **skipped** (a seed wins over a module's `for_root` factory — the path
+///    a test takes to inject a pre-built resource).
 /// 4. **Register** — each module's [`register`](crate::Module::register) builds
-///    its providers last, injecting the seeds and factory outputs above.
+///    its providers last, injecting seeds and factory outputs.
 ///
-/// The collect/factory split is what lets a module *own* an async resource (its
-/// `for_root` returns a `DynamicModule` whose `collect` queues the factory)
-/// while still being declared in `#[module(imports = [...])]` — `register` is
-/// synchronous and cannot `await`, so the value is produced in the factory
-/// phase before any provider needs it. Apps with no runtime values use
-/// [`App::new`] instead.
+/// The collect/factory split is what lets a module own an async resource while
+/// still being declared in `#[module(imports = [...])]` — `register` is
+/// synchronous and cannot `await`.
 pub struct AppBuilder {
     builder: ContainerBuilder,
     modules: Vec<ModuleHooks>,
-    /// Provider replacements applied *after* the register phase, so they win
-    /// over a module's own registration. Seeded by
-    /// [`override_value`](Self::override_value) / [`override_dyn`](Self::override_dyn),
-    /// mainly for tests swapping a real provider for a mock.
     overrides: Vec<Registrar>,
-    /// When set, [`build`](Self::build) returns an
-    /// [`UnreachableResolversError`] if any linked `#[resolver]` lives in no
-    /// reachable module. Default `false` (the default boot emits a `warn` so a
-    /// workspace that ships multiple apps with different surfaces is not
-    /// punished for legitimately-linked-but-unused resolvers).
     strict_resolver_membership: bool,
 }
 
@@ -216,8 +177,7 @@ impl AppBuilder {
         }
     }
 
-    /// Seed a runtime value, wrapped in `Arc` internally. Injectable as
-    /// `Arc<T>` by any provider in the module tree.
+    /// Seed a runtime value, injectable as `Arc<T>`.
     pub fn provide<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.builder = self.builder.provide(value);
         self
@@ -229,7 +189,7 @@ impl AppBuilder {
         self
     }
 
-    /// Seed a trait-object binding, injectable elsewhere as `Arc<dyn Trait>`.
+    /// Seed a trait-object binding, injectable as `Arc<dyn Trait>`.
     pub fn provide_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.builder = self.builder.provide_dyn(value);
         self
@@ -237,9 +197,7 @@ impl AppBuilder {
 
     /// Register an async factory at the composition root — for a resource not
     /// owned by any module (most module-owned resources expose a `for_root`
-    /// instead). Its awaited output is stored as a provider, injectable as
-    /// `Arc<T>`; a returned `Err` aborts the build. If a seed already supplies
-    /// `T`, this factory is skipped (the seed wins):
+    /// instead). A seed of the same type wins (the factory is skipped).
     ///
     /// ```ignore
     /// App::builder()
@@ -263,17 +221,14 @@ impl AppBuilder {
     }
 
     /// Replace a concrete provider of type `T` *after* the module tree
-    /// registers, so this value wins. Intended for tests
-    /// ([`nestrs-testing`](https://docs.rs/nestrs-testing)) swapping a real
+    /// registers, so this value wins. Intended for tests swapping a real
     /// provider for a fake.
     ///
-    /// Because the container builds providers eagerly, the override reaches any
-    /// consumer resolved from the **final** container — controllers, resolvers,
-    /// guards, transports, lifecycle hooks — but not a provider already
-    /// constructed in the register phase that captured the original `Arc` (the
-    /// same final-vs-snapshot timing every aggregating concern observes). Override
-    /// the `dyn Trait` a service is injected behind ([`override_dyn`](Self::override_dyn))
-    /// and that caveat rarely bites in practice.
+    /// The override reaches consumers resolved from the **final** container,
+    /// but not providers already constructed in the register phase that
+    /// captured the original `Arc` (the same final-vs-snapshot timing every
+    /// aggregating concern observes). Override the `dyn Trait` instead — see
+    /// [`override_dyn`](Self::override_dyn).
     pub fn override_value<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.overrides
             .push(Box::new(move |builder| builder.replace(value)));
@@ -281,8 +236,7 @@ impl AppBuilder {
     }
 
     /// Replace a `dyn Trait` binding after the module tree registers — the test
-    /// counterpart of [`provide_dyn`](Self::provide_dyn). A consumer injecting
-    /// `Arc<dyn Trait>` from the final container resolves this value. See
+    /// counterpart of [`provide_dyn`](Self::provide_dyn). See
     /// [`override_value`](Self::override_value) for the eager-build caveat.
     pub fn override_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.overrides
@@ -291,20 +245,16 @@ impl AppBuilder {
     }
 
     /// Promote the default unreachable-resolver `warn` into a boot
-    /// [`UnreachableResolversError`] — every linked `#[resolver]` must live in
-    /// a module reachable from a root, or [`build`](Self::build) fails. Use in
-    /// apps where a forgotten `<Feature>GraphqlModule` import should be a CI
-    /// gate; leave default in apps that intentionally link broader surfaces
-    /// than they expose (a worker linking `features` for the data layer while
-    /// exposing only the queue handlers).
+    /// [`UnreachableResolversError`]. Use in apps where a forgotten
+    /// `<Feature>GraphqlModule` import should be a CI gate; leave default in
+    /// apps that intentionally link broader surfaces than they expose.
     pub fn strict_resolver_membership(mut self) -> Self {
         self.strict_resolver_membership = true;
         self
     }
 
-    /// Register a root module. May be called more than once; all modules
-    /// collect their factories and register their providers together, and each
-    /// roots the access-graph check.
+    /// Register a root module. May be called more than once; each call adds a
+    /// root to the access-graph check.
     pub fn module<M: Module + 'static>(mut self) -> Self {
         self.modules.push(ModuleHooks {
             type_id: TypeId::of::<M>(),
@@ -314,9 +264,8 @@ impl AppBuilder {
         self
     }
 
-    /// Run the four phases and return the assembled [`App`], ready for
-    /// [`transport`](App::transport) and [`run`](App::run). Propagates the first
-    /// factory error.
+    /// Run the four phases and return the assembled [`App`]. Propagates the
+    /// first factory error.
     pub async fn build(self) -> Result<App> {
         let AppBuilder {
             mut builder,
@@ -325,17 +274,12 @@ impl AppBuilder {
             strict_resolver_membership,
         } = self;
 
-        // Collect phase: every module queues the async factories its import
-        // tree owns, before any provider is built.
         for hooks in &modules {
             builder = (hooks.collect)(builder);
         }
-        // Factory phase: run all queued factories (module-owned and root-level).
         // A factory whose output type a seed already supplies is skipped, so a
-        // seed wins over a module's `for_root` factory — the path a test takes to
-        // boot against a pre-built resource (an `EphemeralDatabase` connection in
-        // place of `DatabaseModule`'s). In production nothing seeds a type a
-        // module factory owns, so every factory runs.
+        // seed wins over a module's `for_root` factory — the path a test takes
+        // to boot against a pre-built resource.
         for (type_id, factory) in builder.take_factories() {
             if builder.contains(type_id) {
                 continue;
@@ -343,36 +287,23 @@ impl AppBuilder {
             let register = factory(builder.snapshot()).await?;
             builder = register(builder);
         }
-        // The global set for the access-graph check: seeds + factory outputs,
-        // plus `ReachableProviders` (seeded a few lines down but conceptually
-        // global infrastructure, so the contract treats it as available
-        // anywhere — a provider that injects `Arc<ReachableProviders>`
-        // passes regardless of the actual `provide` ordering). Everything in
-        // this set is reachable from any module.
+        // `ReachableProviders` is seeded after register but counts as global
+        // infrastructure for the access graph, so it must be in `global` up
+        // front regardless of seed ordering.
         let mut global = builder.provider_ids();
         global.insert(TypeId::of::<ReachableProviders>());
-        // Register phase: build providers, now that factory outputs are present.
         for hooks in &modules {
             builder = (hooks.register)(builder);
         }
-        // Override phase: apply test substitutions last so they win over the
-        // modules' own registrations.
+        // Overrides last so they win over the modules' registrations.
         for ov in overrides {
             builder = ov(builder);
         }
 
-        // Enforce the import contract: every provider's dependency must be
-        // reachable through its module's imports or be global infrastructure.
         let roots: Vec<TypeId> = modules.iter().map(|h| h.type_id).collect();
         validate_from_inventory(&roots, &global)?;
-        // Seed the reachable provider set for transport-level discovery to
-        // module-gate against (the GraphQL schema, request-scoped loaders).
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder.provide(ReachableProviders(reachable));
-        // Surface linked-but-unreachable resolvers: a `warn` by default (a
-        // workspace shipping multiple apps with different surfaces is the
-        // expected case), promoted to a hard error when the app opted into
-        // strict membership.
         if builder.contains(TypeId::of::<ResolverSchemaActive>()) {
             if strict_resolver_membership {
                 let unreachable = unreachable_resolvers_from_inventory(&roots);
@@ -424,9 +355,8 @@ mod tests {
     struct Config(u32);
     struct Doubled(u32);
 
-    // Hand-written module (the `#[module]` macro lives in `nestrs-macros`, which
-    // this crate cannot use on its own types). It builds `Doubled` from a seeded
-    // `Config`, proving seeds are visible by the time modules register.
+    // The `#[module]` macro lives in `nestrs-macros`, so this crate's tests
+    // hand-write the trait impl.
     struct DoublerModule;
     impl Module for DoublerModule {
         fn register(builder: ContainerBuilder) -> ContainerBuilder {
@@ -495,8 +425,8 @@ mod tests {
         assert!(err.to_string().contains("connection refused"));
     }
 
-    // A module that owns its provider's factory via `collect` — the hand-written
-    // equivalent of a `DatabaseModule`. `register` adds nothing.
+    // Module owning its provider's factory via `collect` (the `DatabaseModule`
+    // shape).
     struct ConfigModule;
     impl Module for ConfigModule {
         fn register(builder: ContainerBuilder) -> ContainerBuilder {
@@ -509,9 +439,6 @@ mod tests {
 
     #[tokio::test]
     async fn module_owns_a_factory_via_collect() {
-        // `ConfigModule::collect` queues the `Config` factory; `DoublerModule`
-        // injects its output in the register phase — proving collect runs, and
-        // its factory is awaited, before any provider is built.
         let app = App::builder()
             .module::<ConfigModule>()
             .module::<DoublerModule>()
@@ -523,8 +450,6 @@ mod tests {
 
     #[tokio::test]
     async fn modules_inject_factory_output() {
-        // The factory builds `Config`; the module then reads it — the cross-phase
-        // contract a DB pool (factory) + repositories (module) will rely on.
         let app = App::builder()
             .provide_factory(|_| async { Ok(Config(7)) })
             .module::<DoublerModule>()
@@ -536,9 +461,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_seed_short_circuits_a_factory_of_the_same_type() {
-        // The seed supplies `Config`, so the (would-be-explosive) factory of the
-        // same type never runs — the seed wins. This is how a test injects a
-        // pre-built resource in place of a module's `for_root` factory.
         let app = App::builder()
             .provide(Config(99))
             .provide_factory::<Config, _, _>(|_| async { panic!("skipped factory must not run") })
@@ -550,9 +472,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_seed_short_circuits_a_module_owned_collect_factory() {
-        // `ConfigModule::collect` queues a `Config(7)` factory; the seed `Config(1)`
-        // shadows it, so `DoublerModule` reads the seed — the `EphemeralDatabase`
-        // path, where a seeded connection replaces `DatabaseModule`'s.
         let app = App::builder()
             .provide(Config(1))
             .module::<ConfigModule>()

@@ -1,6 +1,3 @@
-//! `#[hooks]`: declare application lifecycle hooks on a provider's impl block.
-//! See the entry doc in `lib.rs`.
-
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -8,8 +5,6 @@ use syn::{parse_macro_input, ImplItem, ItemImpl, ReturnType};
 
 use nestrs_codegen::impl_self_ident;
 
-/// The phase attributes recognised inside a `#[hooks]` impl block, paired with
-/// the `LifecyclePhase` variant each maps to.
 const HOOK_ATTRS: [(&str, &str); 5] = [
     ("on_module_init", "OnModuleInit"),
     ("on_application_bootstrap", "OnApplicationBootstrap"),
@@ -18,7 +13,6 @@ const HOOK_ATTRS: [(&str, &str); 5] = [
     ("on_application_shutdown", "OnApplicationShutdown"),
 ];
 
-/// `#[hooks]` entry: applies to an `#[injectable]` provider's impl block.
 pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     if !args.is_empty() {

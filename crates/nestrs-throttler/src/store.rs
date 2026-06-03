@@ -1,10 +1,8 @@
-//! [`InMemoryThrottler`] — the fixed-window counter behind [`ThrottlerGuard`].
+//! [`InMemoryThrottler`] — fixed-window counter shared process-wide.
 //!
-//! One instance is shared process-wide (provided as global infrastructure by
-//! [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root)); it holds the
-//! default limit and the per-key request windows. A Redis-backed store for
-//! multi-process deployments is a future addition — the guard would take a trait
-//! object then.
+//! Keys are not evicted, so an unbounded set of distinct clients grows the map.
+//! Acceptable for the in-process default; a future Redis store would handle
+//! expiry natively.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -14,10 +12,9 @@ use parking_lot::Mutex;
 
 use crate::throttle::Throttle;
 
-/// The result of counting one request against a key.
 pub struct Decision {
     pub allowed: bool,
-    /// When denied, how long until the window resets (for the `Retry-After` header).
+    /// When denied, time until the window resets (for the `Retry-After` header).
     pub retry_after: Duration,
 }
 
@@ -26,11 +23,6 @@ struct Window {
     count: u32,
 }
 
-/// A process-local fixed-window rate limiter.
-///
-/// Note: keys are not evicted, so an unbounded set of distinct clients grows the
-/// map. Acceptable for the in-process default; the future Redis store handles
-/// expiry natively.
 pub struct InMemoryThrottler {
     default: Throttle,
     trusted_proxies: Vec<IpAddr>,
@@ -46,19 +38,16 @@ impl InMemoryThrottler {
         }
     }
 
-    /// Proxies whose direct peer address may supply a trusted `X-Forwarded-For` chain.
     pub fn trusted_proxies(&self) -> &[IpAddr] {
         &self.trusted_proxies
     }
 
-    /// The module-wide default limit, used when a route attaches no `#[meta(Throttle)]`.
     pub fn default_limit(&self) -> Throttle {
         self.default
     }
 
-    /// Count one hit for `key` under `limit`. Fixed window: the first hit opens a
-    /// window; once `limit` hits land within it, the rest are denied until it
-    /// elapses, after which the window resets.
+    /// Count one hit for `key` under `limit`. Fixed window: the first hit opens
+    /// a window; the rest are denied until it elapses.
     pub fn hit(&self, key: &str, limit: Throttle) -> Decision {
         let now = Instant::now();
         let mut windows = self.windows.lock();
@@ -102,7 +91,6 @@ mod tests {
         assert!(!third.allowed, "the third hit exceeds the limit of 2");
         assert!(third.retry_after > Duration::ZERO);
 
-        // A different client has its own window.
         assert!(throttler.hit("other", limit).allowed);
     }
 

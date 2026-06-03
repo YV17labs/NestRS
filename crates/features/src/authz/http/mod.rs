@@ -1,7 +1,3 @@
-//! Authz HTTP adapter — [`AppAbilityGuard`] is the typed
-//! `AbilityGuard<AppAbility>` controllers bind with
-//! `#[use_guards(AuthGuard, AppAbilityGuard)]`.
-
 mod guard;
 mod module;
 

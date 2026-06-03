@@ -1,21 +1,16 @@
-//! Two transparent jobs `Authorize<A, S>` does as a [`RouteResponseShaper`], both
-//! keyed on the caller's ability that the guard attached:
+//! `Authorize<A, S>` as a [`RouteResponseShaper`] does two things keyed on the
+//! ability the guard attached:
 //!
-//! 1. **Ambient ability** — [`run`](RouteResponseShaper::run) wraps the handler in
-//!    [`with_ability`], so the data layer (`nestrs-database`'s `Repo`) reads the
-//!    caller's ability via `current_ability()` and scopes every query — the
-//!    developer writes no filter.
-//! 2. **Response masking** — after the handler, the wire JSON is parsed into
-//!    `S::Model` (filling columns the `#[expose]` output omits via the
-//!    macro-emitted [`WireModelDefaults`] impl) and run through the same typed
-//!    [`Ability::mask`] / [`Ability::mask_many`]. Keys absent from the wire body
-//!    are stripped again so an unrestricted field grant cannot leak skipped
+//! 1. Wraps the handler in [`with_ability`] so the data layer scopes every
+//!    query via `current_ability()` — no hand-written filter.
+//! 2. Masks the JSON response: parse into `S::Model` (filling columns the
+//!    `#[expose]` output omits via [`WireModelDefaults`]), run typed
+//!    [`Ability::mask`] / [`Ability::mask_many`], then strip keys absent from
+//!    the wire body so an unrestricted field grant cannot leak `#[expose(skip)]`
 //!    columns (e.g. `password_hash`).
 //!
-//! Masking is a security control, so this fails *closed*: a successful JSON body
-//! that cannot be reconciled with `S::Model` yields a `500` rather than shipping
-//! the data unmasked. The whole body is buffered to mask it, so masked list
-//! endpoints should be paginated.
+//! Fails **closed**: a successful JSON body that cannot be reconciled with
+//! `S::Model` yields 500 rather than shipping data unmasked.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -48,10 +43,7 @@ where
     where
         F: Future<Output = Result<Response>> + Send,
     {
-        // Install the ability as ambient state for the handler (and the services
-        // it calls), so the data layer can scope queries; then mask what comes
-        // back. A missing ability means the `Authorize` extractor already rejected
-        // the request with a 500, so this branch only carries it through.
+        // A missing ability means the extractor already rejected with 500.
         match captured {
             Some(ability) => {
                 let resp = with_ability(ability.clone(), inner).await?;
@@ -86,9 +78,8 @@ where
         Err(_) => return resp,
     };
 
-    // Parse the wire body first so we can round-trip handler DTOs (e.g. `User`
-    // with string ids) into `S::Model` for policy, then drop any fields the wire
-    // shape never carried (skipped columns like `password_hash`).
+    // Round-trip handler DTOs through `S::Model` for policy, then drop any
+    // fields the wire shape never carried (e.g. `password_hash`).
     let wire: Value = match serde_json::from_slice(bytes.as_ref()) {
         Ok(wire) => wire,
         Err(_) => {
@@ -144,12 +135,9 @@ where
     }
 }
 
-/// Deserialize a handler JSON object into `S::Model`, filling the columns the
-/// wire DTO omits so policy can run without a second subject type. The defaults
-/// are placeholders, emitted by `#[expose]` from each `#[expose(skip)]`
-/// scalar column's type — the masker strips those keys again via
-/// [`retain_wire_keys`] before the response ships, so a default value never
-/// reaches the wire.
+/// Deserialize a handler JSON object into `S::Model`, filling columns the wire
+/// DTO omits so policy can run. The placeholder defaults are stripped again by
+/// [`retain_wire_keys`] before the response ships — they never reach the wire.
 fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
 where
     S: EntityTrait + WireModelDefaults,

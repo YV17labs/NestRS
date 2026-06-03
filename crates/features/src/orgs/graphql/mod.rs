@@ -1,6 +1,3 @@
-//! Orgs GraphQL adapter — field resolvers on the entity plus root
-//! queries / mutations.
-
 mod module;
 mod resolver;
 

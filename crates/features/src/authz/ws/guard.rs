@@ -3,27 +3,10 @@ use nestrs_authz::current_ability;
 use nestrs_core::injectable;
 use nestrs_ws::{MessageGuard, WsClient};
 
-/// The WebSocket counterpart of HTTP's `#[use_guards(AuthGuard, AppAbilityGuard)]`
-/// and GraphQL's `#[use_guards(GraphqlAuthGuard)]`.
-///
-/// Two jobs, one declarative seam:
-///
-/// 1. **Access-graph marker.** Bound on a `#[subscribe_message]`, it makes a
-///    feature's `<Feature>WsModule` declare `AuthzWsModule` as a dep — without
-///    it, the per-message `dyn SocketContext`
-///    ([`WsDataContext`](nestrs_database::ws::WsDataContext)) that installs the
-///    ambient executor + ability is invisible to the import contract and a
-///    handler reaching `Repo` would silently run unscoped (or fail) at runtime.
-/// 2. **Runtime fail-closed check.** Asserts the connection's authz state is
-///    actually installed before the handler runs. `nestrs-ws` runs message
-///    guards **inside** [`SocketContext::around`], so when the gateway's
-///    connection-level [`AuthGuard`](crate::authn::AuthGuard) +
-///    [`AppAbilityGuard`](crate::authz::AppAbilityGuard) authenticated the
-///    upgrade, [`current_ability`] returns the captured ability here. A
-///    misconfigured gateway (no connection-level auth, or no `WsDataContext`
-///    bound) leaves it unset — the marker then rejects, preventing the
-///    "no-ability ⇒ unscoped read" footgun the data layer otherwise allows by
-///    design.
+/// Access-graph marker + runtime fail-closed check: rejects the message when
+/// no ambient ability is installed, preventing the "no-ability ⇒ unscoped
+/// read" footgun the data layer allows by design when a gateway is
+/// misconfigured (no connection-level auth, or no `WsDataContext` bound).
 #[injectable]
 #[derive(Default)]
 pub struct WsAuthGuard;

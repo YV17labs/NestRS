@@ -3,15 +3,10 @@ use std::sync::Arc;
 use nestrs_middleware::Interceptor;
 
 /// Discovery metadata attached by the `#[interceptor]` macro — the **global**
-/// interceptor form. The [`crate::HttpTransport`] walks these at boot via
-/// [`nestrs_core::DiscoveryService::meta`] and folds them around the
-/// assembled route, *innermost* to *outermost* in registration order
-/// (the last interceptor declared across the module tree wraps the rest). This
-/// is for infrastructure that must wrap *everything* (a DB-transaction context,
-/// tracing). To bind an interceptor to a single controller or handler instead,
-/// write a plain `#[injectable] + impl Interceptor` and list it in
-/// `#[use_interceptors(...)]` — it is then resolved from the container per route,
-/// not auto-mounted globally.
+/// interceptor form, folded around the assembled route innermost-to-outermost
+/// in registration order. For infrastructure that must wrap everything (DB
+/// transaction context, tracing). To bind per-controller/handler, write a
+/// plain `#[injectable] + impl Interceptor` and list it in `#[use_interceptors]`.
 pub struct HttpInterceptorMeta {
     interceptor: Arc<dyn Interceptor>,
 }

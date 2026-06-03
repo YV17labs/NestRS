@@ -1,16 +1,8 @@
-/// A pipe runs at a surface's request boundary, between extraction and the
-/// handler: it `transform`s an extracted value, returning the new value or a
-/// [`PipeError`]. The two use cases mirror NestJS: **transformation** (reshape
-/// the value) and **validation** (pass it through or reject).
+/// A pipe `transform`s an extracted value into a new value or a [`PipeError`].
 ///
-/// This maps NestJS's `PipeTransform.transform(value, metadata)` minus the
-/// `ArgumentMetadata` — in Rust the value's source (path/query/body) and target
-/// type are already encoded by the extractor the pipe wraps.
-///
-/// Pipes are **stateless**: a pipe is a zero-sized marker named at a call site
-/// (`Piped<ParseInt, _>`), never instantiated, so `transform` is an associated
-/// function. (Stateful/DI-injected pipes would need a different binding and are
-/// a future extension.)
+/// Pipes are **stateless** — a zero-sized marker named at a call site
+/// (`Piped<ParseInt, _>`), never instantiated — so `transform` is an associated
+/// function. Stateful/DI-injected pipes would need a different binding.
 pub trait Pipe {
     type In;
     type Out;
@@ -19,8 +11,7 @@ pub trait Pipe {
 
 /// Why a pipe rejected its input. A surface adapter renders it (the HTTP one as
 /// a `400`). Carries a human `message` plus optional structured `details` (e.g.
-/// the field-level errors from [`ValidationPipe`](crate::ValidationPipe)) so a
-/// surface can render both.
+/// the field-level errors from [`ValidationPipe`](crate::ValidationPipe)).
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{message}")]
 pub struct PipeError {
@@ -51,8 +42,6 @@ impl PipeError {
         self.details.as_ref()
     }
 
-    /// Take ownership of the `details`, so a surface rendering the error can
-    /// move them into a response body instead of cloning.
     pub fn into_details(self) -> Option<serde_json::Value> {
         self.details
     }

@@ -1,7 +1,6 @@
-//! Drive the `Scheduler` transport end-to-end against a hand-built container,
-//! exercising all three triggers live. Metadata is attached directly
-//! (`attach_meta` only needs a `'static` host type), so the test needs neither
-//! the `#[cron_job]` macro nor a full module tree — just the public surface.
+//! Drive `Scheduler` end-to-end against a hand-built container. Metadata is
+//! attached directly (`attach_meta` only needs a `'static` host type), so the
+//! test needs neither `#[cron_job]` nor a module tree.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -76,8 +75,8 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
     let cancel = CancellationToken::new();
     let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
 
-    // ~2.2s: interval (200ms) fires ~10×, the one-shot fires once at 300ms, and
-    // the per-second cron crosses at least one whole-second boundary.
+    // ~2.2s covers ~10 interval ticks, the one-shot at 300ms, and crosses a
+    // whole-second boundary for the cron.
     tokio::time::sleep(Duration::from_millis(2200)).await;
     cancel.cancel();
     serving
@@ -100,8 +99,6 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
     );
 }
 
-/// A malformed cron expression must abort the boot at configure time, naming the
-/// offending job — not fail silently or only on the first fire.
 #[tokio::test]
 async fn invalid_cron_expression_fails_configure() {
     struct BadHost;
@@ -127,9 +124,9 @@ async fn invalid_cron_expression_fails_configure() {
     );
 }
 
-// A `JobContext` bound in the container is resolved by the scheduler and wraps each
-// tick — the seam through which a database module installs a pool executor so a job
-// queries through `Repo`. Here a stub installs an ambient marker the job observes.
+// A bound `JobContext` wraps each tick — the seam a database module uses to
+// install a pool executor. The stub here installs an ambient marker the job
+// observes.
 tokio::task_local! {
     static MARKER: u8;
 }

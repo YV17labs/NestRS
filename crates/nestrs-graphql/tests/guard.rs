@@ -1,7 +1,5 @@
-//! `#[use_guards]` on a `#[resolver]` impl block — the GraphQL counterpart of a
-//! controller's guards. A `ResolverGuard` runs before the operation, reads the
-//! per-request state seeded into the context, and allows or denies. Driven
-//! end-to-end through the in-process harness.
+//! `#[use_guards]` on a `#[resolver]` impl — end-to-end through the in-process
+//! harness.
 
 use nestrs_core::{injectable, module};
 use nestrs_graphql::async_graphql::{Context, Error, Result};
@@ -11,8 +9,6 @@ use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response};
 
-/// A per-request role, attached by an HTTP guard from the `x-role` header and
-/// forwarded into the GraphQL context — the stand-in for an authenticated caller.
 #[derive(Clone)]
 struct Role(String);
 
@@ -33,8 +29,6 @@ impl Guard for RoleHeaderGuard {
     }
 }
 
-/// The resolver guard: only an `admin` role may proceed. A container-resolved
-/// `#[injectable]` provider, exactly like an HTTP guard.
 #[injectable]
 #[derive(Default)]
 struct RequireAdmin;
@@ -62,8 +56,9 @@ impl ResolverGuard for RequireAdmin {
 #[resolver]
 struct GuardedResolver;
 
-// Resolver-level guard: every operation runs `RequireAdmin` first. `secret` has no
-// `&Context` of its own, so the macro injects one to run the guard against.
+// `secret` has no `&Context` of its own — the macro injects one to run the
+// guard. `whoami` already declares one; the macro reuses it (the path the
+// `#[crud]`-generated ops follow).
 #[resolver]
 #[use_guards(RequireAdmin)]
 impl GuardedResolver {
@@ -72,9 +67,6 @@ impl GuardedResolver {
         Ok("classified".into())
     }
 
-    /// Already declares `&Context`, so the macro reuses it for the guard rather
-    /// than injecting a second one — the path crud-generated ops (which carry
-    /// `__ctx`) exercise.
     #[query]
     async fn whoami(&self, ctx: &Context<'_>) -> Result<String> {
         Ok(ctx
@@ -118,8 +110,8 @@ async fn resolver_guard_allows_an_admin() {
         "classified",
     );
 
-    // The guard also runs on an operation that already has its own `&Context`
-    // (reuse path), and the body still sees the seeded role.
+    // Reuse path: the guard runs on an op declaring its own `&Context`, and
+    // the body still sees the seeded role.
     let who = app
         .http()
         .post("/graphql")
@@ -144,7 +136,6 @@ async fn resolver_guard_allows_an_admin() {
 async fn resolver_guard_denies_a_non_admin() {
     let app = boot().await;
 
-    // A plain role is rejected by the guard before the body runs.
     let resp = app
         .http()
         .post("/graphql")
@@ -159,7 +150,6 @@ async fn resolver_guard_denies_a_non_admin() {
         "a non-admin is forbidden by the resolver guard",
     );
 
-    // No role at all is likewise denied.
     let anon = app
         .http()
         .post("/graphql")

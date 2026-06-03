@@ -1,32 +1,22 @@
 //! Application lifecycle hooks, mirroring NestJS's lifecycle events.
 //!
-//! A provider opts in by tagging methods on an impl block with `#[hooks]`
-//! (`#[on_module_init]`, `#[on_application_shutdown]`, …). The macro resolves
-//! the provider from the container at call time — the *same* instance request
-//! handlers see — and submits each hook to the link-time [`inventory`] registry
-//! below. [`crate::App::run`] drains the registry at the right moments.
+//! A provider opts in by tagging methods on an impl block with `#[hooks]`. Each
+//! hook is submitted to a link-time `inventory` registry that
+//! [`crate::App::run`] drains per phase. Submitting to `inventory` lets a
+//! provider keep its single `impl Discoverable` from `#[injectable]`.
 //!
-//! Why a registry rather than discovery metadata: a lifecycle hook decorates a
-//! provider that *already* carries its single `impl Discoverable` (emitted by
-//! `#[injectable]`), and a type can only have one. Submitting to `inventory`
-//! sidesteps that — the same trick GraphQL resolver composition uses — so a
-//! provider stays a plain `#[injectable]` and gains hooks without a second
-//! `Discoverable` or a central registration list.
-//!
-//! Ordering within a phase is by `(provider, method)` name, since the registry's
-//! link-time iteration order is not stable across builds. Cross-provider init
-//! *dependencies* (open the pool before warming the cache) are not expressed
-//! here — a hook that needs another service should inject it and rely on that
-//! service being constructed; the hook only runs side effects.
+//! Ordering within a phase is `(provider, method)` name to be stable across
+//! builds. Cross-provider init dependencies are not expressed here — a hook
+//! that needs another service injects it.
 
 use std::future::Future;
 use std::pin::Pin;
 
 use crate::container::Container;
 
-/// The point in the application lifecycle at which a hook runs. Init phases run
-/// after the container is built and transports configured, before serving;
-/// shutdown phases run after the transports stop. Names mirror NestJS.
+/// Lifecycle phase at which a hook runs. Init phases run after the container
+/// is built and transports configured, before serving; shutdown phases run
+/// after the transports stop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LifecyclePhase {
     OnModuleInit,
@@ -36,12 +26,11 @@ pub enum LifecyclePhase {
     OnApplicationShutdown,
 }
 
-/// Future a hook returns. Borrows the container for the duration of the call.
 type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
-/// One lifecycle hook, submitted to the link-time registry by `#[hooks]`. The
-/// `run` thunk resolves the provider from the container and invokes the hook
-/// method; it is a no-op if the provider was never registered in any module.
+/// One lifecycle hook submitted to the link-time registry by `#[hooks]`. The
+/// `run` thunk resolves the provider from the container; it is a no-op if the
+/// provider was never registered in any module.
 pub struct LifecycleHook {
     pub phase: LifecyclePhase,
     pub provider: &'static str,
@@ -51,8 +40,6 @@ pub struct LifecycleHook {
 
 inventory::collect!(LifecycleHook);
 
-/// Hooks registered for `phase`, sorted by `(provider, method)` so boot is
-/// deterministic regardless of link order.
 fn hooks_for(phase: LifecyclePhase) -> Vec<&'static LifecycleHook> {
     let mut hooks: Vec<&'static LifecycleHook> = inventory::iter::<LifecycleHook>()
         .filter(|hook| hook.phase == phase)
@@ -61,8 +48,7 @@ fn hooks_for(phase: LifecyclePhase) -> Vec<&'static LifecycleHook> {
     hooks
 }
 
-/// Run every hook for `phase` sequentially, aborting on the first error.
-/// Used for the init phases: a failed hook means the app must not start.
+/// Init-phase runner: sequential, aborts on the first error.
 pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> anyhow::Result<()> {
     for hook in hooks_for(phase) {
         tracing::debug!(
@@ -82,9 +68,8 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
     Ok(())
 }
 
-/// Run every hook for `phase` best-effort, logging failures and continuing.
-/// Used for the shutdown phases: one provider's cleanup error must not skip
-/// another's.
+/// Shutdown-phase runner: best-effort, logs failures and continues so one
+/// provider's cleanup error does not skip another's.
 pub(crate) async fn run_phase_lenient(container: &Container, phase: LifecyclePhase) {
     for hook in hooks_for(phase) {
         if let Err(err) = (hook.run)(container).await {
@@ -116,9 +101,7 @@ mod tests {
         }
     }
 
-    // Hand-written thunk + submission: the runtime is exercised here without the
-    // `#[hooks]` macro, which lives in `nestrs-macros` and cannot target this
-    // crate's own types.
+    // `#[hooks]` lives in `nestrs-macros`, so this test hand-writes the thunk.
     fn run_touch(container: &Container) -> HookFuture<'_> {
         Box::pin(async move {
             match container.get::<Probe>() {

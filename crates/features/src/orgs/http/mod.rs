@@ -1,5 +1,3 @@
-//! Orgs HTTP adapter — controller + REST error mapping.
-
 mod controller;
 mod error;
 mod module;

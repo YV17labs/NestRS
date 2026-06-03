@@ -1,5 +1,4 @@
-//! [`ThrottlerGuard`] — the per-route rate-limiting guard, the `@nestjs/throttler`
-//! `ThrottlerGuard` analog.
+//! [`ThrottlerGuard`] — per-route rate-limiting guard.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -12,14 +11,11 @@ use poem::{Request, Response};
 use crate::store::InMemoryThrottler;
 use crate::throttle::Throttle;
 
-/// Bind it per route with `#[use_guards(ThrottlerGuard)]`. It applies the module
-/// default ([`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root)) unless
-/// the route overrides it with `#[meta(Throttle::...)]`, which the guard reads via
-/// the [`Reflector`]. A request over the limit is rejected with
-/// `429 Too Many Requests` and a `Retry-After` header — it never reaches the
-/// handler.
+/// Bind per route with `#[use_guards(ThrottlerGuard)]`. Reads the route's
+/// `#[meta(Throttle::...)]` via the [`Reflector`], falling back to the module
+/// default; rejects with `429` + `Retry-After`.
 ///
-/// It must be a per-route guard, not a global one: a global guard runs before
+/// Must be a per-route guard, not a global one: a global guard runs before
 /// routing, so the route's `#[meta(Throttle)]` is not yet attached.
 #[injectable]
 pub struct ThrottlerGuard {
@@ -51,8 +47,8 @@ impl Guard for ThrottlerGuard {
     }
 }
 
-/// The rate-limit key. By default the direct peer IP is used. When the peer is a
-/// configured trusted proxy, the leftmost `X-Forwarded-For` hop is used instead.
+/// Direct peer IP unless the peer is a configured trusted proxy — then the
+/// leftmost `X-Forwarded-For` hop.
 fn client_key(req: &Request, trusted_proxies: &[IpAddr]) -> String {
     let peer = req.remote_addr().as_socket_addr().map(|addr| addr.ip());
     client_key_from(

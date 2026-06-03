@@ -1,12 +1,3 @@
-//! OAuth [`Strategy`] implementations and guard aliases (`AuthGuard<S>`).
-//!
-//! These are **thin HTTP adapters** over [`OAuthFlow`]: they read a poem
-//! request, hand the parsed inputs to the service, and wrap the typed result
-//! in an [`Outcome`]. All grant logic — code exchange, profile resolution,
-//! find-or-create, client credential checks — lives in
-//! [`super::service::OAuthFlow`], so this file is reachable as pure HTTP
-//! plumbing.
-
 use std::sync::Arc;
 
 use async_trait::async_trait;

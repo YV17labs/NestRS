@@ -1,5 +1,5 @@
-//! `OpenApiModule` — import it to serve the auto-generated OpenAPI document and
-//! Swagger UI over HTTP.
+//! `OpenApiModule` — self-mounts `/api` (Swagger UI) + `/api-json` (the document)
+//! over the HTTP transport. Import it; no `main.rs` wiring.
 
 use nestrs_config::ConfigModule;
 use nestrs_core::{ContainerBuilder, DynamicModule};
@@ -10,34 +10,19 @@ use crate::config::OpenApiConfig;
 use crate::document::build_document;
 use crate::ui;
 
-// NestJS convention (`SwaggerModule.setup('api', …)`): UI at `/api`, document
-// at `/api-json`. The OpenAPI spec mandates no serving path, so we follow the
-// reference NestJS surface this framework mirrors. The bundled Swagger UI
-// references these paths absolutely, so they are fixed (not yet configurable).
+// NestJS convention paths. The bundled Swagger UI references these absolutely,
+// so they are fixed (not yet configurable).
 const DOCS_PATH: &str = "/api";
 const SPEC_PATH: &str = "/api-json";
 
-/// Add to a `#[module(imports = [...])]` to expose:
-/// - `GET /api-json` — the OpenAPI 3.1 document, and
-/// - `GET /api` — bundled Swagger UI.
-///
-/// Like [`nestrs_graphql::GraphqlModule`], it self-mounts via an
-/// [`HttpEndpointMeta`]: there is nothing to wire in `main.rs`. The spec is
-/// composed from every `#[controller]` linked into the binary, so importing
-/// this module is the only step.
-///
-/// Wire it with `OpenApiModule::for_root()` (env-driven). The document metadata
-/// loads through [`ConfigModule::for_feature`] from `NESTRS_OPENAPI__*`:
-///
-/// ```ignore
-/// #[module(imports = [OpenApiModule::for_root()])]
-/// ```
+/// Add to a `#[module(imports = [...])]` to expose `GET /api-json` (the OpenAPI
+/// 3.1 document) and `GET /api` (bundled Swagger UI). Wire it with
+/// `OpenApiModule::for_root()`; configuration loads from `NESTRS_OPENAPI__*`.
 pub struct OpenApiModule;
 
 impl OpenApiModule {
-    /// Configure the document. Pass `None` to load [`OpenApiConfig`] from
-    /// `NESTRS_OPENAPI__*` (the `.env` cascade), or an `OpenApiConfig` to pin it in
-    /// code (wins over the environment).
+    /// Pass `None` to load [`OpenApiConfig`] from `NESTRS_OPENAPI__*`, or an
+    /// `OpenApiConfig` to pin it in code (wins over the environment).
     pub fn for_root(config: impl Into<Option<OpenApiConfig>>) -> OpenApiSetup {
         OpenApiSetup {
             pinned: config.into(),
@@ -45,9 +30,6 @@ impl OpenApiModule {
     }
 }
 
-/// The configured form of [`OpenApiModule`]. Resolves `OpenApiConfig` in
-/// **collect** (env, or the pinned value), then installs the endpoint in
-/// **register** (after the factory phase, so the config is available).
 pub struct OpenApiSetup {
     pinned: Option<OpenApiConfig>,
 }
@@ -66,10 +48,6 @@ impl DynamicModule for OpenApiSetup {
     }
 }
 
-/// Shared registration for both the default and configured paths: install the
-/// self-mounting endpoint, capturing the document metadata in the mount closure
-/// (the document itself is built once at `configure`, when every controller is
-/// present).
 fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuilder {
     builder.provide_meta(HttpEndpointMeta::new(
         DOCS_PATH,

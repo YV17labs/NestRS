@@ -1,19 +1,7 @@
-//! Per-message guards — the WebSocket counterpart of an HTTP `#[use_guards]`,
-//! scoped to a single `#[subscribe_message]` instead of the upgrade request.
-//!
-//! A connection-level guard ([`#[use_guards]`](crate::gateway) on the gateway
-//! struct) runs once, on the HTTP upgrade, and reuses the HTTP [`Guard`] trait
-//! because the handshake *is* a `poem::Request`. A per-message guard has no such
-//! request — it gates an individual envelope after the socket is open — so it
-//! gets its own trait, [`MessageGuard`], whose context is the message: the
-//! [`WsClient`] that sent it, the event name, and the raw `data`.
-//!
-//! Bind it on a handler with `#[use_guards(GuardA, GuardB)]` beside the
-//! `#[subscribe_message]` attribute; each is resolved from the container (so a
-//! guard is an ordinary `#[injectable]` provider with its own dependencies) and
-//! the first listed runs first. A guard returning `Err(reason)` short-circuits:
-//! the client receives an error frame under the request's event name and the
-//! handler never runs.
+//! Per-message guards — distinct from the connection-level HTTP [`Guard`]
+//! because a message carries no `poem::Request`. Bound with
+//! `#[use_guards(...)]` beside a `#[subscribe_message]`. Each `Err(reason)`
+//! short-circuits to an error frame under the request's event name.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,16 +10,9 @@ use async_trait::async_trait;
 
 use crate::server::WsClient;
 
-/// Decides whether one incoming message may be dispatched. The `@UseGuards`
-/// analog on a `#[subscribe_message]` handler — distinct from the HTTP [`Guard`]
-/// because a message carries no `poem::Request`.
-///
-/// Return `Ok(())` to allow the message through, or `Err(reason)` to reject it
-/// (the client receives `data: { "error": reason }` under the event name and the
-/// handler does not run). Unlike the HTTP guard, a message guard does not
-/// *attach* context — the [`WsClient`] is already the per-connection handle a
-/// handler reads, and per-message extensions are not part of the envelope
-/// protocol.
+/// Decides whether one incoming message may be dispatched. `Err(reason)` ships
+/// to the client as `data: { "error": reason }` under the event name; the
+/// handler does not run.
 ///
 /// ```ignore
 /// #[nestrs_core::injectable]
@@ -46,11 +27,7 @@ use crate::server::WsClient;
 ///         _event: &str,
 ///         data: &nestrs_ws::serde_json::Value,
 ///     ) -> Result<(), String> {
-///         if data.is_null() {
-///             Err("empty payload".into())
-///         } else {
-///             Ok(())
-///         }
+///         if data.is_null() { Err("empty payload".into()) } else { Ok(()) }
 ///     }
 /// }
 /// ```
@@ -76,31 +53,24 @@ impl<T: MessageGuard + ?Sized> MessageGuard for Arc<T> {
     }
 }
 
-/// The per-gateway map of event name → its `#[use_guards]` guards, built once at
-/// mount by `#[messages]` (which resolves each guard from the container) and
-/// shared across every connection. The connection loop consults it by event
-/// name before dispatching — generically, so the [`Gateway`](crate::Gateway)
-/// dispatcher itself stays guard-unaware.
+/// Per-gateway event-name → guards map, built once at mount by `#[messages]`
+/// and shared across every connection. Keeping the dispatcher guard-unaware.
 #[derive(Default)]
 pub struct MessageGuardTable {
     by_event: HashMap<&'static str, Vec<Arc<dyn MessageGuard>>>,
 }
 
 impl MessageGuardTable {
-    /// An empty table — the common case (no handler declares `#[use_guards]`).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Register the guards an event's handler declared. Called by the
-    /// `#[messages]`-generated mount closure, once per guarded event.
     pub fn insert(&mut self, event: &'static str, guards: Vec<Arc<dyn MessageGuard>>) {
         self.by_event.insert(event, guards);
     }
 
-    /// Run every guard registered for `event`, in order, against the message.
-    /// Returns the first rejection reason, or `Ok(())` if all pass (including the
-    /// common no-guards case, an empty iteration).
+    /// Run every guard registered for `event`, in order. Returns the first
+    /// rejection or `Ok(())` (including the no-guards case).
     pub async fn check(
         &self,
         client: &WsClient,

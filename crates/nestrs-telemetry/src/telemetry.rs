@@ -8,12 +8,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::config::{LogFormat, TelemetryConfig};
 use crate::error::TelemetryError;
 
-/// Set once [`Telemetry::init`] succeeds. [`TelemetryModule`](crate::TelemetryModule)
-/// reads it to fail fast rather than register no-op telemetry providers when an
-/// app forgot to initialise.
+/// `TelemetryModule` reads this to fail fast rather than register no-op
+/// providers when `Telemetry::init` was forgotten.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Whether [`Telemetry::init`] / [`Telemetry::init_with`] has run successfully.
 pub(crate) fn initialized() -> bool {
     INITIALIZED.load(Ordering::Relaxed)
 }
@@ -22,12 +20,8 @@ fn mark_initialized() {
     INITIALIZED.store(true, Ordering::Relaxed);
 }
 
-/// Active telemetry instance. Returned by [`Telemetry::init`] and dropped at
-/// the end of `main` — Drop synchronously flushes pending traces, metrics and
-/// logs so trailing telemetry isn't lost on shutdown.
-///
-/// Keep the binding alive for the whole program: `let _telemetry =
-/// Telemetry::init("api")?;`.
+/// Drop synchronously flushes pending traces/metrics/logs. Keep the binding
+/// alive for the whole program: `let _telemetry = Telemetry::init("api")?;`.
 pub struct Telemetry {
     #[cfg(feature = "otlp")]
     tracer_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
@@ -38,22 +32,15 @@ pub struct Telemetry {
 }
 
 impl Telemetry {
-    /// Shortcut: reads `NESTRS_*` env vars (see [`TelemetryConfig`]) and
-    /// wires the console layer plus the OTel tracer. The batch exporters
-    /// for traces/metrics/logs are added only when an OTLP endpoint is set;
-    /// the tracer itself is installed unconditionally so `trace_id` values
-    /// and `traceparent` propagation work out of the box.
+    /// Reads `NESTRS_TELEMETRY__*`. Batch exporters are added only when an OTLP
+    /// endpoint is set, but the tracer is always installed so `trace_id` and
+    /// `traceparent` propagation work out of the box.
     pub fn init(service_name: impl Into<String>) -> Result<Self, TelemetryError> {
         Self::init_with(TelemetryConfig::from_env(service_name))
     }
 
-    /// Console-only tracing for tests: installs a fmt subscriber (once) and marks
-    /// telemetry initialised, so an app importing
-    /// [`TelemetryModule`](crate::TelemetryModule) boots without the OTLP exporter
-    /// stack. **Idempotent** — safe to call from every test; the first call wins
-    /// and later calls are no-ops (and a subscriber already set by another harness
-    /// is tolerated). Returns no guard: a test does not flush exporters. The log
-    /// level honours `RUST_LOG`, defaulting to `warn` to keep test output quiet.
+    /// Console-only init for tests. Idempotent; first call wins. No flush
+    /// guard. Log level honours `RUST_LOG`, default `warn`.
     pub fn init_for_tests() {
         if initialized() {
             return;
@@ -76,9 +63,8 @@ impl Telemetry {
             let exporters = crate::otlp::build(&config)?;
             let otel_layer = tracing_opentelemetry::layer().with_tracer(exporters.tracer);
 
-            // The OTel log appender is only worth wiring when an exporter is
-            // present; without one it would just drop events while paying the
-            // per-event bridge cost.
+            // Bridge only when an exporter is present; otherwise it pays the
+            // per-event cost just to drop the event.
             let appender_layer = exporters.logger_provider.as_ref().map(|lp| {
                 let f = EnvFilter::try_new(&config.log_filter)
                     .unwrap_or_else(|_| EnvFilter::new("info"));
@@ -129,10 +115,9 @@ impl Telemetry {
     }
 }
 
-/// Boxed so the `text` and `json` layers — which have distinct concrete
-/// types — can flow through the same `Registry` chain. The OTel span
-/// itself is *not* rendered (`FmtSpan::NONE`, the default); only the
-/// explicit access-log event emitted by `OtelHttp` shows up in the console.
+/// Boxed because `text` and `json` layers have distinct concrete types.
+/// `FmtSpan::NONE` by default — only the explicit access-log event shows up
+/// in the console.
 fn console_layer<S>(format: LogFormat) -> Box<dyn Layer<S> + Send + Sync + 'static>
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,

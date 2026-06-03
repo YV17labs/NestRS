@@ -23,35 +23,19 @@ use {
 
 /// Per-request HTTP observation.
 ///
-/// Opens a `tracing` span with OTel HTTP semantic-convention attributes
-/// (`http.request.method`, `http.route`, `http.response.status_code`,
-/// `otel.kind`), parents it on any incoming W3C `traceparent` header, and
-/// surfaces the trace id as an `X-Trace-Id` response header. The span is
-/// what OTel sees and exports; **it is not rendered** in the console
+/// Opens a `tracing` span with OTel HTTP semantic-convention attributes,
+/// parents it on an incoming W3C `traceparent`, surfaces the trace id as
+/// `X-Trace-Id`. The span is exported but **not** rendered in the console
 /// (`FmtSpan::NONE`).
 ///
-/// The visible per-request log line is a single `tracing::info!` event
-/// (target `nestrs::access`) emitted at request end, with short, structured
-/// field names (`method`, `path`, `status`, `bytes`, `duration_ms`, `trace_id`).
-/// One event = one line in text mode, one JSON object in JSON mode — no
-/// span-context prefix, no duplication.
+/// One visible access event per request (`tracing::info!` on target
+/// `nestrs::access`) emitted at **end-of-body**, so `bytes` and `duration_ms`
+/// are exact — poem stamps `Content-Length` past this interceptor, so the
+/// body is wrapped in a byte-counting stream. A client disconnect still emits
+/// via `Drop`.
 ///
-/// Both `bytes` and `duration_ms` are exact, not best-effort: the response body
-/// is wrapped in a byte-counting stream so the size logged is what was actually
-/// sent (poem stamps `Content-Length` past this interceptor, so the header is
-/// not yet available here), and the event fires at **end-of-body** — so the
-/// duration spans transmission too, and a sub-millisecond request reports a
-/// fractional `duration_ms` rather than `0`. A client that disconnects
-/// mid-stream still logs, via the wrapper's `Drop`.
-///
-/// Toggle the access event via the `NESTRS_HTTP__ACCESS_LOG` env var
-/// (default `true`; falsy values `0`/`false`/`off`/`no` disable). The OTel
-/// span is always created so `traceparent` propagation and OTLP export keep
-/// working, and the body wrapper records `http.response.body.size` on it
-/// regardless of the toggle.
-///
-/// Crate-private: registered by [`crate::TelemetryModule`], so an app activates
-/// it with `imports = [TelemetryModule]` and never names this type.
+/// Toggle via `NESTRS_HTTP__ACCESS_LOG` (default `true`); the OTel span is
+/// always created so propagation and OTLP export keep working.
 #[interceptor]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OtelHttp {
@@ -97,8 +81,7 @@ impl Interceptor for OtelHttp {
                 http.response.body.size = tracing::field::Empty,
             );
 
-            // The propagator lookup + HeaderExtractor walk costs a RwLock read
-            // and an allocation; skip it for the common no-traceparent case.
+            // RwLock + alloc; skip for the common no-traceparent case.
             if req.headers().contains_key("traceparent") {
                 let parent_cx = global::get_text_map_propagator(|prop| {
                     prop.extract(&HeaderExtractor(req.headers()))
@@ -112,10 +95,9 @@ impl Interceptor for OtelHttp {
             let start = Instant::now();
             let result = next.run(req).instrument(span.clone()).await;
 
-            // Normalise to a `Response` so an error response is measured like any
-            // other — `OtelHttp` is the outermost discovered interceptor, so
-            // swallowing the `Err` into its rendered response changes nothing for
-            // the CORS / request-scope layers outside it.
+            // Normalise to a Response so an error response is measured too.
+            // OtelHttp is the outermost discovered interceptor, so swallowing
+            // the Err into its rendered response is invisible to outer layers.
             let mut response = result.unwrap_or_else(|err| err.into_response());
             let status = response.status().as_u16();
             span.record("http.response.status_code", status);
@@ -123,10 +105,9 @@ impl Interceptor for OtelHttp {
                 response.headers_mut().insert(X_TRACE_ID, val);
             }
 
-            // Wrap the body so the access event fires once the body is fully sent,
-            // carrying the exact byte count and the full duration. The held span
-            // clone keeps the OTel span open until then, so its recorded
-            // `body.size` is exported.
+            // Body wrapper fires the access event at end-of-body with exact
+            // bytes/duration; the span clone keeps the OTel span open until
+            // body.size is recorded.
             let (parts, body) = response.into_parts();
             let logged = AccessLogBody {
                 inner: Box::pin(body.into_bytes_stream()),
@@ -152,9 +133,6 @@ impl Interceptor for OtelHttp {
     }
 }
 
-/// The fields the access event carries, captured before the body streams and
-/// emitted once it finishes. Owns a clone of the request span, so the OTel span
-/// stays open until the body is sent and its `body.size` is recorded in time.
 #[cfg(feature = "otlp")]
 struct AccessLog {
     method: poem::http::Method,
@@ -189,9 +167,6 @@ impl AccessLog {
     }
 }
 
-/// Wraps a response body stream, tallying the bytes that flow through and
-/// emitting the access event (exactly once) when the stream ends — or, if the
-/// client disconnects first, when the body is dropped.
 #[cfg(feature = "otlp")]
 struct AccessLogBody {
     inner: Pin<Box<dyn Stream<Item = Result<Bytes, IoError>> + Send>>,
@@ -201,8 +176,7 @@ struct AccessLogBody {
 
 #[cfg(feature = "otlp")]
 impl AccessLogBody {
-    /// Emit the access event with the bytes seen so far, at most once — whether
-    /// the stream reached its end or the body was dropped on a disconnect.
+    /// At most once — covers both stream-end and drop-on-disconnect.
     fn emit_once(&mut self) {
         if let Some(log) = self.log.take() {
             log.emit(self.counted);
@@ -246,8 +220,7 @@ fn current_trace_id(span: &tracing::Span) -> Option<String> {
 
 #[cfg(feature = "otlp")]
 fn client_ip(req: &Request) -> String {
-    // Strip the port for log readability; fall back to the raw Display when
-    // the connection isn't a TCP socket (e.g. UDS in tests).
+    // Strip port for readability; fall back to Display for non-TCP (UDS tests).
     req.remote_addr()
         .as_socket_addr()
         .map(|sa| sa.ip().to_string())

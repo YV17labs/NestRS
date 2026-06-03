@@ -4,17 +4,8 @@ use anyhow::{Context, Result};
 use nestrs_config::env_var;
 use poem::listener::{RustlsCertificate, RustlsConfig};
 
-/// TLS material for the HTTP transport: a PEM certificate chain and its private
-/// key. Hand it to [`HttpTransport::tls`](crate::HttpTransport::tls) and the
-/// transport serves HTTPS directly (poem's `rustls` listener, no OpenSSL system
-/// dependency) instead of plain HTTP.
-///
-/// In a container deployment (Kubernetes, a service mesh) the certificate and
-/// key are *injected* — mounted as files or passed as environment variables — so
-/// [`TlsConfig::from_env`] reads them off the framework-wide `NESTRS_HTTP__TLS_*`
-/// scheme with no ceremony and returns `None` when they are unset, the dev
-/// default that keeps the transport plaintext. `main` then opts in with one line
-/// only when the certs are actually present:
+/// TLS material for the HTTP transport: a PEM certificate chain and private
+/// key, handed to [`HttpTransport::tls`](crate::HttpTransport::tls).
 ///
 /// ```no_run
 /// # use nestrs_http::{HttpTransport, TlsConfig};
@@ -30,8 +21,6 @@ pub struct TlsConfig {
 }
 
 impl TlsConfig {
-    /// Build a config from a PEM certificate chain and private key already in
-    /// memory.
     pub fn new(cert: impl Into<Vec<u8>>, key: impl Into<Vec<u8>>) -> Self {
         Self {
             cert: cert.into(),
@@ -39,18 +28,13 @@ impl TlsConfig {
         }
     }
 
-    /// Read TLS material from the framework's `NESTRS_<DOMAIN>__<KEY>` env scheme
-    /// (domain `http`), the channel a mesh / orchestrator uses to inject
-    /// certificates. For each of the certificate and the key: the inline variable
-    /// (`NESTRS_HTTP__TLS_CERT` / `NESTRS_HTTP__TLS_KEY`) holds the PEM directly,
-    /// while the `*_FILE` variant (`NESTRS_HTTP__TLS_CERT_FILE` /
-    /// `NESTRS_HTTP__TLS_KEY_FILE`) names a path the transport loads — the inline
-    /// form wins if both are set.
+    /// Read TLS material from `NESTRS_HTTP__TLS_CERT` / `NESTRS_HTTP__TLS_KEY`
+    /// (PEM inline) or their `_FILE` variants (path the transport loads); the
+    /// inline form wins if both are set.
     ///
-    /// Returns `Ok(None)` when **neither** the certificate nor the key is
-    /// present (serve plain HTTP), and an `Err` when exactly one of the pair is
-    /// configured — a half-configured TLS is a deployment mistake, not a silent
-    /// fall back to plaintext.
+    /// `Ok(None)` when neither is present (serve plain HTTP). Fails if exactly
+    /// one of the pair is configured — a half-configured TLS is a deployment
+    /// mistake, not a silent fall back to plaintext.
     pub fn from_env() -> Result<Option<Self>> {
         let cert = read_env_pem("NESTRS_HTTP__TLS_CERT", "NESTRS_HTTP__TLS_CERT_FILE")?;
         let key = read_env_pem("NESTRS_HTTP__TLS_KEY", "NESTRS_HTTP__TLS_KEY_FILE")?;
@@ -71,8 +55,6 @@ impl TlsConfig {
     }
 }
 
-/// Read a PEM blob from `inline_var` (the value *is* the PEM), falling back to
-/// the path in `file_var`. `None` when neither is set.
 fn read_env_pem(inline_var: &str, file_var: &str) -> Result<Option<Vec<u8>>> {
     if let Some(pem) = env_var(inline_var) {
         return Ok(Some(pem.into_bytes()));

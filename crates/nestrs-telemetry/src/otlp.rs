@@ -1,9 +1,7 @@
-//! OTel SDK wiring. Always installs a local tracer + W3C propagator (so
-//! `tracing` spans get trace ids and `traceparent` headers propagate even
-//! without an exporter). When an OTLP endpoint is configured, also attaches
-//! batch exporters for the three signals (traces, metrics, logs) over
-//! HTTP/protobuf and registers the corresponding providers as the OTel
-//! globals.
+//! OTel SDK wiring. Always installs a local tracer + W3C propagator so
+//! `tracing` spans get trace ids and `traceparent` propagates without an
+//! exporter. When an OTLP endpoint is set, attaches batch exporters for
+//! traces/metrics/logs over HTTP/protobuf.
 
 use opentelemetry::global;
 use opentelemetry::trace::TracerProvider as _;
@@ -26,12 +24,9 @@ use crate::error::TelemetryError;
 pub(crate) struct Exporters {
     pub tracer: opentelemetry_sdk::trace::Tracer,
     pub tracer_provider: SdkTracerProvider,
-    /// `Some` only when an OTLP endpoint is configured. Without an exporter
-    /// the meter provider has nothing to do, so we don't build one.
+    /// `Some` only when an OTLP endpoint is set.
     pub meter_provider: Option<SdkMeterProvider>,
-    /// `Some` only when an OTLP endpoint is configured. Same reasoning as
-    /// the meter — the appender layer is wired only when there is somewhere
-    /// to send logs.
+    /// `Some` only when an OTLP endpoint is set.
     pub logger_provider: Option<SdkLoggerProvider>,
 }
 

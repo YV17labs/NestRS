@@ -1,18 +1,8 @@
 //! [`CrudService`] — the entity's data API and the single audited gateway to the
-//! ORM.
-//!
-//! A service is *the* place an entity's rows are read and written. Controllers
-//! and resolvers never touch [`Repo`] or the ORM directly — they delegate here,
-//! so there is exactly one choke point per entity to secure and audit (the
-//! by-id route-model binding loads through [`access`](CrudService::access) too).
-//!
-//! "Inheriting a base CRUD" is a trait with default methods: a service names
-//! three associated types and gets [`list`](CrudService::list)/
-//! [`page`](CrudService::page)/[`access`](CrudService::access)/
-//! [`create`](CrudService::create)/[`update`](CrudService::update)/
-//! [`delete`](CrudService::delete) for free, all expressed through [`Repo`] (so
-//! the ambient scoping and request transaction stay transparent). Override any
-//! method to add business logic — e.g. stamp a tenant column on `create`.
+//! ORM. Controllers and resolvers delegate here; they never touch [`Repo`] or
+//! the ORM directly, so there is exactly one choke point per entity to secure
+//! and audit. Default methods express CRUD through [`Repo`], keeping ambient
+//! scoping and the request transaction transparent.
 
 use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
@@ -27,20 +17,20 @@ use crate::page::Page;
 use crate::repo::Repo;
 
 /// Build a fresh `ActiveModel` from a create-input DTO. Implemented by `#[expose]`
-/// for each `Create<Name>Input`, so [`CrudService::create`] is generic.
+/// for each `Create<Name>Input`.
 pub trait CreateModel<E: EntityTrait> {
     fn into_active_model(self) -> E::ActiveModel;
 }
 
 /// Apply an update-input DTO onto a loaded `ActiveModel`. Implemented by
-/// `#[expose]` for each `Update<Name>Input`, so [`CrudService::update`] is generic.
+/// `#[expose]` for each `Update<Name>Input`.
 pub trait UpdateModel<E: EntityTrait> {
     fn apply_to(self, model: E::ActiveModel) -> E::ActiveModel;
 }
 
-/// The outcome of an authorized by-id load: the row, a denial (it exists but the
-/// caller may not act on it), or absence — so a surface maps them to 200/403/404
-/// (REST) or data/forbidden/null (GraphQL) without hiding existence.
+/// Outcome of an authorized by-id load. Distinguishing `Denied` from `Missing`
+/// lets a surface map to 200/403/404 (REST) or data/forbidden/null (GraphQL)
+/// without leaking existence by silently returning `Missing` for a denied row.
 pub enum Access<M> {
     Found(M),
     Denied,
@@ -48,10 +38,7 @@ pub enum Access<M> {
 }
 
 /// The entity's CRUD API. Implement it with the three associated types to inherit
-/// every method; override any to extend it. The `where` clause names the SeaORM
-/// bounds a derived entity already satisfies (its `ActiveModel` has behaviour, its
-/// `Model` converts to an `ActiveModel`), so the default bodies can insert/update/
-/// delete generically.
+/// every method; override any to extend it.
 #[async_trait]
 pub trait CrudService: Send + Sync
 where
@@ -63,7 +50,7 @@ where
     type Create: CreateModel<Self::Entity> + Send;
     type Update: UpdateModel<Self::Entity> + Send;
 
-    /// The entity's table name, the `entity` field every operation log carries
+    /// The entity's table name; included as the `entity` field on every log
     /// (the flat module path can't distinguish entities — they all log from
     /// `nestrs_database::service`).
     fn entity_name() -> &'static str {
@@ -76,7 +63,7 @@ where
         Repo::<Self::Entity>::all().await
     }
 
-    /// A keyset page of readable rows, ascending by primary key (see [`Repo::page`]).
+    /// A keyset page of readable rows, ascending by primary key.
     async fn page(
         &self,
         first: u64,
@@ -93,8 +80,7 @@ where
     /// Load a row by id and authorize the caller for `action` on it. The load is
     /// **unscoped** so a denied-but-existing row is [`Access::Denied`] rather than
     /// hidden as [`Access::Missing`] — the route-model-binding gateway the
-    /// `Bind`/`bind` adapters delegate to. The caller's ability is read from the
-    /// ambient request state the route gate installed.
+    /// `Bind`/`bind` adapters delegate to.
     async fn access(
         &self,
         action: Action,
@@ -131,11 +117,11 @@ where
         Ok(model)
     }
 
-    /// Apply an update-input DTO to a loaded row, in the request transaction. The
-    /// write is ability-scoped by [`Repo::update`]: a row outside the caller's
-    /// scope is never touched and surfaces as [`DbErr::RecordNotUpdated`] (logged
-    /// at `warn`), so a caller cannot mutate by id past its scope even if it
-    /// reached this method with a row loaded some other way.
+    /// Apply an update-input DTO to a loaded row, in the request transaction.
+    /// Ability-scoped by [`Repo::update`]: a row outside the caller's scope is
+    /// never touched and surfaces as [`DbErr::RecordNotUpdated`], so a caller
+    /// cannot mutate by id past its scope even if it reached this method with a
+    /// row loaded some other way.
     async fn update(
         &self,
         model: <Self::Entity as EntityTrait>::Model,
@@ -156,10 +142,10 @@ where
         }
     }
 
-    /// Delete a loaded row, in the request transaction. The write is ability-scoped
-    /// by [`Repo::delete`]: a row outside the caller's scope is not deleted, which
-    /// surfaces as a zero-row result mapped to [`DbErr::RecordNotFound`] (logged at
-    /// `warn`) so a caller cannot delete by id past its scope.
+    /// Delete a loaded row, in the request transaction. Ability-scoped by
+    /// [`Repo::delete`]: a row outside the caller's scope yields a zero-row
+    /// result mapped to [`DbErr::RecordNotFound`], so a caller cannot delete by
+    /// id past its scope.
     async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), DbErr> {
         let entity = Self::entity_name();
         let result = Repo::<Self::Entity>::delete(model).await?;

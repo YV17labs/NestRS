@@ -1,40 +1,12 @@
-//! Typed in-process event bus for nestrs — the `@nestjs/event-emitter` analog.
+//! Typed in-process event bus — `@nestjs/event-emitter` analog.
 //!
-//! An event is any `Clone + Send + 'static` type. A handler is a struct:
-//! `#[on_event]` builds it from the container (its `#[inject]` fields) and
-//! emits the single `impl Discoverable` attaching an [`EventHandlerMeta`] — so a
-//! handler is wired by listing it in `#[module(providers = [...])]`, exactly like
-//! a controller or cron job. Import [`EventModule`] to register the [`EventBus`]
-//! and wire every discovered handler at application bootstrap (from the
-//! fully-assembled container, so a handler may inject any provider regardless of
-//! import order). A producer injects `Arc<EventBus>` and calls
-//! [`emit`](EventBus::emit):
+//! An event is any `Clone + Send + 'static`. A handler is a `#[on_event]`
+//! struct that implements [`EventHandler`]; listing it in
+//! `#[module(providers = [...])]` (with `EventModule` imported) wires it from
+//! the fully-assembled container.
 //!
-//! ```ignore
-//! #[derive(Clone)]
-//! pub struct UserRegistered { pub email: String }
-//!
-//! #[on_event]
-//! pub struct SendWelcomeEmail {
-//!     #[inject] mailer: std::sync::Arc<Mailer>,
-//! }
-//!
-//! #[nestrs_events::async_trait]
-//! impl nestrs_events::EventHandler for SendWelcomeEmail {
-//!     type Event = UserRegistered;
-//!     async fn handle(&self, event: UserRegistered) {
-//!         self.mailer.welcome(&event.email).await;
-//!     }
-//! }
-//!
-//! // a producer:
-//! self.events.emit(UserRegistered { email }).await;
-//!
-//! // wiring: #[module(imports = [EventModule], providers = [SendWelcomeEmail, ...])]
-//! ```
-//!
-//! Dispatch is in-process and awaited: [`emit`](EventBus::emit) runs every handler
-//! registered for the event type, in registration order, each with its own clone.
+//! Dispatch is in-process and awaited: every handler registered for the event
+//! type runs in registration order, each with its own clone.
 
 mod bus;
 mod handler;
@@ -48,8 +20,4 @@ pub use module::EventModule;
 
 pub use nestrs_events_macros::on_event;
 
-// Re-exported so an `#[on_event]` struct can write
-// `#[nestrs_events::async_trait]` on its `EventHandler` impl without a direct
-// `async_trait` dependency — and so the handler future is boxed `Send`, which the
-// bus requires.
 pub use async_trait::async_trait;

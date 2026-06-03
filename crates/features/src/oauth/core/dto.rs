@@ -2,7 +2,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use validator::Validate;
 
-/// Email + password login body for the auth app's `POST /login`.
 #[derive(Debug, Deserialize, Validate, JsonSchema)]
 pub struct LoginInput {
     #[validate(email)]

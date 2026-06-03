@@ -1,13 +1,10 @@
 //! Request-scoped DataLoaders, discovered at link time.
 //!
-//! `#[dataloader]` on a data-layer impl block generates one batching loader per
-//! method and submits a [`LoaderRegistration`] here. Rather than living in the
-//! DI container as a single shared instance, each loader is rebuilt *per
-//! request* and seeded into the GraphQL context by [`LoaderExtension`]: a
-//! `#[field]` then reads it back as `&DataLoader<…>`. This mirrors NestJS's
-//! request-scoped loaders, lets a loader observe per-request state, and — the
-//! point — makes module import order irrelevant: the loader is built from the
-//! fully assembled container when a request arrives, never at registration time.
+//! `#[dataloader]` generates one batching loader per method and submits a
+//! [`LoaderRegistration`]. The loader is rebuilt per request and seeded into
+//! the GraphQL context by [`LoaderExtension`], where a `#[field]` reads it as
+//! `&DataLoader<…>`. Per-request build makes module import order irrelevant:
+//! the container is fully assembled when the request arrives.
 
 use std::any::TypeId;
 use std::sync::Arc;
@@ -19,14 +16,10 @@ use async_graphql::extensions::{
 use async_graphql::{Request, ServerResult};
 use nestrs_core::{Container, ReachableProviders};
 
-/// One DataLoader, submitted by `#[dataloader]`. `seed` builds a fresh loader
-/// from the (complete) container and attaches it to the request as context
-/// data. `owner_type_id` is the `TypeId` of the service the loader's
-/// `from_container` reads (the `Self` of the `#[dataloader]` impl block) —
-/// when the owner is not in [`ReachableProviders`], the loader's
-/// `container.get::<Self>()` would panic at request time, so this seed is
-/// module-gated by the owner's reachability. `pub` only so the generated code
-/// can name it.
+/// One DataLoader registration. `owner_type_id` is the `TypeId` of the
+/// `#[dataloader]` impl's `Self`; when the owner is not in
+/// [`ReachableProviders`], `container.get::<Self>()` would panic at request
+/// time, so the seed is module-gated by the owner's reachability.
 #[doc(hidden)]
 pub struct LoaderRegistration {
     pub owner_type_id: fn() -> TypeId,
@@ -35,37 +28,25 @@ pub struct LoaderRegistration {
 
 inventory::collect!(LoaderRegistration);
 
-/// A boxed batch future — the currency a [`BatchContext`] spawner accepts, matching
-/// async-graphql's `DataLoader::new` spawner signature (`Fn(BoxFuture<'static, ()>)`).
 pub type BatchFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 
-/// The spawner async-graphql's `DataLoader` calls to run a queued batch.
 pub type BatchSpawner = Box<dyn Fn(BatchFuture) + Send + Sync>;
 
-/// The seam that re-establishes per-request ambient state inside a DataLoader
-/// batch. async-graphql runs every batch on a *spawned* task (so concurrent
-/// `load_one`s collapse into one query), and a spawned task starts with empty
-/// task-local storage — so the ambient executor and authorization ability a
-/// request installs are gone by the time a batch loads, and a loader's `Repo`
-/// reads would run unscoped. An implementor [`spawner`](BatchContext::spawner)
-/// is called *per request* while building each loader — inside the operation's
-/// ambient scope, so it can snapshot that state — and returns a spawner that
-/// re-installs it around every batch future.
+/// Re-establishes per-request ambient state inside a DataLoader batch.
+/// async-graphql runs every batch on a spawned task, which starts with empty
+/// task-local storage — so the ambient executor + ability a request installs
+/// are gone by the time a batch loads, and a loader's `Repo` reads would run
+/// unscoped. `spawner` is called per request inside the operation's ambient
+/// scope so the implementor can snapshot that state into the returned
+/// spawner.
 ///
-/// Bind an implementor with `providers = [MyBridge as dyn BatchContext]`; the
-/// loader seed resolves it via the container ([`Container::get_dyn`]). With none
-/// registered, batches spawn bare on `tokio::spawn` (loaders run unscoped — the
-/// prior behaviour, correct for an app without row-level security).
+/// Bind with `providers = [MyBridge as dyn BatchContext]`. With none
+/// registered, batches spawn bare on `tokio::spawn` (correct for an app
+/// without row-level security).
 pub trait BatchContext: Send + Sync + 'static {
-    /// Build the spawner for the loaders of one request. Called inside the
-    /// operation's ambient scope, so the implementor reads the live task-locals
-    /// here and captures them into the returned closure.
     fn spawner(&self) -> BatchSpawner;
 }
 
-/// The batch spawner for this request's loaders: the bound [`BatchContext`]'s,
-/// or a bare `tokio::spawn` when none is registered. Called from the
-/// `#[dataloader]`-generated seed; `pub` only so that generated code can name it.
 #[doc(hidden)]
 pub fn batch_spawner(container: &Container) -> BatchSpawner {
     match container.get_dyn::<dyn BatchContext>() {
@@ -76,9 +57,7 @@ pub fn batch_spawner(container: &Container) -> BatchSpawner {
     }
 }
 
-/// Seeds every discovered DataLoader into each GraphQL request. Built by
-/// [`build_schema`](crate::resolver::build_schema) with a clone of the app
-/// container; one [`LoaderExtension`] is created per request.
+/// Seeds every discovered DataLoader into each GraphQL request.
 pub(crate) struct LoaderExtensionFactory {
     container: Container,
 }
@@ -109,15 +88,11 @@ impl Extension for LoaderExtension {
         mut request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
-        // Module-gate the inventory: seed only the loaders whose owner service
-        // is in this app's reachable provider set. A loader from an unimported
-        // module would panic on `container.get::<Owner>()`; skipping its seed
-        // mirrors the GraphQL resolver filter and keeps cross-app discovery
-        // silent. Fail closed if the gate is missing — the production boot
-        // (`App::builder`/`App::new`) always seeds [`ReachableProviders`], so
-        // an absent gate means the schema was built from a hand-rolled
-        // container and seeding every loader would panic the first request
-        // that touches one whose owner the test did not register.
+        // Module-gate: a loader from an unimported module would panic on
+        // `container.get::<Owner>()`. Fail closed when the gate is missing —
+        // a hand-rolled container is the only way for `ReachableProviders`
+        // to be unseeded, and we prefer skipping every loader to panicking
+        // on the first request that touches one.
         let Some(reachable) = self.container.get::<ReachableProviders>() else {
             tracing::warn!(
                 target: "nestrs::graphql",

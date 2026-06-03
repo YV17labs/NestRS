@@ -19,16 +19,13 @@ use crate::oauth::OAuth2Config;
 
 /// The redirect leg of the flow, produced by [`OAuth2Client::authorize`].
 pub struct Authorization {
-    /// The provider URL to redirect the browser to (a `302 Location`).
     pub url: String,
-    /// A signed, short-lived token binding the CSRF state to the PKCE verifier.
-    /// Set it as a cookie on the redirect and pass it to
-    /// [`exchange`](OAuth2Client::exchange) on the callback.
+    /// Signed, short-lived token binding the CSRF state to the PKCE verifier.
+    /// Set as a cookie on the redirect; pass back to [`exchange`](OAuth2Client::exchange).
     pub transaction: String,
 }
 
-/// What [`OAuth2Client::authorize`] stashes and [`OAuth2Client::exchange`] reads
-/// back, carried as a [`JwtService`]-signed cookie so the client cannot forge it.
+/// Carried as a [`JwtService`]-signed cookie so the client cannot forge it.
 #[derive(Serialize, Deserialize)]
 struct Transaction {
     csrf: String,
@@ -36,16 +33,14 @@ struct Transaction {
     exp: u64,
 }
 
-/// A configured OAuth2 client. Construct one per provider from an [`OAuth2Config`].
 pub struct OAuth2Client {
     config: OAuth2Config,
     http: oauth2::reqwest::Client,
 }
 
 impl OAuth2Client {
-    /// Build the client. The HTTP backend refuses redirects — following them
-    /// during a token exchange is an SSRF risk (per the `oauth2` crate's own
-    /// guidance).
+    /// The HTTP backend refuses redirects — following them during a token
+    /// exchange is an SSRF risk (per the `oauth2` crate's own guidance).
     pub fn new(config: OAuth2Config) -> Result<Self, AuthError> {
         config
             .validate()
@@ -89,8 +84,8 @@ impl OAuth2Client {
     }
 
     /// Begin the flow: produce the provider redirect URL and the signed
-    /// transaction token to set as a cookie. `jwt` is the app's service; the
-    /// transaction inherits its expiry.
+    /// transaction token to set as a cookie. The transaction inherits the
+    /// `JwtService`'s expiry.
     pub fn authorize(&self, jwt: &JwtService) -> Result<Authorization, AuthError> {
         let client = self.basic_client()?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
@@ -111,9 +106,8 @@ impl OAuth2Client {
     }
 
     /// Complete the flow: validate the provider's `state` against the signed
-    /// `transaction`, then trade `code` for an access token. Returns the raw
-    /// access token; fetching userinfo from it is the provider-specific step the
-    /// app's strategy performs.
+    /// `transaction`, then trade `code` for an access token. CSRF check runs
+    /// before the exchange — never the other way around.
     pub async fn exchange(
         &self,
         jwt: &JwtService,
@@ -135,9 +129,9 @@ impl OAuth2Client {
         Ok(token.access_token().secret().clone())
     }
 
-    /// Fetch the caller's profile from the provider's userinfo endpoint with the
-    /// access token, deserialized into the app's provider-specific shape. The
-    /// app maps that to its own principal — the step a Passport strategy owns.
+    /// Fetch the caller's profile, deserialized into the app's
+    /// provider-specific shape; mapping it to the app's principal is the
+    /// Passport strategy's job.
     pub async fn userinfo<T: DeserializeOwned>(&self, access_token: &str) -> Result<T, AuthError> {
         let body = self
             .http

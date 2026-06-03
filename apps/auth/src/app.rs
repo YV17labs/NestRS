@@ -4,7 +4,7 @@ use nestrs_core::module;
 use nestrs_database::DatabaseModule;
 use nestrs_health::HealthModule;
 use nestrs_telemetry::TelemetryModule;
-use nestrs_throttler::{Throttle, ThrottlerModule};
+use nestrs_throttler::ThrottlerModule;
 
 use features::oauth::OAuthHttpModule;
 
@@ -14,7 +14,7 @@ use features::oauth::OAuthHttpModule;
         DatabaseModule::for_root(None),
         AuthnModule::for_root(None),
         OAuth2Module::for_root(None),
-        ThrottlerModule::for_root(Throttle::per_minute(60)),
+        ThrottlerModule::for_root(None),
         OAuthHttpModule,
         HealthModule,
         TelemetryModule,

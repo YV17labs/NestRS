@@ -1,6 +1,3 @@
-//! `#[injectable]`: mark a struct as a container-constructed provider. See the
-//! entry doc in `lib.rs`.
-
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -12,7 +9,6 @@ use nestrs_codegen::{
     injected_method, optional_dependencies_method, InjectableBody,
 };
 
-/// `#[injectable]` entry: applies to a provider struct.
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     let request_scoped = match parse_injectable_scope(args.into()) {
         Ok(scoped) => scoped,
@@ -35,10 +31,8 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     let from_container = from_container_method(&ctor);
     let injected = injected_method(&dep_keys);
 
-    // A request-scoped provider builds lazily (per request), so — exactly like a
-    // controller — it declares no register-phase `dependencies`/ordering and
-    // registers a factory rather than a singleton value. `injected` is reported
-    // regardless so the access-graph still governs its `#[inject]` keys.
+    // Request-scoped: lazy build, no register-phase ordering deps, registers
+    // a factory not a value. `injected` is still reported for the access graph.
     let (dependencies, dependency_names, optional_dependencies, register_fn) = if request_scoped {
         (
             dependencies_method(&[]),
@@ -90,9 +84,8 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Parse the optional `#[injectable(scope = …)]` argument. Empty (or
-/// `scope = singleton`) is the default singleton provider; `scope = request`
-/// marks the provider request-scoped. Returns `true` when request-scoped.
+/// Parse `#[injectable(scope = request|singleton)]`. Returns `true` for
+/// request-scoped; empty or `singleton` returns `false`.
 fn parse_injectable_scope(args: TokenStream2) -> syn::Result<bool> {
     if args.is_empty() {
         return Ok(false);

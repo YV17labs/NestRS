@@ -1,4 +1,4 @@
-/// A token request that cannot be fulfilled. [`Display`](std::fmt::Display) yields OAuth2 error codes.
+/// `Display` yields OAuth2 error codes (RFC 6749).
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
     #[error("unsupported_grant_type")]

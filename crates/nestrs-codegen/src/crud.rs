@@ -1,45 +1,32 @@
-//! Shared parser for the `#[crud(...)]` attribute, consumed by both the HTTP
-//! (`nestrs-http-macros`) and GraphQL (`nestrs-graphql-macros`) CRUD generators.
-//!
-//! `#[crud]` sits on a controller's or resolver's impl block and synthesises the
-//! standard operations (list, get, create, update, delete) that the developer did
-//! not hand-write, then re-emits the block under `#[routes]` / `#[resolver]`. The
-//! grammar is the same on both surfaces; each generator reads the fields it needs
-//! (REST consumes `guards`, GraphQL ignores them — its auth is the operation
-//! bridge).
+//! Shared parser for `#[crud(...)]`, consumed by the HTTP and GraphQL CRUD
+//! generators. The grammar is the same on both surfaces; each generator reads
+//! the fields it cares about (REST consumes `guards`; GraphQL ignores them).
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Path, Token};
 
-/// How a generated `list` paginates.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Paginate {
-    /// Keyset pagination over the primary key (the default for new resources;
-    /// stable and index-friendly, and free for UUID-v7 keys, which are ordered).
+    /// Keyset over the primary key. Default for new resources; free for
+    /// UUID-v7 keys (ordered).
     Cursor,
-    /// Offset pagination (`page` / `per_page`) — random page access at the cost of
-    /// O(offset) scans and instability under concurrent inserts.
+    /// Offset (`page`/`per_page`). Random access at the cost of O(offset)
+    /// scans and instability under concurrent inserts.
     Page,
 }
 
-/// The parsed `#[crud(...)]` configuration.
 pub struct CrudConfig {
-    /// The injected field holding the entity's [`CrudService`] — every generated
-    /// operation delegates to it (`service = users`), so the service stays the
-    /// single ORM gateway. Controllers/resolvers never touch `Repo` directly.
+    /// Field holding the entity's [`CrudService`] — every generated op
+    /// delegates to it so controllers/resolvers never touch `Repo` directly.
     pub service: Ident,
-    /// The SeaORM entity the CRUD operates on (`entity = users::entity::Entity`).
     pub entity: Path,
-    /// The exposed output type returned to clients (`output = User`).
     pub output: Path,
-    /// The create input type (`create = CreateUserInput`); omit to skip `create`.
     pub create: Option<Path>,
-    /// The update input type (`update = UpdateUserInput`); omit to skip `update`.
     pub update: Option<Path>,
-    /// Read-only: generate only `list` + `get`.
+    /// Generate only `list` + `get`.
     pub readonly: bool,
-    /// List pagination mode; `None` returns the full (ability-scoped) collection.
+    /// `None` returns the full (ability-scoped) collection.
     pub paginate: Option<Paginate>,
 }
 
@@ -130,14 +117,12 @@ impl Parse for CrudConfig {
     }
 }
 
-/// Parse a `#[crud(...)]` attribute's argument tokens into a [`CrudConfig`].
 pub fn parse_crud_args(args: TokenStream2) -> syn::Result<CrudConfig> {
     syn::parse2(args)
 }
 
-/// The base name a generated resolver derives its operation names from: the
-/// lowercased last segment of the output type (`User` → `user`), giving
-/// `user`/`users`/`create_user`/`update_user`/`delete_user`.
+/// Lowercased last segment of the output type (`User` → `user`); base for
+/// generated operation names.
 pub fn singular_of(output: &Path) -> String {
     output
         .segments

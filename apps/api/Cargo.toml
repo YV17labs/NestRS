@@ -14,11 +14,10 @@ nestrs-health.workspace = true
 nestrs-http.workspace = true
 nestrs-middleware.workspace = true
 nestrs-openapi.workspace = true
-nestrs-database = { workspace = true, features = ["http", "graphql", "ws"] }
+nestrs-database = { workspace = true, features = ["http", "graphql"] }
 nestrs-resource.workspace = true
 nestrs-server-timing.workspace = true
 nestrs-telemetry = { workspace = true, features = ["http"] }
-nestrs-ws.workspace = true
 features.workspace = true
 poem.workspace = true
 tokio.workspace = true
@@ -37,8 +36,6 @@ serde_json.workspace = true
 poem = { workspace = true, features = ["test"] }
 nestrs-testing = { workspace = true, features = ["telemetry", "orm"] }
 db = { path = "../db" }
-futures-util.workspace = true
-tokio-tungstenite = "0.27"
 
 [lints]
 workspace = true

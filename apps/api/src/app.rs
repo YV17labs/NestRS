@@ -8,9 +8,9 @@ use nestrs_server_timing::ServerTimingModule;
 use nestrs_telemetry::TelemetryModule;
 
 use features::authn::AuthnCoreModule;
-use features::authz::{AuthzGraphqlModule, AuthzHttpModule, AuthzWsModule};
+use features::authz::{AuthzGraphqlModule, AuthzHttpModule};
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
-use features::users::{UsersGraphqlModule, UsersHttpModule, UsersWsModule};
+use features::users::{UsersGraphqlModule, UsersHttpModule};
 
 #[module(
     imports = [
@@ -19,12 +19,10 @@ use features::users::{UsersGraphqlModule, UsersHttpModule, UsersWsModule};
         AuthnCoreModule,
         AuthzHttpModule,
         AuthzGraphqlModule,
-        AuthzWsModule,
         OrgsHttpModule,
         OrgsGraphqlModule,
         UsersHttpModule,
         UsersGraphqlModule,
-        UsersWsModule,
         GraphqlModule::for_root(None),
         HealthModule,
         OpenApiModule::for_root(None),

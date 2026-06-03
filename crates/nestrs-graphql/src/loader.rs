@@ -111,15 +111,25 @@ impl Extension for LoaderExtension {
     ) -> ServerResult<Request> {
         // Module-gate the inventory: seed only the loaders whose owner service
         // is in this app's reachable provider set. A loader from an unimported
-        // module would panic on `container.get::<Owner>()` — skipping its seed
+        // module would panic on `container.get::<Owner>()`; skipping its seed
         // mirrors the GraphQL resolver filter and keeps cross-app discovery
-        // silent.
-        let reachable = self.container.get::<ReachableProviders>();
+        // silent. Fail closed if the gate is missing — the production boot
+        // (`App::builder`/`App::new`) always seeds [`ReachableProviders`], so
+        // an absent gate means the schema was built from a hand-rolled
+        // container and seeding every loader would panic the first request
+        // that touches one whose owner the test did not register.
+        let Some(reachable) = self.container.get::<ReachableProviders>() else {
+            tracing::warn!(
+                target: "nestrs::graphql",
+                "LoaderExtension: no ReachableProviders seeded — skipping every loader. \
+                 Build the schema through App::builder/App::new (production) or seed \
+                 the marker on the hand-rolled container."
+            );
+            return next.run(ctx, request).await;
+        };
         for reg in inventory::iter::<LoaderRegistration>() {
-            if let Some(ref r) = reachable {
-                if !r.0.contains(&(reg.owner_type_id)()) {
-                    continue;
-                }
+            if !reachable.0.contains(&(reg.owner_type_id)()) {
+                continue;
             }
             request = (reg.seed)(&self.container, request);
         }

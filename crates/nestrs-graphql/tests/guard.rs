@@ -33,20 +33,21 @@ impl Guard for RoleHeaderGuard {
     }
 }
 
+/// The resolver guard: only an `admin` role may proceed. A container-resolved
+/// `#[injectable]` provider, exactly like an HTTP guard.
+#[injectable]
+#[derive(Default)]
+struct RequireAdmin;
+
 nestrs_graphql::inventory::submit! {
     ContextSeed {
+        owner_type_id: || Some(std::any::TypeId::of::<RequireAdmin>()),
         seed: |req, _container, gql| match req.extensions().get::<Role>() {
             Some(role) => gql.data(role.clone()),
             None => gql,
         },
     }
 }
-
-/// The resolver guard: only an `admin` role may proceed. A container-resolved
-/// `#[injectable]` provider, exactly like an HTTP guard.
-#[injectable]
-#[derive(Default)]
-struct RequireAdmin;
 
 #[async_trait]
 impl ResolverGuard for RequireAdmin {

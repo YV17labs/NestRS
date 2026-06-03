@@ -8,8 +8,9 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    reachable_provider_ids_from_inventory, validate_from_inventory,
-    warn_unreachable_resolvers_from_inventory, ReachableProviders, ResolverSchemaActive,
+    reachable_provider_ids_from_inventory, unreachable_resolvers_from_inventory,
+    validate_from_inventory, warn_unreachable_resolvers_from_inventory, ReachableProviders,
+    ResolverSchemaActive, UnreachableResolversError,
 };
 use crate::container::{Container, ContainerBuilder, Registrar};
 use crate::lifecycle::{run_phase, run_phase_lenient, LifecyclePhase};
@@ -38,11 +39,14 @@ impl App {
     pub fn new<M: Module + 'static>() -> Result<Self> {
         let builder = M::register(Container::builder());
         let roots = [TypeId::of::<M>()];
-        validate_from_inventory(&roots, &HashSet::new())?;
-        // Seed the reachable provider set so transports can module-gate their
-        // discovery (a `#[resolver]` linked but in no reachable module is
-        // silently filtered from the GraphQL schema, not a boot failure).
-        let reachable = reachable_provider_ids_from_inventory(&roots, &HashSet::new());
+        // `ReachableProviders` is seeded after register but counts as global
+        // infrastructure for the access graph (anything that injects
+        // `Arc<ReachableProviders>` lives in a reachable position). Listing
+        // its TypeId in `global` up front makes the contract honest about
+        // what's available, independent of seed ordering.
+        let global: HashSet<TypeId> = HashSet::from([TypeId::of::<ReachableProviders>()]);
+        validate_from_inventory(&roots, &global)?;
+        let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder.provide(ReachableProviders(reachable));
         let container = builder.build();
         // Surface linked-but-unreachable resolvers via warn (only meaningful
@@ -194,6 +198,12 @@ pub struct AppBuilder {
     /// [`override_value`](Self::override_value) / [`override_dyn`](Self::override_dyn),
     /// mainly for tests swapping a real provider for a mock.
     overrides: Vec<Registrar>,
+    /// When set, [`build`](Self::build) returns an
+    /// [`UnreachableResolversError`] if any linked `#[resolver]` lives in no
+    /// reachable module. Default `false` (the default boot emits a `warn` so a
+    /// workspace that ships multiple apps with different surfaces is not
+    /// punished for legitimately-linked-but-unused resolvers).
+    strict_resolver_membership: bool,
 }
 
 impl AppBuilder {
@@ -202,6 +212,7 @@ impl AppBuilder {
             builder: Container::builder(),
             modules: Vec::new(),
             overrides: Vec::new(),
+            strict_resolver_membership: false,
         }
     }
 
@@ -279,6 +290,18 @@ impl AppBuilder {
         self
     }
 
+    /// Promote the default unreachable-resolver `warn` into a boot
+    /// [`UnreachableResolversError`] — every linked `#[resolver]` must live in
+    /// a module reachable from a root, or [`build`](Self::build) fails. Use in
+    /// apps where a forgotten `<Feature>GraphqlModule` import should be a CI
+    /// gate; leave default in apps that intentionally link broader surfaces
+    /// than they expose (a worker linking `features` for the data layer while
+    /// exposing only the queue handlers).
+    pub fn strict_resolver_membership(mut self) -> Self {
+        self.strict_resolver_membership = true;
+        self
+    }
+
     /// Register a root module. May be called more than once; all modules
     /// collect their factories and register their providers together, and each
     /// roots the access-graph check.
@@ -299,6 +322,7 @@ impl AppBuilder {
             mut builder,
             modules,
             overrides,
+            strict_resolver_membership,
         } = self;
 
         // Collect phase: every module queues the async factories its import
@@ -320,9 +344,13 @@ impl AppBuilder {
             builder = register(builder);
         }
         // The global set for the access-graph check: seeds + factory outputs,
-        // i.e. everything present before any module registers. Reachable from
-        // any module.
-        let global = builder.provider_ids();
+        // plus `ReachableProviders` (seeded a few lines down but conceptually
+        // global infrastructure, so the contract treats it as available
+        // anywhere — a provider that injects `Arc<ReachableProviders>`
+        // passes regardless of the actual `provide` ordering). Everything in
+        // this set is reachable from any module.
+        let mut global = builder.provider_ids();
+        global.insert(TypeId::of::<ReachableProviders>());
         // Register phase: build providers, now that factory outputs are present.
         for hooks in &modules {
             builder = (hooks.register)(builder);
@@ -341,11 +369,19 @@ impl AppBuilder {
         // module-gate against (the GraphQL schema, request-scoped loaders).
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder.provide(ReachableProviders(reachable));
-        // Surface linked-but-unreachable resolvers via warn when this app
-        // composes a schema. An app that links resolvers transitively but
-        // composes no schema is not their home, so stays silent.
+        // Surface linked-but-unreachable resolvers: a `warn` by default (a
+        // workspace shipping multiple apps with different surfaces is the
+        // expected case), promoted to a hard error when the app opted into
+        // strict membership.
         if builder.contains(TypeId::of::<ResolverSchemaActive>()) {
-            warn_unreachable_resolvers_from_inventory(&roots);
+            if strict_resolver_membership {
+                let unreachable = unreachable_resolvers_from_inventory(&roots);
+                if !unreachable.is_empty() {
+                    return Err(UnreachableResolversError(unreachable).into());
+                }
+            } else {
+                warn_unreachable_resolvers_from_inventory(&roots);
+            }
         }
 
         Ok(App {

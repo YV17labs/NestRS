@@ -19,5 +19,7 @@ pub struct AuthzGraphqlModule;
 
 // Forward `Claims` from the poem request into the GraphQL context, so a
 // resolver reads the actor via `ctx.data::<Claims>()` exactly as a
-// controller reads it via `Ctx<Claims>`.
-nestrs_graphql::forward_principal!(Claims);
+// controller reads it via `Ctx<Claims>`. Gated on `GraphqlAuthGuard` — the
+// provider declared by this same module — so the forwarder is silent in
+// every app that does not import `AuthzGraphqlModule`.
+nestrs_graphql::forward_principal!(Claims, GraphqlAuthGuard);

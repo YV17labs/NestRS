@@ -11,12 +11,17 @@
 //! behind a type alias:
 //!
 //! ```ignore
-//! type ApiGraphqlGuard = GraphqlAbilityBridge<AuthGuard, AppAbilityGuard>;
+//! pub type AppGraphqlGuard = GraphqlAbilityBridge<AuthGuard, AppAbilityGuard>;
 //!
-//! #[module(imports = [features::authz::AuthzModule],
-//!          providers = [ApiGraphqlGuard as dyn OperationGuard])]
-//! struct AuthzModule;
+//! #[module(
+//!     imports = [AuthzHttpModule],
+//!     providers = [AppGraphqlGuard as dyn OperationGuard, /* … */],
+//! )]
+//! pub struct AuthzGraphqlModule;
 //! ```
+//!
+//! In this repo the alias and the module live together in
+//! `features::authz::graphql` — see `AppGraphqlGuard` and `AuthzGraphqlModule`.
 
 use std::sync::Arc;
 

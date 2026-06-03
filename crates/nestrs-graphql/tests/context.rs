@@ -25,18 +25,21 @@ impl Guard for TagGuard {
     }
 }
 
-// Forward `RequestTag` from the poem request into the GraphQL context.
+#[resolver]
+struct TagResolver;
+
+// Forward `RequestTag` from the poem request into the GraphQL context. Gated on
+// `TagResolver` so it fires whenever the resolver is reachable from the running
+// app — the same mechanism that gates `forward_principal!`.
 nestrs_graphql::inventory::submit! {
     ContextSeed {
+        owner_type_id: || Some(std::any::TypeId::of::<TagResolver>()),
         seed: |req, _container, gql| match req.extensions().get::<RequestTag>() {
             Some(tag) => gql.data(tag.clone()),
             None => gql,
         },
     }
 }
-
-#[resolver]
-struct TagResolver;
 
 #[resolver]
 impl TagResolver {

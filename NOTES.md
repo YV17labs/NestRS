@@ -78,101 +78,16 @@ your own. When the exemplar no longer fits, fix it (and update this list).
 - **`apps/api/`** — the most complete app (REST + GraphQL + WS + DB + authz).
 - **`apps/chat/`** — the pure real-time exemplar (WS-only, no DB).
 
-## Open code-review findings (2026-06-02)
+## Open code-review findings
 
-From the post-refactor multi-angle review of the Layout D + module-gated
-discovery + symmetric three-transport-authz changes. Ranked by severity;
-attack top-down.
-
-### Security / correctness
-
-1. **`WsAuthGuard` fails OPEN by design.** `can_activate` returns `Ok(())`
-   unconditionally (`crates/features/src/authz/ws/guard.rs:30`), and the
-   paired `WsDataContext::capture` installs `Executor::Pool` even when no
-   `Ability` was captured. Combined with the framework rule "no ability ⇒
-   `condition_for => TRUE` => unscoped read", a mis-wired gateway (e.g.
-   future namespaced gateway that drops connection-level `AuthGuard`)
-   serves cross-tenant data. **Fix:** make `can_activate` assert the
-   connection installed an `Ability` snapshot before returning Ok.
-
-2. **`UsersGraphqlModule` does not import `OrgsCoreModule`.** The
-   `User.org` field uses `&DataLoader<OrgsServiceById>`, whose loader
-   resolves `OrgsService`. The macro deliberately excludes `DataLoader`
-   types from `injected_deps`
-   (`crates/nestrs-graphql-macros/src/resolver.rs:483-489`), so the
-   access graph cannot see the dependency. A users-only app would boot
-   cleanly and the first `User.org` query would panic at
-   `data_unchecked`. Today masked because `apps/api` also imports
-   `OrgsHttpModule`. **Fix:** add `OrgsCoreModule` to
-   `UsersGraphqlModule.imports`, mirror in any future cross-feature
-   `#[field]` dataloader.
-
-### Boot/discovery
-
-3. **Removed `validate_resolver_membership` ⇒ silent boot.** A
-   linked-but-unreachable resolver now warns via `tracing::warn` instead
-   of failing the boot (`crates/nestrs-core/src/app.rs:51`). In
-   `RUST_LOG=info` prod, a forgotten `OrgsGraphqlModule` import yields
-   `Unknown field` at request time with no CI gate. **Fix:** either keep
-   warn (current) and add a smoke check that asserts schema field
-   counts, or make it an opt-out error (`strict_membership` builder
-   flag).
-
-4. **`REACHABLE` thread-local not panic-safe.** Cleared after
-   `Schema::build` via a non-RAII line
-   (`crates/nestrs-graphql/src/resolver.rs:252`). A panic between set
-   and clear leaks the previous app's set on the thread, breaking
-   multi-app test isolation. **Fix:** RAII drop guard.
-
-5. **`LoaderExtension::prepare_request` falls back to "seed all" when
-   `ReachableProviders` is missing** (`loader.rs:117`). Hand-rolled
-   container construction bypasses the gate; loaders whose owner isn't
-   registered panic at request time. **Fix:** default to "skip all" so
-   absence of the gate fails closed, or assert at construction.
-
-6. **`forward_principal!(Claims)` moved into library crate.** Its
-   `inventory::submit!` is now link-time global to every consumer of
-   `features` (`crates/features/src/authz/graphql/module.rs:21`). Today
-   dormant in `apps/auth`. A future second GraphQL app with a different
-   principal type would have both forwarders fire. **Fix:** module-gate
-   the `ContextSeed` mechanism the same way `ResolverRegistration` was
-   gated, or move the macro call back to per-app composition.
-
-### Macro / hot-path
-
-7. **`use_guards` resolves with `.expect(...)`** in
-   `nestrs-graphql-macros/src/resolver.rs:180` and `nestrs-ws-macros/
-   src/messages.rs:380-388`. The access graph is supposed to make this
-   unreachable, but anything that slips past panics on a Tokio worker —
-   violates the "no unwrap in hot paths" rule.
-
-8. **`root_object` emits `TypeId::of::<#self_ty>()` unconditionally**
-   for the resolver impl (`resolver.rs:511`), unlike `resolver_struct`
-   which guards generics. A `#[resolver] impl<'a> Foo<'a>` fails to
-   compile with a confusing deep-in-macro error. **Fix:** reject
-   non-`'static` self types in `impl_self_ident` with a friendly span.
-
-### Polish
-
-9. **`GraphqlAuthGuard` error has no GraphQL `extensions.code`**
-   (`crates/features/src/authz/graphql/guard.rs:34`). Inconsistent with
-   `authorize()`/`bind()` which use `FORBIDDEN`. **Fix:** use
-   `ErrorExtensions` with `code = "UNAUTHENTICATED"` and trim the
-   leaking impl message.
-
-10. **Resolver-level `#[use_guards]` runs on every `#[field]`**
-    (`resolver.rs:461`). `GraphqlAuthGuard::check` probes
-    `ctx.data_opt` per row in list results. Functionally OK but
-    redundant overhead. **Fix:** either gate field methods separately or
-    document the duplication.
-
-11. **`ReachableProviders` seeded *after* `global = builder.provider_ids()`**
-    (`app.rs:42`). A future `#[inject] Arc<ReachableProviders>` would
-    fail the access graph despite the value being live. Latent footgun.
-
-12. **Stale doc** in `crates/nestrs-authz/src/graphql/bridge.rs:16-18`
-    references `features::authz::AuthzModule` (deleted) and
-    `ApiGraphqlGuard` (renamed). Also
-    `crates/features/tests/authz/mod.rs:2` mentions
-    `apps/api/src/authz/module.rs` (deleted).
+None at this revision — the 2026-06-02 post-refactor review landed
+(`WsAuthGuard` runtime check, `UsersGraphqlModule` ↔ `OrgsCoreModule`,
+strict-resolver-membership boot flag, RAII guard around the
+`REACHABLE` thread-local, `LoaderExtension` fail-closed, module-gated
+`ContextSeed` + new `forward_principal!(T, Owner)` shape, graceful
+`#[use_guards]` resolution in resolvers, friendlier-span rejection of
+generic `#[resolver]` impls, `UNAUTHENTICATED` extensions code on
+`GraphqlAuthGuard`, resolver-level guards skipped on `#[field]`, and
+`ReachableProviders` accepted as global infrastructure). Re-run the
+verified baseline above after any change in the same area.
 

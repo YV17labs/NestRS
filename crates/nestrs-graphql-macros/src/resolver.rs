@@ -164,6 +164,10 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
 /// Emit the guard checks that run before a resolver operation: resolve each guard
 /// from the container in the context and run it, `?`-propagating a denial as the
 /// operation's GraphQL error. `ctx` is the in-scope `&Context` ident.
+///
+/// A missing provider should already have been caught by the access graph at
+/// boot, but a slip-through must not panic the request worker — it converts to
+/// a GraphQL error (and logs at `error`, since it signals a wiring bug).
 fn guard_checks(guards: &[Path], ctx: &Ident) -> TokenStream2 {
     let checks = guards.iter().map(|g| {
         let msg = format!(
@@ -171,14 +175,24 @@ fn guard_checks(guards: &[Path], ctx: &Ident) -> TokenStream2 {
             quote!(#g),
         );
         quote! {
-            ::nestrs_graphql::ResolverGuard::check(
-                &*::nestrs_core::Container::get::<#g>(
+            {
+                let __guard = match ::nestrs_core::Container::get::<#g>(
                     #ctx.data_unchecked::<::nestrs_core::Container>(),
-                )
-                .expect(#msg),
-                #ctx,
-            )
-            .await?;
+                ) {
+                    ::core::option::Option::Some(__g) => __g,
+                    ::core::option::Option::None => {
+                        ::tracing::error!(
+                            target: "nestrs::graphql",
+                            guard = stringify!(#g),
+                            "resolver guard is missing from the container — boot wiring bug",
+                        );
+                        return ::core::result::Result::Err(
+                            ::nestrs_graphql::async_graphql::Error::new(#msg),
+                        );
+                    }
+                };
+                ::nestrs_graphql::ResolverGuard::check(&*__guard, #ctx).await?;
+            }
         }
     });
     quote! { #(#checks)* }
@@ -193,6 +207,21 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         Ok(base) => base,
         Err(err) => return err.to_compile_error().into(),
     };
+
+    // The generated root submits `TypeId::of::<Self>()` for module-gating, so
+    // `Self` must be `'static`. Reject a generic / lifetime-parameterised impl
+    // with a friendly span up here — otherwise the user sees a confusing deep-
+    // in-macro `T: 'static` failure on the inventory submission.
+    if !item.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &item.generics,
+            "`#[resolver] impl` must be on a concrete, `'static` self type — \
+             generic and lifetime parameters are not supported (the resolver's \
+             `TypeId` is its container key, which requires `'static`)",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     // Resolver-level guards: `#[use_guards(...)]` on the impl block runs before
     // every operation of this resolver (the `@UseGuards` on a `@Resolver` class
@@ -233,18 +262,34 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         let verb_attr = method.attrs.remove(idx);
 
         // Per-operation guards (`#[use_guards(...)]` on this method), consumed here
-        // so they leave neither the delegating attrs nor the inherent method. They
-        // stack inside the resolver-level guards (resolver-level run first).
+        // so they leave neither the delegating attrs nor the inherent method.
         let method_guards = match take_use_guards(&mut method.attrs) {
             Ok(guards) => guards,
             Err(err) => return err.to_compile_error().into(),
         };
         all_guard_paths.extend(method_guards.iter().cloned());
-        let op_guards: Vec<Path> = resolver_guards
-            .iter()
-            .cloned()
-            .chain(method_guards)
-            .collect();
+        // Effective guard chain for this method. For `#[query]`/`#[mutation]`,
+        // resolver-level guards stack inside method-level (resolver-level run
+        // first). For `#[field]`, resolver-level guards are **skipped**: a
+        // field resolver runs per-row in list results, and the operation's
+        // auth posture is already enforced by the operation guard (the
+        // `dyn OperationGuard` bridge) plus the resolver-level guard already
+        // run on the root query/mutation. Running it per row would just probe
+        // `ctx.data_opt::<Ability>()` once for every element returned. A
+        // `#[field]` that needs its own gate still binds `#[use_guards]` at
+        // the method level. The access graph still sees the resolver-level
+        // dependency through `all_guard_paths`, so importing the guard's
+        // module remains required.
+        let is_field = verb_attr.path().is_ident("field");
+        let op_guards: Vec<Path> = if is_field {
+            method_guards
+        } else {
+            resolver_guards
+                .iter()
+                .cloned()
+                .chain(method_guards)
+                .collect()
+        };
 
         // The delegating method keeps the (cleaned) signature and any remaining
         // attrs — async-graphql's `#[graphql(...)]` belongs there. The inherent
@@ -253,7 +298,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         let sig = method.sig.clone();
         let method_name = method.sig.ident.clone();
 
-        if verb_attr.path().is_ident("field") {
+        if is_field {
             let (parent_ty, deleg, deps) =
                 match field_method(&self_ty, &deleg_attrs, &sig, &op_guards) {
                     Ok(triple) => triple,

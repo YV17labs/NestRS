@@ -1,2 +1,5 @@
-//! `authz/module.rs` (policy) — covered by `apps/api` e2e; transport bridges live in
-//! `apps/api/src/authz/module.rs` (imports `features::authz::AuthzModule`).
+//! Mirrors `src/authz/`. Documented gaps: `core/`, `http/`, `graphql/`,
+//! `*/module.rs` — DI/policy wiring exercised by `apps/api` e2e
+//! (`apps/api/tests/e2e.rs`).
+
+mod ws;

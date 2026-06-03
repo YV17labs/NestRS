@@ -231,26 +231,46 @@ discovered_root!(DiscoveredMutation, ResolverKind::Mutation, "Mutation");
 /// Module-gating: reads [`ReachableProviders`] from the container and installs
 /// it in the [`REACHABLE`] thread-local for the duration of `Schema::build`,
 /// so the static `OutputType` methods async-graphql invokes filter the
-/// resolver inventory to the modules an app actually imports. Cleared on the
-/// way out so a subsequent build on the same thread (a test booting multiple
-/// apps) starts clean.
+/// resolver inventory to the modules an app actually imports. A drop guard
+/// clears the thread-local even if `Schema::build` panics — a leak would
+/// otherwise carry the previous app's reachable set into the next build on the
+/// same thread (a test booting multiple apps) and silently widen its schema.
 pub(crate) fn build_schema(
     container: Container,
 ) -> Schema<DiscoveredQuery, DiscoveredMutation, EmptySubscription> {
     let reachable = container
         .get::<ReachableProviders>()
         .map(|p| Arc::new(p.0.clone()));
-    REACHABLE.with(|cell| *cell.borrow_mut() = reachable);
-    let schema = Schema::build(
+    let _reset = ReachableResetGuard::set(reachable);
+    Schema::build(
         DiscoveredQuery::from_registry(&container),
         DiscoveredMutation::from_registry(&container),
         EmptySubscription,
     )
     .data(container.clone())
     .extension(crate::loader::LoaderExtensionFactory::new(container))
-    .finish();
-    REACHABLE.with(|cell| *cell.borrow_mut() = None);
-    schema
+    .finish()
+}
+
+/// RAII guard that swaps a new value into [`REACHABLE`] on construction and
+/// restores the previous value on drop — including on a panic during
+/// `Schema::build`. The previous value is restored (not cleared) so a nested
+/// build inside an outer schema build (theoretical, not exercised) does not
+/// leak the inner's set to the outer's pending work.
+struct ReachableResetGuard(Option<Arc<HashSet<TypeId>>>);
+
+impl ReachableResetGuard {
+    fn set(new: Option<Arc<HashSet<TypeId>>>) -> Self {
+        let previous = REACHABLE.with(|cell| cell.replace(new));
+        Self(previous)
+    }
+}
+
+impl Drop for ReachableResetGuard {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        REACHABLE.with(|cell| *cell.borrow_mut() = previous);
+    }
 }
 
 /// Render the composed schema as SDL for a committed `schema.graphql`.

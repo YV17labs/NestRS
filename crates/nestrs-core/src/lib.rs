@@ -11,7 +11,7 @@ pub mod transport;
 
 pub use access::{
     AccessGraphError, ModuleDescriptor, ProviderDescriptor, ReachableProviders,
-    ResolverDescriptor, ResolverSchemaActive,
+    ResolverDescriptor, ResolverSchemaActive, UnreachableResolversError,
 };
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder};

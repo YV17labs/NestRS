@@ -13,10 +13,10 @@ npm run dev
 # → http://localhost:4321
 ```
 
-`npm run build` produces a fully static site under `docs/dist/` (HTML +
-CSS + minimal JS + a static search index). Drop the folder on any static
-host — Cloudflare Pages, GitHub Pages, OVH mutualisé via SFTP — no
-runtime, no Node on the server.
+`npm run build` produces a fully static site under `docs/dist/` (HTML,
+CSS, minimal JS, and a static search index). Publish that directory with
+whatever static hosting you already use — no application runtime required
+on the server.
 
 ## Editorial rules
 
@@ -59,11 +59,7 @@ sidebar accordingly).
 
 ## Deploying
 
-The site is fully static; any static host works. Quick paths:
-
-- **GitHub Pages** — add a workflow that runs `npm ci && npm run build`
-  and uploads `docs/dist/`.
-- **Cloudflare Pages** — point the project at this repo with build
-  command `cd docs && npm ci && npm run build` and output `docs/dist`.
-- **OVH mutualisé** — `npm run build` locally (or in CI), SFTP `dist/`
-  to `www/`.
+The build output is a plain static tree. In CI or locally, run
+`npm ci && npm run build` from `docs/`, then publish `docs/dist/` the same
+way you would any other static site (object storage + CDN, static bucket
+on a PaaS, rsync/scp to a web root, etc.).

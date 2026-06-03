@@ -2,13 +2,45 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 
+const site = 'https://nestrs.dev';
+const defaultDescription =
+  'Scalable Rust backend apps with native performance.';
+const ogImage = `${site}/social-preview.png`;
+const ogImageAlt =
+  'NestRS — Scalable Rust backend apps with native performance';
+
 export default defineConfig({
-  site: 'https://nestrs.dev',
+  site,
   integrations: [
     starlight({
       title: 'NestRS',
-      description:
-        'Scalable Rust backend apps with native performance.',
+      description: defaultDescription,
+      routeMiddleware: './src/routeData.ts',
+      head: [
+        { tag: 'meta', attrs: { name: 'theme-color', content: '#161619' } },
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'apple-touch-icon',
+            href: '/apple-touch-icon.png',
+            sizes: '180x180',
+          },
+        },
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'icon',
+            type: 'image/png',
+            href: '/apple-touch-icon.png',
+          },
+        },
+        { tag: 'meta', attrs: { property: 'og:image', content: ogImage } },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1280' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '640' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: ogImageAlt } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: ogImage } },
+        { tag: 'meta', attrs: { name: 'twitter:image:alt', content: ogImageAlt } },
+      ],
       plugins: [
         starlightLlmsTxt({
           projectName: 'NestRS',

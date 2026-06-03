@@ -98,7 +98,7 @@ use app::AppModule;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::new::<AppModule>()?
-        .transport(HttpTransport::new().bind("0.0.0.0:3001"))
+        .transport(HttpTransport::new().bind("0.0.0.0:3000"))
         .run()
         .await
 }
@@ -114,12 +114,12 @@ just dev app
    Compiling app v0.1.0
     Finished `dev` profile in 4.21s
      Running `target/debug/app`
-2026-06-03T10:14:22.183Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3001
+2026-06-03T10:14:22.183Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3000
   GET / → HelloController::hello
 ```
 
 ```bash frame="terminal"
-$ curl http://localhost:3001
+$ curl http://localhost:3000
 Hello World
 ```
 

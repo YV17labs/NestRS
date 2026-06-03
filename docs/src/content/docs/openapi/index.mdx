@@ -54,7 +54,7 @@ That's the whole opt-in. The module self-mounts both endpoints on the existing
 ## Run it
 
 ```bash frame="terminal"
-$ curl -s http://localhost:3003/api-json | jq '.openapi, .info.title, (.paths | keys)'
+$ curl -s http://localhost:3000/api-json | jq '.openapi, .info.title, (.paths | keys)'
 "3.1.0"
 "nestrs API"
 [
@@ -63,7 +63,7 @@ $ curl -s http://localhost:3003/api-json | jq '.openapi, .info.title, (.paths | 
 ]
 ```
 
-Open [`http://localhost:3003/api`](http://localhost:3003/api) for the interactive
+Open [`http://localhost:3000/api`](http://localhost:3000/api) for the interactive
 Swagger UI — try a request straight from the browser.
 
 ## Enrich an operation with `#[api]`

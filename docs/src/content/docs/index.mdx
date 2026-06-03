@@ -11,7 +11,7 @@ hero:
   title: |
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
-    <span class="hero-lead">Backend apps as simple as NestJS, <span class="lead-accent">as fast as Rust.</span></span>
+    <span class="hero-lead">Scalable Rust backend apps with <span class="lead-accent">native performance.</span></span>
     <span class="hero-sub">Write a controller, a service, a module. The decorators carry the rest — security, transactions, validation, wiring. The same app runs at <strong>~25×</strong> the throughput and <strong>~20×</strong> less RAM than an equivalent Node service, on the same hardware.</span>
     <span class="hero-meta"><span>Declarative</span><span>Type-safe</span><span>HTTP · OpenAPI · GraphQL · WebSockets</span></span>
   image:
@@ -86,9 +86,9 @@ pub struct HelloModule;
 ```bash frame="terminal"
 $ just dev app
 …
-2026-06-03T10:14:22.183Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3001
+2026-06-03T10:14:22.183Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3000
 
-$ curl http://localhost:3001
+$ curl http://localhost:3000
 Hello World
 ```
 

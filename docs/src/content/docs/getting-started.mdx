@@ -35,7 +35,7 @@ the dev tooling in one step. It is the fastest path to a working setup.
 
    ```bash
    just dev
-   # → http://localhost:3001 returns "Hello World"
+   # → http://localhost:3000 returns "Hello World"
    ```
 
 </Steps>
@@ -68,14 +68,15 @@ string from `NESTRS_DATABASE__URL` / `NESTRS_QUEUE__URL`. The bare `app`,
 ## Run the examples
 
 The workspace ships several example apps. Each is a separate runnable binary;
-they share the same workspace and the same building blocks.
+they share the same workspace and the same building blocks. Run one at a time —
+each serves on `http://localhost:3000`.
 
 ```bash
-just dev          # bare app baseline         :3001
-just dev auth     # OAuth2 / JWT issuer       :3002
-just dev api      # REST + GraphQL + OpenAPI  :3003   (requires `just db up` once)
-just dev mcp      # MCP server                :3004
-just dev chat     # WebSocket gateway         :3005
+just dev          # bare app baseline
+just dev auth     # OAuth2 / JWT issuer
+just dev api      # REST + GraphQL + OpenAPI   (requires `just db up` once)
+just dev mcp      # MCP server
+just dev chat     # WebSocket gateway
 just dev worker   # background jobs (headless)
 ```
 
@@ -151,7 +152,7 @@ use app::AppModule;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::new::<AppModule>()?
-        .transport(HttpTransport::new().bind("0.0.0.0:3001"))
+        .transport(HttpTransport::new().bind("0.0.0.0:3000"))
         .run()
         .await
 }
@@ -167,7 +168,7 @@ nestrs-http = { git = "https://github.com/NestRS/NestRS" }
 
 ```bash
 cargo run
-# → GET http://localhost:3001 returns "Hello World"
+# → GET http://localhost:3000 returns "Hello World"
 ```
 
 ## What just happened

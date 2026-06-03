@@ -15,7 +15,8 @@ authorization live in [Security](/security/).
 
 ## A complete gateway
 
-The real `chat` example (`apps/chat`), running on port 3005:
+A complete gateway, served on `http://localhost:3000` — the full version lives
+in `apps/chat`:
 
 ```rust title="apps/chat/src/chat/gateway.rs"
 use std::sync::Arc;
@@ -92,14 +93,14 @@ just dev chat
 ```
 
 ```text frame="terminal"
-2026-06-03T10:23:14Z  INFO nestrs::http: bound 1 gateway on 0.0.0.0:3005
+2026-06-03T10:23:14Z  INFO nestrs::http: bound 1 gateway on 0.0.0.0:3000
   GET /ws → ChatGateway (4 messages, 2 lifecycle hooks)
 ```
 
 Drive it from any WebSocket client. Below with [`websocat`](https://github.com/vi/websocat):
 
 ```bash frame="terminal"
-$ websocat ws://localhost:3005/ws
+$ websocat ws://localhost:3000/ws
 {"event":"history","data":null}
 {"event":"history","data":[]}
 

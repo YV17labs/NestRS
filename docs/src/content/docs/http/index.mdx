@@ -50,10 +50,10 @@ Run it:
 ```bash frame="terminal"
 $ just dev
 …
-2026-06-03T10:14:22Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3001
+2026-06-03T10:14:22Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3000
   GET / → HelloController::hello
 
-$ curl http://localhost:3001
+$ curl http://localhost:3000
 Hello World
 ```
 
@@ -73,7 +73,7 @@ before the handler runs — there is no `name.parse::<i32>()` to handle
 manually.
 
 ```bash frame="terminal"
-$ curl http://localhost:3001/Ada
+$ curl http://localhost:3000/Ada
 Hello, Ada!
 ```
 
@@ -98,7 +98,7 @@ async fn hello(&self, Query(q): Query<Greet>) -> String {
 ```
 
 ```bash frame="terminal"
-$ curl 'http://localhost:3001/?lang=fr'
+$ curl 'http://localhost:3000/?lang=fr'
 Bonjour le monde
 ```
 
@@ -136,12 +136,12 @@ async fn shout(&self, Valid(Json(input)): Valid<Json<GreetInput>>) -> Result<Jso
   handler.
 
 ```bash frame="terminal"
-$ curl -sX POST http://localhost:3001/ \
+$ curl -sX POST http://localhost:3000/ \
     -H 'Content-Type: application/json' \
     -d '{"name":"ada"}'
 {"greeting":"HELLO, ADA!"}
 
-$ curl -sX POST http://localhost:3001/ \
+$ curl -sX POST http://localhost:3000/ \
     -H 'Content-Type: application/json' \
     -d '{"name":""}'
 {"error":"validation","fields":{"name":["length"]}}

@@ -148,24 +148,24 @@ If the body cannot be reconciled with `Model`, the shaper fails
 
 ```bash
 # Mint a token for Ada (role: user, org: A)
-$ TOKEN=$(curl -sX POST http://localhost:3002/token \
+$ TOKEN=$(curl -sX POST http://localhost:3001/token \
     -d 'grant_type=password&username=ada@example.com&password=password' \
     | jq -r .access_token)
 
 # Ada can see her org's users
-$ curl -s http://localhost:3003/users \
+$ curl -s http://localhost:3000/users \
     -H "Authorization: Bearer $TOKEN" | jq '.[].name'
 "Ada Lovelace"
 "Bob Engineer"        # same org
 
 # Ada cannot reach a user in another org
 $ curl -s -o /dev/null -w "%{http_code}\n" \
-    http://localhost:3003/users/0193c1ee-...other-org \
+    http://localhost:3000/users/0193c1ee-...other-org \
     -H "Authorization: Bearer $TOKEN"
 403
 
 # password_hash is never in the body — it's #[expose(skip)]
-$ curl -s http://localhost:3003/users -H "Authorization: Bearer $TOKEN" \
+$ curl -s http://localhost:3000/users -H "Authorization: Bearer $TOKEN" \
     | jq '.[0] | keys'
 [ "email", "id", "name", "org_id" ]
 ```
@@ -178,8 +178,8 @@ the same `Claims` type via the `identity` crate, never RPC each other,
 and the resource server cannot mint a token even if it wanted to.
 
 ```bash
-just dev auth     # token issuer on :3002
-just dev api      # resource server on :3003
+just dev auth     # token issuer on :3001
+just dev api      # resource server on :3000
 ```
 
 ## Going further

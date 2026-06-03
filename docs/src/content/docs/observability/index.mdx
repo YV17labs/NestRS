@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
         .module::<AppModule>()
         .build()
         .await?
-        .transport(HttpTransport::new().bind("0.0.0.0:3003"))
+        .transport(HttpTransport::new().bind("0.0.0.0:3000"))
         .run()
         .await
 }

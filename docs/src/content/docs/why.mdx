@@ -27,6 +27,28 @@ written slightly differently in two different files.
   lineage; everywhere else the framework is described on its own terms.
 </Aside>
 
+## Why now
+
+Two shifts make this trade-off worth reopening.
+
+**Memory is now a line item.** Cloud RAM has grown steadily more expensive, and
+for many services it is the largest single part of the bill. Managed runtimes —
+Node among them — are genuinely productive, but they buy that productivity with a
+garbage collector and a runtime whose footprint is always resident, whether or
+not a request is in flight. You pay for it idle, and you pay for it again in
+energy per request.
+
+**Native code is no longer the hard path.** Much of what made higher-level
+runtimes attractive — boilerplate, slower scaffolding, a steeper learning
+curve — is far easier to absorb now that LLM-assisted coding carries the rote
+parts. The friction that justified the runtime tax has largely dissolved.
+
+NestRS reopens the trade-off between the two: keep the declarative,
+decorator-driven style that makes the managed-runtime model productive, but stand
+it on a native, compiled foundation that doesn't bill you for it in RAM. One
+`cargo` step compiles and type-checks, modules wire up regardless of import
+order, and the result ships as one lean binary.
+
 ## The six structural properties
 
 Each property below is a consequence of the thesis, not a feature added on

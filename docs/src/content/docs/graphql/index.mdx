@@ -64,13 +64,13 @@ pub struct GreetingModule;
 ## Run it
 
 ```bash frame="terminal"
-$ curl -sX POST http://localhost:3001/graphql \
+$ curl -sX POST http://localhost:3000/graphql \
     -H 'Content-Type: application/json' \
     -d '{"query":"{ greeting(name: \"Ada\") }"}'
 {"data":{"greeting":"Hello, Ada!"}}
 ```
 
-Or open [`http://localhost:3001/graphql`](http://localhost:3001/graphql)
+Or open [`http://localhost:3000/graphql`](http://localhost:3000/graphql)
 for the interactive playground.
 
 ## Injecting a service
@@ -133,7 +133,7 @@ impl GreetingResolver {
   query.
 
 ```bash frame="terminal"
-$ curl -sX POST http://localhost:3001/graphql \
+$ curl -sX POST http://localhost:3000/graphql \
     -H 'Content-Type: application/json' \
     -d '{"query":"mutation { sayHello(input: {name: \"Ada\", formal: true}) { text } }"}'
 {"data":{"sayHello":{"text":"Greetings, Ada!"}}}
@@ -172,7 +172,7 @@ impl UsersResolver {
 ```
 
 ```bash frame="terminal"
-$ curl -sX POST http://localhost:3001/graphql -d \
+$ curl -sX POST http://localhost:3000/graphql -d \
     '{"query":"{ user(id:\"1\") { name displayName } }"}'
 {"data":{"user":{"name":"Ada","displayName":"ADA"}}}
 ```

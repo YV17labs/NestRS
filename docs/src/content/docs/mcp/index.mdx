@@ -10,7 +10,8 @@ A NestRS MCP server is a struct with a `#[mcp]` decorator: DI handles its
 dependencies, `#[tool]` defines each tool, the server self-mounts on the
 HTTP transport at the path you choose.
 
-Below is the real `mcp` example (`apps/mcp`), running on port 3004.
+Below is a complete MCP server, served on `http://localhost:3000` — the full
+version lives in `apps/mcp`.
 
 ## A working MCP server
 
@@ -98,17 +99,17 @@ $ just dev mcp
 ```
 
 ```text frame="terminal"
-2026-06-03T10:34:07.882Z  INFO nestrs::http: bound 1 MCP server on 0.0.0.0:3004
+2026-06-03T10:34:07.882Z  INFO nestrs::http: bound 1 MCP server on 0.0.0.0:3000
   POST /mcp → WeatherTool (1 tool)
 ```
 
-Point an MCP-aware client at `http://localhost:3004/mcp`:
+Point an MCP-aware client at `http://localhost:3000/mcp`:
 
 ```json title="Claude Desktop / Cursor — claude_desktop_config.json"
 {
   "mcpServers": {
     "weather": {
-      "url": "http://localhost:3004/mcp"
+      "url": "http://localhost:3000/mcp"
     }
   }
 }

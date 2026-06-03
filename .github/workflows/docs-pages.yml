@@ -41,9 +41,8 @@ jobs:
 
       - name: Build site
         env:
-          # Project Pages URL — required until nestrs.dev custom domain is active.
-          ASTRO_SITE: https://nestrs.github.io
-          ASTRO_BASE: /NestRS/
+          ASTRO_SITE: https://nestrs.dev
+          ASTRO_BASE: /
         run: npm run build
         working-directory: docs
 

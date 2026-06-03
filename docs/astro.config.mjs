@@ -2,7 +2,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 
-// GitHub Pages project sites live under /NestRS/; nestrs.dev (custom domain) uses /.
+// GitHub Pages: nestrs.dev (custom domain, base /). Local dev defaults match.
 // CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
 const base = process.env.ASTRO_BASE || '/';
 const site = process.env.ASTRO_SITE || 'https://nestrs.dev';

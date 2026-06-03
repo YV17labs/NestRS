@@ -1,0 +1,17 @@
+---
+import Default from '@astrojs/starlight/components/PageFrame.astro';
+import BrandBackground from './BrandBackground.astro';
+---
+
+<div class="nestrs-page-shell">
+  <BrandBackground />
+  <Default {...Astro.props}>
+    <slot />
+    <Fragment slot="header">
+      <slot name="header" />
+    </Fragment>
+    <Fragment slot="sidebar">
+      <slot name="sidebar" />
+    </Fragment>
+  </Default>
+</div>

@@ -8,12 +8,12 @@ export default defineConfig({
     starlight({
       title: 'NestRS',
       description:
-        'A declarative Rust framework for service backends — native throughput, an order of magnitude less RAM, types that hold end to end.',
+        'Scalable Rust backend apps with native performance.',
       plugins: [
         starlightLlmsTxt({
           projectName: 'NestRS',
           description:
-            'A declarative Rust framework for service backends — decorator-driven, secure and transactional by composition, multi-transport (HTTP, GraphQL, WebSockets, queues, schedule, MCP) from one feature definition.',
+            'Scalable Rust backend apps with native performance — declarative framework, multi-transport, boot-time wiring checks, scoped data access by composition.',
           details:
             'NestRS sits on top of hyper/tokio/poem. It is decorator-driven (procedural macros: #[module], #[controller], #[resolver], #[gateway], #[processor], #[cron_job], #[mcp]), with a flat type-id DI container verified at boot (the "access graph"), an ambient data context that installs a request-scoped executor and ability, row-level filtering and response masking via CASL-style abilities, and per-binary subsets through module-gated discovery.',
         }),
@@ -51,6 +51,9 @@ export default defineConfig({
         },
       },
       customCss: ['./src/styles/custom.css'],
+      components: {
+        PageFrame: './src/components/PageFrame.astro',
+      },
       editLink: {
         baseUrl: 'https://github.com/NestRS/NestRS/edit/main/docs/',
       },

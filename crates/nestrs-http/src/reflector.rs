@@ -1,6 +1,6 @@
 //! [`Reflector`] — read per-handler metadata a `#[meta(...)]` attribute
-//! attached. The NestJS `Reflector` analog (the `@Roles` pattern: a guard reads
-//! the route's required roles by type to vary its decision).
+//! attached. Lets a guard read declarative route metadata by type (e.g. a
+//! guard reads the route's required roles to vary its decision).
 //!
 //! Binding constraint: bind the reading guard **per route** with
 //! `#[use_guards]`. A *global* guard (`HttpTransport::guard`) runs before

@@ -1,5 +1,5 @@
 //! Turn an authenticated actor into an [`Ability`](crate::Ability) — the
-//! analog of NestJS CASL's `CaslAbilityFactory`.
+//! per-actor capability set that the authorization layers consume.
 
 use crate::builder::AbilityBuilder;
 

@@ -1,4 +1,4 @@
-//! Typed in-process event bus — `@nestjs/event-emitter` analog.
+//! Typed in-process event bus with decorator-registered handlers.
 //!
 //! An event is any `Clone + Send + 'static`. A handler is a `#[on_event]`
 //! struct that implements [`EventHandler`]; listing it in

@@ -1,4 +1,4 @@
-//! Configuration loading for nestrs — the `@nestjs/config` analog.
+//! Typed configuration loading for nestrs from the environment.
 //!
 //! A config is a namespaced [`Config`] struct that maps `NESTRS_<DOMAIN>__<KEY>`
 //! variables to fields **explicitly** in its `from_env`, read through a

@@ -6,8 +6,8 @@ use poem::{Endpoint, IntoResponse, Request, Response, Result};
 ///
 /// The request is borrowed **mutably**, so a guard may also *attach*
 /// request-scoped context the handler reads back via
-/// [`Ctx<T>`](../../nestrs_http/struct.Ctx.html) — the NestJS `request.user`
-/// pattern.
+/// [`Ctx<T>`](../../nestrs_http/struct.Ctx.html) — e.g. attaching the
+/// authenticated principal for the handler to read back.
 ///
 /// Bind globally (`HttpTransport::guard`) or per-handler with
 /// `#[use_guards(MyGuard)]`, where the guard is resolved from the container as

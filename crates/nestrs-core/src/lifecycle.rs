@@ -1,4 +1,5 @@
-//! Application lifecycle hooks, mirroring NestJS's lifecycle events.
+//! Application lifecycle hooks for the module/application init and shutdown
+//! phases.
 //!
 //! A provider opts in by tagging methods on an impl block with `#[hooks]`. Each
 //! hook is submitted to a link-time `inventory` registry that

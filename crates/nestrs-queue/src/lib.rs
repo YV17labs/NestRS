@@ -1,4 +1,4 @@
-//! Redis-backed job queues — `@nestjs/bullmq` analog. Queue names are
+//! Redis-backed, distributed job queues with retries. Queue names are
 //! stringly-typed (a known cost: the consuming `#[processor]` and every
 //! producer must agree on the literal).
 //!

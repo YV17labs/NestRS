@@ -1,16 +1,16 @@
 ---
 title: NestRS
-description: A Rust framework for modern backends — native throughput, an order of magnitude less RAM, and types that hold end-to-end.
+description: Scalable Rust backend apps with native performance.
 template: splash
 hero:
   title: |
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
-    <span class="hero-lead">Declarative macros, <span class="lead-accent">native performance.</span></span>
-    <span class="hero-sub"><strong>~25×</strong> the throughput of an equivalent Node service, <strong>~20× less</strong> RAM, and types that hold end&#8209;to&#8209;end — no GC pauses, no <code>any</code>, just a single native binary.</span>
-    <span class="hero-pills"><span>Rust</span><span>HTTP · GraphQL · WS · Queue · MCP</span><span>Secure by default</span></span>
+    <span class="hero-lead">Scalable Rust backend apps with <span class="lead-accent">native performance.</span></span>
+    <span class="hero-sub">A Rust framework for native backend applications — <strong>~25×</strong> throughput and <strong>~20×</strong> less RAM than an equivalent Node service on the same hardware.</span>
   image:
-    file: ../../assets/logo-animated.svg
+    alt: NestRS logo
+    file: ../../assets/logo.svg
   actions:
     - text: Get started
       link: /getting-started/
@@ -36,14 +36,14 @@ import Bench from '../../components/Bench.astro';
     no GC pauses. The same `hyper`/`tokio` core as the fastest Rust web
     frameworks — with a structure on top.
   </Card>
-  <Card title="An order of magnitude less RAM" icon="seti:plan">
+  <Card title="An order of magnitude less RAM" icon="laptop">
     **~4 MB idle, ~6 MB under load** — versus ~80–120 MB for an
     equivalent Node service. Smaller instances, higher density, a
     materially lighter cloud bill.
   </Card>
   <Card title="Boots in milliseconds" icon="bars">
-    A single static native binary, no runtime to warm up — autoscaling
-    and cold starts stop hurting.
+    Each deployable is a static native binary with no runtime to warm up —
+    autoscaling and cold starts stop hurting.
   </Card>
   <Card title="Types you don't fight" icon="approve-check">
     Rust types end to end — entity, DTO, route handler, dataloader, GraphQL
@@ -52,8 +52,8 @@ import Bench from '../../components/Bench.astro';
   </Card>
   <Card title="Declarative, decorator-driven" icon="puzzle">
     `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`,
-    `#[gateway]`, `#[cron_job]`, `#[mcp]`. Features are wired with attribute
-    macros — you write logic, not boilerplate.
+    `#[gateway]`, `#[cron_job]`, `#[mcp]`. Wiring is declarative — you write
+    logic, not boilerplate.
   </Card>
   <Card title="Verified before it serves" icon="warning">
     The DI graph is checked at boot — a bad import fails startup with a
@@ -81,10 +81,12 @@ once in NestRS and once in NestJS 11 on Node.js 20, under identical `wrk` load
 
 <Bench />
 
-## What a feature looks like
+## What a module looks like
 
-A provider, a controller, a module. The DI graph is built and verified at
-boot; `cargo` produces a single native binary.
+A minimal slice — a provider, a controller, and a `#[module]` that lists them.
+The DI graph is built and verified at boot; each app under `apps/` compiles to
+its own native binary. For a full vertical slice (core port plus HTTP/GraphQL adapters), start with the
+[tutorial](/tutorial/).
 
 ```rust title="apps/app/src/hello/service.rs"
 use nestrs_core::injectable;
@@ -136,47 +138,92 @@ Hello World
 ```
 
 The same inject-and-decorate model carries every surface — HTTP, GraphQL,
-WebSockets, queues, scheduled jobs, MCP. See the
-[tutorial](/tutorial/) for a full feature, or jump to a transport:
+WebSockets, queues, scheduled jobs, MCP. Jump to a transport:
 [HTTP](/http/), [GraphQL](/graphql/), [WebSockets](/websockets/),
 [Data](/data/), [Security](/security/).
 
-## Monolith or microservices — your call
+## One domain, several focused binaries
 
-Some teams want one deployable; others want a fleet of services. NestRS doesn't
-pick the fight: the **same feature code runs either way**. Compose every edge
-into a single binary, or split by responsibility into separate apps — an API, a
-token issuer, a queue worker — all **sharing their entities, services, and policy
-through `crates/features`**, never by copying code and never by chatty RPC.
-Module-gated discovery means each binary compiles and serves **only what it
-imports**, so a worker carries no HTTP stack. Start as a monolith and split
-later, or the reverse — no rewrite, because the features never moved.
+NestRS is built for **microservice-shaped backends without the old ceremony** —
+several deployables, **one shared feature library**, and no obligation to split
+into many repositories while the team is still small.
 
-<div class="mono">
+**Entities, services, and policy are written once.** Each runnable has a **clear
+responsibility** — some sit on a **public edge** (surfaces clients and partners
+call), others stay **non-public** (background work, off the request path). Processes
+stay lean; your own services stay **loosely coupled** (shared contracts and data,
+not chatty RPC, no platform team or mesh required to get started).
+
+<div class="mono not-content">
   <div class="mono-shared">
-    <span class="mono-tag">crates/features</span>
-    <span class="mono-desc">your domain — entities · services · policy · contracts — written once, shared by every app</span>
+    <span class="mono-tag">shared features</span>
+    <span class="mono-desc">one product codebase — written once, composed into every deployable</span>
+    <span class="mono-desc-sub">the same model; different edges per responsibility</span>
   </div>
-  <div class="mono-apps">
-    <div class="mono-app">
-      <span class="mono-app-name">apps/api</span>
-      <span class="mono-app-role">HTTP · GraphQL · WebSockets</span>
+  <div class="mono-deploy">
+    <div class="mono-tier mono-tier--public">
+      <header class="mono-tier-head">
+        <span class="mono-tier-label">Public edge</span>
+        <span class="mono-tier-hint">exposed to clients and partners</span>
+      </header>
+      <ul class="mono-apps mono-apps--pair">
+        <li class="mono-app">
+          <span class="mono-app-name">API service</span>
+          <span class="mono-app-role">REST · GraphQL</span>
+        </li>
+        <li class="mono-app">
+          <span class="mono-app-name">OAuth service</span>
+          <span class="mono-app-role">OAuth2 · token issuance</span>
+        </li>
+      </ul>
     </div>
-    <div class="mono-app">
-      <span class="mono-app-name">apps/auth</span>
-      <span class="mono-app-role">issues tokens (holds the private key)</span>
-    </div>
-    <div class="mono-app">
-      <span class="mono-app-name">apps/worker</span>
-      <span class="mono-app-role">queue jobs · no HTTP compiled in</span>
+    <div class="mono-tier mono-tier--private">
+      <header class="mono-tier-head">
+        <span class="mono-tier-label">Non-public</span>
+        <span class="mono-tier-hint">not on the client request path</span>
+      </header>
+      <ul class="mono-apps mono-apps--solo">
+        <li class="mono-app">
+          <span class="mono-app-name">Worker</span>
+          <span class="mono-app-role">queues · background work</span>
+        </li>
+      </ul>
     </div>
   </div>
-  <p class="mono-note">Or fold every module into one app — the same features, a single binary. Group or split, switch whenever; the code never moves.</p>
-  <div class="mono-badges">
-    <span>Single static binary</span>
-    <span>Container-ready</span>
-    <span>Kubernetes-ready</span>
+  <p class="mono-note">One monorepo, one feature library — who runs where; operational boundaries, not a rewrite of business logic.</p>
+</div>
+
+## Scale each role on its own signal
+
+Splitting by responsibility is only the first step. In production you **scale
+horizontally per role** — the same binary, more replicas when the pressure moves:
+API capacity follows **demand**, worker capacity follows **queue depth**. There is
+no single “scale the monolith” knob; each deployable gets its own replica count.
+
+<div class="scale not-content">
+  <div class="scale-lanes">
+    <article class="scale-lane scale-lane--api">
+      <div class="scale-lane-top">
+        <span class="scale-signal">demand · traffic</span>
+        <span class="scale-arrow" aria-hidden="true">→</span>
+        <span class="scale-target">API replicas</span>
+      </div>
+      <div class="scale-pills" aria-hidden="true">
+        <span></span><span></span><span></span><span class="scale-pill-more">+</span>
+      </div>
+    </article>
+    <article class="scale-lane scale-lane--worker">
+      <div class="scale-lane-top">
+        <span class="scale-signal">queue · backlog</span>
+        <span class="scale-arrow" aria-hidden="true">→</span>
+        <span class="scale-target">Worker replicas</span>
+      </div>
+      <div class="scale-pills scale-pills--worker" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span class="scale-pill-more">+</span>
+      </div>
+    </article>
   </div>
+  <p class="scale-aside">Issuers such as OAuth usually keep a small, steady footprint — scale where the load actually moves.</p>
 </div>
 
 ## Status

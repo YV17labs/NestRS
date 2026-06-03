@@ -16,12 +16,11 @@
 
 <!-- background -->
 <rect width="1280" height="640" fill="url(#bg)"/>
-<circle cx="300" cy="320" r="380" fill="url(#glow)"/>
+<circle cx="300" cy="335" r="380" fill="url(#glow)"/>
 
-<!-- icon: the existing logo, scaled and placed on the left -->
-<g transform="translate(90,110) scale(0.82)">
+<!-- icon -->
+<g transform="translate(90,135) scale(0.82)">
   <g transform="translate(256,256)">
-    <!-- outer rust-inspired ring -->
     <path d="
     M0,-180
     L28,-160 L65,-168 L92,-140 L130,-136
@@ -33,18 +32,13 @@
     L-176,-42 L-180,-82 L-146,-100 L-130,-136
     L-92,-140 L-65,-168 L-28,-160 Z"
     fill="#111111" stroke="#ff7a59" stroke-width="1.5" stroke-opacity="0.4" stroke-linejoin="round"/>
-
     <circle r="120" fill="#0f0f0f"/>
-
-    <!-- modern brand-mark center -->
     <path d="M0,-110
              C60,-80 88,-25 72,55
              L0,110
              L-72,55
              C-88,-25 -60,-80 0,-110Z"
           fill="url(#grad)"/>
-
-    <!-- subtle inner cut -->
     <path d="M0,-55
              C25,-40 40,-10 34,30
              L0,58
@@ -54,21 +48,17 @@
   </g>
 </g>
 
-<!-- wordmark + tagline on the right -->
-<text x="540" y="300"
+<!-- wordmark + slogan -->
+<text x="540" y="330"
       font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
       font-size="150" font-weight="700" letter-spacing="-3">
   <tspan fill="#15161a">Nest</tspan><tspan fill="url(#grad)">RS</tspan>
 </text>
 
-<text x="544" y="378"
+<text x="544" y="410"
       font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
-      font-size="34" font-weight="400" fill="#4b5563">An opinionated Rust framework.</text>
-<text x="544" y="424"
+      font-size="32" font-weight="500" fill="#374151">Scalable Rust backend apps with</text>
+<text x="544" y="450"
       font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
-      font-size="34" font-weight="400" fill="#4b5563">Declarative macros, native performance.</text>
-
-<text x="546" y="486"
-      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
-      font-size="24" font-weight="600" letter-spacing="2" fill="#ff6b54">RUST · MULTI-TRANSPORT · MACRO-DRIVEN</text>
+      font-size="32" font-weight="500" fill="#374151"><tspan fill="#ff6b54" font-weight="600">native performance</tspan>.</text>
 </svg>

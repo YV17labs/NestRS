@@ -13,7 +13,7 @@ pub struct HelloController {
 #[routes]
 impl HelloController {
     #[get("/")]
-    async fn hello(&self) -> &'static str {
+    async fn hello(&self) -> String {
         self.svc.greeting()
     }
 }

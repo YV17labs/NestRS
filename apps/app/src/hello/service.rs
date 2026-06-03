@@ -5,8 +5,8 @@ use nestrs_core::injectable;
 pub struct HelloService;
 
 impl HelloService {
-    pub fn greeting(&self) -> &'static str {
-        "Hello World"
+    pub fn greeting(&self) -> String {
+        "Hello World".to_string()
     }
 }
 

@@ -1,0 +1,219 @@
+---
+title: GraphQL
+description: A self-composing schema, resolvers as structs, queries / mutations / fields on one impl block.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A resolver is a struct decorated with `#[resolver]`. Each `#[resolver]`
+submits its operations to a registry merged into the schema roots at
+boot — there is no central `queries = [...]` list. Root resolvers
+(`#[query]`, `#[mutation]`) and entity-field resolvers (`#[field]`) live
+on the same impl block.
+
+This page covers GraphQL concerns only. Authentication, authorization
+and database-backed loaders are in their own categories.
+
+## The minimal resolver
+
+```rust title="src/greeting/resolver.rs"
+use nestrs_graphql::{query, resolver};
+
+#[resolver]
+pub struct GreetingResolver;
+
+#[resolver]
+impl GreetingResolver {
+    #[query]
+    async fn greeting(&self, name: Option<String>) -> String {
+        format!("Hello, {}!", name.as_deref().unwrap_or("World"))
+    }
+}
+```
+
+- **`#[resolver]`** on the struct registers it with the schema discovery
+  registry.
+- **`#[resolver]`** on the impl block orchestrates the operations within.
+- **`#[query]`** declares a top-level query. The method name becomes the
+  field name (camelCased on the wire: `greeting`).
+- Arguments are mapped to GraphQL input arguments by serde. `Option<T>`
+  becomes nullable.
+
+Mount the GraphQL transport once at the app root:
+
+```rust title="src/app.rs"
+use nestrs_core::module;
+use nestrs_graphql::GraphqlModule;
+use crate::greeting::GreetingModule;
+
+#[module(imports = [GreetingModule, GraphqlModule::for_root(None)])]
+pub struct AppModule;
+```
+
+```rust title="src/greeting/module.rs"
+use nestrs_core::module;
+use super::resolver::GreetingResolver;
+
+#[module(providers = [GreetingResolver])]
+pub struct GreetingModule;
+```
+
+`GraphqlModule::for_root` mounts `POST /graphql` (the endpoint) and
+`GET /graphql` (the playground) on the HTTP transport.
+
+## Run it
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3001/graphql \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"{ greeting(name: \"Ada\") }"}'
+{"data":{"greeting":"Hello, Ada!"}}
+```
+
+Or open [`http://localhost:3001/graphql`](http://localhost:3001/graphql)
+for the interactive playground.
+
+## Injecting a service
+
+A resolver injects providers like any other struct:
+
+```rust
+use std::sync::Arc;
+use nestrs_graphql::{query, resolver};
+use crate::greeting::service::GreetingService;
+
+#[resolver]
+pub struct GreetingResolver {
+    #[inject]
+    svc: Arc<GreetingService>,
+}
+
+#[resolver]
+impl GreetingResolver {
+    #[query]
+    async fn greeting(&self, name: Option<String>) -> String {
+        self.svc.greet(name.as_deref().unwrap_or("World"))
+    }
+}
+```
+
+The container resolves `GreetingService` from the import tree. No
+container handle to thread, no factory to call.
+
+## A mutation
+
+```rust
+use async_graphql::{InputObject, SimpleObject};
+
+#[derive(InputObject)]
+struct GreetingInput {
+    name: String,
+    formal: Option<bool>,
+}
+
+#[derive(SimpleObject)]
+struct GreetingReply {
+    text: String,
+}
+
+#[resolver]
+impl GreetingResolver {
+    #[mutation]
+    async fn say_hello(&self, input: GreetingInput) -> GreetingReply {
+        let prefix = if input.formal.unwrap_or(false) { "Greetings" } else { "Hello" };
+        GreetingReply { text: format!("{prefix}, {}!", input.name) }
+    }
+}
+```
+
+- `InputObject` makes a struct usable as an argument type;
+  `SimpleObject` makes one usable as a return type. Both come from
+  `async-graphql` (re-exported by `nestrs-graphql`).
+- Add `#[mutation]` on a method to declare it a mutation rather than a
+  query.
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3001/graphql \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"mutation { sayHello(input: {name: \"Ada\", formal: true}) { text } }"}'
+{"data":{"sayHello":{"text":"Greetings, Ada!"}}}
+```
+
+## A field resolver
+
+`#[field]` resolves a property of an entity that is not stored on it —
+typically a derived value or a related entity. The first non-`self`,
+non-`ctx` argument is the parent object.
+
+```rust
+use async_graphql::SimpleObject;
+
+#[derive(SimpleObject, Clone)]
+struct User {
+    id: String,
+    name: String,
+}
+
+#[resolver]
+pub struct UsersResolver;
+
+#[resolver]
+impl UsersResolver {
+    #[query]
+    async fn user(&self, id: String) -> User {
+        User { id, name: "Ada".into() }
+    }
+
+    #[field]
+    async fn display_name(&self, parent: &User) -> String {
+        parent.name.to_uppercase()
+    }
+}
+```
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3001/graphql -d \
+    '{"query":"{ user(id:\"1\") { name displayName } }"}'
+{"data":{"user":{"name":"Ada","displayName":"ADA"}}}
+```
+
+## Errors
+
+A resolver returns `async_graphql::Result<T>` (or your own typed error
+mapped to it). Error messages become the GraphQL error `message`;
+`extensions` carry structured codes:
+
+```rust
+use async_graphql::{Error, Result};
+
+#[query]
+async fn user(&self, id: String) -> Result<User> {
+    if id.is_empty() {
+        return Err(Error::new("id must not be empty").extend_with(|_, e| {
+            e.set("code", "INVALID_ARGUMENT");
+        }));
+    }
+    Ok(User { id, name: "Ada".into() })
+}
+```
+
+## Committed SDL
+
+`apps/api/schema.graphql` is generated on dev runs and committed —
+schema changes show up in diffs without a separate generator pass.
+
+## Going further
+
+- [Security](/security/) — bind a `GraphqlAuthGuard` so resolvers run
+  with an authenticated principal and an ambient `Ability`.
+- [Data](/data/) — `#[dataloader]` to batch DB reads across one
+  response, avoiding N+1.
+
+### Reference
+
+- `crates/features/src/users/graphql/resolver.rs` — a production-grade
+  resolver with relations, dataloaders and authorization.
+- `crates/nestrs-graphql/` — `#[resolver]`, `#[query]`, `#[mutation]`,
+  `#[field]`, schema composition.
+- `crates/nestrs-resource/` — `#[expose]` for an entity that becomes a
+  GraphQL type *and* an OpenAPI schema from one declaration.

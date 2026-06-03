@@ -1,0 +1,187 @@
+---
+title: NestRS
+description: A Rust framework for modern backends — native throughput, an order of magnitude less RAM, and types that hold end-to-end.
+template: splash
+hero:
+  title: |
+    <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
+  tagline: |
+    <span class="hero-lead">Declarative macros, <span class="lead-accent">native performance.</span></span>
+    <span class="hero-sub"><strong>~25×</strong> the throughput of an equivalent Node service, <strong>~20× less</strong> RAM, and types that hold end&#8209;to&#8209;end — no GC pauses, no <code>any</code>, just a single native binary.</span>
+    <span class="hero-pills"><span>Rust</span><span>HTTP · GraphQL · WS · Queue · MCP</span><span>Secure by default</span></span>
+  image:
+    file: ../../assets/logo-animated.svg
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: Why NestRS
+      link: /why/
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/NestRS/NestRS
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, Code } from '@astrojs/starlight/components';
+import Bench from '../../components/Bench.astro';
+
+## Why developers pick NestRS
+
+<CardGrid>
+  <Card title="Native throughput" icon="rocket">
+    **~463k req/s** on 2 cores, **~213k per core**, sub-millisecond p99,
+    no GC pauses. The same `hyper`/`tokio` core as the fastest Rust web
+    frameworks — with a structure on top.
+  </Card>
+  <Card title="An order of magnitude less RAM" icon="seti:plan">
+    **~4 MB idle, ~6 MB under load** — versus ~80–120 MB for an
+    equivalent Node service. Smaller instances, higher density, a
+    materially lighter cloud bill.
+  </Card>
+  <Card title="Boots in milliseconds" icon="bars">
+    A single static native binary, no runtime to warm up — autoscaling
+    and cold starts stop hurting.
+  </Card>
+  <Card title="Types you don't fight" icon="approve-check">
+    Rust types end to end — entity, DTO, route handler, dataloader, GraphQL
+    schema, OpenAPI doc. No `any`, no `unknown`, no `as` casts at the
+    boundaries, no runtime "undefined is not a function."
+  </Card>
+  <Card title="Declarative, decorator-driven" icon="puzzle">
+    `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`,
+    `#[gateway]`, `#[cron_job]`, `#[mcp]`. Features are wired with attribute
+    macros — you write logic, not boilerplate.
+  </Card>
+  <Card title="Verified before it serves" icon="warning">
+    The DI graph is checked at boot — a bad import fails startup with a
+    clear error naming the missing wire. No reflection, no runtime
+    "cannot resolve dependency" five minutes after deploy.
+  </Card>
+  <Card title="Secure & transactional by composition" icon="approve-check-circle">
+    Authn, authorization, row-level filtering, response masking, transaction
+    scope — activated by importing a module, not by remembering to call
+    them. Forgetting to redact a field becomes structurally hard.
+  </Card>
+  <Card title="Batteries included, opt-in by crate" icon="setting">
+    HTTP, GraphQL, OpenAPI, WebSockets, Redis-backed queues, scheduling,
+    an event bus, MCP, CASL-style authorization, health probes,
+    OpenTelemetry — each an opt-in crate, so a worker compiles no HTTP
+    stack at all.
+  </Card>
+</CardGrid>
+
+## How fast, exactly
+
+The same "Hello World" service — a provider, a controller, a module — built
+once in NestRS and once in NestJS 11 on Node.js 20, under identical `wrk` load
+(2 cores, `-t2 -c64 -d20s`).
+
+<Bench />
+
+## What a feature looks like
+
+A provider, a controller, a module. The DI graph is built and verified at
+boot; `cargo` produces a single native binary.
+
+```rust title="apps/app/src/hello/service.rs"
+use nestrs_core::injectable;
+
+#[injectable]
+#[derive(Default)]
+pub struct HelloService;
+
+impl HelloService {
+    pub fn greeting(&self) -> &'static str { "Hello World" }
+}
+```
+
+```rust title="apps/app/src/hello/controller.rs"
+use std::sync::Arc;
+use nestrs_http::{controller, routes};
+use super::service::HelloService;
+
+#[controller(path = "/")]
+pub struct HelloController {
+    #[inject]
+    svc: Arc<HelloService>,
+}
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> &'static str {
+        self.svc.greeting()
+    }
+}
+```
+
+```rust title="apps/app/src/hello/module.rs"
+use nestrs_core::module;
+use super::{controller::HelloController, service::HelloService};
+
+#[module(providers = [HelloService, HelloController])]
+pub struct HelloModule;
+```
+
+```bash frame="terminal"
+$ just dev app
+…
+2026-06-03T10:14:22.183Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3001
+
+$ curl http://localhost:3001
+Hello World
+```
+
+The same inject-and-decorate model carries every surface — HTTP, GraphQL,
+WebSockets, queues, scheduled jobs, MCP. See the
+[tutorial](/tutorial/) for a full feature, or jump to a transport:
+[HTTP](/http/), [GraphQL](/graphql/), [WebSockets](/websockets/),
+[Data](/data/), [Security](/security/).
+
+## Monolith or microservices — your call
+
+Some teams want one deployable; others want a fleet of services. NestRS doesn't
+pick the fight: the **same feature code runs either way**. Compose every edge
+into a single binary, or split by responsibility into separate apps — an API, a
+token issuer, a queue worker — all **sharing their entities, services, and policy
+through `crates/features`**, never by copying code and never by chatty RPC.
+Module-gated discovery means each binary compiles and serves **only what it
+imports**, so a worker carries no HTTP stack. Start as a monolith and split
+later, or the reverse — no rewrite, because the features never moved.
+
+<div class="mono">
+  <div class="mono-shared">
+    <span class="mono-tag">crates/features</span>
+    <span class="mono-desc">your domain — entities · services · policy · contracts — written once, shared by every app</span>
+  </div>
+  <div class="mono-apps">
+    <div class="mono-app">
+      <span class="mono-app-name">apps/api</span>
+      <span class="mono-app-role">HTTP · GraphQL · WebSockets</span>
+    </div>
+    <div class="mono-app">
+      <span class="mono-app-name">apps/auth</span>
+      <span class="mono-app-role">issues tokens (holds the private key)</span>
+    </div>
+    <div class="mono-app">
+      <span class="mono-app-name">apps/worker</span>
+      <span class="mono-app-role">queue jobs · no HTTP compiled in</span>
+    </div>
+  </div>
+  <p class="mono-note">Or fold every module into one app — the same features, a single binary. Group or split, switch whenever; the code never moves.</p>
+  <div class="mono-badges">
+    <span>Single static binary</span>
+    <span>Container-ready</span>
+    <span>Kubernetes-ready</span>
+  </div>
+</div>
+
+## Status
+
+**Alpha.** The API still shifts, rough edges remain — NestRS is not
+production-ready yet. Stars and early feedback on
+[Discussions](https://github.com/NestRS/NestRS/discussions) shape what
+follows.

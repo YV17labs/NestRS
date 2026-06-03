@@ -1,0 +1,93 @@
+---
+// Benchmark comparison — NestRS vs Node as two competing bars per metric.
+//
+// Bar length reflects the real measured value on a per-row shared scale (each
+// row's larger value = 100%), so the picture stays honest in both directions:
+// for throughput NestRS is the long bar; for memory/latency (lower is better)
+// Node becomes the long bar and NestRS a short one — exactly the right read.
+// NestRS is always the brand gradient, Node always muted, so colour means
+// "who", never "good/bad". Bars grow once on scroll-in (see the inline script).
+interface Row {
+  label: string;
+  unit: string;
+  nestrs: number;
+  node: number;
+  nestrsLabel: string;
+  nodeLabel: string;
+  mult: number;
+}
+
+const rows: Row[] = [
+  { label: 'Throughput', unit: '2 cores · req/s', nestrs: 463000, node: 18000, nestrsLabel: '~463k', nodeLabel: '~18k', mult: 25 },
+  { label: 'Throughput', unit: 'per core · req/s', nestrs: 213000, node: 17000, nestrsLabel: '~213k', nodeLabel: '~17k', mult: 13 },
+  { label: 'Latency p50', unit: 'lower is better', nestrs: 0.13, node: 3.2, nestrsLabel: '0.13 ms', nodeLabel: '3.2 ms', mult: 24 },
+  { label: 'Latency p99', unit: 'lower is better', nestrs: 0.57, node: 6.4, nestrsLabel: '0.57 ms', nodeLabel: '6.4 ms', mult: 11 },
+  { label: 'Memory idle', unit: 'lower is better', nestrs: 4, node: 80, nestrsLabel: '4 MB', nodeLabel: '80 MB', mult: 20 },
+  { label: 'Memory under load', unit: 'lower is better', nestrs: 6, node: 118, nestrsLabel: '6 MB', nodeLabel: '118 MB', mult: 18 },
+];
+
+// Width as a share of the row's larger value, with a small floor so the tiny
+// side still shows a visible nub.
+const width = (v: number, max: number) => `${Math.max(3, (v / max) * 100)}%`;
+---
+
+<div class="bench">
+  <div class="bench-legend">
+    <span class="bench-key nestrs">NestRS</span>
+    <span class="bench-key node">NestJS 11 · Node 20</span>
+  </div>
+
+  {
+    rows.map((r, i) => {
+      const max = Math.max(r.nestrs, r.node);
+      return (
+        <div class="bench-row">
+          <div class="bench-label">
+            <span>{r.label}</span>
+            <small>{r.unit}</small>
+          </div>
+
+          <div class="bench-bars">
+            <div class="bench-line">
+              <span class="bench-who nestrs">NestRS</span>
+              <span class="bench-meter">
+                <i class="bench-fill nestrs" style={`--w:${width(r.nestrs, max)};--d:${i * 0.07}s`} />
+              </span>
+              <span class="bench-num nestrs">{r.nestrsLabel}</span>
+            </div>
+            <div class="bench-line">
+              <span class="bench-who">NestJS</span>
+              <span class="bench-meter">
+                <i class="bench-fill node" style={`--w:${width(r.node, max)};--d:${i * 0.07 + 0.05}s`} />
+              </span>
+              <span class="bench-num">{r.nodeLabel}</span>
+            </div>
+          </div>
+
+          <div class="bench-mult">~{r.mult}×</div>
+        </div>
+      );
+    })
+  }
+</div>
+
+<script>
+  // Progressive enhancement: bars start full (no-JS safe), then we arm the
+  // from-zero animation and let it play once when the table scrolls into view.
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const benches = document.querySelectorAll<HTMLElement>('.bench');
+    benches.forEach((b) => b.classList.add('bench-animate'));
+    const io = new IntersectionObserver(
+      (entries, obs) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            e.target.classList.add('is-visible');
+            obs.unobserve(e.target);
+          }
+        }
+      },
+      { threshold: 0.2 }
+    );
+    benches.forEach((b) => io.observe(b));
+  }
+</script>

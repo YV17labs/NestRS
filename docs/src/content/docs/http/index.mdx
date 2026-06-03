@@ -1,0 +1,263 @@
+---
+title: HTTP
+description: Controllers, routes, extractors, validation, response types — the HTTP layer alone.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A controller is a struct that injects its dependencies, with verb methods on
+its `impl` block. The `#[routes]` macro generates the route table; verb
+attributes (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`) bind a
+method to a path.
+
+This page covers HTTP concerns only — routes, extractors, validation,
+response shaping. Authentication, authorization and database queries each
+have their own category.
+
+## The minimal controller
+
+```rust title="apps/app/src/hello/controller.rs"
+use std::sync::Arc;
+use nestrs_http::{controller, routes};
+use crate::hello::service::HelloService;
+
+#[controller(path = "/")]
+pub struct HelloController {
+    #[inject]
+    svc: Arc<HelloService>,
+}
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> String {
+        self.svc.greeting()
+    }
+}
+```
+
+- **`#[controller(path = "/")]`** mounts the impl block under that path.
+- **`#[inject] svc: Arc<HelloService>`** declares a dependency — the
+  container hands the controller the shared `Arc<HelloService>` when it
+  builds the controller.
+- **`#[routes]`** generates the route table; one entry per verb attribute.
+- **`async fn hello(&self) -> String`** — any type that implements
+  `IntoResponse` is a valid return. `String`, `&'static str`, `i32`,
+  `Json<T>`, `(StatusCode, Body)` … all work.
+
+Run it:
+
+```bash frame="terminal"
+$ just dev
+…
+2026-06-03T10:14:22Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3001
+  GET / → HelloController::hello
+
+$ curl http://localhost:3001
+Hello World
+```
+
+## Adding a path parameter
+
+```rust
+use poem::web::Path;
+
+#[get("/:name")]
+async fn greet(&self, Path(name): Path<String>) -> String {
+    format!("Hello, {name}!")
+}
+```
+
+`Path<T>` extracts a typed path segment. Typed parsing fails with `400`
+before the handler runs — there is no `name.parse::<i32>()` to handle
+manually.
+
+```bash frame="terminal"
+$ curl http://localhost:3001/Ada
+Hello, Ada!
+```
+
+## Reading query parameters
+
+```rust
+use poem::web::Query;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Greet {
+    lang: Option<String>,
+}
+
+#[get("/")]
+async fn hello(&self, Query(q): Query<Greet>) -> String {
+    match q.lang.as_deref() {
+        Some("fr") => "Bonjour le monde".to_string(),
+        _ => self.svc.greeting(),
+    }
+}
+```
+
+```bash frame="terminal"
+$ curl 'http://localhost:3001/?lang=fr'
+Bonjour le monde
+```
+
+## Accepting a JSON body, validated
+
+```rust
+use nestrs_http::Valid;
+use poem::web::Json;
+use poem::Result;
+use serde::{Deserialize, Serialize};
+use validator::Validate;
+
+#[derive(Deserialize, Validate)]
+struct GreetInput {
+    #[validate(length(min = 1))]
+    name: String,
+}
+
+#[derive(Serialize)]
+struct GreetReply {
+    greeting: String,
+}
+
+#[post("/")]
+async fn shout(&self, Valid(Json(input)): Valid<Json<GreetInput>>) -> Result<Json<GreetReply>> {
+    Ok(Json(GreetReply {
+        greeting: format!("HELLO, {}!", input.name.to_uppercase()),
+    }))
+}
+```
+
+- **`Json<T>`** parses the request body into `T`. Malformed JSON is `400`.
+- **`Valid<E>`** runs `validator` on the extracted value. A failure
+  returns `400` with the structured error list — no manual checks in the
+  handler.
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3001/ \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"ada"}'
+{"greeting":"HELLO, ADA!"}
+
+$ curl -sX POST http://localhost:3001/ \
+    -H 'Content-Type: application/json' \
+    -d '{"name":""}'
+{"error":"validation","fields":{"name":["length"]}}
+```
+
+## Returning typed JSON
+
+`Json<T>` works as a return type as well — the framework serializes `T`
+and sets `Content-Type: application/json`:
+
+```rust
+#[get("/me")]
+async fn me(&self) -> Json<GreetReply> {
+    Json(GreetReply { greeting: self.svc.greeting() })
+}
+```
+
+## Returning a status + body
+
+```rust
+use poem::http::StatusCode;
+
+#[post("/queue")]
+async fn enqueue(&self) -> (StatusCode, &'static str) {
+    (StatusCode::ACCEPTED, "queued")
+}
+```
+
+Tuples up to `(StatusCode, Headers, Body)` are valid responses.
+
+## Custom errors with `?`
+
+Define a feature-level error type and let the framework map it:
+
+```rust
+use poem::http::StatusCode;
+use poem::error::ResponseError;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum GreetError {
+    #[error("name must not be empty")]
+    EmptyName,
+}
+
+impl ResponseError for GreetError {
+    fn status(&self) -> StatusCode {
+        match self {
+            GreetError::EmptyName => StatusCode::BAD_REQUEST,
+        }
+    }
+}
+
+#[post("/")]
+async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>, GreetError> {
+    if input.name.trim().is_empty() {
+        return Err(GreetError::EmptyName);
+    }
+    Ok(Json(GreetReply { greeting: format!("HELLO, {}", input.name.to_uppercase()) }))
+}
+```
+
+The `?` operator carries the error through; `ResponseError` decides the
+status and body.
+
+## Per-route guards
+
+A guard runs **before** the handler. Bind it on a single route, or on the
+whole controller:
+
+```rust
+use nestrs_http::Guard;
+
+#[injectable]
+pub struct RateLimitGuard;
+
+impl Guard for RateLimitGuard {
+    async fn check(&self, req: &mut poem::Request) -> poem::Result<()> {
+        // ... check a token bucket, return 429 if exceeded ...
+        Ok(())
+    }
+}
+
+#[get("/")]
+#[use_guards(RateLimitGuard)]
+async fn hello(&self) -> String {
+    self.svc.greeting()
+}
+```
+
+Per-route order, inner→outer: **shaper → interceptors → guards → filters
+→ meta**. Bind globally on `HttpTransport`, on the controller, or beside
+a single verb — all three sources are resolved through the container.
+
+## URI versioning
+
+```rust
+#[controller(path = "/items", version = "1")]
+pub struct ItemsV1Controller { /* ... */ }
+```
+
+Routes mount under `/v1/items`. The boot log and the OpenAPI document use
+the same prefix — the three cannot drift.
+
+## Going further
+
+- [Security](/security/) — bind an `AuthGuard` and an `AbilityGuard` to
+  attach the principal and gate actions per row.
+- [Data](/data/) — handlers that persist through a service and `Repo`.
+- [GraphQL](/graphql/) — expose the same feature over GraphQL alongside
+  the controller.
+
+### Reference
+
+- `apps/app/src/hello/controller.rs` — the canonical minimal controller.
+- `crates/nestrs-http/` — the controller, routes, extractors, guards
+  interface.
+- `crates/nestrs-pipes/` — `ValidationPipe<T>`, `ParseUuid`, the other
+  reusable input transformations.

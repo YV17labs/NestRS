@@ -1,0 +1,189 @@
+---
+title: Getting started
+description: Install the toolchain, run an example app, and stand up your first endpoint.
+---
+
+import { Aside, Steps, Tabs, TabItem, FileTree } from '@astrojs/starlight/components';
+
+<Aside type="caution">
+  NestRS is in **alpha**: not yet on crates.io, the API still shifts.
+  Today the path is to clone the workspace and use it as a starting point or a
+  path/git dependency.
+</Aside>
+
+## In a dev container (recommended)
+
+The repository ships a dev container that provisions Rust, Postgres, Redis and
+the dev tooling in one step. It is the fastest path to a working setup.
+
+<Steps>
+
+1. Install [Docker](https://docs.docker.com/get-docker/) and the VS Code
+   [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+   extension.
+
+2. Clone the repository.
+
+   ```bash
+   git clone https://github.com/NestRS/NestRS.git nestrs
+   cd nestrs
+   ```
+
+3. Open the folder in VS Code and accept **Reopen in Container** when prompted.
+
+4. Run the baseline app.
+
+   ```bash
+   just dev
+   # → http://localhost:3001 returns "Hello World"
+   ```
+
+</Steps>
+
+`just dev` runs under `bacon` — every save triggers an incremental rebuild and
+a restart. Edit a handler, save, hit the endpoint again.
+
+## On your own machine
+
+If you prefer a local toolchain:
+
+```bash
+# Rust 1.75 or newer
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Dev tooling
+cargo install --locked just bacon cargo-nextest
+rustup component add llvm-tools-preview
+
+# Clone and run
+git clone https://github.com/NestRS/NestRS.git nestrs
+cd nestrs
+just dev
+```
+
+Apps that need Postgres (`api`) or Redis (`worker`) read their connection
+string from `NESTRS_DATABASE__URL` / `NESTRS_QUEUE__URL`. The bare `app`,
+`auth`, `mcp` and `chat` examples need neither.
+
+## Run the examples
+
+The workspace ships several example apps. Each is a separate runnable binary;
+they share the same workspace and the same building blocks.
+
+```bash
+just dev          # bare app baseline       :3001
+just dev auth     # OAuth2 / JWT issuer     :3002
+just dev api      # REST + GraphQL + DB     :3003   (requires `just db up` once)
+just dev mcp      # MCP server              :3004
+just dev chat     # WebSocket gateway       :3005
+just dev worker   # background jobs (headless)
+```
+
+## Your first endpoint
+
+A complete service with a provider, a controller and a module:
+
+<FileTree>
+- src/
+  - main.rs
+  - app.rs
+  - hello/
+    - module.rs
+    - service.rs
+    - controller.rs
+</FileTree>
+
+```rust title="src/hello/service.rs"
+use nestrs_core::injectable;
+
+#[injectable]
+#[derive(Default)]
+pub struct HelloService;
+
+impl HelloService {
+    pub fn greeting(&self) -> String { "Hello World".to_string() }
+}
+```
+
+```rust title="src/hello/controller.rs"
+use std::sync::Arc;
+use nestrs_http::{controller, routes};
+use super::service::HelloService;
+
+#[controller(path = "/")]
+pub struct HelloController {
+    #[inject]
+    svc: Arc<HelloService>,
+}
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> String {
+        self.svc.greeting()
+    }
+}
+```
+
+```rust title="src/hello/module.rs"
+use nestrs_core::module;
+use super::{controller::HelloController, service::HelloService};
+
+#[module(providers = [HelloService, HelloController])]
+pub struct HelloModule;
+```
+
+```rust title="src/app.rs"
+use nestrs_core::module;
+use crate::hello::module::HelloModule;
+
+#[module(imports = [HelloModule])]
+pub struct AppModule;
+```
+
+```rust title="src/main.rs"
+use nestrs_core::App;
+use nestrs_http::HttpTransport;
+mod hello;
+mod app;
+use app::AppModule;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    App::new::<AppModule>()?
+        .transport(HttpTransport::new().bind("0.0.0.0:3001"))
+        .run()
+        .await
+}
+```
+
+```toml title="Cargo.toml"
+[dependencies]
+anyhow      = "1"
+tokio       = { version = "1", features = ["macros", "rt-multi-thread"] }
+nestrs-core = { git = "https://github.com/NestRS/NestRS" }
+nestrs-http = { git = "https://github.com/NestRS/NestRS" }
+```
+
+```bash
+cargo run
+# → GET http://localhost:3001 returns "Hello World"
+```
+
+## What just happened
+
+- **`#[injectable]`** marked `HelloService` as a provider; `App::build()`
+  constructs it once and shares it as `Arc<HelloService>`.
+- **`#[controller]` + `#[routes]`** generated a poem `Endpoint` that mounts
+  the verb methods on the controller's path.
+- **`#[module]`** registered both with the DI container; `imports = [...]` on
+  `AppModule` opened access from the root.
+- **`App::new`** verified the access graph — every `#[inject]` resolves to
+  something the importing module can reach — and returned `Result`: a bad
+  wiring fails here with a clear error.
+
+## Next steps
+
+- [Tutorial](/tutorial/) — build a complete feature with persistence and authz.
+- [Core concepts](/concepts/) — the module model, the DI graph, the data context.
+- [HTTP](/http/) — controllers, pipes, guards, filters, interceptors in depth.

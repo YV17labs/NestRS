@@ -1,0 +1,196 @@
+---
+title: Core concepts
+description: Modules, providers, the access graph, and the ambient data context — by example.
+---
+
+import { Aside, FileTree } from '@astrojs/starlight/components';
+
+A NestRS app is a tree of **modules**. Each module groups **providers** (injectable
+structs) and optionally **imports** other modules. The dependency-injection
+graph is built at compile time and verified at boot — a missing wire fails
+startup with a clear error.
+
+This page walks the `app` example end to end. It is the smallest possible
+NestRS service — three files, one route.
+
+## The feature
+
+<FileTree>
+- apps/app/src/
+  - hello/
+    - service.rs
+    - controller.rs
+    - module.rs
+  - app.rs
+  - main.rs
+</FileTree>
+
+A **service** is an injectable struct. Everything decorated with
+`#[injectable]` is registered with the container and shared as `Arc<T>`.
+
+```rust title="apps/app/src/hello/service.rs"
+use nestrs_core::injectable;
+
+#[injectable]
+#[derive(Default)]
+pub struct HelloService;
+
+impl HelloService {
+    pub fn greeting(&self) -> String {
+        "Hello World".to_string()
+    }
+}
+```
+
+A **controller** is also injectable. `#[inject]` fields are resolved by type
+from the container. `#[routes]` mounts the verb methods on the controller's
+path.
+
+```rust title="apps/app/src/hello/controller.rs"
+use std::sync::Arc;
+use nestrs_http::{controller, routes};
+use super::service::HelloService;
+
+#[controller(path = "/")]
+pub struct HelloController {
+    #[inject]
+    svc: Arc<HelloService>,
+}
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> String {
+        self.svc.greeting()
+    }
+}
+```
+
+A **module** lists the providers it owns. Other modules import this one to
+gain access to those providers.
+
+```rust title="apps/app/src/hello/module.rs"
+use nestrs_core::module;
+use super::{controller::HelloController, service::HelloService};
+
+#[module(providers = [HelloService, HelloController])]
+pub struct HelloModule;
+```
+
+## Composing into an app
+
+The **root module** of a binary imports every feature module the binary
+exposes.
+
+```rust title="apps/app/src/app.rs"
+use nestrs_core::module;
+use crate::hello::HelloModule;
+
+#[module(imports = [HelloModule])]
+pub struct AppModule;
+```
+
+```rust title="apps/app/src/main.rs"
+use nestrs_core::App;
+use nestrs_http::HttpTransport;
+use app::AppModule;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    App::new::<AppModule>()?
+        .transport(HttpTransport::new().bind("0.0.0.0:3001"))
+        .run()
+        .await
+}
+```
+
+## Run it
+
+```bash
+just dev app
+```
+
+```text frame="terminal"
+   Compiling app v0.1.0
+    Finished `dev` profile in 4.21s
+     Running `target/debug/app`
+2026-06-03T10:14:22.183Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3001
+  GET / → HelloController::hello
+```
+
+```bash frame="terminal"
+$ curl http://localhost:3001
+Hello World
+```
+
+## What the framework did
+
+1. **Collected** every provider in the import tree — `HelloService`,
+   `HelloController` — into a static registry at link time.
+2. **Built** the access graph from `AppModule`. `HelloController` declares it
+   injects `HelloService`; `HelloModule` owns `HelloService`; the graph is
+   reachable. ✓
+3. **Constructed** each provider once. `HelloService::default()` produced one
+   `Arc<HelloService>`. `HelloController` was built with that `Arc` injected
+   into its `svc` field.
+4. **Mounted** `HelloController` on the HTTP transport using the route table
+   that `#[routes]` generated.
+
+## Try breaking it
+
+Comment the line that lists `HelloService` in the module's providers, then
+`cargo run`:
+
+```text frame="terminal" "(needs HelloService)"
+Error: cannot register provider(s) — unreachable in graph:
+  - HelloController (needs HelloService)
+```
+
+The error names *what* is missing and *why* it cannot be resolved. The
+build does not start the HTTP transport when wiring is invalid.
+
+## Five ideas to remember
+
+- **Module** — a struct decorated with `#[module]`, listing `providers` it
+  owns and `imports` it depends on.
+- **Provider** — any injectable struct (`#[injectable]`, `#[controller]`,
+  `#[resolver]`, `#[gateway]`, `#[processor]`, …). Built once, shared as
+  `Arc<T>`.
+- **`#[inject]` field** — declares "I need this type from the container."
+- **Access graph** — the boot-time check that proves every `#[inject]`
+  resolves to a provider the module can reach.
+- **Discoverable** — every decorated provider registers itself; transports
+  consume the registry filtered by reachability.
+
+## Going further
+
+Real-world apps stack many modules. The `api` example imports a dozen at
+once — feature modules plus framework modules:
+
+```rust title="apps/api/src/app.rs"
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        DatabaseModule::for_root(None),
+        AuthnCoreModule,
+        AuthzHttpModule,
+        AuthzGraphqlModule,
+        UsersHttpModule,
+        UsersGraphqlModule,
+        GraphqlModule::for_root(None),
+        OpenApiModule::for_root(None),
+        TelemetryModule,
+        ServerTimingModule,
+    ],
+)]
+pub struct AppModule;
+```
+
+Each import contributes its providers; each transport (`HttpTransport`,
+`Scheduler`, `QueueWorker`, …) drains its `inventory` registry filtered by
+what the import tree reaches. Linking a crate without importing its module
+keeps its providers **inert** — built but not mounted.
+
+- [HTTP](/http/) — controllers, routes, guards, pipes, filters, interceptors.
+- [Data](/data/) — services, `Repo`, transactions, the ambient executor.
+- [Security](/security/) — authn strategies, ability-based authorization.

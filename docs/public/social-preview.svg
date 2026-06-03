@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640">
+<defs>
+  <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#ff4d5f"/>
+    <stop offset="100%" stop-color="#ff7a59"/>
+  </linearGradient>
+  <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#ffffff"/>
+    <stop offset="100%" stop-color="#eceef1"/>
+  </linearGradient>
+  <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="#ff6b54" stop-opacity="0.12"/>
+    <stop offset="100%" stop-color="#ff6b54" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+
+<!-- background -->
+<rect width="1280" height="640" fill="url(#bg)"/>
+<circle cx="300" cy="320" r="380" fill="url(#glow)"/>
+
+<!-- icon: the existing logo, scaled and placed on the left -->
+<g transform="translate(90,110) scale(0.82)">
+  <g transform="translate(256,256)">
+    <!-- outer rust-inspired ring -->
+    <path d="
+    M0,-180
+    L28,-160 L65,-168 L92,-140 L130,-136
+    L146,-100 L180,-82 L176,-42 L198,0
+    L176,42 L180,82 L146,100 L130,136
+    L92,140 L65,168 L28,160 L0,180
+    L-28,160 L-65,168 L-92,140 L-130,136
+    L-146,100 L-180,82 L-176,42 L-198,0
+    L-176,-42 L-180,-82 L-146,-100 L-130,-136
+    L-92,-140 L-65,-168 L-28,-160 Z"
+    fill="#111111" stroke="#ff7a59" stroke-width="1.5" stroke-opacity="0.4" stroke-linejoin="round"/>
+
+    <circle r="120" fill="#0f0f0f"/>
+
+    <!-- modern brand-mark center -->
+    <path d="M0,-110
+             C60,-80 88,-25 72,55
+             L0,110
+             L-72,55
+             C-88,-25 -60,-80 0,-110Z"
+          fill="url(#grad)"/>
+
+    <!-- subtle inner cut -->
+    <path d="M0,-55
+             C25,-40 40,-10 34,30
+             L0,58
+             L-34,30
+             C-40,-10 -25,-40 0,-55Z"
+          fill="#111111"/>
+  </g>
+</g>
+
+<!-- wordmark + tagline on the right -->
+<text x="540" y="300"
+      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+      font-size="150" font-weight="700" letter-spacing="-3">
+  <tspan fill="#15161a">Nest</tspan><tspan fill="url(#grad)">RS</tspan>
+</text>
+
+<text x="544" y="378"
+      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+      font-size="34" font-weight="400" fill="#4b5563">An opinionated Rust framework.</text>
+<text x="544" y="424"
+      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+      font-size="34" font-weight="400" fill="#4b5563">Declarative macros, native performance.</text>
+
+<text x="546" y="486"
+      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+      font-size="24" font-weight="600" letter-spacing="2" fill="#ff6b54">RUST · MULTI-TRANSPORT · MACRO-DRIVEN</text>
+</svg>

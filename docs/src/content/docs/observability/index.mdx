@@ -1,0 +1,142 @@
+---
+title: Observability
+description: Structured logs, OpenTelemetry traces and metrics, request-level instrumentation — wired by import.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every NestRS app inherits a consistent observability shape rather than
+re-inventing one per service. Span targets are dotted, lowercase,
+framework-prefixed (`nestrs::http`, `nestrs::orm`, `nestrs::authn`, …),
+fields are **structured** (`user_id = %id`, not formatted strings), and
+production output is OTLP.
+
+## Wiring it up
+
+```rust title="apps/api/src/main.rs"
+use anyhow::Result;
+use nestrs_config::Environment;
+use nestrs_core::App;
+use nestrs_http::HttpTransport;
+use nestrs_telemetry::Telemetry;
+
+use api::AppModule;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let _environment = Environment::init();
+    let _telemetry = Telemetry::init("api")?;     // ← installs the subscriber
+
+    App::builder()
+        .module::<AppModule>()
+        .build()
+        .await?
+        .transport(HttpTransport::new().bind("0.0.0.0:3003"))
+        .run()
+        .await
+}
+```
+
+```rust title="apps/api/src/app.rs"
+#[module(
+    imports = [
+        // ...
+        TelemetryModule,            // request access log + X-Trace-Id
+        ServerTimingModule,         // Server-Timing response headers
+    ],
+)]
+pub struct AppModule;
+```
+
+- **`Telemetry::init("api")?`** installs the `tracing` subscriber and
+  the OTLP exporter (configured via env). The returned guard **must
+  outlive `main`** — Drop flushes spans.
+- **`TelemetryModule`** mounts the per-request access log middleware and
+  attaches `X-Trace-Id` to every response.
+- **`ServerTimingModule`** adds a `Server-Timing` header summarizing the
+  request's main spans.
+
+## What you see in logs
+
+A request that lists users (with row-level filtering applied):
+
+```text frame="terminal"
+INFO nestrs::http: GET /users start request_id=01J... actor_id=ada
+DEBUG api::users: list users
+TRACE nestrs::orm: SELECT id, name, email, org_id FROM "user" WHERE org_id = $1
+WARN  nestrs::authz: denied access action=Update subject=User row=01J... actor=ada
+INFO nestrs::http: GET /users 200 28ms request_id=01J... bytes=412
+```
+
+The access log on the first/last lines is automatic; the
+`actor_id`/`request_id` fields are propagated as structured fields, so
+a query in Grafana/Loki filters cleanly. The `WARN` line comes from
+`Ability::condition_for` denying a row that wasn't requested — security
+events log at `warn`+ so they appear under default `RUST_LOG=info`.
+
+## Convention table
+
+| Concern              | Target               | Default level |
+|----------------------|----------------------|---------------|
+| HTTP request log     | `nestrs::http`       | `info`        |
+| ORM queries          | `nestrs::orm`        | `trace`       |
+| Authn / Authz        | `nestrs::authn` / `nestrs::authz` | `info` (denials `warn`) |
+| WebSocket events     | `nestrs::ws`         | `info`        |
+| Queue / Schedule     | `nestrs::queue` / `nestrs::schedule` | `info` |
+| App-specific spans   | `<app>::<feature>`   | `info`        |
+
+Controllers / resolvers / gateways log at `info` on success; services at
+`debug`; `Repo` at `trace`; access denials and security events at
+`warn`+. A production deploy should respect `RUST_LOG=info`.
+
+## OTLP for production
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example.com:4317 \
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+RUST_LOG=info \
+  just run api
+```
+
+`Telemetry::init` reads the standard `OTEL_*` environment variables. The
+exporter is async, batched, and shuts down cleanly when the guard drops.
+
+For dev, omit the `OTEL_*` env and you get a human-readable pretty-print
+to stdout.
+
+## Boot-time safety
+
+```text frame="terminal"
+thread 'main' panicked at 'Telemetry::init was not called before
+TelemetryModule::register — the global tracer/meter would be no-ops,
+which would silently drop all telemetry. Call `Telemetry::init(name)`
+in main before `App::builder()`.'
+```
+
+A NestRS app **must** call `Telemetry::init` before `App::builder()` —
+otherwise spans go to no-op exporters and you'd notice in production
+when it's too late. The `TelemetryModule::register` checks the global
+init flag and panics with this message if it isn't set.
+
+## Going further
+
+### Per-request fields
+
+`Ctx<Claims>` lets a handler propagate caller-specific fields:
+
+```rust
+async fn create(&self, auth: Ctx<Claims>) -> Result<Json<User>> {
+    tracing::info!(target: "api::users", actor = %auth.sub, "creating user");
+    // ...
+}
+```
+
+The request span (created by `TelemetryModule`) already carries
+`actor_id`, `tenant_id`, `request_id` — your structured fields layer on
+top.
+
+### Reference
+
+- `crates/nestrs-telemetry/` — `Telemetry::init`, OTLP, the access log.
+- `crates/nestrs-server-timing/` — the `Server-Timing` header
+  middleware.

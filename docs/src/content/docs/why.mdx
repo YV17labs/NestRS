@@ -1,0 +1,142 @@
+---
+title: Why NestRS
+description: The thesis behind the framework, and the six structural properties that follow from it.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## The thesis
+
+> The developer writes business logic. The framework carries the rest.
+
+Cross-cutting concerns — security, transactions, input conversion, lifecycle,
+discovery — are *error-prone exactly because they are repetitive*. Every place a
+codebase has to wire them by hand is a place they will eventually be forgotten,
+inconsistent, or wrong. NestRS treats this as a framework problem: those
+concerns must be **transparent** to the application code.
+
+The leverage is **procedural macros**. A controller, a resolver, a processor is
+a struct with a decorator; the framework expands it into the boilerplate a
+contributor would otherwise have written by hand — and would, eventually, have
+written slightly differently in two different files.
+
+<Aside>
+  NestRS draws inspiration from NestJS's decorator-driven module system — but it
+  is designed from the ground up around Rust's type system, async runtime and
+  trait coherence, and stands on its own. This is the one place we name that
+  lineage; everywhere else the framework is described on its own terms.
+</Aside>
+
+## The six structural properties
+
+Each property below is a consequence of the thesis, not a feature added on
+top. They compose: drop any one and the others weaken.
+
+### 1. Declarative wiring
+
+Modules, providers, controllers, resolvers, gateways, processors, cron jobs,
+MCP tools, event handlers — each is a struct decorated with an attribute
+macro. The decorator carries the entire integration contract. There is no
+service locator to call, no registration list to keep in sync, no central
+manifest a contributor has to remember to edit.
+
+```rust
+#[controller(path = "/users")]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+```
+
+### 2. Secure by default
+
+A request runs through three layers — `AuthGuard` attaches the principal,
+`AbilityGuard` builds the caller's authorization context, and a handler-side
+shaper applies it to the response. Once the corresponding modules are
+imported, every read through the data layer is filtered, every mutating write
+is gated, and every response body is masked. A feature does not opt in to
+these; it opts out by not importing them.
+
+Security is **structural**, not vigilant: forgetting a check is a category
+error the framework prevents, not a bug a code reviewer has to catch.
+
+### 3. Transactional by default
+
+A mutating HTTP request installs a transactional executor in a `task_local`
+before the handler runs. The service queries through `Repo`, which picks up
+that executor automatically. On a `2xx`/`3xx` response the transaction
+commits; otherwise it rolls back. A safe method runs on the pool. Worker
+contexts (jobs, processors) install a pool executor for the same code path.
+
+```rust
+// no @Transactional, no begin/commit — the executor is ambient.
+impl UsersService {
+    pub async fn rename(&self, id: Uuid, name: String) -> Result<User, UserError> {
+        let user = self.repo.find_by_id(id).await?;
+        self.repo.update(user, |m| m.name = name).await
+    }
+}
+```
+
+### 4. Multi-transport, one shape
+
+A feature decomposes into a **port** (the entity, the service, the contract)
+and one **adapter** per transport it exposes (HTTP controller, GraphQL
+resolver, WebSocket gateway, queue processor, MCP tool). Each adapter lives
+in its own folder under the feature, with its own `module.rs`. The
+composition rule is symmetric across transports: import the feature's
+`Core` module + the matching `Authz<Transport>` module, and the wiring is
+done.
+
+```
+features/users/
+  core/      ← entity, service, dto, error
+  http/      ← controller
+  graphql/   ← resolver
+  ws/        ← gateway
+  queue/     ← processor
+  mcp/       ← tool
+```
+
+An app picks the edges it serves. A worker imports `Core + Queue`; an API
+imports `Core + Http + Graphql + Ws`.
+
+### 5. Wiring verified at boot
+
+The dependency-injection graph is not resolved by reflection. Every module
+records its imports and its providers' dependencies into a static registry at
+compile time; at startup, `App::build()` walks the graph and fails with a
+clear `AccessGraphError` if a provider injects something its module neither
+owns, imports transitively, nor receives as global infrastructure.
+
+A misconfigured import is a startup error naming the missing dependency, not
+a `Cannot resolve` at first request.
+
+### 6. Lean per-binary
+
+Capabilities ship as separate crates and integrate via discovery gated on
+module reachability. A binary that imports only `UsersQueueModule` does not
+compile the HTTP stack, does not mount the GraphQL resolver, does not register
+the WebSocket gateway — even if those files are linked into the binary
+because they live in a shared crate. The same shared codebase produces an API
+of one shape and a worker of a strictly smaller one.
+
+The headless `worker` example compiles no `hyper` server: ~4 MB idle, low
+single-digit-MB under load.
+
+## What this is not
+
+- **Not an HTTP layer.** NestRS sits *on top of* `hyper` / `tokio` / `poem` —
+  it gives them structure, it does not replace them.
+- **Not a thin convenience layer.** The framework's value is in the cross-cutting
+  guarantees (authz, transactions, masking, boot-time wiring). A controller-only
+  decorator on top of an existing stack would not deliver them.
+- **Not a runtime DI container.** The container exists, but the contract it
+  enforces is static: types and module imports, checked at boot. There is no
+  `resolve<T>()` you are expected to call from user code.
+
+## Where to go next
+
+- [Getting started](/getting-started/) — install, run an app, build your first feature.
+- [Tutorial](/tutorial/) — a complete feature, end to end, with every layer wired.
+- [Core concepts](/concepts/) — modules, DI, access graph, the ambient data context.

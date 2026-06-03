@@ -1,0 +1,147 @@
+---
+title: MCP
+description: Expose services to language models via the Model Context Protocol — declared like a controller.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+MCP (Model Context Protocol) is the spec language models use to call tools.
+A NestRS MCP server is a struct with a `#[mcp]` decorator: DI handles its
+dependencies, `#[tool]` defines each tool, the server self-mounts on the
+HTTP transport at the path you choose.
+
+Below is the real `mcp` example (`apps/mcp`), running on port 3004.
+
+## A working MCP server
+
+```rust title="apps/mcp/src/weather/tool.rs"
+use std::sync::Arc;
+
+use nestrs_mcp::mcp;
+use nestrs_mcp::{
+    tool, tool_handler, tool_router, CallToolResult, Content, McpError,
+    Parameters, ServerHandler,
+};
+use validator::Validate;
+
+use crate::weather::dto::CoordsParams;
+use crate::weather::service::WeatherProvider;
+
+#[mcp(path = "/mcp")]
+#[derive(Clone)]
+pub struct WeatherTool {
+    #[inject]
+    weather: Arc<dyn WeatherProvider>,
+}
+
+#[tool_router]
+impl WeatherTool {
+    #[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
+    async fn current_weather(
+        &self,
+        Parameters(params): Parameters<CoordsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        params
+            .validate()
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+        let report = self
+            .weather
+            .current(params.latitude, params.longitude)
+            .await
+            .map_err(internal)?;
+
+        let summary = format!(
+            "{:.1}°C, wind {:.1} km/h @ {:.0}° (code {}, observed {})",
+            report.temperature_c,
+            report.wind_speed_kmh,
+            report.wind_direction_deg,
+            report.weather_code,
+            report.observed_at,
+        );
+
+        Ok(CallToolResult::success(vec![Content::text(summary)]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for WeatherTool {}
+```
+
+```rust title="apps/mcp/src/weather/dto.rs"
+use serde::{Deserialize, Serialize};
+use validator::Validate;
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema, Validate)]
+pub struct CoordsParams {
+    #[validate(range(min = -90.0, max = 90.0))]
+    pub latitude: f64,
+    #[validate(range(min = -180.0, max = 180.0))]
+    pub longitude: f64,
+}
+```
+
+- **`#[mcp(path = "/mcp")]`** mounts the server on the HTTP transport at
+  `/mcp` (Streamable-HTTP, the standard MCP transport).
+- **`#[inject] weather: Arc<dyn WeatherProvider>`** — the tool injects a
+  trait object; the impl lives module-private with `pub trait` exposed.
+- **`#[tool(description = ...)]`** registers the method as a tool the
+  LLM client can call. The `description` is what the model sees.
+- **`Parameters<CoordsParams>`** — the framework deserializes the JSON
+  arguments to the typed input. `JsonSchema` derives the schema sent to
+  the client; `validator` rejects out-of-range values.
+
+## Run it
+
+```bash
+$ just dev mcp
+```
+
+```text frame="terminal"
+2026-06-03T10:34:07.882Z  INFO nestrs::http: bound 1 MCP server on 0.0.0.0:3004
+  POST /mcp → WeatherTool (1 tool)
+```
+
+Point an MCP-aware client at `http://localhost:3004/mcp`:
+
+```json title="Claude Desktop / Cursor — claude_desktop_config.json"
+{
+  "mcpServers": {
+    "weather": {
+      "url": "http://localhost:3004/mcp"
+    }
+  }
+}
+```
+
+In your client, the tool `current_weather` becomes callable with
+`{ "latitude": 48.85, "longitude": 2.35 }`:
+
+```text frame="terminal"
+14.2°C, wind 7.3 km/h @ 220° (code 3, observed 2026-06-03T10:34:00)
+```
+
+## Going further
+
+### Multiple tools on one server
+
+Add more methods under `#[tool_router]` impl — each `#[tool(...)]` becomes
+a separately callable tool. Share state through `&self`.
+
+### Authorization
+
+`McpAbilityBridge` (provided by `nestrs-authz` with the `mcp` feature
+flag) gates tool calls against an `Ability`. Same policy as HTTP/GraphQL.
+
+### Trait-based DI
+
+Injecting `Arc<dyn WeatherProvider>` keeps the concrete provider
+module-private — a test app can swap in a stub by overriding the
+provider via `AppBuilder::override_dyn`.
+
+### Reference
+
+- `apps/mcp/` — the full example.
+- `crates/nestrs-mcp/` — `#[mcp]`, `#[tool_router]`, `#[tool]`,
+  `#[tool_handler]`.
+- `crates/nestrs-authz/` (with `mcp` feature) — the MCP authz bridge.

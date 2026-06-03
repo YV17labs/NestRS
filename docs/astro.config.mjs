@@ -2,6 +2,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import remarkGfm from 'remark-gfm';
+import rehypeExternalLinks from 'rehype-external-links';
 
 // GitHub Pages: nestrs.dev (custom domain, base /). Local dev defaults match.
 // CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
@@ -22,6 +23,12 @@ export default defineConfig({
   // Astro 6 — wire remark-gfm explicitly so every docs table renders.
   markdown: {
     remarkPlugins: [remarkGfm],
+    // External links open in a new tab (with rel="noopener noreferrer") so a
+    // reader following e.g. the SeaORM link keeps the docs open. Internal links
+    // are left untouched.
+    rehypePlugins: [
+      [rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }],
+    ],
   },
   integrations: [
     starlight({
@@ -117,7 +124,7 @@ export default defineConfig({
         { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
         { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },
         { label: 'WebSockets', items: [{ autogenerate: { directory: 'websockets' } }] },
-        { label: 'Data', items: [{ autogenerate: { directory: 'data' } }] },
+        { label: 'Database', items: [{ autogenerate: { directory: 'database' } }] },
         { label: 'Security', items: [{ autogenerate: { directory: 'security' } }] },
         { label: 'Schedule', items: [{ autogenerate: { directory: 'schedule' } }] },
         { label: 'Queue', items: [{ autogenerate: { directory: 'queue' } }] },

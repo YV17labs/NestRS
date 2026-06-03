@@ -43,7 +43,7 @@ That's the whole opt-in. The module self-mounts both endpoints on the existing
   `Json<T>` payload types via [`schemars`](https://docs.rs/schemars). An entity
   declared with `#[expose]` already produces its JSON Schema — the same type
   feeds the handler, the GraphQL schema, and this document, so the three stay in
-  sync by construction. See [Data](/data/).
+  sync by construction. See [Database](/database/).
 
 <Aside>
   Because the document is composed from what the binary actually mounts, a worker
@@ -122,7 +122,7 @@ OpenApiModule::for_root(OpenApiConfig {
 
 - [HTTP](/http/) — the controllers, routes and `Json<T>` types this document is
   built from.
-- [Data](/data/) — `#[expose]` turns one entity into a wire DTO, a GraphQL type
+- [Database](/database/) — `#[expose]` turns one entity into a wire DTO, a GraphQL type
   **and** a JSON Schema at once.
 - [Security](/security/) — bind `AuthGuard` / `AbilityGuard`; protected routes
   still appear in the spec.

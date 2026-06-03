@@ -1,9 +1,13 @@
 ---
-title: Data
+title: Database
 description: Entities, services as the single DB gateway, the Repo handle, dataloaders for batching.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+
+NestRS's data layer is built on [SeaORM](https://www.sea-ql.org/SeaORM/) —
+entities, queries and migrations are SeaORM's. NestRS wraps it so every access
+goes through a service and a request-scoped `Repo`, never the ORM directly.
 
 A service is the entity's single DB gateway. Every read and write flows
 through `Repo`, which:
@@ -199,7 +203,7 @@ The `#[crud(...)]` macros wire the paginated route + the GraphQL
 
 ## Migrations
 
-Migrations are SeaORM's, kept in their own app:
+Migrations are [SeaORM](https://www.sea-ql.org/SeaORM/)'s, kept in their own app:
 
 ```bash
 just db up           # apply pending migrations
@@ -240,8 +244,7 @@ A worker job (queue processor, cron job) also gets a pool executor.
 
 - `crates/features/src/users/core/` — a feature with relations,
   dataloaders and credentials helpers.
-- `crates/nestrs-database/` — `Repo`, `CrudService`, the ambient
-  executor.
+- `crates/nestrs-database/` — the [SeaORM](https://www.sea-ql.org/SeaORM/)
+  integration: `Repo`, `CrudService`, the ambient executor.
 - `crates/nestrs-resource/` — `#[expose]`, the GraphQL+OpenAPI
   generation, pagination envelopes.
-- `crates/nestrs-orm/` — the SeaORM integration.

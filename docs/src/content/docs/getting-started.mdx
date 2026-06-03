@@ -71,11 +71,11 @@ The workspace ships several example apps. Each is a separate runnable binary;
 they share the same workspace and the same building blocks.
 
 ```bash
-just dev          # bare app baseline       :3001
-just dev auth     # OAuth2 / JWT issuer     :3002
-just dev api      # REST + GraphQL + DB     :3003   (requires `just db up` once)
-just dev mcp      # MCP server              :3004
-just dev chat     # WebSocket gateway       :3005
+just dev          # bare app baseline         :3001
+just dev auth     # OAuth2 / JWT issuer       :3002
+just dev api      # REST + GraphQL + OpenAPI  :3003   (requires `just db up` once)
+just dev mcp      # MCP server                :3004
+just dev chat     # WebSocket gateway         :3005
 just dev worker   # background jobs (headless)
 ```
 

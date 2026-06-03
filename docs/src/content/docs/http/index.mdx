@@ -5,8 +5,8 @@ description: Controllers, routes, extractors, validation, response types — the
 
 import { Aside } from '@astrojs/starlight/components';
 
-A controller is a struct that injects its dependencies, with verb methods on
-its `impl` block. The `#[routes]` macro generates the route table; verb
+A controller is a plain struct: inject what it needs, hang verb methods off
+its `impl` block, and `#[routes]` generates the route table. Verb
 attributes (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`) bind a
 method to a path.
 
@@ -246,8 +246,24 @@ pub struct ItemsV1Controller { /* ... */ }
 Routes mount under `/v1/items`. The boot log and the OpenAPI document use
 the same prefix — the three cannot drift.
 
+## Your API documents itself
+
+Import `OpenApiModule` and every route you just wrote becomes an OpenAPI 3.1
+document at `GET /api-json`, with a bundled Swagger UI at `GET /api`. The spec is
+composed from the route table and your `Json<T>` types — nothing to
+hand-maintain, and it can't drift from the code.
+
+```rust
+#[module(imports = [/* controllers */, OpenApiModule::for_root(None)])]
+pub struct AppModule;
+```
+
+See [OpenAPI](/openapi/) for `#[api(...)]` enrichment and configuration.
+
 ## Going further
 
+- [OpenAPI](/openapi/) — a self-composing OpenAPI 3.1 spec + Swagger UI from
+  the routes on this page.
 - [Security](/security/) — bind an `AuthGuard` and an `AbilityGuard` to
   attach the principal and gate actions per row.
 - [Data](/data/) — handlers that persist through a service and `Repo`.

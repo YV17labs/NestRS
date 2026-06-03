@@ -1,6 +1,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
+import remarkGfm from 'remark-gfm';
 
 // GitHub Pages: nestrs.dev (custom domain, base /). Local dev defaults match.
 // CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
@@ -17,6 +18,11 @@ const ogImageAlt =
 export default defineConfig({
   site,
   base,
+  // GFM tables/strikethrough/task-lists are not applied to .mdx by default in
+  // Astro 6 — wire remark-gfm explicitly so every docs table renders.
+  markdown: {
+    remarkPlugins: [remarkGfm],
+  },
   integrations: [
     starlight({
       title: 'NestRS',
@@ -108,6 +114,7 @@ export default defineConfig({
         },
         { label: 'Core concepts', items: [{ autogenerate: { directory: 'concepts' } }] },
         { label: 'HTTP', items: [{ autogenerate: { directory: 'http' } }] },
+        { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
         { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },
         { label: 'WebSockets', items: [{ autogenerate: { directory: 'websockets' } }] },
         { label: 'Data', items: [{ autogenerate: { directory: 'data' } }] },

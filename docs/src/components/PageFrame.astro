@@ -15,3 +15,32 @@ import BrandBackground from './BrandBackground.astro';
     </Fragment>
   </Default>
 </div>
+
+<script>
+  /** One-shot fade-in when a marked block enters the viewport; no loop. */
+  (() => {
+    const blocks = document.querySelectorAll('.nestrs-reveal');
+    if (!blocks.length) return;
+
+    const reveal = (el) => el.classList.add('is-revealed');
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      blocks.forEach(reveal);
+      return;
+    }
+
+    document.documentElement.classList.add('nestrs-reveal-ready');
+
+    const io = new IntersectionObserver(
+      (entries, obs) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          reveal(entry.target);
+          obs.unobserve(entry.target);
+        }
+      },
+      { threshold: 0.12, rootMargin: '0px 0px -6% 0px' }
+    );
+    blocks.forEach((el) => io.observe(el));
+  })();
+</script>

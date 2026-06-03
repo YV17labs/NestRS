@@ -35,6 +35,8 @@ import Bench from '../../components/Bench.astro';
 
 ## Why developers pick NestRS
 
+<div class="nestrs-reveal nestrs-reveal--stagger not-content">
+
 <CardGrid>
   <Card title="Native throughput" icon="rocket">
     **~463k req/s** on 2 cores, **~213k per core**, sub-millisecond p99,
@@ -78,6 +80,8 @@ import Bench from '../../components/Bench.astro';
   </Card>
 </CardGrid>
 
+</div>
+
 ## How fast, exactly
 
 The same "Hello World" service — a provider, a controller, a module — built
@@ -87,6 +91,8 @@ once in NestRS and once in NestJS 11 on Node.js 20, under identical `wrk` load
 <Bench />
 
 ## What a module looks like
+
+<div class="nestrs-reveal not-content">
 
 A minimal slice — a provider, a controller, and a `#[module]` that lists them.
 The DI graph is built and verified at boot; each app under `apps/` compiles to
@@ -147,6 +153,8 @@ WebSockets, queues, scheduled jobs, MCP. Jump to a transport:
 [HTTP](/http/), [GraphQL](/graphql/), [WebSockets](/websockets/),
 [Data](/data/), [Security](/security/).
 
+</div>
+
 ## One domain, several focused binaries
 
 NestRS is built for **microservice-shaped backends without the old ceremony** —
@@ -159,7 +167,7 @@ call), others stay **non-public** (background work, off the request path). Proce
 stay lean; your own services stay **loosely coupled** (shared contracts and data,
 not chatty RPC, no platform team or mesh required to get started).
 
-<div class="mono not-content">
+<div class="mono nestrs-reveal not-content">
   <div class="mono-shared">
     <span class="mono-tag">shared features</span>
     <span class="mono-desc">one product codebase — written once, composed into every deployable</span>
@@ -205,7 +213,7 @@ horizontally per role** — the same binary, more replicas when the pressure mov
 API capacity follows **demand**, worker capacity follows **queue depth**. There is
 no single “scale the monolith” knob; each deployable gets its own replica count.
 
-<div class="scale not-content">
+<div class="scale nestrs-reveal not-content">
   <div class="scale-lanes">
     <article class="scale-lane scale-lane--api">
       <div class="scale-lane-top">

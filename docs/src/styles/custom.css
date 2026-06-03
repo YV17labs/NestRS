@@ -134,7 +134,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hero::before { animation: none; }
+  .hero::before {
+    animation: none;
+  }
 }
 
 /* Brand wordmark in the hero h1 — Nest in white, RS in the gradient. */
@@ -256,18 +258,45 @@
   letter-spacing: -0.02em;
   scroll-margin-top: 6rem;
 }
-:root[data-has-hero] .sl-markdown-content h2 {
-  padding-left: 1rem;
+
+/*
+ * Gradient tick — on the heading wrapper (not the h2) so wrapped lines on
+ * mobile stay clear of the bar; Starlight lays out h2 + anchor in a flex row.
+ */
+:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
 }
-:root[data-has-hero] .sl-markdown-content h2::before {
+
+:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2::before {
   content: '';
-  position: absolute;
-  left: 0;
-  top: 0.12em;
-  bottom: 0.12em;
+  flex: 0 0 4px;
   width: 4px;
+  align-self: stretch;
+  margin-top: 0.12em;
+  margin-bottom: 0.12em;
   border-radius: 4px;
   background: var(--nestrs-gradient);
+}
+
+:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 h2 {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  padding-left: 0;
+  padding-inline-end: 0;
+}
+
+:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 .sl-anchor-link {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-inline-start: 0;
+  margin-top: 0.15em;
+}
+
+:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 h2::before {
+  display: none;
 }
 
 /* ---------------------------------------------------------------------------
@@ -478,6 +507,60 @@
   color: transparent;
 }
 
+/* ---------------------------------------------------------------------------
+   Scroll reveal — one fade/slide when the block enters view, then static
+   --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  html.nestrs-reveal-ready .nestrs-reveal:not(.is-revealed) {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+
+  html.nestrs-reveal-ready .nestrs-reveal.is-revealed {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      opacity 0.5s cubic-bezier(0.22, 0.61, 0.36, 1),
+      transform 0.5s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  html.nestrs-reveal-ready .nestrs-reveal--stagger:not(.is-revealed) .card {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+
+  html.nestrs-reveal-ready .nestrs-reveal--stagger.is-revealed .card {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      opacity 0.45s cubic-bezier(0.22, 0.61, 0.36, 1),
+      transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .nestrs-reveal--stagger.is-revealed .card:nth-child(2) {
+    transition-delay: 0.05s;
+  }
+  .nestrs-reveal--stagger.is-revealed .card:nth-child(3) {
+    transition-delay: 0.1s;
+  }
+  .nestrs-reveal--stagger.is-revealed .card:nth-child(4) {
+    transition-delay: 0.15s;
+  }
+  .nestrs-reveal--stagger.is-revealed .card:nth-child(5) {
+    transition-delay: 0.2s;
+  }
+  .nestrs-reveal--stagger.is-revealed .card:nth-child(6) {
+    transition-delay: 0.25s;
+  }
+  .nestrs-reveal--stagger.is-revealed .card:nth-child(7) {
+    transition-delay: 0.3s;
+  }
+  .nestrs-reveal--stagger.is-revealed .card:nth-child(8) {
+    transition-delay: 0.35s;
+  }
+}
+
 /* Sober one-time grow-in. Armed by JS only (no-JS keeps bars at full width);
    disabled entirely under reduced-motion via the matchMedia guard. */
 .bench-animate .bench-fill {
@@ -681,16 +764,6 @@
     height: auto;
     min-height: 5rem;
   }
-
-  .mono-app {
-    align-items: flex-start;
-    text-align: start;
-  }
-
-  .mono-app-role {
-    min-height: 0;
-  }
-
 }
 
 /* ---------------------------------------------------------------------------
@@ -1196,30 +1269,13 @@
   }
 }
 
+/* Meteor background + hero drift — desktop only (≥50rem, Starlight lg). */
 @media (max-width: 50rem) {
-  .nestrs-brand-bg .logo-wrap--2,
-  .nestrs-brand-bg .logo-wrap--4,
-  .nestrs-brand-bg .logo-wrap--6,
-  .nestrs-brand-bg .logo-wrap--8,
-  .nestrs-brand-bg .logo-wrap--9,
-  .nestrs-brand-bg .logo-wrap--10,
-  .nestrs-brand-bg .logo-wrap--11,
-  .nestrs-brand-bg .logo-wrap--12,
-  .nestrs-brand-bg .logo-wrap--13,
-  .nestrs-brand-bg .logo-wrap--14,
-  .nestrs-brand-bg .logo-wrap--15,
-  .nestrs-brand-bg .logo-wrap--16,
-  .nestrs-brand-bg .logo-wrap--17,
-  .nestrs-brand-bg .logo-wrap--18,
-  .nestrs-brand-bg .logo-wrap--19,
-  .nestrs-brand-bg .logo-wrap--20 {
+  .nestrs-page-shell > .nestrs-brand-bg {
     display: none;
   }
 
-  .nestrs-brand-bg .logo-wrap--1 .logo,
-  .nestrs-brand-bg .logo-wrap--3 .logo,
-  .nestrs-brand-bg .logo-wrap--5 .logo,
-  .nestrs-brand-bg .logo-wrap--7 .logo {
-    opacity: calc(var(--logo-opacity, 0.06) * 0.8);
+  .hero::before {
+    animation: none;
   }
 }

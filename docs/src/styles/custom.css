@@ -62,18 +62,70 @@
   isolation: isolate;
 }
 
-/* Ambient brand glow behind the hero — a soft, off-centre radial wash. */
+/*
+ * Logo + copy as one block (social-preview proportions): mark hugs the wordmark,
+ * whole hero capped so the row does not stretch across the full viewport.
+ */
+@media (min-width: 50rem) {
+  .hero {
+    box-sizing: border-box;
+    width: min(100%, 58rem);
+    max-width: 58rem;
+    margin-inline: auto;
+    grid-template-columns: auto minmax(0, 1fr) !important;
+    column-gap: clamp(1rem, 2vw, 1.75rem) !important;
+    row-gap: 1.5rem !important;
+    padding-block: clamp(2.5rem, calc(1rem + 8vmin), 5rem) !important;
+    padding-inline: clamp(0.5rem, 2vw, 1.5rem);
+    align-items: center !important;
+  }
+
+  .hero > img,
+  .hero > .hero-html {
+    order: 0 !important;
+    justify-self: end;
+    align-self: center;
+    margin-inline: 0 !important;
+    width: clamp(9.5rem, 16vw, 13.5rem) !important;
+    max-height: min(42vh, 13.5rem);
+  }
+
+  .hero .stack {
+    min-width: 0;
+  }
+}
+
+@media (min-width: 72rem) {
+  .hero {
+    width: min(100%, 62rem);
+    max-width: 62rem;
+  }
+}
+
+@media (max-width: 49.99rem) {
+  .hero {
+    gap: 1.25rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+
+  .hero > img,
+  .hero > .hero-html {
+    width: min(62%, 11rem) !important;
+  }
+}
+
+/* Ambient glow — one wash behind the logo + copy cluster */
 .hero::before {
   content: '';
   position: absolute;
-  inset: -30% -20% -40% -20%;
+  inset: -25% -10% -35% -10%;
   z-index: -1;
   background:
-    radial-gradient(48% 58% at 72% 38%, rgba(255, 77, 95, 0.12) 0%, transparent 72%),
-    radial-gradient(44% 54% at 18% 30%, rgba(255, 122, 89, 0.09) 0%, transparent 72%);
+    radial-gradient(55% 70% at 38% 45%, rgba(255, 77, 95, 0.13) 0%, transparent 70%),
+    radial-gradient(50% 60% at 58% 40%, rgba(255, 122, 89, 0.07) 0%, transparent 72%);
   filter: blur(20px);
   pointer-events: none;
-  animation: hero-drift 14s ease-in-out infinite alternate;
+  animation: hero-drift 3s ease-in-out infinite alternate;
 }
 
 @keyframes hero-drift {
@@ -89,7 +141,7 @@
 .hero h1 {
   letter-spacing: -0.03em;
   font-weight: 700;
-  font-size: clamp(3rem, calc(1rem + 8vw), 6rem);
+  font-size: clamp(2.75rem, calc(1rem + 5.5vw), 4.75rem);
   line-height: 1;
 }
 .hero .wordmark {
@@ -107,7 +159,7 @@
 .hero .tagline {
   display: flex;
   flex-direction: column;
-  gap: 1.1rem;
+  gap: 0.85rem;
   color: var(--sl-color-gray-2);
 }
 .hero .hero-lead {
@@ -270,14 +322,20 @@
 .card:hover::before { opacity: 0.55; }
 .card:hover::after { opacity: 1; }
 
-/* Soft brand-tinted chip with the glyph in the accent colour — legible and calm
-   (white-on-gradient washed the icon out). */
-.card .icon {
+/* Icon chip on card titles — fixed size so glyphs do not collapse after HMR */
+.card .title > svg.icon {
+  flex-shrink: 0;
+  box-sizing: content-box;
+  display: block;
+  width: 1.35rem !important;
+  height: 1.35rem !important;
+  min-width: 1.35rem;
+  min-height: 1.35rem;
+  padding: 0.45rem !important;
   color: var(--nestrs-orange) !important;
   background: color-mix(in srgb, var(--nestrs-coral) 16%, var(--sl-color-bg)) !important;
   border: 1px solid color-mix(in srgb, var(--nestrs-coral) 30%, transparent) !important;
   border-radius: 10px !important;
-  padding: 0.42em !important;
   box-shadow: none;
 }
 
@@ -445,7 +503,7 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Monorepo diagram — one shared library, many deployable apps
+   Deploy layout — shared domain + focused binaries (no connector lines)
    --------------------------------------------------------------------------- */
 
 .mono {
@@ -453,7 +511,6 @@
 }
 
 .mono-shared {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -463,75 +520,146 @@
   border: 1px solid color-mix(in srgb, var(--nestrs-coral) 22%, var(--nestrs-card-border));
   background: var(--nestrs-gradient-soft);
 }
+
 .mono-tag {
   font-family: var(--sl-font-mono);
   font-weight: 600;
   color: var(--sl-color-text-accent);
 }
+
 .mono-desc {
   font-size: 0.85rem;
   color: var(--sl-color-gray-2);
 }
 
-.mono-apps {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1rem;
-  margin-top: 1.9rem;
-}
-.mono-app {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.9rem 1rem;
-  border-radius: 12px;
-  border: 1px solid var(--nestrs-card-border);
-  background: var(--nestrs-card-bg);
-}
-.mono-app-name {
-  font-family: var(--sl-font-mono);
-  font-weight: 600;
-  color: var(--sl-color-white);
-}
-.mono-app-role {
+.mono-desc-sub {
   font-size: 0.78rem;
   color: var(--sl-color-gray-3);
 }
 
-/* Connectors: a central drop from the shared box to a rail, a stub per app. */
-.mono-shared::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: -0.95rem;
-  width: 2px;
-  height: 0.95rem;
-  transform: translateX(-50%);
-  background: var(--nestrs-card-border);
+.mono-deploy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 1.25rem;
+  padding: 1.15rem 1rem 1.1rem;
+  border-radius: 14px;
+  border: 1px solid var(--nestrs-card-border);
+  background: var(--nestrs-card-bg);
 }
-/* Rail spans exactly between the centres of the outer columns. With 3 equal
-   columns and a 1rem gap (2rem total), each column centre sits (100% - 2rem)/6
-   in from its side — so the rail ends meet the per-app stubs cleanly. */
-.mono-apps::before {
-  content: '';
-  position: absolute;
-  top: -0.95rem;
-  left: calc((100% - 2rem) / 6);
-  right: calc((100% - 2rem) / 6);
-  height: 2px;
-  background: var(--nestrs-card-border);
+
+.mono-tier {
+  padding: 0.85rem 0.75rem 0.8rem;
+  border-radius: 12px;
 }
-.mono-app::before {
-  content: '';
-  position: absolute;
-  top: -0.95rem;
-  left: 50%;
-  width: 2px;
-  height: 0.95rem;
-  transform: translateX(-50%);
-  background: var(--nestrs-card-border);
+
+.mono-tier--public {
+  border: 1px solid color-mix(in srgb, var(--nestrs-coral) 28%, var(--nestrs-card-border));
+  background: color-mix(in srgb, var(--nestrs-coral) 6%, var(--nestrs-surface));
+}
+
+.mono-tier--private {
+  border: 1px dashed color-mix(in srgb, var(--sl-color-gray-4) 55%, var(--nestrs-card-border));
+  background: var(--nestrs-surface);
+}
+
+.mono-tier-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  margin-bottom: 0.7rem;
+  text-align: center;
+}
+
+.mono-tier-label {
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sl-color-white);
+}
+
+.mono-tier--public .mono-tier-label {
+  color: var(--sl-color-text-accent);
+}
+
+.mono-tier-hint {
+  font-size: 0.76rem;
+  color: var(--sl-color-gray-3);
+}
+
+.mono-apps {
+  display: grid;
+  gap: 0.55rem;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  align-items: stretch;
+}
+
+/* Starlight prose adds margin between adjacent <li> — breaks grid alignment */
+.sl-markdown-content .mono .mono-apps > li {
+  margin: 0;
+  padding: 0;
+}
+
+.mono-apps--pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto;
+  align-items: stretch;
+}
+
+.mono-apps--solo {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 14rem;
+  margin-inline: auto;
+}
+
+.mono-app {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 5.5rem;
+  padding: 0.5rem 0.4rem;
+  text-align: center;
+  border-radius: 10px;
+  border: 1px solid var(--nestrs-card-border);
+  background: var(--nestrs-card-bg);
+}
+
+.mono-apps--pair > .mono-app {
+  height: 6rem;
+  min-height: 6rem;
+}
+
+.mono-tier--public .mono-app {
+  border-color: color-mix(in srgb, var(--nestrs-coral) 18%, var(--nestrs-card-border));
+}
+
+.mono-tier--private .mono-app {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--sl-color-gray-6) 40%, var(--nestrs-card-bg));
+}
+
+.mono-app-name {
+  font-family: var(--sl-font-mono);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--sl-color-white);
+}
+
+.mono-app-role {
+  display: block;
+  max-width: 100%;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--sl-color-gray-3);
 }
 
 .mono-note {
@@ -542,32 +670,150 @@
   color: var(--sl-color-gray-3);
 }
 
-.mono-badges {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5rem;
-  margin-top: 1.1rem;
+@media (max-width: 50rem) {
+  .mono-apps--pair,
+  .mono-apps--solo {
+    grid-template-columns: 1fr;
+    max-width: none;
+  }
+
+  .mono-apps--pair > .mono-app {
+    height: auto;
+    min-height: 5rem;
+  }
+
+  .mono-app {
+    align-items: flex-start;
+    text-align: start;
+  }
+
+  .mono-app-role {
+    min-height: 0;
+  }
+
 }
-.mono-badges > span {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--sl-color-gray-2);
-  padding: 0.35rem 0.85rem;
-  border-radius: 999px;
+
+/* ---------------------------------------------------------------------------
+   Scale — horizontal replicas per signal (separate from role layout)
+   --------------------------------------------------------------------------- */
+
+.scale {
+  margin: 1.25rem 0 2rem;
+  padding: 1.1rem 1rem 1rem;
+  border-radius: 14px;
+  border: 1px solid var(--nestrs-card-border);
+  background: var(--nestrs-card-bg);
+}
+
+.scale-lanes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.scale-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.85rem 0.75rem;
+  border-radius: 12px;
   border: 1px solid var(--nestrs-card-border);
   background: var(--nestrs-surface);
 }
 
+.scale-lane--api {
+  border-color: color-mix(in srgb, var(--nestrs-coral) 24%, var(--nestrs-card-border));
+}
+
+.scale-lane--worker {
+  border-style: dashed;
+}
+
+.scale-lane-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem 0.5rem;
+  text-align: center;
+}
+
+.scale-signal {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--sl-color-gray-2);
+}
+
+.scale-arrow {
+  font-family: var(--sl-font-mono);
+  font-size: 0.85rem;
+  color: var(--sl-color-text-accent);
+}
+
+.scale-target {
+  font-family: var(--sl-font-mono);
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--sl-color-white);
+}
+
+.scale-pills {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.scale-pills > span:not(.scale-pill-more) {
+  display: block;
+  width: 1.15rem;
+  height: 1.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--nestrs-card-border);
+  background: var(--nestrs-card-bg);
+}
+
+.scale-lane--api .scale-pills > span:not(.scale-pill-more) {
+  border-color: color-mix(in srgb, var(--nestrs-coral) 22%, var(--nestrs-card-border));
+  background: color-mix(in srgb, var(--nestrs-coral) 10%, var(--nestrs-card-bg));
+}
+
+.scale-pills--worker > span:not(.scale-pill-more) {
+  border-style: dashed;
+}
+
+.scale-pills--worker > span:not(.scale-pill-more):nth-child(n + 4) {
+  opacity: 0.75;
+}
+
+.scale-pill-more {
+  font-family: var(--sl-font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1.4rem;
+  color: var(--sl-color-text-accent);
+}
+
+.scale-aside {
+  margin: 0.85rem 0 0;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--sl-color-gray-3);
+}
+
 @media (max-width: 50rem) {
-  .mono-apps {
+  .scale-lanes {
     grid-template-columns: 1fr;
-    margin-top: 1rem;
   }
-  .mono-shared::after,
-  .mono-apps::before,
-  .mono-app::before {
-    display: none;
+
+  .scale-lane-top {
+    justify-content: flex-start;
+    text-align: start;
+  }
+
+  .scale-pills {
+    justify-content: flex-start;
   }
 }
 
@@ -593,4 +839,387 @@
 }
 .expressive-code .frame .header {
   font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+   Brand background — faint rotating full logos (experimental; easy to remove)
+   --------------------------------------------------------------------------- */
+
+.nestrs-brand-bg {
+  --logo-fill-ring: #111111;
+  --logo-fill-disc: #0f0f0f;
+  --logo-fill-cut: #111111;
+  --logo-stroke-ring: #ff7a59;
+  --logo-stroke-opacity: 0.4;
+}
+
+:root[data-theme='light'] .nestrs-brand-bg {
+  --logo-fill-ring: #e4e4e8;
+  --logo-fill-disc: #ececef;
+  --logo-fill-cut: #e4e4e8;
+  --logo-stroke-ring: #ff7a59;
+  --logo-stroke-opacity: 0.35;
+}
+
+.nestrs-page-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.nestrs-page-shell > .nestrs-brand-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  /* Soften the centre (reading zone) without washing out the edges entirely. */
+  -webkit-mask-image: radial-gradient(
+    ellipse 92% 84% at 50% 44%,
+    transparent 0%,
+    transparent 26%,
+    rgba(0, 0, 0, 0.55) 50%,
+    #000 94%
+  );
+  mask-image: radial-gradient(
+    ellipse 92% 84% at 50% 44%,
+    transparent 0%,
+    transparent 26%,
+    rgba(0, 0, 0, 0.55) 50%,
+    #000 94%
+  );
+}
+
+.nestrs-page-shell > :global(.page) {
+  position: relative;
+  z-index: 1;
+}
+
+/* Wrap follows streamlines; mark stays locked to velocity (no free spin). */
+.nestrs-brand-bg .logo-wrap {
+  position: absolute;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.nestrs-brand-bg .logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: var(--logo-opacity, 0.06);
+}
+
+.nestrs-brand-bg .logo-ring {
+  fill: var(--logo-fill-ring);
+  stroke: var(--logo-stroke-ring);
+  stroke-opacity: var(--logo-stroke-opacity);
+}
+
+.nestrs-brand-bg .logo-disc {
+  fill: var(--logo-fill-disc);
+}
+
+.nestrs-brand-bg .logo-cut {
+  fill: var(--logo-fill-cut);
+}
+
+:root[data-theme='light'] .nestrs-brand-bg .logo {
+  --logo-opacity: 0.045;
+}
+
+/*
+ * Meteor streaks — straight lines, 8 headings. Anchor = spawn lane on the rim;
+ * 0% off-screen entry → 100% off-screen exit, loop respawns at the anchor.
+ * Mark apex is up in SVG; rotate() locks nose to velocity.
+ */
+.nestrs-brand-bg .logo-wrap--1 {
+  width: min(44vw, 440px);
+  height: min(44vw, 440px);
+  top: 6%;
+  left: 18%;
+  animation: nestrs-logo-streak-down 5s linear infinite;
+}
+.nestrs-brand-bg .logo-wrap--1 .logo { --logo-opacity: 0.065; }
+
+.nestrs-brand-bg .logo-wrap--2 {
+  width: min(32vw, 320px);
+  height: min(32vw, 320px);
+  top: 32%;
+  left: 4%;
+  animation: nestrs-logo-streak-right 6s linear -1.4s infinite;
+}
+.nestrs-brand-bg .logo-wrap--2 .logo { --logo-opacity: 0.055; }
+
+.nestrs-brand-bg .logo-wrap--3 {
+  width: min(28vw, 280px);
+  height: min(28vw, 280px);
+  bottom: 8%;
+  left: 42%;
+  animation: nestrs-logo-streak-up 5s linear -2.6s infinite;
+}
+.nestrs-brand-bg .logo-wrap--3 .logo { --logo-opacity: 0.062; }
+
+.nestrs-brand-bg .logo-wrap--4 {
+  width: min(38vw, 380px);
+  height: min(38vw, 380px);
+  top: 4%;
+  right: 16%;
+  animation: nestrs-logo-streak-down-left 6s linear -0.8s infinite;
+}
+.nestrs-brand-bg .logo-wrap--4 .logo { --logo-opacity: 0.058; }
+
+.nestrs-brand-bg .logo-wrap--5 {
+  width: min(30vw, 300px);
+  height: min(30vw, 300px);
+  top: 48%;
+  right: 6%;
+  animation: nestrs-logo-streak-left 4.5s linear -2.1s infinite;
+}
+.nestrs-brand-bg .logo-wrap--5 .logo { --logo-opacity: 0.052; }
+
+.nestrs-brand-bg .logo-wrap--6 {
+  width: min(50vw, 500px);
+  height: min(50vw, 500px);
+  top: 12%;
+  left: 72%;
+  animation: nestrs-logo-streak-down-right 7s linear -3.5s infinite;
+}
+.nestrs-brand-bg .logo-wrap--6 .logo { --logo-opacity: 0.048; }
+
+.nestrs-brand-bg .logo-wrap--7 {
+  width: min(34vw, 340px);
+  height: min(34vw, 340px);
+  bottom: 22%;
+  right: 38%;
+  animation: nestrs-logo-streak-up 5.5s linear -1.9s infinite;
+}
+.nestrs-brand-bg .logo-wrap--7 .logo { --logo-opacity: 0.056; }
+
+.nestrs-brand-bg .logo-wrap--8 {
+  width: min(20vw, 220px);
+  height: min(20vw, 220px);
+  top: 62%;
+  left: 12%;
+  animation: nestrs-logo-streak-right 4s linear -0.4s infinite;
+}
+.nestrs-brand-bg .logo-wrap--8 .logo { --logo-opacity: 0.068; }
+
+.nestrs-brand-bg .logo-wrap--9 {
+  width: 6.5rem;
+  height: 6.5rem;
+  top: 2%;
+  left: 52%;
+  animation: nestrs-logo-streak-down 3.5s linear -1.1s infinite;
+}
+.nestrs-brand-bg .logo-wrap--9 .logo { --logo-opacity: 0.07; }
+
+.nestrs-brand-bg .logo-wrap--10 {
+  width: 10rem;
+  height: 10rem;
+  bottom: 6%;
+  right: 22%;
+  animation: nestrs-logo-streak-up-left 5s linear -3.2s infinite;
+}
+.nestrs-brand-bg .logo-wrap--10 .logo { --logo-opacity: 0.064; }
+
+.nestrs-brand-bg .logo-wrap--11 {
+  width: min(24vw, 260px);
+  height: min(24vw, 260px);
+  top: 18%;
+  right: 4%;
+  animation: nestrs-logo-streak-left 4.5s linear -2.7s infinite;
+}
+.nestrs-brand-bg .logo-wrap--11 .logo { --logo-opacity: 0.05; }
+
+.nestrs-brand-bg .logo-wrap--12 {
+  width: min(26vw, 280px);
+  height: min(26vw, 280px);
+  top: 28%;
+  left: 88%;
+  animation: nestrs-logo-streak-down 6s linear -4.1s infinite;
+}
+.nestrs-brand-bg .logo-wrap--12 .logo { --logo-opacity: 0.048; }
+
+.nestrs-brand-bg .logo-wrap--13 {
+  width: min(30vw, 320px);
+  height: min(30vw, 320px);
+  bottom: 14%;
+  left: 8%;
+  animation: nestrs-logo-streak-up-right 5s linear -0.6s infinite;
+}
+.nestrs-brand-bg .logo-wrap--13 .logo { --logo-opacity: 0.052; }
+
+.nestrs-brand-bg .logo-wrap--14 {
+  width: min(18vw, 200px);
+  height: min(18vw, 200px);
+  top: 44%;
+  left: 28%;
+  animation: nestrs-logo-streak-down-right 4s linear -2.4s infinite;
+}
+.nestrs-brand-bg .logo-wrap--14 .logo { --logo-opacity: 0.054; }
+
+.nestrs-brand-bg .logo-wrap--15 {
+  width: min(22vw, 240px);
+  height: min(22vw, 240px);
+  bottom: 32%;
+  right: 10%;
+  animation: nestrs-logo-streak-left 5.5s linear -1.6s infinite;
+}
+.nestrs-brand-bg .logo-wrap--15 .logo { --logo-opacity: 0.05; }
+
+.nestrs-brand-bg .logo-wrap--16 {
+  width: min(16vw, 180px);
+  height: min(16vw, 180px);
+  bottom: 2%;
+  left: 58%;
+  animation: nestrs-logo-streak-up 4.5s linear -3.8s infinite;
+}
+.nestrs-brand-bg .logo-wrap--16 .logo { --logo-opacity: 0.056; }
+
+.nestrs-brand-bg .logo-wrap--17 {
+  width: 5.5rem;
+  height: 5.5rem;
+  top: 74%;
+  left: 48%;
+  animation: nestrs-logo-streak-right 3.5s linear -2.9s infinite;
+}
+.nestrs-brand-bg .logo-wrap--17 .logo { --logo-opacity: 0.058; }
+
+.nestrs-brand-bg .logo-wrap--18 {
+  width: min(42vw, 420px);
+  height: min(42vw, 420px);
+  top: 8%;
+  left: 2%;
+  animation: nestrs-logo-streak-down-left 6.5s linear -4.6s infinite;
+}
+.nestrs-brand-bg .logo-wrap--18 .logo { --logo-opacity: 0.044; }
+
+.nestrs-brand-bg .logo-wrap--19 {
+  width: min(14vw, 160px);
+  height: min(14vw, 160px);
+  bottom: 38%;
+  left: 78%;
+  animation: nestrs-logo-streak-up-left 4s linear -1.3s infinite;
+}
+.nestrs-brand-bg .logo-wrap--19 .logo { --logo-opacity: 0.055; }
+
+.nestrs-brand-bg .logo-wrap--20 {
+  width: 7.5rem;
+  height: 7.5rem;
+  top: 52%;
+  right: 28%;
+  animation: nestrs-logo-streak-down-right 5s linear -0.2s infinite;
+}
+.nestrs-brand-bg .logo-wrap--20 .logo { --logo-opacity: 0.053; }
+
+/* Straight streaks — entry off-screen, exit off-screen, constant heading. */
+@keyframes nestrs-logo-streak-right {
+  0% {
+    transform: translate3d(-30vw, 0, 0) scale(0.52) rotate(90deg);
+  }
+  100% {
+    transform: translate3d(30vw, 0, 0) scale(1.04) rotate(90deg);
+  }
+}
+
+@keyframes nestrs-logo-streak-left {
+  0% {
+    transform: translate3d(30vw, 0, 0) scale(0.52) rotate(-90deg);
+  }
+  100% {
+    transform: translate3d(-30vw, 0, 0) scale(1.04) rotate(-90deg);
+  }
+}
+
+@keyframes nestrs-logo-streak-down {
+  0% {
+    transform: translate3d(0, -26vh, 0) scale(0.52) rotate(180deg);
+  }
+  100% {
+    transform: translate3d(0, 26vh, 0) scale(1.04) rotate(180deg);
+  }
+}
+
+@keyframes nestrs-logo-streak-up {
+  0% {
+    transform: translate3d(0, 26vh, 0) scale(0.52) rotate(0deg);
+  }
+  100% {
+    transform: translate3d(0, -26vh, 0) scale(1.04) rotate(0deg);
+  }
+}
+
+@keyframes nestrs-logo-streak-down-right {
+  0% {
+    transform: translate3d(-28vw, -22vh, 0) scale(0.52) rotate(45deg);
+  }
+  100% {
+    transform: translate3d(28vw, 22vh, 0) scale(1.04) rotate(45deg);
+  }
+}
+
+@keyframes nestrs-logo-streak-down-left {
+  0% {
+    transform: translate3d(28vw, -22vh, 0) scale(0.52) rotate(135deg);
+  }
+  100% {
+    transform: translate3d(-28vw, 22vh, 0) scale(1.04) rotate(135deg);
+  }
+}
+
+@keyframes nestrs-logo-streak-up-right {
+  0% {
+    transform: translate3d(-28vw, 22vh, 0) scale(0.52) rotate(-45deg);
+  }
+  100% {
+    transform: translate3d(28vw, -22vh, 0) scale(1.04) rotate(-45deg);
+  }
+}
+
+@keyframes nestrs-logo-streak-up-left {
+  0% {
+    transform: translate3d(28vw, 22vh, 0) scale(0.52) rotate(-135deg);
+  }
+  100% {
+    transform: translate3d(-28vw, -22vh, 0) scale(1.04) rotate(-135deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nestrs-brand-bg .logo-wrap {
+    animation: none;
+    will-change: auto;
+  }
+
+  .nestrs-brand-bg .logo {
+    animation: none;
+    will-change: auto;
+  }
+}
+
+@media (max-width: 50rem) {
+  .nestrs-brand-bg .logo-wrap--2,
+  .nestrs-brand-bg .logo-wrap--4,
+  .nestrs-brand-bg .logo-wrap--6,
+  .nestrs-brand-bg .logo-wrap--8,
+  .nestrs-brand-bg .logo-wrap--9,
+  .nestrs-brand-bg .logo-wrap--10,
+  .nestrs-brand-bg .logo-wrap--11,
+  .nestrs-brand-bg .logo-wrap--12,
+  .nestrs-brand-bg .logo-wrap--13,
+  .nestrs-brand-bg .logo-wrap--14,
+  .nestrs-brand-bg .logo-wrap--15,
+  .nestrs-brand-bg .logo-wrap--16,
+  .nestrs-brand-bg .logo-wrap--17,
+  .nestrs-brand-bg .logo-wrap--18,
+  .nestrs-brand-bg .logo-wrap--19,
+  .nestrs-brand-bg .logo-wrap--20 {
+    display: none;
+  }
+
+  .nestrs-brand-bg .logo-wrap--1 .logo,
+  .nestrs-brand-bg .logo-wrap--3 .logo,
+  .nestrs-brand-bg .logo-wrap--5 .logo,
+  .nestrs-brand-bg .logo-wrap--7 .logo {
+    opacity: calc(var(--logo-opacity, 0.06) * 0.8);
+  }
 }

@@ -28,12 +28,12 @@
 			"installOhMyZsh": true
 		}
 	},
-	"forwardPorts": [3001, 3002, 3003, 3004, 3005],
+	"forwardPorts": [3000, 3001, 3002, 3003, 3004],
 	"portsAttributes": {
-		"3001": { "label": "app" },
-		"3002": { "label": "auth" },
-		"3003": { "label": "api" },
-		"3004": { "label": "mcp" },
-		"3005": { "label": "chat" }
+		"3000": { "label": "app" },
+		"3001": { "label": "auth" },
+		"3002": { "label": "api" },
+		"3003": { "label": "mcp" },
+		"3004": { "label": "chat" }
 	}
 }

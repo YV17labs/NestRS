@@ -7,7 +7,7 @@ use app::AppModule;
 #[tokio::main]
 async fn main() -> Result<()> {
     App::new::<AppModule>()?
-        .transport(HttpTransport::new().bind("0.0.0.0:3001"))
+        .transport(HttpTransport::new().bind("0.0.0.0:3000"))
         .run()
         .await
 }

@@ -45,7 +45,7 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
             auth_url: "https://github.com/login/oauth/authorize".into(),
             token_url: "https://github.com/login/oauth/access_token".into(),
             userinfo_url: "https://api.github.com/user".into(),
-            redirect_url: "http://localhost:3002/callback".into(),
+            redirect_url: "http://localhost:3001/callback".into(),
             scopes: vec!["read:user".into()],
         })
         .provide(IssuerConfig {

@@ -10,7 +10,7 @@ async fn main() -> Result<()> {
     let _telemetry = Telemetry::init("chat")?;
 
     App::new::<AppModule>()?
-        .transport(HttpTransport::new().bind("0.0.0.0:3005"))
+        .transport(HttpTransport::new().bind("0.0.0.0:3004"))
         .run()
         .await
 }

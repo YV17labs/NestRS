@@ -1,0 +1,160 @@
+---
+title: Testing
+description: Boot the real DI graph in-process, drive every transport in cargo test, override providers with first-class support.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`nestrs-testing` boots the **real** `AppBuilder` build (the four-phase
+collect → factories → register → access-graph check) in-process,
+configures an `HttpTransport` without a socket, and exposes a typed
+test client. GraphQL, OpenAPI, and MCP ride the same client because
+they self-mount as HTTP endpoints.
+
+The principle: **a test is the truth of what production does**. There is
+no mocked DI graph, no separate test wiring.
+
+## A round-trip e2e test
+
+```rust title="apps/api/tests/e2e.rs"
+use nestrs_testing::TestApp;
+use serde_json::json;
+
+#[tokio::test]
+async fn create_then_list_users() -> anyhow::Result<()> {
+    let app = TestApp::<api::AppModule>::builder()
+        .with_postgres()                          // ephemeral container
+        .build()
+        .await?;
+
+    let token = app.mint_token("ada@example.com", &["user"]).await?;
+
+    let created = app
+        .post("/users")
+        .bearer(&token)
+        .json(&json!({"name":"Bob","email":"bob@example.com"}))
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+
+    assert_eq!(created["name"], "Bob");
+
+    let listed = app
+        .get("/users")
+        .bearer(&token)
+        .send()
+        .await?
+        .json::<Vec<serde_json::Value>>()
+        .await?;
+
+    assert!(listed.iter().any(|u| u["email"] == "bob@example.com"));
+    Ok(())
+}
+```
+
+- **`TestApp::<AppModule>::builder()`** runs the same boot path as `main`
+  — including the access-graph check. A wiring regression fails this
+  test, in this binary.
+- **`.with_postgres()`** spins an ephemeral Postgres (testcontainers in
+  CI) and runs migrations. No mocks, no in-memory fakes.
+- **`.post("/users").bearer(&token).json(...)`** is a typed client over
+  `poem::test::TestClient`. The HTTP shape is exercised exactly as
+  production sees it.
+
+## Provider overrides
+
+A test can swap any provider before build. The override applies after
+`register`, so consumers built lazily (controllers, resolvers, guards)
+pick up the override.
+
+```rust title="apps/mcp/tests/weather_stub.rs"
+struct StubWeather;
+
+#[async_trait]
+impl WeatherProvider for StubWeather {
+    async fn current(&self, _lat: f64, _lon: f64) -> Result<Report> {
+        Ok(Report {
+            temperature_c: 20.0,
+            wind_speed_kmh: 0.0,
+            wind_direction_deg: 0.0,
+            weather_code: 0,
+            observed_at: "2026-06-03T10:00:00Z".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn current_weather_returns_stubbed_report() -> anyhow::Result<()> {
+    let app = TestApp::<mcp::AppModule>::builder()
+        .override_dyn::<dyn WeatherProvider>(Arc::new(StubWeather))
+        .build()
+        .await?;
+
+    // ... drive the MCP endpoint ...
+    Ok(())
+}
+```
+
+External-IO services (HTTP clients, third-party APIs) are the right
+override target. **Do not mock the database** — see
+[Three test homes](#three-test-homes).
+
+## Three test homes
+
+| Where                                              | What it tests                           | Boots? |
+|----------------------------------------------------|-----------------------------------------|--------|
+| `apps/<app>/tests/e2e.rs`                          | Real `AppModule` end to end             | ✓ real |
+| `crates/<crate>/tests/<short>.rs` (+ mirror tree)  | The crate's **public** API in process   | minimal |
+| `crates/nestrs-testing/tests/<behaviour>.rs`       | Cross-crate framework wiring            | tailored |
+
+Each crate has **one** `tests/<short>.rs` binary; everything else under
+`tests/` is a module (Cargo compiles top-level `tests/*.rs` as separate
+crates, which makes the build slow and the harness fragmented). The
+layout mirrors `src/<path>.rs` → `tests/<path>.rs` or
+`tests/<path>/mod.rs`. The only allowed non-mirror path is
+`tests/common/` for shared helpers.
+
+## Run it
+
+```bash
+$ just test
+   Compiling api v0.1.0
+    Finished `test` profile in 12.4s
+     Running unittests
+test result: ok. 142 passed in 0.21s
+     Running tests/e2e.rs
+[+] Running container postgres:16-alpine
+test create_then_list_users ... ok
+test result: ok. 14 passed in 4.31s
+```
+
+```bash
+$ just test-unit              # skip e2e (no DB)
+$ just test-e2e               # only e2e (needs DB)
+$ just test-cov               # with coverage (llvm-cov)
+```
+
+## What is required for a test to claim "done"
+
+> A wiring bug does not surface in a unit test.
+
+- **Every app ships an `tests/e2e.rs`** booting its real `AppModule`. It
+  proves the route table, the DI graph, the access-graph check, the
+  authn/authz layers, and the data access path are all wired.
+- **HTTP/GraphQL changes** require `just dev <app>` + `curl` against the
+  affected endpoint. If you cannot run the binary, say so explicitly
+  rather than claiming green.
+- **No DB mocking in e2e tests** — real Postgres (testcontainers in CI).
+  Unit tests of *pure* logic need no DB.
+
+## Going further
+
+### Reference
+
+- `crates/nestrs-testing/` — `TestApp`, `TestAppBuilder`, the in-process
+  HTTP client.
+- `apps/api/tests/e2e.rs` and `apps/auth/tests/e2e.rs` — the live
+  baseline tests.
+- `crates/nestrs-authn/tests/authn.rs` — the strict-mirror test layout
+  reference.

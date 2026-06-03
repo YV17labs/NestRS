@@ -1,0 +1,247 @@
+---
+title: Data
+description: Entities, services as the single DB gateway, the Repo handle, dataloaders for batching.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A service is the entity's single DB gateway. Every read and write flows
+through `Repo`, which:
+
+1. Runs against the **ambient executor** — a pool on safe routes, a
+   transaction on mutating routes — installed automatically by importing
+   `DatabaseModule`;
+2. Emits an instrumentation span (`target: nestrs::orm`) per query.
+
+The invariant: **every data access goes through a service, and a service
+reaches the DB only through `Repo`**.
+
+This page covers the data layer alone. Row-level filtering and response
+masking are tied to abilities and live in [Security](/security/).
+
+## Declare an entity
+
+```rust title="src/items/entity.rs"
+use nestrs_resource::expose;
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[expose(name = "Item", complex)]
+#[sea_orm::model]
+#[derive(Clone, Debug, DeriveEntityModel)]
+#[sea_orm(
+    table_name = "item",
+    model_attrs(derive(PartialEq, Serialize, Deserialize))
+)]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+
+    #[expose(input(create, update), validate(length(min = 1)))]
+    pub name: String,
+
+    #[expose(input(create, update), validate(range(min = 0)))]
+    pub quantity: i32,
+}
+
+impl ActiveModelBehavior for ActiveModel {}
+```
+
+From this one declaration, `#[expose]` generates:
+
+- the **`Item`** wire DTO returned by handlers (the type without sea_orm
+  internals);
+- **`CreateItemInput`** and **`UpdateItemInput`** — filtered by
+  `input(create)` / `input(update)`, with `validator` derives wired;
+- a GraphQL **`SimpleObject`** + an OpenAPI / **JSON Schema** for `Item`,
+  both with the same field set;
+- `From<&Model>` for `Item` and `IntoActiveModel` for the inputs.
+
+`#[expose(skip)]` on a column **excludes it from every wire surface** —
+useful for private fields you do not want on the JSON / GraphQL body.
+
+## Write the service
+
+```rust title="src/items/service.rs"
+use std::sync::Arc;
+use nestrs_core::injectable;
+use nestrs_database::{CrudService, Repo};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use uuid::Uuid;
+use validator::Validate;
+
+use super::entity::{self, CreateItemInput, Entity as Items, Item, UpdateItemInput};
+use super::error::ItemError;
+
+#[injectable]
+pub struct ItemsService;
+
+impl CrudService for ItemsService {
+    type Entity = Items;
+    type Create = CreateItemInput;
+    type Update = UpdateItemInput;
+}
+
+impl ItemsService {
+    pub async fn create(&self, input: CreateItemInput) -> Result<Item, ItemError> {
+        input.validate()?;
+        let active = input.into_active_model();
+        let row = active.insert(&Repo::<Items>::conn()?).await?;
+        Ok(Item::from(&row))
+    }
+
+    pub async fn find_by_name(&self, name: &str) -> Result<Option<Item>, ItemError> {
+        let row = Items::find()
+            .filter(entity::Column::Name.eq(name.to_owned()))
+            .one(&Repo::<Items>::conn()?)
+            .await?;
+        Ok(row.as_ref().map(Item::from))
+    }
+}
+```
+
+- **`#[injectable]`** registers the service with the container — others
+  inject `Arc<ItemsService>`.
+- **`impl CrudService for ItemsService`** declares the entity + the
+  input shapes the controller `#[crud(...)]` macro will wire into
+  routes. From this, the controller automatically gets `list`, `page`,
+  `access`, `create`, `update`, `delete` — each going through `Repo`.
+- **`Repo::<Items>::conn()`** returns the **ambient executor**: a pool
+  handle on safe routes (GET, HEAD, OPTIONS) and worker jobs, a
+  transaction handle on mutating routes (POST, PUT, PATCH, DELETE).
+  Same code path, different mode.
+- The handler returns `Result<T, E>` — a `DbErr` is **never silently
+  mapped** to an empty result.
+
+## Hook it up
+
+```rust title="src/items/module.rs"
+use nestrs_core::module;
+use super::service::ItemsService;
+
+#[module(providers = [ItemsService])]
+pub struct ItemsCoreModule;
+```
+
+The HTTP-adapter module imports it:
+
+```rust title="src/items/http/module.rs"
+#[module(imports = [ItemsCoreModule], providers = [ItemsController])]
+pub struct ItemsHttpModule;
+```
+
+The app root imports `DatabaseModule::for_root` (this is what installs the
+pool + the ambient executor interceptor):
+
+```rust title="src/app.rs"
+#[module(
+    imports = [
+        DatabaseModule::for_root(None),
+        ItemsCoreModule,
+        ItemsHttpModule,
+    ],
+)]
+pub struct AppModule;
+```
+
+`DatabaseModule::for_root(None)` reads `NESTRS_DATABASE__URL` from the
+environment; pass `Some(custom)` to override.
+
+## Dataloaders — batch field fetches
+
+A `#[dataloader]` is a batched DB read. Resolvers inject a
+`DataLoader<S>` (request-scoped, shared across one response) and call
+`.load_one(key)` per parent — the framework batches every call into a
+single query.
+
+```rust title="src/items/service.rs"
+use std::collections::HashMap;
+use nestrs_graphql::dataloader;
+
+#[dataloader]
+impl ItemsService {
+    async fn by_name(
+        &self,
+        names: &[String],
+    ) -> Result<HashMap<String, Vec<Item>>, ItemError> {
+        if names.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = Items::find()
+            .filter(entity::Column::Name.is_in(names.iter().cloned()))
+            .all(&Repo::<Items>::conn()?)
+            .await?;
+        let mut buckets: HashMap<String, Vec<Item>> =
+            names.iter().map(|n| (n.clone(), Vec::new())).collect();
+        for row in rows {
+            if let Some(bucket) = buckets.get_mut(&row.name) {
+                bucket.push(Item::from(&row));
+            }
+        }
+        Ok(buckets)
+    }
+}
+```
+
+The resolver injects it as `&DataLoader<ItemsServiceByName>` — no N+1.
+
+## Pagination
+
+```rust
+#[expose(name = "Item", complex, paginate)]
+```
+
+Adds an **`ItemPage`** envelope (`{ items, total, page, per_page,
+total_pages, has_next_page, has_previous_page }`) and a `PageArgs` input.
+The `#[crud(...)]` macros wire the paginated route + the GraphQL
+`items_page(args: PageArgs)` operation automatically.
+
+## Migrations
+
+Migrations are SeaORM's, kept in their own app:
+
+```bash
+just db up           # apply pending migrations
+just db fresh        # drop + re-apply from scratch
+just db seed         # load demo data
+just db reset        # fresh + seed
+```
+
+The `db` app is the only place schema changes live — neither the API
+nor the worker run migrations on startup.
+
+## What happens on a mutating route
+
+A `POST /items` request runs like this — the framework handles the data
+context for you:
+
+1. The HTTP transport routes the request to `ItemsController::create`.
+2. The `DbContext` interceptor (auto-bound by `DatabaseModule`) begins a
+   transaction and installs the executor in a `task_local`.
+3. The handler calls `self.svc.create(...)`.
+4. Inside the service, `Repo::<Items>::conn()` reads the `task_local`
+   — that's the transaction.
+5. The handler returns `Ok(...)`. The interceptor commits.
+6. On a `4xx` / `5xx`, the interceptor rolls back.
+
+A safe `GET` runs the same way with a pool executor and no transaction.
+A worker job (queue processor, cron job) also gets a pool executor.
+
+## Going further
+
+- [Security](/security/) — `Ability` filters reads, gates by-id loads,
+  masks response bodies. Wires through the same `Repo` calls.
+- [GraphQL](/graphql/) — `#[field]` resolvers with a
+  `DataLoader<ItemsServiceByName>` to avoid N+1 on relations.
+- [Configuration](/configuration/) — the `NESTRS_DATABASE__URL` scheme.
+
+### Reference
+
+- `crates/features/src/users/core/` — a feature with relations,
+  dataloaders and credentials helpers.
+- `crates/nestrs-database/` — `Repo`, `CrudService`, the ambient
+  executor.
+- `crates/nestrs-resource/` — `#[expose]`, the GraphQL+OpenAPI
+  generation, pagination envelopes.
+- `crates/nestrs-orm/` — the SeaORM integration.

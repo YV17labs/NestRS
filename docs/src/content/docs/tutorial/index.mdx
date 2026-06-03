@@ -1,0 +1,25 @@
+---
+title: Tutorial — build a feature end to end
+description: From an empty folder to a persisted, authorized, multi-transport feature.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note">
+  This tutorial is being written. It will walk a single feature (`users`)
+  through every layer: entity, service, controller, resolver, gateway,
+  authorization, and tests. Until it lands, the
+  [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
+  reference feature is the canonical exemplar to copy from.
+</Aside>
+
+## Sections (coming soon)
+
+1. **Scaffold the feature folder** — port (`core/`) and the first adapter.
+2. **Entity and service** — define the data shape and the business logic.
+3. **Expose over HTTP** — controller, pipes, guards.
+4. **Expose over GraphQL** — resolver, fields, dataloaders.
+5. **Expose over WebSockets** — gateway and messages.
+6. **Authorization** — abilities, row-level filtering, response masking.
+7. **Persistence and migrations** — entity wiring, the migrator app.
+8. **Test it end to end** — `nestrs-testing` and the live baseline.

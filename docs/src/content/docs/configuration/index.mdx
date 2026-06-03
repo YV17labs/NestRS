@@ -1,0 +1,255 @@
+---
+title: Configuration
+description: Typed, namespaced configuration loaded from environment variables — written by hand, validated on the way in.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A configuration is a typed struct that:
+
+1. Declares a **namespace** with `#[config(namespace = "…")]` — its
+   fields read from `NESTRS_<NAMESPACE>__<KEY>` environment variables;
+2. Implements **`from_env`** by hand — every variable is mapped
+   explicitly, so the env contract of a feature is one impl block, in
+   one file;
+3. Implements **`Validate`** so a bad value aborts the boot naming the
+   variable.
+
+`ConfigModule` then loads it from the env at boot and registers
+`Arc<MyConfig>` into the container — consumers inject it like any other
+provider.
+
+The whole pipeline reads only **environment variables** + the **`.env`
+cascade** the framework merges before any `from_env` runs. There is no
+TOML loader, no YAML, no remote source.
+
+## A typed config — by example
+
+This is the real `IssuerConfig` from `features/oauth` (signs the OAuth
+clients accepted by `apps/auth`):
+
+```rust title="crates/features/src/oauth/core/config.rs"
+use nestrs_config::{config, Config, ConfigError, ConfigService};
+use serde::Deserialize;
+use uuid::Uuid;
+use validator::{Validate, ValidationError, ValidationErrors};
+
+const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e);
+
+#[config(namespace = "issuer")]
+#[derive(Clone, Default)]
+pub struct IssuerConfig {
+    pub clients: Vec<RegisteredClient>,
+    pub default_org_id: Uuid,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct RegisteredClient {
+    pub client_id: String,
+    pub client_secret: String,
+    pub org_id: Uuid,
+    pub scopes: Vec<String>,
+}
+
+impl Validate for IssuerConfig {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let mut errors = ValidationErrors::new();
+        if self.clients.is_empty() {
+            errors.add("clients", ValidationError::new("at_least_one_client"));
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors) }
+    }
+}
+
+impl Config for IssuerConfig {
+    fn from_env(env: &ConfigService) -> nestrs_config::Result<Self> {
+        let clients = match env.get("CLIENTS") {
+            Some(raw) => serde_json::from_str(&raw)
+                .map_err(|e| ConfigError::parse(env.var("CLIENTS"), e.to_string()))?,
+            None => Vec::new(),
+        };
+        let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(DEFAULT_ORG);
+        Ok(Self { clients, default_org_id })
+    }
+}
+```
+
+### Reading it line by line
+
+- **`#[config(namespace = "issuer")]`** binds the struct to the
+  `NESTRS_ISSUER__*` environment scheme. The macro also wires the
+  `Namespaced` trait — no manual constant to write.
+- **`impl Config for IssuerConfig { fn from_env(env: &ConfigService) }`**
+  is the **explicit, hand-written contract**: one line per variable. A
+  reviewer reading this file knows exactly which env vars exist, with
+  which defaults, and what happens when one is malformed.
+- **`env.get("CLIENTS")`** reads `NESTRS_ISSUER__CLIENTS` as a `String`
+  (empty values are treated as unset).
+- **`env.parse("DEFAULT_ORG_ID")?`** reads + parses into the field's
+  type. A set-but-unparseable variable returns `Err` naming the
+  variable — boot-fatal, no silent fallback.
+- **`Validate`** is hand-implemented when validation is structural
+  (here: "at least one client"). For per-field rules, derive `Validate`
+  and use `#[validate(...)]` attributes.
+
+### `ConfigService` API
+
+| Method                                      | Reads                                       |
+|---------------------------------------------|---------------------------------------------|
+| `env.get("KEY")` → `Option<String>`         | `NESTRS_<NS>__KEY` as a raw string         |
+| `env.parse::<T>("KEY")?` → `Option<T>`      | Same, parsed via `FromStr`                  |
+| `env.flag("KEY", default)?` → `bool`        | `1`/`true`/`yes`/`on` + negatives (case-insensitive) |
+| `env.list("KEY")` → `Vec<String>`           | Comma-separated, trimmed, empties dropped   |
+| `env.var("KEY")` → `String`                 | The full env-var name (for error messages)  |
+
+## Wire it into the app
+
+The wiring is two module imports:
+
+```rust title="crates/features/src/oauth/core/module.rs"
+use nestrs_config::ConfigModule;
+use super::config::IssuerConfig;
+use super::service::OAuthFlow;
+
+#[module(
+    imports = [ConfigModule::for_feature::<IssuerConfig>(), UsersCoreModule],
+    providers = [OAuthFlow],
+)]
+pub struct OAuthCoreModule;
+```
+
+```rust title="apps/auth/src/app.rs"
+use nestrs_config::ConfigModule;
+
+#[module(
+    imports = [
+        ConfigModule::for_root(),       // ← first: merges the .env cascade
+        // ...
+        OAuthHttpModule,                // brings in OAuthCoreModule → loads IssuerConfig
+    ],
+)]
+pub struct AppModule;
+```
+
+- **`ConfigModule::for_root()`** goes **first** in the root module. It
+  merges the `.env` cascade once (real env vars always win) and
+  registers `Arc<Environment>` so every later `Config::load` sees the
+  merged environment.
+- **`ConfigModule::for_feature::<C>()`** queues a factory in the boot's
+  factory phase. The factory calls `C::load()` (= `from_env` +
+  `validate`); on failure the boot aborts with the variable named.
+
+## Inject it
+
+A consumer injects `Arc<IssuerConfig>` like any provider:
+
+```rust title="crates/features/src/oauth/core/service.rs"
+#[injectable]
+pub struct OAuthFlow {
+    #[inject]
+    config: Arc<IssuerConfig>,
+}
+
+impl OAuthFlow {
+    pub fn issue(&self, client_id: &str) -> Result<AccessToken, AuthError> {
+        let client = self.config.clients
+            .iter()
+            .find(|c| c.client_id == client_id)
+            .ok_or(AuthError::UnknownClient)?;
+        // ...
+    }
+}
+```
+
+## The `.env` cascade
+
+The framework merges these files **once** at boot, in this order (later
+overrides earlier):
+
+```
+.env
+.env.<environment>
+.env.local
+.env.<environment>.local
+```
+
+The `<environment>` segment is read from `NESTRS_ENV` (or `RUST_ENV`),
+defaulting to `development`. The convention:
+
+- **Committed**: `.env`, `.env.development`, `.env.production` —
+  non-secret defaults.
+- **Gitignored**: `.env.local`, `.env.*.local` — per-machine secrets.
+
+Real process environment variables always win over any `.env` file.
+
+## Run it
+
+```bash frame="terminal"
+$ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","org_id":"...","scopes":["read"]}]' \
+  just dev auth
+…
+2026-06-03T10:42:11Z INFO nestrs::config: loaded issuer (2 fields)
+2026-06-03T10:42:11Z INFO nestrs::http: bound 5 routes on 0.0.0.0:3002
+```
+
+A bad value fails the boot before any port opens:
+
+```bash frame="terminal"
+$ NESTRS_ISSUER__DEFAULT_ORG_ID=not-a-uuid just dev auth
+Error: configuration parse error
+  variable: NESTRS_ISSUER__DEFAULT_ORG_ID
+  reason  : invalid character at 1: expected hyphen
+```
+
+A failed validation runs after the load:
+
+```bash frame="terminal"
+$ just dev auth   # no clients configured
+Error: configuration validation failed for 'issuer'
+  - clients: at_least_one_client
+```
+
+## Override in tests
+
+Tests bypass the factory by `.provide()`-ing the pinned value directly:
+
+```rust title="apps/auth/tests/e2e.rs"
+let app = TestApp::<AppModule>::builder()
+    .provide(IssuerConfig {
+        clients: vec![RegisteredClient { /* fixture */ }],
+        default_org_id: Uuid::nil(),
+    })
+    .build()
+    .await?;
+```
+
+A seeded value **wins** over the factory — handy for tests that should
+not depend on the environment.
+
+## Why hand-written `from_env`
+
+Auto-deserializing from env vars sounds convenient, but the contract
+becomes implicit (which vars exist? what are their types?). With
+`from_env` written explicitly:
+
+- The full env contract of a feature is **one impl block, in one file**.
+- A missing variable falls back to a **code default**, not silently to
+  `Default::default()`.
+- Unparseable values fail loudly, **naming the variable**.
+- A reviewer reads the contract by reading 10 lines, not by chasing
+  serde attributes.
+
+## Going further
+
+- **Sibling fallbacks** — a config that legitimately needs another
+  feature's variable can call `env_var("NESTRS_<OTHER>__<KEY>")` inside
+  `from_env`. The pattern is *own > borrowed > code default*.
+- **Multiple configs per feature** — a feature can have several
+  `#[config(namespace = "...")]` structs, each loaded by a separate
+  `ConfigModule::for_feature::<C>()` import.
+
+### Reference
+
+- `crates/features/src/oauth/core/config.rs` — the full real example.
+- `crates/nestrs-config/` — `#[config]`, `Config`, `ConfigService`,
+  `ConfigModule`, the `.env` cascade.

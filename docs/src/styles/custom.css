@@ -1,0 +1,596 @@
+/* NestRS brand — gradient #ff4d5f → #ff7a59. Dark mode uses anthracite, not pure black. */
+
+:root {
+  --nestrs-coral: #ff4d5f;
+  --nestrs-orange: #ff7a59;
+  --nestrs-gradient: linear-gradient(135deg, #ff4d5f 0%, #ff7a59 100%);
+  --nestrs-gradient-soft: linear-gradient(135deg, rgba(255, 77, 95, 0.16) 0%, rgba(255, 122, 89, 0.16) 100%);
+
+  --sl-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --sl-font-mono: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, Monaco,
+    Consolas, 'Liberation Mono', monospace;
+}
+
+/* Dark theme — anthracite, not black. The brand logo reads on this background. */
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #2a1418;
+  --sl-color-accent: #ff4d5f;
+  --sl-color-accent-high: #ff8c6e;
+
+  --sl-color-bg: #161619;          /* main canvas — anthracite */
+  --sl-color-bg-nav: #161619;      /* top nav blends into canvas */
+  --sl-color-bg-sidebar: #161619;  /* sidebar matches canvas */
+  --sl-color-bg-inline-code: #26262b;
+
+  --sl-color-hairline: #2a2a2e;
+  --sl-color-hairline-light: #34343a;
+  --sl-color-hairline-shade: #202024;
+
+  --sl-color-text: #e7e7ea;
+  --sl-color-text-accent: #ff8c6e;
+
+  --nestrs-card-bg: rgba(255, 255, 255, 0.022);
+  --nestrs-card-border: rgba(255, 255, 255, 0.08);
+  --nestrs-surface: rgba(255, 255, 255, 0.03);
+
+  --nestrs-code-bg: #1b1b20;       /* code canvas — a touch above the page */
+  --nestrs-code-tabbar: #161619;   /* tab bar — flush with the page */
+}
+
+/* Light theme. */
+:root[data-theme='light'] {
+  --sl-color-accent-low: #ffe2dc;
+  --sl-color-accent: #d63a4a;
+  --sl-color-accent-high: #a82d1a;
+  --sl-color-text-accent: #d63a4a;
+
+  --nestrs-card-bg: rgba(0, 0, 0, 0.015);
+  --nestrs-card-border: rgba(0, 0, 0, 0.08);
+  --nestrs-surface: rgba(0, 0, 0, 0.02);
+
+  --nestrs-code-bg: #fbfafa;
+  --nestrs-code-tabbar: #f1f0ef;
+}
+
+/* ---------------------------------------------------------------------------
+   Hero — brand wordmark, layered glow, punchy copy
+   --------------------------------------------------------------------------- */
+
+.hero {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Ambient brand glow behind the hero — a soft, off-centre radial wash. */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: -30% -20% -40% -20%;
+  z-index: -1;
+  background:
+    radial-gradient(48% 58% at 72% 38%, rgba(255, 77, 95, 0.12) 0%, transparent 72%),
+    radial-gradient(44% 54% at 18% 30%, rgba(255, 122, 89, 0.09) 0%, transparent 72%);
+  filter: blur(20px);
+  pointer-events: none;
+  animation: hero-drift 14s ease-in-out infinite alternate;
+}
+
+@keyframes hero-drift {
+  from { transform: translate3d(-1.5%, -1%, 0) scale(1); }
+  to   { transform: translate3d(2%, 1.5%, 0) scale(1.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero::before { animation: none; }
+}
+
+/* Brand wordmark in the hero h1 — Nest in white, RS in the gradient. */
+.hero h1 {
+  letter-spacing: -0.03em;
+  font-weight: 700;
+  font-size: clamp(3rem, calc(1rem + 8vw), 6rem);
+  line-height: 1;
+}
+.hero .wordmark {
+  display: inline-block;
+}
+.hero .wm-nest {
+  color: var(--sl-color-white);
+}
+.hero .wm-rs {
+  color: var(--nestrs-orange);
+  -webkit-text-fill-color: var(--nestrs-orange);
+}
+
+/* Tagline — the actual pitch, split into a lead line, support, and tech pills. */
+.hero .tagline {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  color: var(--sl-color-gray-2);
+}
+.hero .hero-lead {
+  font-size: clamp(1.35rem, calc(0.9rem + 1.6vw), 2rem);
+  line-height: 1.18;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: var(--sl-color-white);
+}
+.hero .hero-lead .lead-accent {
+  background: var(--nestrs-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.hero .hero-sub {
+  font-size: clamp(1rem, calc(0.85rem + 0.5vw), 1.2rem);
+  line-height: 1.55;
+  max-width: 48ch;
+}
+.hero .hero-sub strong {
+  color: var(--sl-color-text-accent);
+  font-weight: 700;
+}
+.hero .hero-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+.hero .hero-pills > span {
+  font-size: 0.84rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.45rem 0.95rem;
+  border-radius: 999px;
+  color: var(--sl-color-gray-1);
+  background: var(--nestrs-surface);
+  border: 1px solid var(--nestrs-card-border);
+  white-space: nowrap;
+}
+.hero .hero-pills > span:first-child {
+  color: var(--sl-color-text-accent);
+  border-color: color-mix(in srgb, var(--nestrs-coral) 26%, transparent);
+  background: var(--nestrs-gradient-soft);
+}
+
+/* Hero mark — let the hexagon breathe with a faint glow. */
+.hero > img {
+  filter: drop-shadow(0 24px 70px rgba(255, 77, 95, 0.09));
+}
+
+/* ---------------------------------------------------------------------------
+   Buttons — primary gets the gradient + glow; minimal gets a subtle border
+   --------------------------------------------------------------------------- */
+
+/* Hero action buttons — give the pills more body. */
+.hero .actions .sl-link-button {
+  padding-block: 0.85rem;
+  padding-inline: 1.6rem;
+  font-size: 1.02rem;
+  border-radius: 999px;
+}
+
+.sl-link-button.primary {
+  background: var(--nestrs-gradient);
+  border: none;
+  color: #fff;
+  box-shadow: 0 6px 18px -10px rgba(255, 77, 95, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+.sl-link-button.primary:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px -12px rgba(255, 77, 95, 0.45);
+}
+.sl-link-button.minimal {
+  border: 1px solid var(--nestrs-card-border);
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.sl-link-button.minimal:hover {
+  border-color: color-mix(in srgb, var(--nestrs-coral) 28%, transparent);
+  background: var(--nestrs-surface);
+  transform: translateY(-1px);
+}
+
+/* ---------------------------------------------------------------------------
+   Section headings on the splash — a gradient tick before each h2
+   --------------------------------------------------------------------------- */
+
+.sl-markdown-content h2 {
+  position: relative;
+  letter-spacing: -0.02em;
+  scroll-margin-top: 6rem;
+}
+:root[data-has-hero] .sl-markdown-content h2 {
+  padding-left: 1rem;
+}
+:root[data-has-hero] .sl-markdown-content h2::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.12em;
+  bottom: 0.12em;
+  width: 4px;
+  border-radius: 4px;
+  background: var(--nestrs-gradient);
+}
+
+/* ---------------------------------------------------------------------------
+   Feature cards — glass surface, gradient icon chip, hover lift + glow
+   --------------------------------------------------------------------------- */
+
+.card-grid {
+  gap: 1.25rem;
+}
+
+.card {
+  position: relative;
+  border: 1px solid var(--nestrs-card-border) !important;
+  background: var(--nestrs-card-bg) !important;
+  border-radius: 16px;
+  backdrop-filter: blur(6px);
+  padding: clamp(1.25rem, calc(0.5rem + 2vw), 2rem) !important;
+  overflow: hidden;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease,
+    background 0.2s ease;
+}
+
+/* A faint gradient seam along the top edge, brightened on hover. */
+.card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--nestrs-gradient);
+  opacity: 0.16;
+  transition: opacity 0.2s ease;
+}
+
+/* Soft radial glow that fades in on hover. */
+.card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(60% 80% at 50% -10%, rgba(255, 122, 89, 0.06), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--nestrs-coral) 22%, transparent) !important;
+  box-shadow: 0 16px 36px -24px rgba(0, 0, 0, 0.5);
+  background: var(--nestrs-surface) !important;
+}
+.card:hover::before { opacity: 0.55; }
+.card:hover::after { opacity: 1; }
+
+/* Soft brand-tinted chip with the glyph in the accent colour — legible and calm
+   (white-on-gradient washed the icon out). */
+.card .icon {
+  color: var(--nestrs-orange) !important;
+  background: color-mix(in srgb, var(--nestrs-coral) 16%, var(--sl-color-bg)) !important;
+  border: 1px solid color-mix(in srgb, var(--nestrs-coral) 30%, transparent) !important;
+  border-radius: 10px !important;
+  padding: 0.42em !important;
+  box-shadow: none;
+}
+
+.card .title {
+  align-items: center;
+  gap: 0.85rem;
+}
+.card .body {
+  color: var(--sl-color-gray-2);
+  line-height: 1.6;
+}
+.card .body strong {
+  color: var(--sl-color-white);
+}
+
+/* ---------------------------------------------------------------------------
+   Benchmark — gradient meters instead of a flat table
+   --------------------------------------------------------------------------- */
+
+.bench {
+  margin: 1.5rem 0 2rem;
+  border: 1px solid var(--nestrs-card-border);
+  border-radius: 16px;
+  background: var(--nestrs-card-bg);
+  padding: 0.5rem clamp(0.75rem, 2vw, 1.5rem) 1rem;
+  backdrop-filter: blur(6px);
+}
+
+.bench-legend {
+  display: flex;
+  gap: 1.25rem;
+  justify-content: flex-end;
+  padding: 0.75rem 0.25rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.bench-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--sl-color-gray-2);
+}
+.bench-key::before {
+  content: '';
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 3px;
+}
+.bench-key.nestrs::before { background: var(--nestrs-gradient); }
+.bench-key.node::before { background: var(--sl-color-gray-5); }
+
+.bench-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) minmax(10rem, 2.6fr) auto;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+  padding: 1rem 0.25rem;
+  border-top: 1px solid var(--nestrs-card-border);
+}
+
+.bench-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.bench-label > span {
+  font-weight: 650;
+  color: var(--sl-color-white);
+}
+.bench-label > small {
+  font-size: 0.72rem;
+  color: var(--sl-color-gray-3);
+}
+
+/* Two competing bars stacked per metric. */
+.bench-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.bench-line {
+  display: grid;
+  grid-template-columns: 3.8rem 1fr 4.5rem;
+  align-items: center;
+  gap: 0.7rem;
+}
+.bench-who {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+.bench-who.nestrs {
+  color: var(--sl-color-text-accent);
+}
+
+.bench-meter {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--nestrs-surface);
+  overflow: hidden;
+  border: 1px solid var(--nestrs-card-border);
+}
+.bench-fill {
+  display: block;
+  height: 100%;
+  width: var(--w);
+  min-width: 6px;
+  border-radius: 999px;
+}
+.bench-fill.nestrs {
+  background: var(--nestrs-gradient);
+}
+.bench-fill.node {
+  background: var(--sl-color-gray-5);
+}
+
+.bench-num {
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--sl-color-gray-3);
+}
+.bench-num.nestrs {
+  color: var(--sl-color-white);
+  font-weight: 600;
+}
+
+.bench-mult {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  text-align: right;
+  background: var(--nestrs-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Sober one-time grow-in. Armed by JS only (no-JS keeps bars at full width);
+   disabled entirely under reduced-motion via the matchMedia guard. */
+.bench-animate .bench-fill {
+  width: 0;
+  transition: width 0.85s cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition-delay: var(--d, 0s);
+}
+.bench-animate.is-visible .bench-fill {
+  width: var(--w);
+}
+
+@media (max-width: 50rem) {
+  .bench-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'label mult'
+      'bars  bars';
+    gap: 0.6rem 1rem;
+  }
+  .bench-label { grid-area: label; }
+  .bench-mult { grid-area: mult; align-self: start; }
+  .bench-bars { grid-area: bars; }
+}
+
+/* ---------------------------------------------------------------------------
+   Monorepo diagram — one shared library, many deployable apps
+   --------------------------------------------------------------------------- */
+
+.mono {
+  margin: 1.75rem 0 2rem;
+}
+
+.mono-shared {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  text-align: center;
+  padding: 1rem 1.25rem;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--nestrs-coral) 22%, var(--nestrs-card-border));
+  background: var(--nestrs-gradient-soft);
+}
+.mono-tag {
+  font-family: var(--sl-font-mono);
+  font-weight: 600;
+  color: var(--sl-color-text-accent);
+}
+.mono-desc {
+  font-size: 0.85rem;
+  color: var(--sl-color-gray-2);
+}
+
+.mono-apps {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-top: 1.9rem;
+}
+.mono-app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--nestrs-card-border);
+  background: var(--nestrs-card-bg);
+}
+.mono-app-name {
+  font-family: var(--sl-font-mono);
+  font-weight: 600;
+  color: var(--sl-color-white);
+}
+.mono-app-role {
+  font-size: 0.78rem;
+  color: var(--sl-color-gray-3);
+}
+
+/* Connectors: a central drop from the shared box to a rail, a stub per app. */
+.mono-shared::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -0.95rem;
+  width: 2px;
+  height: 0.95rem;
+  transform: translateX(-50%);
+  background: var(--nestrs-card-border);
+}
+/* Rail spans exactly between the centres of the outer columns. With 3 equal
+   columns and a 1rem gap (2rem total), each column centre sits (100% - 2rem)/6
+   in from its side — so the rail ends meet the per-app stubs cleanly. */
+.mono-apps::before {
+  content: '';
+  position: absolute;
+  top: -0.95rem;
+  left: calc((100% - 2rem) / 6);
+  right: calc((100% - 2rem) / 6);
+  height: 2px;
+  background: var(--nestrs-card-border);
+}
+.mono-app::before {
+  content: '';
+  position: absolute;
+  top: -0.95rem;
+  left: 50%;
+  width: 2px;
+  height: 0.95rem;
+  transform: translateX(-50%);
+  background: var(--nestrs-card-border);
+}
+
+.mono-note {
+  margin: 1.1rem auto 0;
+  max-width: 44rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--sl-color-gray-3);
+}
+
+.mono-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1.1rem;
+}
+.mono-badges > span {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--sl-color-gray-2);
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--nestrs-card-border);
+  background: var(--nestrs-surface);
+}
+
+@media (max-width: 50rem) {
+  .mono-apps {
+    grid-template-columns: 1fr;
+    margin-top: 1rem;
+  }
+  .mono-shared::after,
+  .mono-apps::before,
+  .mono-app::before {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Misc — sidebar weight, inline code accent
+   --------------------------------------------------------------------------- */
+
+.sidebar nav > ul > li > details > summary,
+.sidebar nav > ul > li > a {
+  font-weight: 600;
+}
+
+:root[data-theme='dark'] :not(pre) > code {
+  color: #ff8c6e;
+}
+:root[data-theme='light'] :not(pre) > code {
+  color: #d63a4a;
+}
+
+/* Code frames — brand-tinted border, the active file tab reads as a chip. */
+.expressive-code .frame {
+  border: 1px solid var(--nestrs-card-border);
+}
+.expressive-code .frame .header {
+  font-weight: 600;
+}

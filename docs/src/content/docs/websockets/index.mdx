@@ -1,0 +1,181 @@
+---
+title: WebSockets
+description: A gateway self-mounted on the HTTP transport, JSON-envelope message handlers, connection lifecycle.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A WebSocket upgrade is an HTTP `GET`, so a gateway **self-mounts** on the
+existing `HttpTransport` — same port, same CORS, same TLS, no second
+server. The wire format is one JSON envelope `{ "event": "...", "data":
+... }`; each `#[subscribe_message("event")]` method handles one event.
+
+This page covers the WebSocket layer alone. Authentication and per-message
+authorization live in [Security](/security/).
+
+## A complete gateway
+
+The real `chat` example (`apps/chat`), running on port 3005:
+
+```rust title="apps/chat/src/chat/gateway.rs"
+use std::sync::Arc;
+
+use nestrs_ws::{gateway, messages, WsClient};
+
+use crate::chat::dto::{ChatMessage, SendMessage};
+use crate::chat::service::RoomService;
+
+#[gateway(path = "/ws")]
+pub struct ChatGateway {
+    #[inject]
+    room: Arc<RoomService>,
+}
+
+#[messages]
+impl ChatGateway {
+    #[on_connect]
+    async fn joined(&self, client: &WsClient) {
+        client.join("lobby");
+        self.room.connected();
+    }
+
+    #[on_disconnect]
+    async fn left(&self) {
+        self.room.disconnected();
+    }
+
+    #[subscribe_message("message")]
+    async fn on_message(&self, message: SendMessage) {
+        self.room.record(message);
+    }
+
+    #[subscribe_message("history")]
+    async fn history(&self) -> Vec<ChatMessage> {
+        self.room.history()
+    }
+
+    #[subscribe_message("presence")]
+    async fn presence(&self) -> usize {
+        self.room.present()
+    }
+
+    #[subscribe_message("typing")]
+    async fn typing(&self, message: SendMessage, client: &WsClient) {
+        let _ = client.broadcast("typing", &message);
+    }
+}
+```
+
+- **`#[gateway(path = "/ws")]`** mounts the gateway on the HTTP
+  transport. Everything else on the same transport keeps working — there
+  is no second server.
+- **`#[messages]`** orchestrates the connection lifecycle hooks
+  (`#[on_connect]`, `#[on_disconnect]`) and the message handlers
+  (`#[subscribe_message]`) on one impl block.
+- **`#[on_connect] async fn joined(&self, client: &WsClient)`** — the
+  client joins the `"lobby"` room; the service updates a presence
+  counter.
+- **`#[subscribe_message("message")]`** binds to events with that name
+  in the envelope. The argument `message: SendMessage` is the parsed
+  `data` payload — typed by serde, validated by `#[derive(Validate)]` if
+  you add it.
+- **A handler that returns a value sends a reply** with the same event
+  name. `history` returns `Vec<ChatMessage>`; the client receives
+  `{ "event": "history", "data": [...] }`.
+- **`client.broadcast("typing", &message)`** pushes a server→client
+  event to every other socket in the room.
+
+## Run it
+
+```bash
+just dev chat
+```
+
+```text frame="terminal"
+2026-06-03T10:23:14Z  INFO nestrs::http: bound 1 gateway on 0.0.0.0:3005
+  GET /ws → ChatGateway (4 messages, 2 lifecycle hooks)
+```
+
+Drive it from any WebSocket client. Below with [`websocat`](https://github.com/vi/websocat):
+
+```bash frame="terminal"
+$ websocat ws://localhost:3005/ws
+{"event":"history","data":null}
+{"event":"history","data":[]}
+
+{"event":"message","data":{"author":"ada","text":"hi"}}
+
+{"event":"presence","data":null}
+{"event":"presence","data":1}
+
+{"event":"history","data":null}
+{"event":"history","data":[{"author":"ada","text":"hi","at":"..."}]}
+```
+
+Each message you send is a JSON envelope; the server's reply arrives in
+the same shape. Lines beginning with `{"event":...,"data":...}` after a
+blank line are server-side pushes (e.g. someone else's `typing` event).
+
+## Joining rooms and broadcasting
+
+```rust
+#[subscribe_message("join")]
+async fn join_room(&self, room: String, client: &WsClient) {
+    client.join(&room);
+}
+
+#[subscribe_message("leave")]
+async fn leave_room(&self, room: String, client: &WsClient) {
+    client.leave(&room);
+}
+
+#[subscribe_message("say")]
+async fn say(&self, message: SendMessage, client: &WsClient) {
+    client.broadcast("said", &message); // every other client in every room this client is in
+    client.broadcast_to("lobby", "said", &message); // only "lobby"
+}
+```
+
+`WsClient::join` / `leave` manage room membership. `broadcast` /
+`broadcast_to` push events server-side.
+
+## Server-side push from a service
+
+A service can broadcast without a request triggering it — useful for
+queue processors pushing progress, scheduled jobs sending notifications,
+or any event bus subscriber wanting to reach connected clients:
+
+```rust
+use nestrs_ws::WsServer;
+
+#[injectable]
+pub struct NotifyService {
+    #[inject]
+    ws: Arc<WsServer>,
+}
+
+impl NotifyService {
+    pub fn announce(&self, text: String) {
+        self.ws.broadcast_to("lobby", "announce", &text);
+    }
+}
+```
+
+`WsServer` is the connection registry — inject it anywhere, push events
+without holding a client handle.
+
+## Going further
+
+- [Security](/security/) — authenticate at the upgrade (`AuthGuard` on
+  the gateway impl), gate per-message (`#[use_guards]` on a
+  `#[subscribe_message]`).
+- Per-gateway namespacing — `WsServer<N>` is generic over a namespace
+  marker, so multiple gateways under different paths get distinct
+  connection pools.
+
+### Reference
+
+- `apps/chat/` — the full real-time example.
+- `crates/nestrs-ws/` — `#[gateway]`, `#[messages]`,
+  `#[subscribe_message]`, `#[on_connect]`, `#[on_disconnect]`,
+  `WsClient`, `WsServer`.

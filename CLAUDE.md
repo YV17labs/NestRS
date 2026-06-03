@@ -405,7 +405,7 @@ transaction — is kept by a **request-scoped data context** held in two
 `task_local!`s (a singleton service has no other way to read per-request
 state):
 
-- the **executor** (`nestrs-orm`'s `Executor` enum: pool or transaction);
+- the **executor** (`nestrs-database`'s `Executor` enum: pool or transaction);
 - the **ability** (`nestrs-authz`'s ambient `Arc<Ability>`).
 
 **Hard invariant: every data access goes through a service, and a service

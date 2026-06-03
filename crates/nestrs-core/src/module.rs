@@ -16,8 +16,8 @@ pub trait Module {
     }
 }
 
-/// A module configured at its import site — the analog of NestJS's
-/// `DynamicModule` returned by `forRoot` / `forFeature` / `forRootAsync`.
+/// A module configured at its import site (e.g. `Module::for_root(opts)`),
+/// built synchronously via `register` or asynchronously via `collect`.
 ///
 /// Unlike [`Module`], a dynamic module is a value that captures options:
 ///
@@ -30,14 +30,14 @@ pub trait Module {
 /// ```
 ///
 /// Dynamic modules are **not** auto-deduplicated — each carries its own
-/// config, mirroring NestJS's `forFeature`.
+/// config.
 ///
 /// Two phases, both defaulting to no-op:
 ///
-/// - [`collect`](Self::collect) — queue an async factory (NestJS's
-///   `forRootAsync` for resources like a DB pool).
+/// - [`collect`](Self::collect) — queue an async factory (for resources like
+///   a DB pool that must be built asynchronously).
 /// - [`register`](Self::register) — install synchronous providers, metadata,
-///   or config (NestJS's `forRoot`).
+///   or config.
 pub trait DynamicModule {
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder
     where

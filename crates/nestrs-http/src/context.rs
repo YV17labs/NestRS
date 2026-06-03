@@ -1,6 +1,6 @@
 //! Request-scoped context: the typed value a guard or interceptor attaches to
-//! a request for the handler to read back. The HTTP analog of NestJS's
-//! `request.user`.
+//! a request for the handler to read back (e.g. the authenticated principal
+//! attached by an auth guard).
 
 use std::ops::Deref;
 

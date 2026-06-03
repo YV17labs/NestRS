@@ -39,12 +39,12 @@ tracing-opentelemetry = "0.33"
 thiserror = "2"
 anyhow = "1"
 
-# JWT — the engine `@nestjs/jwt` itself wraps on the npm side; HS/RS/ES algorithms.
+# JWT — HS/RS/ES algorithms for token signing and verification.
 # `rust_crypto` selects the pure-Rust backend (no aws-lc-rs C dependency), matching
 # the workspace's rustls posture; jsonwebtoken 10 requires picking one explicitly.
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 # OAuth2 Authorization Code flow (+ PKCE); the `reqwest` backend below drives its
-# token exchange. The per-provider strategy lives in the app, like Passport.
+# token exchange. The per-provider strategy lives in the app.
 oauth2 = "5"
 # HTTP Basic decoding for OAuth2 client authentication (`Authorization: Basic`).
 # The de-facto standard base64 crate, already in the tree transitively via
@@ -129,14 +129,13 @@ rmcp = { version = "1.7", features = ["server", "macros", "transport-streamable-
 schemars = { version = "1", features = ["uuid1"] }
 
 # Cron expression parsing for #[cron_job(cron = "...")]. croner accepts 5/6/7
-# fields (seconds optional), matching the flexibility of the `cron` npm package
-# NestJS's @nestjs/schedule builds on. chrono is its time type; chrono-tz
-# resolves an IANA name for the optional per-job timezone.
+# fields (seconds optional), for flexible schedule expressions. chrono is its
+# time type; chrono-tz resolves an IANA name for the optional per-job timezone.
 croner = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.10"
 
-# Redis-backed job queues (NestJS's `@nestjs/bullmq` analog). apalis is the
+# Redis-backed job queues. apalis is the
 # background-task framework; apalis-redis is its Redis storage backend. Pinned to
 # the 0.7 stable line — 1.0 is still churning through release candidates and does
 # not clear our "no pre-release in a foundation dep" bar.

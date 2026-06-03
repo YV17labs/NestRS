@@ -1,5 +1,5 @@
-//! Transport-agnostic validation and transformation pipes — the NestJS *pipes*
-//! analog. A [`Pipe`] is a pure transform run at a surface's request boundary,
+//! Transport-agnostic validation and transformation pipes.
+//! A [`Pipe`] is a pure transform run at a surface's request boundary,
 //! between extraction and the handler; the surface binds it to a parameter
 //! (HTTP does so via the `Valid<E>` / `Piped<P, E>` extractors in
 //! `nestrs-http`).

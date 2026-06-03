@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>NestJS ergonomics, Rust performance.</strong><br>
+  <strong>Declarative macros, native performance.</strong><br>
   A declarative, decorator-driven backend framework that compiles to a single
   native binary — a fraction of the memory, none of the garbage-collector tax.
 </p>
@@ -22,12 +22,12 @@
 
 ## Why NestRS
 
-- ⚡ **Rust-native speed.** ~25× the throughput of an equivalent NestJS service on
+- ⚡ **Rust-native speed.** ~25× the throughput of an equivalent Node service on
   the same CPU budget (~13× per core), with a sub-millisecond p99 — built on the
   same hyper/tokio core as the fastest Rust web frameworks, with no GC pauses and
   tail latencies that stay flat under load. [See the benchmark.](#benchmark)
 - 🪶 **An order of magnitude less memory.** ~4 MB idle and ~6 MB under load, versus
-  ~80–120 MB for the same NestJS service — roughly 18–20× lighter, for smaller
+  ~80–120 MB for the same Node service — roughly 18–20× lighter, for smaller
   instances, higher density, and a lighter cloud bill.
 - 🚀 **Boots in milliseconds.** A single static native binary with no runtime to
   warm up — friendly to autoscaling and cold starts.
@@ -36,7 +36,7 @@
   hand-written boilerplate.
 - 🛡️ **Verified before it serves.** The DI graph is wired by macros and checked at
   boot — a module can inject only what its imports reach (a compile-time
-  encapsulation boundary NestJS's runtime `exports` can't enforce), with no
+  encapsulation boundary a runtime `exports` list can't enforce), with no
   reflection and no runtime surprises.
 - 🔐 **Security & transactions, transparent.** A service queries through `Repo`
   against an ambient, request-scoped data context — so every read is filtered to
@@ -184,8 +184,8 @@ web frameworks use — it doesn't replace them, it gives them structure.
   and the whole wiring is verified as a graph at boot.
 
 If you like assembling your own stack, you may not want the opinions. If you want
-a framework that makes the structural decisions for you — the way NestJS, Spring,
-or Rails do — that's the gap NestRS fills.
+a framework that makes the structural decisions for you — the way Spring, Rails,
+and other mature frameworks do — that's the gap NestRS fills.
 
 ## Vision
 
@@ -263,7 +263,7 @@ surface is decorator macros — reach for them first (`#[injectable]`, `#[module
 | `nestrs-orm` | SeaORM database module — async pool via `DatabaseModule::for_root` |
 | `nestrs-queue` | Redis-backed durable job queues + workers (`#[processor]`); `apalis`-backed |
 | `nestrs-schedule` | In-process cron / interval jobs (`#[cron_job]`) |
-| `nestrs-events` | Typed in-process event bus + `#[event_handler]` (the `@nestjs/event-emitter` analog) |
+| `nestrs-events` | Typed in-process event bus + `#[on_event]` handlers |
 | `nestrs-authz` | CASL-style authorization: one ability → access gate + query pre-filter + response masking. Transport bindings behind Cargo features (`http`, `graphql`, `mcp`); the data-coupled extractors (`Bind`, GraphQL `bind`, `LoaderScope`, `WsDataContext`) live in `nestrs-database` |
 | `nestrs-pipes` | Transport-agnostic validation & transformation (`ValidationPipe`, `Parse*`, …) |
 | `nestrs-middleware` | Guards, interceptors, exception filters |
@@ -511,54 +511,33 @@ Security defaults baked in:
 - No `HEALTHCHECK` directive — use the Kubernetes probes exposed at
   `/health/{live,ready,startup}` (the right layer for orchestrator health).
 
-## Coming from NestJS?
+## Decorators at a glance
 
-NestRS borrows NestJS's programming model — modules, providers, decorators,
-dependency injection — and rebuilds it natively in Rust. If you already know
-Nest, this is the map; otherwise you can skip it.
+The developer-facing surface is attribute macros: you decorate a struct or an
+impl block and the framework generates the wiring. The core set:
 
-**Project structure.** NestJS's monorepo mode (several applications in one
-workspace) and its libraries (shared code) map directly onto a Cargo workspace:
-applications under `apps/`, shared libraries as crates under `crates/`. There is
-no `nest-cli.json` — `cargo` is the build tool and the workspace manifest is the
-project definition.
+| Decorator | What it does |
+|-----------|--------------|
+| `#[module]` | Declares a module — groups providers and lists the modules it imports; the unit of composition and the boot-time access boundary |
+| `#[injectable]` | Marks a struct as a provider the container can construct and inject by type (singleton by default, `scope = request` for per-request) |
+| `#[controller]` | Declares a REST controller, mounted under a base path, with services injected by type via `#[inject]` fields |
+| `#[routes]` + `#[get]`/`#[post]`/`#[put]`/… | On a controller impl, turns each verb-attributed method into a routed HTTP handler |
+| `#[resolver]` + `#[query]`/`#[mutation]`/`#[field]` | Declares a GraphQL resolver; query/mutation roots self-compose into the schema, `#[field]` resolves a type's field |
+| `#[gateway]` + `#[messages]`/`#[subscribe_message]` | Declares a WebSocket gateway that self-mounts on the HTTP transport and dispatches JSON `{event, data}` messages |
+| `#[processor]` | Declares a Redis-backed durable queue consumer (queue name, concurrency, retries) |
+| `#[cron_job]` | Declares an in-process scheduled job triggered by an interval, a cron expression, or a one-shot delay |
+| `#[mcp]` | Declares a Model Context Protocol server whose methods become callable tools |
+| `#[expose]` | Exposes a SeaORM entity to GraphQL **and** OpenAPI from a single annotation, with per-field skip/rename |
+| `#[config]` | Binds a typed config struct to environment + TOML values |
+| `#[on_event]` | Subscribes a method to a typed event on the in-process event bus |
+| `#[hooks]` + `#[on_module_init]`/`#[on_application_bootstrap]`/`#[on_module_destroy]`/… | On a provider impl, runs phase-tagged methods at the matching lifecycle stage |
 
-**Decorators & concepts:**
+Supporting decorators round out the request pipeline — `#[use_guards(...)]` binds
+access guards, `#[meta(...)]` attaches handler metadata a guard reads back via
+`Reflector`, and `#[dataloader]` defines a request-scoped batch loader that
+collapses N+1 fetches.
 
-| NestRS | NestJS |
-|--------|--------|
-| `#[module]` | `@Module()` |
-| `#[injectable]` | `@Injectable()` |
-| `#[controller]` / `#[routes]` + `#[get]`/`#[post]`/… | `@Controller()` + `@Get()`/`@Post()`/… |
-| `#[use_guards(...)]` | `@UseGuards()` |
-| `#[meta(...)]` + `Reflector` | `@SetMetadata()` / `@Roles()` + `Reflector` |
-| `#[resolver]` + `#[query]`/`#[mutation]` | `@Resolver()` + `@Query()`/`@Mutation()` |
-| `#[field]` | `@ResolveField()` |
-| `#[dataloader]` | DataLoader |
-| `#[cron_job]` | `@Cron()` |
-| `#[processor]` | `@Processor()` |
-| `#[event_handler]` | `@OnEvent()` / event-emitter |
-| `#[hooks]` + `#[on_module_init]`/… | `onModuleInit()`/… lifecycle hooks |
-| `ValidationPipe` / `Parse*` | pipes |
-
-**Crates ↔ packages:**
-
-| NestRS crate | NestJS package |
-|--------------|----------------|
-| `nestrs-core` | `@nestjs/core` |
-| `nestrs-config` | `@nestjs/config` |
-| `nestrs-http` | `@nestjs/platform-express` |
-| `nestrs-graphql` | `@nestjs/graphql` |
-| `nestrs-openapi` | `@nestjs/swagger` |
-| `nestrs-orm` | `@nestjs/typeorm` |
-| `nestrs-queue` | `@nestjs/bullmq` |
-| `nestrs-schedule` | `@nestjs/schedule` |
-| `nestrs-events` | `@nestjs/event-emitter` |
-| `nestrs-authz` | CASL / `@casl/ability` |
-| `nestrs-pipes` / `nestrs-middleware` | `@nestjs/common` |
-| `nestrs-health` | `@nestjs/terminus` |
-
-**What's different on purpose:**
+**What's notable about the model:**
 
 - **Module encapsulation is compile-time.** A module's boundary is its Rust
   visibility — no runtime `exports` list. Expose a `pub` trait, keep the impl

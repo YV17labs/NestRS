@@ -61,8 +61,8 @@ impl App {
 
     /// Run the init lifecycle phases (`OnModuleInit`, then
     /// `OnApplicationBootstrap`) against the built container, without serving.
-    /// The NestJS `app.init()` analog, exposed so a test harness can drive the
-    /// same startup the server performs.
+    /// Exposed so a test harness can drive the same startup the server
+    /// performs.
     pub async fn init(&self) -> Result<()> {
         run_phase(&self.container, LifecyclePhase::OnModuleInit).await?;
         run_phase(&self.container, LifecyclePhase::OnApplicationBootstrap).await?;

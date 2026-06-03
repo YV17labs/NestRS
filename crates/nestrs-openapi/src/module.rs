@@ -10,8 +10,8 @@ use crate::config::OpenApiConfig;
 use crate::document::build_document;
 use crate::ui;
 
-// NestJS convention paths. The bundled Swagger UI references these absolutely,
-// so they are fixed (not yet configurable).
+// Conventional documentation paths. The bundled Swagger UI references these
+// absolutely, so they are fixed (not yet configurable).
 const DOCS_PATH: &str = "/api";
 const SPEC_PATH: &str = "/api-json";
 

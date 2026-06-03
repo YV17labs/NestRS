@@ -1,4 +1,4 @@
-//! SeaORM database integration — the `@nestjs/typeorm` analog.
+//! SeaORM database integration.
 //!
 //! [`DatabaseModule`] is a [`DynamicModule`](nestrs_core::DynamicModule) that
 //! builds the pool in the collect phase and registers it as a

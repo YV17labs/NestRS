@@ -31,8 +31,8 @@ pub trait Discoverable {
         Vec::new()
     }
 
-    /// `TypeId` of each `#[inject] Option<Arc<…>>` optional dependency (the
-    /// `@Optional` analog). Not required by the register-phase fixpoint, but
+    /// `TypeId` of each `#[inject] Option<Arc<…>>` optional dependency.
+    /// Not required by the register-phase fixpoint, but
     /// used to order the provider after an optional dependency the same module
     /// supplies.
     fn optional_dependencies() -> Vec<TypeId> {

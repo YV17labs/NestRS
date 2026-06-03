@@ -3,9 +3,8 @@ use std::str::FromStr;
 
 use crate::pipe::{Pipe, PipeError};
 
-/// Parse a `String` into any `T: FromStr`. Covers NestJS's
-/// `ParseIntPipe`/`ParseFloatPipe`/`ParseBoolPipe` (aliases below) and
-/// `ParseEnumPipe` (any enum implementing `FromStr`).
+/// Parse a `String` into any `T: FromStr`. Covers integer, float, and bool
+/// parsing (aliases below) and any enum implementing `FromStr`.
 pub struct Parse<T>(PhantomData<fn() -> T>);
 
 impl<T: FromStr> Pipe for Parse<T> {

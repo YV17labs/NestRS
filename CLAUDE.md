@@ -22,7 +22,7 @@ lifecycle** — must be *transparent*. A feature that forces the developer to
 hand-manage any of them is a defect in the framework, not the app's problem.
 
 The leverage that makes this possible is **procedural macros**: decorators
-that keep application code as declarative in Rust as it is in Nest in
+that keep application code as declarative in Rust as decorators make it in
 TypeScript. Crates under `crates/nestrs-*` provide the framework building
 blocks (IoC container, module trait, decorator macros); `crates/features/`
 holds the product's vertical slices, each a port (`core/`) plus per-transport
@@ -31,14 +31,13 @@ under `apps/<name>/` are `main.rs` + `app.rs` that compose the edge modules
 they serve. *Monorepo layout* below is the law on which of the three a given
 file belongs to.
 
-NestJS inspired the surface; it is the **porting mental model**, not the
-spec. Describe features by what they do in nestrs; use Nest vocabulary only
-when it helps someone map decorators and folders.
+Describe features by what they do in nestrs, on their own terms — the
+decorators and folder layout are the vocabulary.
 
-## Rule priority — Rust first, Nest second
+## Rule priority — Rust first, conventions second
 
 Every change must satisfy **both**, in this order. When they conflict, **Rust
-wins** — adapt the Nest mapping, do not bend idiomatic Rust or the type
+wins** — adapt the convention, do not bend idiomatic Rust or the type
 system.
 
 1. **Rust (non‑negotiable).** Idiomatic, reviewable Rust: orphan/coherence
@@ -49,21 +48,21 @@ system.
    trait impls) are normal — not an excuse to hide errors or bypass `Repo`
    except where this file names a deliberate, documented exception (e.g.
    shutdown hooks).
-2. **Nest port (second).** Module/feature folders, decorator names
+2. **Conventions (second).** Module/feature folders, decorator names
    (`#[module]`, `#[controller]`, `#[resolver]`, `#[field]`, `#[dataloader]`),
-   thin handlers, one `service.rs` per feature (≈ `*.service.ts`). Nest
-   explains *where* code lives; Rust explains *how* it is expressed.
+   thin handlers, one `service.rs` per feature. The conventions explain
+   *where* code lives; Rust explains *how* it is expressed.
 
 **Conflict examples (Rust wins):**
 
-| Nest habit | Rust / nestrs decision |
+| Common habit | Rust / nestrs decision |
 |------------|-------------------------|
 | `UsersModule` re-exports everything an app might want | No umbrella. A feature ships `UsersCoreModule` (the port) + one `Users<Edge>Module` per transport (HTTP, GraphQL, WS, …); an app lists the edges it serves |
-| Split `users.service.ts` into many topic files | Optional; **one `service.rs`** holding the whole `UsersService` is fine — do not fragment for aesthetics |
+| Split a feature's service into many topic files | Optional; **one `service.rs`** holding the whole `UsersService` is fine — do not fragment for aesthetics |
 | Return `[]` when the DB fails (looks like "no data") | **Forbidden** — batch/loader methods return `Result` and surface the error |
 | `impl ResponseError` next to the error type | Pure errors live in `<feature>/core/error.rs`; HTTP mapping in `<feature>/http/error.rs` so a non-HTTP app does not link the poem types |
-| `@Module({ exports: [...] })` to expose a service | No `exports` list. Encapsulation is Rust visibility: module-private impl, `pub trait` injected as `Arc<dyn Trait>` |
-| `@Transactional()` on a method | No decorator. The ambient executor wraps mutating handlers automatically |
+| Re-exporting a service so other modules can reach it | No `exports` list. Encapsulation is Rust visibility: module-private impl, `pub trait` injected as `Arc<dyn Trait>` |
+| Wrapping a method in an explicit transaction decorator | No decorator. The ambient executor wraps mutating handlers automatically |
 
 ## North Star — what "good" looks like
 
@@ -93,18 +92,18 @@ developer does *not* write.
 - **One way to do a thing.** Two decorators that solve the same problem are
   a source of pain. Deprecate one before adding a second.
 
-## Where nestrs deliberately differs from Nest
+## Where nestrs deliberately departs from convention
 
-Intentional departures. Do not "fix" them back to Nest-style.
+Intentional departures. Do not "fix" them back to the conventional style.
 
-| Nest | nestrs | Why |
+| Conventional approach | nestrs | Why |
 |------|--------|-----|
-| `@Module({ exports: [...] })` | No `exports`. `pub trait` + module-private impl | Rust visibility is already the encapsulation primitive; a list is redundant |
+| An explicit per-module `exports` list | No `exports`. `pub trait` + module-private impl | Rust visibility is already the encapsulation primitive; a list is redundant |
 | Per-module sub-container | Single flat container | Simpler resolution; orphan rules already prevent accidental coupling |
 | Implicit access check at runtime injection | Compile-time + boot-time **access graph** (`crates/nestrs-core/src/access.rs`) | Boot fails with a clear graph error instead of a deep `Cannot resolve` at first request |
-| `@Transactional()` decorator | Ambient `task_local!` executor wraps mutating handlers | One concern, no per-method ceremony |
-| Manual `@SerializeOptions` / class-transformer | `Ability::mask` runs automatically after every handler | Forgetting to redact a field is structurally hard, not a developer obligation |
-| `@Module({ controllers: [...], providers: [...] })` listing every class | Inventory-based discovery for resolvers, cron jobs, processors, hooks | The list of things in a module = the things decorated in the module |
+| A per-method transaction decorator | Ambient `task_local!` executor wraps mutating handlers | One concern, no per-method ceremony |
+| Manual per-endpoint response serialization config | `Ability::mask` runs automatically after every handler | Forgetting to redact a field is structurally hard, not a developer obligation |
+| Listing every controller and provider in the module declaration | Inventory-based discovery for resolvers, cron jobs, processors, hooks | The list of things in a module = the things decorated in the module |
 | Class-based DI with reflection metadata | Type-id based DI with `#[inject]` fields | Rust has no reflection; types are the source of truth |
 | `nest generate` scaffolding | None — copy the reference feature | Scaffolding produces dead copies; a manual copy forces the contributor to read the pattern once |
 
@@ -237,7 +236,7 @@ adopting an external DI crate.** If ergonomics fall short, extend ours.
 - **Modules compose by type or by configured value.** `#[module(imports =
   [...])]` takes a bare type (a static `Module`) or a call expression like
   `OpenApiModule::for_root(opts)` (a `DynamicModule` configured at its import
-  site — Nest's `forRoot`/`forRootAsync`). A `DynamicModule` configures via
+  site). A `DynamicModule` configures via
   `register` (sync) or `collect` (queues an async factory — a DB pool, a
   queue connection). Configuration is each module's responsibility, declared
   where it is imported, never seeded loosely in `main`. Registration is
@@ -249,8 +248,8 @@ adopting an external DI crate.** If ergonomics fall short, extend ours.
 - **Visibility** is Rust's job: the container is flat (a provider is
   injectable by anyone who can name its type), so a feature hides its impl
   as module-private and exposes a `pub` **trait** bound with `provide_dyn`.
-  Consumers inject `Arc<dyn Trait>`, never the impl. This is Nest's
-  `exports`/`@Injectable` boundary moved to the type system.
+  Consumers inject `Arc<dyn Trait>`, never the impl. This moves the
+  module-encapsulation boundary into the type system.
 
 - **The import contract** is enforced at boot by the access graph
   (`crates/nestrs-core/src/access.rs`): `#[module]` records its imports and
@@ -258,7 +257,7 @@ adopting an external DI crate.** If ergonomics fall short, extend ours.
   walks the graph from the root and **fails the boot**
   (`AccessGraphError`) if a provider injects something its module neither
   owns, imports transitively, nor receives as global infrastructure
-  (seeds + factory outputs, the `@Global` analog). It governs `#[inject]`
+  (seeds + factory outputs — the globally-available infrastructure). It governs `#[inject]`
   fields **and** attribute-bound layers (`#[use_guards]` / `#[use_filters]`
   / `#[use_interceptors]`), which are container-resolved at mount. The one
   deliberate hole, named in `access.rs`: runtime
@@ -501,7 +500,7 @@ change" claim. Read the crate for how; here is only what was decided:
   types leak to apps.
 - **`nestrs-pipes`** — transport-agnostic, **one `Pipe` per file**,
   stateless (`transform(In) -> Result<Out, _>`, never a DI provider). The
-  base set maps Nest (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …).
+  base set covers the common cases (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …).
   HTTP binds them with the `Valid<E>` / `Piped<P, E>` extractors. Reusable
   pipes are framework primitives — never define one in an app.
 - **`nestrs-openapi`** — import `OpenApiModule`, it self-mounts
@@ -520,7 +519,7 @@ change" claim. Read the crate for how; here is only what was decided:
 ## Naming rules — strict
 
 The file name encodes the role; the folder supplies the feature prefix
-(`users/core/service.rs` ≡ `users.service.ts`). Snake_case, NestJS-style. No
+(`users/core/service.rs`). Snake_case, role-prefixed by folder. No
 dotted variants. **No `*_module.rs`** — the DI module file is always
 `module.rs`.
 

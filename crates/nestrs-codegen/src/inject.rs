@@ -24,7 +24,7 @@ pub struct InjectableBody {
 
 /// Strip `#[inject]` attributes from `item`'s fields and build its
 /// `from_container` constructor. `Arc<dyn Trait>` resolves via `get_dyn`,
-/// `Arc<Concrete>` via `get`. `Option<Arc<…>>` is the `@Optional` analog
+/// `Arc<Concrete>` via `get`. `Option<Arc<…>>` is an optional dependency
 /// (lenient, excluded from `dependencies`/`injected`). An `#[inject]` field
 /// that is neither errors; a non-`#[inject]` field falls back to
 /// `Default::default()`.

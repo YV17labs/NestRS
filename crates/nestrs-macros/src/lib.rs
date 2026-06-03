@@ -27,8 +27,8 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     injectable::injectable(args, input)
 }
 
-/// Declare application lifecycle hooks on a provider's impl block, mirroring
-/// NestJS's lifecycle events.
+/// Declare application lifecycle hooks on a provider's impl block, for the
+/// module/application init and shutdown phases.
 ///
 /// Each method tagged with a phase attribute is invoked by
 /// [`App`](nestrs_core::App):
@@ -50,7 +50,7 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// `imports` is either a type (a static [`Module`](nestrs_core::Module)) or a
 /// call expression (a configured [`DynamicModule`](nestrs_core::DynamicModule)
-/// — the `forRoot`/`forFeature` analog). `providers` lists what this module
+/// built at its import site). `providers` lists what this module
 /// declares.
 ///
 /// Each provider entry is `Foo` (a `Discoverable` type) or

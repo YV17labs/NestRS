@@ -38,8 +38,8 @@ impl TestApp {
         self.app.container()
     }
 
-    /// The NestJS `app.init()` analog: deliberately **not** run by `build`
-    /// (matching `Test...compile()`), so startup side effects are opt-in.
+    /// Runs the application's startup side effects: deliberately **not** run by
+    /// `build`, so a test harness can compile the app without triggering them.
     pub async fn init(&self) -> Result<()> {
         self.app.init().await
     }

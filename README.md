@@ -151,7 +151,7 @@ pub struct AudioProducer {
 
 // A durable queue consumer — 5 jobs in flight, retried 3× on failure.
 #[processor(queue = "audio", concurrency = 5, retries = 3)]
-pub struct AudioConsumer {
+pub struct AudioProcessor {
     #[inject]
     transcoder: Arc<Transcoder>,
 }
@@ -211,36 +211,39 @@ still arriving.
 ## Project layout
 
 NestRS is a **Cargo workspace** — one repository holding many crates, built and
-versioned together. Two kinds of member live in it:
+versioned together. Three kinds of member live in it:
 
 - **Applications** under [`apps/`](apps/) — each is a binary crate you run and
   deploy on its own (`api`, `app`, `auth`, `chat`, `mcp`, `worker`). One repository,
   several independently shippable services.
-- **Libraries** under [`crates/`](crates/) — ordinary library crates of reusable
-  code. The framework itself ships this way (`nestrs-core`, `nestrs-http`,
-  `nestrs-graphql`, …), and any code you want to share across your apps becomes a
-  crate here too.
+- **Framework** under [`crates/nestrs-*`](crates/) — generic, product-agnostic
+  building blocks (`nestrs-core`, `nestrs-http`, `nestrs-graphql`, …).
+- **Features** under [`crates/features/`](crates/features/) — the product's
+  vertical slices (entity, service, policy, and per-transport adapters). Apps
+  import the edges they serve; the same feature code backs every binary.
 
 ```
 nestrs/
-├─ apps/            applications — one runnable binary each
-│  ├─ api/          REST + GraphQL, persisted & authorized
-│  ├─ app/          minimal HTTP baseline
-│  ├─ auth/         OAuth2 / JWT token issuer
-│  ├─ chat/         real-time WebSocket gateway
-│  ├─ db/           shared-database migrations & seeding (CLI)
-│  ├─ mcp/          Model Context Protocol server
-│  └─ worker/       background jobs & scheduling (headless)
-└─ crates/          libraries — the framework, plus your shared code
-   ├─ nestrs-core/  IoC container, modules, DI, bootstrap
-   ├─ nestrs-http/  REST controllers & routing
-   └─ …             one crate per capability
+├─ apps/               applications — one runnable binary each
+│  ├─ api/             REST + GraphQL, persisted & authorized
+│  ├─ app/             minimal HTTP baseline
+│  ├─ auth/            OAuth2 / JWT token issuer
+│  ├─ chat/            real-time WebSocket gateway
+│  ├─ db/              shared-database migrations & seeding (CLI)
+│  ├─ mcp/             Model Context Protocol server
+│  └─ worker/          background jobs & scheduling (headless)
+└─ crates/
+   ├─ features/        product features — port + adapters (users, authn, authz, …)
+   ├─ nestrs-core/     IoC container, modules, DI, bootstrap
+   ├─ nestrs-http/     REST controllers & routing
+   └─ …                one framework crate per capability
 ```
 
-Adding an application means adding a directory under `apps/`; factoring out
-shared code means adding one under `crates/`. The workspace picks both up
-automatically (`members = ["crates/*", "apps/*"]`) — no central manifest to edit,
-and the release image auto-discovers every app binary.
+Adding an application means adding a directory under `apps/`; a new feature
+means adding a folder under `crates/features/src/`; a new framework capability
+means adding a `nestrs-*` crate. The workspace picks all three up automatically
+(`members = ["crates/*", "apps/*"]`) — no central manifest to edit, and the
+release image auto-discovers every app binary.
 
 ## What's included
 
@@ -252,17 +255,18 @@ surface is decorator macros — reach for them first (`#[injectable]`, `#[module
 | Crate | What it gives you |
 |-------|-------------------|
 | `nestrs-core` | IoC container, modules (`#[module]`), DI (`#[injectable]`), lifecycle hooks (`#[hooks]`), app bootstrap, boot-time module access-graph check |
-| `nestrs-config` | Typed config from env + TOML (`NESTRS_<DOMAIN>__<KEY>` scheme) |
+| `nestrs-config` | Typed config from environment variables (`NESTRS_<DOMAIN>__<KEY>` scheme) and the `.env` cascade |
 | `nestrs-http` | REST controllers (`#[controller]`/`#[routes]`), per-verb routing, route guards (`#[use_guards]`); poem-backed |
 | `nestrs-graphql` | Resolvers (`#[resolver]`/`#[query]`/`#[mutation]`/`#[field]`), self-composing schema, request-scoped dataloaders (`#[dataloader]`) |
 | `nestrs-openapi` | OpenAPI 3.1 document + bundled offline Swagger UI, composed from the route table |
 | `nestrs-mcp` | Model Context Protocol server over Streamable-HTTP (`#[mcp]`), `rmcp`-backed |
 | `nestrs-ws` | WebSocket gateways (`#[gateway]`/`#[messages]`/`#[subscribe_message]`), server→client push, rooms, per-gateway namespacing, per-message guards + `on_connect`/`on_disconnect` hooks; self-mounts on the HTTP transport |
-| `nestrs-orm` | SeaORM database module — async pool via `DatabaseModule::for_root` |
+| `nestrs-database` | SeaORM integration — `DatabaseModule::for_root`, ambient `Repo` + `CrudService`, request-scoped executor (pool or transaction), transport-coupled extractors (`Bind`, GraphQL `bind`, `LoaderScope`, `WsDataContext`) |
+| `nestrs-authn` | Authentication strategies (`Strategy`, `AuthGuard`), JWT verification (`JwtStrategy`), OAuth2 client helpers |
 | `nestrs-queue` | Redis-backed durable job queues + workers (`#[processor]`); `apalis`-backed |
 | `nestrs-schedule` | In-process cron / interval jobs (`#[cron_job]`) |
 | `nestrs-events` | Typed in-process event bus + `#[on_event]` handlers |
-| `nestrs-authz` | CASL-style authorization: one ability → access gate + query pre-filter + response masking. Transport bindings behind Cargo features (`http`, `graphql`, `mcp`); the data-coupled extractors (`Bind`, GraphQL `bind`, `LoaderScope`, `WsDataContext`) live in `nestrs-database` |
+| `nestrs-authz` | CASL-style authorization: one ability → access gate + query pre-filter + response masking. Transport bindings behind Cargo features (`http`, `graphql`, `mcp`) |
 | `nestrs-pipes` | Transport-agnostic validation & transformation (`ValidationPipe`, `Parse*`, …) |
 | `nestrs-middleware` | Guards, interceptors, exception filters |
 | `nestrs-resource` | Expose a SeaORM entity to GraphQL **and** OpenAPI from one `#[expose]` |
@@ -369,7 +373,8 @@ The crates under `apps/` are **examples**, not products — each is a different
 same building blocks. `auth` and `api` go one step further: together they
 demonstrate the **split-by-responsibility** pattern — a dedicated token issuer and
 a pure resource server that trust the same self-contained JWT and share the
-`identity` crate, never calling each other. They will grow over time.
+`features` crate (`identity` module — the shared `Claims` / `Role` contract),
+never calling each other. They will grow over time.
 
 | App | Kind | Port |
 |-----|------|------|
@@ -394,8 +399,8 @@ Authorization Code flow (`GET /authorize` → provider, `GET /callback`) and iss
 EdDSA-signed JWTs from its token endpoint (`POST /token`), rate-limited via
 `nestrs-throttler`. It holds the **private** signing key; `api` holds only the
 matching public key and verifies tokens locally, so the two never call each
-other — they share the `identity` crate (the `Claims` / `Role` contract) and a
-self-contained JWT, nothing more. It needs no database: signing keys come from the
+other — they share the `features` crate's `identity` module (`Claims`, `Role`)
+and a self-contained JWT, nothing more. It needs no database: signing keys come from the
 environment (with dev defaults) and the OAuth provider defaults to GitHub.
 
 ### `api` — REST + GraphQL, persisted and authorized (port 3003)
@@ -526,7 +531,7 @@ impl block and the framework generates the wiring. The core set:
 | `#[cron_job]` | Declares an in-process scheduled job triggered by an interval, a cron expression, or a one-shot delay |
 | `#[mcp]` | Declares a Model Context Protocol server whose methods become callable tools |
 | `#[expose]` | Exposes a SeaORM entity to GraphQL **and** OpenAPI from a single annotation, with per-field skip/rename |
-| `#[config]` | Binds a typed config struct to environment + TOML values |
+| `#[config]` | Binds a typed config struct to environment variables (`NESTRS_<NAMESPACE>__<KEY>`) |
 | `#[on_event]` | Subscribes a method to a typed event on the in-process event bus |
 | `#[hooks]` + `#[on_module_init]`/`#[on_application_bootstrap]`/`#[on_module_destroy]`/… | On a provider impl, runs phase-tagged methods at the matching lifecycle stage |
 

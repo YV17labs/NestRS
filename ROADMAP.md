@@ -87,14 +87,12 @@ repo stays a **single monorepo** (the model every multi-crate Rust framework use
 `tokio`, `bevy`, `axum`): one atomic commit can span a crate, its `*-macros`
 companion, and an example app, which a repo-per-crate split would make impossible.
 
-- **A structured `docs/` guide** — a progressive guide written **category by
-  category, simple → advanced** (getting started → core concepts: modules, DI,
-  bootstrap → each surface: HTTP, GraphQL, MCP, queues, scheduling, WebSockets →
-  the cross-cutting guarantees: transparent security, transactions, the boot-time
-  access graph), so a newcomer learns the framework in reading order rather than by
-  reading crates. Adoption lives or dies on this — it is a release blocker, not a
-  nicety. Deferred until the public API settles: documenting a surface that still
-  shifts wastes the work, and the crate-level docs under *Now* come first.
+- **Grow the `docs/` site** — the Starlight skeleton under `docs/` is live
+  (getting started, core concepts, and one page per surface). What remains:
+  the end-to-end tutorial, the Basics → All options tier split per section,
+  CI-verified code snippets, and pages aligned with the current API (authz,
+  testing harness). Adoption lives or dies on this — it is a release blocker,
+  not a nicety.
 - **Continuous integration** — one workflow on every PR that gates merges:
   `fmt --check`, `clippy -D warnings`, `build`, and `test --workspace`. The e2e
   tests exercise live Postgres and Redis, so CI provisions both as service

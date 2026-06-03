@@ -3,9 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Declarative macros, native performance.</strong><br>
-  A declarative, decorator-driven backend framework that compiles to a single
-  native binary — a fraction of the memory, none of the garbage-collector tax.
+  <strong>Scalable Rust backend apps with native performance.</strong>
 </p>
 
 <p align="center">

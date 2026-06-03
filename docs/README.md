@@ -6,6 +6,8 @@ a PR that changes an API can update the doc in the same commit.
 
 ## Run locally
 
+Requires **Node.js 22.12 or newer** (Astro 6).
+
 ```bash
 cd docs
 npm install

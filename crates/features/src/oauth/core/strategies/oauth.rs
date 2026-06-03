@@ -1,16 +1,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nestrs_authn::{basic_credentials, AuthError, Outcome, Strategy};
+use nestrs_authn::{AuthError, Outcome, Strategy};
 use nestrs_core::injectable;
 use poem::http::{header, StatusCode};
 use poem::{Request, Response};
 use serde::Deserialize;
 
-use super::service::{AuthenticatedClient, Caller, OAuthFlow};
+use super::super::service::{Caller, OAuthFlow};
 
 pub type OAuthGuard = nestrs_authn::AuthGuard<OAuthStrategy>;
-pub type ClientAuthGuard = nestrs_authn::AuthGuard<ClientCredentialsStrategy>;
 
 const TRANSACTION_COOKIE: &str = "oauth_tx";
 
@@ -56,27 +55,6 @@ impl Strategy for OAuthStrategy {
             .ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
         let caller = self.flow.resolve_caller(&transaction, &state, &code).await?;
         Ok(Outcome::Authenticated(caller))
-    }
-}
-
-#[injectable]
-pub struct ClientCredentialsStrategy {
-    #[inject]
-    flow: Arc<OAuthFlow>,
-}
-
-#[async_trait]
-impl Strategy for ClientCredentialsStrategy {
-    type Principal = AuthenticatedClient;
-
-    async fn authenticate(
-        &self,
-        req: &mut Request,
-    ) -> Result<Outcome<AuthenticatedClient>, AuthError> {
-        let (client_id, client_secret) =
-            basic_credentials(req).ok_or(AuthError::MissingCredentials)?;
-        let client = self.flow.authenticate_client(&client_id, &client_secret)?;
-        Ok(Outcome::Authenticated(client))
     }
 }
 

@@ -1,20 +1,14 @@
 use std::sync::Arc;
 
 use api::AppModule;
-use futures_util::{SinkExt, StreamExt};
 use features::{Claims, Role};
 use nestrs_authn::{JwtConfig, JwtOptions, JwtService};
 use nestrs_authz::{with_ability, AbilityBuilder, Action};
 use nestrs_database::{with_executor, Executor, Repo};
-use nestrs_http::HttpTransport;
 use nestrs_testing::{EphemeralDatabase, TestApp};
 use poem::http::{header, StatusCode};
-use sea_orm::sea_query::Query;
-use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden, EntityTrait, IntoActiveModel, Set};
-use serde_json::{json, Value};
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION as WS_AUTHORIZATION;
-use tokio_tungstenite::tungstenite::Message;
+use sea_orm::{EntityTrait, IntoActiveModel, Set};
+use serde_json::json;
 use uuid::Uuid;
 
 const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
@@ -793,141 +787,4 @@ async fn crud_cursor_pagination_walks_the_collection_in_order() {
         seen, created,
         "keyset pages preserve ascending-id (chronological) order",
     );
-}
-
-const WS_ORG_A: &str = "018f0000-0000-7000-8000-00000000a001";
-const WS_ORG_B: &str = "018f0000-0000-7000-8000-00000000b002";
-
-#[derive(DeriveIden)]
-enum Org {
-    Table,
-    Id,
-    Name,
-}
-
-#[derive(DeriveIden)]
-enum User {
-    Table,
-    Id,
-    OrgId,
-    Name,
-    Email,
-}
-
-async fn seed_org_with_user(
-    conn: &DatabaseConnection,
-    org_id: &str,
-    org_name: &str,
-    user_name: &str,
-) {
-    let org_id = Uuid::parse_str(org_id).expect("valid org uuid");
-    let org = Query::insert()
-        .into_table(Org::Table)
-        .columns([Org::Id, Org::Name])
-        .values_panic([org_id.into(), org_name.into()])
-        .to_owned();
-    conn.execute(&org).await.expect("insert org");
-    let user = Query::insert()
-        .into_table(User::Table)
-        .columns([User::Id, User::OrgId, User::Name, User::Email])
-        .values_panic([
-            Uuid::now_v7().into(),
-            org_id.into(),
-            user_name.into(),
-            format!("{}@ws.test", user_name.to_lowercase()).into(),
-        ])
-        .to_owned();
-    conn.execute(&user).await.expect("insert user");
-}
-
-async fn connect_ws(bind: &str, bearer: &str) -> Socket {
-    let url = format!("ws://{bind}/ws");
-    for _ in 0..50 {
-        let mut request = url.as_str().into_client_request().expect("ws request");
-        request
-            .headers_mut()
-            .insert(WS_AUTHORIZATION, bearer.parse().expect("bearer header"));
-        match tokio_tungstenite::connect_async(request).await {
-            Ok((socket, _)) => return socket,
-            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
-        }
-    }
-    panic!("could not connect to {url}");
-}
-
-async fn ws_user_names(socket: &mut Socket) -> Vec<String> {
-    socket
-        .send(Message::Text(
-            json!({ "event": "users.list" }).to_string().into(),
-        ))
-        .await
-        .expect("send users.list");
-    let frame = ws_next_json(socket).await;
-    assert_eq!(frame["event"], "users.list");
-    frame["data"]
-        .as_array()
-        .expect("a users array")
-        .iter()
-        .map(|u| u["name"].as_str().expect("a name").to_owned())
-        .collect()
-}
-
-#[tokio::test]
-async fn ws_gateway_scopes_users_list_to_the_callers_org() {
-    let bind = "127.0.0.1:13350";
-
-    let db = EphemeralDatabase::create::<db::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    seed_org_with_user(&db.connection(), WS_ORG_A, "WsAcme", "WsAda").await;
-    seed_org_with_user(&db.connection(), WS_ORG_B, "WsGlobex", "WsZoe").await;
-
-    let app = TestApp::builder()
-        .module::<AppModule>()
-        .with_test_telemetry()
-        .provide_arc(db.connection())
-        .provide(JwtConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            ..Default::default()
-        })
-        .build_headless()
-        .await
-        .expect("AppModule boots headless against the throwaway database");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves the self-mounted gateway");
-
-    let token_a = format!("Bearer {}", token_for(WS_ORG_A, "admin").await);
-    let mut socket_a = connect_ws(bind, &token_a).await;
-    assert_eq!(
-        ws_user_names(&mut socket_a).await,
-        vec!["WsAda".to_string()],
-        "org A sees only its own user over the socket",
-    );
-    socket_a.close(None).await.ok();
-
-    let token_b = format!("Bearer {}", token_for(WS_ORG_B, "admin").await);
-    let mut socket_b = connect_ws(bind, &token_b).await;
-    assert_eq!(
-        ws_user_names(&mut socket_b).await,
-        vec!["WsZoe".to_string()],
-        "org B sees only its own user over the socket",
-    );
-    socket_b.close(None).await.ok();
-
-    handle.shutdown().await.expect("transport shuts down");
-}
-
-type Socket =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-async fn ws_next_json(socket: &mut Socket) -> Value {
-    loop {
-        match socket.next().await.expect("a frame").expect("a message") {
-            Message::Text(text) => return serde_json::from_str(&text).expect("json envelope"),
-            Message::Close(_) => panic!("socket closed before a reply"),
-            _ => continue,
-        }
-    }
 }

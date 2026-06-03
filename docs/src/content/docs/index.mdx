@@ -11,8 +11,9 @@ hero:
   title: |
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
-    <span class="hero-lead">Scalable Rust backend apps with <span class="lead-accent">native performance.</span></span>
-    <span class="hero-sub">A Rust framework for native backend applications — <strong>~25×</strong> throughput and <strong>~20×</strong> less RAM than an equivalent Node service on the same hardware.</span>
+    <span class="hero-lead">Backend apps as simple as NestJS, <span class="lead-accent">as fast as Rust.</span></span>
+    <span class="hero-sub">Write a controller, a service, a module. The decorators carry the rest — security, transactions, validation, wiring. The same app runs at <strong>~25×</strong> the throughput and <strong>~20×</strong> less RAM than an equivalent Node service, on the same hardware.</span>
+    <span class="hero-meta"><span>Declarative</span><span>Type-safe</span><span>HTTP · OpenAPI · GraphQL · WebSockets</span></span>
   image:
     alt: NestRS logo
     file: ../../assets/logo.svg
@@ -30,74 +31,17 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid, Code } from '@astrojs/starlight/components';
+import { Card, CardGrid } from '@astrojs/starlight/components';
 import Bench from '../../components/Bench.astro';
 
-## Why developers pick NestRS
-
-<div class="nestrs-reveal nestrs-reveal--stagger not-content">
-
-<CardGrid>
-  <Card title="Native throughput" icon="rocket">
-    **~463k req/s** on 2 cores, **~213k per core**, sub-millisecond p99,
-    no GC pauses. The same `hyper`/`tokio` core as the fastest Rust web
-    frameworks — with a structure on top.
-  </Card>
-  <Card title="An order of magnitude less RAM" icon="laptop">
-    **~4 MB idle, ~6 MB under load** — versus ~80–120 MB for an
-    equivalent Node service. Smaller instances, higher density, a
-    materially lighter cloud bill.
-  </Card>
-  <Card title="Boots in milliseconds" icon="bars">
-    Each deployable is a static native binary with no runtime to warm up —
-    autoscaling and cold starts stop hurting.
-  </Card>
-  <Card title="Types you don't fight" icon="approve-check">
-    Rust types end to end — entity, DTO, route handler, dataloader, GraphQL
-    schema, OpenAPI doc. No `any`, no `unknown`, no `as` casts at the
-    boundaries, no runtime "undefined is not a function."
-  </Card>
-  <Card title="Declarative, decorator-driven" icon="puzzle">
-    `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`,
-    `#[gateway]`, `#[cron_job]`, `#[mcp]`. Wiring is declarative — you write
-    logic, not boilerplate.
-  </Card>
-  <Card title="Verified before it serves" icon="warning">
-    The DI graph is checked at boot — a bad import fails startup with a
-    clear error naming the missing wire. No reflection, no runtime
-    "cannot resolve dependency" five minutes after deploy.
-  </Card>
-  <Card title="Secure & transactional by composition" icon="approve-check-circle">
-    Authn, authorization, row-level filtering, response masking, transaction
-    scope — activated by importing a module, not by remembering to call
-    them. Forgetting to redact a field becomes structurally hard.
-  </Card>
-  <Card title="Batteries included, opt-in by crate" icon="setting">
-    HTTP, GraphQL, OpenAPI, WebSockets, Redis-backed queues, scheduling,
-    an event bus, MCP, CASL-style authorization, health probes,
-    OpenTelemetry — each an opt-in crate, so a worker compiles no HTTP
-    stack at all.
-  </Card>
-</CardGrid>
-
-</div>
-
-## How fast, exactly
-
-The same "Hello World" service — a provider, a controller, a module — built
-once in NestRS and once in NestJS 11 on Node.js 20, under identical `wrk` load
-(2 cores, `-t2 -c64 -d20s`).
-
-<Bench />
-
-## What a module looks like
+## A complete service, in three small files
 
 <div class="nestrs-reveal not-content">
 
-A minimal slice — a provider, a controller, and a `#[module]` that lists them.
-The DI graph is built and verified at boot; each app under `apps/` compiles to
-its own native binary. For a full vertical slice (core port plus HTTP/GraphQL adapters), start with the
-[tutorial](/tutorial/).
+No wiring file. No config. No boilerplate. A provider, a controller, and a
+`#[module]` that lists them — that's a real, type-checked HTTP service. The
+dependency graph is built and **verified at boot**, and each app under `apps/`
+compiles to its own native binary.
 
 ```rust title="apps/app/src/hello/service.rs"
 use nestrs_core::injectable;
@@ -149,9 +93,68 @@ Hello World
 ```
 
 The same inject-and-decorate model carries every surface — HTTP, GraphQL,
-WebSockets, queues, scheduled jobs, MCP. Jump to a transport:
-[HTTP](/http/), [GraphQL](/graphql/), [WebSockets](/websockets/),
-[Data](/data/), [Security](/security/).
+WebSockets, queues, scheduled jobs, MCP. [Get started](/getting-started/), read
+the [core concepts](/concepts/), or jump straight to a topic:
+[HTTP](/http/), [OpenAPI](/openapi/), [GraphQL](/graphql/),
+[WebSockets](/websockets/), [Data](/data/), [Security](/security/).
+
+</div>
+
+## How fast, exactly
+
+The same "Hello World" service — a provider, a controller, a module — built
+once in NestRS and once in NestJS 11 on Node.js 20, under identical `wrk` load
+(2 cores, `-t2 -c64 -d20s`).
+
+<Bench />
+
+## Why developers pick NestRS
+
+<div class="nestrs-reveal nestrs-reveal--stagger not-content">
+
+<CardGrid>
+  <Card title="Declarative, decorator-driven" icon="puzzle">
+    `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`,
+    `#[gateway]`, `#[cron_job]`, `#[mcp]`. You write logic; the decorator
+    expands the boilerplate. No service locator, no registration list to keep
+    in sync.
+  </Card>
+  <Card title="Types you don't fight" icon="approve-check">
+    Rust types end to end — entity, DTO, route handler, dataloader, GraphQL
+    schema, OpenAPI doc. No `any`, no `unknown`, no `as` casts at the
+    boundaries, no runtime "undefined is not a function."
+  </Card>
+  <Card title="Native throughput" icon="rocket">
+    **~463k req/s** on 2 cores, **~231k per core**, sub-millisecond p99,
+    no GC pauses. The same `hyper`/`tokio` core as the fastest Rust web
+    frameworks — with a structure on top.
+  </Card>
+  <Card title="An order of magnitude less RAM" icon="laptop">
+    **~4 MB idle, ~6 MB under load** — versus ~80–120 MB for an
+    equivalent Node service. Smaller instances, higher density, a
+    materially lighter cloud bill.
+  </Card>
+  <Card title="Boots in milliseconds" icon="bars">
+    Each deployable is a static native binary with no runtime to warm up —
+    autoscaling and cold starts stop hurting.
+  </Card>
+  <Card title="Secure & transactional by composition" icon="approve-check-circle">
+    Authn, authorization, row-level filtering, response masking, transaction
+    scope — you turn them on by importing a module, never by remembering to
+    call them. Forgetting to redact a field becomes structurally hard.
+  </Card>
+  <Card title="Verified before it serves" icon="warning">
+    The DI graph is checked at boot — a bad import fails startup with a
+    clear error naming the missing wire. No reflection, no runtime
+    "cannot resolve dependency" five minutes after deploy.
+  </Card>
+  <Card title="Batteries included, opt-in by crate" icon="setting">
+    HTTP, GraphQL, OpenAPI, WebSockets, Redis-backed queues, scheduling,
+    an event bus, MCP, CASL-style authorization, health probes,
+    OpenTelemetry — each an opt-in crate, so a worker compiles no HTTP
+    stack at all.
+  </Card>
+</CardGrid>
 
 </div>
 
@@ -168,11 +171,6 @@ stay lean; your own services stay **loosely coupled** (shared contracts and data
 not chatty RPC, no platform team or mesh required to get started).
 
 <div class="mono nestrs-reveal not-content">
-  <div class="mono-shared">
-    <span class="mono-tag">shared features</span>
-    <span class="mono-desc">one product codebase — written once, composed into every deployable</span>
-    <span class="mono-desc-sub">the same model; different edges per responsibility</span>
-  </div>
   <div class="mono-deploy">
     <div class="mono-tier mono-tier--public">
       <header class="mono-tier-head">
@@ -181,24 +179,34 @@ not chatty RPC, no platform team or mesh required to get started).
       </header>
       <ul class="mono-apps mono-apps--pair">
         <li class="mono-app">
-          <span class="mono-app-name">API service</span>
-          <span class="mono-app-role">REST · GraphQL</span>
+          <span class="mono-app-name">Service A</span>
+          <span class="mono-app-role">a public surface</span>
         </li>
         <li class="mono-app">
-          <span class="mono-app-name">OAuth service</span>
-          <span class="mono-app-role">OAuth2 · token issuance</span>
+          <span class="mono-app-name">Service B</span>
+          <span class="mono-app-role">another public surface</span>
         </li>
       </ul>
     </div>
+
+    <div class="mono-shared-mid">
+      <span class="mono-shared-mid-label">shared features</span>
+      <span class="mono-shared-mid-sub">one model — every service above and below builds on it</span>
+    </div>
+
     <div class="mono-tier mono-tier--private">
       <header class="mono-tier-head">
         <span class="mono-tier-label">Non-public</span>
         <span class="mono-tier-hint">not on the client request path</span>
       </header>
-      <ul class="mono-apps mono-apps--solo">
+      <ul class="mono-apps mono-apps--pair">
         <li class="mono-app">
-          <span class="mono-app-name">Worker</span>
-          <span class="mono-app-role">queues · background work</span>
+          <span class="mono-app-name">Service C</span>
+          <span class="mono-app-role">a background service</span>
+        </li>
+        <li class="mono-app">
+          <span class="mono-app-name">Service D</span>
+          <span class="mono-app-role">another background service</span>
         </li>
       </ul>
     </div>
@@ -210,7 +218,7 @@ not chatty RPC, no platform team or mesh required to get started).
 
 Splitting by responsibility is only the first step. In production you **scale
 horizontally per role** — the same binary, more replicas when the pressure moves:
-API capacity follows **demand**, worker capacity follows **queue depth**. There is
+a request-facing service follows **demand**, a background one follows **queue depth**. There is
 no single “scale the monolith” knob; each deployable gets its own replica count.
 
 <div class="scale nestrs-reveal not-content">
@@ -219,7 +227,7 @@ no single “scale the monolith” knob; each deployable gets its own replica co
       <div class="scale-lane-top">
         <span class="scale-signal">demand · traffic</span>
         <span class="scale-arrow" aria-hidden="true">→</span>
-        <span class="scale-target">API replicas</span>
+        <span class="scale-target">Service A replicas</span>
       </div>
       <div class="scale-pills" aria-hidden="true">
         <span></span><span></span><span></span><span class="scale-pill-more">+</span>
@@ -229,19 +237,18 @@ no single “scale the monolith” knob; each deployable gets its own replica co
       <div class="scale-lane-top">
         <span class="scale-signal">queue · backlog</span>
         <span class="scale-arrow" aria-hidden="true">→</span>
-        <span class="scale-target">Worker replicas</span>
+        <span class="scale-target">Service C replicas</span>
       </div>
       <div class="scale-pills scale-pills--worker" aria-hidden="true">
         <span></span><span></span><span></span><span></span><span class="scale-pill-more">+</span>
       </div>
     </article>
   </div>
-  <p class="scale-aside">Issuers such as OAuth usually keep a small, steady footprint — scale where the load actually moves.</p>
+  <p class="scale-aside">A steady service like B usually keeps a small, constant footprint — scale where the load actually moves.</p>
 </div>
 
 ## Status
 
 **Alpha.** The API still shifts, rough edges remain — NestRS is not
 production-ready yet. Stars and early feedback on
-[Discussions](https://github.com/NestRS/NestRS/discussions) shape what
-follows.
+[GitHub](https://github.com/NestRS/NestRS) shape what follows.

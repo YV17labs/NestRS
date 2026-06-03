@@ -20,11 +20,11 @@
     L-146,100 L-180,82 L-176,42 L-198,0
     L-176,-42 L-180,-82 L-146,-100 L-130,-136
     L-92,-140 L-65,-168 L-28,-160 Z"
-    fill="#111111"/>
+    fill="#111111" stroke="#ff7a59" stroke-width="1.5" stroke-opacity="0.4" stroke-linejoin="round"/>
 
     <circle r="120" fill="#0f0f0f"/>
 
-    <!-- modern Nest-inspired center -->
+    <!-- modern brand-mark center -->
     <path d="M0,-110
              C60,-80 88,-25 72,55
              L0,110

@@ -1,23 +1,26 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nestrs_queue::{async_trait, processor, Processor};
+use nestrs_core::injectable;
+use nestrs_queue::processor;
 
 use crate::audio::core::{Transcoder, TranscodeJob};
 
 /// Consumer side: the `worker` app mounts this and processes jobs the `api`
-/// app pushed onto the shared `audio` queue.
-#[processor(queue = "audio", concurrency = 5, retries = 3)]
-pub struct AudioProcessor {
+/// app pushed onto the shared `audio` queue. A single provider holds every
+/// queue handler — the NestJS-style pattern of pooling related processors on
+/// one service so they share `#[inject]` dependencies (here a single
+/// [`Transcoder`]).
+#[injectable]
+pub struct AudioJobs {
     #[inject]
     transcoder: Arc<Transcoder>,
 }
 
-#[async_trait]
-impl Processor for AudioProcessor {
-    type Job = TranscodeJob;
-
-    async fn process(&self, job: TranscodeJob) -> Result<()> {
+#[processor]
+impl AudioJobs {
+    #[process(queue = "audio", concurrency = 5, retries = 3)]
+    async fn transcode(&self, job: TranscodeJob) -> Result<()> {
         self.transcoder.transcode(&job.file).await
     }
 }
@@ -26,32 +29,31 @@ impl Processor for AudioProcessor {
 mod tests {
     use std::any::TypeId;
 
-    use nestrs_core::{Container, Discoverable, DiscoveryService, Module};
-    use nestrs_queue::ProcessorMeta;
+    use nestrs_core::Discoverable;
+    use nestrs_queue::ProcessMethod;
 
-    use super::AudioProcessor;
+    use super::AudioJobs;
     use crate::audio::core::{Transcoder, AUDIO_QUEUE};
-    use crate::audio::queue::AudioQueueModule;
 
     #[test]
-    fn processor_is_discovered_with_its_queue_config() {
-        let container = AudioQueueModule::register(Container::builder()).build();
-        let processors = DiscoveryService::new(&container).meta::<ProcessorMeta>();
-        let audio = processors
+    fn process_method_is_discovered_through_the_inventory() {
+        let entries: Vec<&ProcessMethod> = nestrs_core::inventory::iter::<ProcessMethod>()
+            .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioJobs>())
+            .collect();
+        let transcode = entries
             .iter()
-            .find(|d| d.meta.name == "AudioProcessor")
-            .expect("AudioProcessor is discovered via #[processor]");
-        assert_eq!(audio.meta.queue, AUDIO_QUEUE);
-        assert_eq!(audio.meta.concurrency, 5);
-        assert_eq!(audio.meta.retries, 3);
+            .find(|e| e.name == "AudioJobs::transcode")
+            .expect("AudioJobs::transcode is discovered");
+        assert_eq!(transcode.queue, AUDIO_QUEUE);
+        assert_eq!(transcode.concurrency, 5);
+        assert_eq!(transcode.retries, 3);
     }
 
     #[test]
-    fn processor_declares_its_injected_dependency_for_the_access_graph() {
-        assert!(AudioProcessor::dependencies().is_empty());
-        assert!(
-            AudioProcessor::injected().contains(&TypeId::of::<Transcoder>()),
-            "the processor's injected Transcoder is recorded for the access graph",
-        );
+    fn injected_dependency_is_recorded_for_the_access_graph() {
+        // `#[injectable]` emits Discoverable; `#[processor]` only adds
+        // inventory entries — same separation as `#[scheduled]`.
+        assert!(AudioJobs::dependencies().contains(&TypeId::of::<Transcoder>()));
+        assert!(AudioJobs::injected().contains(&TypeId::of::<Transcoder>()));
     }
 }

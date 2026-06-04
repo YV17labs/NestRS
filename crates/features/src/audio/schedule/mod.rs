@@ -2,4 +2,4 @@ mod module;
 mod producer;
 
 pub use module::AudioScheduleModule;
-pub use producer::AudioProducer;
+pub use producer::AudioTasks;

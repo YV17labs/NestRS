@@ -1,6 +1,6 @@
 use nestrs_core::module;
 
-use super::producer::AudioProducer;
+use super::producer::AudioTasks;
 
-#[module(providers = [AudioProducer])]
+#[module(providers = [AudioTasks])]
 pub struct AudioScheduleModule;

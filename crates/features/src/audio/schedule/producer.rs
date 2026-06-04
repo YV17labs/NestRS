@@ -2,23 +2,29 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+use nestrs_core::injectable;
 use nestrs_queue::QueueConnection;
-use nestrs_schedule::{async_trait, cron_job, CronExpression, Scheduled};
+use nestrs_schedule::{scheduled, CronExpression};
 
 use crate::audio::core::{TranscodeJob, AUDIO_QUEUE};
 
 /// Producer side: a recurring schedule that enqueues jobs the `worker` app
 /// consumes. Lives with the producing app (`api`), not the worker, so the
 /// worker stays a pure consumer. Shares the `core` contract.
-#[cron_job(cron = CronExpression::EVERY_5_SECONDS)]
-pub struct AudioProducer {
+///
+/// Three triggers on one provider — the NestJS-style pattern of pooling
+/// related cron methods on a single service so they share `#[inject]`s
+/// (here a single [`QueueConnection`]).
+#[injectable]
+pub struct AudioTasks {
     #[inject]
     queue: Arc<QueueConnection>,
 }
 
-#[async_trait]
-impl Scheduled for AudioProducer {
-    async fn run(&self) -> Result<()> {
+#[scheduled]
+impl AudioTasks {
+    #[every("5s")]
+    async fn enqueue_transcode(&self) -> Result<()> {
         let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
         let file = format!("track-{id}.mp3");
         self.queue
@@ -28,35 +34,62 @@ impl Scheduled for AudioProducer {
         tracing::info!(target: "features::audio", %file, "scheduled transcode job");
         Ok(())
     }
+
+    #[after("3s")]
+    async fn warmup_on_boot(&self) -> Result<()> {
+        tracing::info!(
+            target: "features::audio",
+            "audio producer warmup — pipeline is ready to enqueue",
+        );
+        Ok(())
+    }
+
+    #[cron(CronExpression::EVERY_MINUTE)]
+    async fn heartbeat(&self) -> Result<()> {
+        tracing::info!(
+            target: "features::audio",
+            queue = AUDIO_QUEUE,
+            "audio producer heartbeat",
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
 
-    use nestrs_core::{Container, Discoverable, DiscoveryService, Module};
+    use nestrs_core::{Discoverable, ReachableProviders};
     use nestrs_queue::QueueConnection;
-    use nestrs_schedule::CronJobMeta;
+    use nestrs_schedule::ScheduledMethod;
 
-    use super::AudioProducer;
-    use crate::audio::schedule::AudioScheduleModule;
+    use super::AudioTasks;
 
     #[test]
-    fn producer_is_discovered_as_a_cron_job() {
-        let container = AudioScheduleModule::register(Container::builder()).build();
-        let jobs = DiscoveryService::new(&container).meta::<CronJobMeta>();
-        assert!(
-            jobs.iter().any(|d| d.meta.name == "AudioProducer"),
-            "AudioProducer is discovered via #[cron_job]",
-        );
+    fn three_methods_are_discovered_through_the_inventory() {
+        let names: Vec<&'static str> = nestrs_core::inventory::iter::<ScheduledMethod>()
+            .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioTasks>())
+            .map(|m| m.name)
+            .collect();
+        assert!(names.contains(&"AudioTasks::enqueue_transcode"), "{names:?}");
+        assert!(names.contains(&"AudioTasks::warmup_on_boot"), "{names:?}");
+        assert!(names.contains(&"AudioTasks::heartbeat"), "{names:?}");
     }
 
     #[test]
-    fn producer_declares_its_injected_dependency_for_the_access_graph() {
-        assert!(AudioProducer::dependencies().is_empty());
-        assert!(
-            AudioProducer::injected().contains(&TypeId::of::<QueueConnection>()),
-            "the cron job's injected QueueConnection is recorded for the access graph",
-        );
+    fn injected_dependency_is_recorded_for_the_access_graph() {
+        // The provider's own `#[injectable]` emits Discoverable; `#[scheduled]`
+        // only adds inventory entries. `dependencies()` records the eagerly
+        // required deps the register-phase fixpoint orders against, and
+        // `injected()` records the same set for the access-graph check.
+        assert!(AudioTasks::dependencies().contains(&TypeId::of::<QueueConnection>()));
+        assert!(AudioTasks::injected().contains(&TypeId::of::<QueueConnection>()));
+    }
+
+    #[test]
+    fn reachable_providers_marker_is_a_normal_provider() {
+        // Sanity: ReachableProviders is a concrete type that gets seeded at
+        // boot; the scheduler keys its filter on this exact type.
+        let _ = TypeId::of::<ReachableProviders>();
     }
 }

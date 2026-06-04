@@ -3,6 +3,7 @@ use nestrs_config::ConfigModule;
 use nestrs_core::module;
 use nestrs_database::DatabaseModule;
 use nestrs_health::HealthModule;
+use nestrs_http::{HttpConfig, HttpModule};
 use nestrs_telemetry::TelemetryModule;
 use nestrs_throttler::ThrottlerModule;
 
@@ -18,6 +19,7 @@ use features::oauth::OAuthHttpModule;
         OAuthHttpModule,
         HealthModule,
         TelemetryModule,
+        HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
     ],
 )]
 pub struct AppModule;

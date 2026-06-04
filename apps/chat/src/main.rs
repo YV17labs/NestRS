@@ -1,6 +1,5 @@
 use anyhow::Result;
 use nestrs_core::App;
-use nestrs_http::HttpTransport;
 use nestrs_telemetry::Telemetry;
 
 use chat::AppModule;
@@ -9,8 +8,10 @@ use chat::AppModule;
 async fn main() -> Result<()> {
     let _telemetry = Telemetry::init("chat")?;
 
-    App::new::<AppModule>()?
-        .transport(HttpTransport::new().bind("0.0.0.0:3004"))
+    App::builder()
+        .module::<AppModule>()
+        .build()
+        .await?
         .run()
         .await
 }

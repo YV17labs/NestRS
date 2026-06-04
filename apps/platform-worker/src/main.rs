@@ -1,7 +1,6 @@
 use anyhow::Result;
 use nestrs_config::Environment;
 use nestrs_core::App;
-use nestrs_queue::QueueWorker;
 use nestrs_telemetry::Telemetry;
 
 use platform_worker::AppModule;
@@ -15,7 +14,6 @@ async fn main() -> Result<()> {
         .module::<AppModule>()
         .build()
         .await?
-        .transport(QueueWorker::new())
         .run()
         .await
 }

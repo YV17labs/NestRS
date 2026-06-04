@@ -1,9 +1,9 @@
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nestrs_core::module;
+use nestrs_core::{injectable, module};
 use nestrs_queue::{
-    async_trait, processor, Processor, QueueConfig, QueueConnection, QueueModule, QueueWorker,
+    processor, QueueConfig, QueueConnection, QueueModule, QueueWorker,
 };
 use nestrs_testing::TestApp;
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ async fn worker_app_boots_and_consumes_through_the_queue_transport() {
         .expect("AppModule boots and connects to Redis");
 
     // The worker is a pure consumer now: only the QueueWorker transport, which
-    // must configure against the reachable AudioProcessor.
+    // must configure against the reachable AudioJobs::transcode method.
     let queue = app
         .spawn_transport(QueueWorker::new())
         .await
@@ -50,14 +50,14 @@ struct ProbeJob {
 
 static PROBE_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<String>> = OnceLock::new();
 
-#[processor(queue = "nestrs-e2e-probe", concurrency = 1, retries = 0)]
+#[injectable]
+#[derive(Default)]
 struct ProbeConsumer;
 
-#[async_trait]
-impl Processor for ProbeConsumer {
-    type Job = ProbeJob;
-
-    async fn process(&self, job: ProbeJob) -> anyhow::Result<()> {
+#[processor]
+impl ProbeConsumer {
+    #[process(queue = "nestrs-e2e-probe", concurrency = 1, retries = 0)]
+    async fn handle(&self, job: ProbeJob) -> anyhow::Result<()> {
         if let Some(tx) = PROBE_TX.get() {
             let _ = tx.send(job.tag);
         }

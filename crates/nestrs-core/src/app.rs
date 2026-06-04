@@ -13,16 +13,16 @@ use crate::access::{
     ResolverSchemaActive, UnreachableResolversError,
 };
 use crate::container::{Container, ContainerBuilder, Registrar};
+use crate::discovery::DiscoveryService;
 use crate::lifecycle::{run_phase, run_phase_lenient, LifecyclePhase};
 use crate::module::Module;
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportContribution};
 
 /// Entry point for a nestrs application. Builds the container from a root
-/// [`Module`], attaches zero or more [`Transport`]s, and runs them
-/// concurrently until shutdown.
+/// [`Module`] and runs every transport its imports contribute concurrently
+/// until shutdown.
 pub struct App {
     container: Container,
-    transports: Vec<Box<dyn Transport>>,
 }
 
 impl App {
@@ -43,10 +43,7 @@ impl App {
         if container.get::<ResolverSchemaActive>().is_some() {
             warn_unreachable_resolvers_from_inventory(&roots);
         }
-        Ok(Self {
-            container,
-            transports: Vec::new(),
-        })
+        Ok(Self { container })
     }
 
     /// Start an [`AppBuilder`] for apps that must seed runtime values or build
@@ -69,20 +66,29 @@ impl App {
         Ok(())
     }
 
-    pub fn transport<T: Transport>(mut self, transport: T) -> Self {
-        self.transports.push(Box::new(transport));
-        self
-    }
-
     /// Configure each transport against the container, run the init lifecycle
     /// hooks, then run all transports concurrently. SIGINT / SIGTERM cancels the
     /// shared token; the first transport that errors also cancels the others.
     /// Once the transports have stopped, the shutdown lifecycle hooks run.
+    ///
+    /// Every transport is contributed by an imported module via
+    /// [`TransportContribution`] — `HttpModule` brings `HttpTransport`,
+    /// `ScheduleModule` brings `Scheduler`, `QueueWorkerModule` brings
+    /// `QueueWorker`. There is no imperative `.transport()` on `App` —
+    /// `AppModule.imports` is the single composition seam.
     pub async fn run(self) -> Result<()> {
-        let App {
-            container,
-            mut transports,
-        } = self;
+        let App { container } = self;
+
+        let mut transports: Vec<Box<dyn Transport>> = Vec::new();
+        for contribution in DiscoveryService::new(&container).meta::<TransportContribution>() {
+            let transport = (contribution.meta.build)(&container)?;
+            tracing::info!(
+                target: "nestrs::transport",
+                transport = contribution.meta.name,
+                "attached module-contributed transport",
+            );
+            transports.push(transport);
+        }
 
         for t in transports.iter_mut() {
             t.configure(&container).await?;
@@ -317,7 +323,6 @@ impl AppBuilder {
 
         Ok(App {
             container: builder.build(),
-            transports: Vec::new(),
         })
     }
 }
@@ -481,4 +486,42 @@ mod tests {
             .expect("build succeeds");
         assert_eq!(app.container().get::<Doubled>().unwrap().0, 2);
     }
+
+    struct NullTransport;
+    #[async_trait::async_trait]
+    impl Transport for NullTransport {
+        async fn configure(&mut self, _: &Container) -> Result<()> {
+            Ok(())
+        }
+        async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()> {
+            cancel.cancelled().await;
+            Ok(())
+        }
+    }
+
+    struct WithTransportModule;
+    impl Module for WithTransportModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_meta(TransportContribution {
+                name: "NullTransport",
+                build: |_| Ok(Box::new(NullTransport)),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn module_contributes_a_transport_via_meta() {
+        let app = App::builder()
+            .module::<WithTransportModule>()
+            .build()
+            .await
+            .expect("build succeeds");
+        // The contribution lands in the container's metadata so `App::run`
+        // can drain it at boot.
+        let contributions =
+            DiscoveryService::new(app.container()).meta::<TransportContribution>();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].meta.name, "NullTransport");
+    }
+
 }

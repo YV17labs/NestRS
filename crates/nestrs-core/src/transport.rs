@@ -20,3 +20,30 @@ pub trait Transport: Send + Sync + 'static {
     async fn configure(&mut self, container: &Container) -> Result<()>;
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()>;
 }
+
+/// A transport contributed by a module — the only way an app gains one.
+/// Drained by [`App::run`](crate::App::run) at boot.
+///
+/// Modules attach one with
+/// [`ContainerBuilder::provide_meta`](crate::ContainerBuilder::provide_meta):
+///
+/// ```ignore
+/// impl Module for ScheduleModule {
+///     fn register(builder: ContainerBuilder) -> ContainerBuilder {
+///         builder.provide_meta(TransportContribution {
+///             name: "Scheduler",
+///             build: |_| Ok(Box::new(Scheduler::new())),
+///         })
+///     }
+/// }
+/// ```
+///
+/// A module that is not imported never runs its `register`, so its
+/// contribution never lands in the container — module-gating is free.
+pub struct TransportContribution {
+    /// Human-readable label used in boot logs.
+    pub name: &'static str,
+    /// Build the transport at boot. Sees the assembled container, so the
+    /// transport may resolve providers eagerly if it needs to.
+    pub build: fn(&Container) -> Result<Box<dyn Transport>>,
+}

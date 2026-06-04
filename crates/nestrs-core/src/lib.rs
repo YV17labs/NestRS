@@ -21,7 +21,7 @@ pub use job::{run_in_job_context, JobContext};
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
 pub use module::{DynamicModule, Module};
 pub use scope::RequestScope;
-pub use transport::Transport;
+pub use transport::{Transport, TransportContribution};
 
 // Re-exported so `#[hooks]`-generated `inventory::submit!` resolves through the
 // framework — apps never depend on `inventory` directly.

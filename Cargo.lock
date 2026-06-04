@@ -2837,7 +2837,6 @@ dependencies = [
 name = "nestrs-queue-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2875,6 +2874,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
+ "libc",
  "nestrs-core",
  "nestrs-schedule-macros",
  "tokio",
@@ -2887,7 +2887,6 @@ name = "nestrs-schedule-macros"
 version = "0.1.0"
 dependencies = [
  "croner",
- "nestrs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

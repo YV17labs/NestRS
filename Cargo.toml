@@ -150,7 +150,7 @@ proc-macro2 = "1"
 # The product's functional core (not framework — no `nestrs-` prefix). All shared
 # business logic, contracts, policy, and the transport adapters that expose
 # them — features compose a port + edge modules (HTTP, GraphQL, WS, Queue,
-# MCP) that an app picks à la carte. Apps hold only `main.rs` + `app.rs`.
+# MCP) that an app picks à la carte. Apps hold only `main.rs` + `module.rs`.
 # See CLAUDE.md "Monorepo layout".
 features = { path = "crates/features" }
 
@@ -189,7 +189,7 @@ nestrs-resource-macros = { path = "crates/nestrs-resource-macros" }
 nestrs-schedule = { path = "crates/nestrs-schedule" }
 nestrs-schedule-macros = { path = "crates/nestrs-schedule-macros" }
 nestrs-server-timing = { path = "crates/nestrs-server-timing" }
-nestrs-telemetry = { path = "crates/nestrs-telemetry" }
+nestrs-opentelemetry = { path = "crates/nestrs-opentelemetry" }
 nestrs-testing = { path = "crates/nestrs-testing" }
 nestrs-ws = { path = "crates/nestrs-ws" }
 nestrs-ws-macros = { path = "crates/nestrs-ws-macros" }

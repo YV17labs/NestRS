@@ -1,17 +1,17 @@
 use anyhow::Result;
 use nestrs_config::Environment;
 use nestrs_core::App;
-use nestrs_telemetry::Telemetry;
+use nestrs_opentelemetry::OpenTelemetry;
 
-use platform_auth::AppModule;
+use platform_auth::PlatformAuthModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
-    let _telemetry = Telemetry::init("auth")?;
+    let _opentelemetry = OpenTelemetry::init("platform-auth")?;
 
     App::builder()
-        .module::<AppModule>()
+        .module::<PlatformAuthModule>()
         .build()
         .await?
         .run()

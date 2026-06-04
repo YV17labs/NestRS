@@ -4,7 +4,7 @@ use nestrs_core::module;
 use nestrs_database::DatabaseModule;
 use nestrs_health::HealthModule;
 use nestrs_http::{HttpConfig, HttpModule};
-use nestrs_telemetry::TelemetryModule;
+use nestrs_opentelemetry::OpenTelemetryModule;
 use nestrs_throttler::ThrottlerModule;
 
 use features::oauth::OAuthHttpModule;
@@ -18,8 +18,8 @@ use features::oauth::OAuthHttpModule;
         ThrottlerModule::for_root(None),
         OAuthHttpModule,
         HealthModule,
-        TelemetryModule,
+        OpenTelemetryModule,
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
     ],
 )]
-pub struct AppModule;
+pub struct PlatformAuthModule;

@@ -1,4 +1,4 @@
-use platform_auth::{AppModule, IssuerConfig, RegisteredClient};
+use platform_auth::{PlatformAuthModule, IssuerConfig, RegisteredClient};
 use base64::Engine as _;
 use features::{Claims, Role};
 use nestrs_authn::{hash_password, JwtConfig, JwtOptions, JwtService, OAuth2Config};
@@ -31,7 +31,7 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
         .await
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
-        .module::<AppModule>()
+        .module::<PlatformAuthModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(JwtConfig {

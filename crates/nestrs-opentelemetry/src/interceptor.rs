@@ -38,11 +38,11 @@ use {
 /// always created so propagation and OTLP export keep working.
 #[interceptor]
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct OtelHttp {
+pub(crate) struct OpenTelemetryHttp {
     access_log: bool,
 }
 
-impl Default for OtelHttp {
+impl Default for OpenTelemetryHttp {
     fn default() -> Self {
         let access_log = env_var("NESTRS_HTTP__ACCESS_LOG")
             .map(|raw| {
@@ -60,7 +60,7 @@ impl Default for OtelHttp {
 const X_TRACE_ID: HeaderName = HeaderName::from_static("x-trace-id");
 
 #[async_trait]
-impl Interceptor for OtelHttp {
+impl Interceptor for OpenTelemetryHttp {
     #[allow(unused_mut, unused_variables)]
     async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
         #[cfg(feature = "otlp")]
@@ -96,7 +96,7 @@ impl Interceptor for OtelHttp {
             let result = next.run(req).instrument(span.clone()).await;
 
             // Normalise to a Response so an error response is measured too.
-            // OtelHttp is the outermost discovered interceptor, so swallowing
+            // OpenTelemetryHttp is the outermost discovered interceptor, so swallowing
             // the Err into its rendered response is invisible to outer layers.
             let mut response = result.unwrap_or_else(|err| err.into_response());
             let status = response.status().as_u16();

@@ -762,7 +762,7 @@ dependencies = [
  "nestrs-core",
  "nestrs-health",
  "nestrs-http",
- "nestrs-telemetry",
+ "nestrs-opentelemetry",
  "nestrs-testing",
  "nestrs-ws",
  "parking_lot",
@@ -2460,8 +2460,8 @@ dependencies = [
  "nestrs-http",
  "nestrs-mcp",
  "nestrs-middleware",
+ "nestrs-opentelemetry",
  "nestrs-server-timing",
- "nestrs-telemetry",
  "nestrs-testing",
  "poem",
  "reqwest 0.13.4",
@@ -2806,6 +2806,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "nestrs-opentelemetry"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "nestrs-config",
+ "nestrs-core",
+ "nestrs-http",
+ "nestrs-middleware",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "poem",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "nestrs-pipes"
 version = "0.1.0"
 dependencies = [
@@ -2905,32 +2931,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-telemetry"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "futures-core",
- "nestrs-config",
- "nestrs-core",
- "nestrs-http",
- "nestrs-middleware",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "poem",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "nestrs-testing"
 version = "0.1.0"
 dependencies = [
@@ -2938,7 +2938,7 @@ dependencies = [
  "nestrs-config",
  "nestrs-core",
  "nestrs-http",
- "nestrs-telemetry",
+ "nestrs-opentelemetry",
  "poem",
  "sea-orm",
  "sea-orm-migration",
@@ -3536,11 +3536,11 @@ dependencies = [
  "nestrs-http",
  "nestrs-middleware",
  "nestrs-openapi",
+ "nestrs-opentelemetry",
  "nestrs-queue",
  "nestrs-resource",
  "nestrs-schedule",
  "nestrs-server-timing",
- "nestrs-telemetry",
  "nestrs-testing",
  "poem",
  "schemars",
@@ -3569,7 +3569,7 @@ dependencies = [
  "nestrs-database",
  "nestrs-health",
  "nestrs-http",
- "nestrs-telemetry",
+ "nestrs-opentelemetry",
  "nestrs-testing",
  "nestrs-throttler",
  "poem",
@@ -3591,8 +3591,8 @@ dependencies = [
  "features",
  "nestrs-config",
  "nestrs-core",
+ "nestrs-opentelemetry",
  "nestrs-queue",
- "nestrs-telemetry",
  "nestrs-testing",
  "serde",
  "tokio",

@@ -1,16 +1,16 @@
 use nestrs_core::module;
 use nestrs_health::HealthModule;
 use nestrs_http::{HttpConfig, HttpModule};
-use nestrs_telemetry::TelemetryModule;
+use nestrs_opentelemetry::OpenTelemetryModule;
 
-use crate::chat::ChatModule;
+use crate::chat::ChatModule as ChatFeatureModule;
 use crate::notify::NotifyModule;
 
 #[module(imports = [
-    ChatModule,
+    ChatFeatureModule,
     NotifyModule,
     HealthModule,
-    TelemetryModule,
+    OpenTelemetryModule,
     HttpModule::for_root(HttpConfig { port: 3004, ..Default::default() }),
 ])]
-pub struct AppModule;
+pub struct ChatModule;

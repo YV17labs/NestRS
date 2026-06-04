@@ -1,4 +1,4 @@
-use chat::AppModule;
+use chat::ChatModule;
 use futures_util::{SinkExt, StreamExt};
 use nestrs_http::poem::http::StatusCode;
 use nestrs_http::HttpTransport;
@@ -9,11 +9,11 @@ use tokio_tungstenite::tungstenite::Message;
 #[tokio::test]
 async fn gateway_endpoint_is_mounted() {
     let app = TestApp::builder()
-        .module::<AppModule>()
+        .module::<ChatModule>()
         .with_test_telemetry()
         .build()
         .await
-        .expect("AppModule boots and self-mounts the gateway");
+        .expect("ChatModule boots and self-mounts the gateway");
 
     let resp = app.http().get("/ws").send().await;
     resp.assert_status(StatusCode::BAD_REQUEST);
@@ -24,11 +24,11 @@ async fn gateway_echoes_messages_over_a_real_socket() {
     let bind = "127.0.0.1:13344";
 
     let app = TestApp::builder()
-        .module::<AppModule>()
+        .module::<ChatModule>()
         .with_test_telemetry()
         .build_headless()
         .await
-        .expect("AppModule boots headless");
+        .expect("ChatModule boots headless");
     let handle = app
         .spawn_transport(HttpTransport::new().bind(bind))
         .await
@@ -79,11 +79,11 @@ async fn a_message_is_broadcast_to_every_connected_client() {
     let bind = "127.0.0.1:13345";
 
     let app = TestApp::builder()
-        .module::<AppModule>()
+        .module::<ChatModule>()
         .with_test_telemetry()
         .build_headless()
         .await
-        .expect("AppModule boots headless");
+        .expect("ChatModule boots headless");
     let handle = app
         .spawn_transport(HttpTransport::new().bind(bind))
         .await
@@ -119,11 +119,11 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
     let bind = "127.0.0.1:13346";
 
     let app = TestApp::builder()
-        .module::<AppModule>()
+        .module::<ChatModule>()
         .with_test_telemetry()
         .build_headless()
         .await
-        .expect("AppModule boots headless");
+        .expect("ChatModule boots headless");
     let handle = app
         .spawn_transport(HttpTransport::new().bind(bind))
         .await
@@ -160,11 +160,11 @@ async fn namespaced_gateways_isolate_their_broadcasts() {
     let bind = "127.0.0.1:13347";
 
     let app = TestApp::builder()
-        .module::<AppModule>()
+        .module::<ChatModule>()
         .with_test_telemetry()
         .build_headless()
         .await
-        .expect("AppModule boots headless");
+        .expect("ChatModule boots headless");
     let handle = app
         .spawn_transport(HttpTransport::new().bind(bind))
         .await

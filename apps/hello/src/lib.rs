@@ -1,5 +1,5 @@
-mod app;
 mod controller;
+mod module;
 mod service;
 
-pub use app::AppModule;
+pub use module::HelloModule;

@@ -131,13 +131,12 @@ impl TestAppBuilder {
     }
 }
 
-#[cfg(feature = "telemetry")]
+#[cfg(feature = "opentelemetry")]
 impl TestAppBuilder {
-    /// Satisfy `TelemetryModule`'s boot guard (it panics unless
-    /// `Telemetry::init` has run) by installing console-only test telemetry
-    /// once (idempotent).
+    /// Satisfy `OpenTelemetryModule`'s boot guard (it panics unless `OpenTelemetry::init` has
+    /// run) by installing console-only test OpenTelemetry once (idempotent).
     pub fn with_test_telemetry(self) -> Self {
-        nestrs_telemetry::Telemetry::init_for_tests();
+        nestrs_opentelemetry::OpenTelemetry::init_for_tests();
         self
     }
 }

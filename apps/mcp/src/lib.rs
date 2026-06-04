@@ -1,4 +1,4 @@
-mod app;
+mod module;
 mod weather;
 
-pub use app::AppModule;
+pub use module::McpModule;

@@ -27,7 +27,7 @@ TypeScript. Crates under `crates/nestrs-*` provide the framework building
 blocks (IoC container, module trait, decorator macros); `crates/features/`
 holds the product's vertical slices, each a port (`core/`) plus per-transport
 adapter modules (`http/`, `graphql/`, `ws/`, `queue/`, `mcp/`); binaries
-under `apps/<name>/` are `main.rs` + `app.rs` that compose the edge modules
+under `apps/<name>/` are `main.rs` + `module.rs` that compose the edge modules
 they serve. *Monorepo layout* below is the law on which of the three a given
 file belongs to.
 
@@ -123,8 +123,8 @@ habit**. Three homes, one mandate each:
   `graphql/`, `ws/`, `queue/`, `mcp/`), each carrying its own `module.rs`.
   Everything a feature owns lives in its folder — entity, service, contracts,
   policy *and* the controllers / resolvers / gateways that expose them.
-- **`apps/<name>` — pure composition.** `main.rs` + `app.rs` (and nothing
-  else by default): `app.rs` is a `#[module(imports = [...])]` listing the
+- **`apps/<name>` — pure composition.** `main.rs` + `module.rs` (and nothing
+  else by default): `module.rs` is a `#[module(imports = [...])]` listing the
   edge modules this binary serves. An app folder for a feature
   (`apps/<x>/<feature>/`) is the **exception**, justified only when the app
   has an endpoint that **could not live in `features`** (a glue handler over
@@ -596,7 +596,7 @@ dotted variants. **No `*_module.rs`** — the DI module file is always
   (or `traits.rs` / `types.rs` for a standalone cluster).
 - **Apps live under `apps/<name>/`.** Not `examples/`, not `services/` —
   every runnable thing lives under `apps/` uniformly. By default an app
-  contains only `main.rs` + `app.rs`; a feature folder under `apps/<x>/`
+  contains only `main.rs` + `module.rs`; a feature folder under `apps/<x>/`
   is the documented exception (an endpoint that genuinely cannot live in
   `features`).
 - A file exists only if it has real content (a one-line role file is real
@@ -663,9 +663,9 @@ or every app reinvents it.
   `tenant_id`, `request_id` (via `Ctx<T>` where the framework exposes one)
   so a query filters cleanly. Prefer `user_id = %id` to
   `format!("user {} did X")`.
-- **Production output is OTLP, not stdout.** The `nestrs-telemetry` crate
-  ships an OTLP appender; an app opts in via `TelemetryModule::for_root`.
-  Dev pretty-print is acceptable only under a `dev` profile.
+- **Production output is OTLP, not stdout.** The `nestrs-opentelemetry` crate
+  ships an OTLP appender; an app opts in via `OpenTelemetryModule`. Dev
+  pretty-print is acceptable only under a `dev` profile.
 
 ## Dependency bar
 
@@ -757,7 +757,7 @@ transcripts are not injected automatically.
 3. **`crates/features/src/users/`** — the reference feature; copy before
    inventing. Read `core/`, then any `<edge>/`.
 4. **`apps/platform-api/`** — the reference app (REST + GraphQL + WS + DB + authz);
-   `app.rs` is the canonical composition example.
+   `module.rs` is the canonical composition example.
 5. **The relevant `crates/nestrs-<concern>/`** for whatever you are about
    to touch.
 

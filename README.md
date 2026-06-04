@@ -120,11 +120,11 @@ use nestrs_http::HttpModule;
     imports = [HttpModule::for_root(None)],
     providers = [HelloService, HelloController],
 )]
-pub struct AppModule;
+pub struct HelloModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    App::builder().module::<AppModule>().build().await?.run().await
+    App::builder().module::<HelloModule>().build().await?.run().await
 }
 ```
 
@@ -132,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
 default — override via `NESTRS_HTTP__HOST` / `NESTRS_HTTP__PORT` or pin in
 code with `HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })`.
 `main` carries no transport at all; every transport is imported in
-`AppModule`.
+`HelloModule`.
 
 `just dev` runs it; `GET /` returns `Hello World`. No reflection, no separate
 codegen step — `cargo` compiles it to a single native binary, and the DI graph
@@ -294,9 +294,9 @@ surface is decorator macros — reach for them first (`#[injectable]`, `#[module
 | `nestrs-middleware` | Guards, interceptors, exception filters |
 | `nestrs-resource` | Expose a SeaORM entity to GraphQL **and** OpenAPI from one `#[expose]` |
 | `nestrs-health` | Kubernetes liveness / readiness / startup probes |
-| `nestrs-telemetry` | Structured logs, OpenTelemetry traces & metrics, per-request access log + `X-Trace-Id` |
+| `nestrs-opentelemetry` | OpenTelemetry: structured logs, traces & metrics, W3C `traceparent` propagation, per-request access log + `X-Trace-Id` |
 | `nestrs-server-timing` | `Server-Timing` response headers |
-| `nestrs-testing` | In-process test harness — boot the real DI graph and drive HTTP / GraphQL / headless transports in `cargo test`, with provider overrides and fixtures (ephemeral Postgres, telemetry) |
+| `nestrs-testing` | In-process test harness — boot the real DI graph and drive HTTP / GraphQL / headless transports in `cargo test`, with provider overrides and fixtures (ephemeral Postgres, OpenTelemetry) |
 
 Decorator macros live in companion `*-macros` crates (a Rust `proc-macro` crate
 can export only macros) with shared codegen in `nestrs-codegen`; these are

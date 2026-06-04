@@ -5,10 +5,10 @@ use nestrs_graphql::GraphqlModule;
 use nestrs_health::HealthModule;
 use nestrs_http::{HttpConfig, HttpModule};
 use nestrs_openapi::OpenApiModule;
+use nestrs_opentelemetry::OpenTelemetryModule;
 use nestrs_queue::QueueModule;
 use nestrs_schedule::ScheduleModule;
 use nestrs_server_timing::ServerTimingModule;
-use nestrs_telemetry::TelemetryModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 use features::authn::AuthnCoreModule;
@@ -34,9 +34,9 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         GraphqlModule::for_root(None),
         HealthModule,
         OpenApiModule::for_root(None),
-        TelemetryModule,
+        OpenTelemetryModule,
         ServerTimingModule,
         HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
     ],
 )]
-pub struct AppModule;
+pub struct PlatformApiModule;

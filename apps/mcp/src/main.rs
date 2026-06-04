@@ -1,15 +1,15 @@
 use anyhow::Result;
 use nestrs_core::App;
-use nestrs_telemetry::Telemetry;
+use nestrs_opentelemetry::OpenTelemetry;
 
-use mcp::AppModule;
+use mcp::McpModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _telemetry = Telemetry::init("mcp")?;
+    let _opentelemetry = OpenTelemetry::init("mcp")?;
 
     App::builder()
-        .module::<AppModule>()
+        .module::<McpModule>()
         .build()
         .await?
         .run()

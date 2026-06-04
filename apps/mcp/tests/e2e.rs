@@ -1,4 +1,4 @@
-use mcp::AppModule;
+use mcp::McpModule;
 use nestrs_core::DiscoveryService;
 use nestrs_http::HttpEndpointMeta;
 use nestrs_testing::TestApp;
@@ -6,11 +6,11 @@ use serde_json::json;
 
 async fn boot() -> TestApp {
     TestApp::builder()
-        .module::<AppModule>()
+        .module::<McpModule>()
         .with_test_telemetry()
         .build()
         .await
-        .expect("AppModule boots")
+        .expect("McpModule boots")
 }
 
 #[tokio::test]

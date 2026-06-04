@@ -1,17 +1,17 @@
 use anyhow::Result;
 use nestrs_config::Environment;
 use nestrs_core::App;
-use nestrs_telemetry::Telemetry;
+use nestrs_opentelemetry::OpenTelemetry;
 
-use platform_worker::AppModule;
+use platform_worker::PlatformWorkerModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
-    let _telemetry = Telemetry::init("worker")?;
+    let _opentelemetry = OpenTelemetry::init("platform-worker")?;
 
     App::builder()
-        .module::<AppModule>()
+        .module::<PlatformWorkerModule>()
         .build()
         .await?
         .run()

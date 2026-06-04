@@ -4,15 +4,28 @@ use proc_macro::TokenStream;
 
 mod processor;
 
-/// Mark a struct as a queue consumer.
+/// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
+/// tagged with `#[process(queue = "...", concurrency, retries)]` becomes a
+/// queue consumer the `QueueWorker` spawns at boot.
 ///
-/// `#[processor(queue = "welcome-email", concurrency = 5, retries = 3)]` on a
-/// struct implementing [`Processor`](../nestrs_queue/trait.Processor.html).
-/// `#[inject]` fields resolve from the container; others default. Emits
-/// `impl Discoverable` attaching a `ProcessorMeta` the `QueueWorker` transport
-/// reads at boot.
+/// A single provider may carry several `#[process]` methods (different
+/// queues, different concurrencies) sharing the same `#[inject]`
+/// dependencies — the NestJS-style pattern of pooling related queue handlers
+/// on one service.
 ///
-/// `queue` is required; `concurrency` defaults to `1`, `retries` to `0`.
+/// Per-method attributes (exactly one `#[process]` per method):
+///
+/// - `#[process(queue = "audio")]` — minimal, defaults `concurrency = 1`,
+///   `retries = 0`.
+/// - `#[process(queue = "audio", concurrency = 5)]` — bound the in-flight jobs
+///   per worker.
+/// - `#[process(queue = "audio", concurrency = 5, retries = 3)]` — apalis
+///   retries before the job lands on the queue's failed list.
+///
+/// The method signature is `async fn(&self, job: T) -> anyhow::Result<()>`,
+/// where `T: Job`. The macro extracts the job type from the second
+/// parameter, generates a typed handler, and submits a per-method
+/// inventory entry the worker drains.
 #[proc_macro_attribute]
 pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     processor::processor(args, input)

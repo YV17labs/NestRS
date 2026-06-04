@@ -119,7 +119,7 @@ use super::service::OAuthFlow;
 pub struct OAuthCoreModule;
 ```
 
-```rust title="apps/platform-auth/src/app.rs"
+```rust title="apps/platform-auth/src/module.rs"
 use nestrs_config::ConfigModule;
 
 #[module(
@@ -129,7 +129,7 @@ use nestrs_config::ConfigModule;
         OAuthHttpModule,                // brings in OAuthCoreModule → loads IssuerConfig
     ],
 )]
-pub struct AppModule;
+pub struct PlatformAuthModule;
 ```
 
 - **`ConfigModule::for_root()`** goes **first** in the root module. It
@@ -215,7 +215,7 @@ Error: configuration validation failed for 'issuer'
 Tests bypass the factory by `.provide()`-ing the pinned value directly:
 
 ```rust title="apps/platform-auth/tests/e2e.rs"
-let app = TestApp::<AppModule>::builder()
+let app = TestApp::<PlatformAuthModule>::builder()
     .provide(IssuerConfig {
         clients: vec![RegisteredClient { /* fixture */ }],
         default_org_id: Uuid::nil(),

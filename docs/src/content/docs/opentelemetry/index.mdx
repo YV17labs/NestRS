@@ -1,0 +1,186 @@
+---
+title: OpenTelemetry
+description: First-class OpenTelemetry for nestrs — traces, logs and metrics, W3C propagation, OTLP export — wired by importing one module.
+sidebar:
+  order: 1
+---
+
+`nestrs-opentelemetry` is the OpenTelemetry layer of the framework. It installs
+a [`tracing`](https://docs.rs/tracing) subscriber, batches traces / logs /
+metrics through the official
+[`opentelemetry`](https://crates.io/crates/opentelemetry) +
+[`opentelemetry_sdk`](https://crates.io/crates/opentelemetry_sdk) +
+[`opentelemetry-otlp`](https://crates.io/crates/opentelemetry-otlp) crates,
+follows the
+[`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions)
+for resource and HTTP attributes, and links the `tracing` span tree to its OTel
+counterpart through
+[`tracing-opentelemetry`](https://crates.io/crates/tracing-opentelemetry).
+
+Three signal types ship in one crate, behind one import:
+
+- **[Traces](/opentelemetry/traces/)** — every request, job and scheduled tick
+  opens a span; W3C `traceparent` propagation, sampling, and the per-request
+  HTTP interceptor stitch distributed traces together.
+- **[Logs](/opentelemetry/logs/)** — `tracing::info!` and friends flow to the
+  console **and** to OTel logs (via
+  [`opentelemetry-appender-tracing`](https://crates.io/crates/opentelemetry-appender-tracing))
+  with structured fields, configurable level per layer, and JSON for prod.
+- **[Metrics](/opentelemetry/metrics/)** — inject `Arc<OpenTelemetryMeter>` and
+  build counters / histograms / gauges; metrics batch on a `PeriodicReader`
+  and export through the same OTLP endpoint as the traces.
+
+## Wiring it up
+
+```rust title="apps/platform-api/src/main.rs"
+use anyhow::Result;
+use nestrs_config::Environment;
+use nestrs_core::App;
+use nestrs_opentelemetry::OpenTelemetry;
+
+use platform_api::PlatformApiModule;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let _environment = Environment::init();
+    let _opentelemetry = OpenTelemetry::init("platform-api")?;
+
+    App::builder()
+        .module::<PlatformApiModule>()
+        .build()
+        .await?
+        .run()
+        .await
+}
+```
+
+```rust title="apps/platform-api/src/module.rs"
+#[module(
+    imports = [
+        OpenTelemetryModule,
+        ServerTimingModule,
+    ],
+)]
+pub struct PlatformApiModule;
+```
+
+Two pieces, one rule. `OpenTelemetry::init(name)?` installs the global
+subscriber and must run **before** `App::builder()`. The returned guard flushes
+batch exporters on Drop, so it must live until `main` returns.
+`OpenTelemetryModule` then mounts the per-request HTTP interceptor and exposes
+the meter as a provider.
+
+## Configuration
+
+Every option of `OpenTelemetryConfig` is settable via env or via the pinned
+struct — the framework-wide config dual path. `OpenTelemetry::init(name)` reads
+env; `OpenTelemetry::init_with(cfg)` takes a pinned `OpenTelemetryConfig`.
+
+| Env var | Field | Default |
+|---|---|---|
+| `NESTRS_OPENTELEMETRY__SERVICE_NAME` | `service_name` | argument to `init` |
+| `NESTRS_OPENTELEMETRY__SERVICE_VERSION` | `service_version` | `None` |
+| `NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT` | `deployment_environment` | `None` |
+| `NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID` | `service_instance_id` | fresh UUIDv7 per process |
+| `NESTRS_OPENTELEMETRY__LOG_LEVEL` | `log_filter` | `info` |
+| `NESTRS_OPENTELEMETRY__LOG_FORMAT` | `log_format` | `text` (`json` available) |
+| `NESTRS_OPENTELEMETRY__OTLP_ENDPOINT` | `otlp_endpoint` | `None` (console-only) |
+| `NESTRS_OPENTELEMETRY__SAMPLE_RATIO` | `trace_sample_ratio` | `1.0` |
+
+The OTLP exporter wires up **only** when `otlp_endpoint` is set. Without it,
+the subscriber stays console-only; the W3C propagator is still installed so
+incoming `traceparent` is parsed and outgoing headers carry one.
+
+```bash frame="terminal"
+NESTRS_OPENTELEMETRY__OTLP_ENDPOINT=http://otel-collector:4318 \
+NESTRS_OPENTELEMETRY__SERVICE_VERSION=2026.06.0 \
+NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT=production \
+NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1 \
+RUST_LOG=info \
+  just run platform-api
+```
+
+The exporter uses HTTP/protobuf via `reqwest` (no `tonic`, no `openssl`) — the
+batch processors export from a dedicated non-Tokio thread so the blocking
+reqwest client is the right pick, the upstream-recommended pairing.
+
+## Feature flags
+
+`nestrs-opentelemetry` ships two features:
+
+- **`otlp`** (default) — pulls the `opentelemetry-*` crates, installs the OTLP
+  exporters for traces / metrics / logs, and bridges `tracing` events into OTel
+  logs. Without it, the subscriber stays a pure `tracing-subscriber` setup —
+  useful for a tiny binary that should not link the OTel SDK.
+- **`http`** — pulls `poem` + `nestrs-http` + `nestrs-middleware` so the
+  per-request HTTP interceptor compiles. A headless app (a queue worker) uses
+  `otlp` **without** `http` and stays free of the HTTP transport. Requires
+  `otlp` — the interceptor reads the trace id off the OTel span.
+
+```toml title="apps/platform-worker/Cargo.toml"
+nestrs-opentelemetry.workspace = true
+```
+
+```toml title="apps/platform-api/Cargo.toml"
+nestrs-opentelemetry = { workspace = true, features = ["http"] }
+```
+
+## Boot-time safety
+
+```text frame="terminal"
+thread 'main' panicked at 'OpenTelemetryModule was imported without calling
+`OpenTelemetry::init` first — the global tracer and meter are no-ops, so
+traces and metrics would be silently dropped. Add `let _opentelemetry =
+nestrs_opentelemetry::OpenTelemetry::init("<service>")?;` at the top of
+`main`, before building the app.'
+```
+
+Forgetting `OpenTelemetry::init` is the failure mode that hurts in production:
+the backend stays quiet, the team thinks observability is on, and the first
+time someone needs a trace there's nothing to grep. The boot guard makes it a
+deterministic startup error instead — visible the first time you run the
+binary locally.
+
+## Tests
+
+```rust
+use nestrs_testing::TestApp;
+
+#[tokio::test]
+async fn users_list_returns_a_page() {
+    let app = TestApp::builder()
+        .module::<PlatformApiModule>()
+        .with_test_telemetry()
+        .build()
+        .await
+        .unwrap();
+
+    app.http().get("/users").send().await.assert_status_is_ok();
+}
+```
+
+`with_test_telemetry` calls `OpenTelemetry::init_for_tests` — a console-only
+init honouring `RUST_LOG` (default `warn` for noise control). It is
+idempotent; the first test to run wins, the rest no-op. It is gated by the
+`opentelemetry` feature on `nestrs-testing`.
+
+A test that does **not** import `OpenTelemetryModule` does not need it.
+
+## Going further
+
+- **Per-request context** — the request span carries `request_id`,
+  `actor_id`, `tenant_id` when an authn module is mounted. Layer your own
+  fields with `tracing::info!(target: "api::users", actor = %auth.sub, …)`.
+- **`Server-Timing`** — the companion `nestrs-server-timing` crate adds a
+  `Server-Timing` header summarising the request's main spans. Mount with
+  `ServerTimingModule`.
+- **Module lifecycle** — `tracing::info!` on `nestrs::module` fires once per
+  module when its providers register, so the boot trace shows your import
+  tree in resolution order.
+
+## Reference
+
+- `crates/nestrs-opentelemetry/` — `OpenTelemetry::init`,
+  `OpenTelemetryConfig`, `OpenTelemetryModule`, `OpenTelemetryMeter`,
+  `OpenTelemetryHttp`.
+- `crates/nestrs-server-timing/` — the `Server-Timing` header middleware.

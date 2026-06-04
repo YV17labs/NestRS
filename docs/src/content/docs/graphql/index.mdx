@@ -41,13 +41,13 @@ impl GreetingResolver {
 
 Mount the GraphQL transport once at the app root:
 
-```rust title="src/app.rs"
+```rust title="src/module.rs"
 use nestrs_core::module;
 use nestrs_graphql::GraphqlModule;
 use crate::greeting::GreetingModule;
 
 #[module(imports = [GreetingModule, GraphqlModule::for_root(None)])]
-pub struct AppModule;
+pub struct GreetingsAppModule;
 ```
 
 ```rust title="src/greeting/module.rs"

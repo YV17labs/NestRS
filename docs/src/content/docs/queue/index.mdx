@@ -168,7 +168,7 @@ Two modules, two roles:
   app does NOT import this — keeping its binary free of a worker it
   doesn't run.
 
-```rust title="apps/platform-worker/src/app.rs"
+```rust title="apps/platform-worker/src/module.rs"
 use nestrs_core::module;
 use nestrs_queue::{QueueModule, QueueWorkerModule};
 
@@ -181,7 +181,7 @@ use features::audio::{AudioCoreModule, AudioQueueModule};
     AudioCoreModule,
     AudioQueueModule,
 ])]
-pub struct AppModule;
+pub struct PlatformWorkerModule;
 ```
 
 And `main` is the universal skeleton:
@@ -190,12 +190,12 @@ And `main` is the universal skeleton:
 use anyhow::Result;
 use nestrs_core::App;
 
-use platform_worker::AppModule;
+use platform_worker::PlatformWorkerModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     App::builder()
-        .module::<AppModule>()
+        .module::<PlatformWorkerModule>()
         .build()
         .await?
         .run()
@@ -260,7 +260,7 @@ runtime.
 
 - [Schedule](/schedule/) — `#[scheduled]` providers whose methods push
   onto a queue on a timer.
-- [Observability](/observability/) — every queue span targets
+- [OpenTelemetry](/opentelemetry/) — every queue span targets
   `nestrs::queue` with structured `queue`, `job_id`, `elapsed_ms`,
   `attempt` fields.
 

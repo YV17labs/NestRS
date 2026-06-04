@@ -21,7 +21,7 @@ slice.
 - apps/hello/src/
   - service.rs
   - controller.rs
-  - app.rs
+  - module.rs
   - main.rs
 </FileTree>
 
@@ -70,10 +70,10 @@ impl HelloController {
 
 The binary's **root module** lists the providers it owns in `providers`.
 For this minimal app that is the whole wiring: the controller and service
-sit right on `AppModule`. A separate feature module only earns its keep
+sit right on `HelloModule`. A separate feature module only earns its keep
 once a slice grows or is shared across binaries (see *Going further*).
 
-```rust title="apps/hello/src/app.rs"
+```rust title="apps/hello/src/module.rs"
 use nestrs_core::module;
 use nestrs_http::HttpModule;
 use crate::controller::HelloController;
@@ -83,17 +83,17 @@ use crate::service::HelloService;
     imports = [HttpModule::for_root(None)],
     providers = [HelloService, HelloController],
 )]
-pub struct AppModule;
+pub struct HelloModule;
 ```
 
 ```rust title="apps/hello/src/main.rs"
 use nestrs_core::App;
-use hello::AppModule;
+use hello::HelloModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::builder()
-        .module::<AppModule>()
+        .module::<HelloModule>()
         .build()
         .await?
         .run()
@@ -124,8 +124,8 @@ Hello World
 
 1. **Collected** every provider in the import tree — `HelloService`,
    `HelloController` — into a static registry at link time.
-2. **Built** the access graph from `AppModule`. `HelloController` declares it
-   injects `HelloService`; `AppModule` owns `HelloService`; the graph is
+2. **Built** the access graph from `HelloModule`. `HelloController` declares it
+   injects `HelloService`; `HelloModule` owns `HelloService`; the graph is
    reachable. ✓
 3. **Constructed** each provider once. `HelloService::default()` produced one
    `Arc<HelloService>`. `HelloController` was built with that `Arc` injected
@@ -135,7 +135,7 @@ Hello World
 
 ## Try breaking it
 
-Comment the line that lists `HelloService` in `AppModule`'s providers, then
+Comment the line that lists `HelloService` in `HelloModule`'s providers, then
 `cargo run`:
 
 ```text frame="terminal" "(needs HelloService)"
@@ -164,7 +164,7 @@ build does not start the HTTP transport when wiring is invalid.
 Real-world apps stack many modules. The `api` example imports a dozen at
 once — feature modules plus framework modules:
 
-```rust title="apps/platform-api/src/app.rs"
+```rust title="apps/platform-api/src/module.rs"
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -176,11 +176,11 @@ once — feature modules plus framework modules:
         UsersGraphqlModule,
         GraphqlModule::for_root(None),
         OpenApiModule::for_root(None),
-        TelemetryModule,
+        OpenTelemetryModule,
         ServerTimingModule,
     ],
 )]
-pub struct AppModule;
+pub struct PlatformApiModule;
 ```
 
 Each import contributes its providers; each transport (`HttpTransport`,

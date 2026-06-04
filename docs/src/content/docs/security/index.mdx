@@ -21,7 +21,7 @@ checklist.
 
 ## Two-line wiring per transport
 
-```rust title="apps/platform-api/src/app.rs"
+```rust title="apps/platform-api/src/module.rs"
 #[module(
     imports = [
         DatabaseModule::for_root(None),
@@ -33,7 +33,7 @@ checklist.
         // ...
     ],
 )]
-pub struct AppModule;
+pub struct PlatformApiModule;
 ```
 
 ```rust title="crates/features/src/users/http/controller.rs"

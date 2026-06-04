@@ -140,7 +140,7 @@ pub struct AudioScheduleModule;
 The app activates the scheduler by importing `ScheduleModule` —
 `ScheduleModule` contributes the scheduler to `App::run` itself:
 
-```rust title="apps/platform-api/src/app.rs"
+```rust title="apps/platform-api/src/module.rs"
 use nestrs_core::module;
 use nestrs_schedule::ScheduleModule;
 use features::audio::{AudioHttpModule, AudioScheduleModule};
@@ -150,17 +150,17 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
     AudioScheduleModule,
     ScheduleModule,
 ])]
-pub struct AppModule;
+pub struct PlatformApiModule;
 ```
 
 ```rust title="apps/platform-api/src/main.rs"
 use nestrs_core::App;
-use platform_api::AppModule;
+use platform_api::PlatformApiModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::builder()
-        .module::<AppModule>()
+        .module::<PlatformApiModule>()
         .build()
         .await?
         .run()
@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 `main` carries no transport at all — every transport (`HttpModule`,
-`ScheduleModule`, `QueueWorkerModule`) is imported in `AppModule` and
+`ScheduleModule`, `QueueWorkerModule`) is imported in `PlatformApiModule` and
 attaches itself at boot.
 
 **Without the `ScheduleModule` import, every `#[scheduled]` method
@@ -230,7 +230,7 @@ Just importing `DatabaseModule` is enough — no manual connection plumbing.
 
 - [Queue](/queue/) — pair a scheduled producer with a durable consumer
   for distributed work.
-- [Observability](/observability/) — every job span is targeted on
+- [OpenTelemetry](/opentelemetry/) — every job span is targeted on
   `nestrs::schedule`; structured fields (`job`, `ran_for`) are
   automatic.
 

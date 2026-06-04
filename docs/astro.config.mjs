@@ -129,7 +129,7 @@ export default defineConfig({
         { label: 'Schedule', items: [{ autogenerate: { directory: 'schedule' } }] },
         { label: 'Queue', items: [{ autogenerate: { directory: 'queue' } }] },
         { label: 'MCP', items: [{ autogenerate: { directory: 'mcp' } }] },
-        { label: 'Observability', items: [{ autogenerate: { directory: 'observability' } }] },
+        { label: 'OpenTelemetry', items: [{ autogenerate: { directory: 'opentelemetry' } }] },
         { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
         { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
       ],

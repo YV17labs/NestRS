@@ -1,0 +1,88 @@
+---
+title: Logs
+description: tracing::info! and friends flow to the console and to OTel logs with structured fields, configurable level per layer, and JSON for prod.
+sidebar:
+  order: 3
+---
+
+`tracing::info!`, `debug!`, `warn!`, `error!` are the framework's logging API.
+Every event flows through the installed subscriber to the console **and**, when
+OTLP is configured, through the
+[`OpenTelemetryTracingBridge`](https://docs.rs/opentelemetry-appender-tracing)
+to OTel logs. Backend collectors index them alongside the traces of the same
+request.
+
+## Default level per layer
+
+| Concern | Target | Default level |
+|---|---|---|
+| HTTP request log | `nestrs::access` | `info` |
+| HTTP span | `nestrs::http` | `info` |
+| ORM queries | `nestrs::orm` | `trace` |
+| Authn / Authz | `nestrs::authn` / `nestrs::authz` | `info` (denials `warn`) |
+| WebSocket events | `nestrs::ws` | `info` |
+| Queue / Schedule | `nestrs::queue` / `nestrs::schedule` | `info` |
+| Module lifecycle | `nestrs::module` | `info` |
+| App-specific spans | `<app>::<feature>` | `info` |
+
+Controllers, resolvers, gateways log at `info` on success. Services at `debug`.
+`Repo` at `trace`. **Access denials and security events at `warn`+** so they
+appear under the default `RUST_LOG=info`. A production deploy should respect
+`info` — no per-request `debug!` on the hot path.
+
+## Structured fields
+
+```rust
+tracing::info!(
+    target: "api::users",
+    user_id = %id,
+    actor = %auth.sub,
+    "creating user",
+);
+```
+
+Always prefer `field = %value` to `format!("{}", value)`. The OTLP bridge
+serializes structured fields directly; a formatted string becomes opaque text
+the backend cannot filter on.
+
+The request span (installed by the HTTP interceptor — see
+[Traces](/opentelemetry/traces/#http-interceptor)) already carries
+`request_id`, `actor_id`, `tenant_id` when an authn module is mounted, so
+your structured fields layer on top of those.
+
+## Text vs JSON
+
+The console layer ships both formats. Default is `text` (pretty for dev). For
+prod, set:
+
+```bash
+NESTRS_OPENTELEMETRY__LOG_FORMAT=json
+```
+
+JSON drops the `current_span` and `span_list` fields — the OTel export carries
+span structure, and duplicating it in the console line is noise.
+
+## Access log
+
+The HTTP interceptor emits one access event per request on `nestrs::access`,
+at end-of-body, with byte-accurate `bytes` and `duration_ms`:
+
+```text frame="terminal"
+INFO nestrs::access: GET /users 200 28ms request_id=01J… bytes=412 client_ip=10.0.0.1 trace_id=4bf92f…
+```
+
+The same fields land on the OTel HTTP span (see
+[Traces](/opentelemetry/traces/#http-interceptor)), so the access line and
+the span line up in the backend. Toggle the access line with
+`NESTRS_HTTP__ACCESS_LOG=false`; the OTel span still opens, so propagation
+and OTLP export keep working.
+
+## OTel logs bridge
+
+The
+[`OpenTelemetryTracingBridge`](https://crates.io/crates/opentelemetry-appender-tracing)
+is wired in only when an OTLP endpoint is configured. Without an endpoint, the
+bridge is skipped — it pays a small per-event cost just to drop the event,
+which is not worth paying when console-only logging is the goal. When the
+endpoint is set, every `tracing` event becomes an OTel log record with the
+same target, level, fields and `trace_id`.

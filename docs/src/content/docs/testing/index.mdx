@@ -22,7 +22,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn create_then_list_users() -> anyhow::Result<()> {
-    let app = TestApp::<api::AppModule>::builder()
+    let app = TestApp::<platform_api::PlatformApiModule>::builder()
         .with_postgres()                          // ephemeral container
         .build()
         .await?;
@@ -53,7 +53,7 @@ async fn create_then_list_users() -> anyhow::Result<()> {
 }
 ```
 
-- **`TestApp::<AppModule>::builder()`** runs the same boot path as `main`
+- **`TestApp::<PlatformApiModule>::builder()`** runs the same boot path as `main`
   — including the access-graph check. A wiring regression fails this
   test, in this binary.
 - **`.with_postgres()`** spins an ephemeral Postgres (testcontainers in
@@ -86,7 +86,7 @@ impl WeatherProvider for StubWeather {
 
 #[tokio::test]
 async fn current_weather_returns_stubbed_report() -> anyhow::Result<()> {
-    let app = TestApp::<mcp::AppModule>::builder()
+    let app = TestApp::<mcp::McpModule>::builder()
         .override_dyn::<dyn WeatherProvider>(Arc::new(StubWeather))
         .build()
         .await?;
@@ -104,7 +104,7 @@ override target. **Do not mock the database** — see
 
 | Where                                              | What it tests                           | Boots? |
 |----------------------------------------------------|-----------------------------------------|--------|
-| `apps/<app>/tests/e2e.rs`                          | Real `AppModule` end to end             | ✓ real |
+| `apps/<app>/tests/e2e.rs`                          | The app's real top-level module end to end | ✓ real |
 | `crates/<crate>/tests/<short>.rs` (+ mirror tree)  | The crate's **public** API in process   | minimal |
 | `crates/nestrs-testing/tests/<behaviour>.rs`       | Cross-crate framework wiring            | tailored |
 
@@ -139,7 +139,7 @@ $ just test-cov               # with coverage (llvm-cov)
 
 > A wiring bug does not surface in a unit test.
 
-- **Every app ships an `tests/e2e.rs`** booting its real `AppModule`. It
+- **Every app ships a `tests/e2e.rs`** booting its real top-level module. It
   proves the route table, the DI graph, the access-graph check, the
   authn/authz layers, and the data access path are all wired.
 - **HTTP/GraphQL changes** require `just dev <app>` + `curl` against the

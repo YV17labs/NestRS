@@ -11,20 +11,20 @@ Importing `HttpModule::for_root(...)` in `AppModule.imports` attaches the
 HTTP transport at boot. Pass `None` to read every option from the
 environment, or pin `HttpConfig` in code:
 
-```rust title="apps/hello/src/app.rs"
+```rust title="apps/hello/src/module.rs"
 use nestrs_http::HttpModule;
 
 #[module(imports = [HttpModule::for_root(None)])]
-pub struct AppModule;
+pub struct HelloModule;
 ```
 
-```rust title="apps/platform-api/src/app.rs"
+```rust title="apps/platform-api/src/module.rs"
 use nestrs_http::{HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
 ])]
-pub struct AppModule;
+pub struct PlatformApiModule;
 ```
 
 Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
@@ -86,7 +86,7 @@ let key  = std::fs::read("privkey.pem")?;
         ..Default::default()
     }),
 ])]
-pub struct AppModule;
+pub struct PlatformApiModule;
 ```
 
 ## CORS
@@ -106,7 +106,7 @@ NESTRS_HTTP__CORS_CREDENTIALS=true
 NESTRS_HTTP__CORS_MAX_AGE=3600
 ```
 
-```rust title="apps/platform-api/src/app.rs"
+```rust title="apps/platform-api/src/module.rs"
 use std::time::Duration;
 use nestrs_http::{CorsConfig, HttpConfig, HttpModule};
 
@@ -124,7 +124,7 @@ use nestrs_http::{CorsConfig, HttpConfig, HttpModule};
         ..Default::default()
     }),
 ])]
-pub struct AppModule;
+pub struct PlatformApiModule;
 ```
 
 `origins: vec!["*".into()]` is allowed for fully open APIs (the wildcard

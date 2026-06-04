@@ -1,0 +1,101 @@
+---
+title: Traces
+description: Every request, job and scheduled tick opens a span; W3C traceparent propagation, sampling, and the per-request HTTP interceptor stitch distributed traces together.
+sidebar:
+  order: 2
+---
+
+Traces come from `tracing` spans. Because `OpenTelemetry::init` links
+[`tracing-opentelemetry`](https://crates.io/crates/tracing-opentelemetry) to
+the OTel SDK at boot, every `tracing` span automatically gets a `trace_id`
+and exports through OTLP when an endpoint is configured.
+
+## Span targets
+
+**Targets are dotted, lowercase, framework-prefixed.** One target per concern
+per crate.
+
+| Layer | Target |
+|---|---|
+| HTTP request span | `nestrs::http` |
+| HTTP access event | `nestrs::access` |
+| ORM queries | `nestrs::orm` |
+| Authentication | `nestrs::authn` |
+| Authorization | `nestrs::authz` |
+| WebSocket events | `nestrs::ws` |
+| Queue jobs | `nestrs::queue` |
+| Scheduled jobs | `nestrs::schedule` |
+| Module lifecycle | `nestrs::module` |
+| Application spans | `<app>::<feature>` (e.g. `api::users`) |
+
+## Custom spans
+
+```rust
+#[get("/{id}")]
+async fn read(&self, id: Path<Uuid>) -> Result<Json<User>> {
+    let _span = tracing::info_span!("users.read", user_id = %id.0).entered();
+    let user = self.svc.find(id.0).await?;
+    Ok(Json(user))
+}
+```
+
+Use `info_span!` for the span itself, `tracing::info!` for an event inside it.
+Always prefer `field = %value` to `format!("{}", value)` — structured fields
+serialize cleanly to OTLP and stay filterable in the backend.
+
+## W3C propagation
+
+`traceparent` propagation is automatic on incoming HTTP requests: if a client
+sends a W3C `traceparent` header, the request span is parented onto the
+incoming context, and the outgoing response carries `X-Trace-Id` so a caller
+can match a span in their backend to a span in yours.
+
+The W3C propagator is installed even when no OTLP endpoint is set — useful when
+a sibling service in your monorepo *does* export and you want the connection
+preserved across the hop.
+
+## Sampling
+
+`ParentBased(TraceIdRatioBased(ratio))` — children inherit the parent's
+sampling decision, so a request either samples end-to-end or not at all.
+
+```bash
+NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1
+```
+
+Or pinned:
+
+```rust
+OpenTelemetryConfig::new("platform-api").with_trace_sample_ratio(0.1)
+```
+
+The sampler comes from
+[`opentelemetry_sdk::trace::Sampler`](https://docs.rs/opentelemetry_sdk).
+Ratios are clamped to `[0.0, 1.0]`.
+
+## HTTP interceptor
+
+Importing `OpenTelemetryModule` activates the `OpenTelemetryHttp` interceptor
+automatically — there's nothing else to mount. Per request it:
+
+1. Opens a span on `nestrs::http` named `http.request`, with the OTel HTTP
+   semantic-convention attributes — `http.request.method`, `http.route`,
+   `http.response.status_code`, `http.response.body.size`, `client.address`,
+   `user_agent.original` — via
+   [`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions).
+2. Extracts the W3C `traceparent` header (via
+   [`opentelemetry-http`](https://crates.io/crates/opentelemetry-http)) and
+   parents the span on the incoming context.
+3. Adds `X-Trace-Id` to every response, so a client can quote the id when
+   filing an issue.
+4. Wraps the response body in a byte-counter — `bytes` and `duration_ms` are
+   measured at **end-of-body**, not at handler return. A client disconnect
+   emits the access event too (via Drop), so a half-streamed response still
+   produces one access line.
+5. Records `http.response.status_code` and `http.response.body.size` on the
+   span when the body finishes, so the span and the access event line up in
+   the backend.
+
+The access event itself is covered in [Logs](/opentelemetry/logs/) — toggle
+it with `NESTRS_HTTP__ACCESS_LOG=false`; the OTel span still opens, so
+propagation and OTLP export keep working.

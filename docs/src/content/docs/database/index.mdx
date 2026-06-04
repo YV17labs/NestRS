@@ -140,7 +140,7 @@ pub struct ItemsHttpModule;
 The app root imports `DatabaseModule::for_root` (this is what installs the
 pool + the ambient executor interceptor):
 
-```rust title="src/app.rs"
+```rust title="src/module.rs"
 #[module(
     imports = [
         DatabaseModule::for_root(None),
@@ -148,7 +148,7 @@ pool + the ambient executor interceptor):
         ItemsHttpModule,
     ],
 )]
-pub struct AppModule;
+pub struct ItemsModule;
 ```
 
 `DatabaseModule::for_root(None)` reads `NESTRS_DATABASE__URL` from the

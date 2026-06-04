@@ -16,7 +16,7 @@ the document changes with it.
 Add `OpenApiModule::for_root` to the app root, alongside the controllers it
 should document:
 
-```rust title="apps/platform-api/src/app.rs"
+```rust title="apps/platform-api/src/module.rs"
 use nestrs_openapi::OpenApiModule;
 
 #[module(
@@ -26,7 +26,7 @@ use nestrs_openapi::OpenApiModule;
         OpenApiModule::for_root(None),   // None → reads NESTRS_OPENAPI__* / defaults
     ],
 )]
-pub struct AppModule;
+pub struct PlatformApiModule;
 ```
 
 That's the whole opt-in. The module self-mounts both endpoints on the existing

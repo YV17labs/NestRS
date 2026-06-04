@@ -1,0 +1,84 @@
+---
+title: Metrics
+description: Inject Arc<OpenTelemetryMeter> and build counters, histograms or gauges; metrics batch on a PeriodicReader and export through the same OTLP endpoint as the traces.
+sidebar:
+  order: 4
+---
+
+`OpenTelemetryModule` provides `Arc<OpenTelemetryMeter>` — the OTel global
+meter, wrapped so it flows through the DI graph. Inject it like any other
+dependency.
+
+## A first counter
+
+```rust
+use nestrs_core::injectable;
+use nestrs_opentelemetry::OpenTelemetryMeter;
+use opentelemetry::metrics::Counter;
+use std::sync::Arc;
+
+#[injectable]
+pub struct UsersService {
+    #[inject]
+    meter: Arc<OpenTelemetryMeter>,
+    created: Counter<u64>,
+}
+
+impl UsersService {
+    pub async fn create(&self, input: CreateUser) -> anyhow::Result<User> {
+        let user = self.repo.insert(input).await?;
+        self.created.add(1, &[]);
+        Ok(user)
+    }
+}
+```
+
+Counters, histograms, gauges — anything the
+[`opentelemetry`](https://docs.rs/opentelemetry) meter exposes works.
+`Arc<OpenTelemetryMeter>` derefs to the inner `Meter`, so
+`self.meter.u64_counter("users.created").build()` is the canonical
+construction pattern when you want to build instruments lazily inside an
+`impl` block.
+
+## Attributes
+
+The second argument to `.add(...)` / `.record(...)` is a slice of OTel
+attributes — the metric's labels at the OTel/Prometheus boundary.
+
+```rust
+use opentelemetry::KeyValue;
+
+self.created.add(1, &[
+    KeyValue::new("org_id", org_id.to_string()),
+    KeyValue::new("source", "api"),
+]);
+```
+
+Stick to a small, bounded cardinality on the label set — every distinct
+attribute combination becomes a separate time series.
+
+## Export
+
+Metrics batch on a
+[`PeriodicReader`](https://docs.rs/opentelemetry_sdk) and export through the
+same OTLP endpoint as the traces (set
+`NESTRS_OPENTELEMETRY__OTLP_ENDPOINT`). Without an endpoint, instrument
+construction still works but the readings stay local — useful for tests that
+want to assert on counter increments without spinning a collector.
+
+## Resource attributes
+
+Every exported metric carries the service-level resource attributes built from
+`OpenTelemetryConfig`:
+
+- `service.name` — argument to `OpenTelemetry::init`
+- `service.version` — `NESTRS_OPENTELEMETRY__SERVICE_VERSION`
+- `deployment.environment` — `NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT`
+- `service.instance_id` — `NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID` (a
+  fresh UUIDv7 per process by default, so restarts get distinct identities in
+  the backend)
+
+These come from the
+[`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions)
+schema, so any backend that understands OTel semconv (Grafana Cloud, Honeycomb,
+Datadog OTLP, …) keys on them out of the box.

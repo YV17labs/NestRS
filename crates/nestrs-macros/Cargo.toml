@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-macros"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Internal — surface-agnostic nestrs decorators (#[injectable], #[module], #[hooks]); re-exported by nestrs-core, not a direct dependency."
 
 [lib]

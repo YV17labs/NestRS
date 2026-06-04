@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-config"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Configuration loading for nestrs apps — the @nestjs/config analog (namespaced env mapping)."
 
 [dependencies]

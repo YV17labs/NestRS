@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-ws"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "WebSocket gateways for nestrs: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport, built on poem's WebSocket upgrade."
 
 [dependencies]

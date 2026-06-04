@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-ws-macros"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Internal — WebSocket gateway decorator macros (#[gateway], #[messages], #[subscribe_message]); re-exported by nestrs-ws, not a direct dependency."
 
 [lib]

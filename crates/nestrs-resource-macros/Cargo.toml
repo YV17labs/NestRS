@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-resource-macros"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Internal — the #[expose] attribute (SeaORM entity to GraphQL + OpenAPI); re-exported by nestrs-resource, not a direct dependency."
 
 [lib]

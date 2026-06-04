@@ -1,10 +1,12 @@
 [package]
 name = "features"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
+publish = false
 description = "The product's feature library — vertical slices as port + adapter modules (entities, services, controllers, resolvers, gateways). Each feature exposes a core module plus per-transport edge modules; apps compose by listing the edges they serve."
 
 [dependencies]

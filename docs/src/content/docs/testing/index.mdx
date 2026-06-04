@@ -16,7 +16,7 @@ no mocked DI graph, no separate test wiring.
 
 ## A round-trip e2e test
 
-```rust title="apps/api/tests/e2e.rs"
+```rust title="apps/platform-api/tests/e2e.rs"
 use nestrs_testing::TestApp;
 use serde_json::json;
 
@@ -154,7 +154,7 @@ $ just test-cov               # with coverage (llvm-cov)
 
 - `crates/nestrs-testing/` — `TestApp`, `TestAppBuilder`, the in-process
   HTTP client.
-- `apps/api/tests/e2e.rs` and `apps/auth/tests/e2e.rs` — the live
+- `apps/platform-api/tests/e2e.rs` and `apps/platform-auth/tests/e2e.rs` — the live
   baseline tests.
 - `crates/nestrs-authn/tests/authn.rs` — the strict-mirror test layout
   reference.

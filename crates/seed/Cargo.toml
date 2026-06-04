@@ -1,0 +1,16 @@
+[package]
+name = "seed"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+sea-orm.workspace = true
+uuid.workspace = true
+fake.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+nestrs-testing = { workspace = true, features = ["orm"] }
+migrations.workspace = true

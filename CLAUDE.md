@@ -291,7 +291,7 @@ filters its `inventory` / metadata against it. Linking a crate without
 importing its module = code present in the binary, **inert** in this app —
 not pollution. A linked-but-unreachable resolver fires a `tracing::warn` at
 boot (so leftover code does not disappear silently) and is skipped from the
-schema. This is what makes per-app subsets work: `apps/worker` links
+schema. This is what makes per-app subsets work: `apps/platform-worker` links
 `features` for the data layer but importing only `UsersQueueModule` keeps
 the HTTP controller, the GraphQL resolver, and the WS gateway out of its
 binary's runtime surface.
@@ -341,8 +341,8 @@ resource-server case needs no app strategy: `JwtStrategy<C>` ships it, so
 resource-server app mounts it. **`JwtService`** is global infrastructure
 (factory phase); it takes a symmetric secret or an EdDSA key pair — a
 resource server holds **only the public key** (cannot mint tokens), which
-is why **token issuance is its own app** (`apps/auth` signs with the
-private key; `apps/api` is a pure resource server that only verifies). The
+is why **token issuance is its own app** (`apps/platform-auth` signs with the
+private key; `apps/platform-api` is a pure resource server that only verifies). The
 two share `crates/features` (the `identity` contract lives there) and the
 DB, never RPC each other.
 
@@ -478,7 +478,7 @@ other read, and return `Result<HashMap<…>, E>` (or infallible only when
 the method cannot fail). Never map a DB error to an empty batch — that
 reads as success and violates the Rust-first rule.
 
-`apps/api` is the exemplar (REST + GraphQL + WS, DB + authz); `apps/chat`
+`apps/platform-api` is the exemplar (REST + GraphQL + WS, DB + authz); `apps/chat`
 is the pure real-time exemplar. See `NOTES.md` for the per-feature
 exemplar map.
 
@@ -729,7 +729,7 @@ transcripts are not injected automatically.
    feature-exemplar pointers.
 3. **`crates/features/src/users/`** — the reference feature; copy before
    inventing. Read `core/`, then any `<edge>/`.
-4. **`apps/api/`** — the reference app (REST + GraphQL + WS + DB + authz);
+4. **`apps/platform-api/`** — the reference app (REST + GraphQL + WS + DB + authz);
    `app.rs` is the canonical composition example.
 5. **The relevant `crates/nestrs-<concern>/`** for whatever you are about
    to touch.

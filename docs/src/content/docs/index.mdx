@@ -43,7 +43,7 @@ No wiring file. No config. No boilerplate. A provider, a controller, and a
 dependency graph is built and **verified at boot**, and each app under `apps/`
 compiles to its own native binary.
 
-```rust title="apps/app/src/hello/service.rs"
+```rust title="apps/hello/src/service.rs"
 use nestrs_core::injectable;
 
 #[injectable]
@@ -55,10 +55,10 @@ impl HelloService {
 }
 ```
 
-```rust title="apps/app/src/hello/controller.rs"
+```rust title="apps/hello/src/controller.rs"
 use std::sync::Arc;
 use nestrs_http::{controller, routes};
-use super::service::HelloService;
+use crate::service::HelloService;
 
 #[controller(path = "/")]
 pub struct HelloController {
@@ -75,16 +75,16 @@ impl HelloController {
 }
 ```
 
-```rust title="apps/app/src/hello/module.rs"
+```rust title="apps/hello/src/app.rs"
 use nestrs_core::module;
-use super::{controller::HelloController, service::HelloService};
+use crate::{controller::HelloController, service::HelloService};
 
 #[module(providers = [HelloService, HelloController])]
-pub struct HelloModule;
+pub struct AppModule;
 ```
 
 ```bash frame="terminal"
-$ just dev app
+$ just dev hello
 …
 2026-06-03T10:14:22.183Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3000
 

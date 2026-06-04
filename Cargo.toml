@@ -154,6 +154,12 @@ proc-macro2 = "1"
 # See CLAUDE.md "Monorepo layout".
 features = { path = "crates/features" }
 
+# The product's database concern: schema (migrations) + demo data (seed).
+# Product crates like `features` — not framework — and the template a future
+# `nestrs new` would emit (the app's repo owns its schema). See CLAUDE.md.
+migrations = { path = "crates/migrations" }
+seed = { path = "crates/seed" }
+
 # Internal crates (framework)
 nestrs-core = { path = "crates/nestrs-core" }
 nestrs-authn = { path = "crates/nestrs-authn" }

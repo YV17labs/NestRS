@@ -1,0 +1,21 @@
+[package]
+name = "platform-worker"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+nestrs-core.workspace = true
+nestrs-config.workspace = true
+nestrs-queue.workspace = true
+nestrs-telemetry.workspace = true
+features.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+nestrs-testing.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

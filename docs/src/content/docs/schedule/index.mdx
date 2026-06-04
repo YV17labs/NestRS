@@ -16,10 +16,11 @@ naming the job.
 
 ## A 5-second interval job
 
-This is the real producer from `apps/worker` — every 5 seconds it
-generates a fake transcode task and pushes it onto a queue:
+This is the real producer run by `apps/platform-api` — every 5 seconds it
+generates a fake transcode task and pushes it onto a queue that the separate
+`apps/platform-worker` consumes:
 
-```rust title="apps/worker/src/audio/producer.rs"
+```rust title="crates/features/src/audio/schedule/producer.rs"
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,7 +28,7 @@ use anyhow::Result;
 use nestrs_queue::QueueConnection;
 use nestrs_schedule::{async_trait, cron_job, CronExpression, Scheduled};
 
-use crate::audio::dto::{TranscodeJob, AUDIO_QUEUE};
+use crate::audio::core::{TranscodeJob, AUDIO_QUEUE};
 
 #[cron_job(cron = CronExpression::EVERY_5_SECONDS)]
 pub struct AudioProducer {
@@ -44,7 +45,7 @@ impl Scheduled for AudioProducer {
             .of::<TranscodeJob>(AUDIO_QUEUE)
             .push(TranscodeJob { file: file.clone() })
             .await?;
-        tracing::info!(target: "worker::audio", %file, "queued transcode job");
+        tracing::info!(target: "features::audio", %file, "scheduled transcode job");
         Ok(())
     }
 }
@@ -75,18 +76,19 @@ naming the job and the offending value — never silently skipped.
 
 ## Wire it in
 
-```rust title="apps/worker/src/audio/module.rs"
+```rust title="crates/features/src/audio/schedule/module.rs"
 use nestrs_core::module;
-use super::{producer::AudioProducer, processor::AudioProcessor, service::Transcoder};
+use super::producer::AudioProducer;
 
-#[module(providers = [AudioProducer, AudioProcessor, Transcoder])]
-pub struct AudioModule;
+#[module(providers = [AudioProducer])]
+pub struct AudioScheduleModule;
 ```
 
-```rust title="apps/worker/src/main.rs"
+```rust title="apps/platform-api/src/main.rs"
 use nestrs_core::App;
+use nestrs_http::HttpTransport;
 use nestrs_schedule::Scheduler;
-use worker::AppModule;
+use platform_api::AppModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -94,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
         .module::<AppModule>()
         .build()
         .await?
+        .transport(HttpTransport::new().bind("0.0.0.0:3002"))
         .transport(Scheduler::new())      // ← runs every #[cron_job]
         .run()
         .await
@@ -109,12 +112,12 @@ schedule.
 ## Run it
 
 ```bash frame="terminal"
-$ just dev worker
+$ just dev platform-api
 …
 2026-06-03T10:18:41Z  INFO nestrs::schedule: registered 1 cron job
   AudioProducer • every 5s
-2026-06-03T10:18:46Z  INFO worker::audio: queued transcode job file=track-1717405126521.mp3
-2026-06-03T10:18:51Z  INFO worker::audio: queued transcode job file=track-1717405131524.mp3
+2026-06-03T10:18:46Z  INFO features::audio: scheduled transcode job file=track-1717405126521.mp3
+2026-06-03T10:18:51Z  INFO features::audio: scheduled transcode job file=track-1717405131524.mp3
 ```
 
 A bad trigger fails the boot:
@@ -162,6 +165,6 @@ Just importing `DatabaseModule` is enough — no manual connection plumbing.
 
 ### Reference
 
-- `apps/worker/src/audio/producer.rs` — the canonical interval producer.
+- `crates/features/src/audio/schedule/producer.rs` — the canonical interval producer.
 - `crates/nestrs-schedule/` — `#[cron_job]`, `Scheduler`,
   `CronExpression`, the `Scheduled` trait.

@@ -82,19 +82,18 @@ just dev worker   # background jobs (headless)
 
 ## Your first endpoint
 
-A complete service with a provider, a controller and a module:
+A complete service — a provider, a controller, and the root module that
+lists them directly:
 
 <FileTree>
 - src/
   - main.rs
   - app.rs
-  - hello/
-    - module.rs
-    - service.rs
-    - controller.rs
+  - service.rs
+  - controller.rs
 </FileTree>
 
-```rust title="src/hello/service.rs"
+```rust title="src/service.rs"
 use nestrs_core::injectable;
 
 #[injectable]
@@ -106,10 +105,10 @@ impl HelloService {
 }
 ```
 
-```rust title="src/hello/controller.rs"
+```rust title="src/controller.rs"
 use std::sync::Arc;
 use nestrs_http::{controller, routes};
-use super::service::HelloService;
+use crate::service::HelloService;
 
 #[controller(path = "/")]
 pub struct HelloController {
@@ -126,27 +125,20 @@ impl HelloController {
 }
 ```
 
-```rust title="src/hello/module.rs"
-use nestrs_core::module;
-use super::{controller::HelloController, service::HelloService};
-
-#[module(providers = [HelloService, HelloController])]
-pub struct HelloModule;
-```
-
 ```rust title="src/app.rs"
 use nestrs_core::module;
-use crate::hello::module::HelloModule;
+use crate::{controller::HelloController, service::HelloService};
 
-#[module(imports = [HelloModule])]
+#[module(providers = [HelloService, HelloController])]
 pub struct AppModule;
 ```
 
 ```rust title="src/main.rs"
 use nestrs_core::App;
 use nestrs_http::HttpTransport;
-mod hello;
 mod app;
+mod controller;
+mod service;
 use app::AppModule;
 
 #[tokio::main]

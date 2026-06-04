@@ -16,7 +16,7 @@ the document changes with it.
 Add `OpenApiModule::for_root` to the app root, alongside the controllers it
 should document:
 
-```rust title="apps/api/src/app.rs"
+```rust title="apps/platform-api/src/app.rs"
 use nestrs_openapi::OpenApiModule;
 
 #[module(
@@ -129,7 +129,7 @@ OpenApiModule::for_root(OpenApiConfig {
 
 ### Reference
 
-- `apps/api/` — mounts `OpenApiModule::for_root(None)` next to REST + GraphQL.
+- `apps/platform-api/` — mounts `OpenApiModule::for_root(None)` next to REST + GraphQL.
 - `crates/features/src/users/http/controller.rs` — real `#[api(...)]` usage.
 - `crates/nestrs-openapi/` — `OpenApiModule`, `OpenApiConfig`, the document
   composer, the bundled Swagger UI.

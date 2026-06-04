@@ -21,7 +21,7 @@ checklist.
 
 ## Two-line wiring per transport
 
-```rust title="apps/api/src/app.rs"
+```rust title="apps/platform-api/src/app.rs"
 #[module(
     imports = [
         DatabaseModule::for_root(None),
@@ -172,8 +172,8 @@ $ curl -s http://localhost:3000/users -H "Authorization: Bearer $TOKEN" \
 
 ## Split issuer and resource server
 
-`apps/auth` issues tokens (signs with the **private** EdDSA key);
-`apps/api` verifies them (holds **only** the public key). They share
+`apps/platform-auth` issues tokens (signs with the **private** EdDSA key);
+`apps/platform-api` verifies them (holds **only** the public key). They share
 the same `Claims` type via the `identity` crate, never RPC each other,
 and the resource server cannot mint a token even if it wanted to.
 

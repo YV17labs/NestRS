@@ -26,7 +26,7 @@ fn read_all_ability() -> Arc<Ability> {
 
 #[tokio::test]
 async fn list_returns_seeded_orgs_for_an_unrestricted_reader() {
-    let db = EphemeralDatabase::create::<db::Migrator>()
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("ephemeral database");
     let org_id = Uuid::now_v7();
@@ -44,7 +44,7 @@ async fn list_returns_seeded_orgs_for_an_unrestricted_reader() {
 
 #[tokio::test]
 async fn access_hides_out_of_scope_orgs() {
-    let db = EphemeralDatabase::create::<db::Migrator>()
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("ephemeral database");
     let allowed = Uuid::now_v7();

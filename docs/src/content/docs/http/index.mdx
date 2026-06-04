@@ -16,10 +16,10 @@ have their own category.
 
 ## The minimal controller
 
-```rust title="apps/app/src/hello/controller.rs"
+```rust title="apps/hello/src/controller.rs"
 use std::sync::Arc;
 use nestrs_http::{controller, routes};
-use crate::hello::service::HelloService;
+use crate::service::HelloService;
 
 #[controller(path = "/")]
 pub struct HelloController {
@@ -272,7 +272,7 @@ See [OpenAPI](/openapi/) for `#[api(...)]` enrichment and configuration.
 
 ### Reference
 
-- `apps/app/src/hello/controller.rs` — the canonical minimal controller.
+- `apps/hello/src/controller.rs` — the canonical minimal controller.
 - `crates/nestrs-http/` — the controller, routes, extractors, guards
   interface.
 - `crates/nestrs-pipes/` — `ValidationPipe<T>`, `ParseUuid`, the other

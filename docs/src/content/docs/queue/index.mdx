@@ -17,16 +17,15 @@ discovery registry.
 
 ## A durable consumer
 
-This is the real consumer from `apps/worker`:
+This is the real consumer from `apps/platform-worker`:
 
-```rust title="apps/worker/src/audio/processor.rs"
+```rust title="crates/features/src/audio/queue/processor.rs"
 use std::sync::Arc;
 
 use anyhow::Result;
 use nestrs_queue::{async_trait, processor, Processor};
 
-use crate::audio::dto::TranscodeJob;
-use crate::audio::service::Transcoder;
+use crate::audio::core::{Transcoder, TranscodeJob};
 
 #[processor(queue = "audio", concurrency = 5, retries = 3)]
 pub struct AudioProcessor {
@@ -55,12 +54,14 @@ impl Processor for AudioProcessor {
 
 ## The payload
 
-```rust title="apps/worker/src/audio/dto.rs"
+```rust title="crates/features/src/audio/core/dto.rs"
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const AUDIO_QUEUE: &str = "audio";
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+// JsonSchema too: the same payload is the producer endpoint's HTTP body.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct TranscodeJob {
     pub file: String,
 }
@@ -72,26 +73,39 @@ type — no special trait. The convention is to keep payloads small
 
 ## A producer
 
-A producer is any code holding `Arc<QueueConnection>`. It can be a
-scheduled job, an HTTP handler, an event-bus subscriber — anything in
-the DI graph.
+A producer is any code holding `Arc<QueueConnection>`. Here it's the HTTP
+handler the `api` app exposes — a request enqueues a job the separate
+`worker` app consumes:
 
-```rust title="apps/worker/src/audio/producer.rs"
+```rust title="crates/features/src/audio/http/controller.rs"
+use std::sync::Arc;
+
+use nestrs_http::{controller, routes};
 use nestrs_queue::QueueConnection;
+use poem::http::StatusCode;
+use poem::web::Json;
+use poem::{Error, Result};
 
-#[injectable]
-pub struct UploadService {
+use crate::audio::core::{TranscodeJob, AUDIO_QUEUE};
+
+#[controller(path = "/audio")]
+#[use_guards(AuthGuard, AppAbilityGuard)]
+pub struct AudioController {
     #[inject]
     queue: Arc<QueueConnection>,
 }
 
-impl UploadService {
-    pub async fn enqueue(&self, file: String) -> anyhow::Result<()> {
+#[routes]
+impl AudioController {
+    #[post("/transcode")]
+    async fn transcode(&self, body: Json<TranscodeJob>) -> Result<Json<TranscodeJob>> {
+        let job = body.0;
         self.queue
-            .of::<TranscodeJob>("audio")
-            .push(TranscodeJob { file })
-            .await?;
-        Ok(())
+            .of::<TranscodeJob>(AUDIO_QUEUE)
+            .push(job.clone())
+            .await
+            .map_err(|e| Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+        Ok(Json(job))
     }
 }
 ```
@@ -106,24 +120,25 @@ The consumer side runs in its own binary (or alongside others). Mount
 the `QueueWorker` transport in `main` and import
 `QueueModule::for_root`:
 
-```rust title="apps/worker/src/app.rs"
+```rust title="apps/platform-worker/src/app.rs"
 use nestrs_core::module;
 use nestrs_queue::QueueModule;
-use crate::audio::AudioModule;
+use features::audio::{AudioCoreModule, AudioQueueModule};
 
 #[module(
     imports = [
         QueueModule::for_root(None),     // reads NESTRS_QUEUE__URL
-        AudioModule,
+        AudioCoreModule,
+        AudioQueueModule,                // the #[processor]
     ],
 )]
 pub struct AppModule;
 ```
 
-```rust title="apps/worker/src/main.rs"
+```rust title="apps/platform-worker/src/main.rs"
 use nestrs_core::App;
 use nestrs_queue::QueueWorker;
-use worker::AppModule;
+use platform_worker::AppModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -137,29 +152,29 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-A producer-only binary (e.g. `apps/api` pushing jobs without
-consuming them) imports `QueueModule::for_root` to gain
-`QueueConnection`, but does **not** mount `QueueWorker` — no
-processors to run.
+That is exactly what `apps/platform-api` is: a producer-only binary. It
+imports `QueueModule::for_root` (plus the audio feature's `http` and
+`schedule` edges) to gain `QueueConnection` and **push**, but never mounts
+`QueueWorker` — it runs no processors.
 
 ## Run it
 
 ```bash
-$ just dev worker
+$ just dev platform-worker
 ```
 
 ```text frame="terminal"
 2026-06-03T10:18:41Z  INFO nestrs::queue: registered 1 processor
   AudioProcessor • queue=audio concurrency=5 retries=3
-2026-06-03T10:18:46Z  INFO worker::audio: queued transcode job file=track-1717405126521.mp3
-2026-06-03T10:18:46Z  INFO worker::audio: transcoding file=track-1717405126521.mp3
-2026-06-03T10:18:46Z  INFO nestrs::queue: job ok queue=audio elapsed=42ms
+2026-06-03T10:18:46Z  INFO features::audio: transcoded file=track-1717405126521.mp3
+2026-06-03T10:18:46Z  INFO nestrs::queue: job ok queue=audio elapsed=342ms
 ```
 
-Producer and consumer can run in the same binary (here `worker` does
-both, via `Scheduler + QueueWorker`), or split across deploys with the
-producer in `apps/api` and the consumer in `apps/worker`. The Redis
-queue is the only thing they share.
+Here producer and consumer are **split across deploys**: `apps/platform-api`
+produces (an HTTP handler plus a `#[cron_job]`, mounting `Scheduler`), and
+`apps/platform-worker` consumes (`QueueWorker`). The Redis queue and the
+shared `features::audio` contract are all they share — no RPC. They could
+just as well run in one binary; the queue doesn't care.
 
 ## Retries and failure
 
@@ -181,21 +196,16 @@ Like a scheduled job, a processor runs as **system work**:
 - **No ability** is installed; `Repo` reads are **unscoped** — correct
   for system work.
 
-## Lean binaries
+## Module-gated, even when the crate is shared
 
-A worker imports **no HTTP crate**. Its release binary doesn't link
-the `poem` server, the controllers, the OpenAPI doc, the GraphQL
-schema. The features crate is shared, but module-gated discovery
-keeps the unused providers inert.
-
-```bash
-$ ls -lh target/release/worker target/release/api
--rwxr-xr-x  18M  worker
--rwxr-xr-x  41M  api
-```
-
-(orders of magnitude shown for illustration — actual sizes depend on
-features.)
+The worker depends on the shared `features` crate, so the audio
+controller's code is *compiled in* — but **module-gated discovery** keeps
+every provider the worker doesn't import inert. Importing only
+`AudioCoreModule + AudioQueueModule`, the HTTP controller, the OpenAPI
+doc, and the GraphQL schema never mount: present in the binary, dead at
+runtime. (Trimming them from the binary itself — cargo features on
+`features` to drop the unused transports — is a build-time concern on the
+roadmap.)
 
 ## Going further
 
@@ -207,7 +217,8 @@ features.)
 
 ### Reference
 
-- `apps/worker/src/audio/processor.rs` — the consumer.
-- `apps/worker/src/audio/producer.rs` — a scheduled producer.
+- `crates/features/src/audio/queue/processor.rs` — the consumer (worker).
+- `crates/features/src/audio/http/controller.rs` — the HTTP producer (api).
+- `crates/features/src/audio/schedule/producer.rs` — the scheduled producer (api).
 - `crates/nestrs-queue/` — `#[processor]`, `QueueConnection`,
   `QueueWorker`, the `Processor` trait.

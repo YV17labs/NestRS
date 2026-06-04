@@ -13,7 +13,7 @@ production output is OTLP.
 
 ## Wiring it up
 
-```rust title="apps/api/src/main.rs"
+```rust title="apps/platform-api/src/main.rs"
 use anyhow::Result;
 use nestrs_config::Environment;
 use nestrs_core::App;
@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-```rust title="apps/api/src/app.rs"
+```rust title="apps/platform-api/src/app.rs"
 #[module(
     imports = [
         // ...

@@ -7,23 +7,23 @@ _default:
 
 # Apply all pending migrations
 up:
-    cargo run -p db --bin migrate -- up
+    cargo run -p migrations --bin migrate -- up
 
 # Roll back the last applied migration
 down:
-    cargo run -p db --bin migrate -- down
+    cargo run -p migrations --bin migrate -- down
 
 # Drop every table and re-apply all migrations from scratch
 fresh:
-    cargo run -p db --bin migrate -- fresh
+    cargo run -p migrations --bin migrate -- fresh
 
 # Show which migrations are applied vs. pending
 status:
-    cargo run -p db --bin migrate -- status
+    cargo run -p migrations --bin migrate -- status
 
 # Seed demo data (idempotent)
 seed:
-    cargo run -p db --bin seed
+    cargo run -p seed --bin seed
 
 # Clean slate: drop, re-migrate, then reseed
 reset: fresh seed

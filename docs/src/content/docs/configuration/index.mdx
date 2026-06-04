@@ -27,7 +27,7 @@ TOML loader, no YAML, no remote source.
 ## A typed config — by example
 
 This is the real `IssuerConfig` from `features/oauth` (signs the OAuth
-clients accepted by `apps/auth`):
+clients accepted by `apps/platform-auth`):
 
 ```rust title="crates/features/src/oauth/core/config.rs"
 use nestrs_config::{config, Config, ConfigError, ConfigService};
@@ -119,7 +119,7 @@ use super::service::OAuthFlow;
 pub struct OAuthCoreModule;
 ```
 
-```rust title="apps/auth/src/app.rs"
+```rust title="apps/platform-auth/src/app.rs"
 use nestrs_config::ConfigModule;
 
 #[module(
@@ -214,7 +214,7 @@ Error: configuration validation failed for 'issuer'
 
 Tests bypass the factory by `.provide()`-ing the pinned value directly:
 
-```rust title="apps/auth/tests/e2e.rs"
+```rust title="apps/platform-auth/tests/e2e.rs"
 let app = TestApp::<AppModule>::builder()
     .provide(IssuerConfig {
         clients: vec![RegisteredClient { /* fixture */ }],

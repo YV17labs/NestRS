@@ -1,4 +1,4 @@
 //! Documented gaps: `core/`, `http/`, `graphql/`, `*/module.rs` — covered by
-//! `apps/api` e2e.
+//! `apps/platform-api` e2e.
 
 mod ws;

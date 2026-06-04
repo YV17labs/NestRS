@@ -168,52 +168,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "api"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-graphql",
- "db",
- "features",
- "nestrs-authn",
- "nestrs-authz",
- "nestrs-config",
- "nestrs-core",
- "nestrs-database",
- "nestrs-graphql",
- "nestrs-health",
- "nestrs-http",
- "nestrs-middleware",
- "nestrs-openapi",
- "nestrs-resource",
- "nestrs-server-timing",
- "nestrs-telemetry",
- "nestrs-testing",
- "poem",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "validator",
-]
-
-[[package]]
-name = "app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "nestrs-core",
- "nestrs-http",
- "nestrs-testing",
- "poem",
- "tokio",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -582,35 +536,6 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
-
-[[package]]
-name = "auth"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "db",
- "features",
- "nestrs-authn",
- "nestrs-authz",
- "nestrs-config",
- "nestrs-core",
- "nestrs-database",
- "nestrs-health",
- "nestrs-http",
- "nestrs-telemetry",
- "nestrs-testing",
- "nestrs-throttler",
- "poem",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
- "validator",
-]
 
 [[package]]
 name = "autocfg"
@@ -1182,19 +1107,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
-name = "db"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fake",
- "nestrs-testing",
- "sea-orm",
- "sea-orm-migration",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1463,7 +1375,7 @@ dependencies = [
  "anyhow",
  "async-graphql",
  "async-trait",
- "db",
+ "migrations",
  "nestrs-authn",
  "nestrs-authz",
  "nestrs-config",
@@ -1471,7 +1383,9 @@ dependencies = [
  "nestrs-database",
  "nestrs-graphql",
  "nestrs-http",
+ "nestrs-queue",
  "nestrs-resource",
+ "nestrs-schedule",
  "nestrs-testing",
  "nestrs-throttler",
  "nestrs-ws",
@@ -1900,6 +1814,18 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hello"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nestrs-core",
+ "nestrs-http",
+ "nestrs-testing",
+ "poem",
+ "tokio",
+]
 
 [[package]]
 name = "hermit-abi"
@@ -2571,6 +2497,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "migrations"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sea-orm",
+ "sea-orm-migration",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3581,6 +3518,86 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "platform-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-graphql",
+ "features",
+ "migrations",
+ "nestrs-authn",
+ "nestrs-authz",
+ "nestrs-config",
+ "nestrs-core",
+ "nestrs-database",
+ "nestrs-graphql",
+ "nestrs-health",
+ "nestrs-http",
+ "nestrs-middleware",
+ "nestrs-openapi",
+ "nestrs-queue",
+ "nestrs-resource",
+ "nestrs-schedule",
+ "nestrs-server-timing",
+ "nestrs-telemetry",
+ "nestrs-testing",
+ "poem",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "validator",
+]
+
+[[package]]
+name = "platform-auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "features",
+ "migrations",
+ "nestrs-authn",
+ "nestrs-authz",
+ "nestrs-config",
+ "nestrs-core",
+ "nestrs-database",
+ "nestrs-health",
+ "nestrs-http",
+ "nestrs-telemetry",
+ "nestrs-testing",
+ "nestrs-throttler",
+ "poem",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "validator",
+]
+
+[[package]]
+name = "platform-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "features",
+ "nestrs-config",
+ "nestrs-core",
+ "nestrs-queue",
+ "nestrs-telemetry",
+ "nestrs-testing",
+ "serde",
+ "tokio",
+]
 
 [[package]]
 name = "pluralizer"
@@ -4677,6 +4694,19 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "seed"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fake",
+ "migrations",
+ "nestrs-testing",
+ "sea-orm",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -6501,22 +6531,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "worker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "nestrs-config",
- "nestrs-core",
- "nestrs-queue",
- "nestrs-schedule",
- "nestrs-telemetry",
- "nestrs-testing",
- "serde",
- "tokio",
- "tracing",
 ]
 
 [[package]]

@@ -15,12 +15,15 @@ nestrs-authz = { workspace = true, features = ["http", "graphql"] }
 nestrs-config.workspace = true
 nestrs-graphql.workspace = true
 nestrs-http.workspace = true
+nestrs-queue.workspace = true
+nestrs-schedule.workspace = true
 nestrs-throttler.workspace = true
 nestrs-ws.workspace = true
 nestrs-resource.workspace = true
 async-graphql.workspace = true
 async-trait.workspace = true
 poem.workspace = true
+tokio.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -39,4 +42,4 @@ nestrs-database.workspace = true
 async-graphql.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
-db = { path = "../../apps/db" }
+migrations = { workspace = true }

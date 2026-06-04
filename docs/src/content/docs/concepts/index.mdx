@@ -10,17 +10,17 @@ structs) and optionally **imports** other modules. The dependency-injection
 graph is built at compile time and verified at boot — a missing wire fails
 startup with a clear error.
 
-This page walks the `app` example end to end. It is the smallest possible
-NestRS service — three files, one route.
+This page walks the `hello` example end to end — the smallest possible
+NestRS service. The binary's **root module** declares its controller and
+service directly; no feature module is needed until you have more than one
+slice.
 
-## The feature
+## The pieces
 
 <FileTree>
-- apps/app/src/
-  - hello/
-    - service.rs
-    - controller.rs
-    - module.rs
+- apps/hello/src/
+  - service.rs
+  - controller.rs
   - app.rs
   - main.rs
 </FileTree>
@@ -28,7 +28,7 @@ NestRS service — three files, one route.
 A **service** is an injectable struct. Everything decorated with
 `#[injectable]` is registered with the container and shared as `Arc<T>`.
 
-```rust title="apps/app/src/hello/service.rs"
+```rust title="apps/hello/src/service.rs"
 use nestrs_core::injectable;
 
 #[injectable]
@@ -46,10 +46,10 @@ A **controller** is also injectable. `#[inject]` fields are resolved by type
 from the container. `#[routes]` mounts the verb methods on the controller's
 path.
 
-```rust title="apps/app/src/hello/controller.rs"
+```rust title="apps/hello/src/controller.rs"
 use std::sync::Arc;
 use nestrs_http::{controller, routes};
-use super::service::HelloService;
+use crate::service::HelloService;
 
 #[controller(path = "/")]
 pub struct HelloController {
@@ -66,34 +66,26 @@ impl HelloController {
 }
 ```
 
-A **module** lists the providers it owns. Other modules import this one to
-gain access to those providers.
+## The root module
 
-```rust title="apps/app/src/hello/module.rs"
+The binary's **root module** lists the providers it owns in `providers`.
+For this minimal app that is the whole wiring: the controller and service
+sit right on `AppModule`. A separate feature module only earns its keep
+once a slice grows or is shared across binaries (see *Going further*).
+
+```rust title="apps/hello/src/app.rs"
 use nestrs_core::module;
-use super::{controller::HelloController, service::HelloService};
+use crate::controller::HelloController;
+use crate::service::HelloService;
 
 #[module(providers = [HelloService, HelloController])]
-pub struct HelloModule;
-```
-
-## Composing into an app
-
-The **root module** of a binary imports every feature module the binary
-exposes.
-
-```rust title="apps/app/src/app.rs"
-use nestrs_core::module;
-use crate::hello::HelloModule;
-
-#[module(imports = [HelloModule])]
 pub struct AppModule;
 ```
 
-```rust title="apps/app/src/main.rs"
+```rust title="apps/hello/src/main.rs"
 use nestrs_core::App;
 use nestrs_http::HttpTransport;
-use app::AppModule;
+use hello::AppModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -107,13 +99,13 @@ async fn main() -> anyhow::Result<()> {
 ## Run it
 
 ```bash
-just dev app
+just dev hello
 ```
 
 ```text frame="terminal"
-   Compiling app v0.1.0
+   Compiling hello v0.1.0
     Finished `dev` profile in 4.21s
-     Running `target/debug/app`
+     Running `target/debug/hello`
 2026-06-03T10:14:22.183Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3000
   GET / → HelloController::hello
 ```
@@ -128,7 +120,7 @@ Hello World
 1. **Collected** every provider in the import tree — `HelloService`,
    `HelloController` — into a static registry at link time.
 2. **Built** the access graph from `AppModule`. `HelloController` declares it
-   injects `HelloService`; `HelloModule` owns `HelloService`; the graph is
+   injects `HelloService`; `AppModule` owns `HelloService`; the graph is
    reachable. ✓
 3. **Constructed** each provider once. `HelloService::default()` produced one
    `Arc<HelloService>`. `HelloController` was built with that `Arc` injected
@@ -138,7 +130,7 @@ Hello World
 
 ## Try breaking it
 
-Comment the line that lists `HelloService` in the module's providers, then
+Comment the line that lists `HelloService` in `AppModule`'s providers, then
 `cargo run`:
 
 ```text frame="terminal" "(needs HelloService)"
@@ -167,7 +159,7 @@ build does not start the HTTP transport when wiring is invalid.
 Real-world apps stack many modules. The `api` example imports a dozen at
 once — feature modules plus framework modules:
 
-```rust title="apps/api/src/app.rs"
+```rust title="apps/platform-api/src/app.rs"
 #[module(
     imports = [
         ConfigModule::for_root(),

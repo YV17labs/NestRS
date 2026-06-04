@@ -108,19 +108,17 @@ impl HelloController {
         self.svc.greeting()
     }
 }
-
-// A module groups providers; import order never matters.
-#[module(providers = [HelloService, HelloController])]
-pub struct HelloModule;
 ```
 
-Compose modules and boot with one transport:
+Declare them on the root module and boot with one transport:
 
 ```rust
 use nestrs_core::{module, App};
 use nestrs_http::HttpTransport;
 
-#[module(imports = [HelloModule])]
+// The root module lists its providers directly; a feature module is only
+// needed once you have more than one slice.
+#[module(providers = [HelloService, HelloController])]
 pub struct AppModule;
 
 #[tokio::main]
@@ -160,7 +158,7 @@ pub struct AudioProcessor {
 GraphQL resolvers (`#[resolver]`/`#[query]`), MCP tools (`#[mcp]`) and the rest
 follow the same shape. The richest example, `api`, stacks REST + GraphQL +
 OpenAPI behind route guards, validation pipes and request-scoped dataloaders —
-see [`apps/api`](apps/api/).
+see [`apps/platform-api`](apps/platform-api/).
 
 ## How it compares
 
@@ -423,7 +421,7 @@ applied by the `db` app, not the running service — run `just db up` once first
 
 It exercises most of the framework at once: a GraphQL schema that composes
 itself from every `#[resolver]` in the binary (committed as SDL at
-[`apps/api/schema.graphql`](apps/api/schema.graphql) so API changes show up in
+[`apps/platform-api/schema.graphql`](apps/platform-api/schema.graphql) so API changes show up in
 diffs), an OpenAPI document that composes itself from every `#[controller]` with
 a bundled offline Swagger UI at `/api`, and a full request pipeline — route
 guards for authentication and CASL-style authorization (one ability drives access

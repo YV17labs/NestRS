@@ -1,0 +1,170 @@
+---
+title: Interceptors
+description: Wrap handler execution — install ambient state, observe, transform the response, in a single intercept(req, next) call.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An interceptor wraps the handler. It sees the request before the handler
+runs, holds the response after, and in between calls `next.run(req)` to
+delegate to whatever sits inside it (another interceptor, eventually the
+handler). One call, both sides of the boundary.
+
+```rust
+#[async_trait]
+pub trait Interceptor: Send + Sync + 'static {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
+}
+```
+
+Same vocabulary as a guard, different shape:
+
+- A **guard** runs *before* the handler and returns yes/no.
+- An **interceptor** runs *around* the handler — it can install ambient
+  state for the handler's duration, add response headers, time the call,
+  retry, transform the body.
+
+It is the seam where the database transaction lives, where response
+masking lives, where tracing spans wrap a request.
+
+## A minimal interceptor
+
+```rust
+use nestrs_core::injectable;
+use nestrs_http::{async_trait, Interceptor, Next};
+use poem::{Request, Response, Result};
+
+#[injectable]
+#[derive(Default)]
+pub struct Tracer;
+
+#[async_trait]
+impl Interceptor for Tracer {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+        let mut resp = next.run(req).await?;
+        resp.headers_mut()
+            .insert("x-trace", "hit".parse().unwrap());
+        Ok(resp)
+    }
+}
+```
+
+A plain `#[injectable]` provider that implements `Interceptor`. Listed
+in a module's `providers = [...]`, then bound per controller, per
+handler, or globally.
+
+## Three binding scopes
+
+| Scope | Binding | Notes |
+|-------|---------|-------|
+| **Global (manual)** | `HttpTransport::interceptor(Arc::new(t))` | Imperatively, before `App::run` |
+| **Global (auto)** | `#[interceptor]` on the struct | Auto-discovered, folded around every route. Used for infrastructure — `DbContext`, tracing |
+| **Controller** | `#[use_interceptors(Tracer)]` on the controller struct | Wraps every handler in the controller |
+| **Per-handler** | `#[use_interceptors(Tracer)]` beside the verb | Wraps that one handler |
+
+```rust
+#[controller(path = "/api")]
+#[use_interceptors(Tracer)]                        // controller scope
+pub struct ApiController {
+    #[inject] svc: Arc<ApiService>,
+}
+
+#[routes]
+impl ApiController {
+    #[get("/cache")]
+    #[use_interceptors(CacheControl)]              // handler scope
+    async fn cached(&self) -> Json<Snapshot> { /* ... */ }
+}
+```
+
+Multiple interceptors in one attribute run outermost-first: the first
+listed sees the request before the second, and its response wraps the
+second's.
+
+## Auto-discovered global interceptors
+
+For infrastructure that *must* wrap everything, write `#[interceptor]`
+instead of `#[injectable] + impl Interceptor`. The framework discovers
+it, builds it, and folds it around the assembled route tree in
+registration order — no `#[use_interceptors]` needed anywhere.
+
+```rust title="crates/nestrs-database/src/interceptor.rs"
+#[interceptor]
+pub(crate) struct DbContext {
+    #[inject]
+    db: Arc<DatabaseConnection>,
+}
+
+#[async_trait]
+impl Interceptor for DbContext {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+        if is_safe(req.method()) {
+            return with_request_executor(Executor::Pool(self.db.clone()), next.run(req)).await;
+        }
+        let txn = Arc::new(self.db.begin().await?);
+        let result = with_request_executor(Executor::Txn(txn.clone()), next.run(req)).await;
+        commit_or_rollback(txn, &result).await?;
+        result
+    }
+}
+```
+
+That's the entire transactional boundary. Import `DatabaseModule`, the
+interceptor is auto-mounted, and every handler runs inside a transaction
+on a mutating verb, on the pool on a safe verb. No `#[use_interceptors]`
+on any controller.
+
+## The request-layer ordering
+
+Per route, inner → outer:
+
+```
+shaper → interceptors → guards → filters → meta
+```
+
+So an interceptor wraps the *guards*, not the other way around. That's
+how `DbContext` works:
+
+1. **`DbContext`** runs (global interceptor) — opens a transaction for
+   `POST`/`PUT`/`PATCH`/`DELETE`, installs the executor in a
+   `task_local!`, then calls `next.run(req)`.
+2. **Guards run inside it** — `AuthGuard` attaches `Claims`,
+   `AbilityGuard` builds `Ability` and installs it as the second
+   ambient. Both see the same executor.
+3. **Handler runs** — `Repo::scoped(...)` reads both ambients without
+   threading anything explicitly.
+4. **Response returns** — `DbContext` commits on a 2xx/3xx, rolls back
+   otherwise.
+
+<Aside type="caution">
+**Global** interceptors wrap *outside* global guards (the data context
+must install the executor around the guards too). Controller- and
+handler-bound interceptors wrap *inside* the controller's guards — a
+guard that short-circuits returns the response before the interceptor's
+pre-handler work runs.
+</Aside>
+
+## Common things an interceptor does
+
+- **Install ambient state** for the handler's duration (transactions,
+  tracing spans, request id, authorization ability).
+- **Transform the response** — add headers (`Server-Timing`,
+  `X-Request-Id`), compress, paginate.
+- **Time the call** — measure latency by route, emit a metric.
+- **Mask the body** — `nestrs-authz`'s `Authorize` shaper is technically
+  a "shaper" (inside the interceptors), but the pattern is the same: see
+  the response, decide what to send.
+
+The pattern: capture what you need from `req`, `await next.run(req)` to
+get the response, decide what to do with it.
+
+## Going further
+
+- [Guards](/fundamentals/guards/) — the sibling layer, runs after
+  interceptors install their state.
+- [Database / transactions](/database/) — `DbContext` end to end.
+- [Security / response masking](/security/) — the `Authorize` shaper
+  composes with this seam.
+- [HTTP / controllers](/http/controllers/) — per-route bindings.

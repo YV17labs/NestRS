@@ -119,7 +119,7 @@ export default defineConfig({
             { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
           ],
         },
-        { label: 'Core concepts', items: [{ autogenerate: { directory: 'concepts' } }] },
+        { label: 'Fundamentals', items: [{ autogenerate: { directory: 'fundamentals' } }] },
         { label: 'HTTP', items: [{ autogenerate: { directory: 'http' } }] },
         { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
         { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },

@@ -1,0 +1,216 @@
+---
+title: Pipes
+description: Stateless transforms at the request boundary — parse, normalize, validate before the handler runs.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A pipe runs **between extraction and the handler**: the transport pulls
+a value out of the request (a path segment, a query param, a JSON body),
+hands it to the pipe, and the pipe either returns the transformed value
+or rejects with a `PipeError` the transport renders as a `400`.
+
+The trait lives in `nestrs-pipes`, transport-agnostic. The HTTP binding
+ships as the `Valid<E>` and `Piped<P, E>` extractors in `nestrs-http`.
+
+```rust
+pub trait Pipe {
+    type In;
+    type Out;
+    fn transform(input: Self::In) -> Result<Self::Out, PipeError>;
+}
+```
+
+## Pipes are stateless
+
+A pipe is a **zero-sized marker** named at a call site — never
+instantiated, never injected. `transform` is an associated function;
+there's no `&self` and no DI container in scope. That's deliberate: a
+pipe is a pure transform, the same input always produces the same
+output, and the type name is enough to pick which one runs.
+
+```rust
+use nestrs_pipes::{Pipe, PipeError};
+
+pub struct Trim;
+
+impl Pipe for Trim {
+    type In = String;
+    type Out = String;
+    fn transform(input: String) -> Result<String, PipeError> {
+        Ok(input.trim().to_string())
+    }
+}
+```
+
+If you need DI-injected logic at the request boundary, that's a service
+or an interceptor — not a pipe.
+
+## The built-in set
+
+`nestrs-pipes` ships the common cases. Reach for them before writing
+your own:
+
+| Pipe | In → Out | Use it for |
+|------|----------|------------|
+| `Parse<T>` | `String → T` (any `FromStr`) | Generic conversion: `ParseInt`, `ParseFloat`, `ParseBool` |
+| `ParseUuid` | `String → Uuid` | Any-version UUID |
+| `ParseUuidV4` / `ParseUuidV7` / … | `String → Uuid` | Version-pinned UUID |
+| `ParseArray<P>` | `String → Vec<P::Out>` | Comma-separated list, each item piped through `P` |
+| `Trim`, `Lowercase`, `Uppercase` | `String → String` | Edge normalization |
+| `ValidationPipe<T>` | `T → T` (where `T: Validate`) | Run [validator](https://docs.rs/validator) attribute rules |
+
+A `PipeError` rejection becomes a JSON `400`:
+
+```json
+{ "statusCode": 400, "error": "Bad Request", "message": "must be a UUID v7" }
+```
+
+`ValidationPipe<T>` attaches the structured field-level errors as
+`details`.
+
+## Validation at the HTTP edge
+
+`Valid<E>` is the ergonomic form of `Piped<ValidationPipe<T>, E>`: extract
+`E`, then validate.
+
+```rust
+use nestrs_http::Valid;
+use poem::web::Json;
+use serde::Deserialize;
+use validator::Validate;
+
+#[derive(Deserialize, Validate)]
+pub struct CreateUserInput {
+    #[validate(email)]
+    email: String,
+    #[validate(length(min = 8))]
+    password: String,
+}
+
+#[post("/")]
+async fn create(&self, Valid(Json(input)): Valid<Json<CreateUserInput>>)
+    -> Result<Json<User>>
+{
+    Ok(Json(self.svc.create(input).await?))
+}
+```
+
+A malformed JSON body is `400` before the pipe runs. A well-formed body
+that fails validation is `400` with:
+
+```json
+{
+  "statusCode": 400,
+  "error": "Bad Request",
+  "message": "validation failed",
+  "details": {
+    "email": [{ "code": "email", "message": null, "params": { /* ... */ } }],
+    "password": [{ "code": "length", "params": { "min": 8 } }]
+  }
+}
+```
+
+No manual checks in the handler.
+
+## Custom transforms with `Piped<P, E>`
+
+When the input needs a transform other than `Validate`, name the pipe at
+the call site:
+
+```rust
+use nestrs_http::Piped;
+use nestrs_pipes::ParseUuidV7;
+use poem::web::Path;
+
+#[get("/:id")]
+async fn get(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> Json<User> {
+    Json(self.svc.find(id).await?)
+}
+```
+
+`Path<String>` extracts the raw segment; `ParseUuidV7::transform` validates
+it as a v7 UUID. A non-UUID string is `400` with `"must be a UUID v7"` —
+not a stringly-typed handler doing its own `parse::<Uuid>()`.
+
+## Pipes vs `Bind`
+
+A pipe converts a *primitive* input — an ID string into a `Uuid`, a JSON
+blob into a validated DTO. A [`Bind<S, A>`](/database/) extractor goes
+further: it parses the id, **loads the row through a service**, and
+**authorizes** it — returning `404` if the row doesn't exist within the
+caller's scope, `403` if denied.
+
+```rust
+// Pipe — pure conversion, no DB
+#[get("/_validate/:id")]
+async fn validate(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> String {
+    format!("{id} is valid")
+}
+
+// Bind — convert + load + authorize
+#[get("/:id")]
+async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+    Json(User::from(&*user))
+}
+```
+
+`Bind` is HTTP-only (it depends on the data layer). `Pipe` is transport-
+agnostic — the same `ParseUuidV7` can bind in HTTP today and a GraphQL
+input tomorrow.
+
+## Writing a pipe
+
+Three rules:
+
+1. **Stateless.** `transform` is an associated function; no `&self`, no
+   container.
+2. **One file per pipe** under `crates/nestrs-pipes/src/pipes/` (one role,
+   one file). Reusable pipes belong to the framework crate — never to an
+   app.
+3. **Use the error envelope.** Return `PipeError::new(msg)` for a simple
+   message, `PipeError::with_details(msg, details)` to carry structured
+   field-level errors.
+
+```rust
+use nestrs_pipes::{Pipe, PipeError};
+
+pub struct NonEmpty;
+
+impl Pipe for NonEmpty {
+    type In = String;
+    type Out = String;
+    fn transform(input: String) -> Result<String, PipeError> {
+        if input.trim().is_empty() {
+            Err(PipeError::new("must not be empty"))
+        } else {
+            Ok(input)
+        }
+    }
+}
+```
+
+Then bind it at the call site:
+
+```rust
+#[post("/")]
+async fn create(&self, Piped(name): Piped<NonEmpty, Json<String>>) -> &'static str {
+    "ok"
+}
+```
+
+<Aside>
+**Reusable pipes live in the framework, never in an app.** A
+single-feature transform is a service. A pattern that recurs in two
+apps belongs in `crates/nestrs-pipes/`.
+</Aside>
+
+## Going further
+
+- [HTTP / controllers](/http/controllers/) — every extractor that
+  composes with a pipe.
+- [Guards](/fundamentals/guards/) — gate access; pipes don't.
+- [Database / `Bind`](/database/) — pipes are for primitives, `Bind`
+  loads and authorizes a row.

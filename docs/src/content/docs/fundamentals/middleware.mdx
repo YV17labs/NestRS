@@ -1,0 +1,139 @@
+---
+title: Middleware
+description: NestRS has no middleware primitive — Guards and Interceptors cover the two roles. A short guide for readers looking for it.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+NestRS doesn't have a middleware primitive. Some backend frameworks ship
+one for cross-cutting work; NestRS splits the responsibility so the
+shape of each layer is explicit:
+
+- **Gate-and-context work** lives in **[Guards](/fundamentals/guards/)** —
+  pre-handler, can short-circuit with a response, can attach typed
+  context the handler reads back via `Ctx<T>`.
+- **Wrap-the-handler work** lives in **[Interceptors](/fundamentals/interceptors/)** —
+  observe both sides, install ambient state, transform the response.
+
+If you're looking for a place to put work the word "middleware" usually
+covers — logging, request id, rate limiting, auth, opening a transaction
+— the table below maps the role to its NestRS home.
+
+## What the word usually covers, and where it lands in NestRS
+
+| Role | NestRS primitive | Why |
+|------|------------------|-----|
+| Logging the request | **Interceptor** | Needs both sides (start time, end time, status) |
+| Adding `X-Request-Id` to the response | **Interceptor** | Touches the response |
+| Authenticating the bearer token | **Guard** (`AuthGuard`) | Short-circuit on 401, attach `Claims` for the handler |
+| Rate-limiting | **Guard** | Short-circuit on 429 before any work runs |
+| Parsing/normalizing the body | **Pipe** at the boundary | Pure transform, no DI |
+| Opening a database transaction | **Interceptor** (`DbContext`, auto-mounted) | Wraps the handler, commits/rolls back on exit |
+| CORS, security headers | poem middleware, configured on `HttpConfig` | Lower-level than a Guard/Interceptor |
+
+The split is on purpose: "gate" and "wrap" are different shapes, the
+framework names them differently, and the request-layer ordering reflects
+the difference.
+
+## "But I want a middleware"
+
+You probably want one of three things. Pick the one that matches.
+
+### "I want to see every request and add a header to the response."
+
+That's an interceptor.
+
+```rust
+#[injectable]
+#[derive(Default)]
+pub struct RequestId;
+
+#[async_trait]
+impl Interceptor for RequestId {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+        let id = uuid::Uuid::now_v7().to_string();
+        let mut resp = next.run(req).await?;
+        resp.headers_mut().insert("x-request-id", id.parse().unwrap());
+        Ok(resp)
+    }
+}
+```
+
+Bind it globally — either by adding `#[interceptor]` on the struct
+(auto-mount on every route) or by writing `HttpTransport::interceptor(...)`
+in `main`.
+
+### "I want to validate the request before any handler runs and block it if invalid."
+
+That's a guard. Gate the request, return `Err(Response)` on rejection.
+
+```rust
+#[injectable]
+#[derive(Default)]
+pub struct RequireApiKey;
+
+#[async_trait]
+impl Guard for RequireApiKey {
+    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+        if req.headers().get("x-api-key").is_some() {
+            Ok(())
+        } else {
+            Err(Response::builder().status(StatusCode::UNAUTHORIZED).body("missing key"))
+        }
+    }
+}
+```
+
+Bind with `#[use_guards(RequireApiKey)]` per controller or per handler,
+or globally via `HttpTransport::guard(...)`.
+
+### "I want to attach something to the request so the handler can read it."
+
+A guard does that too. The guard borrows the request mutably:
+
+```rust
+#[async_trait]
+impl Guard for AuthGuard {
+    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+        let claims = verify_bearer(req)?;
+        req.extensions_mut().insert(claims);
+        Ok(())
+    }
+}
+
+// In the handler:
+async fn me(&self, auth: Ctx<Claims>) -> Json<User> { /* ... */ }
+```
+
+See [Guards / Attaching request context](/fundamentals/guards/#attaching-request-context).
+
+## What about the raw poem middleware trait?
+
+`nestrs-http` builds on [poem](https://docs.rs/poem), and poem has its
+own `Middleware` trait. The framework exposes the named categories
+(Guard / Interceptor / Filter) layered over it. CORS, request-size
+limits, body-decoding — those things live on `HttpConfig` and are
+applied as poem middleware by the transport, not as NestRS Guards or
+Interceptors.
+
+If a third-party crate ships a `poem::Middleware` you want to bolt on,
+attach it through poem's own `.with(...)` API on a `HttpTransport`
+builder. The framework doesn't get in the way; it just doesn't dress
+those up as one of its named primitives.
+
+<Aside>
+Treat `Middleware` as a lower-level extension point — useful when
+wrapping an external crate. For your *own* cross-cutting work, write a
+Guard or an Interceptor; you get DI, the access graph, and per-route
+binding for free.
+</Aside>
+
+## Going further
+
+- [Guards](/fundamentals/guards/) — gate and attach context.
+- [Interceptors](/fundamentals/interceptors/) — wrap and observe.
+- [Pipes](/fundamentals/pipes/) — pure input transforms.
+- [HTTP / configuration](/http/configuration/) — CORS, TLS, the
+  framework `Server:` header.

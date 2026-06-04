@@ -1,0 +1,191 @@
+---
+title: Providers
+description: "#[injectable], #[inject], singleton vs request scope, the pub-trait pattern, and the boot-time access graph."
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A provider is any struct the container can build for you. Mark it
+`#[injectable]`, list it in a module's `providers = [...]`, declare its
+dependencies as `#[inject]` fields. The container does the rest — once,
+at boot.
+
+```rust
+use std::sync::Arc;
+use nestrs_core::injectable;
+
+#[injectable]
+pub struct UsersService {
+    #[inject]
+    db: Arc<DatabaseConnection>,
+}
+
+impl UsersService {
+    pub async fn list(&self) -> Vec<User> { /* ... */ }
+}
+```
+
+`#[injectable]` registers `UsersService` with the container by its
+`TypeId`. `#[inject] db: Arc<DatabaseConnection>` says "I need a
+`DatabaseConnection`; resolve it from the container when you build me."
+
+## What counts as a provider
+
+Anything decorated with one of the framework's struct-level macros is a
+provider:
+
+| Decorator | Used for |
+|-----------|----------|
+| `#[injectable]` | Services, helpers, anything not bound to a transport |
+| `#[controller]` | HTTP controllers — also a provider, with routes |
+| `#[resolver]` | GraphQL resolvers — provider + schema contribution |
+| `#[gateway]` | WebSocket gateways — provider + connection handling |
+| `#[processor]` | Queue consumers — provider + apalis workers |
+| `#[interceptor]` | Global interceptors — provider + auto-mount on HTTP |
+| `#[mcp]` | MCP tool providers |
+
+Every one of them implements `Discoverable` (the trait the framework's
+transports drain) and ships through `#[module(providers = [...])]`.
+
+## Singleton by default, request-scoped on opt-in
+
+```rust
+#[injectable]                              // singleton — the default
+pub struct UsersService { /* ... */ }
+
+#[injectable(scope = request)]             // built fresh per request
+pub struct RequestLogger { /* ... */ }
+```
+
+Singletons are built once at boot, shared as `Arc<T>` everywhere. The
+container is a flat singleton store; injecting a singleton is a typed
+`Arc<T>` lookup.
+
+Request-scoped providers are built **once per request**, cached for that
+request. They may inject singletons; singletons may **not** inject them
+(singletons exist before any request does).
+
+The model is one level deep. Reach a request-scoped provider through the
+request boundary, not through `#[inject]`:
+
+```rust
+use nestrs_http::Scoped;
+
+#[get("/log")]
+async fn log(&self, logger: Scoped<RequestLogger>) -> String {
+    logger.line("served");
+    "ok".into()
+}
+```
+
+The HTTP transport installs a fresh `RequestScope` per request. GraphQL
+and MCP don't bridge the scope yet — singleton-only there.
+
+## The `pub trait` + module-private impl pattern
+
+A module exposes a service to its importers by binding a `pub trait`:
+
+```rust title="crates/features/src/users/core/service.rs"
+use std::sync::Arc;
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait UsersService: Send + Sync {
+    async fn list(&self) -> Result<Vec<User>, Error>;
+}
+
+#[injectable]
+pub(crate) struct UsersServiceImpl { /* ... */ }
+
+#[async_trait]
+impl UsersService for UsersServiceImpl { /* ... */ }
+```
+
+```rust title="users/core/module.rs"
+#[module(providers = [UsersServiceImpl as dyn UsersService])]
+pub struct UsersCoreModule;
+```
+
+The `as dyn UsersService` clause tells `#[module]` to register the impl
+under the trait's key as well — every consumer asking for
+`Arc<dyn UsersService>` gets the same `UsersServiceImpl` value.
+Consumers inject the trait, never the impl. The impl stays
+module-private; visibility is Rust's job, the container only hands out
+what types name.
+
+<Aside>
+There is **no `exports = [...]`** list in `#[module]`. The container is
+flat; a registered provider is reachable by anyone who can name its
+type. The encapsulation primitive is Rust visibility plus the
+`as dyn Trait` binding.
+</Aside>
+
+## The access graph — wiring checked at boot
+
+The container is flat *at runtime* — every `TypeId` is resolvable
+globally — but `#[module]` makes wiring *declarative*. The access graph
+enforces the contract: a provider's `#[inject]` dependency must be
+reachable from its own module's import closure or be global
+infrastructure.
+
+```rust
+#[injectable]
+pub struct Mailer { /* ... */ }
+
+#[module(providers = [Mailer])]
+pub struct MailerModule;
+
+#[injectable]
+pub struct WelcomeService {
+    #[inject]
+    mailer: Arc<Mailer>,
+}
+
+// ✗ MailerModule not imported
+#[module(providers = [WelcomeService])]
+pub struct WelcomeModule;
+```
+
+```text frame="terminal"
+Error: module access violation:
+  `WelcomeService` (in module `WelcomeModule`) depends on `Mailer`, but
+  `WelcomeModule` imports no module that provides it. `Mailer` is
+  provided by `MailerModule` — add `MailerModule` to
+  `#[module(imports = [...])]` of `WelcomeModule`, or route the
+  dependency through a module `WelcomeModule` already imports.
+```
+
+The error tells you the consumer, the missing dependency, and the module
+that owns it — boot fails clean, not with a cryptic "Cannot resolve" on
+the first request.
+
+The graph also governs **attribute-bound** layers
+(`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`): a
+controller listing `#[use_guards(AppAbilityGuard)]` must reach
+`AppAbilityGuard` through its module's imports, or boot fails the same
+way.
+
+## The runtime escape hatch (and when to skip it)
+
+```rust
+let mailer: Arc<Mailer> = container.get::<Mailer>().unwrap();
+```
+
+`Container::get` / `get_dyn` resolve a provider imperatively from any
+code that holds a `&Container`. It bypasses the access graph entirely —
+useful for test harnesses or rare bootstrap glue, and called out in the
+framework's source as an unchecked escape hatch.
+
+In application code, prefer `#[inject]`. The contract is what protects
+you from a refactor moving a provider out of reach.
+
+## Going further
+
+- [Modules](/fundamentals/modules/) — where providers are listed and
+  how imports compose.
+- [Guards](/fundamentals/guards/), [Interceptors](/fundamentals/interceptors/) —
+  providers bound at request layers, container-resolved on every route.
+- [Database / `Repo`](/database/) — the single audited choke point every
+  service goes through.

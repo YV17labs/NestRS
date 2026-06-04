@@ -7,12 +7,15 @@ use async_trait::async_trait;
 use chrono::Utc;
 use chrono_tz::Tz;
 use croner::Cron;
-use nestrs_core::{run_in_job_context, Container, DiscoveryService, JobContext, Transport};
+use nestrs_core::{
+    inventory, run_in_job_context, Container, DiscoveryService, JobContext, ReachableProviders,
+    Transport,
+};
 use tokio::task::JoinSet;
 use tokio::time::{interval, sleep, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
-use crate::{CronJobMeta, RunFn, Trigger};
+use crate::{CronJobMeta, RunFn, ScheduledMethod, Trigger};
 
 /// Cron expressions and timezones are parsed in `configure` so a bad value
 /// fails boot (not the first fire); each tick is cheap.
@@ -104,11 +107,38 @@ impl Default for Scheduler {
 impl Transport for Scheduler {
     async fn configure(&mut self, container: &Container) -> Result<()> {
         let discovery = DiscoveryService::new(container);
-        self.jobs = discovery
+        // Path 1: `attach_meta::<…, CronJobMeta>` — direct registration the
+        // crate's own tests use; also a hand-written escape hatch for an app
+        // that wants to register a job without going through the macros.
+        let mut jobs: Vec<Job> = discovery
             .meta::<CronJobMeta>()
             .iter()
             .map(|d| Scheduler::resolve(&d.meta))
             .collect::<Result<Vec<_>>>()?;
+        // Path 2: link-time inventory from `#[scheduled]` — module-gated by
+        // `ReachableProviders` so a job whose provider lives in an unimported
+        // module compiles in but does not fire.
+        let reachable = container.get::<ReachableProviders>();
+        for entry in inventory::iter::<ScheduledMethod>() {
+            let provider_id = (entry.provider_type_id)();
+            if let Some(r) = reachable.as_ref() {
+                if !r.0.contains(&provider_id) {
+                    tracing::debug!(
+                        target: "nestrs::schedule",
+                        job = entry.name,
+                        "skipped scheduled method: provider unreachable from app's module tree",
+                    );
+                    continue;
+                }
+            }
+            let synthesized = Arc::new(CronJobMeta {
+                name: entry.name,
+                trigger: entry.trigger,
+                run: entry.run,
+            });
+            jobs.push(Scheduler::resolve(&synthesized)?);
+        }
+        self.jobs = jobs;
         for job in &self.jobs {
             match job {
                 Job::Interval { name, period, .. } => tracing::info!(

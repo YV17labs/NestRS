@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Internal — the #[cron_job] decorator macro; re-exported by nestrs-schedule, not a direct dependency."
+description = "Internal — the #[scheduled] decorator macro; re-exported by nestrs-schedule, not a direct dependency."
 
 [lib]
 proc-macro = true
@@ -14,7 +14,6 @@ proc-macro = true
 syn.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true
-nestrs-codegen.workspace = true
-# Validate a `cron = "..."` string literal at macro-expansion time, so a bad
+# Validate a `cron(...)` string literal at macro-expansion time, so a bad
 # expression is a compile error rather than a boot-time surprise.
 croner.workspace = true

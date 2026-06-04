@@ -1,22 +1,23 @@
-//! Scheduled jobs discovered like controllers. `Scheduler` is a
-//! [`Transport`](nestrs_core::Transport) — it sees the complete container, so a
-//! job may inject anything regardless of module import order.
+//! Scheduled methods discovered like routes. `#[scheduled]` on a provider's
+//! `impl` block orchestrates per-method `#[cron]` / `#[every]` / `#[after]`
+//! attributes; each method ships one cron entry sharing the provider's
+//! `#[inject]` deps. Importing [`ScheduleModule`] attaches the [`Scheduler`]
+//! to the app at boot.
 //!
-//! `#[cron_job]` takes exactly one of three triggers — `every = "30s"`
-//! (interval), `cron = "..."` (5/6/7-field expression, optionally
-//! `tz = "..."`; UTC otherwise), or `after = "10s"` (one-shot). Cron strings
-//! are validated at compile time; presets/timezones at boot.
+//! Triggers are validated **at compile time** (string literals) or **at
+//! boot** (`CronExpression` presets, IANA timezones); a bad value fails the
+//! boot naming the offending job.
 
+mod inventory;
 mod meta;
-mod scheduled;
+mod module;
 mod scheduler;
 mod trigger;
 
+pub use inventory::ScheduledMethod;
 pub use meta::{CronJobMeta, RunFn};
-pub use scheduled::Scheduled;
+pub use module::ScheduleModule;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};
 
-pub use nestrs_schedule_macros::cron_job;
-
-pub use async_trait::async_trait;
+pub use nestrs_schedule_macros::scheduled;

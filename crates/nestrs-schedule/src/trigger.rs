@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+/// `Copy` so static inventory entries can ship a `Trigger` directly without a
+/// boxed allocation.
+#[derive(Clone, Copy)]
 pub enum Trigger {
     /// First run one interval in (matches `@Interval`).
     Interval(Duration),

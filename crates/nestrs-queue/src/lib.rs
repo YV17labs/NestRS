@@ -17,15 +17,21 @@ mod connection;
 mod module;
 mod processor;
 mod worker;
+mod worker_module;
 
 pub use config::QueueConfig;
 pub use connection::{Queue, QueueConnection};
 pub use module::{QueueModule, QueueSetup};
-pub use processor::{Job, Processor, ProcessorMeta};
+pub use processor::{Job, MethodHandler, ProcessMethod, Processor, ProcessorMeta};
 pub use worker::QueueWorker;
+pub use worker_module::QueueWorkerModule;
 
 #[doc(hidden)]
-pub use processor::{register_worker, FromContainer};
+pub use processor::{register_method, register_worker, FromContainer};
+// Apalis surface re-exported for the generated handler/register code. Apps
+// never reach for these directly — the macro emits them.
+#[doc(hidden)]
+pub use apalis::prelude::{Data, Monitor};
 
 pub use nestrs_queue_macros::processor;
 

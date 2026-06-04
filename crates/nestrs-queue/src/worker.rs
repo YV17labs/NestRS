@@ -3,12 +3,12 @@
 use anyhow::{Context, Result};
 use apalis::prelude::Monitor;
 use async_trait::async_trait;
-use nestrs_core::{Container, DiscoveryService, Transport};
+use nestrs_core::{inventory, Container, DiscoveryService, ReachableProviders, Transport};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::connection::QueueConnection;
-use crate::processor::ProcessorMeta;
+use crate::processor::{ProcessMethod, ProcessorMeta};
 
 pub struct QueueWorker {
     processors: Vec<Arc<ProcessorMeta>>,
@@ -34,11 +34,37 @@ impl Default for QueueWorker {
 impl Transport for QueueWorker {
     async fn configure(&mut self, container: &Container) -> Result<()> {
         let discovery = DiscoveryService::new(container);
-        self.processors = discovery
+        let mut processors: Vec<Arc<ProcessorMeta>> = discovery
             .meta::<ProcessorMeta>()
             .into_iter()
             .map(|d| d.meta)
             .collect();
+        // Drain link-time `#[process]` methods, filtered by ReachableProviders
+        // so a method on a provider not in the app's module tree compiles in
+        // but does not subscribe to its queue.
+        let reachable = container.get::<ReachableProviders>();
+        for entry in inventory::iter::<ProcessMethod>() {
+            let provider_id = (entry.provider_type_id)();
+            if let Some(r) = reachable.as_ref() {
+                if !r.0.contains(&provider_id) {
+                    tracing::debug!(
+                        target: "nestrs::queue",
+                        processor = entry.name,
+                        queue = entry.queue,
+                        "skipped #[process] method: provider unreachable from app's module tree",
+                    );
+                    continue;
+                }
+            }
+            processors.push(Arc::new(ProcessorMeta {
+                name: entry.name,
+                queue: entry.queue,
+                concurrency: entry.concurrency,
+                retries: entry.retries,
+                register: entry.register,
+            }));
+        }
+        self.processors = processors;
 
         // Fail fast at boot if processors exist but no connection is seeded.
         if !self.processors.is_empty() {

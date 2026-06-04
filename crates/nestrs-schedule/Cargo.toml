@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-schedule"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Discovered cron-style scheduled jobs for nestrs: the #[scheduled] decorator plus a ScheduleModule that auto-attaches the Scheduler."
 
 [dependencies]

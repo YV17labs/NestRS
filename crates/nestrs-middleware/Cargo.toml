@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-middleware"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Named middleware vocabulary (Interceptor, Guard, Filter) for nestrs, layered on top of poem::Middleware."
 
 [dependencies]

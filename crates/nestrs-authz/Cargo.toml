@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-authz"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "CASL-style authorization for nestrs: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`, `LoaderScope`, `WsDataContext`) live in `nestrs-database` so the engine stays free of a data-layer dependency."
 
 [features]

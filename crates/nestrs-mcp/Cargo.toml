@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-mcp"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Model Context Protocol server support for nestrs — wraps the rmcp SDK behind the nestrs DI container and exposes a poem endpoint."
 
 [dependencies]

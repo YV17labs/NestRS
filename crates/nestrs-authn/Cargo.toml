@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-authn"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Authentication for nestrs: a JwtService (sign/verify), a pluggable Strategy trait, and the request-scoped AuthGuard that establishes the caller's identity."
 
 [dependencies]

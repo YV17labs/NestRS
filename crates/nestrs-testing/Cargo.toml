@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-testing"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "In-process testing harness for nestrs: boot an app's real DI graph and drive its HTTP/GraphQL/MCP surfaces with poem's TestClient, with provider overrides and no socket bound."
 
 [features]

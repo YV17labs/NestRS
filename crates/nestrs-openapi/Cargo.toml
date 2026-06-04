@@ -1,10 +1,11 @@
 [package]
 name = "nestrs-openapi"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "OpenAPI 3.0 document generation and bundled Swagger UI for nestrs HTTP controllers (the REST analog of nestrs-graphql's GraphqlModule)."
 
 [dependencies]

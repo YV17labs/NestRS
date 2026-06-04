@@ -1,0 +1,115 @@
+---
+title: Migrations
+description: SeaORM migrations in the migrations crate — write one, register it, run it with just db.
+sidebar:
+  order: 2
+---
+
+Schema changes live in the **`migrations`** crate — a product crate under
+`crates/`, not an app. Migrations are
+[SeaORM](https://www.sea-ql.org/SeaORM/)'s, so a migration is a struct
+implementing `MigrationTrait` with an `up` and a `down`. Neither the API nor
+the worker run migrations on startup; you run them explicitly with `just db`.
+
+## Write a migration
+
+One file per migration, named `m<utc-date>_<seq>_<what>.rs`.
+`DeriveMigrationName` takes the version from the file name; a `DeriveIden`
+enum names the table and its columns so there are no stringly-typed
+identifiers.
+
+```rust title="crates/migrations/src/m20260526_000000_create_org.rs"
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(Org::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(Org::Id).uuid().not_null().primary_key())
+                    .col(ColumnDef::new(Org::Name).string().not_null().unique_key())
+                    .to_owned(),
+            )
+            .await
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(Org::Table).to_owned())
+            .await
+    }
+}
+
+#[derive(DeriveIden)]
+enum Org {
+    Table,
+    Id,
+    Name,
+}
+```
+
+`down` is the inverse of `up` — it's what `just db down` and `just db fresh`
+replay to roll back cleanly.
+
+### Foreign keys
+
+A later migration references an earlier table by adding a foreign key — the
+`user` table hangs off `org`:
+
+```rust title="crates/migrations/src/m20260526_000001_create_user.rs"
+.col(ColumnDef::new(User::OrgId).uuid().not_null())
+.foreign_key(
+    ForeignKey::create()
+        .name("fk_user_org_id")
+        .from(User::Table, User::OrgId)
+        .to(Org::Table, Org::Id)
+        .on_delete(ForeignKeyAction::Restrict)
+        .on_update(ForeignKeyAction::Cascade),
+)
+```
+
+## Register it
+
+Add the module to the `Migrator` so it joins the ordered list. Migrations run
+top to bottom, so a table must appear after anything it references:
+
+```rust title="crates/migrations/src/migrator.rs"
+use sea_orm_migration::prelude::*;
+use super::{m20260526_000000_create_org, m20260526_000001_create_user};
+
+pub struct Migrator;
+
+#[async_trait::async_trait]
+impl MigratorTrait for Migrator {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        vec![
+            Box::new(m20260526_000000_create_org::Migration),
+            Box::new(m20260526_000001_create_user::Migration),
+        ]
+    }
+}
+```
+
+## Run them
+
+```bash
+just db up       # apply every pending migration
+just db down     # roll back the last applied migration
+just db status   # show applied vs. pending
+just db fresh    # drop every table, then re-apply from scratch
+```
+
+Each verb shells out to the crate's `migrate` binary
+(`cargo run -p migrations --bin migrate -- <verb>`), which reads
+`NESTRS_DATABASE__URL` — the same variable the apps connect with.
+
+## Going further
+
+- [Seeding](/database/seeding/) — load demo data once the schema is in place.
+- [Database](/database/) — the data layer the schema backs.

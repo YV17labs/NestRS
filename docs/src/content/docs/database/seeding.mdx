@@ -1,0 +1,86 @@
+---
+title: Seeding
+description: Idempotent demo data via the seed crate — factories, the runner, just db seed.
+sidebar:
+  order: 3
+---
+
+Demo data lives in the **`seed`** crate — a product crate under `crates/`,
+beside [`migrations`](/database/migrations/). Seeding is **idempotent**: every
+factory inserts with `ON CONFLICT DO NOTHING`, so `just db seed` can run any
+number of times and only ever fills gaps. `just db reset` chains a fresh
+migrate with a seed for a clean slate.
+
+## A factory
+
+One factory per table, each a `seed(db)` function that inserts its demo rows
+and returns how many landed. Organizations use fixed UUIDs so other factories
+— and tests — can reference them by constant:
+
+```rust title="crates/seed/src/factories/org.rs"
+pub const ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e);
+pub const GLOBEX: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_61b3);
+
+const DEMO_ORGS: [(Uuid, &str); 2] = [(ACME, "Acme"), (GLOBEX, "Globex")];
+
+pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
+    let mut inserted = 0;
+    for (id, name) in DEMO_ORGS {
+        let stmt = Query::insert()
+            .into_table(Org::Table)
+            .columns([Org::Id, Org::Name])
+            .values_panic([id.into(), name.to_owned().into()])
+            .on_conflict(OnConflict::column(Org::Id).do_nothing().to_owned())
+            .to_owned();
+        inserted += db.execute(&stmt).await?.rows_affected();
+    }
+    Ok(inserted)
+}
+```
+
+Rows that depend on others reach for those constants. The user factory hangs
+its demo accounts off `org::ACME` / `org::GLOBEX`, mints a `Uuid::now_v7()` id,
+fakes a name, derives a deterministic email, and conflicts on the unique
+`email`:
+
+```rust title="crates/seed/src/factories/user.rs"
+const DEMO: [(Uuid, &str, usize); 2] = [(org::ACME, "acme", 3), (org::GLOBEX, "globex", 2)];
+
+// build a UserRow { id: Uuid::now_v7(), org_id, name: Name().fake(),
+//                   email: format!("{slug}-user-{n}@example.test") }
+// then INSERT ... ON CONFLICT (email) DO NOTHING.
+```
+
+## The runner
+
+`seed::run` calls each factory in dependency order and sums the inserts —
+parents before children, so foreign keys resolve:
+
+```rust title="crates/seed/src/runner.rs"
+pub async fn run(db: &DatabaseConnection) -> Result<u64> {
+    let mut inserted = 0;
+    inserted += factories::org::seed(db).await?;
+    inserted += factories::user::seed(db).await?;
+    Ok(inserted)
+}
+```
+
+## Run it
+
+```bash
+just db seed     # load demo data (idempotent)
+just db reset    # fresh migrate, then seed
+```
+
+`just db seed` runs the crate's `seed` binary (`cargo run -p seed --bin seed`),
+which reads `NESTRS_DATABASE__URL`, runs `seed::run`, and prints how many rows
+it inserted.
+
+Because `run` is a plain function, tests call it directly. The crate's e2e
+migrates a throwaway database, seeds it, asserts rows landed, then seeds again
+and asserts the second pass inserts **zero** — idempotence, verified.
+
+## Going further
+
+- [Migrations](/database/migrations/) — the schema the seed data fills.
+- [Database](/database/) — entities and the service that reads them back.

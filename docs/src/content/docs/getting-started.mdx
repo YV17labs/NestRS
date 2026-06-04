@@ -127,15 +127,23 @@ impl HelloController {
 
 ```rust title="src/app.rs"
 use nestrs_core::module;
+use nestrs_http::HttpModule;
 use crate::{controller::HelloController, service::HelloService};
 
-#[module(providers = [HelloService, HelloController])]
+#[module(
+    imports = [HttpModule::for_root(None)],
+    providers = [HelloService, HelloController],
+)]
 pub struct AppModule;
 ```
 
+`HttpModule::for_root(None)` listens on host `0.0.0.0` and port `3000` by
+default — override with `NESTRS_HTTP__HOST` / `NESTRS_HTTP__PORT`, or pin a
+different port in code with
+`HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })`.
+
 ```rust title="src/main.rs"
 use nestrs_core::App;
-use nestrs_http::HttpTransport;
 mod app;
 mod controller;
 mod service;
@@ -143,12 +151,18 @@ use app::AppModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    App::new::<AppModule>()?
-        .transport(HttpTransport::new().bind("0.0.0.0:3000"))
+    App::builder()
+        .module::<AppModule>()
+        .build()
+        .await?
         .run()
         .await
 }
 ```
+
+The HTTP transport is activated by importing `HttpModule::for_root(None)`
+in `AppModule`; `main` carries no transport at all and is identical
+across every app in the workspace.
 
 ```toml title="Cargo.toml"
 [dependencies]

@@ -77,10 +77,24 @@ impl HelloController {
 
 ```rust title="apps/hello/src/app.rs"
 use nestrs_core::module;
+use nestrs_http::HttpModule;
 use crate::{controller::HelloController, service::HelloService};
 
-#[module(providers = [HelloService, HelloController])]
+#[module(
+    imports = [HttpModule::for_root(None)],
+    providers = [HelloService, HelloController],
+)]
 pub struct AppModule;
+```
+
+```rust title="apps/hello/src/main.rs"
+use nestrs_core::App;
+use hello::AppModule;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    App::builder().module::<AppModule>().build().await?.run().await
+}
 ```
 
 ```bash frame="terminal"
@@ -115,7 +129,7 @@ once in NestRS and once in NestJS 11 on Node.js 20, under identical `wrk` load
 <CardGrid>
   <Card title="Declarative, decorator-driven" icon="puzzle">
     `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`,
-    `#[gateway]`, `#[cron_job]`, `#[mcp]`. You write logic; the decorator
+    `#[gateway]`, `#[scheduled]`, `#[mcp]`. You write logic; the decorator
     expands the boilerplate. No service locator, no registration list to keep
     in sync.
   </Card>

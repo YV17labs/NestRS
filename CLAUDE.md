@@ -264,18 +264,33 @@ adopting an external DI crate.** If ergonomics fall short, extend ours.
   `Container::get`/`get_dyn` is an unchecked escape hatch — the contract
   binds the *declarative* surface, not imperative resolution.
 
-## Discovery is struct-level by default
+## Discovery: providers via `Discoverable`, per-method units via inventory
 
 Anything a module wires up implements `Discoverable` and is listed in a flat
-`#[module(providers = [...])]`. **Default to one struct per concern**, each
-with its own decorator macro emitting the single `impl Discoverable`
-(`#[cron_job]`, `#[processor]`, `#[mcp]`, a gateway, …) — so third-party
-crates extend the system without touching `nestrs-macros`. **HTTP and GraphQL
-are the exceptions**: `#[routes]` orchestrates verb attributes on a
-controller impl, and `#[resolver]` orchestrates
-`#[query]`/`#[mutation]`/`#[field]` on a resolver impl (async-graphql forces
-method-level kind). Any *further* method-level decoration needs a strong
-written justification.
+`#[module(providers = [...])]`. `#[injectable]`, `#[mcp]`, the gateway
+struct, and similar single-concern decorators emit the single
+`impl Discoverable` directly.
+
+**For concerns that aggregate per-method units, the orchestrator pattern
+applies uniformly:** `#[routes]` on a controller impl scans `#[get]`/`#[post]`/…
+methods, `#[resolver]` on a resolver impl scans `#[query]`/`#[mutation]`/`#[field]`,
+`#[scheduled]` on a provider impl scans `#[every]`/`#[cron]`/`#[after]`, and
+`#[processor]` on a provider impl scans `#[process(queue, ...)]`. The host
+struct is an ordinary `#[injectable]` (or `#[controller]`/`#[resolver]`)
+that owns `Discoverable`; each method submits its own unit to a link-time
+`inventory` registry so the orchestrator never collides with the struct's
+single `Discoverable`. This is the same seam `#[hooks]` uses.
+
+Per-method units (cron jobs, queue handlers, lifecycle hooks) are
+**module-gated by `ReachableProviders`** at boot: an inventory entry whose
+provider is in no reachable module is silently skipped. Linking a crate
+without importing its module = code present in the binary, **inert** in
+this app — same property the GraphQL schema relies on.
+
+A new method-level decorator pair (orchestrator on impl + per-method
+attribute) is the right model for any concern where one provider should
+own several units sharing the same `#[inject]` dependencies. Anything else
+— a transport-bound runtime, a single-concern marker — stays struct-level.
 
 GraphQL composition is **discovered, not listed**: each `#[resolver]` submits
 its query/mutation objects to an `inventory` registry merged into the schema
@@ -467,7 +482,7 @@ WebSocket's `SocketContext` is `WsDataContext` (installs the connection's
 pool + ability per message — no per-message transaction).
 The **worker transports** install a pool executor too via the orm-agnostic
 `JobContext` seam (`WorkerDbContext`, auto-bound by `DatabaseModule`) — so
-a `#[cron_job]`/`#[processor]` gets an ambient `Repo` with no connection
+a `#[scheduled]`/`#[processor]` method gets an ambient `Repo` with no connection
 injected (system work ⇒ no ability ⇒ unscoped, correct). A genuinely
 contextless path (a shutdown hook) keeps an injected
 `Arc<DatabaseConnection>` — the **only** documented bypass of `Repo` on a
@@ -487,17 +502,29 @@ exemplar map.
 Each realizes the "new concern = new crate + decorator, no `nestrs-macros`
 change" claim. Read the crate for how; here is only what was decided:
 
-- **`nestrs-schedule`** — `#[cron_job]` with exactly one of three triggers
-  (`every` interval, `cron` expression with optional `tz`, `after`
-  one-shot); string literals validated at compile time, presets/timezones
-  at boot (a bad value fails the boot naming the job). The `Scheduler` is a
-  `Transport`.
+- **`nestrs-schedule`** — `#[scheduled]` orchestrator on an `#[injectable]`
+  provider's `impl` block; each method tagged with exactly one of `#[every]`
+  (interval), `#[cron]` (cron expression, optional `tz`), or `#[after]`
+  (one-shot). String literals validated at compile time; presets/timezones
+  at boot — a bad value fails the boot naming the offending job. The
+  `Scheduler` is a `Transport` contributed at boot by `ScheduleModule` via
+  `TransportContribution`.
 - **`nestrs-queue`** — Redis-backed via `apalis` (the `@nestjs/bullmq`
-  analog): durable, distributed, with retries. A `#[processor(queue =
-  "...", concurrency, retries)]` is a struct; queues are **identified by
-  name** (stringly-typed, the known cost). Producer and consumer are
-  decoupled. The connection is seeded as a factory at the root; no apalis
-  types leak to apps.
+  analog): durable, distributed, with retries. `#[processor]` is an
+  orchestrator on an `#[injectable]`'s `impl` block; each method tagged
+  `#[process(queue = "...", concurrency, retries)]` becomes one apalis
+  consumer. Queues are **identified by name** (stringly-typed, the known
+  cost). Producer and consumer are decoupled. The connection is seeded as
+  a factory at the root via `QueueModule::for_root`; the consumer runtime
+  activates by importing the separate `QueueWorkerModule` (producer-only
+  apps don't import it). No apalis types leak to apps.
+- **`nestrs-http`** — the only activation seam is `HttpModule::for_root(...)`
+  in `AppModule.imports`; `App` has no public `.transport(...)` method.
+  Every option of `HttpConfig { host, port, tls, … }` is settable both via
+  `NESTRS_HTTP__*` env vars and via the pinned struct — the framework-wide
+  dual-path rule. TLS material (`tls: Option<TlsConfig>`) is read from
+  `NESTRS_HTTP__TLS_CERT[_FILE]` + `NESTRS_HTTP__TLS_KEY[_FILE]` by
+  `from_env`, or pinned in code via `TlsConfig::new(cert, key)`.
 - **`nestrs-pipes`** — transport-agnostic, **one `Pipe` per file**,
   stateless (`transform(In) -> Result<Out, _>`, never a DI provider). The
   base set covers the common cases (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …).

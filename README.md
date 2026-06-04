@@ -110,50 +110,75 @@ impl HelloController {
 }
 ```
 
-Declare them on the root module and boot with one transport:
+Declare them on the root module and boot:
 
 ```rust
 use nestrs_core::{module, App};
-use nestrs_http::HttpTransport;
+use nestrs_http::HttpModule;
 
-// The root module lists its providers directly; a feature module is only
-// needed once you have more than one slice.
-#[module(providers = [HelloService, HelloController])]
+#[module(
+    imports = [HttpModule::for_root(None)],
+    providers = [HelloService, HelloController],
+)]
 pub struct AppModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    App::new::<AppModule>()?
-        .transport(HttpTransport::new().bind("0.0.0.0:3000"))
-        .run()
-        .await
+    App::builder().module::<AppModule>().build().await?.run().await
 }
 ```
+
+`HttpModule::for_root(None)` listens on host `0.0.0.0` and port `3000` by
+default — override via `NESTRS_HTTP__HOST` / `NESTRS_HTTP__PORT` or pin in
+code with `HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })`.
+`main` carries no transport at all; every transport is imported in
+`AppModule`.
 
 `just dev` runs it; `GET /` returns `Hello World`. No reflection, no separate
 codegen step — `cargo` compiles it to a single native binary, and the DI graph
 is checked at boot.
 
-The same inject-and-decorate model carries every surface, not just HTTP. The
-`worker` example pairs a scheduled producer with a durable, Redis-backed
-consumer — each a struct that injects what it needs and implements one trait
-method for its logic:
+The same inject-and-decorate model carries every surface, not just HTTP.
+Scheduled jobs and queue handlers live as **methods on any `#[injectable]`
+provider** — the NestJS-style pattern of pooling related work on one service
+so they share `#[inject]` dependencies:
 
 ```rust
-// Runs every 5s — an in-process scheduled job.
-#[cron_job(every = "5s")]
-pub struct AudioProducer {
+// One service, several scheduled methods sharing `self.queue`.
+#[injectable]
+pub struct AudioTasks {
     #[inject]
     queue: Arc<QueueConnection>,
 }
 
+#[scheduled]
+impl AudioTasks {
+    #[every("5s")]
+    async fn enqueue_transcode(&self) -> Result<()> { /* … */ }
+
+    #[cron(CronExpression::EVERY_MINUTE)]
+    async fn heartbeat(&self) -> Result<()> { /* … */ }
+}
+
 // A durable queue consumer — 5 jobs in flight, retried 3× on failure.
-#[processor(queue = "audio", concurrency = 5, retries = 3)]
-pub struct AudioProcessor {
+#[injectable]
+pub struct AudioJobs {
     #[inject]
     transcoder: Arc<Transcoder>,
 }
+
+#[processor]
+impl AudioJobs {
+    #[process(queue = "audio", concurrency = 5, retries = 3)]
+    async fn transcode(&self, job: TranscodeJob) -> Result<()> {
+        self.transcoder.transcode(&job.file).await
+    }
+}
 ```
+
+The schedule and queue runtimes activate by importing `ScheduleModule` /
+`QueueWorkerModule` in the `AppModule`'s `imports` — same composition seam
+as HTTP.
 
 GraphQL resolvers (`#[resolver]`/`#[query]`), MCP tools (`#[mcp]`) and the rest
 follow the same shape. The richest example, `api`, stacks REST + GraphQL +
@@ -261,8 +286,8 @@ surface is decorator macros — reach for them first (`#[injectable]`, `#[module
 | `nestrs-ws` | WebSocket gateways (`#[gateway]`/`#[messages]`/`#[subscribe_message]`), server→client push, rooms, per-gateway namespacing, per-message guards + `on_connect`/`on_disconnect` hooks; self-mounts on the HTTP transport |
 | `nestrs-database` | SeaORM integration — `DatabaseModule::for_root`, ambient `Repo` + `CrudService`, request-scoped executor (pool or transaction), transport-coupled extractors (`Bind`, GraphQL `bind`, `LoaderScope`, `WsDataContext`) |
 | `nestrs-authn` | Authentication strategies (`Strategy`, `AuthGuard`), JWT verification (`JwtStrategy`), OAuth2 client helpers |
-| `nestrs-queue` | Redis-backed durable job queues + workers (`#[processor]`); `apalis`-backed |
-| `nestrs-schedule` | In-process cron / interval jobs (`#[cron_job]`) |
+| `nestrs-queue` | Redis-backed durable job queues + workers (`#[processor]` orchestrator + `#[process]` per method); `apalis`-backed. Consumer side activated by importing `QueueWorkerModule` |
+| `nestrs-schedule` | In-process cron / interval jobs declared as methods (`#[scheduled]` + `#[cron]`/`#[every]`/`#[after]`); activated by importing `ScheduleModule` |
 | `nestrs-events` | Typed in-process event bus + `#[on_event]` handlers |
 | `nestrs-authz` | CASL-style authorization: one ability → access gate + query pre-filter + response masking. Transport bindings behind Cargo features (`http`, `graphql`, `mcp`) |
 | `nestrs-pipes` | Transport-agnostic validation & transformation (`ValidationPipe`, `Parse*`, …) |
@@ -450,10 +475,11 @@ Cursor, …) at `http://localhost:3003/mcp`.
 
 ### `worker` — Background jobs & scheduling (headless)
 
-Started with `just dev worker`. No HTTP surface — it runs a `Scheduler`
-(in-process cron / interval jobs) and a `QueueWorker` (Redis-backed durable jobs
-via `apalis`), so it needs a `NESTRS_QUEUE__URL`. The bundled `audio` feature shows the
-full producer → queue → consumer loop with `#[cron_job]` and `#[processor]`.
+Started with `just dev worker`. No HTTP surface — it runs a `QueueWorker`
+(Redis-backed durable jobs via `apalis`, activated by importing
+`QueueWorkerModule`), so it needs a `NESTRS_QUEUE__URL`. The bundled `audio`
+feature shows the full producer → queue → consumer loop with `#[scheduled]`
+on the API side and `#[processor]` + `#[process]` on the worker.
 Importing no HTTP crate, the binary never compiles the poem stack — a genuinely
 lean headless build.
 
@@ -525,8 +551,8 @@ impl block and the framework generates the wiring. The core set:
 | `#[routes]` + `#[get]`/`#[post]`/`#[put]`/… | On a controller impl, turns each verb-attributed method into a routed HTTP handler |
 | `#[resolver]` + `#[query]`/`#[mutation]`/`#[field]` | Declares a GraphQL resolver; query/mutation roots self-compose into the schema, `#[field]` resolves a type's field |
 | `#[gateway]` + `#[messages]`/`#[subscribe_message]` | Declares a WebSocket gateway that self-mounts on the HTTP transport and dispatches JSON `{event, data}` messages |
-| `#[processor]` | Declares a Redis-backed durable queue consumer (queue name, concurrency, retries) |
-| `#[cron_job]` | Declares an in-process scheduled job triggered by an interval, a cron expression, or a one-shot delay |
+| `#[processor]` + `#[process(queue, concurrency, retries)]` | On a provider impl, turns each `#[process]`-tagged method into a Redis-backed durable queue consumer |
+| `#[scheduled]` + `#[every]`/`#[cron]`/`#[after]` | On a provider impl, turns each tagged method into an in-process scheduled job (interval, cron expression, or one-shot delay) |
 | `#[mcp]` | Declares a Model Context Protocol server whose methods become callable tools |
 | `#[expose]` | Exposes a SeaORM entity to GraphQL **and** OpenAPI from a single annotation, with per-field skip/rename |
 | `#[config]` | Binds a typed config struct to environment variables (`NESTRS_<NAMESPACE>__<KEY>`) |

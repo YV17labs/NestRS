@@ -1,44 +1,46 @@
 ---
 title: Schedule
-description: In-process cron and interval jobs — declared as structs, validated at boot.
+description: In-process cron and interval jobs — declared as methods on any provider, activated by importing one module.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-A scheduled job is just a struct with `#[cron_job(...)]` — the same DI shape
-as every other provider. The `Scheduler` transport drains the registry
-at boot, validates each trigger, and dispatches the jobs in-process —
-no broker, no second binary.
+A scheduled job is **a method** on any `#[injectable]` provider, tagged with
+`#[every]`, `#[cron]`, or `#[after]` inside a `#[scheduled]` impl block.
+Importing `ScheduleModule` in your `AppModule` attaches the scheduler at
+boot.
 
-Triggers are validated **at compile time** (string literals) or **at
-boot** (presets, timezones); a bad cron expression fails the boot
-naming the job.
+Triggers are validated **at compile time** (string literals) or **at boot**
+(`CronExpression` presets, IANA timezones); a bad value fails the boot
+naming the offending job.
 
-## A 5-second interval job
+## A first scheduled method
 
-This is the real producer run by `apps/platform-api` — every 5 seconds it
-generates a fake transcode task and pushes it onto a queue that the separate
-`apps/platform-worker` consumes:
+A regular `#[injectable]` service with one decorated method. The `#[scheduled]`
+attribute marks the impl block; `#[every("5s")]` marks the method as a
+recurring job.
 
 ```rust title="crates/features/src/audio/schedule/producer.rs"
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+use nestrs_core::injectable;
 use nestrs_queue::QueueConnection;
-use nestrs_schedule::{async_trait, cron_job, CronExpression, Scheduled};
+use nestrs_schedule::scheduled;
 
 use crate::audio::core::{TranscodeJob, AUDIO_QUEUE};
 
-#[cron_job(cron = CronExpression::EVERY_5_SECONDS)]
-pub struct AudioProducer {
+#[injectable]
+pub struct AudioTasks {
     #[inject]
     queue: Arc<QueueConnection>,
 }
 
-#[async_trait]
-impl Scheduled for AudioProducer {
-    async fn run(&self) -> Result<()> {
+#[scheduled]
+impl AudioTasks {
+    #[every("5s")]
+    async fn enqueue_transcode(&self) -> Result<()> {
         let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
         let file = format!("track-{id}.mp3");
         self.queue
@@ -51,43 +53,108 @@ impl Scheduled for AudioProducer {
 }
 ```
 
-- **`#[cron_job(cron = ...)]`** decorates the struct. The macro
-  registers it with the scheduler discovery registry and records its
-  injected dependencies for the access graph.
-- **`#[inject] queue: Arc<QueueConnection>`** — the container hands
-  the job whatever it needs. No magical singletons.
-- **`impl Scheduled for AudioProducer`** is the body. The framework
-  calls `run` on each tick. A `Result::Err` is logged at `error`; the
-  job retries on its next scheduled tick.
+- **`#[injectable]`** makes `AudioTasks` a regular DI provider — same
+  `#[inject]` shape as any other service.
+- **`#[scheduled]`** on the impl block orchestrates the per-method trigger
+  attributes and submits one cron entry per decorated method.
+- **`#[every("5s")]`** runs the method on a fixed interval. A failure
+  returns `Err`; it is logged and the schedule continues — one failed run
+  never stops the job.
+
+## Several methods on the same provider
+
+This is the pattern the framework is built for. A single `#[injectable]`
+owns the deps once, and as many decorated methods as you need share them.
+Mix triggers freely:
+
+```rust title="crates/features/src/audio/schedule/producer.rs"
+use nestrs_schedule::{scheduled, CronExpression};
+
+#[injectable]
+pub struct AudioTasks {
+    #[inject]
+    queue: Arc<QueueConnection>,
+}
+
+#[scheduled]
+impl AudioTasks {
+    #[every("5s")]
+    async fn enqueue_transcode(&self) -> Result<()> { /* push a TranscodeJob */ }
+
+    #[after("3s")]
+    async fn warmup_on_boot(&self) -> Result<()> {
+        tracing::info!(
+            target: "features::audio",
+            "audio producer warmup — pipeline is ready to enqueue",
+        );
+        Ok(())
+    }
+
+    #[cron(CronExpression::EVERY_MINUTE)]
+    async fn heartbeat(&self) -> Result<()> {
+        tracing::info!(target: "features::audio", "audio producer heartbeat");
+        Ok(())
+    }
+
+    fn next_file_name(&self) -> String { /* … */ }
+}
+```
+
+Three cron entries land in the scheduler — `AudioTasks::enqueue_transcode`,
+`AudioTasks::warmup_on_boot`, `AudioTasks::heartbeat` — all pointing at the
+same `AudioTasks` instance. Same `Arc<QueueConnection>`, three triggers, no
+ceremony.
+
+<Aside>
+A single `#[scheduled]` impl block per struct (multiple would conflict at
+the discovery layer). Put every scheduled method of a service in the same
+block — same convention as `#[routes]`.
+</Aside>
 
 ## Triggers
 
 | Form                                          | Meaning                                  |
 |-----------------------------------------------|------------------------------------------|
-| `every = "30s"`                               | Fixed interval (`s`, `m`, `h`, `d`)      |
-| `cron = "0 */5 * * * *"`                      | 6-field cron expression                  |
-| `cron = CronExpression::EVERY_5_SECONDS`      | Named preset (compile-time validated)    |
-| `after = "10s"`                               | One-shot — runs N after boot, then never |
-| `cron = "0 9 * * MON", tz = "Europe/Paris"`   | Cron + named timezone                    |
+| `#[every("30s")]`                             | Fixed interval (`ms`, `s`, `m`, `h`)     |
+| `#[after("10s")]`                             | One-shot — runs N after boot, then never |
+| `#[cron("0 */5 * * * *")]`                    | 6-field cron expression                  |
+| `#[cron(CronExpression::EVERY_5_SECONDS)]`    | Named preset (compile-time validated)    |
+| `#[cron("0 9 * * MON", tz = "Europe/Paris")]` | Cron + named timezone (default UTC)      |
 
 A literal cron expression is validated at **compile time**; presets and
-timezones at boot. Either way, an invalid trigger fails the boot
-naming the job and the offending value — never silently skipped.
+timezones at boot. Either way, an invalid trigger fails the boot naming
+the job and the offending value — never silently skipped.
 
 ## Wire it in
 
+The provider goes in its feature module like any other `#[injectable]`:
+
 ```rust title="crates/features/src/audio/schedule/module.rs"
 use nestrs_core::module;
-use super::producer::AudioProducer;
+use super::producer::AudioTasks;
 
-#[module(providers = [AudioProducer])]
+#[module(providers = [AudioTasks])]
 pub struct AudioScheduleModule;
+```
+
+The app activates the scheduler by importing `ScheduleModule` —
+`ScheduleModule` contributes the scheduler to `App::run` itself:
+
+```rust title="apps/platform-api/src/app.rs"
+use nestrs_core::module;
+use nestrs_schedule::ScheduleModule;
+use features::audio::{AudioHttpModule, AudioScheduleModule};
+
+#[module(imports = [
+    AudioHttpModule,
+    AudioScheduleModule,
+    ScheduleModule,
+])]
+pub struct AppModule;
 ```
 
 ```rust title="apps/platform-api/src/main.rs"
 use nestrs_core::App;
-use nestrs_http::HttpTransport;
-use nestrs_schedule::Scheduler;
 use platform_api::AppModule;
 
 #[tokio::main]
@@ -96,59 +163,63 @@ async fn main() -> anyhow::Result<()> {
         .module::<AppModule>()
         .build()
         .await?
-        .transport(HttpTransport::new().bind("0.0.0.0:3002"))
-        .transport(Scheduler::new())      // ← runs every #[cron_job]
         .run()
         .await
 }
 ```
 
-The **`Scheduler` transport** is what drains the registry and runs the
-jobs. Importing `nestrs-schedule` without mounting `Scheduler::new()`
-means the jobs compile in but never tick — a deliberate choice: an HTTP
-app linking the `features` crate doesn't accidentally run a worker's
-schedule.
+`main` carries no transport at all — every transport (`HttpModule`,
+`ScheduleModule`, `QueueWorkerModule`) is imported in `AppModule` and
+attaches itself at boot.
+
+**Without the `ScheduleModule` import, every `#[scheduled]` method
+compiles in but never ticks** — a deliberate choice: an HTTP-only app
+that links the `features` crate does not accidentally run a worker's
+schedule. The framework only ticks methods whose provider is reachable
+from the app's module tree.
 
 ## Run it
 
 ```bash frame="terminal"
 $ just dev platform-api
 …
-2026-06-03T10:18:41Z  INFO nestrs::schedule: registered 1 cron job
-  AudioProducer • every 5s
+2026-06-03T10:18:41Z  INFO nestrs::transport: attached module-contributed transport transport=Scheduler
+2026-06-03T10:18:41Z  INFO nestrs::schedule: scheduled job (interval) job=AudioTasks::enqueue_transcode interval_ms=5000
+2026-06-03T10:18:41Z  INFO nestrs::schedule: scheduled job (one-shot) job=AudioTasks::warmup_on_boot delay_ms=3000
+2026-06-03T10:18:41Z  INFO nestrs::schedule: scheduled job (cron)     job=AudioTasks::heartbeat timezone=UTC
+2026-06-03T10:18:44Z  INFO features::audio: audio producer warmup — pipeline is ready to enqueue
 2026-06-03T10:18:46Z  INFO features::audio: scheduled transcode job file=track-1717405126521.mp3
-2026-06-03T10:18:51Z  INFO features::audio: scheduled transcode job file=track-1717405131524.mp3
+2026-06-03T10:19:00Z  INFO features::audio: audio producer heartbeat
 ```
 
 A bad trigger fails the boot:
 
 ```bash frame="terminal"
 $ just dev worker
-Error: invalid cron expression for job 'NightlyReport'
+Error: invalid cron expression for job 'AudioTasks::heartbeat'
   expression : "every monday"
   reason     : missing seconds field
 ```
 
 ## The ambient data context
 
-A job has **no caller** — system work, intentionally. The framework
-installs a **pool executor** in the ambient data context (`Repo` reads
-go through the pool) and **no ability** is installed (`Repo` reads are
-unscoped, correct for system work).
+A scheduled method has **no caller** — system work, intentionally. The
+framework installs a **pool executor** in the ambient data context (`Repo`
+reads go through the pool) and **no ability** is installed (`Repo` reads
+are unscoped, correct for system work).
 
 ```rust
-#[cron_job(every = "1h")]
-pub struct CleanupExpired {
+#[injectable]
+pub struct CleanupTasks {
     #[inject]
     svc: Arc<ItemsService>,
 }
 
-#[async_trait]
-impl Scheduled for CleanupExpired {
-    async fn run(&self) -> Result<()> {
-        // ItemsService uses Repo<Items>::conn() — picks up the pool executor.
-        self.svc.delete_expired().await?;
-        Ok(())
+#[scheduled]
+impl CleanupTasks {
+    #[every("1h")]
+    async fn delete_expired(&self) -> Result<()> {
+        self.svc.delete_expired().await
     }
 }
 ```
@@ -165,6 +236,6 @@ Just importing `DatabaseModule` is enough — no manual connection plumbing.
 
 ### Reference
 
-- `crates/features/src/audio/schedule/producer.rs` — the canonical interval producer.
-- `crates/nestrs-schedule/` — `#[cron_job]`, `Scheduler`,
-  `CronExpression`, the `Scheduled` trait.
+- `crates/features/src/audio/schedule/producer.rs` — the canonical multi-method exemplar.
+- `crates/nestrs-schedule/` — `#[scheduled]`, `ScheduleModule`,
+  `Scheduler`, `CronExpression`, `Trigger`.

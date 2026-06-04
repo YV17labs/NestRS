@@ -1,0 +1,159 @@
+---
+title: Configuration
+description: HttpConfig — host, port, TLS, CORS, the framework header — settable both via NESTRS_HTTP__* env vars and pinned in code.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Importing `HttpModule::for_root(...)` in `AppModule.imports` attaches the
+HTTP transport at boot. Pass `None` to read every option from the
+environment, or pin `HttpConfig` in code:
+
+```rust title="apps/hello/src/app.rs"
+use nestrs_http::HttpModule;
+
+#[module(imports = [HttpModule::for_root(None)])]
+pub struct AppModule;
+```
+
+```rust title="apps/platform-api/src/app.rs"
+use nestrs_http::{HttpConfig, HttpModule};
+
+#[module(imports = [
+    HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
+])]
+pub struct AppModule;
+```
+
+Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
+no framework `Server` header.
+
+## `HttpConfig` fields
+
+Every field of `HttpConfig` is settable both by env var and in the pinned
+struct — the same dual-path rule every config in the framework follows.
+Real env always wins over the `.env` cascade.
+
+| Field | Env variable | Default | Pinned form |
+|-------|--------------|---------|-------------|
+| `host` | `NESTRS_HTTP__HOST` | `0.0.0.0` | `HttpConfig { host: "127.0.0.1".into(), ..Default::default() }` |
+| `port` | `NESTRS_HTTP__PORT` | `3000` | `HttpConfig { port: 3002, ..Default::default() }` |
+| `tls.cert` | `NESTRS_HTTP__TLS_CERT` (inline PEM) or `NESTRS_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(TlsConfig::new(cert, key)), ..Default::default() }` |
+| `tls.key`  | `NESTRS_HTTP__TLS_KEY` or `NESTRS_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
+| `cors.origins` | `NESTRS_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `CorsConfig { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
+| `cors.methods` | `NESTRS_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
+| `cors.headers` | `NESTRS_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
+| `cors.exposed_headers` | `NESTRS_HTTP__CORS_EXPOSED` | empty | `exposed_headers: vec!["X-Total-Count".into()]` |
+| `cors.credentials` | `NESTRS_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
+| `cors.max_age` | `NESTRS_HTTP__CORS_MAX_AGE` (seconds) | unset | `max_age: Some(Duration::from_secs(3600))` |
+| `server_header` | `NESTRS_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
+
+## Serve HTTPS
+
+Setting **both** `NESTRS_HTTP__TLS_CERT[_FILE]` and `NESTRS_HTTP__TLS_KEY[_FILE]`
+makes the transport serve over [rustls](https://docs.rs/rustls) (through
+poem's listener) instead of plain HTTP. Setting only one of the pair fails
+the boot — a half-configured TLS is a deployment mistake, not a silent
+fall back to plaintext.
+
+```bash frame="terminal"
+# Inline (suits k8s secrets, systemd EnvironmentFile, …)
+NESTRS_HTTP__TLS_CERT="$(cat fullchain.pem)" \
+NESTRS_HTTP__TLS_KEY="$(cat privkey.pem)" \
+just dev platform-api
+
+# Or by path (the transport reads the file at boot)
+NESTRS_HTTP__TLS_CERT_FILE=/etc/letsencrypt/.../fullchain.pem \
+NESTRS_HTTP__TLS_KEY_FILE=/etc/letsencrypt/.../privkey.pem \
+just dev platform-api
+```
+
+Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
+tests (production deploys carry secrets in the environment):
+
+```rust
+use nestrs_http::{HttpConfig, HttpModule, TlsConfig};
+
+let cert = std::fs::read("fullchain.pem")?;
+let key  = std::fs::read("privkey.pem")?;
+
+#[module(imports = [
+    HttpModule::for_root(HttpConfig {
+        port: 3002,
+        tls: Some(TlsConfig::new(cert, key)),
+        ..Default::default()
+    }),
+])]
+pub struct AppModule;
+```
+
+## CORS
+
+CORS uses [poem's `Cors` middleware](https://docs.rs/poem/latest/poem/middleware/struct.Cors.html)
+under the hood. The transport installs it **outermost**, so a preflight
+(`OPTIONS`) is answered before any guard or interceptor runs.
+
+CORS activates only when `cors.origins` is non-empty — the default is no
+CORS layer. Set the origins (and any other knob you need) via either path:
+
+```bash title=".env.production" frame="terminal"
+NESTRS_HTTP__CORS_ORIGINS=https://app.example.com,https://admin.example.com
+NESTRS_HTTP__CORS_METHODS=GET,POST,PUT,DELETE
+NESTRS_HTTP__CORS_HEADERS=Content-Type,Authorization
+NESTRS_HTTP__CORS_CREDENTIALS=true
+NESTRS_HTTP__CORS_MAX_AGE=3600
+```
+
+```rust title="apps/platform-api/src/app.rs"
+use std::time::Duration;
+use nestrs_http::{CorsConfig, HttpConfig, HttpModule};
+
+#[module(imports = [
+    HttpModule::for_root(HttpConfig {
+        port: 3002,
+        cors: Some(CorsConfig {
+            origins: vec!["https://app.example.com".into()],
+            methods: vec!["GET".into(), "POST".into()],
+            headers: vec!["Content-Type".into(), "Authorization".into()],
+            credentials: true,
+            max_age: Some(Duration::from_secs(3600)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }),
+])]
+pub struct AppModule;
+```
+
+`origins: vec!["*".into()]` is allowed for fully open APIs (the wildcard
+is passed straight through to poem).
+
+## Framework `Server:` header
+
+Off by default — a production-safe choice: no fingerprint of the
+framework or its version is exposed. Flip on for local development to see
+`Server: nestrs/<crate version>` on every response (the same shape Apache
+and nginx use):
+
+```bash title=".env.development" frame="terminal"
+NESTRS_HTTP__SERVER_HEADER=true
+```
+
+```rust
+HttpModule::for_root(HttpConfig {
+    server_header: true,
+    ..Default::default()
+})
+```
+
+The value is sourced from the `nestrs-http` crate's `CARGO_PKG_VERSION` at
+build time — it tracks the framework, not your app version.
+
+## Going further
+
+- [Controllers & routes](/http/controllers/) — write the handlers this
+  transport serves.
+- [Configuration](/configuration/) — the framework-wide `NESTRS_<NS>__*`
+  scheme and the `.env` cascade.

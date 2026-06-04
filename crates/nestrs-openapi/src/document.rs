@@ -1,10 +1,10 @@
 //! Assemble an OpenAPI 3.1 document from the discovered HTTP controllers.
 
 use nestrs_core::{Container, DiscoveryService};
-use nestrs_http::{join_path, HttpControllerMeta, HttpRouteMeta};
-use schemars::generate::SchemaSettings;
+use nestrs_http::{HttpControllerMeta, HttpRouteMeta, join_path};
 use schemars::SchemaGenerator;
-use serde_json::{json, Map, Value};
+use schemars::generate::SchemaSettings;
+use serde_json::{Map, Value, json};
 
 /// Build the OpenAPI document for everything mounted on the HTTP transport.
 ///

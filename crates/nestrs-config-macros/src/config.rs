@@ -3,7 +3,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{parse_macro_input, Expr, ExprLit, ItemStruct, Lit, LitStr, MetaNameValue, Token};
+use syn::{Expr, ExprLit, ItemStruct, Lit, LitStr, MetaNameValue, Token, parse_macro_input};
 
 pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     let namespace = match parse_namespace(args.into()) {
@@ -42,7 +42,7 @@ fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
                 return Err(syn::Error::new_spanned(
                     &meta.path,
                     format!("unknown #[config] argument `{other}`; expected `namespace`"),
-                ))
+                ));
             }
         }
     }

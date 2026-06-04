@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use nestrs_mcp::{endpoint_with_guard, tool_handler, tool_router, McpOperationGuard, ServerHandler};
+use nestrs_mcp::{
+    McpOperationGuard, ServerHandler, endpoint_with_guard, tool_handler, tool_router,
+};
 use nestrs_middleware::Guard;
 use poem::http::StatusCode;
 use poem::test::TestClient;
@@ -20,16 +22,8 @@ impl Guard for RejectAll {
 struct RejectGuard;
 
 impl McpOperationGuard for RejectGuard {
-    fn before<'a>(
-        &'a self,
-        req: &'a mut Request,
-    ) -> nestrs_mcp::BoxFuture<'a, poem::Result<()>> {
-        Box::pin(async move {
-            RejectAll
-                .check(req)
-                .await
-                .map_err(Error::from_response)
-        })
+    fn before<'a>(&'a self, req: &'a mut Request) -> nestrs_mcp::BoxFuture<'a, poem::Result<()>> {
+        Box::pin(async move { RejectAll.check(req).await.map_err(Error::from_response) })
     }
 }
 

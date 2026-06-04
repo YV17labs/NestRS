@@ -30,8 +30,7 @@ mod tests {
     #[test]
     fn registering_the_module_attaches_one_transport_contribution() {
         let container = QueueWorkerModule::register(Container::builder()).build();
-        let contributions =
-            DiscoveryService::new(&container).meta::<TransportContribution>();
+        let contributions = DiscoveryService::new(&container).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].meta.name, "QueueWorker");
     }

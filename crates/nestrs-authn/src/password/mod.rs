@@ -2,4 +2,4 @@
 
 mod hash;
 
-pub use hash::{burn_verify, hash_password, verify_password, PasswordError};
+pub use hash::{PasswordError, burn_verify, hash_password, verify_password};

@@ -1,8 +1,8 @@
 //! `scope_for` denies every row on request-scoped executors without an ability.
 
 use nestrs_authz::Action;
-use nestrs_database::{scope_for, with_job_executor, with_request_executor, Executor, ExecutorScope};
-use sea_orm::{ConnectionTrait, Database, EntityTrait, QueryFilter, QueryTrait};
+use nestrs_database::{Executor, scope_for, with_request_executor};
+use sea_orm::{Database, EntityTrait, QueryFilter, QueryTrait};
 
 mod widget {
     use sea_orm::entity::prelude::*;

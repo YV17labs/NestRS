@@ -1,6 +1,6 @@
 //! [`ThrottlerConfig`] — rate-limit settings populated from `NESTRS_THROTTLER__*`.
 
-use nestrs_config::{config, Config, ConfigService, Result};
+use nestrs_config::{Config, ConfigService, Result, config};
 use validator::Validate;
 
 #[config(namespace = "throttler")]

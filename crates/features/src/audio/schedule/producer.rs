@@ -4,9 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use nestrs_core::injectable;
 use nestrs_queue::QueueConnection;
-use nestrs_schedule::{scheduled, CronExpression};
+use nestrs_schedule::{CronExpression, scheduled};
 
-use crate::audio::core::{TranscodeJob, AUDIO_QUEUE};
+use crate::audio::core::{AUDIO_QUEUE, TranscodeJob};
 
 /// Producer side: a recurring schedule that enqueues jobs the `worker` app
 /// consumes. Lives with the producing app (`api`), not the worker, so the
@@ -71,7 +71,10 @@ mod tests {
             .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioTasks>())
             .map(|m| m.name)
             .collect();
-        assert!(names.contains(&"AudioTasks::enqueue_transcode"), "{names:?}");
+        assert!(
+            names.contains(&"AudioTasks::enqueue_transcode"),
+            "{names:?}"
+        );
         assert!(names.contains(&"AudioTasks::warmup_on_boot"), "{names:?}");
         assert!(names.contains(&"AudioTasks::heartbeat"), "{names:?}");
     }

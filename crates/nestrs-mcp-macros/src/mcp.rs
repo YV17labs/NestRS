@@ -1,10 +1,10 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemStruct};
+use syn::{ItemStruct, parse_macro_input};
 
 use nestrs_codegen::{
-    build_injectable_body, from_container_method, injected_method, parse_named_str_arg,
-    InjectableBody,
+    InjectableBody, build_injectable_body, from_container_method, injected_method,
+    parse_named_str_arg,
 };
 
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {

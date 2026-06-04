@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use features::authz::ws::WsAuthGuard;
-use nestrs_authz::{with_ability, Ability};
+use nestrs_authz::{Ability, with_ability};
 use nestrs_ws::{MessageGuard, WsClient};
 use serde_json::json;
 

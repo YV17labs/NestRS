@@ -50,8 +50,8 @@ fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStrea
             map.entry(::std::string::String::from(stringify!(#key)))
                 .or_insert(::serde_json::Value::Bool(false));
         },
-        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
-        | "u128" | "usize" | "f32" | "f64" => quote! {
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" | "f32" | "f64" => quote! {
             map.entry(::std::string::String::from(stringify!(#key)))
                 .or_insert(::serde_json::json!(0));
         },

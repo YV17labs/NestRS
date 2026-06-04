@@ -4,7 +4,7 @@ use anyhow::Result;
 use nestrs_core::injectable;
 use nestrs_queue::processor;
 
-use crate::audio::core::{Transcoder, TranscodeJob};
+use crate::audio::core::{TranscodeJob, Transcoder};
 
 /// Consumer side: the `worker` app mounts this and processes jobs the `api`
 /// app pushed onto the shared `audio` queue. A single provider holds every
@@ -33,7 +33,7 @@ mod tests {
     use nestrs_queue::ProcessMethod;
 
     use super::AudioJobs;
-    use crate::audio::core::{Transcoder, AUDIO_QUEUE};
+    use crate::audio::core::{AUDIO_QUEUE, Transcoder};
 
     #[test]
     fn process_method_is_discovered_through_the_inventory() {

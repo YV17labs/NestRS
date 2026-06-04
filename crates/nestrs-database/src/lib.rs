@@ -35,12 +35,12 @@ pub mod ws;
 
 pub use config::DatabaseConfig;
 pub use executor::{
-    current_executor, current_executor_scope, with_executor, with_job_executor,
-    with_request_executor, Executor, ExecutorScope,
+    Executor, ExecutorScope, current_executor, current_executor_scope, with_executor,
+    with_job_executor, with_request_executor,
 };
 pub use module::{DatabaseModule, DatabaseSetup};
 pub use page::{Page, PageParams};
-pub use repo::{scope_for, Repo};
+pub use repo::{Repo, scope_for};
 pub use service::{Access, CreateModel, CrudService, UpdateModel};
 pub use worker::WorkerDbContext;
 

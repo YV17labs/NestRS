@@ -6,7 +6,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    parse_macro_input, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Path, ReturnType, Type,
+    FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Path, ReturnType, Type, parse_macro_input,
 };
 
 use nestrs_codegen::{injected_method_with_layers, layer_inject_keys};
@@ -248,10 +248,10 @@ fn classify_return(output: &ReturnType) -> ReturnKind {
         ReturnType::Default => return ReturnKind::Unit,
         ReturnType::Type(_, ty) => ty.as_ref(),
     };
-    if let Type::Tuple(t) = ty {
-        if t.elems.is_empty() {
-            return ReturnKind::Unit;
-        }
+    if let Type::Tuple(t) = ty
+        && t.elems.is_empty()
+    {
+        return ReturnKind::Unit;
     }
     let Type::Path(tp) = ty else {
         return ReturnKind::Value;
@@ -262,12 +262,11 @@ fn classify_return(output: &ReturnType) -> ReturnKind {
     if last.ident != "Result" {
         return ReturnKind::Value;
     }
-    if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
-        if let Some(syn::GenericArgument::Type(Type::Tuple(t))) = args.args.first() {
-            if t.elems.is_empty() {
-                return ReturnKind::ResultUnit;
-            }
-        }
+    if let syn::PathArguments::AngleBracketed(args) = &last.arguments
+        && let Some(syn::GenericArgument::Type(Type::Tuple(t))) = args.args.first()
+        && t.elems.is_empty()
+    {
+        return ReturnKind::ResultUnit;
     }
     ReturnKind::Result
 }

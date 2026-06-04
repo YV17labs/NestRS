@@ -3,8 +3,8 @@
 
 use nestrs_core::{injectable, module};
 use nestrs_graphql::async_graphql::{Context, Error, Result};
-use nestrs_graphql::{async_trait, resolver, ContextSeed, GraphqlModule, ResolverGuard};
-use nestrs_http::{async_trait as http_async_trait, Guard, HttpTransport};
+use nestrs_graphql::{ContextSeed, GraphqlModule, ResolverGuard, async_trait, resolver};
+use nestrs_http::{Guard, HttpTransport, async_trait as http_async_trait};
 use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response};

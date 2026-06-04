@@ -1,6 +1,6 @@
 //! [`OAuth2Config`] — env-driven OAuth2 provider endpoints.
 
-use nestrs_config::{config, Config, ConfigService};
+use nestrs_config::{Config, ConfigService, config};
 use validator::Validate;
 
 // No `Debug`: `client_secret` must not leak through a derived format.

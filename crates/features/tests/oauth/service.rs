@@ -6,12 +6,14 @@ use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
 fn issuer() -> TokenIssuer {
-    let jwt = Arc::new(
-        JwtService::new(JwtOptions::new("oauth-grant-test-secret")).expect("jwt service"),
-    );
-    TokenIssuer::new(jwt, Arc::new(features::users::UsersService::new(Arc::new(
-        DatabaseConnection::default(),
-    ))))
+    let jwt =
+        Arc::new(JwtService::new(JwtOptions::new("oauth-grant-test-secret")).expect("jwt service"));
+    TokenIssuer::new(
+        jwt,
+        Arc::new(features::users::UsersService::new(Arc::new(
+            DatabaseConnection::default(),
+        ))),
+    )
 }
 
 const ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_00a1);

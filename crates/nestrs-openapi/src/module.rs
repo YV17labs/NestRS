@@ -4,7 +4,7 @@
 use nestrs_config::ConfigModule;
 use nestrs_core::{ContainerBuilder, DynamicModule};
 use nestrs_http::HttpEndpointMeta;
-use poem::{get, Route};
+use poem::{Route, get};
 
 use crate::config::OpenApiConfig;
 use crate::document::build_document;

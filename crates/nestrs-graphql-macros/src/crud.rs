@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, parse_quote, ImplItem, ItemImpl};
+use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
 use nestrs_codegen::{parse_crud_args, singular_of};
 
@@ -111,28 +111,29 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     }
 
     if !cfg.readonly {
-        if let Some(create) = &cfg.create {
-            if !existing.contains(&create_op.to_string()) {
-                generated.push(parse_quote! {
-                    #[mutation]
-                    async fn #create_op(
-                        &self,
-                        __ctx: &::nestrs_graphql::async_graphql::Context<'_>,
-                        input: #create,
-                    ) -> ::nestrs_graphql::async_graphql::Result<#output> {
-                        ::nestrs_authz::graphql::authorize::<::nestrs_authz::Create, #entity>(__ctx)?;
-                        let __row = ::nestrs_database::CrudService::create(&*self.#service, input)
-                            .await
-                            .map_err(#gql_err)?;
-                        ::core::result::Result::Ok(#output::from(&__row))
-                    }
-                });
-            }
+        if let Some(create) = &cfg.create
+            && !existing.contains(&create_op.to_string())
+        {
+            generated.push(parse_quote! {
+                #[mutation]
+                async fn #create_op(
+                    &self,
+                    __ctx: &::nestrs_graphql::async_graphql::Context<'_>,
+                    input: #create,
+                ) -> ::nestrs_graphql::async_graphql::Result<#output> {
+                    ::nestrs_authz::graphql::authorize::<::nestrs_authz::Create, #entity>(__ctx)?;
+                    let __row = ::nestrs_database::CrudService::create(&*self.#service, input)
+                        .await
+                        .map_err(#gql_err)?;
+                    ::core::result::Result::Ok(#output::from(&__row))
+                }
+            });
         }
 
-        if let Some(update) = &cfg.update {
-            if !existing.contains(&update_op.to_string()) {
-                generated.push(parse_quote! {
+        if let Some(update) = &cfg.update
+            && !existing.contains(&update_op.to_string())
+        {
+            generated.push(parse_quote! {
                     #[mutation]
                     async fn #update_op(
                         &self,
@@ -167,7 +168,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         }
                     }
                 });
-            }
         }
 
         if !existing.contains(&delete_op.to_string()) {

@@ -31,6 +31,9 @@ impl OrgsService {
             .filter(entity::Column::Id.is_in(ids.iter().cloned()))
             .all(&Repo::<Orgs>::conn()?)
             .await?;
-        Ok(rows.into_iter().map(|row| (row.id, Org::from(&row))).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.id, Org::from(&row)))
+            .collect())
     }
 }

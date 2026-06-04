@@ -7,8 +7,8 @@
 use nestrs_config::ConfigModule;
 use nestrs_core::{ContainerBuilder, DynamicModule};
 
-use crate::config::QueueConfig;
 use crate::QueueConnection;
+use crate::config::QueueConfig;
 
 pub struct QueueModule;
 

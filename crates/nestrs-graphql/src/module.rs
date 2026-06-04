@@ -3,9 +3,9 @@
 use nestrs_config::ConfigModule;
 use nestrs_core::{ContainerBuilder, DynamicModule};
 use nestrs_http::HttpEndpointMeta;
+use poem::Route;
 use poem::endpoint::make_sync;
 use poem::web::Html;
-use poem::Route;
 
 use crate::config::GraphqlConfig;
 use crate::resolver::build_schema;

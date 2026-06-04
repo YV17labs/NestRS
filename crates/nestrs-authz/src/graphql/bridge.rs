@@ -10,7 +10,7 @@ use nestrs_graphql::{BoxFuture, OperationGuard};
 use nestrs_middleware::Guard;
 use poem::{Request, Response};
 
-use crate::{with_ability, Ability};
+use crate::{Ability, with_ability};
 
 /// Runs the controllers' guard chain (`A` then `G`) on the GraphQL request and
 /// scopes the operation to the resulting ability.

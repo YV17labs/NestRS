@@ -20,12 +20,12 @@ use nestrs_resource::WireModelDefaults;
 use poem::http::StatusCode;
 use poem::{Request, Response, Result};
 use sea_orm::EntityTrait;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::extractor::Authorize;
-use crate::{with_ability, Ability, Action, ActionMarker};
+use crate::{Ability, Action, ActionMarker, with_ability};
 
 impl<A, S> RouteResponseShaper for Authorize<A, S>
 where
@@ -90,10 +90,8 @@ where
 
     let masked = match &wire {
         Value::Array(items) => {
-            let models: Result<Vec<S::Model>, _> = items
-                .iter()
-                .map(|item| wire_to_model::<S>(item))
-                .collect();
+            let models: Result<Vec<S::Model>, _> =
+                items.iter().map(|item| wire_to_model::<S>(item)).collect();
             models.map(|models| {
                 let masked = ability.mask_many::<S>(action, models.iter());
                 if masked.len() == items.len() {
@@ -113,10 +111,10 @@ where
             })
         }
         Value::Object(_) => wire_to_model::<S>(&wire).map(|model| {
-                let mut masked = ability.mask::<S>(action, &model);
-                retain_wire_keys(&mut masked, &wire);
-                masked
-            }),
+            let mut masked = ability.mask::<S>(action, &model);
+            retain_wire_keys(&mut masked, &wire);
+            masked
+        }),
         // Scalar / null — nothing to strip.
         _ => {
             resp.set_body(bytes);

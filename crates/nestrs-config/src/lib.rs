@@ -13,10 +13,10 @@ mod loader;
 mod module;
 
 pub use config::{Config, Namespaced};
-pub use module::{ConfigFeature, ConfigModule, ConfigRoot};
 pub use environment::Environment;
 pub use error::{ConfigError, Result};
-pub use loader::{env_var, ConfigService};
+pub use loader::{ConfigService, env_var};
+pub use module::{ConfigFeature, ConfigModule, ConfigRoot};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
 /// injectable [`Config`]. Re-exported from `nestrs-config-macros` so apps write

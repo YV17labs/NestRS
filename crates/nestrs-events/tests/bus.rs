@@ -1,10 +1,10 @@
 //! End-to-end: producer emits via the bus; the discovered `#[on_event]` runs.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nestrs_core::{injectable, module, App};
-use nestrs_events::{async_trait, on_event, EventBus, EventHandler, EventModule};
+use nestrs_core::{App, injectable, module};
+use nestrs_events::{EventBus, EventHandler, EventModule, async_trait, on_event};
 
 #[derive(Clone)]
 struct PointsAwarded {

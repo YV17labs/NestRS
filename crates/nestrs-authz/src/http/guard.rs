@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use nestrs_core::injectable;
-use nestrs_http::{async_trait, Guard};
+use nestrs_http::{Guard, async_trait};
 use poem::http::StatusCode;
 use poem::{Request, Response};
 

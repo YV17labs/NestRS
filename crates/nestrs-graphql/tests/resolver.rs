@@ -2,7 +2,7 @@
 //! resolver in no reachable module is silently skipped.
 
 use nestrs_core::module;
-use nestrs_graphql::{resolver, GraphqlModule};
+use nestrs_graphql::{GraphqlModule, resolver};
 use nestrs_http::HttpTransport;
 use nestrs_testing::TestApp;
 
@@ -87,9 +87,6 @@ async fn an_unreachable_resolver_is_filtered_from_the_schema() {
         .array();
     for field in fields.iter() {
         let name = field.object().get("name").string();
-        assert_ne!(
-            name, "loose",
-            "unreachable resolver leaked into the schema",
-        );
+        assert_ne!(name, "loose", "unreachable resolver leaked into the schema",);
     }
 }

@@ -1,6 +1,6 @@
 //! Covers `src/jwt/service.rs` — `JwtService` sign/verify and decode error mapping.
 
-use jsonwebtoken::{get_current_timestamp, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, get_current_timestamp};
 use nestrs_authn::{AuthError, JwtOptions, JwtService};
 use serde::{Deserialize, Serialize};
 

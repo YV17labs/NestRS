@@ -40,9 +40,11 @@ mod tests {
 
     #[test]
     fn empty_input_is_an_empty_vec() {
-        assert!(ParseArray::<u32>::transform("  ".into())
-            .unwrap()
-            .is_empty());
+        assert!(
+            ParseArray::<u32>::transform("  ".into())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

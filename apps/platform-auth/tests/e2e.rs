@@ -1,8 +1,8 @@
-use platform_auth::{PlatformAuthModule, IssuerConfig, RegisteredClient};
 use base64::Engine as _;
 use features::{Claims, Role};
-use nestrs_authn::{hash_password, JwtConfig, JwtOptions, JwtService, OAuth2Config};
+use nestrs_authn::{JwtConfig, JwtOptions, JwtService, OAuth2Config, hash_password};
 use nestrs_testing::{EphemeralDatabase, TestApp};
+use platform_auth::{IssuerConfig, PlatformAuthModule, RegisteredClient};
 use poem::http::StatusCode;
 use sea_orm::sea_query::{OnConflict, Query};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
@@ -195,7 +195,10 @@ async fn token_endpoint_rejects_a_scope_beyond_the_client_grant() {
     let (_db, app) = boot().await;
     app.http()
         .post("/token")
-        .header("authorization", basic_auth("limited-service", "limited-secret"))
+        .header(
+            "authorization",
+            basic_auth("limited-service", "limited-secret"),
+        )
         .content_type("application/x-www-form-urlencoded")
         .body("grant_type=client_credentials&scope=admin")
         .send()
@@ -209,7 +212,10 @@ async fn token_endpoint_derives_the_org_from_the_authenticated_client() {
     let resp = app
         .http()
         .post("/token")
-        .header("authorization", basic_auth("limited-service", "limited-secret"))
+        .header(
+            "authorization",
+            basic_auth("limited-service", "limited-secret"),
+        )
         .content_type("application/x-www-form-urlencoded")
         .body("grant_type=client_credentials")
         .send()
@@ -217,7 +223,12 @@ async fn token_endpoint_derives_the_org_from_the_authenticated_client() {
     resp.assert_status_is_ok();
 
     let json = resp.json().await;
-    let token = json.value().object().get("access_token").string().to_owned();
+    let token = json
+        .value()
+        .object()
+        .get("access_token")
+        .string()
+        .to_owned();
     let claims: Claims = resource_server_verifier()
         .verify(&token)
         .expect("the public key verifies the privately-signed token");
@@ -251,7 +262,12 @@ async fn login_issues_a_token_the_public_key_verifies() {
     resp.assert_status_is_ok();
 
     let json = resp.json().await;
-    let token = json.value().object().get("access_token").string().to_owned();
+    let token = json
+        .value()
+        .object()
+        .get("access_token")
+        .string()
+        .to_owned();
     let claims: Claims = resource_server_verifier()
         .verify(&token)
         .expect("the public key verifies the privately-signed token");

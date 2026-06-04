@@ -1,4 +1,4 @@
-use nestrs_config::{config, Config, ConfigService, Result};
+use nestrs_config::{Config, ConfigService, Result, config};
 use validator::Validate;
 
 use crate::cors::CorsConfig;

@@ -29,7 +29,10 @@ where
     A: ActionMarker,
 {
     // No ambient ability ⇒ fail closed before any load.
-    if ctx.data_opt::<std::sync::Arc<nestrs_authz::Ability>>().is_none() {
+    if ctx
+        .data_opt::<std::sync::Arc<nestrs_authz::Ability>>()
+        .is_none()
+    {
         return Err(Error::new(
             "missing request `Ability` — is the GraphQL auth bridge installed on /graphql?",
         ));

@@ -6,7 +6,7 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-use crate::attr::{is_uuid, ResourceModel};
+use crate::attr::{ResourceModel, is_uuid};
 
 pub fn emit(model: &ResourceModel) -> TokenStream2 {
     let create = emit_create(model);

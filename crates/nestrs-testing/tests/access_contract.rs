@@ -3,8 +3,8 @@
 //! fails the boot with `AccessGraphError`, never silently resolves or panics
 //! at mount.
 
-use nestrs_core::{injectable, module, AccessGraphError, App};
-use nestrs_http::{async_trait, controller, routes, Guard};
+use nestrs_core::{AccessGraphError, App, injectable, module};
+use nestrs_http::{Guard, async_trait, controller, routes};
 use poem::http::StatusCode;
 use poem::{Request, Response};
 

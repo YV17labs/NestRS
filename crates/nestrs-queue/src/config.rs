@@ -1,4 +1,4 @@
-use nestrs_config::{config, Config, ConfigService, Result};
+use nestrs_config::{Config, ConfigService, Result, config};
 use validator::Validate;
 
 const DEFAULT_URL: &str = "redis://127.0.0.1/";

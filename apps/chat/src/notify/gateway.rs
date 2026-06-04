@@ -1,4 +1,4 @@
-use nestrs_ws::{gateway, messages, WsClient};
+use nestrs_ws::{WsClient, gateway, messages};
 
 pub struct NotifyNs;
 

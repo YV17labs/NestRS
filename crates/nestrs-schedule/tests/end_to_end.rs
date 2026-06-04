@@ -5,12 +5,12 @@
 //! Pinned to a multi-threaded runtime so the cancellation race against
 //! `App::run`'s SIGINT handler does not starve the scheduled tick.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nestrs_core::{injectable, module, App};
-use nestrs_schedule::{scheduled, ScheduleModule};
-use tokio::time::{sleep, Duration};
+use nestrs_core::{App, injectable, module};
+use nestrs_schedule::{ScheduleModule, scheduled};
+use tokio::time::{Duration, sleep};
 
 static HITS: AtomicUsize = AtomicUsize::new(0);
 

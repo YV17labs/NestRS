@@ -3,8 +3,8 @@
 
 use nestrs_core::module;
 use nestrs_graphql::async_graphql::Context;
-use nestrs_graphql::{resolver, ContextSeed, GraphqlModule};
-use nestrs_http::{async_trait, Guard, HttpTransport};
+use nestrs_graphql::{ContextSeed, GraphqlModule, resolver};
+use nestrs_http::{Guard, HttpTransport, async_trait};
 use nestrs_testing::TestApp;
 use poem::{Request, Response};
 

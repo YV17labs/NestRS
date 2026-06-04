@@ -8,9 +8,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use nestrs_core::{App, AppBuilder, Container, Module, Transport};
 use nestrs_http::HttpTransport;
+use poem::Response;
 use poem::endpoint::BoxEndpoint;
 use poem::test::TestClient;
-use poem::Response;
 
 use crate::headless::HeadlessApp;
 
@@ -56,7 +56,8 @@ impl TestAppBuilder {
         // env-aware defaults (GraphQL playground / SDL emit) stay off. An
         // explicit value wins (e.g. CI asserting prod behaviour).
         if std::env::var_os("NESTRS_ENV").is_none() {
-            std::env::set_var("NESTRS_ENV", "test");
+            // FIXME: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var("NESTRS_ENV", "test") };
         }
         Self {
             inner: App::builder(),

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nestrs_authn::{AuthError, Outcome, Strategy};
 use nestrs_core::injectable;
-use poem::http::{header, StatusCode};
+use poem::http::{StatusCode, header};
 use poem::{Request, Response};
 use serde::Deserialize;
 
@@ -53,7 +53,10 @@ impl Strategy for OAuthStrategy {
             .ok_or_else(|| AuthError::Failed("OAuth callback missing state".into()))?;
         let transaction = transaction_cookie(req)
             .ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
-        let caller = self.flow.resolve_caller(&transaction, &state, &code).await?;
+        let caller = self
+            .flow
+            .resolve_caller(&transaction, &state, &code)
+            .await?;
         Ok(Outcome::Authenticated(caller))
     }
 }

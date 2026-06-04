@@ -32,9 +32,7 @@ fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
     assert!(auth.url.contains("code_challenge="));
     assert!(auth.url.contains("code_challenge_method=S256"));
 
-    let tx: Transaction = jwt
-        .verify(&auth.transaction)
-        .expect("transaction verifies");
+    let tx: Transaction = jwt.verify(&auth.transaction).expect("transaction verifies");
     assert!(auth.url.contains(&format!("state={}", tx.csrf)));
     assert!(!tx.pkce.is_empty());
 }

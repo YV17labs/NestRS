@@ -10,11 +10,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nestrs_core::injectable;
 use nestrs_core::JobContext;
+use nestrs_core::injectable;
 use sea_orm::DatabaseConnection;
 
-use crate::executor::{with_job_executor, Executor};
+use crate::executor::{Executor, with_job_executor};
 
 /// Installs the request-less pool executor around a worker job. Bound to
 /// `dyn JobContext` by [`DatabaseModule`](crate::DatabaseModule).

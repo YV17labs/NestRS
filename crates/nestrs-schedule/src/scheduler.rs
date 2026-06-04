@@ -8,11 +8,11 @@ use chrono::Utc;
 use chrono_tz::Tz;
 use croner::Cron;
 use nestrs_core::{
-    inventory, run_in_job_context, Container, DiscoveryService, JobContext, ReachableProviders,
-    Transport,
+    Container, DiscoveryService, JobContext, ReachableProviders, Transport, inventory,
+    run_in_job_context,
 };
 use tokio::task::JoinSet;
-use tokio::time::{interval, sleep, MissedTickBehavior};
+use tokio::time::{MissedTickBehavior, interval, sleep};
 use tokio_util::sync::CancellationToken;
 
 use crate::{CronJobMeta, RunFn, ScheduledMethod, Trigger};
@@ -121,15 +121,15 @@ impl Transport for Scheduler {
         let reachable = container.get::<ReachableProviders>();
         for entry in inventory::iter::<ScheduledMethod>() {
             let provider_id = (entry.provider_type_id)();
-            if let Some(r) = reachable.as_ref() {
-                if !r.0.contains(&provider_id) {
-                    tracing::debug!(
-                        target: "nestrs::schedule",
-                        job = entry.name,
-                        "skipped scheduled method: provider unreachable from app's module tree",
-                    );
-                    continue;
-                }
+            if let Some(r) = reachable.as_ref()
+                && !r.0.contains(&provider_id)
+            {
+                tracing::debug!(
+                    target: "nestrs::schedule",
+                    job = entry.name,
+                    "skipped scheduled method: provider unreachable from app's module tree",
+                );
+                continue;
             }
             let synthesized = Arc::new(CronJobMeta {
                 name: entry.name,

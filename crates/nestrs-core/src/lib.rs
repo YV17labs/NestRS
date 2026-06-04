@@ -10,16 +10,16 @@ pub mod scope;
 pub mod transport;
 
 pub use access::{
-    AccessGraphError, ModuleDescriptor, ProviderDescriptor, ReachableProviders,
-    ResolverDescriptor, ResolverSchemaActive, UnreachableResolversError,
+    AccessGraphError, ModuleDescriptor, ProviderDescriptor, ReachableProviders, ResolverDescriptor,
+    ResolverSchemaActive, UnreachableResolversError,
 };
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder};
 pub use discoverable::Discoverable;
 pub use discovery::{Discovered, DiscoveryService};
-pub use job::{run_in_job_context, JobContext};
+pub use job::{JobContext, run_in_job_context};
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
-pub use module::{DynamicModule, Module, __module_registered};
+pub use module::{__module_registered, DynamicModule, Module};
 pub use scope::RequestScope;
 pub use transport::{Transport, TransportContribution};
 

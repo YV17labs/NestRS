@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use nestrs_config::{config, Config, ConfigModule, ConfigService};
+use nestrs_config::{Config, ConfigModule, ConfigService, config};
 use nestrs_core::{injectable, module};
 use nestrs_testing::TestApp;
 use validator::Validate;
@@ -49,8 +49,10 @@ struct DemoModule;
 // One sequential test (two boots) so concurrent env mutation doesn't race.
 #[tokio::test]
 async fn for_feature_loads_injects_and_a_seed_overrides_the_environment() {
-    std::env::set_var("NESTRS_DEMOAPP__URL", "postgres://from-env/app");
-    std::env::set_var("NESTRS_DEMOAPP__MAX_CONNECTIONS", "7");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("NESTRS_DEMOAPP__URL", "postgres://from-env/app") };
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("NESTRS_DEMOAPP__MAX_CONNECTIONS", "7") };
 
     let app = TestApp::builder()
         .module::<DemoModule>()
@@ -81,6 +83,8 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_environment() {
     assert_eq!(svc.url(), "postgres://seeded/app", "the seed wins over env");
     assert_eq!(svc.max_connections(), 99);
 
-    std::env::remove_var("NESTRS_DEMOAPP__URL");
-    std::env::remove_var("NESTRS_DEMOAPP__MAX_CONNECTIONS");
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("NESTRS_DEMOAPP__URL") };
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("NESTRS_DEMOAPP__MAX_CONNECTIONS") };
 }

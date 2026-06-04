@@ -27,9 +27,9 @@ pub use factory::AbilityFactory;
 pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::Subject;
 
-#[cfg(feature = "http")]
-pub mod http;
 #[cfg(feature = "graphql")]
 pub mod graphql;
+#[cfg(feature = "http")]
+pub mod http;
 #[cfg(feature = "mcp")]
 pub mod mcp;

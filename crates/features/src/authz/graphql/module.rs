@@ -4,8 +4,8 @@ use nestrs_graphql::{BatchContext, OperationGuard};
 
 use super::bridge::AppGraphqlGuard;
 use super::guard::GraphqlAuthGuard;
-use crate::authz::http::AuthzHttpModule;
 use crate::Claims;
+use crate::authz::http::AuthzHttpModule;
 
 #[module(
     imports = [AuthzHttpModule],

@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
-use async_graphql::dataloader::DataLoader;
 use async_graphql::Result;
+use async_graphql::dataloader::DataLoader;
 use nestrs_graphql::{crud, resolver};
 use uuid::Uuid;
 
 use crate::authz::graphql::GraphqlAuthGuard;
-use crate::orgs::core::{
-    CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput,
-};
+use crate::orgs::core::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
 use crate::users::{User, UsersServiceByOrg};
 
 #[resolver]

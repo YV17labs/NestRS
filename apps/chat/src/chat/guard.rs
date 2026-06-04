@@ -1,6 +1,6 @@
 use nestrs_core::injectable;
 use nestrs_ws::serde_json::Value;
-use nestrs_ws::{async_trait, MessageGuard, WsClient};
+use nestrs_ws::{MessageGuard, WsClient, async_trait};
 
 #[injectable]
 #[derive(Default)]

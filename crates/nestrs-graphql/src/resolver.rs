@@ -85,8 +85,7 @@ fn is_member_active(reg: &ResolverRegistration) -> bool {
 }
 
 fn kind_has_members(kind: ResolverKind) -> bool {
-    inventory::iter::<ResolverRegistration>()
-        .any(|reg| reg.kind == kind && is_member_active(reg))
+    inventory::iter::<ResolverRegistration>().any(|reg| reg.kind == kind && is_member_active(reg))
 }
 
 fn build_members(container: &Container, kind: ResolverKind) -> Vec<Box<dyn ResolverObject>> {
@@ -141,7 +140,7 @@ fn merge_type_info<T: OutputType>(
 }
 
 macro_rules! discovered_root {
-    ($name:ident, $kind:expr, $type_name:literal) => {
+    ($name:ident, $kind:expr_2021, $type_name:literal) => {
         pub(crate) struct $name {
             members: Vec<Box<dyn ResolverObject>>,
         }

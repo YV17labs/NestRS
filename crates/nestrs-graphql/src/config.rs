@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use nestrs_config::{config, Config, ConfigService, Result};
+use nestrs_config::{Config, ConfigService, Result, config};
 use validator::Validate;
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";

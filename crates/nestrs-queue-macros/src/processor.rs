@@ -12,7 +12,7 @@ use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, FnArg, Ident, ImplItem, ItemImpl, LitInt, LitStr, PatType, Token, Type,
+    FnArg, Ident, ImplItem, ItemImpl, LitInt, LitStr, PatType, Token, Type, parse_macro_input,
 };
 
 pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -59,8 +59,11 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         let provider_snake = to_snake(&provider_name);
         let method_snake = to_snake(&method_name);
-        let handler_ident =
-            format_ident!("__nestrs_process_handler_{}_{}", provider_snake, method_snake);
+        let handler_ident = format_ident!(
+            "__nestrs_process_handler_{}_{}",
+            provider_snake,
+            method_snake
+        );
         let register_ident = format_ident!(
             "__nestrs_process_register_{}_{}",
             provider_snake,
@@ -149,10 +152,10 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 fn impl_self_ident(self_ty: &Type) -> syn::Result<Ident> {
-    if let Type::Path(p) = self_ty {
-        if let Some(seg) = p.path.segments.last() {
-            return Ok(seg.ident.clone());
-        }
+    if let Type::Path(p) = self_ty
+        && let Some(seg) = p.path.segments.last()
+    {
+        return Ok(seg.ident.clone());
     }
     Err(syn::Error::new_spanned(
         self_ty,
@@ -170,13 +173,13 @@ fn extract_job_type(method: &syn::ImplItemFn) -> syn::Result<Type> {
             return Err(syn::Error::new(
                 other.span(),
                 "a `#[process]` method must take `&self` as its first argument",
-            ))
+            ));
         }
         None => {
             return Err(syn::Error::new(
                 method.sig.span(),
                 "a `#[process]` method must take `&self` and one job argument",
-            ))
+            ));
         }
     }
     let Some(arg) = iter.next() else {
@@ -220,7 +223,7 @@ impl Parse for ProcessArgs {
                             "unknown #[process] key `{other}` \
                              (expected `queue`, `concurrency`, or `retries`)"
                         ),
-                    ))
+                    ));
                 }
             }
             if !input.is_empty() {

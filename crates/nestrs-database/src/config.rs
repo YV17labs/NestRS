@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use nestrs_config::{config, Config, ConfigService, Result};
+use nestrs_config::{Config, ConfigService, Result, config};
 use sea_orm::ConnectOptions;
 use validator::Validate;
 

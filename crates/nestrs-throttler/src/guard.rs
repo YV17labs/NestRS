@@ -4,8 +4,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use nestrs_core::injectable;
-use nestrs_http::{async_trait, Guard, Reflector};
-use poem::http::{header, StatusCode};
+use nestrs_http::{Guard, Reflector, async_trait};
+use poem::http::{StatusCode, header};
 use poem::{Request, Response};
 
 use crate::store::InMemoryThrottler;
@@ -66,14 +66,13 @@ fn client_key_from(
     trusted_proxies: &[IpAddr],
 ) -> String {
     if let Some(peer) = peer {
-        if trusted_proxies.contains(&peer) {
-            if let Some(client) = forwarded_for
+        if trusted_proxies.contains(&peer)
+            && let Some(client) = forwarded_for
                 .and_then(|chain| chain.split(',').next())
                 .map(str::trim)
                 .filter(|ip| !ip.is_empty() && ip.parse::<IpAddr>().is_ok())
-            {
-                return client.to_owned();
-            }
+        {
+            return client.to_owned();
         }
         return peer.to_string();
     }
@@ -99,11 +98,7 @@ mod tests {
     #[test]
     fn trusted_proxies_use_the_leftmost_forwarded_client() {
         let proxy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
-        let key = client_key_from(
-            Some("203.0.113.50, 192.0.2.1"),
-            Some(proxy),
-            &[proxy],
-        );
+        let key = client_key_from(Some("203.0.113.50, 192.0.2.1"), Some(proxy), &[proxy]);
         assert_eq!(key, "203.0.113.50");
     }
 }

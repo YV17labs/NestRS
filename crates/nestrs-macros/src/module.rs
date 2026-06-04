@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{bracketed, parse_macro_input, Expr, Ident, ItemStruct, Path, Token, Type};
+use syn::{Expr, Ident, ItemStruct, Path, Token, Type, bracketed, parse_macro_input};
 
 pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as ModuleArgs);
@@ -270,10 +270,10 @@ fn path_tail(p: &Path) -> String {
 fn path_tail_of_type(ty: &Type) -> String {
     if let Type::TraitObject(obj) = ty {
         for bound in &obj.bounds {
-            if let syn::TypeParamBound::Trait(t) = bound {
-                if let Some(seg) = t.path.segments.last() {
-                    return seg.ident.to_string();
-                }
+            if let syn::TypeParamBound::Trait(t) = bound
+                && let Some(seg) = t.path.segments.last()
+            {
+                return seg.ident.to_string();
             }
         }
     }

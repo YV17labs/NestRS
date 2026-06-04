@@ -79,7 +79,7 @@ mod server;
 
 pub use context::{BoxFuture, Captured, SocketContext};
 pub use envelope::{WsEnvelope, WsReply};
-pub use gateway::{gateway_endpoint, Gateway, GatewayEndpoint};
+pub use gateway::{Gateway, GatewayEndpoint, gateway_endpoint};
 pub use guard::{MessageGuard, MessageGuardTable};
 pub use module::WsModule;
 pub use server::{ConnId, Global, Registry, WsClient, WsServer};

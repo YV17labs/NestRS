@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use nestrs_config::{config, Config, ConfigService};
+use nestrs_config::{Config, ConfigService, config};
 use validator::Validate;
 
 use crate::error::AuthError;

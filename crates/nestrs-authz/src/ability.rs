@@ -4,8 +4,8 @@
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 
-use sea_orm::sea_query::{Condition, Expr};
 use sea_orm::EntityTrait;
+use sea_orm::sea_query::{Condition, Expr};
 
 use crate::action::Action;
 use crate::predicate::Predicate;
@@ -111,10 +111,10 @@ impl Ability {
         E::Model: serde::Serialize,
     {
         let mut json = serde_json::to_value(model).unwrap_or(serde_json::Value::Null);
-        if let FieldSet::Only(allowed) = self.permitted_fields::<E>(action, model) {
-            if let serde_json::Value::Object(map) = &mut json {
-                map.retain(|key, _| allowed.contains(key.as_str()));
-            }
+        if let FieldSet::Only(allowed) = self.permitted_fields::<E>(action, model)
+            && let serde_json::Value::Object(map) = &mut json
+        {
+            map.retain(|key, _| allowed.contains(key.as_str()));
         }
         json
     }

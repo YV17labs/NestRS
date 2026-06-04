@@ -14,13 +14,13 @@
 
 use std::sync::Arc;
 
-use nestrs_authz::{with_ability, Ability};
+use nestrs_authz::{Ability, with_ability};
 use nestrs_core::injectable;
 use nestrs_ws::{BoxFuture, Captured, SocketContext, WsReply};
 use poem::Request;
 use sea_orm::DatabaseConnection;
 
-use crate::{with_request_executor, Executor};
+use crate::{Executor, with_request_executor};
 
 /// Captured on upgrade. A guest connection has no `Ability` and its handlers
 /// run unscoped — the resolvers' own gate then refuses what it must.

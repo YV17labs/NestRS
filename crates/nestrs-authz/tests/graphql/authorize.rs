@@ -8,9 +8,9 @@ use nestrs_authz::graphql::authorize;
 use nestrs_authz::{AbilityBuilder, Action, Read};
 use nestrs_core::module;
 use nestrs_graphql::async_graphql::{Context, Result as GqlResult};
-use nestrs_graphql::{resolver, GraphqlModule};
+use nestrs_graphql::{GraphqlModule, resolver};
 use nestrs_http::poem::{Request, Response};
-use nestrs_http::{async_trait, Guard, HttpTransport};
+use nestrs_http::{Guard, HttpTransport, async_trait};
 use nestrs_testing::TestApp;
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`.

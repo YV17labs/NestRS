@@ -4,7 +4,7 @@
 
 use poem::endpoint::make_sync;
 use poem::web::Html;
-use poem::{handler, Endpoint, Response};
+use poem::{Endpoint, Response, handler};
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
 const SWAGGER_CSS: &[u8] = include_bytes!("../assets/swagger-ui.css");

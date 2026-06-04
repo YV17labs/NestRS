@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
 use crate::oauth::core::{
-    AccessToken, AuthenticatedClient, Caller, ClientAuthGuard, LoginInput, OAuthGuard,
-    TokenIssuer,
+    AccessToken, AuthenticatedClient, Caller, ClientAuthGuard, LoginInput, OAuthGuard, TokenIssuer,
 };
-use nestrs_http::{controller, routes, Ctx, Valid};
+use nestrs_http::{Ctx, Valid, controller, routes};
 use nestrs_throttler::{Throttle, ThrottlerGuard};
-use poem::web::{Form, Json};
 use poem::Result;
+use poem::web::{Form, Json};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -68,10 +67,7 @@ impl OAuthController {
     #[use_guards(ThrottlerGuard)]
     #[meta(Throttle::per_minute(10))]
     #[api(summary = "Sign in with email and password", tags("Auth"))]
-    async fn login(
-        &self,
-        body: Valid<Json<LoginInput>>,
-    ) -> Result<Json<AccessToken>> {
+    async fn login(&self, body: Valid<Json<LoginInput>>) -> Result<Json<AccessToken>> {
         let input = body.into_inner();
         Ok(Json(
             self.issuer

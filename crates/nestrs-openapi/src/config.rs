@@ -1,7 +1,7 @@
 //! [`OpenApiConfig`] — the OpenAPI document `info` block, populated from
 //! `NESTRS_OPENAPI__*` in the `.env` cascade.
 
-use nestrs_config::{config, Config, ConfigService, Result};
+use nestrs_config::{Config, ConfigService, Result, config};
 use validator::Validate;
 
 #[config(namespace = "openapi")]

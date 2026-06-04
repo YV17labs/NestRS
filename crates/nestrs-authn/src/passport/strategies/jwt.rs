@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 
 use crate::error::AuthError;
 use crate::jwt::JwtService;
-use crate::passport::{bearer_token, Outcome, Strategy};
+use crate::passport::{Outcome, Strategy, bearer_token};
 
 #[injectable]
 pub struct JwtStrategy<C: Send + Sync + 'static> {

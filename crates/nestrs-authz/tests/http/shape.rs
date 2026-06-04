@@ -7,7 +7,7 @@ use nestrs_authz::http::Authorize;
 use nestrs_authz::{AbilityBuilder, Action, Read};
 use nestrs_core::module;
 use nestrs_http::poem::web::Json;
-use nestrs_http::{async_trait, controller, routes, Guard, HttpTransport};
+use nestrs_http::{Guard, HttpTransport, async_trait, controller, routes};
 use nestrs_resource::WireModelDefaults;
 use nestrs_testing::TestApp;
 use poem::{Request, Response};
@@ -76,10 +76,7 @@ struct WidgetController;
 #[routes]
 impl WidgetController {
     #[get("/:id")]
-    async fn one(
-        &self,
-        _authz: Authorize<Read, widget::Entity>,
-    ) -> Json<WidgetDto> {
+    async fn one(&self, _authz: Authorize<Read, widget::Entity>) -> Json<WidgetDto> {
         Json(WidgetDto {
             id: 1,
             name: "ada".into(),
@@ -87,10 +84,7 @@ impl WidgetController {
     }
 
     #[get("/")]
-    async fn list(
-        &self,
-        _authz: Authorize<Read, widget::Entity>,
-    ) -> Json<Vec<WidgetDto>> {
+    async fn list(&self, _authz: Authorize<Read, widget::Entity>) -> Json<Vec<WidgetDto>> {
         Json(vec![
             WidgetDto {
                 id: 1,
@@ -119,7 +113,12 @@ async fn boot() -> TestApp {
 #[tokio::test]
 async fn a_restricted_grant_masks_to_permitted_fields() {
     let app = boot().await;
-    let resp = app.http().get("/widgets/1").header("x-role", "user").send().await;
+    let resp = app
+        .http()
+        .get("/widgets/1")
+        .header("x-role", "user")
+        .send()
+        .await;
     resp.assert_status_is_ok();
     let body = resp.0.into_body().into_string().await.expect("body");
     assert_eq!(
@@ -138,7 +137,12 @@ async fn a_restricted_grant_masks_to_permitted_fields() {
 #[tokio::test]
 async fn an_unrestricted_grant_cannot_leak_skipped_columns() {
     let app = boot().await;
-    let resp = app.http().get("/widgets/1").header("x-role", "admin").send().await;
+    let resp = app
+        .http()
+        .get("/widgets/1")
+        .header("x-role", "admin")
+        .send()
+        .await;
     resp.assert_status_is_ok();
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
@@ -200,7 +204,12 @@ async fn a_non_json_response_passes_through() {
         .await
         .expect("plain harness boots");
 
-    let resp = app.http().get("/plain").header("x-role", "admin").send().await;
+    let resp = app
+        .http()
+        .get("/plain")
+        .header("x-role", "admin")
+        .send()
+        .await;
     resp.assert_status_is_ok();
     resp.assert_text("hello").await;
 }

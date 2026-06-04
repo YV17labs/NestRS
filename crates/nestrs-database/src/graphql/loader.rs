@@ -18,7 +18,7 @@ use nestrs_core::injectable;
 use nestrs_graphql::{BatchContext, BatchSpawner};
 use sea_orm::DatabaseConnection;
 
-use crate::{with_request_executor, Executor};
+use crate::{Executor, with_request_executor};
 
 /// Scopes every `#[dataloader]` batch to the caller. List
 /// `LoaderScope as dyn BatchContext` on the GraphQL authz module.

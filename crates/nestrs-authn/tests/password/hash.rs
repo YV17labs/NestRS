@@ -1,6 +1,6 @@
 //! Covers `src/password/hash.rs`.
 
-use nestrs_authn::{burn_verify, hash_password, verify_password, PasswordError};
+use nestrs_authn::{PasswordError, burn_verify, hash_password, verify_password};
 
 #[test]
 fn hash_and_verify_round_trip() {

@@ -6,7 +6,7 @@ use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};
 
-use crate::audio::core::{TranscodeJob, AUDIO_QUEUE};
+use crate::audio::core::{AUDIO_QUEUE, TranscodeJob};
 use crate::authn::AuthGuard;
 use crate::authz::AppAbilityGuard;
 

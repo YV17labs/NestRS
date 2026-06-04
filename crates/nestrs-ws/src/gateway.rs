@@ -5,11 +5,11 @@ use futures_util::{SinkExt, StreamExt};
 use poem::web::websocket::{Message, WebSocket};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
+use crate::WsReply;
 use crate::context::{BoxFuture, Captured, SocketContext};
 use crate::envelope::WsEnvelope;
 use crate::guard::MessageGuardTable;
 use crate::server::{Registry, WsClient, WsServer};
-use crate::WsReply;
 
 /// Per-connection message dispatcher a gateway implements. `#[messages]`
 /// emits the impl: `dispatch` matches the event name, deserializes the

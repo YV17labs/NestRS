@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use nestrs_core::{injectable, module};
-use nestrs_http::{controller, routes, Scoped};
+use nestrs_http::{Scoped, controller, routes};
 use nestrs_testing::TestApp;
 
 #[injectable]

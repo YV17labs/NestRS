@@ -54,7 +54,8 @@ fn load_file(path: &Path) {
         if key.is_empty() || std::env::var_os(key).is_some() {
             continue;
         }
-        std::env::set_var(key, parse_value(value.trim()));
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key, parse_value(value.trim())) };
     }
 }
 

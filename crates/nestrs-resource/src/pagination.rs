@@ -87,23 +87,29 @@ mod tests {
     #[test]
     fn validation_rejects_out_of_range() {
         use validator::Validate;
-        assert!(PageArgs {
-            page: 0,
-            per_page: 20
-        }
-        .validate()
-        .is_err());
-        assert!(PageArgs {
-            page: 1,
-            per_page: 1000
-        }
-        .validate()
-        .is_err());
-        assert!(PageArgs {
-            page: 1,
-            per_page: 20
-        }
-        .validate()
-        .is_ok());
+        assert!(
+            PageArgs {
+                page: 0,
+                per_page: 20
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            PageArgs {
+                page: 1,
+                per_page: 1000
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            PageArgs {
+                page: 1,
+                per_page: 20
+            }
+            .validate()
+            .is_ok()
+        );
     }
 }

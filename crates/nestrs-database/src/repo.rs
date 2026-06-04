@@ -11,14 +11,14 @@
 
 use std::marker::PhantomData;
 
-use nestrs_authz::{current_ability, Action};
+use nestrs_authz::{Action, current_ability};
 use sea_orm::sea_query::{Condition, Expr};
 use sea_orm::{
     ActiveModelTrait, DbErr, Delete, DeleteResult, EntityTrait, IntoActiveModel, PrimaryKeyTrait,
     QueryFilter, Select, Update,
 };
 
-use crate::executor::{current_executor, current_executor_scope, Executor, ExecutorScope};
+use crate::executor::{Executor, ExecutorScope, current_executor, current_executor_scope};
 
 /// Row-level filter for `action` on `E` from the ambient ability. Deny-all on a
 /// request-scoped executor without an ability; unscoped on worker/system paths.

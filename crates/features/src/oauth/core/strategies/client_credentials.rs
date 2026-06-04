@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nestrs_authn::{basic_credentials, AuthError, Outcome, Strategy};
+use nestrs_authn::{AuthError, Outcome, Strategy, basic_credentials};
 use nestrs_core::injectable;
 use poem::Request;
 

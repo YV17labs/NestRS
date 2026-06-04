@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use nestrs_authz::{with_ability, Ability, ActionMarker};
+use nestrs_authz::{Ability, ActionMarker, with_ability};
 use nestrs_core::RequestScope;
 use poem::http::StatusCode;
 use poem::web::Path;

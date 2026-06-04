@@ -3,14 +3,16 @@ use std::sync::Arc;
 use nestrs_authz::http::Authorize;
 use nestrs_authz::{Create, Read};
 use nestrs_database::Bind;
-use nestrs_http::{controller, crud, Ctx, Valid};
-use poem::web::Json;
+use nestrs_http::{Ctx, Valid, controller, crud};
 use poem::Result;
+use poem::web::Json;
 
+use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AppAbilityGuard;
-use crate::users::core::{CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService};
-use crate::Claims;
+use crate::users::core::{
+    CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService,
+};
 
 #[controller(path = "/users")]
 #[use_guards(AuthGuard, AppAbilityGuard)]
@@ -41,7 +43,9 @@ impl UsersController {
         body: Valid<Json<CreateUserInput>>,
     ) -> Result<Json<User>> {
         Ok(Json(
-            self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
+            self.svc
+                .create_in_org(body.into_inner(), auth.org_id)
+                .await?,
         ))
     }
 

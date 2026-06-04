@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use nestrs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 use nestrs_graphql::ContextSeed;
+use nestrs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 
 use crate::Ability;
 

@@ -4,7 +4,7 @@
 use nestrs_core::module;
 use nestrs_http::poem::http::Method;
 use nestrs_http::poem::middleware::Cors;
-use nestrs_http::{controller, routes, HttpTransport};
+use nestrs_http::{HttpTransport, controller, routes};
 use nestrs_testing::TestApp;
 
 #[controller(path = "/")]

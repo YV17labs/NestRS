@@ -14,8 +14,8 @@
 
 use std::any::TypeId;
 
-use crate::meta::RunFn;
 use crate::Trigger;
+use crate::meta::RunFn;
 
 pub struct ScheduledMethod {
     /// `"ProviderType::method"` — the human-readable label `Scheduler` logs and

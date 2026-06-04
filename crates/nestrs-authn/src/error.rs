@@ -1,6 +1,6 @@
 //! Authentication failures, rendered as HTTP 401 challenges.
 
-use poem::http::{header, StatusCode};
+use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 
 /// Why authentication did not establish an identity.

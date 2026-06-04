@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use apalis::prelude::Monitor;
 use async_trait::async_trait;
-use nestrs_core::{inventory, Container, DiscoveryService, ReachableProviders, Transport};
+use nestrs_core::{Container, DiscoveryService, ReachableProviders, Transport, inventory};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -45,16 +45,16 @@ impl Transport for QueueWorker {
         let reachable = container.get::<ReachableProviders>();
         for entry in inventory::iter::<ProcessMethod>() {
             let provider_id = (entry.provider_type_id)();
-            if let Some(r) = reachable.as_ref() {
-                if !r.0.contains(&provider_id) {
-                    tracing::debug!(
-                        target: "nestrs::queue",
-                        processor = entry.name,
-                        queue = entry.queue,
-                        "skipped #[process] method: provider unreachable from app's module tree",
-                    );
-                    continue;
-                }
+            if let Some(r) = reachable.as_ref()
+                && !r.0.contains(&provider_id)
+            {
+                tracing::debug!(
+                    target: "nestrs::queue",
+                    processor = entry.name,
+                    queue = entry.queue,
+                    "skipped #[process] method: provider unreachable from app's module tree",
+                );
+                continue;
             }
             processors.push(Arc::new(ProcessorMeta {
                 name: entry.name,

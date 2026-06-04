@@ -27,7 +27,7 @@ pub use worker::QueueWorker;
 pub use worker_module::QueueWorkerModule;
 
 #[doc(hidden)]
-pub use processor::{register_method, register_worker, FromContainer};
+pub use processor::{FromContainer, register_method, register_worker};
 // Apalis surface re-exported for the generated handler/register code. Apps
 // never reach for these directly — the macro emits them.
 #[doc(hidden)]

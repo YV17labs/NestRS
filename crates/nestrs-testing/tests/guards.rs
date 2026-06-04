@@ -5,7 +5,7 @@
 //! inline controllers, no product entities and no database.
 
 use nestrs_core::{injectable, module};
-use nestrs_http::{async_trait, controller, routes, Guard, HttpTransport};
+use nestrs_http::{Guard, HttpTransport, async_trait, controller, routes};
 use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response};

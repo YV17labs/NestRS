@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Path, Signature};
 
 use crate::ty::{arc_inner, nth_generic_type, type_label};
@@ -164,7 +164,7 @@ pub fn forwarded_idents<'a>(
                     other,
                     "resolver/controller method arguments must be simple identifiers \
                      (no destructuring patterns)",
-                ))
+                ));
             }
         }
     }

@@ -2,7 +2,7 @@
 //! the macro picks (Unit / Value / `Result<(), E>` / `Result<T, E>`). The macro
 //! itself lives in `nestrs-ws-macros`; this file pins its observable behaviour.
 
-use nestrs_ws::{gateway, messages, Gateway, WsClient, WsReply};
+use nestrs_ws::{Gateway, WsClient, WsReply, gateway, messages};
 
 #[gateway(path = "/test")]
 pub struct TestGateway;

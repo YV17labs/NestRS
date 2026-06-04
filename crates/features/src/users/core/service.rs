@@ -79,9 +79,8 @@ impl UsersService {
             email: email.to_owned(),
         };
         input.validate()?;
-        let password_hash = hash_password(password).map_err(|_| {
-            UserError::Db(DbErr::Custom("password hashing failed".into()))
-        })?;
+        let password_hash = hash_password(password)
+            .map_err(|_| UserError::Db(DbErr::Custom("password hashing failed".into())))?;
         let mut active = input.into_active_model();
         active.org_id = Set(org_id);
         active.role = Set(DEFAULT_ROLE.to_owned());
@@ -135,10 +134,7 @@ impl UsersService {
 
 #[dataloader]
 impl UsersService {
-    async fn by_name(
-        &self,
-        names: &[String],
-    ) -> Result<HashMap<String, Vec<User>>, UserError> {
+    async fn by_name(&self, names: &[String]) -> Result<HashMap<String, Vec<User>>, UserError> {
         if names.is_empty() {
             return Ok(HashMap::new());
         }
@@ -150,10 +146,7 @@ impl UsersService {
         Ok(group_users_by_name(names, rows))
     }
 
-    async fn by_org(
-        &self,
-        org_ids: &[Uuid],
-    ) -> Result<HashMap<Uuid, Vec<User>>, UserError> {
+    async fn by_org(&self, org_ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<User>>, UserError> {
         if org_ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -177,8 +170,10 @@ impl UsersService {
 }
 
 fn group_users_by_name(names: &[String], rows: Vec<entity::Model>) -> HashMap<String, Vec<User>> {
-    let mut buckets: HashMap<String, Vec<User>> =
-        names.iter().map(|name| (name.clone(), Vec::new())).collect();
+    let mut buckets: HashMap<String, Vec<User>> = names
+        .iter()
+        .map(|name| (name.clone(), Vec::new()))
+        .collect();
     for row in rows {
         if let Some(bucket) = buckets.get_mut(&row.name) {
             bucket.push(User::from(&row));

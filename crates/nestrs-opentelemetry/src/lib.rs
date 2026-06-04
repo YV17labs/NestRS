@@ -10,16 +10,16 @@
 
 mod config;
 mod error;
+mod init;
 #[cfg(feature = "http")]
 mod interceptor;
 mod module;
-mod init;
 #[cfg(feature = "otlp")]
 mod otlp;
 
 pub use config::{LogFormat, OpenTelemetryConfig};
 pub use error::OpenTelemetryError;
+pub use init::OpenTelemetry;
 #[cfg(feature = "otlp")]
 pub use module::OpenTelemetryMeter;
 pub use module::OpenTelemetryModule;
-pub use init::OpenTelemetry;

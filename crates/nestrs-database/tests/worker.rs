@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nestrs_core::{Container, JobContext};
-use nestrs_database::{current_executor, Executor, WorkerDbContext};
+use nestrs_database::{Executor, WorkerDbContext, current_executor};
 use sea_orm::{ConnectionTrait, Database};
 
 #[tokio::test]

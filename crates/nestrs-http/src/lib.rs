@@ -21,19 +21,19 @@ mod transport;
 
 pub use config::HttpConfig;
 pub use context::Ctx;
-pub use cors::CorsConfig;
 pub use controller::{
-    schema_of, Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, SchemaFn,
+    Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, SchemaFn, schema_of,
 };
+pub use cors::CorsConfig;
 pub use endpoint::HttpEndpointMeta;
 pub use interceptor::HttpInterceptorMeta;
 pub use module::{HttpModule, HttpSetup};
 pub use pipe::{IntoInner, Piped, Valid};
 pub use reflector::Reflector;
 pub use scope::{RequestScopeEndpoint, Scoped};
-pub use shaper::{shaped, RouteResponseShaper, ShapedEndpoint};
+pub use shaper::{RouteResponseShaper, ShapedEndpoint, shaped};
 pub use tls::TlsConfig;
-pub use transport::{join_path, version_path, HttpTransport};
+pub use transport::{HttpTransport, join_path, version_path};
 
 pub use poem;
 pub use schemars;

@@ -4,7 +4,7 @@
 use std::any::TypeId;
 
 use nestrs_core::{
-    inventory, module, App, ResolverDescriptor, ResolverSchemaActive, UnreachableResolversError,
+    App, ResolverDescriptor, ResolverSchemaActive, UnreachableResolversError, inventory, module,
 };
 
 struct StrayResolver;

@@ -3,18 +3,18 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
+    ReachableProviders, ResolverSchemaActive, UnreachableResolversError,
     reachable_provider_ids_from_inventory, unreachable_resolvers_from_inventory,
-    validate_from_inventory, warn_unreachable_resolvers_from_inventory, ReachableProviders,
-    ResolverSchemaActive, UnreachableResolversError,
+    validate_from_inventory, warn_unreachable_resolvers_from_inventory,
 };
 use crate::container::{Container, ContainerBuilder, Registrar};
 use crate::discovery::DiscoveryService;
-use crate::lifecycle::{run_phase, run_phase_lenient, LifecyclePhase};
+use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
 use crate::transport::{Transport, TransportContribution};
 
@@ -331,7 +331,7 @@ fn spawn_shutdown_signal(cancel: CancellationToken) {
     tokio::spawn(async move {
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             let mut sigterm = match signal(SignalKind::terminate()) {
                 Ok(s) => s,
                 Err(e) => {
@@ -518,10 +518,8 @@ mod tests {
             .expect("build succeeds");
         // The contribution lands in the container's metadata so `App::run`
         // can drain it at boot.
-        let contributions =
-            DiscoveryService::new(app.container()).meta::<TransportContribution>();
+        let contributions = DiscoveryService::new(app.container()).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].meta.name, "NullTransport");
     }
-
 }

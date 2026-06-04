@@ -1,6 +1,6 @@
 use anyhow::Result;
-use fake::faker::name::en::Name;
 use fake::Fake;
+use fake::faker::name::en::Name;
 use sea_orm::sea_query::{OnConflict, Query};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;

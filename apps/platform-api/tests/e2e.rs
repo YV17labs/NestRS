@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use platform_api::PlatformApiModule;
 use features::{Claims, Role};
 use nestrs_authn::{JwtConfig, JwtOptions, JwtService};
-use nestrs_authz::{with_ability, AbilityBuilder, Action};
-use nestrs_database::{with_executor, Executor, Repo};
+use nestrs_authz::{AbilityBuilder, Action, with_ability};
+use nestrs_database::{Executor, Repo, with_executor};
 use nestrs_testing::{EphemeralDatabase, TestApp};
-use poem::http::{header, StatusCode};
+use platform_api::PlatformApiModule;
+use poem::http::{StatusCode, header};
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
 use serde_json::json;
 use uuid::Uuid;

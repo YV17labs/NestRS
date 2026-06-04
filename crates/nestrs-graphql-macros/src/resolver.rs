@@ -6,14 +6,14 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    parse_macro_input, parse_quote, Attribute, FnArg, Ident, ImplItem, Item, ItemImpl, ItemStruct,
-    Path, Signature, Token, Type,
+    Attribute, FnArg, Ident, ImplItem, Item, ItemImpl, ItemStruct, Path, Signature, Token, Type,
+    parse_macro_input, parse_quote,
 };
 
 use nestrs_codegen::{
-    build_injectable_body, forwarded_arg_idents, forwarded_idents, from_container_method,
-    impl_self_ident, injected_keys_expr, injected_method_with_layers, layer_inject_keys,
-    InjectableBody,
+    InjectableBody, build_injectable_body, forwarded_arg_idents, forwarded_idents,
+    from_container_method, impl_self_ident, injected_keys_expr, injected_method_with_layers,
+    layer_inject_keys,
 };
 
 pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -386,7 +386,7 @@ fn field_method(
             return Err(syn::Error::new_spanned(
                 sig,
                 "#[field] method needs a `&self` receiver (services come from the resolver's `#[inject]` fields)",
-            ))
+            ));
         }
     }
 

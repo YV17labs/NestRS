@@ -11,7 +11,7 @@ use sea_orm::{
     PrimaryKeyTrait,
 };
 
-use nestrs_authz::{current_ability, Action};
+use nestrs_authz::{Action, current_ability};
 
 use crate::page::Page;
 use crate::repo::Repo;

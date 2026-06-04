@@ -6,13 +6,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use apalis::layers::retry::{RetryLayer, RetryPolicy};
 use apalis::layers::ErrorHandlingLayer;
+use apalis::layers::retry::{RetryLayer, RetryPolicy};
 use apalis::prelude::{Data, Monitor, WorkerBuilder, WorkerFactoryFn};
 use apalis_redis::RedisStorage;
 use async_trait::async_trait;
-use nestrs_core::{run_in_job_context, Container, JobContext};
-use serde::{de::DeserializeOwned, Serialize};
+use nestrs_core::{Container, JobContext, run_in_job_context};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::connection::QueueConnection;
 
@@ -112,7 +112,9 @@ pub type MethodHandler<J> = fn(
     J,
     Data<Container>,
     Data<Option<Arc<dyn JobContext>>>,
-) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>;
+) -> Pin<
+    Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>,
+>;
 
 /// Build one apalis worker for a `#[process]` method. Called by the per-method
 /// `register` thunk that `#[processor]` emits; takes the method's typed

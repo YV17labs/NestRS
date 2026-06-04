@@ -1,4 +1,4 @@
-use nestrs_config::{config, Config, ConfigError, ConfigService};
+use nestrs_config::{Config, ConfigError, ConfigService, config};
 use serde::Deserialize;
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};

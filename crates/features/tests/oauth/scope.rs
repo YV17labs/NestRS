@@ -1,5 +1,5 @@
-use features::oauth::roles_for_scope;
 use features::Role;
+use features::oauth::roles_for_scope;
 
 #[test]
 fn empty_scope_grants_all_allowed() {

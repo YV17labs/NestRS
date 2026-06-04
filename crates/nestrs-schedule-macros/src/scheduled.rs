@@ -18,8 +18,8 @@ use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Attribute, Expr, ExprLit, ImplItem, ItemImpl, Lit, LitStr, MetaNameValue,
-    Token, Type,
+    Attribute, Expr, ExprLit, ImplItem, ItemImpl, Lit, LitStr, MetaNameValue, Token, Type,
+    parse_macro_input,
 };
 
 pub(crate) fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -180,13 +180,12 @@ fn parse_cron(attr: &Attribute) -> syn::Result<TokenStream2> {
     if let Expr::Lit(ExprLit {
         lit: Lit::Str(s), ..
     }) = &expr
+        && let Err(e) = croner::Cron::from_str(&s.value())
     {
-        if let Err(e) = croner::Cron::from_str(&s.value()) {
-            return Err(syn::Error::new(
-                s.span(),
-                format!("invalid cron expression: {e}"),
-            ));
-        }
+        return Err(syn::Error::new(
+            s.span(),
+            format!("invalid cron expression: {e}"),
+        ));
     }
     let tz_tokens = match tz {
         Some(lit) => quote! { ::std::option::Option::Some(#lit) },
@@ -246,10 +245,10 @@ fn period_millis(lit: &LitStr) -> syn::Result<u64> {
 }
 
 fn impl_self_name(self_ty: &Type) -> syn::Result<String> {
-    if let Type::Path(p) = self_ty {
-        if let Some(seg) = p.path.segments.last() {
-            return Ok(seg.ident.to_string());
-        }
+    if let Type::Path(p) = self_ty
+        && let Some(seg) = p.path.segments.last()
+    {
+        return Ok(seg.ident.to_string());
     }
     Err(syn::Error::new_spanned(
         self_ty,

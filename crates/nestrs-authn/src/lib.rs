@@ -19,10 +19,8 @@ mod error;
 pub use error::AuthError;
 pub use jwt::{AuthnModule, AuthnSetup, JwtConfig, JwtKey, JwtOptions, JwtService};
 pub use oauth::{Authorization, OAuth2Client, OAuth2Config, OAuth2Module, OAuth2Setup};
-pub use passport::{
-    basic_credentials, bearer_token, AuthGuard, JwtStrategy, Outcome, Strategy,
-};
-pub use password::{burn_verify, hash_password, verify_password, PasswordError};
+pub use passport::{AuthGuard, JwtStrategy, Outcome, Strategy, basic_credentials, bearer_token};
+pub use password::{PasswordError, burn_verify, hash_password, verify_password};
 
 /// Re-exported so apps configure [`JwtOptions`] without a direct `jsonwebtoken` dependency.
 pub use jsonwebtoken::Algorithm;

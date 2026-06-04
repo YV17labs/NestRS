@@ -488,8 +488,7 @@ mod tests {
             providers: &[],
         };
         let resolver = orgs_resolver_desc();
-        let leftover =
-            unreachable_resolvers(&[&app], &[TypeId::of::<AppMod>()], &[&resolver]);
+        let leftover = unreachable_resolvers(&[&app], &[TypeId::of::<AppMod>()], &[&resolver]);
         assert_eq!(leftover, vec!["OrgsResolver"]);
     }
 
@@ -511,14 +510,15 @@ mod tests {
             imports: &[],
             providers: &[],
         };
-        let keys = reachable_provider_ids(&[&app, &billing], &[TypeId::of::<AppMod>()], &HashSet::new());
-        assert!(!keys.contains(&TypeId::of::<OrgsResolver>()));
-        let resolver = orgs_resolver_desc();
-        let leftover = unreachable_resolvers(
+        let keys = reachable_provider_ids(
             &[&app, &billing],
             &[TypeId::of::<AppMod>()],
-            &[&resolver],
+            &HashSet::new(),
         );
+        assert!(!keys.contains(&TypeId::of::<OrgsResolver>()));
+        let resolver = orgs_resolver_desc();
+        let leftover =
+            unreachable_resolvers(&[&app, &billing], &[TypeId::of::<AppMod>()], &[&resolver]);
         assert_eq!(leftover, vec!["OrgsResolver"]);
     }
 

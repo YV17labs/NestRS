@@ -2,7 +2,7 @@
 //! pattern), end-to-end through the HTTP harness.
 
 use nestrs_core::{injectable, module};
-use nestrs_http::{async_trait, controller, routes, Guard, Reflector};
+use nestrs_http::{Guard, Reflector, async_trait, controller, routes};
 use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response};

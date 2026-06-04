@@ -3,10 +3,10 @@
 use std::time::Duration;
 
 use jsonwebtoken::{
-    decode, encode, errors::ErrorKind, get_current_timestamp, Algorithm, DecodingKey, EncodingKey,
-    Header, Validation,
+    Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode, errors::ErrorKind,
+    get_current_timestamp,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::error::AuthError;
 

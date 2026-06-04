@@ -52,10 +52,12 @@ mod tests {
     fn version_alias_enforces_the_exact_version() {
         let v4 = "550e8400-e29b-41d4-a716-446655440000".to_string();
         assert!(ParseUuidV4::transform(v4.clone()).is_ok());
-        assert!(ParseUuidV7::transform(v4)
-            .unwrap_err()
-            .to_string()
-            .contains("v7"));
+        assert!(
+            ParseUuidV7::transform(v4)
+                .unwrap_err()
+                .to_string()
+                .contains("v7")
+        );
     }
 
     #[test]

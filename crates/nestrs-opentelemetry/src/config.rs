@@ -71,17 +71,17 @@ impl OpenTelemetryConfig {
         if let Some(v) = env_var("NESTRS_OPENTELEMETRY__LOG_LEVEL") {
             cfg.log_filter = v;
         }
-        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__LOG_FORMAT") {
-            if let Some(fmt) = LogFormat::parse(&raw) {
-                cfg.log_format = fmt;
-            }
+        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__LOG_FORMAT")
+            && let Some(fmt) = LogFormat::parse(&raw)
+        {
+            cfg.log_format = fmt;
         }
 
         cfg.otlp_endpoint = env_var("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT");
-        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__SAMPLE_RATIO") {
-            if let Ok(r) = raw.parse::<f64>() {
-                cfg.trace_sample_ratio = r.clamp(0.0, 1.0);
-            }
+        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__SAMPLE_RATIO")
+            && let Ok(r) = raw.parse::<f64>()
+        {
+            cfg.trace_sample_ratio = r.clamp(0.0, 1.0);
         }
 
         cfg

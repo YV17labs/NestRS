@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use nestrs_mcp::mcp;
 use nestrs_mcp::{
-    tool, tool_handler, tool_router, CallToolResult, Content, McpError, Parameters, ServerHandler,
+    CallToolResult, Content, McpError, Parameters, ServerHandler, tool, tool_handler, tool_router,
 };
 use validator::Validate;
 

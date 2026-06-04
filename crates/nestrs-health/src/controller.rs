@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nestrs_http::{controller, routes};
-use poem::{http::StatusCode, Response};
+use poem::{Response, http::StatusCode};
 
 use crate::service::HealthCheck;
 

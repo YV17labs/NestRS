@@ -12,7 +12,7 @@ use sea_orm::{
 
 use nestrs_authz::Action;
 
-use crate::repo::{scope_for, Repo};
+use crate::repo::{Repo, scope_for};
 
 /// One keyset page. `next_cursor` is the last row's primary key, present only
 /// when [`has_more`](Page::has_more).

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nestrs_ws::{gateway, messages, WsClient};
+use nestrs_ws::{WsClient, gateway, messages};
 
 use crate::chat::dto::{ChatMessage, SendMessage};
 use crate::chat::guard::ModeratedGuard;

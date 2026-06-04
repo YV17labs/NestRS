@@ -122,10 +122,11 @@ mod tests {
     fn parse_is_none_when_unset() {
         figment::Jail::expect_with(|_| {
             let env = ConfigService::for_namespace("testdb");
-            assert!(env
-                .parse::<u32>("UNSET_KEY")
-                .expect("unset is Ok(None)")
-                .is_none());
+            assert!(
+                env.parse::<u32>("UNSET_KEY")
+                    .expect("unset is Ok(None)")
+                    .is_none()
+            );
             Ok(())
         });
     }

@@ -2,11 +2,11 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{ParseStream, Parser};
-use syn::{parse_macro_input, Ident, ItemStruct, Token};
+use syn::{Ident, ItemStruct, Token, parse_macro_input};
 
 use nestrs_codegen::{
-    build_injectable_body, dependencies_method, dependency_names_method, from_container_method,
-    injected_method, optional_dependencies_method, InjectableBody,
+    InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
+    from_container_method, injected_method, optional_dependencies_method,
 };
 
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {

@@ -9,9 +9,9 @@ use std::collections::HashSet;
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, parse_quote, ImplItem, ItemImpl};
+use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
-use nestrs_codegen::{impl_self_ident, parse_crud_args, Paginate};
+use nestrs_codegen::{Paginate, impl_self_ident, parse_crud_args};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
@@ -114,7 +114,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     Span::call_site(),
                     "#[crud] REST list does not yet support `paginate = page` (offset); \
                      use `paginate = cursor`",
-                ))
+                ));
             }
         };
         generated.push(list_method);
@@ -154,70 +154,70 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     }
 
     if !cfg.readonly {
-        if let Some(create) = &cfg.create {
-            if !existing.contains("create") {
-                let summary = format!("Create {tag}");
-                generated.push(parse_quote! {
-                    #[post("/")]
-                    #[api(summary = #summary, tags(#tag))]
-                    async fn create(
-                        &self,
-                        _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Create, #entity>,
-                        __body: ::nestrs_http::Valid<::poem::web::Json<#create>>,
-                    ) -> ::poem::Result<::poem::web::Json<#output>> {
-                        let __row = ::nestrs_database::CrudService::create(
-                            &*self.#service,
-                            __body.into_inner(),
-                        )
-                        .await
-                        .map_err(#internal)?;
-                        ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
-                    }
-                });
-            }
+        if let Some(create) = &cfg.create
+            && !existing.contains("create")
+        {
+            let summary = format!("Create {tag}");
+            generated.push(parse_quote! {
+                #[post("/")]
+                #[api(summary = #summary, tags(#tag))]
+                async fn create(
+                    &self,
+                    _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Create, #entity>,
+                    __body: ::nestrs_http::Valid<::poem::web::Json<#create>>,
+                ) -> ::poem::Result<::poem::web::Json<#output>> {
+                    let __row = ::nestrs_database::CrudService::create(
+                        &*self.#service,
+                        __body.into_inner(),
+                    )
+                    .await
+                    .map_err(#internal)?;
+                    ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
+                }
+            });
         }
 
-        if let Some(update) = &cfg.update {
-            if !existing.contains("update") {
-                let summary = format!("Update {tag} by id");
-                generated.push(parse_quote! {
-                    #[patch("/:id")]
-                    #[api(summary = #summary, tags(#tag))]
-                    async fn update(
-                        &self,
-                        _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Update, #entity>,
-                        __id: ::poem::web::Path<::uuid::Uuid>,
-                        __body: ::nestrs_http::Valid<::poem::web::Json<#update>>,
-                    ) -> ::poem::Result<::poem::web::Json<#output>> {
-                        #id_v7_check
-                        match ::nestrs_database::CrudService::access(
-                            &*self.#service,
-                            ::nestrs_authz::Action::Update,
-                            __id.0,
-                        )
-                        .await
-                        .map_err(#internal)?
-                        {
-                            ::nestrs_database::Access::Found(__m) => {
-                                let __row = ::nestrs_database::CrudService::update(
-                                    &*self.#service,
-                                    __m,
-                                    __body.into_inner(),
-                                )
-                                .await
-                                .map_err(#internal)?;
-                                ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
-                            }
-                            ::nestrs_database::Access::Denied => ::core::result::Result::Err(
-                                ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
-                            ),
-                            ::nestrs_database::Access::Missing => ::core::result::Result::Err(
-                                ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
-                            ),
+        if let Some(update) = &cfg.update
+            && !existing.contains("update")
+        {
+            let summary = format!("Update {tag} by id");
+            generated.push(parse_quote! {
+                #[patch("/:id")]
+                #[api(summary = #summary, tags(#tag))]
+                async fn update(
+                    &self,
+                    _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Update, #entity>,
+                    __id: ::poem::web::Path<::uuid::Uuid>,
+                    __body: ::nestrs_http::Valid<::poem::web::Json<#update>>,
+                ) -> ::poem::Result<::poem::web::Json<#output>> {
+                    #id_v7_check
+                    match ::nestrs_database::CrudService::access(
+                        &*self.#service,
+                        ::nestrs_authz::Action::Update,
+                        __id.0,
+                    )
+                    .await
+                    .map_err(#internal)?
+                    {
+                        ::nestrs_database::Access::Found(__m) => {
+                            let __row = ::nestrs_database::CrudService::update(
+                                &*self.#service,
+                                __m,
+                                __body.into_inner(),
+                            )
+                            .await
+                            .map_err(#internal)?;
+                            ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
                         }
+                        ::nestrs_database::Access::Denied => ::core::result::Result::Err(
+                            ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
+                        ),
+                        ::nestrs_database::Access::Missing => ::core::result::Result::Err(
+                            ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
+                        ),
                     }
-                });
-            }
+                }
+            });
         }
 
         if !existing.contains("delete") {

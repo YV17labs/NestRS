@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use nestrs_core::injectable;
-use nestrs_http::{async_trait, Guard};
+use nestrs_http::{Guard, async_trait};
 use poem::{IntoResponse, Request, Response};
 
 use crate::passport::{Outcome, Strategy};

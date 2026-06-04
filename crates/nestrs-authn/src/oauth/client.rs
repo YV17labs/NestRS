@@ -5,13 +5,13 @@
 //! round-trip needs no server-side session storage.
 
 use oauth2::basic::BasicClient;
-use validator::Validate;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
     PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 use crate::error::AuthError;
 use crate::jwt::JwtService;

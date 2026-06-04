@@ -11,7 +11,7 @@ use nestrs_middleware::Guard;
 use poem::http::StatusCode;
 use poem::{Error, Request, Response, Result};
 
-use crate::{with_ability, Ability};
+use crate::{Ability, with_ability};
 
 /// Runs `A` then `G` on each MCP HTTP request and scopes the handler to the
 /// resulting ability when present. Inject it as `dyn McpOperationGuard`.
@@ -33,10 +33,7 @@ impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
                         .body("Unauthorized"),
                 ));
             }
-            self.ability
-                .check(req)
-                .await
-                .map_err(Error::from_response)
+            self.ability.check(req).await.map_err(Error::from_response)
         })
     }
 }

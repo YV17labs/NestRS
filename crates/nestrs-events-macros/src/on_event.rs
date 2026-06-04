@@ -4,10 +4,10 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, ItemStruct};
+use syn::{ItemStruct, parse_macro_input};
 
 use nestrs_codegen::{
-    build_injectable_body, from_container_method, injected_method, InjectableBody,
+    InjectableBody, build_injectable_body, from_container_method, injected_method,
 };
 
 pub(crate) fn on_event(args: TokenStream, input: TokenStream) -> TokenStream {

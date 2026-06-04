@@ -2,12 +2,10 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nestrs_core::{injectable, module};
-use nestrs_queue::{
-    processor, QueueConfig, QueueConnection, QueueModule, QueueWorker,
-};
+use nestrs_queue::{QueueConfig, QueueConnection, QueueModule, QueueWorker, processor};
 use nestrs_testing::TestApp;
-use serde::{Deserialize, Serialize};
 use platform_worker::PlatformWorkerModule;
+use serde::{Deserialize, Serialize};
 
 const PROBE_QUEUE: &str = "nestrs-e2e-probe";
 

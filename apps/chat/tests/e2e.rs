@@ -1,9 +1,9 @@
 use chat::ChatModule;
 use futures_util::{SinkExt, StreamExt};
-use nestrs_http::poem::http::StatusCode;
 use nestrs_http::HttpTransport;
+use nestrs_http::poem::http::StatusCode;
 use nestrs_testing::TestApp;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test]
@@ -65,10 +65,12 @@ async fn gateway_echoes_messages_over_a_real_socket() {
         .await
         .expect("send unknown");
     let unknown = next_json(&mut socket).await;
-    assert!(unknown["data"]["error"]
-        .as_str()
-        .expect("error string")
-        .contains("unknown event"));
+    assert!(
+        unknown["data"]["error"]
+            .as_str()
+            .expect("error string")
+            .contains("unknown event")
+    );
 
     socket.close(None).await.ok();
     handle.shutdown().await.expect("transport shuts down");
@@ -143,10 +145,12 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
     .expect("bob sends");
     let denied = next_json(&mut bob).await;
     assert_eq!(denied["event"], "message");
-    assert!(denied["data"]["error"]
-        .as_str()
-        .expect("error string")
-        .contains("not allowed"));
+    assert!(
+        denied["data"]["error"]
+            .as_str()
+            .expect("error string")
+            .contains("not allowed")
+    );
 
     bob.close(None).await.ok();
     wait_for_presence(&mut alice, 1).await;

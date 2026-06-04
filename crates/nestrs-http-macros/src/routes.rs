@@ -7,8 +7,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    parse_macro_input, Attribute, Expr, FnArg, ImplItem, ItemImpl, LitStr, Meta, Path, ReturnType,
-    Token, Type,
+    Attribute, Expr, FnArg, ImplItem, ItemImpl, LitStr, Meta, Path, ReturnType, Token, Type,
+    parse_macro_input,
 };
 
 use nestrs_codegen::{
@@ -390,7 +390,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                     other,
                     "#[api] accepts `summary = \"...\"`, `description = \"...\"`, and \
                      `tags(\"a\", \"b\")`",
-                ))
+                ));
             }
         }
     }

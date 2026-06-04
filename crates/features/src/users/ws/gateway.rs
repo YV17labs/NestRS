@@ -4,8 +4,8 @@ use nestrs_database::CrudService;
 use nestrs_ws::{gateway, messages};
 
 use crate::authn::AuthGuard;
-use crate::authz::ws::WsAuthGuard;
 use crate::authz::AppAbilityGuard;
+use crate::authz::ws::WsAuthGuard;
 use crate::users::core::{User, UserError, UsersService};
 
 #[gateway(path = "/ws")]

@@ -7,10 +7,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{parse_macro_input, ItemStruct, LitStr, Meta, Path, Token};
+use syn::{ItemStruct, LitStr, Meta, Path, Token, parse_macro_input};
 
 use nestrs_codegen::{
-    build_injectable_body, from_container_method, injected_keys_with_layers, InjectableBody,
+    InjectableBody, build_injectable_body, from_container_method, injected_keys_with_layers,
 };
 
 use crate::attr::{expr_str, take_use_attr};
@@ -117,7 +117,7 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitS
                 return Err(syn::Error::new_spanned(
                     other,
                     "#[controller] accepts `path = \"...\"` and an optional `version = \"...\"`",
-                ))
+                ));
             }
         }
     }

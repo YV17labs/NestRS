@@ -3,8 +3,8 @@
 use std::sync::OnceLock;
 
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use thiserror::Error;
 
@@ -38,8 +38,7 @@ pub fn verify_password(encoded_hash: &str, password: &str) -> Result<bool, Passw
 /// Run a verify against a dummy hash — call when the account is absent so the
 /// work factor matches a real login attempt.
 pub fn burn_verify(password: &str) {
-    let dummy = TIMING_DUMMY_HASH.get_or_init(|| {
-        hash_password("nestrs-timing-dummy").expect("dummy hash initializes once")
-    });
+    let dummy = TIMING_DUMMY_HASH
+        .get_or_init(|| hash_password("nestrs-timing-dummy").expect("dummy hash initializes once"));
     let _ = verify_password(dummy, password);
 }

@@ -2,7 +2,7 @@
 //! (`#[use_filters]`), end-to-end through the HTTP harness.
 
 use nestrs_core::{injectable, module};
-use nestrs_http::{async_trait, controller, routes, Filter, RequestSnapshot};
+use nestrs_http::{Filter, RequestSnapshot, async_trait, controller, routes};
 use nestrs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Error, Response};

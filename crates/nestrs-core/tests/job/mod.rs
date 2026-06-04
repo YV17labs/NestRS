@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nestrs_core::{run_in_job_context, JobContext};
+use nestrs_core::{JobContext, run_in_job_context};
 
 tokio::task_local! {
     static MARKER: u32;

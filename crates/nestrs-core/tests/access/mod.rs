@@ -5,7 +5,7 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nestrs_core::{injectable, module, App, ContainerBuilder, Discoverable};
+use nestrs_core::{App, ContainerBuilder, Discoverable, injectable, module};
 
 #[injectable]
 struct ServiceA;

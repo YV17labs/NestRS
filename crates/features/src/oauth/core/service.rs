@@ -94,7 +94,10 @@ impl TokenIssuer {
             roles: roles.clone(),
             exp: self.jwt.expiry(),
         };
-        let access_token = self.jwt.sign(&claims).map_err(|e| TokenError::Sign(e.into()))?;
+        let access_token = self
+            .jwt
+            .sign(&claims)
+            .map_err(|e| TokenError::Sign(e.into()))?;
         tracing::info!(
             ?sub,
             %org_id,

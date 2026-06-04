@@ -1,7 +1,7 @@
 //! HTTP credential extractors shared by bearer and basic-auth [`Strategy`] impls.
 
 use base64::Engine as _;
-use poem::{http::header, Request};
+use poem::{Request, http::header};
 
 /// Pull a token out of `Authorization: Bearer <token>`, if non-empty.
 pub fn bearer_token(req: &Request) -> Option<&str> {

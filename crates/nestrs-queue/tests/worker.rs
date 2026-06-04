@@ -2,8 +2,8 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nestrs_core::{Container, JobContext, Transport};
 use nestrs_queue::{Processor, ProcessorMeta, QueueWorker};
@@ -94,7 +94,9 @@ async fn processors_run_inside_the_bound_job_context() {
         .provide_dyn::<dyn JobContext>(Arc::new(MarkerContext))
         .build();
 
-    let job_context = container.get_dyn::<dyn JobContext>().expect("JobContext bound");
+    let job_context = container
+        .get_dyn::<dyn JobContext>()
+        .expect("JobContext bound");
     nestrs_core::run_in_job_context(Some(&job_context), async {
         ProbeProcessor.process(1).await.expect("job succeeds");
     })

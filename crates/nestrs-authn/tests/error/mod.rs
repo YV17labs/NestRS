@@ -1,8 +1,8 @@
 //! Covers `src/error.rs` — HTTP mapping for authentication failures.
 
 use nestrs_authn::AuthError;
-use poem::http::{header, StatusCode};
 use poem::IntoResponse;
+use poem::http::{StatusCode, header};
 
 #[test]
 fn maps_to_unauthorized_with_bearer_challenge() {

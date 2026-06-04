@@ -16,7 +16,7 @@ use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-use crate::executor::{with_request_executor, Executor};
+use crate::executor::{Executor, with_request_executor};
 
 #[interceptor]
 pub(crate) struct DbContext {
@@ -68,8 +68,10 @@ impl Interceptor for DbContext {
                 tracing::error!(target: "nestrs::orm", error = %err, "transaction commit failed");
                 return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
             }
-        } else if let Err(err) = txn.rollback().await {
-            tracing::error!(target: "nestrs::orm", error = %err, "transaction rollback failed");
+        } else {
+            if let Err(err) = txn.rollback().await {
+                tracing::error!(target: "nestrs::orm", error = %err, "transaction rollback failed");
+            }
         }
         result
     }

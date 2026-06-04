@@ -72,9 +72,10 @@ impl CorsConfig {
             cors = cors.allow_credentials(true);
         }
         if let Some(age) = self.max_age {
-            let secs: i32 = age.as_secs().try_into().context(
-                "CORS max_age overflows i32 seconds (~68 years); pick a smaller value",
-            )?;
+            let secs: i32 = age
+                .as_secs()
+                .try_into()
+                .context("CORS max_age overflows i32 seconds (~68 years); pick a smaller value")?;
             cors = cors.max_age(secs);
         }
         Ok(cors)

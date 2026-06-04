@@ -8,8 +8,8 @@ repository.workspace = true
 description = "In-process testing harness for nestrs: boot an app's real DI graph and drive its HTTP/GraphQL/MCP surfaces with poem's TestClient, with provider overrides and no socket bound."
 
 [features]
-# Satisfy the TelemetryModule boot guard in tests (`with_test_telemetry`).
-telemetry = ["dep:nestrs-telemetry"]
+# Satisfy the OpenTelemetryModule boot guard in tests (`with_test_telemetry`).
+opentelemetry = ["dep:nestrs-opentelemetry"]
 # An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`).
 orm = ["dep:sea-orm", "dep:sea-orm-migration"]
 
@@ -23,8 +23,8 @@ poem = { workspace = true, features = ["test"] }
 # A headless app drives non-HTTP transports on a cancellable background task.
 tokio.workspace = true
 tokio-util.workspace = true
-# Opt-in fixtures: telemetry (boot guard) and a throwaway database for e2e.
-nestrs-telemetry = { workspace = true, optional = true }
+# Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
+nestrs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 sea-orm-migration = { workspace = true, optional = true }
 

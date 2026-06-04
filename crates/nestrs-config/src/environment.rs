@@ -19,7 +19,7 @@ pub enum Environment {
 
 impl Environment {
     /// Call at the top of `main` before anything that reads the env outside the
-    /// DI graph (e.g. `Telemetry::init`). Idempotent with `ConfigModule::for_root`.
+    /// DI graph (e.g. `OpenTelemetry::init`). Idempotent with `ConfigModule::for_root`.
     pub fn init() -> Self {
         crate::dotenv::ensure_env_loaded();
         Self::from_env()

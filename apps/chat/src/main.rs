@@ -1,15 +1,15 @@
 use anyhow::Result;
 use nestrs_core::App;
-use nestrs_telemetry::Telemetry;
+use nestrs_opentelemetry::OpenTelemetry;
 
-use chat::AppModule;
+use chat::ChatModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _telemetry = Telemetry::init("chat")?;
+    let _opentelemetry = OpenTelemetry::init("chat")?;
 
     App::builder()
-        .module::<AppModule>()
+        .module::<ChatModule>()
         .build()
         .await?
         .run()

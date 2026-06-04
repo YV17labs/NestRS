@@ -1,5 +1,5 @@
-mod app;
 mod chat;
+mod module;
 mod notify;
 
-pub use app::AppModule;
+pub use module::ChatModule;

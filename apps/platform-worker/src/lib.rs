@@ -1,3 +1,3 @@
-mod app;
+mod module;
 
-pub use app::AppModule;
+pub use module::PlatformWorkerModule;

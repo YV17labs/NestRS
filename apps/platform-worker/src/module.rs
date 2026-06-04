@@ -11,4 +11,4 @@ use features::audio::{AudioCoreModule, AudioQueueModule};
     AudioCoreModule,
     AudioQueueModule,
 ])]
-pub struct AppModule;
+pub struct PlatformWorkerModule;

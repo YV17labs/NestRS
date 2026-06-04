@@ -9,7 +9,7 @@ nestrs-core.workspace = true
 nestrs-http.workspace = true
 nestrs-ws.workspace = true
 nestrs-health.workspace = true
-nestrs-telemetry = { workspace = true, features = ["http"] }
+nestrs-opentelemetry = { workspace = true, features = ["http"] }
 serde.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
@@ -17,7 +17,7 @@ tracing.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
-nestrs-testing = { workspace = true, features = ["telemetry"] }
+nestrs-testing = { workspace = true, features = ["opentelemetry"] }
 futures-util.workspace = true
 tokio-tungstenite = "0.27"
 serde_json.workspace = true

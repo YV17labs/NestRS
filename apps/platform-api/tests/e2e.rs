@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use platform_api::AppModule;
+use platform_api::PlatformApiModule;
 use features::{Claims, Role};
 use nestrs_authn::{JwtConfig, JwtOptions, JwtService};
 use nestrs_authz::{with_ability, AbilityBuilder, Action};
@@ -21,7 +21,7 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
         .await
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
-        .module::<AppModule>()
+        .module::<PlatformApiModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(JwtConfig {
@@ -30,7 +30,7 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
         })
         .build()
         .await
-        .expect("AppModule boots against the throwaway database");
+        .expect("PlatformApiModule boots against the throwaway database");
     (db, app)
 }
 

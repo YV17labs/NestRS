@@ -12,7 +12,7 @@ nestrs-config.workspace = true
 nestrs-database.workspace = true
 nestrs-health.workspace = true
 nestrs-http.workspace = true
-nestrs-telemetry = { workspace = true, features = ["http"] }
+nestrs-opentelemetry = { workspace = true, features = ["http"] }
 nestrs-throttler.workspace = true
 features.workspace = true
 poem.workspace = true
@@ -28,7 +28,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 poem = { workspace = true, features = ["test"] }
-nestrs-testing = { workspace = true, features = ["telemetry", "orm"] }
+nestrs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
 migrations = { workspace = true }
 base64.workspace = true
 

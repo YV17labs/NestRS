@@ -18,8 +18,8 @@ use opentelemetry_semantic_conventions::{
 };
 use uuid::Uuid;
 
-use crate::config::TelemetryConfig;
-use crate::error::TelemetryError;
+use crate::config::OpenTelemetryConfig;
+use crate::error::OpenTelemetryError;
 
 pub(crate) struct Exporters {
     pub tracer: opentelemetry_sdk::trace::Tracer,
@@ -30,7 +30,7 @@ pub(crate) struct Exporters {
     pub logger_provider: Option<SdkLoggerProvider>,
 }
 
-pub(crate) fn build(config: &TelemetryConfig) -> Result<Exporters, TelemetryError> {
+pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelemetryError> {
     global::set_text_map_propagator(TraceContextPropagator::new());
 
     let resource = build_resource(config);
@@ -53,7 +53,7 @@ pub(crate) fn build(config: &TelemetryConfig) -> Result<Exporters, TelemetryErro
             .with_endpoint(format!("{}/v1/traces", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| TelemetryError::Otlp(e.to_string()))?;
+            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
         tracer_builder = tracer_builder.with_batch_exporter(span_exporter);
     }
 
@@ -67,7 +67,7 @@ pub(crate) fn build(config: &TelemetryConfig) -> Result<Exporters, TelemetryErro
             .with_endpoint(format!("{}/v1/metrics", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| TelemetryError::Otlp(e.to_string()))?;
+            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
         let reader = PeriodicReader::builder(metric_exporter).build();
         let meter_provider = SdkMeterProvider::builder()
             .with_resource(resource.clone())
@@ -80,7 +80,7 @@ pub(crate) fn build(config: &TelemetryConfig) -> Result<Exporters, TelemetryErro
             .with_endpoint(format!("{}/v1/logs", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| TelemetryError::Otlp(e.to_string()))?;
+            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
         let logger_provider = SdkLoggerProvider::builder()
             .with_resource(resource)
             .with_batch_exporter(log_exporter)
@@ -99,7 +99,7 @@ pub(crate) fn build(config: &TelemetryConfig) -> Result<Exporters, TelemetryErro
     })
 }
 
-fn build_resource(config: &TelemetryConfig) -> Resource {
+fn build_resource(config: &OpenTelemetryConfig) -> Resource {
     let mut attrs = vec![KeyValue::new(SERVICE_NAME, config.service_name.clone())];
     attrs.push(KeyValue::new(
         SERVICE_INSTANCE_ID,

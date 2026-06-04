@@ -7,7 +7,7 @@ use nestrs_queue::{
 };
 use nestrs_testing::TestApp;
 use serde::{Deserialize, Serialize};
-use platform_worker::AppModule;
+use platform_worker::PlatformWorkerModule;
 
 const PROBE_QUEUE: &str = "nestrs-e2e-probe";
 
@@ -26,10 +26,10 @@ fn unique_tag() -> String {
 #[tokio::test]
 async fn worker_app_boots_and_consumes_through_the_queue_transport() {
     let app = TestApp::builder()
-        .module::<AppModule>()
+        .module::<PlatformWorkerModule>()
         .build_headless()
         .await
-        .expect("AppModule boots and connects to Redis");
+        .expect("PlatformWorkerModule boots and connects to Redis");
 
     // The worker is a pure consumer now: only the QueueWorker transport, which
     // must configure against the reachable AudioJobs::transcode method.

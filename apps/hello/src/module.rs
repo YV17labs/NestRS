@@ -8,4 +8,4 @@ use crate::service::HelloService;
     imports = [HttpModule::for_root(None)],
     providers = [HelloService, HelloController],
 )]
-pub struct AppModule;
+pub struct HelloModule;

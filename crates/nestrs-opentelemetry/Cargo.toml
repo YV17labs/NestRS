@@ -1,11 +1,11 @@
 [package]
-name = "nestrs-telemetry"
+name = "nestrs-opentelemetry"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Logging, tracing, metrics and Server-Timing middleware for nestrs apps."
+description = "OpenTelemetry for nestrs: logs, traces, metrics, W3C propagation, OTLP export."
 
 [features]
 # OTLP exporter is default so a dev who sets OTEL_EXPORTER_OTLP_ENDPOINT gets

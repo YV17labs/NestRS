@@ -19,7 +19,7 @@ nestrs-resource.workspace = true
 nestrs-queue.workspace = true
 nestrs-schedule.workspace = true
 nestrs-server-timing.workspace = true
-nestrs-telemetry = { workspace = true, features = ["http"] }
+nestrs-opentelemetry = { workspace = true, features = ["http"] }
 features.workspace = true
 poem.workspace = true
 tokio.workspace = true
@@ -36,7 +36,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 poem = { workspace = true, features = ["test"] }
-nestrs-testing = { workspace = true, features = ["telemetry", "orm"] }
+nestrs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
 migrations = { workspace = true }
 
 [lints]

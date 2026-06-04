@@ -5,11 +5,11 @@ use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::config::{LogFormat, TelemetryConfig};
-use crate::error::TelemetryError;
+use crate::config::{LogFormat, OpenTelemetryConfig};
+use crate::error::OpenTelemetryError;
 
-/// `TelemetryModule` reads this to fail fast rather than register no-op
-/// providers when `Telemetry::init` was forgotten.
+/// `OpenTelemetryModule` reads this to fail fast rather than register no-op providers
+/// when `OpenTelemetry::init` was forgotten.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn initialized() -> bool {
@@ -21,8 +21,8 @@ fn mark_initialized() {
 }
 
 /// Drop synchronously flushes pending traces/metrics/logs. Keep the binding
-/// alive for the whole program: `let _telemetry = Telemetry::init("api")?;`.
-pub struct Telemetry {
+/// alive for the whole program: `let _otel = OpenTelemetry::init("api")?;`.
+pub struct OpenTelemetry {
     #[cfg(feature = "otlp")]
     tracer_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
     #[cfg(feature = "otlp")]
@@ -31,12 +31,12 @@ pub struct Telemetry {
     logger_provider: Option<opentelemetry_sdk::logs::SdkLoggerProvider>,
 }
 
-impl Telemetry {
-    /// Reads `NESTRS_TELEMETRY__*`. Batch exporters are added only when an OTLP
+impl OpenTelemetry {
+    /// Reads `NESTRS_OPENTELEMETRY__*`. Batch exporters are added only when an OTLP
     /// endpoint is set, but the tracer is always installed so `trace_id` and
     /// `traceparent` propagation work out of the box.
-    pub fn init(service_name: impl Into<String>) -> Result<Self, TelemetryError> {
-        Self::init_with(TelemetryConfig::from_env(service_name))
+    pub fn init(service_name: impl Into<String>) -> Result<Self, OpenTelemetryError> {
+        Self::init_with(OpenTelemetryConfig::from_env(service_name))
     }
 
     /// Console-only init for tests. Idempotent; first call wins. No flush
@@ -53,7 +53,7 @@ impl Telemetry {
         mark_initialized();
     }
 
-    pub fn init_with(config: TelemetryConfig) -> Result<Self, TelemetryError> {
+    pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
         let filter =
             EnvFilter::try_new(&config.log_filter).unwrap_or_else(|_| EnvFilter::new("info"));
         let fmt_layer = console_layer(config.log_format);
@@ -78,7 +78,7 @@ impl Telemetry {
                 .with(otel_layer)
                 .with(appender_layer)
                 .try_init()
-                .map_err(|e| TelemetryError::Init(e.to_string()))?;
+                .map_err(|e| OpenTelemetryError::Init(e.to_string()))?;
             mark_initialized();
 
             tracing::info!(
@@ -87,10 +87,10 @@ impl Telemetry {
                 sample_ratio = config.trace_sample_ratio,
                 log_format = ?config.log_format,
                 otlp_export = exporters.meter_provider.is_some(),
-                "telemetry initialised"
+                "OpenTelemetry initialised"
             );
 
-            Ok(Telemetry {
+            Ok(OpenTelemetry {
                 tracer_provider: Some(exporters.tracer_provider),
                 meter_provider: exporters.meter_provider,
                 logger_provider: exporters.logger_provider,
@@ -103,14 +103,14 @@ impl Telemetry {
                 .with(filter)
                 .with(fmt_layer)
                 .try_init()
-                .map_err(|e| TelemetryError::Init(e.to_string()))?;
+                .map_err(|e| OpenTelemetryError::Init(e.to_string()))?;
             mark_initialized();
             tracing::info!(
                 service = %config.service_name,
                 log_format = ?config.log_format,
-                "telemetry initialised (console only)"
+                "OpenTelemetry initialised (console only)"
             );
-            Ok(Telemetry {})
+            Ok(OpenTelemetry {})
         }
     }
 }
@@ -132,7 +132,7 @@ where
     }
 }
 
-impl Drop for Telemetry {
+impl Drop for OpenTelemetry {
     fn drop(&mut self) {
         #[cfg(feature = "otlp")]
         {

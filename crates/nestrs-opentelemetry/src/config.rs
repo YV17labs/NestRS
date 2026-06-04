@@ -1,14 +1,14 @@
 use nestrs_config::env_var;
 
-/// Configuration for [`crate::Telemetry::init`].
+/// Configuration for [`crate::OpenTelemetry::init`].
 ///
-/// Env vars under the `telemetry` domain
-/// (`NESTRS_TELEMETRY__{LOG_LEVEL,LOG_FORMAT,SERVICE_NAME,SERVICE_VERSION,
+/// Env vars under the `otel` domain
+/// (`NESTRS_OPENTELEMETRY__{LOG_LEVEL,LOG_FORMAT,SERVICE_NAME,SERVICE_VERSION,
 /// SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO}`).
-/// OTel exporter is wired only when `otlp_endpoint` is set; otherwise
-/// telemetry stays console-only.
+/// OTel exporter is wired only when `otlp_endpoint` is set; otherwise the
+/// subscriber stays console-only.
 #[derive(Clone, Debug)]
-pub struct TelemetryConfig {
+pub struct OpenTelemetryConfig {
     pub service_name: String,
     pub service_version: Option<String>,
     pub deployment_environment: Option<String>,
@@ -43,7 +43,7 @@ impl LogFormat {
     }
 }
 
-impl TelemetryConfig {
+impl OpenTelemetryConfig {
     pub fn new(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),
@@ -57,28 +57,28 @@ impl TelemetryConfig {
         }
     }
 
-    /// `service_name` is the default; `NESTRS_TELEMETRY__SERVICE_NAME` overrides.
+    /// `service_name` is the default; `NESTRS_OPENTELEMETRY__SERVICE_NAME` overrides.
     pub fn from_env(service_name: impl Into<String>) -> Self {
         let mut cfg = Self::new(service_name);
 
-        if let Some(v) = env_var("NESTRS_TELEMETRY__SERVICE_NAME") {
+        if let Some(v) = env_var("NESTRS_OPENTELEMETRY__SERVICE_NAME") {
             cfg.service_name = v;
         }
-        cfg.service_version = env_var("NESTRS_TELEMETRY__SERVICE_VERSION");
-        cfg.deployment_environment = env_var("NESTRS_TELEMETRY__SERVICE_ENVIRONMENT");
-        cfg.service_instance_id = env_var("NESTRS_TELEMETRY__SERVICE_INSTANCE_ID");
+        cfg.service_version = env_var("NESTRS_OPENTELEMETRY__SERVICE_VERSION");
+        cfg.deployment_environment = env_var("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT");
+        cfg.service_instance_id = env_var("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID");
 
-        if let Some(v) = env_var("NESTRS_TELEMETRY__LOG_LEVEL") {
+        if let Some(v) = env_var("NESTRS_OPENTELEMETRY__LOG_LEVEL") {
             cfg.log_filter = v;
         }
-        if let Some(raw) = env_var("NESTRS_TELEMETRY__LOG_FORMAT") {
+        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__LOG_FORMAT") {
             if let Some(fmt) = LogFormat::parse(&raw) {
                 cfg.log_format = fmt;
             }
         }
 
-        cfg.otlp_endpoint = env_var("NESTRS_TELEMETRY__OTLP_ENDPOINT");
-        if let Some(raw) = env_var("NESTRS_TELEMETRY__SAMPLE_RATIO") {
+        cfg.otlp_endpoint = env_var("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT");
+        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__SAMPLE_RATIO") {
             if let Ok(r) = raw.parse::<f64>() {
                 cfg.trace_sample_ratio = r.clamp(0.0, 1.0);
             }
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn defaults_sample_everything() {
-        let cfg = TelemetryConfig::new("svc");
+        let cfg = OpenTelemetryConfig::new("svc");
         assert_eq!(cfg.trace_sample_ratio, 1.0);
         assert!(cfg.otlp_endpoint.is_none());
         assert_eq!(cfg.log_filter, "info");
@@ -133,9 +133,9 @@ mod tests {
 
     #[test]
     fn ratio_is_clamped() {
-        let cfg = TelemetryConfig::new("svc").with_trace_sample_ratio(2.5);
+        let cfg = OpenTelemetryConfig::new("svc").with_trace_sample_ratio(2.5);
         assert_eq!(cfg.trace_sample_ratio, 1.0);
-        let cfg = TelemetryConfig::new("svc").with_trace_sample_ratio(-1.0);
+        let cfg = OpenTelemetryConfig::new("svc").with_trace_sample_ratio(-1.0);
         assert_eq!(cfg.trace_sample_ratio, 0.0);
     }
 

@@ -1,0 +1,174 @@
+---
+title: Fundamentals
+description: Modules, providers, guards, pipes, interceptors, filters — the vocabulary every NestRS app is built from.
+sidebar:
+  order: 1
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+A NestRS app is a tree of **modules**. Each module groups **providers**
+(injectable structs) and optionally imports other modules. The
+dependency-injection graph is built at compile time and verified at boot —
+a missing wire fails startup with a clear error, never with a deep
+`Cannot resolve` at first request.
+
+This category walks the seven primitives every binary leans on:
+
+- **Modules** — the composition unit. `#[module]` declares what a module
+  owns and what it depends on.
+- **Providers** — the things modules own. Anything `#[injectable]`
+  (services, controllers, resolvers, gateways, processors, …) is built
+  once and shared as `Arc<T>`.
+- **Guards** — decide *who* gets through. `Guard::check(&mut Request)`
+  short-circuits the chain with a `Response` or attaches request-scoped
+  context the handler reads back via `Ctx<T>`.
+- **Pipes** — convert and validate input at the request boundary.
+  Stateless transforms (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …)
+  bound by HTTP through the `Valid<E>` / `Piped<P, E>` extractors.
+- **Interceptors** — wrap handler execution. The same seam that lets you
+  log a request also installs the ambient database transaction and the
+  authorization context.
+- **Exception filters** — map errors to responses. Bound with
+  `#[use_filters(...)]` on a controller or beside a verb.
+- **Middleware** — NestRS doesn't have a middleware primitive. See [the
+  page](/fundamentals/middleware/) for the Guards/Interceptors split if
+  you're looking for one.
+
+## A minimal app, end to end
+
+```rust title="apps/hello/src/service.rs"
+use nestrs_core::injectable;
+
+#[injectable]
+#[derive(Default)]
+pub struct HelloService;
+
+impl HelloService {
+    pub fn greeting(&self) -> String {
+        "Hello World".to_string()
+    }
+}
+```
+
+A service is an injectable struct. Anything decorated with `#[injectable]`
+is registered with the container and shared as `Arc<T>`.
+
+```rust title="apps/hello/src/controller.rs"
+use std::sync::Arc;
+use nestrs_http::{controller, routes};
+use crate::service::HelloService;
+
+#[controller(path = "/")]
+pub struct HelloController {
+    #[inject]
+    svc: Arc<HelloService>,
+}
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> String {
+        self.svc.greeting()
+    }
+}
+```
+
+A controller is also injectable. `#[inject]` fields are resolved by type
+from the container; `#[routes]` mounts the verb methods on the
+controller's path.
+
+```rust title="apps/hello/src/module.rs"
+use nestrs_core::module;
+use nestrs_http::HttpModule;
+use crate::controller::HelloController;
+use crate::service::HelloService;
+
+#[module(
+    imports = [HttpModule::for_root(None)],
+    providers = [HelloService, HelloController],
+)]
+pub struct HelloModule;
+```
+
+```rust title="apps/hello/src/main.rs"
+use nestrs_core::App;
+use hello::HelloModule;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    App::builder()
+        .module::<HelloModule>()
+        .build()
+        .await?
+        .run()
+        .await
+}
+```
+
+```bash frame="terminal"
+$ just dev hello
+2026-06-03T10:14:22Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3000
+  GET / → HelloController::hello
+
+$ curl http://localhost:3000
+Hello World
+```
+
+## What the framework did
+
+1. **Collected** every provider in the import tree — `HelloService`,
+   `HelloController` — into a link-time registry.
+2. **Built** the access graph from `HelloModule`. `HelloController`
+   declares it injects `HelloService`; `HelloModule` owns it; reachable. ✓
+3. **Constructed** each provider once. `HelloService::default()` produced
+   one `Arc<HelloService>`, injected into `HelloController::svc`.
+4. **Mounted** `HelloController` on the HTTP transport from the route
+   table `#[routes]` generated.
+
+## Try breaking it
+
+Comment the line that lists `HelloService` in `HelloModule`'s providers,
+then `cargo run`:
+
+```text frame="terminal" "(needs HelloService)"
+Error: cannot register provider(s) — unreachable in graph:
+  - HelloController (needs HelloService)
+```
+
+The error names *what* is missing and *why* it cannot be resolved. The
+build does not start the HTTP transport when wiring is invalid.
+
+## Five ideas to remember
+
+- **Module** — a struct decorated with `#[module]`, listing `providers`
+  it owns and `imports` it depends on. See [Modules](/fundamentals/modules/).
+- **Provider** — any injectable struct (`#[injectable]`, `#[controller]`,
+  `#[resolver]`, `#[gateway]`, `#[processor]`, …). Built once, shared as
+  `Arc<T>`. See [Providers](/fundamentals/providers/).
+- **`#[inject]` field** — declares "I need this type from the container."
+- **Access graph** — boot-time check that proves every `#[inject]`
+  resolves to a provider the module can reach.
+- **Discoverable** — every decorated provider registers itself; transports
+  consume the registry filtered by reachability.
+
+## What follows
+
+Each primitive gets its own page — concept, signature, where to bind it,
+and a tested example.
+
+```
+Fundamentals/
+  ├─ Modules
+  ├─ Providers
+  ├─ Guards
+  ├─ Pipes
+  ├─ Interceptors
+  ├─ Exception filters
+  └─ Middleware (equivalence note)
+```
+
+Handler types (controllers, resolvers, gateways, processors, MCP tools)
+are transport-specific — they live in their own categories
+([HTTP](/http/), [GraphQL](/graphql/), [WebSockets](/websockets/),
+[Queue](/queue/), [MCP](/mcp/)).

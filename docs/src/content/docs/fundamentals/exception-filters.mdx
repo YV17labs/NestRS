@@ -1,0 +1,174 @@
+---
+title: Exception filters
+description: "Map handler errors to HTTP responses — feature errors via ResponseError, route-bound filters via #[use_filters]."
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A filter sees an error coming out of a handler and turns it into a
+`Response`. The success path passes through untouched. Two seams in
+NestRS cover this — the `ResponseError` impl on a feature's error type
+(the default), and `#[use_filters(...)]` for route-specific behavior.
+
+```rust
+#[async_trait]
+pub trait Filter: Send + Sync + 'static {
+    async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
+}
+```
+
+## The default: per-feature `ResponseError`
+
+A feature's pure error type lives in `<feature>/core/error.rs`. The
+HTTP mapping — status codes + body — lives in `<feature>/http/error.rs`,
+so a non-HTTP app (a worker, an MCP server) does not link the poem
+types.
+
+```rust title="users/core/error.rs"
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum UsersError {
+    #[error("not found")]
+    NotFound,
+    #[error("email already in use")]
+    EmailTaken,
+    #[error(transparent)]
+    Db(#[from] sea_orm::DbErr),
+}
+```
+
+```rust title="users/http/error.rs"
+use poem::error::ResponseError;
+use poem::http::StatusCode;
+use crate::users::core::UsersError;
+
+impl ResponseError for UsersError {
+    fn status(&self) -> StatusCode {
+        match self {
+            UsersError::NotFound   => StatusCode::NOT_FOUND,
+            UsersError::EmailTaken => StatusCode::CONFLICT,
+            UsersError::Db(_)      => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+```
+
+Then handlers use `?` and `Result<T, UsersError>` — no manual mapping:
+
+```rust
+#[post("/")]
+async fn create(&self, Valid(Json(input)): Valid<Json<CreateUserInput>>)
+    -> Result<Json<User>, UsersError>
+{
+    Ok(Json(self.svc.create(input).await?))
+}
+```
+
+`?` carries the error to the response boundary; `ResponseError::status()`
+decides the code; the default body is poem's. Override `as_response()`
+on the impl when you want a structured JSON body.
+
+<Aside>
+`ResponseError` lives in `<feature>/http/error.rs`, not next to the
+error type. A worker or MCP-only app importing only the core never
+links poem.
+</Aside>
+
+## Route-bound filters via `#[use_filters(...)]`
+
+Sometimes the mapping depends on the *route*, not the error. Maybe
+`/v1/widgets/boom` should return an `I'm a teapot` while every other
+500 stays a 500. That's what `#[use_filters(...)]` is for.
+
+```rust
+use nestrs_core::injectable;
+use nestrs_http::{async_trait, Filter, RequestSnapshot};
+use poem::http::StatusCode;
+use poem::{Error, Response};
+
+#[injectable]
+#[derive(Default)]
+pub struct TeapotFilter;
+
+#[async_trait]
+impl Filter for TeapotFilter {
+    async fn filter(&self, _req: &RequestSnapshot, _error: Error) -> Response {
+        Response::builder()
+            .status(StatusCode::IM_A_TEAPOT)
+            .body("filtered")
+    }
+}
+```
+
+Bind it per route or per controller:
+
+```rust
+#[controller(path = "/widgets")]
+pub struct WidgetController;
+
+#[routes]
+impl WidgetController {
+    #[get("/boom")]
+    #[use_filters(TeapotFilter)]               // route scope
+    async fn boom(&self) -> poem::Result<&'static str> {
+        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    }
+}
+
+#[controller(path = "/gadgets")]
+#[use_filters(TeapotFilter)]                   // controller scope
+pub struct GadgetController;
+```
+
+A filter sees a **`RequestSnapshot`** (method + URI + headers), not the
+live `Request` — the inner endpoint has already consumed it. Snapshot
+the routing-relevant bits up front, pass them to the renderer.
+
+Filters are `#[injectable]` providers, listed in `providers = [...]` and
+resolved from the container — same shape as guards and interceptors.
+
+## Where filters sit in the chain
+
+Per route, inner → outer:
+
+```
+shaper → interceptors → guards → filters → meta
+```
+
+A filter wraps *outside* guards and interceptors, so it sees errors
+from any of them — a `403` from a guard, a `500` from a handler, an
+error from an interceptor's `next.run(req)`. The successful path passes
+through unchanged.
+
+## Filters vs `ResponseError`
+
+| Layer | Where it lives | When to use it |
+|-------|----------------|-----------------|
+| `ResponseError` on an error type | `<feature>/http/error.rs` | Default. Every handler returning that error gets the same mapping |
+| `#[use_filters(F)]` per route | A provider | Route-shaped behavior — a debug endpoint, a special status, a custom body envelope |
+
+Reach for `ResponseError` first. A filter earns its keep only when the
+status or shape depends on the route — not on the error itself.
+
+## A small filter-only case: validation envelopes
+
+The framework's pipe error renderer already returns:
+
+```json
+{ "statusCode": 400, "error": "Bad Request", "message": "...", "details": { /* ... */ } }
+```
+
+If your API uses a different envelope (`{ ok: false, error: { ... } }`),
+write one filter that intercepts the error path and re-renders, bind it
+globally. The error itself stays pure.
+
+## Going further
+
+- [HTTP / controllers — custom errors with `?`](/http/controllers/#custom-errors-with-) —
+  the `ResponseError` walkthrough.
+- [Interceptors](/fundamentals/interceptors/) — the success-path sibling.
+- [Guards](/fundamentals/guards/) — return `Err(Response)` directly,
+  bypassing the filter chain.

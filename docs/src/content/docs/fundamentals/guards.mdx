@@ -1,0 +1,211 @@
+---
+title: Guards
+description: Pre-handler authorization — gate access, short-circuit with a response, attach request-scoped context.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A guard decides *whether* a handler runs. It sees the request before the
+handler does, borrows it mutably, and either returns `Ok(())` (let it
+through) or `Err(Response)` (short-circuit with that response — typically
+401, 403, 429).
+
+Because the borrow is mutable, a guard can also **attach typed context**
+the handler reads back via `Ctx<T>` — that's how `AuthGuard` puts the
+authenticated `Claims` on the request without going through extractors.
+
+The trait is named in `nestrs-middleware` and re-exported as
+`nestrs_http::Guard`. It wraps [poem](https://docs.rs/poem)'s endpoint
+layer:
+
+```rust
+#[async_trait]
+pub trait Guard: Send + Sync + 'static {
+    async fn check(&self, req: &mut Request) -> Result<(), Response>;
+}
+```
+
+## A minimal guard
+
+```rust
+use nestrs_core::injectable;
+use nestrs_http::{async_trait, Guard};
+use poem::http::StatusCode;
+use poem::{Request, Response};
+
+#[injectable]
+#[derive(Default)]
+pub struct RateLimitGuard;
+
+#[async_trait]
+impl Guard for RateLimitGuard {
+    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+        if over_quota(req) {
+            return Err(Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .body("rate limited"));
+        }
+        Ok(())
+    }
+}
+```
+
+A guard is just an `#[injectable]` provider that implements `Guard`. It
+goes in some module's `providers = [...]`, and the access graph holds
+controllers/handlers that reference it to importing its module.
+
+## Three binding scopes
+
+| Scope | Binding | Resolved from |
+|-------|---------|---------------|
+| **Global** | `HttpTransport::guard(Arc::new(g))` in your `main` | Built imperatively before `App::run` |
+| **Controller** | `#[use_guards(AuthGuard)]` on the controller struct | The container, at mount |
+| **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb | The container, at mount |
+
+Multiple guards listed in a single attribute run in declaration order,
+outermost first — the first listed sees the request before the second.
+
+```rust
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AppAbilityGuard)]      // controller scope, both bound
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[routes]
+impl UsersController {
+    #[get("/:id")]
+    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+        Json(User::from(&*user))
+    }
+
+    #[delete("/:id")]
+    #[use_guards(AdminGuard)]                  // handler scope, in addition
+    async fn delete(&self, id: Path<Uuid>) -> Result<()> {
+        self.svc.delete(*id).await
+    }
+}
+```
+
+`AdminGuard` runs *on top of* the controller's two guards — it doesn't
+replace them. Per-handler is additive.
+
+## Attaching request context
+
+A guard often does more than gate access — it produces a value the
+handler needs. `AuthGuard` is the canonical case:
+
+```rust
+#[async_trait]
+impl Guard for AuthGuard {
+    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+        let claims = verify_bearer(req)?;
+        req.extensions_mut().insert(claims);    // attach
+        Ok(())
+    }
+}
+```
+
+The handler reads it back:
+
+```rust
+use nestrs_http::Ctx;
+
+#[get("/me")]
+async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
+    Json(self.svc.find(auth.sub).await?)
+}
+```
+
+`Ctx<T>` rejects with `500` if the value isn't on the request — a missing
+context means the guard that should have set it never ran. The error
+explicitly names the missing type and points at the wiring fix.
+
+## Reading per-handler metadata
+
+A guard sometimes needs to vary its decision per route. `#[meta(...)]`
+attaches a typed payload to the route; `Reflector` reads it back inside
+the guard:
+
+```rust
+#[derive(Clone)]
+pub struct Roles(pub &'static [&'static str]);
+
+#[injectable]
+#[derive(Default)]
+pub struct RolesGuard;
+
+#[async_trait]
+impl Guard for RolesGuard {
+    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+        let claims = req.extensions().get::<Claims>().ok_or_else(forbidden)?;
+        let required = Reflector::new(req).get::<Roles>().map(|r| r.0).unwrap_or(&[]);
+        if required.iter().any(|r| claims.roles.contains(r)) {
+            Ok(())
+        } else {
+            Err(forbidden())
+        }
+    }
+}
+```
+
+```rust
+#[get("/admin")]
+#[use_guards(AuthGuard, RolesGuard)]
+#[meta(Roles(&["admin", "auditor"]))]
+async fn admin(&self) -> &'static str { "ok" }
+```
+
+<Aside type="caution">
+`#[meta(...)]` only reaches a guard bound **per controller** or **per
+handler**. A global guard runs before routing resolves a handler, so
+route metadata is not yet attached and the reflector finds nothing.
+</Aside>
+
+## Ordering with the other layers
+
+Per-route, inner → outer:
+
+```
+shaper → interceptors → guards → filters → meta
+```
+
+- **Shaper** wraps the handler innermost (the response masking gate
+  emitted by `#[routes]` when a handler declares an `Authorize`
+  parameter).
+- **Interceptors** wrap the shaper and may install ambient state across
+  the guards.
+- **Guards** run after interceptors — that's how `DbContext` (a global
+  interceptor) installs the executor before `AbilityGuard` reads from it.
+- **Filters** see the error coming out of the chain.
+- **Meta** is read by guards via `Reflector`.
+
+So a guard reads request context that an upstream interceptor or
+upstream guard may have attached, and a downstream handler reads what
+*this* guard attaches.
+
+## GraphQL and WebSocket guards
+
+The trait is HTTP-shaped (it takes `&mut Request`). GraphQL and
+WebSockets use their own guard traits — `ResolverGuard` and
+`MessageGuard` — but the *binding model* is the same:
+`#[use_guards(...)]` on the `#[resolver]` impl, on the gateway struct,
+or beside a `#[subscribe_message]`. The framework's authz feature
+provides the cross-transport bridges so a single `AppAbility` covers all
+three.
+
+See [Security](/security/) for the bridge between HTTP, GraphQL, and WS
+authz.
+
+## Going further
+
+- [Interceptors](/fundamentals/interceptors/) — the sibling layer; wraps
+  the handler instead of gating it.
+- [Exception filters](/fundamentals/exception-filters/) — what happens
+  after a handler (or guard) returns `Err`.
+- [Security](/security/) — `AuthGuard`, `AbilityGuard`, the full chain.
+- [HTTP / controllers](/http/controllers/) — per-route bindings end to
+  end.

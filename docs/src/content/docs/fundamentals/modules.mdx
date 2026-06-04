@@ -1,0 +1,188 @@
+---
+title: Modules
+description: "How #[module] composes a binary — providers, imports, dynamic modules, idempotent registration."
+sidebar:
+  order: 2
+---
+
+import { Aside, FileTree } from '@astrojs/starlight/components';
+
+A module is a struct decorated with `#[module(...)]`. It declares two
+things: the **providers it owns** (built and registered into the
+container) and the **modules it imports** (whose providers it can
+inject). That's it.
+
+```rust title="apps/hello/src/module.rs"
+use nestrs_core::module;
+use nestrs_http::HttpModule;
+use crate::controller::HelloController;
+use crate::service::HelloService;
+
+#[module(
+    imports = [HttpModule::for_root(None)],
+    providers = [HelloService, HelloController],
+)]
+pub struct HelloModule;
+```
+
+## Two lists, one purpose
+
+| List | Holds | Purpose |
+|------|-------|---------|
+| `providers = [...]` | `#[injectable]` / `#[controller]` / `#[resolver]` / `#[gateway]` / `#[processor]` / `#[interceptor]` structs | This module *builds* them and *registers* them in the container |
+| `imports = [...]` | Other modules — by type or by `Module::for_root(opts)` | This module *depends on* them; their providers become injectable here |
+
+A provider listed by another module cannot be redeclared here — the
+container is flat. The access graph (see [Providers](/fundamentals/providers/))
+enforces that every `#[inject]` resolves through `imports`.
+
+## The two import forms
+
+```rust
+#[module(
+    imports = [
+        UsersHttpModule,                       // 1. static, by type
+        DatabaseModule::for_root(None),        // 2. dynamic, configured at the import site
+        HttpModule::for_root(HttpConfig {
+            host: "0.0.0.0".into(),
+            port: 4000,
+            ..Default::default()
+        }),
+    ],
+    providers = [/* ... */],
+)]
+pub struct AppModule;
+```
+
+**Static imports** are bare types — a `Module` trait impl with no
+parameters. The framework dedups them: a diamond import (two paths
+through the tree both importing `DatabaseModule`) builds providers
+exactly once.
+
+**Dynamic imports** are call expressions returning a `DynamicModule`.
+They carry configuration at the import site — a pinned config struct, a
+TLS cert, a worker concurrency. Dynamic modules are **not** auto-deduped
+(each carries its own config); importing the same one twice with
+different options builds two configurations.
+
+<Aside type="tip">
+Every framework module's config follows the dual path: pin a value at
+the import site, or leave it `None` and let `NESTRS_<NS>__<KEY>` env
+vars populate it. Apps mix both freely — pin host/port in code, read
+secrets from env.
+</Aside>
+
+## The four boot phases
+
+`App::builder().build().await` runs four ordered phases, independent of
+how `main` calls them:
+
+1. **Seeds** — runtime values your `main` computes and passes to
+   `.seed(value)`. A seed always wins over a module-built provider of the
+   same type.
+2. **Collect** — every queued async factory runs (DB pools, queue
+   connections, anything that must be built asynchronously). A dynamic
+   module's `collect()` lives here.
+3. **Factories** — the awaited factory outputs land in the container as
+   global infrastructure.
+4. **Register** — the synchronous `Module::register()` walk builds every
+   provider in dependency order, injecting seeds + factory outputs +
+   peers.
+
+A sync-only app skips collect/factories and uses `App::new::<AppModule>()`
+directly.
+
+## A real composition
+
+```rust title="apps/platform-api/src/module.rs"
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        DatabaseModule::for_root(None),
+        AuthnCoreModule,
+        AuthzHttpModule,
+        AuthzGraphqlModule,
+        UsersCoreModule,
+        UsersHttpModule,
+        UsersGraphqlModule,
+        GraphqlModule::for_root(None),
+        OpenApiModule::for_root(None),
+        OpenTelemetryModule,
+    ],
+)]
+pub struct PlatformApiModule;
+```
+
+Each import contributes its providers; each transport (`HttpTransport`,
+`Scheduler`, `QueueWorker`, …) drains its `inventory` registry filtered
+by what the import tree reaches. Linking a crate without importing its
+module keeps its providers **inert** — present in the binary, not
+mounted.
+
+`PlatformApiModule` has no `providers = [...]` list at all. The root
+module of an app often doesn't — it composes feature modules and lets
+each own its providers.
+
+## Port + adapters: one module per role
+
+A feature ships several modules, never one umbrella. For a `users/`
+feature:
+
+<FileTree>
+- crates/features/src/users/
+  - core/
+    - module.rs (UsersCoreModule — the port)
+    - service.rs
+    - entity.rs
+    - dto.rs
+  - http/
+    - module.rs (UsersHttpModule — imports UsersCoreModule)
+    - controller.rs
+  - graphql/
+    - module.rs (UsersGraphqlModule — imports UsersCoreModule)
+    - resolver.rs
+  - queue/
+    - module.rs (UsersQueueModule — imports UsersCoreModule)
+    - processor.rs
+</FileTree>
+
+An app that needs only HTTP imports `UsersCoreModule` +
+`UsersHttpModule`. A worker imports `UsersCoreModule` +
+`UsersQueueModule`. The same data layer, different surface.
+
+<Aside>
+**One `#[module]` per folder.** A `module.rs` defines exactly one
+`#[module]` struct. Multiple modules per feature ⇒ multiple folders. No
+`*_module.rs` — the file is always `module.rs`.
+</Aside>
+
+## Idempotent registration
+
+The `#[module]` macro marks each module as registered the first time its
+`register()` runs, then short-circuits on subsequent calls. A diamond
+import (A imports B, A also imports C, both B and C import `Common`)
+builds `Common`'s providers exactly once.
+
+```rust
+#[module(imports = [Common])]
+pub struct B;
+
+#[module(imports = [Common])]
+pub struct C;
+
+#[module(imports = [B, C])]
+pub struct A;
+```
+
+`Common`'s providers are registered once — not twice. The boot log emits
+`nestrs::module: module dependencies initialized` per module, exactly
+once per type.
+
+## Going further
+
+- [Providers](/fundamentals/providers/) — what lives in `providers = [...]`,
+  scopes, the access graph.
+- [Configuration](/configuration/) — how dynamic modules turn
+  `NESTRS_<NS>__<KEY>` env vars into pinned values.
+- [HTTP transport](/http/configuration/) — `HttpModule::for_root(...)`
+  end to end.

@@ -79,6 +79,7 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let body = if args.providers.is_empty() {
         quote! {
             #(#import_calls)*
+            ::nestrs_core::__module_registered(#name_str);
             builder
         }
     } else {
@@ -216,6 +217,7 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     }
                 }
             }
+            ::nestrs_core::__module_registered(#name_str);
             builder
         }
     };

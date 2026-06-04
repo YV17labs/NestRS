@@ -19,7 +19,7 @@ pub use discoverable::Discoverable;
 pub use discovery::{Discovered, DiscoveryService};
 pub use job::{run_in_job_context, JobContext};
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
-pub use module::{DynamicModule, Module};
+pub use module::{DynamicModule, Module, __module_registered};
 pub use scope::RequestScope;
 pub use transport::{Transport, TransportContribution};
 

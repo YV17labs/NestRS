@@ -15,9 +15,21 @@ use poem::listener::{RustlsCertificate, RustlsConfig};
 /// }
 /// # Ok::<(), anyhow::Error>(())
 /// ```
+#[derive(Clone)]
 pub struct TlsConfig {
     cert: Vec<u8>,
     key: Vec<u8>,
+}
+
+/// Manual `Debug` so `HttpConfig`'s derived `Debug` cannot leak the private
+/// key to a log line — only sizes are printed.
+impl std::fmt::Debug for TlsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TlsConfig")
+            .field("cert", &format_args!("<{} bytes>", self.cert.len()))
+            .field("key", &format_args!("<{} bytes redacted>", self.key.len()))
+            .finish()
+    }
 }
 
 impl TlsConfig {

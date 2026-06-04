@@ -6,7 +6,8 @@ use nestrs_core::{Container, DiscoveryService, Transport};
 use nestrs_middleware::{EndpointExt as NestrsEndpointExt, Filter, Guard, Interceptor};
 use poem::endpoint::BoxEndpoint;
 use poem::listener::{Listener, TcpListener};
-use poem::middleware::Cors;
+use poem::http::header::{HeaderValue, SERVER};
+use poem::middleware::{Cors, SetHeader};
 use poem::{EndpointExt, IntoEndpoint, Response, Route, Server};
 use tokio_util::sync::CancellationToken;
 
@@ -55,6 +56,7 @@ pub struct HttpTransport {
     mounts: Vec<MountFn>,
     cors: Option<Cors>,
     tls: Option<TlsConfig>,
+    server_header: Option<&'static str>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -74,8 +76,17 @@ impl HttpTransport {
             mounts: Vec::new(),
             cors: None,
             tls: None,
+            server_header: None,
             endpoint: None,
         }
+    }
+
+    /// Emit `Server: <value>` on every response — off by default
+    /// (production-safe). [`HttpModule`](crate::HttpModule) sets this when
+    /// `HttpConfig.server_header` is `true`, using `nestrs/<crate version>`.
+    pub fn server_header(mut self, value: &'static str) -> Self {
+        self.server_header = Some(value);
+        self
     }
 
     pub fn bind(mut self, addr: impl Into<String>) -> Self {
@@ -192,6 +203,13 @@ impl Transport for HttpTransport {
             endpoint = NestrsEndpointExt::interceptor(endpoint, interceptor)
                 .map_to_response()
                 .boxed();
+        }
+        // Server header is purely cosmetic — apply before CORS so the
+        // preflight short-circuit (no body) still carries it for observability.
+        if let Some(value) = self.server_header.take() {
+            let header_value = HeaderValue::from_static(value);
+            let set = SetHeader::new().overriding(SERVER, header_value);
+            endpoint = endpoint.with(set).map_to_response().boxed();
         }
         // CORS wraps outermost, so a preflight is handled before guards run.
         if let Some(cors) = self.cors.take() {

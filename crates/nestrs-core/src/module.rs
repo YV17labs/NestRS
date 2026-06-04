@@ -1,5 +1,18 @@
 use crate::container::ContainerBuilder;
 
+/// Boot-time trace emitted by the `#[module]` macro after a module finishes
+/// registering its providers. Idempotent registration means a diamond import
+/// fires this exactly once. Target `nestrs::module`, level `info` — quiet under
+/// `RUST_LOG=warn`, visible by default.
+#[doc(hidden)]
+pub fn __module_registered(name: &'static str) {
+    tracing::info!(
+        target: "nestrs::module",
+        module = name,
+        "module dependencies initialized",
+    );
+}
+
 /// A statically-composed module — the common case, listed by type in
 /// `#[module(imports = [...])]`. The `#[module]` macro makes registration
 /// idempotent via [`ContainerBuilder::mark_registered`], so a diamond import

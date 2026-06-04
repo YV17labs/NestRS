@@ -1,6 +1,8 @@
 ---
 title: Database
 description: Entities, services as the single DB gateway, the Repo handle, dataloaders for batching.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -201,19 +203,21 @@ total_pages, has_next_page, has_previous_page }`) and a `PageArgs` input.
 The `#[crud(...)]` macros wire the paginated route + the GraphQL
 `items_page(args: PageArgs)` operation automatically.
 
-## Migrations
+## Schema and demo data
 
-Migrations are [SeaORM](https://www.sea-ql.org/SeaORM/)'s, kept in their own app:
+Schema lives in the **`migrations`** crate; demo data in the **`seed`** crate
+— both product crates under `crates/`, not apps. Neither the API nor the
+worker run migrations on startup; `just db` drives them:
 
 ```bash
-just db up           # apply pending migrations
-just db fresh        # drop + re-apply from scratch
-just db seed         # load demo data
-just db reset        # fresh + seed
+just db up       # apply pending migrations
+just db status   # applied vs. pending
+just db seed     # load demo data (idempotent)
+just db reset    # fresh + seed
 ```
 
-The `db` app is the only place schema changes live — neither the API
-nor the worker run migrations on startup.
+See [Migrations](/database/migrations/) for writing and running schema
+changes, and [Seeding](/database/seeding/) for demo data.
 
 ## What happens on a mutating route
 
@@ -234,6 +238,9 @@ A worker job (queue processor, cron job) also gets a pool executor.
 
 ## Going further
 
+- [Migrations](/database/migrations/) — schema changes in the `migrations`
+  crate.
+- [Seeding](/database/seeding/) — idempotent demo data in the `seed` crate.
 - [Security](/security/) — `Ability` filters reads, gates by-id loads,
   masks response bodies. Wires through the same `Repo` calls.
 - [GraphQL](/graphql/) — `#[field]` resolvers with a

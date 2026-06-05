@@ -30,6 +30,8 @@ mod worker;
 mod bind;
 #[cfg(feature = "graphql")]
 pub mod graphql;
+#[cfg(feature = "health")]
+mod health;
 #[cfg(feature = "ws")]
 pub mod ws;
 
@@ -46,5 +48,7 @@ pub use worker::WorkerDbContext;
 
 #[cfg(feature = "http")]
 pub use bind::Bind;
+#[cfg(feature = "health")]
+pub use health::{DatabaseHealthModule, DbHealthIndicator};
 
 pub(crate) use interceptor::DbContext;

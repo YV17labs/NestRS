@@ -21,8 +21,13 @@ graphql = ["dep:async-graphql", "dep:nestrs-graphql", "dep:uuid"]
 # WebSocket transport extractor: `WsDataContext` (the `SocketContext` that
 # re-installs the request executor + ability around each gateway message).
 ws = ["dep:nestrs-ws"]
+# Liveness/readiness pool ping (`DbHealthIndicator`) wired through
+# `nestrs-health`'s `#[indicators]` registry. The connection's `ping`
+# round-trips a `SELECT 1`, so an unreachable DB drops the readiness probe
+# to `503`.
+health = ["dep:nestrs-health"]
 # Convenience for tests and exemplars.
-full = ["http", "graphql", "ws"]
+full = ["http", "graphql", "ws", "health"]
 
 [dependencies]
 nestrs-core.workspace = true
@@ -53,3 +58,4 @@ uuid = { workspace = true, optional = true }
 async-graphql = { workspace = true, optional = true }
 nestrs-graphql = { workspace = true, optional = true }
 nestrs-ws = { workspace = true, optional = true }
+nestrs-health = { workspace = true, optional = true }

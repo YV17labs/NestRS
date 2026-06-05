@@ -1,0 +1,17 @@
+[package]
+name = "nestrs-health-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Internal — the #[indicators] decorator macro; re-exported by nestrs-health, not a direct dependency."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true

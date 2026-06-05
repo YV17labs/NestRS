@@ -624,7 +624,7 @@ unambiguous. Write code when it is none of the three.
 - anything that needs `unsafe` or runtime reflection.
 
 A new decorator must ship with: a doc comment showing the expanded form, a
-test in the home crate's mirror tree (or in `nestrs-testing` for
+test in the home crate's `tests/` (or in `nestrs-testing` for
 cross-crate wiring) proving the wiring, and a use site in an app or in
 `features` so the integration is exercised end-to-end. Measure incremental
 compile cost per use site; > 0.5 s is a defect (see *North Star*).
@@ -684,41 +684,27 @@ then **kill the server before returning control**. The verified baseline
 
 - **No mocking the database in e2e tests** — real Postgres
   (testcontainers in CI). Unit tests of pure logic need no DB.
-- **Three test homes** (do not mix them):
-  - **App e2e** — exactly one `apps/<app>/tests/e2e.rs`: boots the real
-    `AppModule`, Postgres/Redis, routes and DI wiring.
-  - **Crate integration** — layout below; tests the crate's **public**
-    API in process, no app boot, no DB unless the crate truly owns
-    persistence.
-  - **Cross-crate harness** — `nestrs-testing/tests/<behaviour>.rs` for
-    framework wiring shared across crates.
-- **Crate integration layout (strict mirror)** — exemplar: `nestrs-authn`.
-  - **One binary only**: `tests/<short>.rs` (e.g. `tests/authn.rs` for
-    `nestrs-authn`). Every other path under `tests/` is a **module**,
-    never a second `tests/*.rs` at the top level (Cargo would compile each
-    as its own crate).
-  - **Path rule**: for every `src/<path>.rs` with testable logic,
-    maintain `tests/<path>.rs` or `tests/<path>/mod.rs` at the same
-    relative path. Root-level sources use a directory module
-    (`src/error.rs` → `tests/error/mod.rs`, declared `mod error;` in the
-    entry file).
-  - **`tests/<feature>/mod.rs`** mirrors `src/<feature>/mod.rs` and
-    declares the same submodule names.
-  - **The only allowed non-mirror path**: `tests/common/` for shared
-    helpers (HTTP fixtures, dev keys, …). Document it in the entry file;
-    never hide product logic there.
-  - **Documented gaps** (no test file required; say so in the entry
-    `//!`): `*/module.rs` (DI/`#[module]` wiring — covered by app e2e),
-    `lib.rs` / pure re-export `mod.rs`, trait-only files with no runtime
-    logic (may ship an empty `tests/.../strategy.rs` with a pointer to
-    where the trait is exercised).
-  - **Unit vs integration in a crate**: default to integration tests in
-    the mirror tree. Use `#[cfg(test)] mod tests` inside `src/` only when
-    the assertion needs private items; prefer refactoring to a testable
-    public constructor (`Type::new(deps)`) over container boot.
-  - **Testability rule**: if a type is hard to integration-test, fix the
-    API (explicit `new`, no leaked secrets in HTTP bodies) — do not skip
-    coverage.
+- **Three categories** — Rust's standard model plus the app e2e:
+  - **Unit tests** — `#[cfg(test)] mod tests` inside the `src/` file
+    under test. The default home for pure-logic assertions: parsers,
+    formatters, mappings, any pure function or impl body. Private-item
+    access is the point.
+  - **Integration tests** — `tests/*.rs` at the crate root, testing the
+    crate's **public** API as an external consumer would. Cargo compiles
+    each top-level `tests/*.rs` as its own binary — that is normal Cargo
+    behavior, not a smell. Group related tests in one file when they
+    share setup; split files when they don't. Shared helpers go in
+    `tests/common/mod.rs` (the `mod.rs` form prevents Cargo from
+    compiling it as a separate binary — official Rust idiom). No DB
+    unless the crate truly owns persistence.
+  - **End-to-end tests** — exactly one `apps/<app>/tests/e2e.rs` per
+    app: boots the real `AppModule` against the live Postgres/Redis,
+    exercising routes, DI wiring, and transports.
+- **Cross-crate framework wiring** lives as integration tests in
+  `nestrs-testing` (`tests/*.rs`) — boot-time access-graph rejection,
+  lifecycle hook ordering, transport contribution.
+- **Testability rule**: if a type is hard to test, fix the API (explicit
+  `new(deps)`, no leaked secrets in HTTP bodies) — do not skip coverage.
 - A GraphQL app commits its SDL (`apps/<app>/schema.graphql`),
   regenerated as a side effect of the **dev run** (`emit_sdl` driven from
   the environment) — there is no standalone generator and no CI

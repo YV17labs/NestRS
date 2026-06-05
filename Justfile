@@ -16,19 +16,15 @@ build:
 # Database lifecycle — migrations + seeding. Usage: just db up|down|fresh|status|seed|reset
 mod db
 
-# Run all tests
+# Run unit + integration tests (no DB)
 test:
-    cargo nextest run --workspace
+    cargo nextest run --workspace -E 'not binary(e2e)'
 
-# Run e2e tests
+# Run e2e tests (Postgres required)
 test-e2e:
     cargo nextest run --workspace -E 'binary(e2e)'
 
-# Run unit tests
-test-unit:
-    cargo nextest run --workspace -E 'not binary(e2e)'
-
-# Run coverage
+# Run coverage on the full suite
 test-cov:
     cargo llvm-cov nextest --workspace
 

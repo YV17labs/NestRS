@@ -1,6 +1,6 @@
 use nestrs_config::ConfigModule;
 use nestrs_core::module;
-use nestrs_database::DatabaseModule;
+use nestrs_database::{DatabaseHealthModule, DatabaseModule};
 use nestrs_graphql::GraphqlModule;
 use nestrs_health::HealthModule;
 use nestrs_http::{HttpConfig, HttpModule};
@@ -33,6 +33,7 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         ScheduleModule,
         GraphqlModule::for_root(None),
         HealthModule,
+        DatabaseHealthModule,
         OpenApiModule::for_root(None),
         OpenTelemetryModule,
         ServerTimingModule,

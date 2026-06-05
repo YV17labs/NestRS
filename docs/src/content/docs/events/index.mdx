@@ -1,0 +1,225 @@
+---
+title: Events
+description: A typed in-process event bus — emit any Clone event, listeners declared as methods on any provider, activated by importing one module.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An event listener is **a method** on any `#[injectable]` provider, tagged
+with `#[on_event]` inside a `#[listeners]` impl block. Importing
+`EventModule` in the app's `AppModule` wires every discovered listener
+from the fully-assembled container at bootstrap.
+
+An event is any `Clone + Send + 'static` type. Dispatch is in-process and
+awaited: `bus.emit(event)` clones the event for each listener registered
+on that type, runs them in registration order, and returns once they all
+complete. There is no broker, no retries — for cross-process or durable
+work, push a job on the [Queue](/queue/) instead.
+
+## A first listener
+
+A regular `#[injectable]` service with one decorated method. The
+`#[listeners]` attribute marks the impl block; `#[on_event]` marks the
+method as a listener for the event type read from its second parameter.
+
+```rust title="crates/features/src/points/event/listener.rs"
+use std::sync::Arc;
+
+use nestrs_core::injectable;
+use nestrs_events::listeners;
+
+use crate::points::core::{Ledger, PointsAwarded};
+
+#[injectable]
+pub struct PointsListeners {
+    #[inject]
+    svc: Arc<Ledger>,
+}
+
+#[listeners]
+impl PointsListeners {
+    #[on_event]
+    async fn on_awarded(&self, event: PointsAwarded) {
+        self.svc.credit(event.user_id, event.amount).await;
+    }
+}
+```
+
+- **`#[injectable]`** makes `PointsListeners` a regular DI provider.
+- **`#[listeners]`** on the impl block orchestrates the per-method
+  `#[on_event]` attributes and submits one listener per decorated method.
+- **`#[on_event]`** takes no arguments — the event type is read from the
+  method's second parameter. The bus enforces `Clone + Send + 'static` on
+  it through the call site.
+
+## Several listeners on the same provider
+
+The pattern the framework is built for: one `#[injectable]` declares the
+deps once, multiple decorated methods share them. Different events, same
+service:
+
+```rust title="crates/features/src/points/event/listener.rs"
+#[injectable]
+pub struct PointsListeners {
+    #[inject] svc: Arc<Ledger>,
+    #[inject] mailer: Arc<Mailer>,
+}
+
+#[listeners]
+impl PointsListeners {
+    #[on_event]
+    async fn on_awarded(&self, event: PointsAwarded) {
+        self.svc.credit(event.user_id, event.amount).await;
+    }
+
+    #[on_event]
+    async fn on_redeemed(&self, event: PointsRedeemed) {
+        self.svc.debit(event.user_id, event.amount).await;
+    }
+
+    #[on_event]
+    async fn notify_milestone(&self, event: PointsAwarded) {
+        if event.amount >= 1000 {
+            self.mailer.send_milestone(event.user_id).await;
+        }
+    }
+}
+```
+
+Three inventory entries — `PointsListeners::on_awarded`,
+`PointsListeners::on_redeemed`, `PointsListeners::notify_milestone` — all
+pointing at the same `PointsListeners` instance. Same `Arc<Ledger>`, same
+`Arc<Mailer>`, three subscriptions. Two methods can listen to the *same*
+event type; both run, in registration order.
+
+<Aside>
+A single `#[listeners]` impl block per struct. Put every listener of a
+provider in the same block — same convention as `#[routes]`,
+`#[scheduled]`, and `#[processor]`.
+</Aside>
+
+## Define an event
+
+```rust title="crates/features/src/points/core/event.rs"
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct PointsAwarded {
+    pub user_id: Uuid,
+    pub amount: u32,
+}
+```
+
+That is the whole event surface — any plain `Clone + Send + 'static`
+type. No trait, no derive macro. Any listener method whose second
+parameter is `PointsAwarded` subscribes to it.
+
+## Emit an event
+
+The emitter injects `Arc<EventBus>` like any other dep and calls `emit`:
+
+```rust title="crates/features/src/points/core/service.rs"
+use std::sync::Arc;
+use uuid::Uuid;
+
+use nestrs_core::injectable;
+use nestrs_events::EventBus;
+
+use super::event::PointsAwarded;
+
+#[injectable]
+pub struct PointsService {
+    #[inject]
+    events: Arc<EventBus>,
+}
+
+impl PointsService {
+    pub async fn award(&self, user_id: Uuid, amount: u32) {
+        self.events.emit(PointsAwarded { user_id, amount }).await;
+    }
+}
+```
+
+`emit` is awaited — when it returns, every listener has run. Emitting an
+event with no subscriber is a no-op (not an error), so adding a listener
+later does not require touching the emitter.
+
+## Wire it in
+
+The listener provider and the producer are providers like any other,
+listed in the feature's module. The app activates the bus by importing
+`EventModule`:
+
+```rust title="crates/features/src/points/event/module.rs"
+use nestrs_core::module;
+
+use crate::points::core::PointsCoreModule;
+use super::listener::PointsListeners;
+
+#[module(imports = [PointsCoreModule], providers = [PointsListeners])]
+pub struct PointsEventModule;
+```
+
+```rust title="apps/platform-api/src/module.rs"
+use nestrs_core::module;
+use nestrs_events::EventModule;
+
+use features::points::{PointsCoreModule, PointsEventModule};
+
+#[module(imports = [
+    EventModule,
+    PointsCoreModule,
+    PointsEventModule,
+])]
+pub struct PlatformApiModule;
+```
+
+<Aside>
+Without `EventModule`, the `EventBus` is absent — every `#[listeners]`
+provider compiles in but stays inert (no subscription is wired). This is
+the same "linked but unreachable" property the rest of the framework
+relies on: an app that does not want the bus simply omits the module.
+</Aside>
+
+## The shape of dispatch
+
+`bus.emit(event)` reads the listener list once (under an uncontended
+`RwLock` — read-only after bootstrap), then awaits each listener in turn
+with its own clone of the event. Three consequences worth naming:
+
+- **Order is deterministic** — registration order is preservation order;
+  listeners are registered in the order their providers appear in
+  `providers = [...]`, then in the order their methods appear in the
+  `#[listeners]` impl block.
+- **Failure is local** — a listener is fire-and-forget. The method must
+  return `()`; errors are the method's responsibility. There is no
+  retry, no dead-letter queue, no global rollback.
+- **No bridge to a transaction** — `emit` does not enroll itself in the
+  ambient executor's transaction. If a listener must write to the same
+  transaction as the emitter, call the listener directly from the
+  service instead of going through the bus; emit it once the transaction
+  commits for the fire-and-forget cases.
+
+## Module-gated, even when the crate is shared
+
+A worker app that links `features` for the data layer but only imports
+`PointsCoreModule` keeps the listener inert: the inventory entry is
+present in the binary but skipped at boot because the provider is not
+reachable from the worker's module tree. Same property as queue
+processors and scheduled jobs.
+
+## Going further
+
+- [Queue](/queue/) — durable, distributed, retried; the right tool when
+  the work must outlive the request or run on another binary.
+- [Schedule](/schedule/) — for recurring system work, no event needed.
+- [Providers](/fundamentals/providers/) — the `#[injectable]` model
+  `#[listeners]` builds on (same `#[inject]` fields, same boot-time
+  access graph).
+
+### Reference
+
+- `crates/nestrs-events/` — `EventBus`, `EventModule`, `#[listeners]`,
+  `#[on_event]`.
+- `crates/nestrs-events/tests/bus.rs` — end-to-end test wiring a producer
+  and a multi-method `#[listeners]` provider in one module.

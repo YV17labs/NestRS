@@ -1,0 +1,251 @@
+---
+title: CRUD
+description: One #[crud] attribute on a controller or resolver — list, get, create, update, delete are generated, scoped, and masked, all going through the service.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A REST CRUD or a GraphQL CRUD is **one attribute** on the controller or
+resolver impl block. `#[crud(...)]` reads the entity's [`CrudService`](/database/),
+synthesises every operation the developer did not hand-write, and re-emits
+the block under `#[routes]` (HTTP) or `#[resolver]` (GraphQL). Auth, row-level
+filtering, by-id binding and response masking come from the same data context
+described in [Database](/database/) and [Security](/security/) — `#[crud]`
+just wires the endpoints.
+
+## A full REST CRUD, 22 lines
+
+```rust title="crates/features/src/orgs/http/controller.rs"
+use std::sync::Arc;
+
+use nestrs_http::{controller, crud};
+
+use crate::authn::AuthGuard;
+use crate::authz::AppAbilityGuard;
+use crate::orgs::core::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
+
+#[controller(path = "/orgs")]
+#[use_guards(AuthGuard, AppAbilityGuard)]
+pub struct OrgsController {
+    #[inject]
+    svc: Arc<OrgsService>,
+}
+
+#[crud(
+    service = svc,
+    entity = OrgEntity,
+    output = Org,
+    create = CreateOrgInput,
+    update = UpdateOrgInput,
+    paginate = cursor,
+)]
+impl OrgsController {}
+```
+
+The empty impl block is intentional. From this declaration the framework
+mounts:
+
+| Verb     | Path        | Authz check        | Body                  | Returns                |
+|----------|-------------|--------------------|-----------------------|------------------------|
+| `GET`    | `/orgs`     | `Read` on `Org`    | —                     | `Vec<Org>` + cursor    |
+| `GET`    | `/orgs/:id` | `Read` on `Org`    | —                     | `Org` (404/403)        |
+| `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrgInput`      | `Org`                  |
+| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrgInput`      | `Org` (404/403)        |
+| `DELETE` | `/orgs/:id` | `Delete` on `Org`  | —                     | `204` (404/403)        |
+
+Every handler delegates to the same `OrgsService` instance, which goes through
+`Repo` against the ambient executor — so reads are pool, mutations sit inside
+the request's transaction, and `Ability` filters every row.
+
+## What `#[crud]` needs
+
+```rust
+#[crud(
+    service = svc,        // the field on the struct holding Arc<…Service>
+    entity = OrgEntity,   // the SeaORM entity (used in authz Authorize<Action, Entity>)
+    output = Org,         // the #[expose]-generated wire type returned by handlers
+    create = CreateOrgInput,
+    update = UpdateOrgInput,
+    paginate = cursor,    // optional — keyset (REST) or page (GraphQL)
+    readonly,             // optional — only list + get, no mutations
+)]
+impl OrgsController {}
+```
+
+- `service` is the **field name** on the struct, not the type. Follow the
+  framework convention: a single service is named `svc`, several are
+  `svc_<thing>`.
+- `output` is the type the handler returns — typically the `#[expose]`
+  output (`Org`), not the SeaORM `Model`. The shaper runs response masking
+  on it.
+- `create` and `update` map to the `#[expose(input(create), input(update))]`
+  generated input types. Omit them with `readonly` for a read-only resource.
+- `paginate = cursor` adds keyset pagination (next cursor in
+  `x-next-cursor`); `paginate = page` is GraphQL-only.
+
+## Override one handler, keep the rest
+
+`#[crud]` only generates the operations you did **not** write. Hand-write
+the ones that need custom logic — the rest are filled in:
+
+```rust title="crates/features/src/users/http/controller.rs"
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AppAbilityGuard)]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[crud(
+    service = svc,
+    entity = UserEntity,
+    output = User,
+    create = CreateUserInput,
+    update = UpdateUserInput,
+)]
+impl UsersController {
+    #[post("/")]
+    #[api(summary = "Create a user in the caller's org", tags("User"))]
+    async fn create(
+        &self,
+        _authz: Authorize<Create, UserEntity>,
+        auth: Ctx<Claims>,
+        body: Valid<Json<CreateUserInput>>,
+    ) -> Result<Json<User>> {
+        Ok(Json(
+            self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
+        ))
+    }
+
+    #[get("/:id")]
+    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+        Json(User::from(&*user))
+    }
+}
+```
+
+The `create` and `get` methods take over their generated counterparts; the
+default `list`, `update` and `delete` are still emitted. Names match by
+ident — a hand-written `delete` cancels the generated one.
+
+## The GraphQL twin
+
+The same attribute, with `query`/`mutation` names derived from the output
+type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
+`delete_user`:
+
+```rust title="crates/features/src/users/graphql/resolver.rs"
+#[resolver]
+pub struct UsersResolver {
+    #[inject]
+    users: Arc<UsersService>,
+}
+
+#[crud(
+    service = users,
+    entity = UserEntity,
+    output = User,
+    create = CreateUserInput,
+    update = UpdateUserInput,
+)]
+#[use_guards(GraphqlAuthGuard)]
+impl UsersResolver {
+    #[mutation]
+    async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {
+        authorize::<Create, UserEntity>(ctx)?;
+        let actor = ctx.data::<Claims>()?;
+        Ok(self.users.create_in_org(input, actor.org_id).await?)
+    }
+
+    #[query]
+    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
+        Ok(bind::<UsersService, Read>(ctx, &id).await?.as_ref().map(User::from))
+    }
+}
+```
+
+Same override rule — the GraphQL `create_user` and `user` you wrote take
+over; `users`, `update_user`, `delete_user` are generated.
+
+## Pagination
+
+| Form              | Surface     | Wire shape                                      |
+|-------------------|-------------|-------------------------------------------------|
+| `paginate = cursor` | HTTP + GraphQL | `Vec<T>` body + `x-next-cursor` header (REST); `<T>Page { items, ... }` (GraphQL) |
+| `paginate = page`   | GraphQL only   | `<T>Page { items, total, page, per_page, ... }` |
+
+Keyset pagination (`cursor`) is the recommended default — stable under
+inserts, and the body stays a plain array so response masking works
+unchanged. Offset pagination (`page`) ships an envelope; the `#[expose]`
+attribute on the entity must declare `paginate` to generate the matching
+`<T>Page` type:
+
+```rust
+#[expose(name = "Item", complex, paginate)]
+```
+
+## By-id binding goes through the service
+
+Every generated `get` / `update` / `delete` calls
+`CrudService::access(action, id)` — not a raw `find_by_id`. `access` loads
+the row through `Repo` (so the ability's `Condition` filters it), then
+checks the **field-level** rules of `Ability::can` against the loaded
+model. The result tells the handler which HTTP status to return:
+
+| `Access` outcome    | Meaning                                          | HTTP  |
+|---------------------|--------------------------------------------------|-------|
+| `Access::Found(m)`  | Row visible, action allowed                      | proceed |
+| `Access::Missing`   | Row absent (or invisible at the row level)       | `404` |
+| `Access::Denied`    | Row visible, action denied by a field-level rule | `403` |
+
+`#[crud]` also rejects non-UUID-v7 ids before any load (route-model
+binding's validation half) — a malformed id is `400 Bad Request`, never a
+DB round-trip.
+
+## Wire it in
+
+`#[crud]` adds nothing to the module declaration — the orchestrator on the
+impl block is what `#[controller]` / `#[resolver]` already discover. List
+the controller (and the service it injects) like any other provider:
+
+```rust title="src/orgs/core/module.rs"
+#[module(providers = [OrgsService])]
+pub struct OrgsCoreModule;
+```
+
+```rust title="src/orgs/http/module.rs"
+#[module(imports = [OrgsCoreModule, AuthzHttpModule], providers = [OrgsController])]
+pub struct OrgsHttpModule;
+```
+
+The HTTP transport + the data context interceptor activate at the app
+root with `HttpModule::for_root(...)` and `DatabaseModule::for_root(...)`.
+Importing only `OrgsCoreModule` (no HTTP module) gives a worker the same
+`OrgsService` without mounting the endpoints — that is the port + adapter
+split this framework is built around.
+
+## Going further
+
+- [Database](/database/) — `CrudService`, `Repo`, the ambient executor;
+  why every CRUD call goes through the service.
+- [Security](/security/) — `Ability`, `Authorize`, the masking shaper;
+  what makes `Read` / `Create` / `Update` / `Delete` mean what they
+  mean here.
+- [OpenAPI](/openapi/) — every generated route ships with an `#[api]`
+  summary and the right `tags`, so the document at `GET /api-json`
+  composes automatically.
+- [GraphQL](/graphql/) — the `#[crud]` twin on a resolver; relations and
+  field resolvers backed by dataloaders.
+
+### Reference
+
+- `crates/features/src/orgs/` — the empty-impl exemplar (cursor pagination).
+- `crates/features/src/users/` — the override exemplar (`create` + `get`
+  custom, the rest generated).
+- `crates/nestrs-http-macros/src/crud.rs` — the REST expansion.
+- `crates/nestrs-graphql-macros/src/crud.rs` — the GraphQL expansion.
+- `crates/nestrs-database/` — `CrudService`, `Access`, `Repo`.
+- `crates/nestrs-resource/` — `#[expose]` for the entity, pagination
+  envelopes.

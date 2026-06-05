@@ -1,0 +1,103 @@
+---
+title: Server-Timing
+description: Surface server-side latency in the browser's Network panel — one module import, optional sub-step records from any handler.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+[`Server-Timing`](https://www.w3.org/TR/server-timing/) is a W3C header
+browsers render in their Network panel (DevTools → Network → Timing
+tab) — a per-request breakdown of where the time went. Importing
+`ServerTimingModule` attaches an interceptor that always appends a
+final `total;dur=<ms>`; handlers add their own sub-steps by recording
+into a per-request `Timings` accumulator pulled from the request
+extensions.
+
+This is observability for the frontend developer's browser, not a
+replacement for proper tracing — for cross-service spans and
+aggregations, reach for [OpenTelemetry](/opentelemetry/).
+
+## Mount it
+
+```rust title="apps/platform-api/src/module.rs"
+use nestrs_core::module;
+use nestrs_server_timing::ServerTimingModule;
+
+#[module(imports = [ServerTimingModule])]
+pub struct PlatformApiModule;
+```
+
+Every response now carries a `Server-Timing` header. The minimum,
+unstructured form is one entry:
+
+```bash frame="terminal"
+$ curl -i http://localhost:8080/items | grep -i server-timing
+server-timing: total;dur=12.34
+```
+
+That alone shows up in DevTools next to the request — round-trip vs.
+server time becomes a glance.
+
+## Record sub-steps
+
+Pull `Timings` out of the request extensions and call `record` (or
+`record_with_desc`) with a duration. The interceptor concatenates every
+recorded entry into the final header, with `total` appended on the way
+out:
+
+```rust title="src/items/http/controller.rs"
+use std::time::Instant;
+
+use nestrs_http::{controller, routes};
+use nestrs_server_timing::Timings;
+use poem::Request;
+
+#[controller(path = "/items")]
+pub struct ItemsController {
+    #[inject]
+    svc: Arc<ItemsService>,
+}
+
+#[routes]
+impl ItemsController {
+    #[get("/")]
+    async fn list(&self, req: &Request) -> Result<Json<Vec<Item>>> {
+        let timings = req.extensions().get::<Timings>().cloned().unwrap_or_default();
+
+        let started = Instant::now();
+        let rows = self.svc.list().await?;
+        timings.record("db", started.elapsed());
+
+        let started = Instant::now();
+        let view: Vec<Item> = rows.iter().map(Item::from).collect();
+        timings.record_with_desc("render", "wire transform", started.elapsed());
+
+        Ok(Json(view))
+    }
+}
+```
+
+```bash frame="terminal"
+$ curl -i http://localhost:8080/items | grep -i server-timing
+server-timing: db;dur=7.82, render;dur=0.41;desc="wire transform", total;dur=8.96
+```
+
+- **`record(name, dur)`** — short entry; `name` must be a valid header
+  token (no spaces, no commas).
+- **`record_with_desc(name, desc, dur)`** — `desc` shows as a tooltip
+  in DevTools; any string is allowed, the formatter quotes/escapes for
+  you.
+
+## Going further
+
+- [OpenTelemetry](/opentelemetry/) — for spans the frontend cannot
+  see (cross-service traces, async work after the response, queue
+  jobs).
+- [Interceptors](/fundamentals/interceptors/) — the seam
+  `ServerTimingModule` plugs into; the same shape any other
+  cross-cutting concern uses.
+
+### Reference
+
+- `crates/nestrs-server-timing/` — `ServerTimingModule`, `Timings`,
+  `Entry`.

@@ -1,0 +1,135 @@
+---
+title: Throttler
+description: Per-route rate limiting — a guard, a default limit from env, per-handler overrides via #[meta(Throttle::…)].
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The throttler turns a route into "at most N requests per window, per
+client". One `ThrottlerModule` import provides the in-memory counter
+(an [`InMemoryThrottler`] fixed-window store); one `#[use_guards(ThrottlerGuard)]`
+binds it to a route or controller; one `#[meta(Throttle::per_minute(10))]`
+overrides the limit for a single handler. Over the limit, the response is
+`429 Too Many Requests` with a `Retry-After` header.
+
+`ThrottlerGuard` must be a **per-route** guard, never a global one — a global
+guard runs before routing, so the route's `#[meta(Throttle)]` is not yet
+attached.
+
+## Mount the throttler
+
+```rust title="apps/platform-api/src/module.rs"
+use nestrs_core::module;
+use nestrs_throttler::ThrottlerModule;
+
+#[module(imports = [ThrottlerModule::for_root(None)])]
+pub struct PlatformApiModule;
+```
+
+Passing `None` loads `ThrottlerConfig` from `NESTRS_THROTTLER__*`; the
+defaults (`60` requests per `60s` window) apply when nothing is set.
+Pass `Some(ThrottlerConfig { ... })` to pin the limit in code — the
+pinned value wins over the environment, on the same dual-path rule the
+rest of the framework follows.
+
+```bash frame="terminal"
+NESTRS_THROTTLER__LIMIT=120
+NESTRS_THROTTLER__WINDOW_SECS=60
+NESTRS_THROTTLER__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
+```
+
+## Guard a controller
+
+```rust title="src/items/http/controller.rs"
+use nestrs_http::controller;
+use nestrs_throttler::ThrottlerGuard;
+
+#[controller(path = "/items")]
+#[use_guards(ThrottlerGuard)]
+pub struct ItemsController { /* … */ }
+```
+
+Every route on this controller now goes through the throttler. The
+default limit applies unless a handler overrides it.
+
+## Override per route
+
+```rust title="src/items/http/controller.rs"
+use nestrs_http::{controller, routes};
+use nestrs_throttler::{Throttle, ThrottlerGuard};
+
+#[controller(path = "/items")]
+#[use_guards(ThrottlerGuard)]
+pub struct ItemsController { /* … */ }
+
+#[routes]
+impl ItemsController {
+    #[post("/")]
+    #[meta(Throttle::per_minute(10))]
+    async fn create(&self, /* … */) -> Result<Json<Item>> { /* … */ }
+
+    #[get("/")]
+    async fn list(&self, /* … */) -> Result<Json<Vec<Item>>> { /* … */ }
+}
+```
+
+`#[meta]` attaches the limit to the route; the guard reads it back through
+the `Reflector` at request time. `create` is capped at 10/min; `list`
+inherits the module default. Forms:
+
+| Form                                | Meaning                          |
+|-------------------------------------|----------------------------------|
+| `Throttle::per_second(n)`           | `n` requests per second          |
+| `Throttle::per_minute(n)`           | `n` requests per minute          |
+| `Throttle::new(n, Duration::from_secs(s))` | `n` requests per `s` seconds |
+
+## What "per client" means
+
+The client key is the **direct peer IP** by default — every request
+coming from the same IP shares the same window. If the request arrives
+through a reverse proxy you have listed in
+`NESTRS_THROTTLER__TRUSTED_PROXIES`, the throttler reads the leftmost
+`X-Forwarded-For` hop instead and counts that as the client.
+
+The rule is strict and adversarial-aware:
+
+- An unconfigured `X-Forwarded-For` is **ignored** — a direct client
+  cannot bypass its own bucket by setting the header.
+- An unparseable IP in `TRUSTED_PROXIES` **aborts the boot** naming
+  the offending value — never a silent skip.
+- A request with no peer addr (synthetic, in-process) is counted
+  against a literal `"global"` bucket.
+
+<Aside>
+Trust the proxy header **only** when the request arrived through a
+proxy you control. Production behind an ingress: list the ingress IPs.
+Direct exposure: leave `TRUSTED_PROXIES` empty.
+</Aside>
+
+## What an over-limit response looks like
+
+```bash frame="terminal"
+$ for i in {1..11}; do
+    curl -s -o /dev/null -w "%{http_code} retry=%{header.retry-after}s\n" \
+      -X POST http://localhost:8080/items -d '{...}'
+  done
+200 retry=s
+200 retry=s
+… (8 more 200s)
+429 retry=47s
+```
+
+`Retry-After` is the time until the window resets — clients respecting
+it back off cleanly and resume on the same window.
+
+## Going further
+
+- [Configuration](/configuration/) — `NESTRS_THROTTLER__*` follows the
+  same env → struct dual path every module uses.
+- [Guards](/fundamentals/guards/) — what `#[use_guards(ThrottlerGuard)]`
+  binds, and why a global guard is the wrong shape here.
+
+### Reference
+
+- `crates/nestrs-throttler/` — `ThrottlerModule`, `ThrottlerGuard`,
+  `ThrottlerConfig`, `Throttle`, `InMemoryThrottler`.

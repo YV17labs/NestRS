@@ -57,6 +57,70 @@ pub fn batch_spawner(container: &Container) -> BatchSpawner {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    // Falling back to bare `tokio::spawn` is the documented "no row-level
+    // security" path. Pin that the spawner actually runs the future end-to-end
+    // when no `BatchContext` provider is registered.
+    #[tokio::test]
+    async fn batch_spawner_without_a_context_runs_the_future_on_tokio_spawn() {
+        let container = Container::builder().build();
+        let spawner = batch_spawner(&container);
+        let ran = Arc::new(AtomicUsize::new(0));
+        let r = ran.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        spawner(Box::pin(async move {
+            r.fetch_add(1, Ordering::SeqCst);
+            let _ = tx.send(());
+        }));
+        rx.await.expect("spawned future resolves");
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+    }
+
+    // A registered `BatchContext` provider must take over from the default
+    // spawner. The trait is intentionally minimal so a bridge can install
+    // ambient state around the future; verifying the dispatch (not just the
+    // shape) is the regression check that matters.
+    struct CountingContext {
+        count: Arc<AtomicUsize>,
+    }
+
+    impl BatchContext for CountingContext {
+        fn spawner(&self) -> BatchSpawner {
+            let count = self.count.clone();
+            Box::new(move |fut| {
+                count.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(fut);
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_spawner_routes_through_a_registered_batch_context() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let ctx: Arc<dyn BatchContext> = Arc::new(CountingContext {
+            count: count.clone(),
+        });
+        let container = Container::builder().provide_dyn(ctx).build();
+
+        let spawner = batch_spawner(&container);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        spawner(Box::pin(async move {
+            let _ = tx.send(());
+        }));
+        rx.await.expect("spawned future resolves");
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "the bridge's spawner must wrap the future, not be bypassed",
+        );
+    }
+}
+
 /// Seeds every discovered DataLoader into each GraphQL request.
 pub(crate) struct LoaderExtensionFactory {
     container: Container,

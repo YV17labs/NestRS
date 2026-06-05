@@ -104,3 +104,90 @@ impl HttpControllerMeta {
         (self.mount)(container, route)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn http_verb_as_str_renders_each_method_name() {
+        assert_eq!(HttpVerb::Get.as_str(), "GET");
+        assert_eq!(HttpVerb::Post.as_str(), "POST");
+        assert_eq!(HttpVerb::Put.as_str(), "PUT");
+        assert_eq!(HttpVerb::Delete.as_str(), "DELETE");
+        assert_eq!(HttpVerb::Patch.as_str(), "PATCH");
+    }
+
+    #[test]
+    fn http_verb_is_value_type_for_equality_and_clone() {
+        // The derives are part of the public surface (`#[routes]` clones the
+        // verb into discovery metadata); pin them.
+        let a = HttpVerb::Get;
+        let b = a;
+        assert_eq!(a, b);
+        assert_eq!(format!("{a:?}"), "Get");
+    }
+
+    #[test]
+    fn schema_of_records_a_subschema_for_the_payload_type() {
+        let mut generator = schemars::SchemaGenerator::default();
+        let schema = schema_of::<String>(&mut generator);
+        // The subschema is a JSON-schema object whose serialization round-trips.
+        let value: serde_json::Value =
+            serde_json::to_value(&schema).expect("schema serializes");
+        assert!(value.is_object(), "schema serializes to a JSON object");
+    }
+
+    #[test]
+    fn effective_prefix_returns_path_unchanged_without_a_version() {
+        let meta = HttpControllerMeta::new("/users", None, Vec::new(), |_c, r| r);
+        assert_eq!(meta.effective_prefix(), "/users");
+    }
+
+    #[test]
+    fn effective_prefix_prepends_the_uri_version_when_present() {
+        // `version_path` joins `/v<v>` ahead of the controller path — the
+        // single place URI versioning lives, so this is the contract.
+        let meta = HttpControllerMeta::new("/users", Some("1"), Vec::new(), |_c, r| r);
+        assert_eq!(meta.effective_prefix(), "/v1/users");
+    }
+
+    #[test]
+    fn new_stores_the_path_version_and_routes_verbatim() {
+        let routes = vec![HttpRouteMeta {
+            verb: HttpVerb::Get,
+            path: "/:id",
+            handler: "show",
+            summary: Some("Fetch one"),
+            description: None,
+            tags: &["Users"],
+            request_body: None,
+            response: None,
+        }];
+        let meta = HttpControllerMeta::new("/users", Some("2"), routes, |_c, r| r);
+        assert_eq!(meta.path, "/users");
+        assert_eq!(meta.version, Some("2"));
+        assert_eq!(meta.routes.len(), 1);
+        assert_eq!(meta.routes[0].handler, "show");
+        assert_eq!(meta.routes[0].tags, &["Users"]);
+    }
+
+    #[test]
+    fn mount_invokes_the_closure_with_the_container_and_route() {
+        // The mount closure is the seam `#[routes]` emits; assert it's called
+        // exactly once per `mount` invocation and receives the same container.
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        let meta = HttpControllerMeta::new("/health", None, Vec::new(), |_c, r| {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            r
+        });
+        let container = Container::builder().build();
+        let route = Route::new();
+
+        let _routed = meta.mount(&container, route);
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+        let _ = meta.mount(&container, Route::new());
+        assert_eq!(CALLS.load(Ordering::SeqCst), 2);
+    }
+}

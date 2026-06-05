@@ -5,6 +5,7 @@
 //! every bridge in this crate.
 
 mod ability;
+mod builder;
 
 #[cfg(feature = "http")]
 mod http;

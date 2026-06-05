@@ -56,3 +56,29 @@ impl Config for HttpConfig {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_bind_all_interfaces_on_3000_with_no_tls_no_cors() {
+        let d = HttpConfig::default();
+        assert_eq!(d.host, "0.0.0.0");
+        assert_eq!(d.port, 3000);
+        assert!(d.tls.is_none(), "default must serve plain HTTP");
+        assert!(d.cors.is_none(), "no CORS layer by default");
+        assert!(
+            !d.server_header,
+            "Server header opt-out by default — no framework fingerprint in prod",
+        );
+    }
+
+    #[test]
+    fn default_constants_do_not_drift() {
+        // App ops read `DEFAULT_PORT` indirectly via `HttpConfig::default()` —
+        // a rename or value change is a deployment surprise. Pin them.
+        assert_eq!(DEFAULT_HOST, "0.0.0.0");
+        assert_eq!(DEFAULT_PORT, 3000);
+    }
+}

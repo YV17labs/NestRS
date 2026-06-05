@@ -81,3 +81,164 @@ impl CorsConfig {
         Ok(cors)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(origins: &[&str]) -> CorsConfig {
+        CorsConfig {
+            origins: origins.iter().map(|s| (*s).to_owned()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn into_middleware_accepts_an_empty_config() {
+        cfg(&[]).into_middleware().expect("empty config builds");
+    }
+
+    #[test]
+    fn into_middleware_accepts_a_basic_origin_list() {
+        cfg(&["https://app.example.com"]).into_middleware().expect("valid config");
+    }
+
+    fn err_string(result: Result<Cors>) -> String {
+        match result {
+            Ok(_) => panic!("expected an error"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn into_middleware_rejects_an_invalid_method() {
+        // Spaces aren't token characters in RFC 9110 §9 — `Method::from_bytes`
+        // refuses them.
+        let cfg = CorsConfig {
+            origins: vec!["*".into()],
+            methods: vec!["BAD METHOD".into()],
+            ..Default::default()
+        };
+        let err = err_string(cfg.into_middleware());
+        assert!(err.contains("invalid HTTP method"), "got: {err}");
+    }
+
+    #[test]
+    fn into_middleware_rejects_an_invalid_header_name() {
+        let cfg = CorsConfig {
+            origins: vec!["*".into()],
+            headers: vec!["bad header!".into()],
+            ..Default::default()
+        };
+        let err = err_string(cfg.into_middleware());
+        assert!(err.contains("invalid header name"), "got: {err}");
+    }
+
+    #[test]
+    fn into_middleware_rejects_a_max_age_that_overflows_i32_seconds() {
+        let cfg = CorsConfig {
+            origins: vec!["*".into()],
+            max_age: Some(Duration::from_secs(u64::MAX)),
+            ..Default::default()
+        };
+        let err = err_string(cfg.into_middleware());
+        assert!(err.contains("max_age overflows"), "got: {err}");
+    }
+
+    #[test]
+    fn into_middleware_accepts_credentials_and_max_age_and_exposed_headers() {
+        let cfg = CorsConfig {
+            origins: vec!["https://app.example.com".into()],
+            methods: vec!["GET".into(), "POST".into()],
+            headers: vec!["content-type".into(), "x-trace-id".into()],
+            exposed_headers: vec!["x-trace-id".into()],
+            credentials: true,
+            max_age: Some(Duration::from_secs(60 * 60)),
+        };
+        cfg.into_middleware().expect("a fully-specified config builds");
+    }
+
+    #[test]
+    fn into_middleware_rejects_an_invalid_exposed_header() {
+        let cfg = CorsConfig {
+            origins: vec!["*".into()],
+            exposed_headers: vec!["bad header!".into()],
+            ..Default::default()
+        };
+        let err = err_string(cfg.into_middleware());
+        assert!(err.contains("invalid header name"), "got: {err}");
+        assert!(err.contains("expose-list"), "must name the list: {err}");
+    }
+
+    // `from_env` mutates real process env; serialize so two tests don't race.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_env<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // FIXME: env mutation is unsafe; serialized within this binary by the
+        // mutex above.
+        for (k, v) in vars {
+            match v {
+                Some(value) => unsafe { std::env::set_var(k, value) },
+                None => unsafe { std::env::remove_var(k) },
+            }
+        }
+        let out = f();
+        // Wipe after — never leak set vars to neighbouring tests.
+        for (k, _) in vars {
+            unsafe { std::env::remove_var(k) };
+        }
+        out
+    }
+
+    fn http_env() -> nestrs_config::ConfigService {
+        nestrs_config::ConfigService::for_namespace("http")
+    }
+
+    #[test]
+    fn from_env_returns_none_when_origins_unset() {
+        with_env(&[("NESTRS_HTTP__CORS_ORIGINS", None)], || {
+            let cfg = CorsConfig::from_env(&http_env()).expect("no error");
+            assert!(cfg.is_none(), "unset origins ⇒ CORS off");
+        });
+    }
+
+    #[test]
+    fn from_env_reads_origins_methods_headers_when_set() {
+        with_env(
+            &[
+                ("NESTRS_HTTP__CORS_ORIGINS", Some("https://a.example,https://b.example")),
+                ("NESTRS_HTTP__CORS_METHODS", Some("GET,POST")),
+                ("NESTRS_HTTP__CORS_HEADERS", Some("content-type")),
+            ],
+            || {
+                let cfg = CorsConfig::from_env(&http_env())
+                    .expect("no error")
+                    .expect("Some when origins set");
+                assert_eq!(cfg.origins, vec!["https://a.example".to_string(), "https://b.example".into()]);
+                assert_eq!(cfg.methods, vec!["GET".to_string(), "POST".into()]);
+                assert_eq!(cfg.headers, vec!["content-type".to_string()]);
+                assert!(!cfg.credentials, "off by default");
+                assert!(cfg.max_age.is_none(), "off by default");
+            },
+        );
+    }
+
+    #[test]
+    fn from_env_reads_credentials_flag_and_max_age() {
+        with_env(
+            &[
+                ("NESTRS_HTTP__CORS_ORIGINS", Some("*")),
+                ("NESTRS_HTTP__CORS_CREDENTIALS", Some("true")),
+                ("NESTRS_HTTP__CORS_MAX_AGE", Some("600")),
+            ],
+            || {
+                let cfg = CorsConfig::from_env(&http_env())
+                    .expect("no error")
+                    .expect("Some");
+                assert!(cfg.credentials);
+                assert_eq!(cfg.max_age, Some(Duration::from_secs(600)));
+            },
+        );
+    }
+}

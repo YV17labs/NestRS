@@ -34,3 +34,8 @@ tokio-util.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
+# the `Json<T>` extractor in `from_request` test paths.
+serde.workspace = true

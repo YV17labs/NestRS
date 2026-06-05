@@ -46,3 +46,43 @@ impl PipeError {
         self.details
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_omits_details() {
+        let err = PipeError::new("not a uuid");
+        assert_eq!(err.message(), "not a uuid");
+        assert!(err.details().is_none());
+    }
+
+    #[test]
+    fn display_matches_message() {
+        // `PipeError`'s `#[error("{message}")]` discipline matters — a renderer
+        // (HTTP, WS) writes `Display`, never the inner struct.
+        let err = PipeError::new("not a uuid");
+        assert_eq!(err.to_string(), "not a uuid");
+    }
+
+    #[test]
+    fn with_details_round_trips_payload() {
+        let payload = serde_json::json!({ "field": ["bad"] });
+        let err = PipeError::with_details("validation failed", payload.clone());
+        assert_eq!(err.message(), "validation failed");
+        assert_eq!(err.details(), Some(&payload));
+    }
+
+    #[test]
+    fn into_details_consumes_and_returns_value() {
+        let err = PipeError::with_details("x", serde_json::json!({"k": 1}));
+        let details = err.into_details().expect("details");
+        assert_eq!(details["k"], 1);
+    }
+
+    #[test]
+    fn into_details_on_a_plain_error_returns_none() {
+        assert!(PipeError::new("plain").into_details().is_none());
+    }
+}

@@ -52,8 +52,12 @@ impl OAuth2Client {
         Ok(Self { config, http })
     }
 
-    fn basic_client(
-        &self,
+    /// Build the underlying `oauth2` client from a config. Free function (vs.
+    /// `&self`) so unit tests can exercise the URL-parse error paths
+    /// directly — `Self::new` short-circuits on `validate()` (length ≥ 1)
+    /// before the URLs are syntactically checked here.
+    pub(crate) fn basic_client(
+        config: &OAuth2Config,
     ) -> Result<
         BasicClient<
             oauth2::EndpointSet,
@@ -66,19 +70,19 @@ impl OAuth2Client {
     > {
         let parse = |s: &str| AuthError::Failed(format!("invalid OAuth URL: {s}"));
         Ok(
-            BasicClient::new(ClientId::new(self.config.client_id.clone()))
-                .set_client_secret(ClientSecret::new(self.config.client_secret.clone()))
+            BasicClient::new(ClientId::new(config.client_id.clone()))
+                .set_client_secret(ClientSecret::new(config.client_secret.clone()))
                 .set_auth_uri(
-                    AuthUrl::new(self.config.auth_url.clone())
-                        .map_err(|_| parse(&self.config.auth_url))?,
+                    AuthUrl::new(config.auth_url.clone())
+                        .map_err(|_| parse(&config.auth_url))?,
                 )
                 .set_token_uri(
-                    TokenUrl::new(self.config.token_url.clone())
-                        .map_err(|_| parse(&self.config.token_url))?,
+                    TokenUrl::new(config.token_url.clone())
+                        .map_err(|_| parse(&config.token_url))?,
                 )
                 .set_redirect_uri(
-                    RedirectUrl::new(self.config.redirect_url.clone())
-                        .map_err(|_| parse(&self.config.redirect_url))?,
+                    RedirectUrl::new(config.redirect_url.clone())
+                        .map_err(|_| parse(&config.redirect_url))?,
                 ),
         )
     }
@@ -87,7 +91,7 @@ impl OAuth2Client {
     /// transaction token to set as a cookie. The transaction inherits the
     /// `JwtService`'s expiry.
     pub fn authorize(&self, jwt: &JwtService) -> Result<Authorization, AuthError> {
-        let client = self.basic_client()?;
+        let client = Self::basic_client(&self.config)?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let mut request = client.authorize_url(CsrfToken::new_random);
         for scope in &self.config.scopes {
@@ -119,8 +123,7 @@ impl OAuth2Client {
         if tx.csrf != state {
             return Err(AuthError::Failed("OAuth state mismatch".into()));
         }
-        let token = self
-            .basic_client()?
+        let token = Self::basic_client(&self.config)?
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(PkceCodeVerifier::new(tx.pkce))
             .request_async(&self.http)
@@ -146,5 +149,116 @@ impl OAuth2Client {
             .await
             .map_err(|e| AuthError::Failed(e.to_string()))?;
         serde_json::from_str(&body).map_err(|e| AuthError::Failed(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jwt::JwtOptions;
+
+    fn valid_config() -> OAuth2Config {
+        OAuth2Config {
+            client_id: "client".into(),
+            client_secret: "secret".into(),
+            auth_url: "https://provider.example/authorize".into(),
+            token_url: "https://provider.example/token".into(),
+            redirect_url: "https://app.example/callback".into(),
+            userinfo_url: "https://provider.example/userinfo".into(),
+            scopes: vec!["read".into()],
+        }
+    }
+
+    fn jwt() -> JwtService {
+        JwtService::new(JwtOptions::new("oauth-client-tests")).expect("HMAC service")
+    }
+
+    #[test]
+    fn new_rejects_invalid_config_at_validate_stage() {
+        // `OAuth2Config::default()` has empty URL fields → `validate()`
+        // (length ≥ 1) trips before any URL is parsed, so `new` surfaces a
+        // `Failed`. `OAuth2Client` is not `Debug`, so we test via `is_err`.
+        assert!(OAuth2Client::new(OAuth2Config::default()).is_err());
+    }
+
+    #[test]
+    fn new_accepts_a_valid_config() {
+        // Happy `new` path — the URL-parse tests below stand on this baseline.
+        assert!(OAuth2Client::new(valid_config()).is_ok());
+        OAuth2Client::basic_client(&valid_config()).expect("basic_client builds");
+    }
+
+    #[test]
+    fn basic_client_rejects_malformed_auth_url() {
+        let mut config = valid_config();
+        config.auth_url = "not a url".into();
+        let Err(AuthError::Failed(msg)) = OAuth2Client::basic_client(&config) else {
+            panic!("expected Failed");
+        };
+        assert!(msg.contains("not a url"), "error names the offending value: {msg}");
+    }
+
+    #[test]
+    fn basic_client_rejects_malformed_token_url() {
+        let mut config = valid_config();
+        config.token_url = "::::".into();
+        assert!(matches!(
+            OAuth2Client::basic_client(&config),
+            Err(AuthError::Failed(_))
+        ));
+    }
+
+    #[test]
+    fn basic_client_rejects_malformed_redirect_url() {
+        // A redirect URL must be absolute — a bare path trips `RedirectUrl::new`
+        // after auth_url and token_url have parsed successfully.
+        let mut config = valid_config();
+        config.redirect_url = "/relative/path".into();
+        assert!(matches!(
+            OAuth2Client::basic_client(&config),
+            Err(AuthError::Failed(_))
+        ));
+    }
+
+    #[test]
+    fn authorize_surfaces_basic_client_error() {
+        // `validate()` accepts non-empty strings; the URL-syntax check runs
+        // inside `basic_client` when `authorize` rebuilds the client. This
+        // exercises the `?` propagation path in `authorize`.
+        let mut config = valid_config();
+        config.auth_url = "not a url".into();
+        let client = OAuth2Client::new(config).expect("new accepts non-empty fields");
+        assert!(matches!(
+            client.authorize(&jwt()),
+            Err(AuthError::Failed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn exchange_surfaces_url_parse_error_after_csrf_passes() {
+        // Forge a transaction whose csrf matches the state we will pass in,
+        // so the early `state mismatch` branch is skipped and `exchange`
+        // reaches `basic_client(&self.config)?` — which fails on the
+        // malformed `token_url` before any network call. Covers the
+        // `?` propagation past the CSRF check.
+        let jwt = jwt();
+        let mut config = valid_config();
+        config.token_url = "::::".into();
+        let client = OAuth2Client::new(config).expect("new accepts non-empty fields");
+
+        let transaction = jwt
+            .sign(&Transaction {
+                csrf: "agreed-state".into(),
+                pkce: "verifier".into(),
+                exp: jwt.expiry(),
+            })
+            .expect("sign");
+
+        assert!(matches!(
+            client
+                .exchange(&jwt, &transaction, "agreed-state", "the-code")
+                .await,
+            Err(AuthError::Failed(_))
+        ));
     }
 }

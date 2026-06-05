@@ -48,3 +48,46 @@ impl Config for IssuerConfig {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(id: &str) -> RegisteredClient {
+        RegisteredClient {
+            client_id: id.into(),
+            client_secret: "s3cr3t".into(),
+            org_id: Uuid::nil(),
+            scopes: vec!["user".into()],
+        }
+    }
+
+    #[test]
+    fn empty_clients_fails_validation() {
+        let cfg = IssuerConfig {
+            clients: vec![],
+            default_org_id: Uuid::nil(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.field_errors().contains_key("clients"));
+    }
+
+    #[test]
+    fn non_empty_clients_passes_validation() {
+        let cfg = IssuerConfig {
+            clients: vec![client("ci-runner")],
+            default_org_id: Uuid::nil(),
+        };
+        cfg.validate().expect("valid");
+    }
+
+    #[test]
+    fn default_org_constant_does_not_drift() {
+        // Pins the dev-default org id used when `NESTRS_ISSUER__DEFAULT_ORG_ID`
+        // is unset — changing it silently retargets every new user.
+        assert_eq!(
+            DEFAULT_ORG,
+            Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e),
+        );
+    }
+}

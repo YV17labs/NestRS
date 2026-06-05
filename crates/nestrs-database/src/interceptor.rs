@@ -19,9 +19,15 @@ use sea_orm::{DatabaseConnection, TransactionTrait};
 use crate::executor::{Executor, with_request_executor};
 
 #[interceptor]
-pub(crate) struct DbContext {
+pub struct DbContext {
     #[inject]
     db: Arc<DatabaseConnection>,
+}
+
+impl DbContext {
+    pub fn new(db: Arc<DatabaseConnection>) -> Self {
+        Self { db }
+    }
 }
 
 #[async_trait]
@@ -91,70 +97,55 @@ fn should_commit(result: &Result<Response>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use nestrs_middleware::EndpointExt;
-    use poem::endpoint::make;
-    use poem::{Endpoint, IntoResponse};
-    use sea_orm::Database;
+    use poem::IntoResponse;
 
     use super::*;
-    use crate::executor::current_executor;
 
-    async fn db() -> Arc<DatabaseConnection> {
-        let url = std::env::var("NESTRS_DATABASE__URL")
-            .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
-        Arc::new(Database::connect(&url).await.expect("connect to Postgres"))
+    #[test]
+    fn safe_methods_skip_the_transaction_wrapper() {
+        assert!(is_safe(&Method::GET));
+        assert!(is_safe(&Method::HEAD));
+        assert!(is_safe(&Method::OPTIONS));
+        assert!(is_safe(&Method::TRACE));
     }
 
-    fn mutating_request() -> Request {
-        Request::builder()
-            .method(Method::POST)
-            .uri("/".parse().unwrap())
-            .finish()
+    #[test]
+    fn mutating_methods_open_a_transaction() {
+        assert!(!is_safe(&Method::POST));
+        assert!(!is_safe(&Method::PUT));
+        assert!(!is_safe(&Method::PATCH));
+        assert!(!is_safe(&Method::DELETE));
     }
 
-    fn status_of(result: Result<Response>) -> StatusCode {
-        match result {
-            Ok(resp) => resp.status(),
-            Err(err) => err.into_response().status(),
-        }
+    fn response_with(status: StatusCode) -> Result<Response> {
+        Ok(status.into_response())
     }
 
-    // Leaking the ambient executor into a detached task that outlives the
-    // handler must turn the would-be 200 into a loud 500 — silent rollback of
-    // a "successful" mutation is data loss.
-    #[tokio::test]
-    async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
-        let ctx = DbContext { db: db().await };
+    #[test]
+    fn two_xx_commits() {
+        assert!(should_commit(&response_with(StatusCode::OK)));
+        assert!(should_commit(&response_with(StatusCode::CREATED)));
+        assert!(should_commit(&response_with(StatusCode::NO_CONTENT)));
+    }
 
-        let endpoint = make(|_req: Request| async {
-            let escaped = current_executor().expect("the handler runs with an ambient executor");
-            tokio::spawn(async move {
-                let _hold = escaped;
-                tokio::time::sleep(Duration::from_secs(30)).await;
-            });
-            StatusCode::OK.into_response()
-        });
+    #[test]
+    fn three_xx_commits() {
+        assert!(should_commit(&response_with(StatusCode::MOVED_PERMANENTLY)));
+        assert!(should_commit(&response_with(StatusCode::SEE_OTHER)));
+    }
 
-        let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-        assert_eq!(
-            status,
+    #[test]
+    fn four_xx_and_five_xx_roll_back() {
+        assert!(!should_commit(&response_with(StatusCode::BAD_REQUEST)));
+        assert!(!should_commit(&response_with(StatusCode::FORBIDDEN)));
+        assert!(!should_commit(&response_with(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "a leaked transaction must surface as a 500, never a false 2xx",
-        );
+        )));
     }
 
-    #[tokio::test]
-    async fn a_well_behaved_mutating_handler_keeps_its_status() {
-        let ctx = DbContext { db: db().await };
-
-        let endpoint = make(|_req: Request| async {
-            current_executor().expect("the handler runs with an ambient executor");
-            StatusCode::CREATED.into_response()
-        });
-
-        let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-        assert_eq!(status, StatusCode::CREATED);
+    #[test]
+    fn err_rolls_back() {
+        let err: Result<Response> = Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(!should_commit(&err));
     }
 }

@@ -158,4 +158,126 @@ mod tests {
             Ok(())
         });
     }
+
+    // `parse_value` is the per-line parser shared by every cascade tier — pin
+    // each quoting variant directly so a future rewrite of `load_file`
+    // doesn't silently change PEM-multiline support.
+
+    #[test]
+    fn parse_value_unquoted_passes_through_unchanged() {
+        assert_eq!(parse_value("plain"), "plain");
+        assert_eq!(parse_value("with spaces"), "with spaces");
+        assert_eq!(parse_value(""), "");
+    }
+
+    #[test]
+    fn parse_value_double_quoted_strips_quotes() {
+        assert_eq!(parse_value(r#""hello""#), "hello");
+    }
+
+    #[test]
+    fn parse_value_double_quoted_expands_escapes() {
+        // \n / \t / \r / \\ / \" — the documented set; a PEM private key
+        // ships as one logical line with \n for newlines, so this is
+        // load-bearing.
+        assert_eq!(parse_value(r#""a\nb""#), "a\nb");
+        assert_eq!(parse_value(r#""a\tb""#), "a\tb");
+        assert_eq!(parse_value(r#""a\rb""#), "a\rb");
+        assert_eq!(parse_value(r#""a\\b""#), "a\\b");
+        assert_eq!(parse_value(r#""quoted \"x\"""#), r#"quoted "x""#);
+    }
+
+    #[test]
+    fn parse_value_double_quoted_preserves_unknown_escapes_verbatim() {
+        // A `\z` isn't a known escape — keep the backslash + the char so the
+        // user sees the typo rather than getting silent data loss.
+        assert_eq!(parse_value(r#""a\zb""#), r"a\zb");
+    }
+
+    #[test]
+    fn parse_value_double_quoted_trailing_backslash_is_kept_literal() {
+        // Inner = `x\` (one literal backslash at end, no follower); keep it
+        // verbatim instead of consuming the closing quote.
+        let input = "\"x\\\""; // string `"x\"`
+        assert_eq!(parse_value(input), "x\\"); // string `x\`
+    }
+
+    #[test]
+    fn parse_value_single_quoted_is_literal_no_escape_expansion() {
+        // Single quotes are the literal form — `\n` stays two chars.
+        assert_eq!(parse_value(r#"'a\nb'"#), r"a\nb");
+        assert_eq!(parse_value("'plain'"), "plain");
+    }
+
+    #[test]
+    fn parse_value_mismatched_quotes_are_not_treated_as_quoted() {
+        // `"x'` — different opening/closing quote chars: not quoted.
+        assert_eq!(parse_value(r#""x'"#), r#""x'"#);
+        // Single char that looks like an opening quote: not quoted.
+        assert_eq!(parse_value(r#"""#), r#"""#);
+    }
+
+    // `load_file` exercises every parse-line branch (comment, empty,
+    // missing equal, `export` prefix, set-if-absent). Drive them all via
+    // a temp file.
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_file_handles_comments_blank_lines_and_export_prefix() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                ".env",
+                "# a comment\n\nLOAD_A=one\nexport LOAD_B=two\nno-equals-here\nLOAD_C=three\n",
+            )?;
+            load_cascade(Path::new("."), Environment::Development);
+            assert_eq!(std::env::var("LOAD_A").unwrap(), "one");
+            assert_eq!(std::env::var("LOAD_B").unwrap(), "two");
+            assert_eq!(std::env::var("LOAD_C").unwrap(), "three");
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_file_skips_empty_key_and_lines_with_only_whitespace_key() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "=value-without-key\n   =whitespace-key\nVALID_KEY=ok\n")?;
+            load_cascade(Path::new("."), Environment::Development);
+            assert_eq!(std::env::var("VALID_KEY").unwrap(), "ok");
+            // The bad lines must not be loaded under any key.
+            assert!(std::env::var("").is_err());
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_file_is_a_no_op_when_the_path_doesnt_exist() {
+        figment::Jail::expect_with(|jail| {
+            // No `.env` files created — load_cascade walks all candidates and
+            // every read fails silently. We mainly check that no panic
+            // happens and existing env stays intact.
+            jail.set_env("CASCADE_PRESERVE_ME", "kept");
+            load_cascade(Path::new("."), Environment::Development);
+            assert_eq!(std::env::var("CASCADE_PRESERVE_ME").unwrap(), "kept");
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn load_file_expands_double_quoted_pem_style_value() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                ".env",
+                "PEM_KEY=\"-----BEGIN-----\\nMIIB\\n-----END-----\"\n",
+            )?;
+            load_cascade(Path::new("."), Environment::Development);
+            assert_eq!(
+                std::env::var("PEM_KEY").unwrap(),
+                "-----BEGIN-----\nMIIB\n-----END-----",
+            );
+            Ok(())
+        });
+    }
 }

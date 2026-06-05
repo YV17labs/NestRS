@@ -2780,6 +2780,7 @@ dependencies = [
  "nestrs-pipes",
  "poem",
  "schemars",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",

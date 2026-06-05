@@ -148,3 +148,65 @@ impl Drop for OpenTelemetry {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `INITIALIZED` is a process-wide `AtomicBool`; tests that mutate it must
+    /// serialize so an interleaved check does not see another test's write.
+    static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn initialized_reflects_the_mark() {
+        let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Snapshot, mutate, restore — leaving the flag set would poison every
+        // other init test in the file (and `init_for_tests` depends on it
+        // returning the prior state).
+        let prior = INITIALIZED.swap(false, Ordering::Relaxed);
+        assert!(!initialized());
+        mark_initialized();
+        assert!(initialized());
+        INITIALIZED.store(prior, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn console_layer_produces_a_text_layer_for_text_format() {
+        // The returned layer is type-erased (`Box<dyn Layer<_>>`); compose it
+        // against a registry to confirm the branch builds a working layer.
+        let layer = console_layer::<Registry>(LogFormat::Text);
+        let _subscriber = Registry::default().with(layer);
+    }
+
+    #[test]
+    fn console_layer_produces_a_json_layer_for_json_format() {
+        let layer = console_layer::<Registry>(LogFormat::Json);
+        let _subscriber = Registry::default().with(layer);
+    }
+
+    #[test]
+    fn init_for_tests_is_idempotent() {
+        let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // First call may or may not be the first across the whole test
+        // binary — either way `initialized()` must be true afterwards, and a
+        // second call must not panic.
+        OpenTelemetry::init_for_tests();
+        assert!(initialized(), "init_for_tests must flip the global flag");
+        // Second call hits the short-circuit branch.
+        OpenTelemetry::init_for_tests();
+        assert!(initialized());
+    }
+
+    #[test]
+    fn drop_does_not_panic_on_empty_guard() {
+        #[cfg(feature = "otlp")]
+        let guard = OpenTelemetry {
+            tracer_provider: None,
+            meter_provider: None,
+            logger_provider: None,
+        };
+        #[cfg(not(feature = "otlp"))]
+        let guard = OpenTelemetry {};
+        drop(guard);
+    }
+}

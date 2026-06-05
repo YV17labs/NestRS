@@ -47,3 +47,29 @@ impl Environment {
         matches!(self, Self::Production)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn as_str_is_lowercase_for_each_variant() {
+        assert_eq!(Environment::Development.as_str(), "development");
+        assert_eq!(Environment::Test.as_str(), "test");
+        assert_eq!(Environment::Staging.as_str(), "staging");
+        assert_eq!(Environment::Production.as_str(), "production");
+    }
+
+    #[test]
+    fn is_production_matches_only_production() {
+        assert!(Environment::Production.is_production());
+        assert!(!Environment::Development.is_production());
+        assert!(!Environment::Test.is_production());
+        assert!(!Environment::Staging.is_production());
+    }
+
+    #[test]
+    fn default_is_development() {
+        assert_eq!(Environment::default(), Environment::Development);
+    }
+}

@@ -306,4 +306,221 @@ mod tests {
         assert_eq!(recv_all(&mut rx).len(), 0);
         assert_eq!(global.broadcast("ping", &1).expect("ok"), 1);
     }
+
+    #[test]
+    fn emit_to_a_specific_connection_lands_on_that_inbox_only() {
+        let server = WsServer::<Global>::default();
+        let (tx_a, mut rx_a) = unbounded_channel();
+        let (tx_b, mut rx_b) = unbounded_channel();
+        let a = server.connect(tx_a);
+        let _b = server.connect(tx_b);
+
+        assert!(server.emit(a, "hello", &"hi").expect("serializes"));
+        assert_eq!(recv_all(&mut rx_a).len(), 1);
+        assert_eq!(recv_all(&mut rx_b).len(), 0);
+    }
+
+    #[test]
+    fn emit_to_an_unknown_connection_returns_false() {
+        let server = WsServer::<Global>::default();
+        // 99 was never connected.
+        let id: ConnId = 99;
+        assert!(!server.emit(id, "x", &"y").expect("serializes"));
+    }
+
+    #[test]
+    fn emit_to_an_empty_room_sends_zero_frames() {
+        let server = WsServer::<Global>::default();
+        let (tx, mut rx) = unbounded_channel();
+        let _ = server.connect(tx);
+        assert_eq!(server.emit_to("ghost", "x", &"y").expect("serializes"), 0);
+        assert!(recv_all(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn connection_count_tracks_connects_and_disconnects() {
+        let server = WsServer::<Global>::default();
+        assert_eq!(server.connection_count(), 0);
+
+        let (tx_a, _rx_a) = unbounded_channel();
+        let a = server.connect(tx_a);
+        assert_eq!(server.connection_count(), 1);
+
+        let (tx_b, _rx_b) = unbounded_channel();
+        let _b = server.connect(tx_b);
+        assert_eq!(server.connection_count(), 2);
+
+        server.disconnect(a);
+        assert_eq!(server.connection_count(), 1);
+    }
+
+    #[test]
+    fn ws_client_join_leave_routes_through_the_registry() {
+        let server = Arc::new(WsServer::<Global>::default());
+        let (tx_a, mut rx_a) = unbounded_channel();
+        let (tx_b, mut rx_b) = unbounded_channel();
+        let a = server.connect(tx_a);
+        let _b = server.connect(tx_b);
+
+        let registry: Arc<dyn Registry> = server.clone();
+        let client = WsClient::new(a, registry);
+        client.join("lobby");
+
+        assert_eq!(server.emit_to("lobby", "msg", &1).expect("ok"), 1);
+        assert_eq!(recv_all(&mut rx_a).len(), 1);
+        assert_eq!(recv_all(&mut rx_b).len(), 0);
+
+        client.leave("lobby");
+        assert_eq!(server.emit_to("lobby", "msg", &2).expect("ok"), 0);
+    }
+
+    #[test]
+    fn ws_client_emit_sends_to_its_own_connection_only() {
+        let server = Arc::new(WsServer::<Global>::default());
+        let (tx_a, mut rx_a) = unbounded_channel();
+        let (tx_b, mut rx_b) = unbounded_channel();
+        let a = server.connect(tx_a);
+        let _b = server.connect(tx_b);
+
+        let registry: Arc<dyn Registry> = server;
+        let client = WsClient::new(a, registry);
+        assert!(client.emit("ping", &"hi").expect("serializes"));
+        assert_eq!(recv_all(&mut rx_a).len(), 1);
+        assert!(recv_all(&mut rx_b).is_empty());
+    }
+
+    #[test]
+    fn ws_client_broadcast_reaches_every_connection_including_self() {
+        let server = Arc::new(WsServer::<Global>::default());
+        let (tx_a, mut rx_a) = unbounded_channel();
+        let (tx_b, mut rx_b) = unbounded_channel();
+        let a = server.connect(tx_a);
+        let _b = server.connect(tx_b);
+
+        let registry: Arc<dyn Registry> = server;
+        let client = WsClient::new(a, registry);
+        assert_eq!(client.broadcast("hi", &"all").expect("serializes"), 2);
+        assert_eq!(recv_all(&mut rx_a).len(), 1);
+        assert_eq!(recv_all(&mut rx_b).len(), 1);
+    }
+
+    #[test]
+    fn ws_client_to_emits_into_the_named_room_only() {
+        // `WsClient::to(room, event, data)` is the `@ConnectedSocket.to` analog —
+        // sends to peers in `room` regardless of whether `self` joined it.
+        let server = Arc::new(WsServer::<Global>::default());
+        let (tx_a, mut rx_a) = unbounded_channel();
+        let (tx_b, mut rx_b) = unbounded_channel();
+        let a = server.connect(tx_a);
+        let b = server.connect(tx_b);
+        server.join(b, "lobby");
+
+        let registry: Arc<dyn Registry> = server.clone();
+        let client = WsClient::new(a, registry);
+        let count = client.to("lobby", "msg", &"hi").expect("serializes");
+
+        assert_eq!(count, 1, "only the room member receives the frame");
+        assert!(recv_all(&mut rx_a).is_empty());
+        assert_eq!(recv_all(&mut rx_b).len(), 1);
+    }
+
+    #[test]
+    fn ws_client_to_an_empty_room_returns_zero() {
+        let server = Arc::new(WsServer::<Global>::default());
+        let (tx, _rx) = unbounded_channel();
+        let id = server.connect(tx);
+        let registry: Arc<dyn Registry> = server;
+        let client = WsClient::new(id, registry);
+        // No-one joined "ghost" — the count is zero, no error.
+        assert_eq!(client.to("ghost", "msg", &"hi").expect("serializes"), 0);
+    }
+
+    #[test]
+    fn ws_client_id_returns_the_allocated_connection_id() {
+        // The `id()` accessor is part of the handler-facing surface — gateways
+        // store it to keep per-connection state.
+        let server = Arc::new(WsServer::<Global>::default());
+        let (tx, _rx) = unbounded_channel();
+        let assigned = server.connect(tx);
+        let registry: Arc<dyn Registry> = server;
+        let client = WsClient::new(assigned, registry);
+        assert_eq!(client.id(), assigned);
+    }
+
+    #[test]
+    fn ws_client_registry_accessor_returns_the_underlying_registry() {
+        // Handlers reach `WsServer` through this dyn handle without naming `N`.
+        let server = Arc::new(WsServer::<Global>::default());
+        let (tx, mut rx) = unbounded_channel();
+        let id = server.connect(tx);
+        let registry: Arc<dyn Registry> = server.clone();
+        let client = WsClient::new(id, registry);
+
+        // Calling `broadcast_value` through the accessor reaches the same
+        // backing server.
+        let sent = client
+            .registry()
+            .broadcast_value("evt", serde_json::json!({"k": 1}));
+        assert_eq!(sent, 1);
+        assert_eq!(recv_all(&mut rx).len(), 1);
+    }
+
+    #[test]
+    fn registry_dyn_dispatch_routes_join_and_leave_through_the_namespace() {
+        // The trait object is what `WsClient` actually holds — verify each
+        // method dispatches to the underlying `WsServer<N>` impl.
+        let server: Arc<dyn Registry> = Arc::new(WsServer::<Global>::default());
+        // Build a real connection on the underlying server through the trait —
+        // we can't call `connect` through `dyn Registry`, so reach the impl.
+        // Instead, exercise the four message-routing methods on an unknown id /
+        // unknown room: each should return the documented "no-op" value.
+        Registry::join(&*server, 999, "room");
+        Registry::leave(&*server, 999, "room");
+        assert_eq!(
+            Registry::broadcast_value(&*server, "x", serde_json::json!(1)),
+            0,
+            "no connections ⇒ zero frames",
+        );
+        assert_eq!(
+            Registry::emit_to_value(&*server, "room", "x", serde_json::json!(1)),
+            0,
+            "empty room ⇒ zero frames",
+        );
+        assert!(
+            !Registry::emit_value(&*server, 999, "x", serde_json::json!(1)),
+            "unknown connection ⇒ false",
+        );
+    }
+
+    #[test]
+    fn ws_server_with_a_custom_namespace_carries_its_own_connections() {
+        // Tag `WsServer<MyNs>` with a non-`Default` marker — covers the
+        // namespace-typed path and the manual `Default` impl that does not
+        // bound `N: Default`.
+        struct MyNs;
+        let server = WsServer::<MyNs>::default();
+        let (tx, mut rx) = unbounded_channel();
+        let id = server.connect(tx);
+        assert_eq!(server.connection_count(), 1);
+
+        assert!(server.emit(id, "ping", &"hi").expect("serializes"));
+        assert_eq!(recv_all(&mut rx).len(), 1);
+
+        server.disconnect(id);
+        assert_eq!(server.connection_count(), 0);
+    }
+
+    #[test]
+    fn ws_client_for_test_yields_a_dropable_outbox() {
+        // `for_test` is the documented shim for unit-testing gateway handlers
+        // without a real server — sends are accepted (registry exists) but
+        // the rx is dropped so frames are silently shed.
+        let client = WsClient::for_test();
+        // `emit` writes to a closed channel — registry's send returns false,
+        // but the constructor doesn't panic and the public API stays usable.
+        let _ = client.emit("hello", &"world");
+        // `id()` and `registry()` are usable trivial accessors.
+        let _ = client.id();
+        let _ = client.registry();
+    }
 }

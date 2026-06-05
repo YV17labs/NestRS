@@ -10,3 +10,18 @@ impl ResponseError for OrgError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::DbErr;
+
+    use super::*;
+
+    #[test]
+    fn db_is_500() {
+        assert_eq!(
+            OrgError::Db(DbErr::Custom("boom".into())).status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+    }
+}

@@ -28,3 +28,33 @@ pub struct Model {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+#[cfg(test)]
+mod tests {
+    use nestrs_resource::WireModelDefaults;
+    use serde_json::Map;
+
+    use super::*;
+
+    // The `#[expose]` macro emits a `WireModelDefaults` impl per `#[expose(skip)]`
+    // scalar column, so the shaper can reconstruct the full `Model` from a
+    // user-only wire body for `Ability::mask` to walk. A regression here turns
+    // every protected response into a 500 — pin the placeholder shape now.
+    #[test]
+    fn wire_defaults_fill_in_role_and_password_hash_when_absent() {
+        let mut body: Map<String, serde_json::Value> = Map::new();
+        Entity::fill_wire_defaults(&mut body);
+
+        assert_eq!(body.get("role"), Some(&serde_json::Value::String(String::new())));
+        assert_eq!(body.get("password_hash"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn wire_defaults_do_not_overwrite_already_present_keys() {
+        let mut body: Map<String, serde_json::Value> = Map::new();
+        body.insert("role".into(), serde_json::Value::String("admin".into()));
+        Entity::fill_wire_defaults(&mut body);
+
+        assert_eq!(body["role"], serde_json::Value::String("admin".into()));
+    }
+}

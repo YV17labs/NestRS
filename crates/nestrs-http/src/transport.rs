@@ -246,3 +246,88 @@ impl Transport for HttpTransport {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `join_path` is the single source of truth shared with `nestrs-openapi`
+    // and the boot route log — a drift here means the served path and the
+    // documented path disagree, so the cases are exhaustive on purpose.
+    #[test]
+    fn join_path_concatenates_clean_segments() {
+        assert_eq!(join_path("/health", "/live"), "/health/live");
+        assert_eq!(join_path("/users", "/:id"), "/users/:id");
+    }
+
+    #[test]
+    fn join_path_strips_redundant_slashes_on_either_side() {
+        assert_eq!(join_path("/health/", "/live"), "/health/live");
+        assert_eq!(join_path("/health", "live"), "/health/live");
+        assert_eq!(join_path("/health/", "live"), "/health/live");
+    }
+
+    #[test]
+    fn join_path_handles_empty_or_root_segments() {
+        assert_eq!(join_path("", ""), "/");
+        assert_eq!(join_path("/", ""), "/");
+        assert_eq!(join_path("/", "/"), "/");
+        assert_eq!(join_path("", "/users"), "/users");
+        assert_eq!(join_path("/users", ""), "/users");
+    }
+
+    #[test]
+    fn version_path_prefixes_when_a_version_is_supplied() {
+        assert_eq!(version_path(Some("1"), "/users"), "/v1/users");
+        assert_eq!(version_path(Some("2"), "/users/:id"), "/v2/users/:id");
+        // Version + root.
+        assert_eq!(version_path(Some("1"), "/"), "/v1");
+    }
+
+    #[test]
+    fn version_path_leaves_an_unversioned_path_alone() {
+        assert_eq!(version_path(None, "/users"), "/users");
+        assert_eq!(version_path(None, "/"), "/");
+    }
+
+    #[test]
+    fn http_transport_defaults_match_an_empty_new() {
+        let d = HttpTransport::default();
+        let n = HttpTransport::new();
+        assert_eq!(d.bind, n.bind);
+        assert_eq!(d.bind, "0.0.0.0:3000");
+        assert!(d.interceptors.is_empty());
+        assert!(d.guards.is_empty());
+        assert!(d.filters.is_empty());
+        assert!(d.mounts.is_empty());
+        assert!(d.cors.is_none());
+        assert!(d.tls.is_none());
+        assert!(d.server_header.is_none());
+        assert!(d.endpoint.is_none());
+    }
+
+    #[test]
+    fn bind_overrides_the_default_address() {
+        let t = HttpTransport::new().bind("127.0.0.1:9000");
+        assert_eq!(t.bind, "127.0.0.1:9000");
+    }
+
+    #[test]
+    fn tls_pins_the_supplied_config() {
+        // TlsConfig is opaque, so just check the option flips on.
+        let t = HttpTransport::new().tls(TlsConfig::new(b"cert".to_vec(), b"key".to_vec()));
+        assert!(t.tls.is_some());
+    }
+
+    #[test]
+    fn server_header_pins_the_supplied_static_str() {
+        let t = HttpTransport::new().server_header("nestrs/0.1.0");
+        assert_eq!(t.server_header, Some("nestrs/0.1.0"));
+    }
+
+    #[test]
+    fn take_endpoint_returns_none_before_configure_has_run() {
+        let mut t = HttpTransport::new();
+        assert!(t.take_endpoint().is_none(), "no endpoint before configure");
+    }
+}

@@ -37,3 +37,25 @@ pub fn roles_for_scope(requested: Option<&str>, allowed: &[String]) -> Option<Ve
         roles
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_from_db_maps_admin() {
+        assert!(matches!(role_from_db("admin"), Role::Admin));
+    }
+
+    #[test]
+    fn role_from_db_maps_user() {
+        assert!(matches!(role_from_db("user"), Role::User));
+    }
+
+    #[test]
+    fn role_from_db_falls_back_to_user_for_unknown() {
+        // Defence in depth: an unrecognised role string never gets escalated to admin.
+        assert!(matches!(role_from_db("superuser"), Role::User));
+        assert!(matches!(role_from_db(""), Role::User));
+    }
+}

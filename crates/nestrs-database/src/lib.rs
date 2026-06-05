@@ -51,4 +51,4 @@ pub use bind::Bind;
 #[cfg(feature = "health")]
 pub use health::{DatabaseHealthModule, DbHealthIndicator};
 
-pub(crate) use interceptor::DbContext;
+pub use interceptor::DbContext;

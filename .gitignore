@@ -19,8 +19,9 @@ lcov.info
 *.swp
 *.swo
 
-# Claude Code local settings
+# Claude Code local settings + transient worktrees
 .claude/settings.local.json
+.claude/worktrees/
 
 # OS noise
 .DS_Store

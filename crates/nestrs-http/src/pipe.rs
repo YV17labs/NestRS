@@ -141,3 +141,195 @@ where
         Ok(Valid(value))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reject_emits_a_400_json_body_with_the_message() {
+        let err = PipeError::new("not a uuid");
+        let resp = reject(err).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(json["statusCode"], 400);
+        assert_eq!(json["error"], "Bad Request");
+        assert_eq!(json["message"], "not a uuid");
+        assert!(json.get("details").is_none(), "no details on a plain error");
+    }
+
+    #[tokio::test]
+    async fn reject_carries_structured_details_when_present() {
+        let err = PipeError::with_details(
+            "validation failed",
+            serde_json::json!({ "email": ["not an email"] }),
+        );
+        let resp = reject(err).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(json["message"], "validation failed");
+        assert_eq!(json["details"]["email"][0], "not an email");
+    }
+
+    // `IntoInner` is the owned-unwrap shim. The three impls are
+    // line-for-line identical; pin one for each so a future rename of `.0`
+    // or a generic mismatch surfaces immediately.
+
+    #[test]
+    fn into_inner_for_json_unwraps_the_payload() {
+        let j = Json(42i32);
+        assert_eq!(j.into_inner(), 42);
+    }
+
+    #[test]
+    fn into_inner_for_path_unwraps_the_payload() {
+        let p = Path("/users/123".to_string());
+        assert_eq!(p.into_inner(), "/users/123");
+    }
+
+    #[test]
+    fn into_inner_for_query_unwraps_the_payload() {
+        #[derive(Debug, PartialEq)]
+        struct Q {
+            first: u32,
+        }
+        let q = Query(Q { first: 7 });
+        assert_eq!(q.into_inner(), Q { first: 7 });
+    }
+
+    // Piped<P, E> exposes `into_inner` and `Deref<Target = P::Out>`. Build a
+    // `Piped` directly (the field is private so tests live here, the only
+    // module that can see it) and exercise both.
+
+    struct ToUpper;
+
+    impl nestrs_pipes::Pipe for ToUpper {
+        type In = String;
+        type Out = String;
+        fn transform(input: String) -> std::result::Result<String, PipeError> {
+            Ok(input.to_ascii_uppercase())
+        }
+    }
+
+    #[test]
+    fn piped_into_inner_yields_the_transformed_value() {
+        let p: Piped<ToUpper, Json<String>> = Piped {
+            value: "HELLO".into(),
+            _marker: PhantomData,
+        };
+        assert_eq!(p.into_inner(), "HELLO");
+    }
+
+    #[test]
+    fn piped_deref_borrows_the_transformed_value() {
+        let p: Piped<ToUpper, Json<String>> = Piped {
+            value: "world".into(),
+            _marker: PhantomData,
+        };
+        assert_eq!(p.len(), 5);
+        assert_eq!(&*p, "world");
+    }
+
+    #[test]
+    fn valid_into_inner_yields_the_validated_value() {
+        let v: Valid<Json<String>> = Valid("ok".into());
+        assert_eq!(v.into_inner(), "ok");
+    }
+
+    #[test]
+    fn valid_deref_borrows_the_validated_value() {
+        let v: Valid<Json<String>> = Valid("ok".into());
+        assert_eq!(v.len(), 2);
+        assert_eq!(&*v, "ok");
+    }
+
+    // `from_request` paths. Build a real `Request` with a JSON body and run
+    // the extractor by hand — same shape poem invokes at the route boundary.
+
+    use poem::Body;
+    use serde::{Deserialize, Serialize};
+    use validator::Validate;
+
+    fn json_request<T: Serialize>(payload: &T) -> (Request, poem::RequestBody) {
+        let body = Body::from_json(payload).expect("body serializes");
+        let req = Request::builder()
+            .content_type("application/json")
+            .body(body);
+        req.split()
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Validate)]
+    struct Greeting {
+        #[validate(length(min = 1))]
+        msg: String,
+    }
+
+    #[tokio::test]
+    async fn piped_from_request_pipes_the_extracted_value() {
+        let (req, mut body) = json_request(&"hello".to_string());
+        let piped: Piped<ToUpper, Json<String>> =
+            Piped::from_request(&req, &mut body).await.expect("happy path");
+        assert_eq!(piped.into_inner(), "HELLO");
+    }
+
+    struct AlwaysReject;
+
+    impl nestrs_pipes::Pipe for AlwaysReject {
+        type In = String;
+        type Out = String;
+        fn transform(_: String) -> std::result::Result<String, PipeError> {
+            Err(PipeError::new("nope"))
+        }
+    }
+
+    #[tokio::test]
+    async fn piped_from_request_rejects_when_the_pipe_returns_an_error() {
+        let (req, mut body) = json_request(&"hello".to_string());
+        let err = match Piped::<AlwaysReject, Json<String>>::from_request(&req, &mut body).await {
+            Ok(_) => panic!("the pipe should have rejected"),
+            Err(e) => e,
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(json["message"], "nope");
+    }
+
+    #[tokio::test]
+    async fn valid_from_request_returns_the_validated_payload() {
+        let payload = Greeting {
+            msg: "hi".into(),
+        };
+        let (req, mut body) = json_request(&payload);
+        let v: Valid<Json<Greeting>> = Valid::from_request(&req, &mut body)
+            .await
+            .expect("validation passes");
+        assert_eq!(v.into_inner(), payload);
+    }
+
+    #[tokio::test]
+    async fn valid_from_request_rejects_with_400_and_field_details_on_invalid_input() {
+        // Empty `msg` fails the `length(min = 1)` rule.
+        let payload = Greeting { msg: String::new() };
+        let (req, mut body) = json_request(&payload);
+        let err = match Valid::<Json<Greeting>>::from_request(&req, &mut body).await {
+            Ok(_) => panic!("validation should have rejected"),
+            Err(e) => e,
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(json["statusCode"], 400);
+        // The field-level details surface under the offending field name.
+        assert!(
+            json.get("details").and_then(|d| d.get("msg")).is_some(),
+            "details should name the failing field: {json}",
+        );
+    }
+}

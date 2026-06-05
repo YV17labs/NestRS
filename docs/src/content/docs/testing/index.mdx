@@ -1,160 +1,105 @@
 ---
 title: Testing
 description: Boot the real DI graph in-process, drive every transport in cargo test, override providers with first-class support.
+sidebar:
+  order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+`nestrs-testing` boots the **real** `AppBuilder` (the four-phase collect →
+factories → register → access-graph check) in-process, configures an
+`HttpTransport` without a socket, and exposes a typed client over
+[`poem::test::TestClient`](https://docs.rs/poem/latest/poem/test/struct.TestClient.html).
+GraphQL, OpenAPI, and MCP ride the same client because they self-mount as
+HTTP endpoints.
 
-`nestrs-testing` boots the **real** `AppBuilder` build (the four-phase
-collect → factories → register → access-graph check) in-process,
-configures an `HttpTransport` without a socket, and exposes a typed
-test client. GraphQL, OpenAPI, and MCP ride the same client because
-they self-mount as HTTP endpoints.
+The principle: **a test is the truth of what production does.** No mocked
+DI graph, no separate test wiring.
 
-The principle: **a test is the truth of what production does**. There is
-no mocked DI graph, no separate test wiring.
+Three categories, Rust's standard model plus the app e2e:
 
-## A round-trip e2e test
+- **[Unit tests](/testing/unit/)** — `#[cfg(test)] mod tests` inside
+  `src/`. Pure logic next to the code under test, with private-item
+  access and no DI boot.
+- **[Integration tests](/testing/integration/)** — `tests/*.rs` at the
+  crate root. The crate's public API, exercised as an external consumer
+  would. Shared fixtures go in `tests/common/mod.rs`.
+- **[End-to-end tests](/testing/e2e/)** — `TestApp` boots the real
+  `AppModule` against an `EphemeralDatabase`. The route table, the DI
+  graph, the access-graph check, authn/authz, and the data path all run.
 
-```rust title="apps/platform-api/tests/e2e.rs"
-use nestrs_testing::TestApp;
-use serde_json::json;
+| Where | What it tests | Boots? |
+|---|---|---|
+| `crates/<crate>/src/**.rs` (`#[cfg(test)]`) | In-file logic, private items | no |
+| `crates/<crate>/tests/*.rs` | Crate's public API | no |
+| `crates/nestrs-testing/tests/*.rs` | Cross-crate framework wiring | tailored |
+| `apps/<app>/tests/e2e.rs` | The app's real top-level module | ✓ real |
 
-#[tokio::test]
-async fn create_then_list_users() -> anyhow::Result<()> {
-    let app = TestApp::<platform_api::PlatformApiModule>::builder()
-        .with_postgres()                          // ephemeral container
-        .build()
-        .await?;
+## Picking the right tool
 
-    let token = app.mint_token("ada@example.com", &["user"]).await?;
+The three categories are the *where*. The *which* depends on the risk
+you carry. nestrs ships techniques for each — pick what matches, skip
+what doesn't:
 
-    let created = app
-        .post("/users")
-        .bearer(&token)
-        .json(&json!({"name":"Bob","email":"bob@example.com"}))
-        .send()
-        .await?
-        .json::<serde_json::Value>()
-        .await?;
+| Risk you carry | Technique it earns |
+|---|---|
+| Wiring (DI graph, routes mounted, guards bound) | E2E — `TestApp` boots the real module tree |
+| Security policy regressions (`Ability::mask`, `condition_for`, `WireModelDefaults`) | [Policy tests](/testing/policy/) — pure unit tests on the policy types |
+| Failure modes (401 / 403 / 400 / rollback) | [Negative-path tests](/testing/negative-path/) in the app's e2e |
+| Pure logic — calculations, conversions, validators | [Unit tests](/testing/unit/) next to the code |
+| Edge cases in parsers and validators | Property-based testing with [`proptest`](https://crates.io/crates/proptest) |
+| API contract drift (OpenAPI, GraphQL SDL) | Snapshot tests on `/api-json` and `schema.graphql` |
+| A framework crate's public API | [Integration tests](/testing/integration/) in the crate's `tests/` |
 
-    assert_eq!(created["name"], "Bob");
-
-    let listed = app
-        .get("/users")
-        .bearer(&token)
-        .send()
-        .await?
-        .json::<Vec<serde_json::Value>>()
-        .await?;
-
-    assert!(listed.iter().any(|u| u["email"] == "bob@example.com"));
-    Ok(())
-}
-```
-
-- **`TestApp::<PlatformApiModule>::builder()`** runs the same boot path as `main`
-  — including the access-graph check. A wiring regression fails this
-  test, in this binary.
-- **`.with_postgres()`** spins an ephemeral Postgres (testcontainers in
-  CI) and runs migrations. No mocks, no in-memory fakes.
-- **`.post("/users").bearer(&token).json(...)`** is a typed client over
-  `poem::test::TestClient`. The HTTP shape is exercised exactly as
-  production sees it.
-
-## Provider overrides
-
-A test can swap any provider before build. The override applies after
-`register`, so consumers built lazily (controllers, resolvers, guards)
-pick up the override.
-
-```rust title="apps/mcp/tests/weather_stub.rs"
-struct StubWeather;
-
-#[async_trait]
-impl WeatherProvider for StubWeather {
-    async fn current(&self, _lat: f64, _lon: f64) -> Result<Report> {
-        Ok(Report {
-            temperature_c: 20.0,
-            wind_speed_kmh: 0.0,
-            wind_direction_deg: 0.0,
-            weather_code: 0,
-            observed_at: "2026-06-03T10:00:00Z".into(),
-        })
-    }
-}
-
-#[tokio::test]
-async fn current_weather_returns_stubbed_report() -> anyhow::Result<()> {
-    let app = TestApp::<mcp::McpModule>::builder()
-        .override_dyn::<dyn WeatherProvider>(Arc::new(StubWeather))
-        .build()
-        .await?;
-
-    // ... drive the MCP endpoint ...
-    Ok(())
-}
-```
-
-External-IO services (HTTP clients, third-party APIs) are the right
-override target. **Do not mock the database** — see
-[Three test homes](#three-test-homes).
-
-## Three test homes
-
-| Where                                              | What it tests                           | Boots? |
-|----------------------------------------------------|-----------------------------------------|--------|
-| `apps/<app>/tests/e2e.rs`                          | The app's real top-level module end to end | ✓ real |
-| `crates/<crate>/tests/<short>.rs` (+ mirror tree)  | The crate's **public** API in process   | minimal |
-| `crates/nestrs-testing/tests/<behaviour>.rs`       | Cross-crate framework wiring            | tailored |
-
-Each crate has **one** `tests/<short>.rs` binary; everything else under
-`tests/` is a module (Cargo compiles top-level `tests/*.rs` as separate
-crates, which makes the build slow and the harness fragmented). The
-layout mirrors `src/<path>.rs` → `tests/<path>.rs` or
-`tests/<path>/mod.rs`. The only allowed non-mirror path is
-`tests/common/` for shared helpers.
+A small CRUD feature with no calculation and no custom policy can ship
+with zero unit tests, zero integration tests, and full coverage through
+its app's e2e. That is a valid outcome — write what the risk earns, skip
+what it doesn't.
 
 ## Run it
 
-```bash
-$ just test
+```bash frame="terminal"
+$ just test                   # unit + integration, no DB
    Compiling api v0.1.0
     Finished `test` profile in 12.4s
-     Running unittests
 test result: ok. 142 passed in 0.21s
-     Running tests/e2e.rs
+```
+
+```bash frame="terminal"
+$ just test-e2e               # e2e — Postgres required
 [+] Running container postgres:16-alpine
 test create_then_list_users ... ok
 test result: ok. 14 passed in 4.31s
 ```
 
-```bash
-$ just test-unit              # skip e2e (no DB)
-$ just test-e2e               # only e2e (needs DB)
-$ just test-cov               # with coverage (llvm-cov)
+```bash frame="terminal"
+$ just test-cov               # full suite with coverage (llvm-cov)
 ```
 
-## What is required for a test to claim "done"
+The split is by **what each command needs to run**, not by Rust test
+category. `just test` covers everything that runs without Postgres —
+unit tests *and* integration tests of crates that don't own
+persistence. `just test-e2e` covers the rest. The full suite is
+`just test && just test-e2e`.
+
+## What "done" requires
 
 > A wiring bug does not surface in a unit test.
 
-- **Every app ships a `tests/e2e.rs`** booting its real top-level module. It
-  proves the route table, the DI graph, the access-graph check, the
-  authn/authz layers, and the data access path are all wired.
+- **Every app ships a `tests/e2e.rs`** booting its real top-level module —
+  it proves the route table, the DI graph, the access-graph check, the
+  authn/authz layers, and the data path are all wired.
 - **HTTP/GraphQL changes** require `just dev <app>` + `curl` against the
   affected endpoint. If you cannot run the binary, say so explicitly
   rather than claiming green.
-- **No DB mocking in e2e tests** — real Postgres (testcontainers in CI).
-  Unit tests of *pure* logic need no DB.
+- **No DB mocking in e2e tests** — real Postgres via `EphemeralDatabase`
+  (testcontainers in CI). Unit tests of *pure* logic need no DB.
 
-## Going further
+## Reference
 
-### Reference
-
-- `crates/nestrs-testing/` — `TestApp`, `TestAppBuilder`, the in-process
-  HTTP client.
-- `apps/platform-api/tests/e2e.rs` and `apps/platform-auth/tests/e2e.rs` — the live
-  baseline tests.
-- `crates/nestrs-authn/tests/authn.rs` — the strict-mirror test layout
-  reference.
+- `crates/nestrs-testing/` — `TestApp`, `TestAppBuilder`,
+  `EphemeralDatabase`, the in-process HTTP client.
+- `apps/platform-api/tests/e2e.rs` and `apps/platform-auth/tests/e2e.rs` —
+  the live baseline tests.
+- [The Rust Book, ch. 11.3](https://doc.rust-lang.org/book/ch11-03-test-organization.html)
+  and [the Cargo Book on integration tests](https://doc.rust-lang.org/cargo/guide/tests.html)
+  — the underlying conventions.

@@ -1,0 +1,124 @@
+---
+title: Policy tests
+description: Ability::mask, condition_for, and WireModelDefaults are policy code — a regression there is a silent data leak. Assert against them directly.
+sidebar:
+  order: 6
+---
+
+`Ability::mask`, `Ability::condition_for`, and `WireModelDefaults` are
+the policy code of a nestrs app — they decide which fields a caller
+sees and which rows the data layer accepts. A regression there is a
+silent data leak; a happy-path e2e does not catch it.
+
+These are perfect unit-test targets: pure functions on policy types,
+no DI, no DB, microsecond runs.
+
+## Masking — every grant scenario
+
+For each entity with `#[expose]`, write one test per masking scenario
+the policy supports. The minimum: an admin sees everything an
+unrestricted grant allows, a self-call sees the self-visible fields, a
+stranger sees the public subset, and `#[expose(skip)]` columns never
+escape.
+
+```rust title="crates/features/src/users/core/policy.rs"
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn fixture() -> users::Model {
+        users::Model {
+            id: Uuid::nil(),
+            email: "bob@example.com".into(),
+            name: "Bob".into(),
+            password_hash: "argon2id$…".into(),
+        }
+    }
+
+    #[test]
+    fn admin_sees_every_exposed_field() {
+        let masked = AppAbility::admin().mask(fixture()).expect("masked");
+        assert_eq!(masked.email, "bob@example.com");
+        assert_eq!(masked.name, "Bob");
+    }
+
+    #[test]
+    fn stranger_sees_only_the_public_subset() {
+        let masked = AppAbility::stranger().mask(fixture()).expect("masked");
+        assert_eq!(masked.name, "Bob");
+        assert!(masked.email.is_empty(), "email is private to strangers");
+    }
+
+    #[test]
+    fn unrestricted_grant_still_strips_expose_skip_columns() {
+        let masked = AppAbility::admin().mask(fixture()).expect("masked");
+        assert!(
+            masked.password_hash.is_empty(),
+            "password_hash is #[expose(skip)] — must never leak even with full field grant",
+        );
+    }
+}
+```
+
+The third test matters most. An admin gets every granted field, but a
+`#[expose(skip)]` column (a password hash, an API secret) must still
+be stripped on its way to the wire. A bug in `retain_wire_keys` leaks
+it. The test pins the contract.
+
+## Ability conditions — every branch
+
+`Ability::condition_for::<Entity>()` returns the SQL filter `Repo`
+applies on every read. A bug here scopes too narrowly (the feature
+looks broken) or too widely (data leak). One test per branch of the
+ability:
+
+```rust
+#[test]
+fn admin_condition_is_unscoped() {
+    let cond = AppAbility::admin().condition_for::<users::Entity>();
+    assert!(cond.is_always_true(), "admin reads every row");
+}
+
+#[test]
+fn member_condition_scopes_to_tenant() {
+    let tenant = Uuid::new_v4();
+    let cond = AppAbility::member(tenant).condition_for::<users::Entity>();
+    let sql = cond.to_sql_string();
+    assert!(sql.contains("tenant_id ="));
+    assert!(sql.contains(&tenant.to_string()));
+}
+
+#[test]
+fn no_ability_yields_unscoped() {
+    let cond = AppAbility::none().condition_for::<users::Entity>();
+    assert!(
+        cond.is_always_true(),
+        "no ability ⇒ TRUE — system work runs unscoped, correct",
+    );
+}
+```
+
+The last test pins a subtle invariant: `Repo` running without an
+ambient ability (a `#[scheduled]` job, a shutdown hook) returns every
+row — system work is unscoped by design. A future refactor that swaps
+the default to `FALSE` would silently break every background job; the
+test catches it the same day.
+
+## What still belongs in e2e
+
+Policy unit tests prove the code is correct in isolation. The e2e
+proves it is actually wired in — that `Repo` reads through the ambient
+ability, that the shaper masks the response on the way out, that
+forgetting to import `AuthzHttpModule` fails the boot rather than
+silently allowing unscoped reads.
+
+A balanced setup:
+
+- **Unit** — every branch of `mask`, `condition_for`, and
+  `WireModelDefaults`. Fast, exhaustive.
+- **E2E negative path** — the wrong caller gets `403`, the masked
+  response excludes `#[expose(skip)]` columns, a missing authz module
+  fails the boot loudly. See [negative-path](/testing/negative-path/).
+
+Together they cover both the policy *and* its wiring.

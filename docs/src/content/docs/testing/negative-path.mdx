@@ -1,0 +1,162 @@
+---
+title: Negative-path tests
+description: Auth refused, cross-tenant denied, validation failed, rollback verified — the failure modes hide the bugs that ship.
+sidebar:
+  order: 5
+---
+
+A 2xx test is half a test. The bugs that ship to production live in
+the failure modes — the request that should have been refused, the
+transaction that should have rolled back, the field that should have
+been masked. `tests/e2e/` is the natural home: same `TestApp`, same
+`EphemeralDatabase`, just asserting on the failure shape.
+
+## Four shapes worth covering
+
+For every endpoint that mutates or returns scoped data, four failures
+catch bugs the happy path can't:
+
+- **No auth → 401.** A controller missing
+  `#[use_guards(AuthGuard, …)]` silently exposes the route — this test
+  forces the regression to surface.
+- **Cross-tenant → 403, not 404 and not 500.** A 404 leaks existence;
+  a 500 means the authz scope did not install. Both are bugs.
+- **Malformed input → 400 with the wire error shape.** Confirms the
+  pipe runs, the error mapping survives, and the body matches the
+  client contract.
+- **Server error → rollback verified.** The ambient executor rolls
+  back on non-2xx; a test that triggers a 500 then queries the DB
+  confirms the row is absent.
+
+## Auth refused
+
+```rust title="apps/platform-api/tests/e2e/users_negatives.rs"
+use crate::common::boot;
+use poem::http::{StatusCode, header};
+use serde_json::json;
+
+#[tokio::test]
+async fn create_without_auth_returns_401() {
+    let (_db, app) = boot().await;
+    let resp = app
+        .http()
+        .post("/users")
+        .body_json(&json!({ "name": "Bob" }))
+        .send()
+        .await;
+    resp.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn create_with_expired_token_returns_401() {
+    let (_db, app) = boot().await;
+    let resp = app
+        .http()
+        .post("/users")
+        .header(header::AUTHORIZATION, "Bearer expired.token.here")
+        .body_json(&json!({ "name": "Bob" }))
+        .send()
+        .await;
+    resp.assert_status(StatusCode::UNAUTHORIZED);
+}
+```
+
+## Cross-tenant refused
+
+A caller authenticated as tenant A asking for tenant B's resource
+returns `403` — the row exists, the caller cannot see it. `404` would
+leak existence; `500` would mean `Ability::condition_for` never
+installed.
+
+```rust
+#[tokio::test]
+async fn get_other_tenants_user_returns_403() {
+    let (db, app) = boot().await;
+    let other_user = crate::common::seed_user_in_tenant(&db, "tenant-b").await;
+    let bearer = format!(
+        "Bearer {}",
+        crate::common::admin_token_for("tenant-a").await,
+    );
+
+    let resp = app
+        .http()
+        .get(format!("/users/{}", other_user.id))
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await;
+    resp.assert_status(StatusCode::FORBIDDEN);
+}
+```
+
+## Validation failed
+
+```rust
+#[tokio::test]
+async fn create_with_invalid_email_returns_400_with_field_errors() {
+    let (_db, app) = boot().await;
+    let bearer = format!("Bearer {}", crate::common::admin_token().await);
+
+    let resp = app
+        .http()
+        .post("/users")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "email": "not-an-email" }))
+        .send()
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+
+    let body = resp.json().await;
+    let value = body.value();
+    assert_eq!(value.object().get("error").string(), "validation");
+    assert!(value.object().get("fields").object().get_opt("email").is_some());
+}
+```
+
+## Rollback verified
+
+A passing happy-path test confirms the transaction wraps; a failing
+test next to it confirms it unwinds:
+
+```rust
+#[tokio::test]
+async fn handler_error_rolls_back_the_create() {
+    let (db, app) = boot().await;
+    let bearer = format!("Bearer {}", crate::common::admin_token().await);
+
+    let resp = app
+        .http()
+        .post("/users/with-broken-hook")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "name": "Bob" }))
+        .send()
+        .await;
+    resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+    let count = crate::common::count_users_named(&db, "Bob").await;
+    assert_eq!(count, 0, "the failed mutation must not have committed");
+}
+```
+
+The two tests together prove both halves of the transaction promise:
+the wrapper installs on the mutating method (good 2xx commits), and it
+unwinds on failure (failed 5xx leaves no trace).
+
+## Where they live
+
+A separate module per feature, grouped under `tests/e2e/`, keeps the
+suite navigable:
+
+```text frame="none"
+apps/platform-api/tests/e2e/
+├── users.rs              ← happy paths
+├── users_negatives.rs    ← failure modes
+├── orgs.rs
+├── orgs_negatives.rs
+└── common/
+    └── mod.rs
+```
+
+A small suite can interleave positives and negatives in one file
+instead — the split matters less than the coverage. What matters is
+that every endpoint with a mutation or scoped read has its four
+failure modes asserted somewhere.

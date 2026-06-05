@@ -1,0 +1,246 @@
+---
+title: End-to-end tests
+description: TestApp boots the real AppModule against an EphemeralDatabase — the route table, the DI graph, the access-graph check, authn/authz, and the data path all run.
+sidebar:
+  order: 4
+---
+
+An end-to-end test boots the **real** top-level module in process,
+against a throwaway Postgres database, and drives the HTTP surface
+through the same [`poem`](https://crates.io/crates/poem) runtime
+production uses. Every app ships one, at `apps/<app>/tests/e2e.rs`.
+
+## A round-trip e2e test
+
+```rust title="apps/platform-api/tests/e2e.rs"
+use nestrs_authn::JwtConfig;
+use nestrs_testing::{EphemeralDatabase, TestApp};
+use platform_api::PlatformApiModule;
+use poem::http::header;
+use serde_json::json;
+
+async fn boot() -> (EphemeralDatabase, TestApp) {
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("create + migrate a throwaway database");
+    let app = TestApp::builder()
+        .module::<PlatformApiModule>()
+        .with_test_telemetry()
+        .provide_arc(db.connection())
+        .provide(JwtConfig {
+            public_key: Some(DEV_PUBLIC_KEY.into()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("PlatformApiModule boots against the throwaway database");
+    (db, app)
+}
+
+#[tokio::test]
+async fn create_then_list_users() {
+    let (_db, app) = boot().await;
+    let bearer = format!("Bearer {}", admin_token().await);
+
+    let created = app
+        .http()
+        .post("/users")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "name": "Bob", "email": "bob@example.com" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+
+    let listed = app
+        .http()
+        .get("/users")
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await;
+    listed.assert_status_is_ok();
+}
+```
+
+`TestApp::builder().module::<PlatformApiModule>()` runs the same
+four-phase boot as `main`, including the access-graph check. A wiring
+regression fails this test, in this binary.
+
+## Splitting a large suite
+
+Cargo compiles `apps/<app>/tests/e2e.rs` as one binary and treats
+subdirectories as modules. That seam grows the suite without going to
+multiple binaries: keep one top-level `e2e.rs`, declare modules under
+it, and share the `boot()` helper through `tests/e2e/common/mod.rs`.
+
+```text frame="none"
+apps/platform-api/
+└── tests/
+    ├── e2e.rs
+    └── e2e/
+        ├── common/
+        │   └── mod.rs       ← boot(), admin_token(), fixtures
+        ├── users.rs
+        ├── orgs.rs
+        ├── auth.rs
+        └── graphql.rs
+```
+
+`tests/e2e.rs` becomes a flat index:
+
+```rust title="apps/platform-api/tests/e2e.rs"
+mod common;
+mod users;
+mod orgs;
+mod auth;
+mod graphql;
+```
+
+Each module pulls shared setup from `crate::common`:
+
+```rust title="apps/platform-api/tests/e2e/users.rs"
+use crate::common::{admin_token, boot};
+use poem::http::header;
+use serde_json::json;
+
+#[tokio::test]
+async fn create_then_list_users() {
+    let (_db, app) = boot().await;
+    let bearer = format!("Bearer {}", admin_token().await);
+
+    let created = app
+        .http()
+        .post("/users")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "name": "Bob", "email": "bob@example.com" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+}
+```
+
+Rust's module rule: `mod common;` in `tests/e2e.rs` resolves to
+`tests/e2e/common/mod.rs` because the directory takes the entry file's
+stem. The `mod.rs` form on `common` matters — it's the
+[official Rust idiom](https://doc.rust-lang.org/book/ch11-03-test-organization.html#submodules-in-integration-tests)
+that prevents Cargo from compiling it as its own binary.
+
+Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
+
+- The four-phase boot is the expensive part — sharing `boot()` through
+  `common` keeps it written once.
+- Cargo links the app crate once per binary; one binary means one link
+  step instead of one per concern file.
+- `cargo test --test e2e` runs the whole suite; `cargo test --test e2e
+  users::` narrows to one module.
+
+## Ephemeral Postgres
+
+`EphemeralDatabase::create::<Migrator>()` creates a uniquely-named
+Postgres database, runs migrations, and drops it on the guard's `Drop`
+— even on panic, even after a crashed previous run (it reaps
+`nestrs_e2e_*` databases older than five minutes on the next call). The
+admin URL comes from `NESTRS_DATABASE__URL`.
+
+`provide_arc(db.connection())` seeds the real connection into the
+container, short-circuiting `DatabaseModule`'s `for_root` factory. The
+rest of the app builds normally.
+
+```rust
+let db = EphemeralDatabase::create::<migrations::Migrator>().await?;
+let app = TestApp::builder()
+    .module::<PlatformApiModule>()
+    .provide_arc(db.connection())
+    .build()
+    .await?;
+```
+
+## Driving the HTTP surface
+
+`app.http()` returns
+[`poem::test::TestClient`](https://docs.rs/poem/latest/poem/test/struct.TestClient.html)
+— typed requests, typed responses, no socket. GraphQL
+(`POST /graphql`), the OpenAPI document (`GET /api-json`), and MCP all
+ride the same client because they self-mount as HTTP endpoints.
+
+```rust
+let resp = app.http().get("/api-json").send().await;
+resp.assert_status_is_ok();
+let paths = resp.json().await.value().object().get("paths").object();
+assert!(paths.get_opt("/users").is_some());
+```
+
+## Provider overrides
+
+`override_value` and `override_dyn` swap any provider after the
+four-phase build. The override applies before any consumer resolves the
+type, so controllers, resolvers, and guards pick it up.
+
+```rust
+struct StubWeather;
+
+#[async_trait]
+impl WeatherProvider for StubWeather {
+    async fn current(&self, _lat: f64, _lon: f64) -> Result<Report> {
+        Ok(Report {
+            temperature_c: 20.0,
+            wind_speed_kmh: 0.0,
+            wind_direction_deg: 0.0,
+            weather_code: 0,
+            observed_at: "2026-06-03T10:00:00Z".into(),
+        })
+    }
+}
+
+let app = TestApp::builder()
+    .module::<McpModule>()
+    .override_dyn::<dyn WeatherProvider>(Arc::new(StubWeather))
+    .build()
+    .await?;
+```
+
+External-IO services — HTTP clients to third-party APIs, queue producers
+reaching an outside system — are the right override target. **The
+database is not.** A test that mocks `Repo` to make a service compile is
+asserting on a fiction; use `EphemeralDatabase` instead.
+
+## Headless apps
+
+`build_headless()` skips the HTTP transport for queue workers,
+schedulers, or any binary without an HTTP surface. The four-phase build
+still runs, so the access-graph check still fires.
+
+```rust
+let app = TestApp::builder()
+    .module::<PlatformWorkerModule>()
+    .provide_arc(db.connection())
+    .build_headless()
+    .await?;
+```
+
+Drive non-HTTP transports through `HeadlessApp::spawn_transport`.
+
+## Test telemetry
+
+`with_test_telemetry()` calls `OpenTelemetry::init_for_tests` — a
+console-only init honouring `RUST_LOG` (default `warn` for noise
+control). It is idempotent; the first test to run wins, the rest no-op.
+Required when the module tree imports `OpenTelemetryModule` (the boot
+guard panics otherwise). Gated by the `opentelemetry` feature on
+`nestrs-testing`.
+
+A test whose module tree does **not** import `OpenTelemetryModule` does
+not need it.
+
+## What ends an HTTP/GraphQL change
+
+E2E is not enough on its own. After the test goes green, run the binary
+and `curl` the affected endpoint:
+
+```bash frame="terminal"
+$ just dev platform-api &
+$ curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/users
+$ kill %1
+```
+
+**Kill the server before returning control.** If you cannot run the
+binary, say so explicitly rather than claiming green.

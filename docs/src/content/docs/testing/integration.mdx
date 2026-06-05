@@ -1,0 +1,104 @@
+---
+title: Integration tests
+description: The crate's public API in process — tests/*.rs at the crate root, one binary per file, shared fixtures in tests/common/mod.rs.
+sidebar:
+  order: 3
+---
+
+A crate integration test exercises the crate's **public** API in
+process: it constructs types by hand, calls them, and asserts on the
+result. No app boot, no database unless the crate itself owns
+persistence.
+
+## Cargo's model
+
+[Cargo compiles each top-level `tests/*.rs` as its own integration test
+binary](https://doc.rust-lang.org/cargo/guide/tests.html#integration-tests).
+Subdirectories are **not** compiled as binaries — they hold modules a
+top-level entry file pulls in with `mod`. The standard layout:
+
+```text frame="none"
+crates/nestrs-authn/
+├── src/
+│   ├── error.rs
+│   ├── jwt/
+│   │   ├── config.rs
+│   │   └── service.rs
+│   └── password/
+│       └── hash.rs
+└── tests/
+    ├── jwt.rs              ← one binary, tests/jwt/*.rs modules under it
+    ├── jwt/
+    │   ├── config.rs
+    │   └── service.rs
+    ├── password.rs         ← another binary
+    └── common/
+        └── mod.rs          ← shared helpers, not its own binary
+```
+
+Each `tests/*.rs` is a normal Rust crate root: declare its modules with
+`mod`, pull in shared helpers from `tests/common/mod.rs`.
+
+```rust title="crates/nestrs-authn/tests/jwt.rs"
+mod common;
+mod jwt;
+```
+
+## One file or many?
+
+Cargo allows both — pick by build cost and harness coherence:
+
+- **One file per concern cluster.** A binary per test file means Cargo
+  links the crate once per file; bundling related tests cuts link time.
+  Group tests that share setup (e.g. all JWT tests under `tests/jwt.rs`).
+- **Separate files for independent concerns.** A test suite that does
+  not share helpers with another belongs in its own binary, so a
+  rebuild of one does not relink the other.
+- **One file is fine for a small crate.** `tests/<crate-short>.rs` with
+  every module declared inside it is a reasonable default until the
+  build cost shows up.
+
+## Shared helpers — `tests/common/mod.rs`
+
+The [official Rust idiom](https://doc.rust-lang.org/book/ch11-03-test-organization.html#submodules-in-integration-tests)
+for shared test helpers: put them in `tests/common/mod.rs`, not
+`tests/common.rs`. The `mod.rs` form keeps Cargo from compiling them as
+their own integration test binary.
+
+```rust title="crates/nestrs-authn/tests/common/mod.rs"
+pub const DEV_PRIVATE_KEY: &str = include_str!("../fixtures/dev.key");
+pub const DEV_PUBLIC_KEY: &str = include_str!("../fixtures/dev.pub");
+```
+
+```rust title="crates/nestrs-authn/tests/jwt/config.rs"
+use nestrs_authn::{JwtConfig, JwtKey, JwtService};
+
+#[test]
+fn into_options_selects_eddsa_from_key_pair() {
+    let options = JwtConfig {
+        private_key: Some(crate::common::DEV_PRIVATE_KEY.into()),
+        public_key: Some(crate::common::DEV_PUBLIC_KEY.into()),
+        ..Default::default()
+    }
+    .into_options()
+    .expect("options");
+    assert!(matches!(options.key, JwtKey::Pem { .. }));
+    JwtService::new(options).expect("EdDSA service builds");
+}
+```
+
+## Cross-crate framework wiring
+
+`crates/nestrs-testing/tests/*.rs` is the home for harnesses that
+exercise framework wiring across crates — boot-time access-graph
+rejection, lifecycle hook ordering, transport contribution. One file
+per behaviour cluster, same Cargo conventions.
+
+## When a crate owns persistence
+
+If the crate genuinely owns database access (e.g. `nestrs-database`
+itself), a real Postgres via
+[`EphemeralDatabase`](/testing/e2e/#ephemeral-postgres) is fair game in
+its integration tests. A test that mocks the database to assert query
+shape belongs deleted, not rewritten — the queries are exercised
+end-to-end against a real engine.

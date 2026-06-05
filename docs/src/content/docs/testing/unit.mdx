@@ -1,0 +1,104 @@
+---
+title: Unit tests
+description: Pure logic next to the code it exercises — #[cfg(test)] mod tests inside src/, Rust's standard home.
+sidebar:
+  order: 2
+---
+
+A unit test exercises one piece of logic next to the code that defines
+it. It runs in microseconds, breaks one line at a time, and reaches
+private items the integration tree cannot see.
+
+## Where they live
+
+`#[cfg(test)] mod tests` inside the `src/` file under test —
+[Rust's standard layout](https://doc.rust-lang.org/book/ch11-03-test-organization.html#the-tests-module-and-cfgtest):
+
+```rust title="crates/features/src/pricing/core/service.rs"
+use nestrs_core::injectable;
+
+#[injectable]
+pub struct PricingService {}
+
+impl PricingService {
+    pub fn apply_discount(amount_cents: u64, percent: u8) -> u64 {
+        if percent >= 100 {
+            return 0;
+        }
+        amount_cents * (100 - percent as u64) / 100
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_discount_leaves_amount_unchanged() {
+        assert_eq!(PricingService::apply_discount(10_000, 0), 10_000);
+    }
+
+    #[test]
+    fn fifty_percent_halves_amount() {
+        assert_eq!(PricingService::apply_discount(10_000, 50), 5_000);
+    }
+
+    #[test]
+    fn full_discount_zeroes_amount() {
+        assert_eq!(PricingService::apply_discount(10_000, 100), 0);
+    }
+}
+```
+
+`#[cfg(test)]` strips the module from non-test builds, so it costs
+nothing at runtime. `use super::*;` brings the parent module's items
+into scope — that visibility is the reason to keep the test next to
+the code instead of moving it to `tests/`.
+
+`apply_discount` does not reach the injected fields, so the test calls
+it as an associated function — no DI boot, no `&self`. The methods on
+the same service that do load or persist get tested through the app
+e2e instead.
+
+## What belongs here
+
+- **Pure methods on a service** — calculations, validations,
+  formatters, anything that takes inputs and returns outputs without
+  reaching the injected dependencies. Call them as associated
+  functions, or extract the logic onto a value type.
+- **Pure functions and value types in `core/`** — parsers, conversions,
+  arithmetic on domain types.
+- **Trait impls with a knowable shape** — a `Display`, a `From`, an
+  error → response mapping.
+- **Private helpers** the public API delegates to, when asserting them
+  directly is clearer than going through the surface.
+
+## What does not
+
+- **Anything that needs `#[inject]` fields.** A service built through
+  the DI graph is by design exercised through it. Test it as an
+  integration test (its public API, hand-constructed) or as an app e2e
+  (boots the real graph).
+- **Anything that touches the database.** A repository test is
+  integration at best — use `EphemeralDatabase` and an e2e test.
+- **Anything that asserts wiring** — that a guard fires, that a
+  controller is mounted, that the access graph rejects a missing
+  import. Wiring lives in app e2e.
+
+## Refactor for testability
+
+When a hot path resists unit testing, extract the pure piece:
+
+- Move the calculation out of the service method into a free function
+  or a `pub fn` on the value type.
+- Add a `Type::new(deps)` constructor by hand alongside the
+  `#[injectable]` one when a test needs to instantiate the type without
+  the container.
+- Parse at the edge with [`validator`](https://crates.io/crates/validator)
+  / [`uuid`](https://crates.io/crates/uuid) so the parsed value is
+  plain data to assert against.
+
+A type that can only be built by the container, and only exercised
+through a request, is fine — that is what app e2e is for. Use unit
+tests where the assertion lives one return value away from the input,
+and integration tests where it lives behind the crate's public API.

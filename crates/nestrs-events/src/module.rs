@@ -3,13 +3,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nestrs_core::{
-    Container, ContainerBuilder, DiscoveryService, LifecycleHook, LifecyclePhase, Module,
+    Container, ContainerBuilder, LifecycleHook, LifecyclePhase, Module, ReachableProviders,
+    inventory,
 };
 
-use crate::{EventBus, EventHandlerMeta};
+use crate::{EventBus, ListenerMethod};
 
-/// Registers the [`EventBus`] and wires every discovered `#[on_event]` at
-/// application bootstrap against the fully-assembled container.
+/// Registers the [`EventBus`] and wires every discovered `#[on_event]` method
+/// at application bootstrap against the fully-assembled container.
 pub struct EventModule;
 
 impl Module for EventModule {
@@ -26,25 +27,36 @@ nestrs_core::inventory::submit! {
     LifecycleHook {
         phase: LifecyclePhase::OnApplicationBootstrap,
         provider: "EventModule",
-        method: "wire_handlers",
-        run: wire_handlers,
+        method: "wire_listeners",
+        run: wire_listeners,
     }
 }
 
-fn wire_handlers(
+fn wire_listeners(
     container: &Container,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
         let Some(bus) = container.get::<EventBus>() else {
             return Ok(());
         };
-        let discovery = DiscoveryService::new(container);
-        for handler in discovery.meta::<EventHandlerMeta>() {
-            (handler.meta.wire)(container, &bus);
+        let reachable = container.get::<ReachableProviders>();
+        for entry in inventory::iter::<ListenerMethod>() {
+            let provider_id = (entry.provider_type_id)();
+            if let Some(r) = reachable.as_ref()
+                && !r.0.contains(&provider_id)
+            {
+                tracing::debug!(
+                    target: "nestrs::events",
+                    listener = entry.name,
+                    "skipped #[on_event] method: provider unreachable from app's module tree",
+                );
+                continue;
+            }
+            (entry.wire)(container, &bus);
             tracing::debug!(
                 target: "nestrs::events",
-                handler = handler.meta.name,
-                "wired event handler",
+                listener = entry.name,
+                "wired event listener",
             );
         }
         Ok(())

@@ -1,23 +1,20 @@
-//! Typed in-process event bus with decorator-registered handlers.
+//! Typed in-process event bus with decorator-registered listeners.
 //!
-//! An event is any `Clone + Send + 'static`. A handler is a `#[on_event]`
-//! struct that implements [`EventHandler`]; listing it in
-//! `#[module(providers = [...])]` (with `EventModule` imported) wires it from
-//! the fully-assembled container.
+//! An event is any `Clone + Send + 'static`. Listeners live as methods on a
+//! regular `#[injectable]` provider, grouped under `#[listeners]` on the
+//! `impl` block, each tagged `#[on_event]`. Listing the provider in
+//! `#[module(providers = [...])]` (with `EventModule` imported) wires every
+//! listener from the fully-assembled container at bootstrap.
 //!
-//! Dispatch is in-process and awaited: every handler registered for the event
-//! type runs in registration order, each with its own clone.
+//! Dispatch is in-process and awaited: every listener registered for the
+//! event type runs in registration order, each with its own clone.
 
 mod bus;
-mod handler;
 mod meta;
 mod module;
 
 pub use bus::EventBus;
-pub use handler::EventHandler;
-pub use meta::EventHandlerMeta;
+pub use meta::ListenerMethod;
 pub use module::EventModule;
 
-pub use nestrs_events_macros::on_event;
-
-pub use async_trait::async_trait;
+pub use nestrs_events_macros::listeners;

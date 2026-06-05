@@ -1,29 +1,49 @@
-//! The `#[on_event]` decorator, re-exported by `nestrs-events`.
+//! The `#[listeners]` decorator macro, re-exported by `nestrs-events`.
 
 use proc_macro::TokenStream;
 
-mod on_event;
+mod listeners;
 
-/// Mark a struct as an event handler, discovered like a controller or cron job.
+/// Orchestrator on a provider's `impl` block. Walks the methods; for each one
+/// tagged with `#[on_event]`, subscribes a closure to the
+/// [`EventBus`](../nestrs_events/struct.EventBus.html) at bootstrap and
+/// submits a `ListenerMethod` to the link-time inventory the
+/// [`EventModule`](../nestrs_events/struct.EventModule.html) drains.
 ///
-/// `#[inject]` fields resolve from the container; the struct must implement
-/// [`EventHandler`](../nestrs_events/trait.EventHandler.html).
+/// The struct itself must be a regular `#[injectable]`. Multiple `#[on_event]`
+/// methods on the same impl block share the provider's `#[inject]`
+/// dependencies — the pattern the framework is built for.
+///
+/// Per-method requirements (one `#[on_event]` per method):
+///
+/// - `async fn(&self, event: T)` — the event type `T` is read from the second
+///   parameter; the bus enforces `T: Clone + Send + 'static`.
+/// - Returns `()` — events are fire-and-forget, handle errors inside.
+///
+/// `#[on_event]` is a pure marker consumed by `#[listeners]` — using it
+/// outside a `#[listeners]` impl block fails the same way `#[get]` outside
+/// `#[routes]` does.
 ///
 /// ```ignore
-/// #[on_event]
-/// pub struct SendWelcomeEmail {
-///     #[inject] mailer: std::sync::Arc<Mailer>,
+/// #[injectable]
+/// pub struct PointsHandlers {
+///     #[inject] svc: std::sync::Arc<Ledger>,
 /// }
 ///
-/// #[nestrs_events::async_trait]
-/// impl nestrs_events::EventHandler for SendWelcomeEmail {
-///     type Event = UserRegistered;
-///     async fn handle(&self, event: UserRegistered) {
-///         self.mailer.welcome(event.email).await;
+/// #[listeners]
+/// impl PointsHandlers {
+///     #[on_event]
+///     async fn on_awarded(&self, e: PointsAwarded) {
+///         self.svc.credit(e.user_id, e.amount).await;
+///     }
+///
+///     #[on_event]
+///     async fn on_redeemed(&self, e: PointsRedeemed) {
+///         self.svc.debit(e.user_id, e.amount).await;
 ///     }
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn on_event(args: TokenStream, input: TokenStream) -> TokenStream {
-    on_event::on_event(args, input)
+pub fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
+    listeners::listeners(args, input)
 }

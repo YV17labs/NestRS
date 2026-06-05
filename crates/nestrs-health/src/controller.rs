@@ -3,46 +3,40 @@ use std::sync::Arc;
 use nestrs_http::{controller, routes};
 use poem::{Response, http::StatusCode};
 
-use crate::service::HealthCheck;
+use crate::indicator::{IndicatorStatus, ProbeKind, ProbeReport};
+use crate::service::HealthService;
 
 #[controller(path = "/health")]
 pub struct HealthController {
     #[inject]
-    svc: Arc<dyn HealthCheck>,
+    svc: Arc<HealthService>,
 }
 
 #[routes]
 impl HealthController {
     #[get("/live")]
     async fn live(&self) -> Response {
-        if self.svc.is_live().await {
-            Response::builder().status(StatusCode::OK).body("ok")
-        } else {
-            Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .body("dead")
-        }
+        respond(self.svc.probe(ProbeKind::Liveness).await)
     }
 
     #[get("/ready")]
     async fn ready(&self) -> Response {
-        if self.svc.is_ready().await {
-            Response::builder().status(StatusCode::OK).body("ready")
-        } else {
-            Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .body("not ready")
-        }
+        respond(self.svc.probe(ProbeKind::Readiness).await)
     }
 
     #[get("/startup")]
     async fn startup(&self) -> Response {
-        if self.svc.is_started().await {
-            Response::builder().status(StatusCode::OK).body("started")
-        } else {
-            Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .body("starting")
-        }
+        respond(self.svc.probe(ProbeKind::Startup).await)
     }
+}
+
+fn respond(report: ProbeReport) -> Response {
+    let status = match report.status {
+        IndicatorStatus::Up => StatusCode::OK,
+        IndicatorStatus::Down => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    Response::builder()
+        .status(status)
+        .content_type("application/json")
+        .body(serde_json::to_vec(&report).unwrap_or_default())
 }

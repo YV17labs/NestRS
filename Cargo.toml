@@ -176,6 +176,7 @@ nestrs-macros = { version = "0.1.0", path = "crates/nestrs-macros" }
 nestrs-graphql = { version = "0.1.0", path = "crates/nestrs-graphql" }
 nestrs-graphql-macros = { version = "0.1.0", path = "crates/nestrs-graphql-macros" }
 nestrs-health = { version = "0.1.0", path = "crates/nestrs-health" }
+nestrs-health-macros = { version = "0.1.0", path = "crates/nestrs-health-macros" }
 nestrs-http = { version = "0.1.0", path = "crates/nestrs-http" }
 nestrs-http-macros = { version = "0.1.0", path = "crates/nestrs-http-macros" }
 nestrs-mcp = { version = "0.1.0", path = "crates/nestrs-mcp" }

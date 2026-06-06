@@ -34,8 +34,21 @@ tokio-util.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+# `serde` derives `Serialize` on the RFC 9457 `ProblemDetails` body so the
+# response carries an `application/problem+json` payload.
+serde.workspace = true
+# `RawBody` returns the body as `bytes::Bytes` (zero-copy view) with a size
+# guard.
+bytes.workspace = true
 
 [dev-dependencies]
 # Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
 # the `Json<T>` extractor in `from_request` test paths.
 serde.workspace = true
+# `tests/global_prefix.rs` drives an in-process server through poem's
+# `TestClient`, gated behind poem's `test` feature.
+poem = { workspace = true, features = ["test"] }
+tokio.workspace = true
+# `tests/global_prefix.rs` env-path test isolates the process env via
+# `figment::Jail`, matching how `nestrs-config` itself tests env reads.
+figment = { workspace = true, features = ["test"] }

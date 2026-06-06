@@ -96,16 +96,6 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { , #(#inputs),* }
         };
 
-        wrappers.push(quote! {
-            #[::poem::handler]
-            async fn #wrapper_name(
-                ::poem::web::Data(__ctrl): ::poem::web::Data<&::std::sync::Arc<#self_ty>>
-                #extra_inputs
-            ) -> #return_type {
-                __ctrl.#method_name(#(#arg_idents),*).await
-            }
-        });
-
         let guards = match take_use_attr(&mut method.attrs, "use_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
@@ -118,6 +108,53 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
+
+        // Drained after the `use_*` attributes so error spans for a misuse of
+        // a response decorator point past the layers — and *before* emitting
+        // the wrapper fn so the wrapper's return type and body reflect any
+        // status / header / redirect override. The method's block is forwarded
+        // so `#[redirect]` can reject a non-empty body (which the macro would
+        // silently drop).
+        let response_decorators = match crate::response_decorators::take_response_decorators(
+            &mut method.attrs,
+            &method.block,
+        ) {
+            Ok(d) => d,
+            Err(err) => return err.to_compile_error().into(),
+        };
+
+        let call_expr = quote! { __ctrl.#method_name(#(#arg_idents),*).await };
+        let returns_result = match &method.sig.output {
+            ReturnType::Type(_, ty) => result_inner(ty).is_some(),
+            ReturnType::Default => false,
+        };
+        let (wrapper_return_type, wrapper_body) = if response_decorators.is_empty() {
+            (return_type.clone(), call_expr)
+        } else {
+            let mut wrapper_args: Vec<syn::Ident> = Vec::with_capacity(arg_idents.len() + 1);
+            wrapper_args.push(syn::Ident::new("__ctrl", proc_macro2::Span::call_site()));
+            wrapper_args.extend(arg_idents.iter().cloned());
+            let body = crate::response_decorators::apply_response_decorators(
+                &response_decorators,
+                call_expr,
+                &wrapper_args,
+                returns_result,
+            );
+            (
+                quote! { ::poem::Result<::poem::Response> },
+                body,
+            )
+        };
+
+        wrappers.push(quote! {
+            #[::poem::handler]
+            async fn #wrapper_name(
+                ::poem::web::Data(__ctrl): ::poem::web::Data<&::std::sync::Arc<#self_ty>>
+                #extra_inputs
+            ) -> #wrapper_return_type {
+                #wrapper_body
+            }
+        });
 
         let mut metas: Vec<Expr> = Vec::new();
         while let Some(m_idx) = method.attrs.iter().position(|a| a.path().is_ident("meta")) {
@@ -419,12 +456,24 @@ fn request_payload(inputs: &[FnArg]) -> Option<Type> {
     })
 }
 
+/// `Some(T)` when `ty` is `Result<T, _>`, `None` otherwise. Detects the
+/// unqualified last-segment ident `Result` — it does not resolve type
+/// aliases (proc-macros have no name resolution), so a feature-local
+/// alias whose last segment is `Result` is matched while a renamed
+/// `type Outcome<T, E> = Result<T, E>;` is not. That limitation is
+/// acceptable: drives both response-payload schema capture and the
+/// `Err` short-circuit in `apply_response_decorators`, and a non-`Result`
+/// caller cannot accidentally match.
+pub(crate) fn result_inner(ty: &Type) -> Option<&Type> {
+    nth_generic_type(ty, "Result", 0)
+}
+
 /// The JSON payload type of a handler's return — strips one optional `Result`
 /// then a `Json`. Non-JSON returns yield `None`.
 fn response_payload(output: &ReturnType) -> Option<Type> {
     let ReturnType::Type(_, ty) = output else {
         return None;
     };
-    let inner = nth_generic_type(ty, "Result", 0).unwrap_or(ty);
+    let inner = result_inner(ty).unwrap_or(ty);
     nth_generic_type(inner, "Json", 0).cloned()
 }

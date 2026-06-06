@@ -4,12 +4,44 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::format_ident;
 use syn::parse::Parse;
-use syn::{Fields, Ident, ItemStruct, LitStr, Token, Type};
+use syn::{
+    Fields, GenericArgument, Ident, ItemStruct, LitStr, Path, PathArguments, Token, Type, TypePath,
+};
+
+/// SeaORM marker on a relation field: `HasOne<T>` ⇔ `belongs_to`,
+/// `HasMany<T>` ⇔ `has_many`. Kept typed (not stringly) so a rename or typo
+/// on either side fails at compile rather than as a silent scalar fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cardinality {
+    One,
+    Many,
+}
+
+/// What kind of SeaORM association the field declares.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RelationKind {
+    /// Owner of the foreign key — `#[sea_orm(belongs_to, from = …, to = …)]`
+    /// paired with `HasOne<T>`. Resolves to one target via its PK loader.
+    BelongsTo {
+        /// FK column on the current entity (e.g. `org_id`).
+        from: Ident,
+        /// `crate::orgs::Entity` (the path written between `HasOne<…>`).
+        target: Path,
+    },
+    /// Inverse side — `#[sea_orm(has_many)]` on a `HasMany<T>`. The target's
+    /// own `belongs_to` macro is responsible for emitting the FK loader; this
+    /// side only consumes `RelatedTo<Self::Entity>::Loader`.
+    HasMany {
+        /// `crate::users::Entity`.
+        target: Path,
+    },
+}
 
 pub struct ResourceField {
     pub ident: Ident,
     pub ty: Type,
-    /// Excluded from the GraphQL output type.
+    /// Excluded from the GraphQL output type AND, when this is a relation,
+    /// from auto-generated field-resolver emission.
     pub skip: bool,
     pub in_create: bool,
     pub in_update: bool,
@@ -18,11 +50,17 @@ pub struct ResourceField {
     pub is_pk: bool,
     /// Re-emitted verbatim as `#[validate(...)]` on the input field.
     pub validate: Vec<TokenStream2>,
+    /// Detected `HasOne<T>` / `HasMany<T>` association. Drives auto-generated
+    /// field resolvers + loader trait impls. Scalar columns leave this `None`.
+    pub relation: Option<RelationKind>,
 }
 
 impl ResourceField {
-    pub fn in_output(&self) -> bool {
-        !self.skip
+    /// True iff the field belongs in the output struct as a plain column. A
+    /// relation never does — it is materialised by a `#[ComplexObject]` field
+    /// resolver (or skipped entirely).
+    pub fn in_output_struct(&self) -> bool {
+        !self.skip && self.relation.is_none()
     }
 }
 
@@ -33,18 +71,36 @@ pub struct ResourceModel {
     pub update_input_ident: Ident,
     pub page_ident: Ident,
     pub fields: Vec<ResourceField>,
-    /// Emit `#[graphql(complex)]` so a bespoke `#[field]` resolver can attach.
+    /// Path to the entity's service, used as the receiver of auto-generated
+    /// `#[dataloader]` impls. Required when any non-skip relation is present.
+    pub service: Option<Path>,
+    /// Emit `#[graphql(complex)]` on the output. Set explicitly via
+    /// `complex` or implicitly when any non-skip relation calls for a
+    /// `#[ComplexObject]`.
     pub complex: bool,
     pub paginate: bool,
 }
 
+impl ResourceModel {
+    /// True iff at least one non-skip relation needs a `#[ComplexObject]`.
+    pub fn has_auto_relations(&self) -> bool {
+        self.fields
+            .iter()
+            .any(|f| !f.skip && f.relation.is_some())
+    }
+}
+
 pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceModel> {
     let mut name: Option<String> = None;
+    let mut service: Option<Path> = None;
     let mut complex = false;
     let mut paginate = false;
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
             name = Some(meta.value()?.parse::<LitStr>()?.value());
+            Ok(())
+        } else if meta.path.is_ident("service") {
+            service = Some(meta.value()?.parse::<Path>()?);
             Ok(())
         } else if meta.path.is_ident("complex") {
             complex = true;
@@ -54,7 +110,7 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
             Ok(())
         } else {
             Err(meta.error(
-                "unknown #[expose(...)] option (expected `name = \"...\"`, `complex`, or `paginate`)",
+                "unknown #[expose(...)] option (expected `name = \"...\"`, `service = …`, `complex`, or `paginate`)",
             ))
         }
     });
@@ -85,21 +141,42 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
         let mut in_update = false;
         let mut validate = Vec::new();
 
-        // Detect the PK from the untouched `#[sea_orm(...)]` attrs so `create`
-        // can seed a UUID v7. Name-value pairs (e.g. `from = "col"`) must be
-        // consumed for the meta parser to advance; errors are ignored — an
-        // unreadable column simply is not flagged as PK.
+        // Pull PK + relation column info out of the `#[sea_orm(...)]` attrs in
+        // the same pass. The attrs stay on the field so SeaORM still owns them
+        // — we only read.
         let mut is_pk = false;
+        let mut is_belongs_to = false;
+        let mut is_has_many = false;
+        let mut from_col: Option<String> = None;
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("sea_orm")) {
-            let _ = attr.parse_nested_meta(|m| {
+            // Surface a sea_orm-side parse failure — silently swallowing it
+            // (the previous `let _ = ...`) hid malformed `from = some_expr`
+            // shapes behind a downstream 'missing from' diagnostic.
+            attr.parse_nested_meta(|m| {
                 if m.path.is_ident("primary_key") {
                     is_pk = true;
-                }
-                if m.input.peek(Token![=]) {
+                } else if m.path.is_ident("belongs_to") {
+                    is_belongs_to = true;
+                    // Legacy `belongs_to = "Path"` form: accept and ignore the
+                    // value. The flat form (`#[sea_orm(belongs_to, …)]`) is the
+                    // canonical one in this repo.
+                    if m.input.peek(Token![=]) {
+                        let _: syn::Expr = m.value()?.parse()?;
+                    }
+                } else if m.path.is_ident("has_many") {
+                    is_has_many = true;
+                    if m.input.peek(Token![=]) {
+                        let _: syn::Expr = m.value()?.parse()?;
+                    }
+                } else if m.path.is_ident("from") {
+                    from_col = Some(m.value()?.parse::<LitStr>()?.value());
+                } else if m.input.peek(Token![=]) {
+                    // Any other key-value pair — consume so the meta parser
+                    // can advance past it without erroring.
                     let _: syn::Expr = m.value()?.parse()?;
                 }
                 Ok(())
-            });
+            })?;
         }
 
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("expose")) {
@@ -141,6 +218,44 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
 
         field.attrs.retain(|a| !a.path().is_ident("expose"));
 
+        // Type-driven relation detection. `HasOne<T>` paired with `belongs_to`
+        // ⇒ BelongsTo; `HasMany<T>` paired with `has_many` ⇒ HasMany. A type
+        // marker without its matching sea_orm marker is a user mistake worth
+        // surfacing — silently treating it as a scalar drops the field into
+        // the `SimpleObject` derive where it explodes with a cryptic
+        // 'HasOne does not impl OutputType' span on the macro expansion.
+        let card = relation_cardinality(&ty);
+        let relation = match (card, is_belongs_to, is_has_many) {
+            (Some((Cardinality::One, target)), true, _) => {
+                let from = from_col.ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        &field.ident,
+                        "`belongs_to` relation needs `#[sea_orm(from = \"...\")]`",
+                    )
+                })?;
+                Some(RelationKind::BelongsTo {
+                    from: format_ident!("{}", from),
+                    target,
+                })
+            }
+            (Some((Cardinality::Many, target)), _, true) => {
+                Some(RelationKind::HasMany { target })
+            }
+            (Some((Cardinality::One, _)), false, _) => {
+                return Err(syn::Error::new_spanned(
+                    &field.ident,
+                    "`HasOne<T>` field is missing its `#[sea_orm(belongs_to, from = \"...\", to = \"...\")]` marker",
+                ));
+            }
+            (Some((Cardinality::Many, _)), _, false) => {
+                return Err(syn::Error::new_spanned(
+                    &field.ident,
+                    "`HasMany<T>` field is missing its `#[sea_orm(has_many)]` marker",
+                ));
+            }
+            _ => None,
+        };
+
         fields.push(ResourceField {
             ident,
             ty,
@@ -149,6 +264,7 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
             in_update,
             is_pk,
             validate,
+            relation,
         });
     }
 
@@ -159,9 +275,31 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
         update_input_ident: format_ident!("Update{}Input", name_ident),
         page_ident: format_ident!("{}Page", name_ident),
         fields,
+        service,
         complex,
         paginate,
     })
+}
+
+/// Match `HasOne<T>` / `HasMany<T>` on the last path segment. Returns the
+/// cardinality and the inner target path.
+fn relation_cardinality(ty: &Type) -> Option<(Cardinality, Path)> {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return None;
+    };
+    let last = path.segments.last()?;
+    let card = match last.ident.to_string().as_str() {
+        "HasOne" => Cardinality::One,
+        "HasMany" => Cardinality::Many,
+        _ => return None,
+    };
+    let PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    let GenericArgument::Type(Type::Path(target)) = args.args.first()? else {
+        return None;
+    };
+    Some((card, target.path.clone()))
 }
 
 /// `true` when the type's last path segment is `Uuid` (rendered as `String` in

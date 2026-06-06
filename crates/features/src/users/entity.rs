@@ -2,7 +2,7 @@ use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[expose(name = "User", complex)]
+#[expose(name = "User", service = super::service::UsersService)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(
@@ -23,7 +23,6 @@ pub struct Model {
     #[expose(skip)]
     pub password_hash: Option<String>,
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
-    #[expose(skip)]
     pub org: HasOne<crate::orgs::Entity>,
 }
 

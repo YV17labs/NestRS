@@ -21,7 +21,7 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     if !args.is_empty() {
         return syn::Error::new_spanned(
             &args,
-            "#[resolver] takes no arguments; tag methods with `#[query]` / `#[mutation]`",
+            "#[resolver] takes no arguments; tag methods with `#[query]` / `#[mutation]` / `#[field_resolver]`",
         )
         .to_compile_error()
         .into();
@@ -63,7 +63,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let from_container = from_container_method(&ctor);
     // The struct's `#[inject]` keys, exposed for the impl-block macro to fold
     // into `Discoverable::injected` together with operation guards and
-    // `#[field]` `&Service` deps. Same struct/impl split as
+    // `#[field_resolver]` `&Service` deps. Same struct/impl split as
     // `#[controller]`/`#[routes]`.
     let injected_keys = injected_keys_expr(&dep_keys);
 
@@ -225,10 +225,10 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
     let mut query_methods: Vec<TokenStream2> = Vec::new();
     let mut mutation_methods: Vec<TokenStream2> = Vec::new();
     // async-graphql wants one `#[ComplexObject]` per parent type, so a
-    // resolver's `#[field]` methods for the same parent merge into one impl.
+    // resolver's `#[field_resolver]` methods for the same parent merge into one impl.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
     // Extra access-contract deps on top of the struct's `#[inject]` keys:
-    // operation guards + `#[field]` `&Service` injections.
+    // operation guards + `#[field_resolver]` `&Service` injections.
     let mut all_guard_paths: Vec<Path> = resolver_guards.clone();
     let mut field_dep_types: Vec<Type> = Vec::new();
 
@@ -240,7 +240,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         let verb_idx = method.attrs.iter().position(|a| {
             a.path().is_ident("query")
                 || a.path().is_ident("mutation")
-                || a.path().is_ident("field")
+                || a.path().is_ident("field_resolver")
         });
         let Some(idx) = verb_idx else { continue };
 
@@ -251,14 +251,14 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             Err(err) => return err.to_compile_error().into(),
         };
         all_guard_paths.extend(method_guards.iter().cloned());
-        // `#[field]` skips resolver-level guards: a field resolver runs
-        // per-row, and the operation's auth posture is already enforced by
-        // the operation guard plus the resolver-level guard on the root
+        // `#[field_resolver]` skips resolver-level guards: a field resolver
+        // runs per-row, and the operation's auth posture is already enforced
+        // by the operation guard plus the resolver-level guard on the root
         // query/mutation. Running it per row would just re-probe the
-        // ability for every element. A `#[field]` needing its own gate
-        // still binds `#[use_guards]` at the method level. The access graph
-        // still sees the resolver-level dependency via `all_guard_paths`.
-        let is_field = verb_attr.path().is_ident("field");
+        // ability for every element. A `#[field_resolver]` needing its own
+        // gate still binds `#[use_guards]` at the method level. The access
+        // graph still sees the resolver-level dependency via `all_guard_paths`.
+        let is_field = verb_attr.path().is_ident("field_resolver");
         let op_guards: Vec<Path> = if is_field {
             method_guards
         } else {
@@ -341,7 +341,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
     });
 
     // `Discoverable::injected` = struct `#[inject]` keys + operation guards +
-    // `#[field]` deps. `register` is a no-op: the schema builds the resolver
+    // `#[field_resolver]` deps. `register` is a no-op: the schema builds the resolver
     // from the assembled container at boot.
     let mut layer_keys = layer_inject_keys(all_guard_paths.iter());
     layer_keys.extend(layer_inject_keys(field_dep_types.iter()));
@@ -385,7 +385,7 @@ fn field_method(
         _ => {
             return Err(syn::Error::new_spanned(
                 sig,
-                "#[field] method needs a `&self` receiver (services come from the resolver's `#[inject]` fields)",
+                "#[field_resolver] method needs a `&self` receiver (services come from the resolver's `#[inject]` fields)",
             ));
         }
     }
@@ -393,19 +393,19 @@ fn field_method(
     let parent = inputs.next().ok_or_else(|| {
         syn::Error::new_spanned(
             sig,
-            "#[field] method needs a parent argument `parent: &ParentType` — the object being resolved",
+            "#[field_resolver] method needs a parent argument `parent: &ParentType` — the object being resolved",
         )
     })?;
     let FnArg::Typed(parent) = parent else {
         return Err(syn::Error::new_spanned(
             parent,
-            "#[field] parent argument must be typed",
+            "#[field_resolver] parent argument must be typed",
         ));
     };
     let Type::Reference(parent_ref) = &*parent.ty else {
         return Err(syn::Error::new_spanned(
             &parent.ty,
-            "#[field] parent argument must be a reference `&ParentType`",
+            "#[field_resolver] parent argument must be a reference `&ParentType`",
         ));
     };
     let parent_ty = (*parent_ref.elem).clone();
@@ -439,7 +439,7 @@ fn field_method(
                 call_args.push(quote! { #dep });
             } else {
                 let msg = format!(
-                    "#[field] `{}`: no provider registered for `{}`",
+                    "#[field_resolver] `{}`: no provider registered for `{}`",
                     method_name,
                     quote!(#dep_ty),
                 );

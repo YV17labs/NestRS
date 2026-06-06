@@ -5,7 +5,7 @@ apps, built on [async-graphql](https://docs.rs/async-graphql) and served
 over HTTP through [async-graphql-poem](https://docs.rs/async-graphql-poem)
 on the `nest-rs-http` transport.
 
-`#[resolver]` on an impl block scans `#[query]` / `#[mutation]` / `#[field]`
+`#[resolver]` on an impl block scans `#[query]` / `#[mutation]` / `#[field_resolver]`
 methods and submits them to a link-time `inventory` registry. The schema
 roots `DiscoveredQuery` / `DiscoveredMutation` merge fields from the
 registry at runtime (filtered by `ReachableProviders` for module-gating) —

@@ -13,7 +13,7 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
     let mut decls = Vec::new();
     let mut inits = Vec::new();
 
-    for field in model.fields.iter().filter(|f| f.in_output()) {
+    for field in model.fields.iter().filter(|f| f.in_output_struct()) {
         let name = &field.ident;
         if is_uuid(&field.ty) {
             decls.push(quote! { pub #name: ::std::string::String });

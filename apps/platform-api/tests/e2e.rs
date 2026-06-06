@@ -652,19 +652,24 @@ async fn graphql_requires_a_jwt_and_scopes_to_the_callers_org() {
     );
 }
 
+// `User.org` and `Org.users` are auto-resolved by `#[expose]`: declaring the
+// `belongs_to` / `has_many` is the whole field-resolver story (no `#[field_resolver]`,
+// no `#[dataloader]` by hand). This pins both directions plus the ability
+// scope that flows through the generated PK/FK loaders — org B's users must
+// not surface in org A's `{ orgs { users { email } } }` view.
 #[tokio::test]
-async fn graphql_namesakes_field_stays_within_the_callers_org() {
+async fn graphql_auto_resolved_relations_respect_ability_scope() {
     let (_db, app) = boot().await;
     let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
-    let org_a = create_org(&app, &admin, "NsA").await;
-    let org_b = create_org(&app, &admin, "NsB").await;
+    let org_a = create_org(&app, &admin, "RelA").await;
+    let org_b = create_org(&app, &admin, "RelB").await;
     let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
     let token_b = format!("Bearer {}", token_for(&org_b, "admin").await);
 
     for (tok, email) in [
-        (&token_a, "twina@x.test"),
-        (&token_b, "twinb@x.test"),
-        (&token_a, "twina2@x.test"),
+        (&token_a, "ada@rel.test"),
+        (&token_a, "bea@rel.test"),
+        (&token_b, "leak@rel.test"),
     ] {
         app.http()
             .post("/users")
@@ -675,36 +680,80 @@ async fn graphql_namesakes_field_stays_within_the_callers_org() {
             .assert_status_is_ok();
     }
 
+    // BelongsTo: every user's `org` resolves to the same org id (and the
+    // caller's, since the user list is already org-scoped).
     let resp = app
         .http()
         .post("/graphql")
         .header(header::AUTHORIZATION, &token_a)
-        .body_json(&json!({ "query": "{ users { namesakes { email } } }" }))
+        .body_json(&json!({ "query": "{ users { id org { id } } }" }))
         .send()
         .await;
     resp.assert_status_is_ok();
     let body = resp.json().await;
-    let mut namesake_emails: Vec<String> = Vec::new();
-    for user in body
+    // async-graphql returns HTTP 200 with `errors: [...]` on resolver
+    // failures (missing loader, panicked field). Without an explicit absence
+    // assertion, a regression that registers no loader would surface as
+    // `data.users[].org = null + errors`, which the array walk below might
+    // still partially traverse — pin the absence here.
+    assert!(
+        body.value().object().get_opt("errors").is_none(),
+        "graphql response must not contain errors",
+    );
+    let users_a = body
         .value()
         .object()
         .get("data")
         .object()
         .get("users")
+        .array();
+    assert!(
+        users_a.iter().count() >= 2,
+        "org A must see its two seeded users (got {})",
+        users_a.iter().count(),
+    );
+    for u in users_a.iter() {
+        let org_id = u.object().get("org").object().get("id").string();
+        assert_eq!(org_id, org_a, "auto-resolved org must be caller's: {org_id}");
+    }
+
+    // HasMany: `{ orgs { users { email } } }` returns only org A's users,
+    // never org B's. The auto-generated FK loader runs Repo::scoped(Read)
+    // so the ability filter applies to each batched query.
+    let resp = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &token_a)
+        .body_json(&json!({ "query": "{ orgs { id users { email } } }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body = resp.json().await;
+    assert!(
+        body.value().object().get_opt("errors").is_none(),
+        "graphql response must not contain errors",
+    );
+    let mut seen: Vec<String> = Vec::new();
+    for org in body
+        .value()
+        .object()
+        .get("data")
+        .object()
+        .get("orgs")
         .array()
         .iter()
     {
-        for n in user.object().get("namesakes").array().iter() {
-            namesake_emails.push(n.object().get("email").string().to_owned());
+        for u in org.object().get("users").array().iter() {
+            seen.push(u.object().get("email").string().to_owned());
         }
     }
     assert!(
-        !namesake_emails.is_empty(),
-        "same-org namesakes still resolve",
+        seen.iter().any(|e| e == "ada@rel.test"),
+        "org A's own users must surface through the HasMany resolver: {seen:?}",
     );
     assert!(
-        !namesake_emails.contains(&"twinb@x.test".to_string()),
-        "org B's user must not leak through the namesakes field: {namesake_emails:?}",
+        !seen.contains(&"leak@rel.test".to_string()),
+        "org B's user must not leak through Org.users: {seen:?}",
     );
 }
 

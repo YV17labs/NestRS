@@ -148,7 +148,7 @@ pub fn forwarded_arg_idents(sig: &Signature) -> syn::Result<Vec<Ident>> {
 }
 
 /// [`forwarded_arg_idents`] over an arbitrary argument sequence — used when
-/// `#[resolver]`'s `#[field]` path drops the parent before forwarding.
+/// `#[resolver]`'s `#[field_resolver]` path drops the parent before forwarding.
 pub fn forwarded_idents<'a>(
     inputs: impl IntoIterator<Item = &'a FnArg>,
 ) -> syn::Result<Vec<Ident>> {
@@ -173,7 +173,7 @@ pub fn forwarded_idents<'a>(
 
 /// `TypeId::of::<P>()` for each referenced type a provider resolves from the
 /// container outside its `#[inject]` fields — guards, filters, interceptors,
-/// resolver `#[field]` `&Service` deps — deduplicated by token text. Feeding
+/// resolver `#[field_resolver]` `&Service` deps — deduplicated by token text. Feeding
 /// these into `Discoverable::injected` puts them under the access contract.
 pub fn layer_inject_keys<'a, T: ToTokens + 'a>(
     items: impl IntoIterator<Item = &'a T>,

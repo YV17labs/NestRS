@@ -10,6 +10,7 @@ mod attr;
 mod dto;
 mod expose;
 mod input;
+mod relations;
 mod wire;
 
 /// Expose a SeaORM entity to GraphQL + OpenAPI from one declaration. Emits a

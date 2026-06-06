@@ -75,7 +75,7 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         // Owned arg = the payload (deserialized from the envelope's `data`);
         // `&`-reference arg = the connected `WsClient`. At most one of each —
-        // same owned/reference split a `#[field]` resolver uses.
+        // same owned/reference split a `#[field_resolver]` resolver uses.
         let mut payload_ty: Option<&Type> = None;
         let mut takes_client = false;
         let mut call_args: Vec<TokenStream2> = Vec::new();

@@ -2,7 +2,7 @@ use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[expose(name = "Org", complex)]
+#[expose(name = "Org", service = super::service::OrgsService)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(
@@ -16,7 +16,6 @@ pub struct Model {
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
     #[sea_orm(has_many)]
-    #[expose(skip)]
     pub users: HasMany<crate::users::Entity>,
 }
 

@@ -2,8 +2,8 @@
 //! uses absolute paths, so this crate does not depend on the surface crate.
 //!
 //! Mirrors the HTTP `#[controller]`/`#[routes]` split: `#[resolver]` on a
-//! struct = construction (DI); on its impl = `#[query]`/`#[mutation]`/`#[field]`
-//! orchestration.
+//! struct = construction (DI); on its impl =
+//! `#[query]`/`#[mutation]`/`#[field_resolver]` orchestration.
 
 use proc_macro::TokenStream;
 
@@ -14,7 +14,7 @@ mod resolver;
 /// Mark a GraphQL resolver. On the struct: construction via the container
 /// (`from_container`). On its impl: `#[query]`/`#[mutation]` methods split
 /// into generated `#[Object]` roots and submitted to the link-time registry;
-/// `#[field]` methods become `#[ComplexObject]` impls on the parent type.
+/// `#[field_resolver]` methods become `#[ComplexObject]` impls on the parent type.
 ///
 /// `#[use_guards(...)]` on the impl block runs before every operation;
 /// per-method `#[use_guards(...)]` stacks inside it. A denial short-circuits
@@ -44,7 +44,7 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// registry — no `#[module(providers = [...])]` entry. The loader is
 /// **request-scoped**: rebuilt per request from the fully assembled container
 /// (so import order is irrelevant) and seeded into the GraphQL context, read
-/// by a `#[field]` as `&DataLoader<…>`.
+/// by a `#[field_resolver]` as `&DataLoader<…>`.
 #[proc_macro_attribute]
 pub fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
     dataloader::dataloader(args, input)

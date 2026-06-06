@@ -191,17 +191,6 @@ impl UsersService {
         Ok(group_users_by_name(names, rows))
     }
 
-    async fn by_org(&self, org_ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<User>>, ServiceError> {
-        if org_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        tracing::debug!(target: "nest_rs::loader", count = org_ids.len(), "loading users by org");
-        let rows = Repo::<Users>::scoped(Action::Read)
-            .filter(entity::Column::OrgId.is_in(org_ids.iter().cloned()))
-            .all(&Repo::<Users>::conn()?)
-            .await?;
-        Ok(group_users_by_org(org_ids, rows))
-    }
 }
 
 #[hooks]
@@ -221,17 +210,6 @@ fn group_users_by_name(names: &[String], rows: Vec<entity::Model>) -> HashMap<St
         .collect();
     for row in rows {
         if let Some(bucket) = buckets.get_mut(&row.name) {
-            bucket.push(User::from(&row));
-        }
-    }
-    buckets
-}
-
-fn group_users_by_org(org_ids: &[Uuid], rows: Vec<entity::Model>) -> HashMap<Uuid, Vec<User>> {
-    let mut buckets: HashMap<Uuid, Vec<User>> =
-        org_ids.iter().map(|org_id| (*org_id, Vec::new())).collect();
-    for row in rows {
-        if let Some(bucket) = buckets.get_mut(&row.org_id) {
             bucket.push(User::from(&row));
         }
     }
@@ -299,30 +277,6 @@ mod tests {
     fn group_by_name_returns_an_empty_map_when_no_names_requested() {
         let buckets = group_users_by_name(&[], vec![row("ada", Uuid::nil())]);
         assert!(buckets.is_empty());
-    }
-
-    #[test]
-    fn group_by_org_keeps_every_requested_org_as_a_bucket() {
-        let a = Uuid::now_v7();
-        let b = Uuid::now_v7();
-        let c = Uuid::now_v7();
-        let org_ids = vec![a, b, c];
-        let rows = vec![row("ada", a), row("bob", a), row("eve", b)];
-
-        let buckets = group_users_by_org(&org_ids, rows);
-        assert_eq!(buckets.len(), 3);
-        assert_eq!(buckets[&a].len(), 2);
-        assert_eq!(buckets[&b].len(), 1);
-        assert!(buckets[&c].is_empty(), "an org with no users keeps its bucket");
-    }
-
-    #[test]
-    fn group_by_org_drops_rows_not_in_the_requested_set() {
-        let a = Uuid::now_v7();
-        let other = Uuid::now_v7();
-        let buckets = group_users_by_org(&[a], vec![row("ada", a), row("eve", other)]);
-        assert_eq!(buckets.len(), 1);
-        assert_eq!(buckets[&a].len(), 1);
     }
 
     // The `active_for_new_user` helper carries the contract every insert
@@ -510,13 +464,6 @@ mod tests {
     async fn by_name_returns_empty_without_touching_the_executor_when_no_keys() {
         let svc = users_service_disconnected();
         let out = svc.by_name(&[]).await.expect("empty keys short-circuit");
-        assert!(out.is_empty());
-    }
-
-    #[tokio::test]
-    async fn by_org_returns_empty_without_touching_the_executor_when_no_keys() {
-        let svc = users_service_disconnected();
-        let out = svc.by_org(&[]).await.expect("empty keys short-circuit");
         assert!(out.is_empty());
     }
 

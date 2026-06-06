@@ -2,7 +2,7 @@
 //!
 //! `#[dataloader]` generates one batching loader per method and submits a
 //! [`LoaderRegistration`]. The loader is rebuilt per request and seeded into
-//! the GraphQL context by [`LoaderExtension`], where a `#[field]` reads it as
+//! the GraphQL context by [`LoaderExtension`], where a `#[field_resolver]` reads it as
 //! `&DataLoader<…>`. Per-request build makes module import order irrelevant:
 //! the container is fully assembled when the request arrives.
 

@@ -41,7 +41,7 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[expose(name = "Item", complex)]
+#[expose(name = "Item", service = super::service::ItemsService)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(
@@ -70,10 +70,23 @@ From this one declaration, `#[expose]` generates:
   `input(create)` / `input(update)`, with `validator` derives wired;
 - a GraphQL **`SimpleObject`** + an OpenAPI / **JSON Schema** for `Item`,
   both with the same field set;
+- a **PK dataloader** (`ItemsServiceById`) on `ItemsService`, so any
+  other entity holding a `belongs_to` to `Item` resolves through it
+  without an N+1;
 - `From<&Model>` for `Item` and `IntoActiveModel` for the inputs.
 
-`#[expose(skip)]` on a column **excludes it from every wire surface** —
-useful for private fields you do not want on the JSON / GraphQL body.
+`service = …` is required as soon as the entity declares any non-skip
+relation — the macro emits the PK loader on it. `#[expose(skip)]` on a
+column **excludes it from every wire surface** — useful for private
+fields you do not want on the JSON / GraphQL body.
+
+### Relations resolve themselves
+
+A SeaORM `belongs_to` / `has_many` field declared on the entity
+becomes a **GraphQL field auto-resolved through a dataloader** — see
+[GraphQL → Relation fields resolve themselves](/graphql/#relation-fields-resolve-themselves)
+for the full pattern. Opt a single relation out with `#[expose(skip)]`
+and write a hand-rolled `#[field_resolver]` if you need a custom shape.
 
 ## Write the service
 
@@ -169,6 +182,12 @@ A `#[dataloader]` is a batched DB read. Resolvers inject a
 `.load_one(key)` per parent — the framework batches every call into a
 single query.
 
+The **PK loader** (`<Service>ById`) and **FK loaders**
+(`<Service>By<Col>` for every `belongs_to`) are emitted automatically
+by `#[expose]`. Write `#[dataloader]` by hand only for a custom key —
+a `by_name`, a `by_tag`, a denormalized lookup not driven by an ORM
+relation.
+
 ```rust title="src/items/service.rs"
 use std::collections::HashMap;
 use nest_rs_graphql::dataloader;
@@ -198,7 +217,8 @@ impl ItemsService {
 }
 ```
 
-The resolver injects it as `&DataLoader<ItemsServiceByName>` — no N+1.
+A `#[field_resolver]` resolver injects it as `&DataLoader<ItemsServiceByName>` —
+no N+1.
 
 ## Pagination
 
@@ -332,7 +352,7 @@ the request body is upstream of where it sits.
 - [Seeding](/database/seeding/) — idempotent demo data in the `seed` crate.
 - [Security](/security/) — `Ability` filters reads, gates by-id loads,
   masks response bodies. Wires through the same `Repo` calls.
-- [GraphQL](/graphql/) — `#[field]` resolvers with a
+- [GraphQL](/graphql/) — `#[field_resolver]` resolvers with a
   `DataLoader<ItemsServiceByName>` to avoid N+1 on relations.
 - [Configuration](/configuration/) — the `NESTRS_DATABASE__URL` scheme.
 

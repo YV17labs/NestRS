@@ -13,22 +13,12 @@
 //! hand-writes `impl WireModelDefaults for Entity` with an audited placeholder.
 
 use quote::quote;
-use syn::{Type, TypePath};
+use syn::Type;
 
 use crate::attr::{ResourceField, ResourceModel};
 
-fn is_relation(ty: &Type) -> bool {
-    match ty {
-        Type::Path(TypePath { path, .. }) => path
-            .segments
-            .last()
-            .is_some_and(|s| matches!(s.ident.to_string().as_str(), "HasOne" | "HasMany")),
-        _ => false,
-    }
-}
-
 fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStream> {
-    if !field.skip || field.is_pk || is_relation(&field.ty) {
+    if !field.skip || field.is_pk || field.relation.is_some() {
         return None;
     }
     let key = &field.ident;

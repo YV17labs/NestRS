@@ -8,7 +8,7 @@ import { Aside } from '@astrojs/starlight/components';
 Write a resolver as a struct and decorate it with `#[resolver]`; its
 operations register themselves into the schema at boot — there is no central
 `queries = [...]` list to keep in sync. Root resolvers
-(`#[query]`, `#[mutation]`) and entity-field resolvers (`#[field]`) live
+(`#[query]`, `#[mutation]`) and entity-field resolvers (`#[field_resolver]`) live
 on the same impl block.
 
 This page covers GraphQL concerns only. Authentication, authorization
@@ -139,11 +139,79 @@ $ curl -sX POST http://localhost:3000/graphql \
 {"data":{"sayHello":{"text":"Greetings, Ada!"}}}
 ```
 
-## A field resolver
+## Relation fields resolve themselves
 
-`#[field]` resolves a property of an entity that is not stored on it —
-typically a derived value or a related entity. The first non-`self`,
-non-`ctx` argument is the parent object.
+Declaring a SeaORM relation on an `#[expose]`d entity is the **whole
+field-resolver story** — no `#[field_resolver]`, no `#[dataloader]` to write by
+hand. Pass `service = …` to `#[expose]` and the macro emits the PK
+dataloader on the service, the trait bridges that let other entities
+reach it, and a `#[ComplexObject]` field resolver on the wire DTO. The
+ambient `Ability` filters every batch under `Repo::scoped(Action::Read)`,
+so a relation cannot leak across orgs.
+
+```rust title="src/users/entity.rs"
+use nest_rs_resource::expose;
+use sea_orm::entity::prelude::*;
+
+#[expose(name = "User", service = super::service::UsersService)]
+#[sea_orm::model]
+#[derive(Clone, Debug, DeriveEntityModel)]
+#[sea_orm(table_name = "user")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+
+    #[sea_orm(belongs_to, from = "org_id", to = "id")]
+    pub org: HasOne<crate::orgs::Entity>,
+}
+```
+
+```rust title="src/orgs/entity.rs"
+#[expose(name = "Org", service = super::service::OrgsService)]
+#[sea_orm::model]
+#[derive(Clone, Debug, DeriveEntityModel)]
+#[sea_orm(table_name = "org")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub name: String,
+
+    #[sea_orm(has_many)]
+    pub users: HasMany<crate::users::Entity>,
+}
+```
+
+That is the whole declaration. Both directions now query:
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3000/graphql -d \
+    '{"query":"{ users { id org { id name } } orgs { users { email } } }"}'
+```
+
+Behind the scenes `#[expose]` emits a `by_id` loader on every service
+(BelongsTo side) and a `by_<fk_col>` loader on the FK-owner's service
+(HasMany inverse), backs each resolver with the right `DataLoader<…>`
+from the request context, and ties the two entities through the
+`PkLoadable` / `RelatedTo<Parent>` traits — the inverse side never
+hard-codes the other service's name.
+
+### Opt out, override
+
+A `#[expose(skip)]` on a relation field disables auto-emission for that
+specific field. The relation stays declared at the ORM level (SeaORM
+still knows about it), and you can write a hand-rolled `#[field_resolver]` if
+you need a custom shape — say a `Connection<User>` with cursor
+pagination, or a filtered subset.
+
+## A custom field resolver
+
+For a property that isn't a stored relation — a computed value, a
+shape that mixes several services, a non-default cardinality — write a
+`#[field_resolver]` on the resolver. The first non-`self`, non-`ctx` argument is
+the parent object; `&Service` parameters are injected from the
+container, `&DataLoader<…>` from the request context.
 
 ```rust
 use async_graphql::SimpleObject;
@@ -164,7 +232,7 @@ impl UsersResolver {
         User { id, name: "Ada".into() }
     }
 
-    #[field]
+    #[field_resolver]
     async fn display_name(&self, parent: &User) -> String {
         parent.name.to_uppercase()
     }
@@ -176,6 +244,16 @@ $ curl -sX POST http://localhost:3000/graphql -d \
     '{"query":"{ user(id:\"1\") { name displayName } }"}'
 {"data":{"user":{"name":"Ada","displayName":"ADA"}}}
 ```
+
+<Aside type="caution">
+async-graphql allows only one `#[ComplexObject]` impl per type. If the
+entity already has at least one auto-resolved relation (the macro
+emits its own block), custom `#[field_resolver]` methods for the same wire
+type cannot also live on the resolver — they collide at trait
+coherence. Either mark the relation `#[expose(skip)]` and own the full
+complex object on the resolver, or move the custom logic to a different
+shape (see [CRUD](/database/crud/)).
+</Aside>
 
 ## Errors
 
@@ -214,6 +292,6 @@ schema changes show up in diffs without a separate generator pass.
 - `crates/features/src/users/graphql/resolver.rs` — a production-grade
   resolver with relations, dataloaders and authorization.
 - `crates/nest-rs-graphql/` — `#[resolver]`, `#[query]`, `#[mutation]`,
-  `#[field]`, schema composition.
+  `#[field_resolver]`, schema composition.
 - `crates/nest-rs-resource/` — `#[expose]` for an entity that becomes a
   GraphQL type *and* an OpenAPI schema from one declaration.

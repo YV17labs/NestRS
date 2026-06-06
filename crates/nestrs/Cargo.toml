@@ -1,0 +1,55 @@
+[package]
+name = "nestrs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "nestrs framework umbrella — re-exports the core and the surface crates an app reaches for, with a `prelude` for the common case."
+
+[features]
+default = ["http", "config"]
+
+http = ["dep:nestrs-http"]
+config = ["dep:nestrs-config"]
+database = ["dep:nestrs-database"]
+seaorm = ["dep:nestrs-seaorm", "database"]
+graphql = ["dep:nestrs-graphql", "http"]
+ws = ["dep:nestrs-ws", "http"]
+mcp = ["dep:nestrs-mcp", "http"]
+queue = ["dep:nestrs-queue"]
+redis = ["dep:nestrs-redis", "queue"]
+schedule = ["dep:nestrs-schedule"]
+events = ["dep:nestrs-events"]
+authn = ["dep:nestrs-authn"]
+authz = ["dep:nestrs-authz"]
+opentelemetry = ["dep:nestrs-opentelemetry"]
+openapi = ["dep:nestrs-openapi", "http"]
+health = ["dep:nestrs-health", "http"]
+throttler = ["dep:nestrs-throttler", "http"]
+server-timing = ["dep:nestrs-server-timing", "http"]
+testing = ["dep:nestrs-testing"]
+
+[dependencies]
+nestrs-core.workspace = true
+
+nestrs-http = { workspace = true, optional = true }
+nestrs-config = { workspace = true, optional = true }
+nestrs-database = { workspace = true, optional = true }
+nestrs-seaorm = { workspace = true, optional = true }
+nestrs-graphql = { workspace = true, optional = true }
+nestrs-ws = { workspace = true, optional = true }
+nestrs-mcp = { workspace = true, optional = true }
+nestrs-queue = { workspace = true, optional = true }
+nestrs-redis = { workspace = true, optional = true }
+nestrs-schedule = { workspace = true, optional = true }
+nestrs-events = { workspace = true, optional = true }
+nestrs-authn = { workspace = true, optional = true }
+nestrs-authz = { workspace = true, optional = true }
+nestrs-opentelemetry = { workspace = true, optional = true }
+nestrs-openapi = { workspace = true, optional = true }
+nestrs-health = { workspace = true, optional = true }
+nestrs-throttler = { workspace = true, optional = true }
+nestrs-server-timing = { workspace = true, optional = true }
+nestrs-testing = { workspace = true, optional = true }

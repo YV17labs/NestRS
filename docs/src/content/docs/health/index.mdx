@@ -29,8 +29,8 @@ is silently skipped.
 ## Mount it
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_core::module;
-use nestrs_health::HealthModule;
+use nest_rs_core::module;
+use nest_rs_health::HealthModule;
 
 #[module(imports = [HealthModule])]
 pub struct PlatformApiModule;
@@ -95,18 +95,18 @@ crate that owns the dependency, behind a Cargo feature — that way an app
 that does not import `HealthModule` does not pay for the indicator. The
 SeaORM pool ping is the first one to ship.
 
-`nestrs-seaorm` exposes it as `DatabaseHealthModule`, which registers
+`nest-rs-seaorm` exposes it as `DatabaseHealthModule`, which registers
 `DbHealthIndicator`. The indicator's `#[readiness]` and `#[startup]`
 methods both call `DatabaseConnection::ping` — exactly what most apps need
 and zero code in your app:
 
 ```toml title="apps/platform-api/Cargo.toml"
-nestrs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
+nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
 ```
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_seaorm::{DatabaseHealthModule, DatabaseModule};
-use nestrs_health::HealthModule;
+use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
+use nest_rs_health::HealthModule;
 
 #[module(
     imports = [
@@ -124,7 +124,7 @@ the pod just because the database blinked).
 
 The `health` feature is opt-in for a reason: a DB-using app that does not
 mount `HealthModule` should not pay for the inventory submission or the
-indirect `nestrs-health` dependency.
+indirect `nest-rs-health` dependency.
 
 ## Register a product-level indicator
 
@@ -134,8 +134,8 @@ its GraphQL resolver: as one more adapter sub-folder.
 ```rust title="crates/features/<feature>/health/indicator.rs"
 use std::sync::Arc;
 
-use nestrs_core::injectable;
-use nestrs_health::indicators;
+use nest_rs_core::injectable;
+use nest_rs_health::indicators;
 
 use crate::<feature>::core::UpstreamClient;
 
@@ -155,7 +155,7 @@ impl UpstreamHealthIndicator {
 ```
 
 ```rust title="crates/features/<feature>/health/module.rs"
-use nestrs_core::module;
+use nest_rs_core::module;
 
 use crate::<feature>::health::indicator::UpstreamHealthIndicator;
 
@@ -165,7 +165,7 @@ pub struct <Feature>HealthModule;
 
 ```rust title="apps/<your-app>/src/module.rs"
 use features::<feature>::<Feature>HealthModule;
-use nestrs_health::HealthModule;
+use nest_rs_health::HealthModule;
 
 #[module(imports = [HealthModule, <Feature>HealthModule])]
 pub struct AppModule;
@@ -182,7 +182,7 @@ pub struct AppModule;
   configuration-loaded check on one service instead of writing a struct
   per check.
 
-A worker app or an MCP app that imports only `<Feature>CoreModule`
+A worker app or an MCP app that imports only `<Feature>Module`
 without `<Feature>HealthModule` ships the feature's data layer with no
 probe surface — the access graph keeps the indicator out of the running
 binary entirely. Apps opt into health the same way they opt into HTTP or
@@ -255,14 +255,14 @@ and inherits its tracing target.
 - [Database](/database/) — `DatabaseHealthModule` is the database
   integration named above; the page covers the rest of the data layer.
 - [OpenTelemetry](/opentelemetry/) — emit a span (target:
-  `nestrs::health` or your own `app::health`) from an indicator to see
+  `nest_rs::health` or your own `app::health`) from an indicator to see
   probe results in traces.
 
 ### Reference
 
-- `crates/nestrs-health/` — `HealthModule`, `HealthService`,
+- `crates/nest-rs-health/` — `HealthModule`, `HealthService`,
   `HealthController`, the `#[indicators]` / `#[liveness]` /
   `#[readiness]` / `#[startup]` macros, and the `HealthIndicator`
   inventory entry.
-- `crates/nestrs-seaorm/src/health.rs` (Cargo feature `health`) —
+- `crates/nest-rs-seaorm/src/health.rs` (Cargo feature `health`) —
   `DatabaseHealthModule` and `DbHealthIndicator`.

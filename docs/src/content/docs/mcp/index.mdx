@@ -18,8 +18,8 @@ version lives in `apps/mcp`.
 ```rust title="apps/mcp/src/weather/tool.rs"
 use std::sync::Arc;
 
-use nestrs_mcp::mcp;
-use nestrs_mcp::{
+use nest_rs_mcp::mcp;
+use nest_rs_mcp::{
     tool, tool_handler, tool_router, CallToolResult, Content, McpError,
     Parameters, ServerHandler,
 };
@@ -99,7 +99,7 @@ $ just dev mcp
 ```
 
 ```text frame="terminal"
-2026-06-03T10:34:07.882Z  INFO nestrs::http: bound 1 MCP server on 0.0.0.0:3000
+2026-06-03T10:34:07.882Z  INFO nest_rs::http: bound 1 MCP server on 0.0.0.0:3000
   POST /mcp → WeatherTool (1 tool)
 ```
 
@@ -131,7 +131,7 @@ a separately callable tool. Share state through `&self`.
 
 ### Authorization
 
-`McpAbilityBridge` (provided by `nestrs-authz` with the `mcp` feature
+`McpAbilityBridge` (provided by `nest-rs-authz` with the `mcp` feature
 flag) gates tool calls against an `Ability`. Same policy as HTTP/GraphQL.
 
 ### Trait-based DI
@@ -143,6 +143,6 @@ provider via `AppBuilder::override_dyn`.
 ### Reference
 
 - `apps/mcp/` — the full example.
-- `crates/nestrs-mcp/` — `#[mcp]`, `#[tool_router]`, `#[tool]`,
+- `crates/nest-rs-mcp/` — `#[mcp]`, `#[tool_router]`, `#[tool]`,
   `#[tool_handler]`.
-- `crates/nestrs-authz/` (with `mcp` feature) — the MCP authz bridge.
+- `crates/nest-rs-authz/` (with `mcp` feature) — the MCP authz bridge.

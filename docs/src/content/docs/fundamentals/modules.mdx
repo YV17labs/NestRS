@@ -13,8 +13,8 @@ container) and the **modules it imports** (whose providers it can
 inject). That's it.
 
 ```rust title="apps/hello/src/module.rs"
-use nestrs_core::module;
-use nestrs_http::HttpModule;
+use nest_rs_core::module;
+use nest_rs_http::HttpModule;
 use crate::controller::HelloController;
 use crate::service::HelloService;
 
@@ -99,10 +99,10 @@ directly.
     imports = [
         ConfigModule::for_root(),
         DatabaseModule::for_root(None),
-        AuthnCoreModule,
+        AuthnModule,
         AuthzHttpModule,
         AuthzGraphqlModule,
-        UsersCoreModule,
+        UsersModule,
         UsersHttpModule,
         UsersGraphqlModule,
         GraphqlModule::for_root(None),
@@ -130,24 +130,24 @@ feature:
 
 <FileTree>
 - crates/features/src/users/
-  - core/
-    - module.rs (UsersCoreModule — the port)
-    - service.rs
-    - entity.rs
-    - dto.rs
+  - module.rs (UsersModule — the port)
+  - service.rs
+  - entity.rs
+  - dto.rs
+  - error.rs
   - http/
-    - module.rs (UsersHttpModule — imports UsersCoreModule)
+    - module.rs (UsersHttpModule — imports UsersModule)
     - controller.rs
   - graphql/
-    - module.rs (UsersGraphqlModule — imports UsersCoreModule)
+    - module.rs (UsersGraphqlModule — imports UsersModule)
     - resolver.rs
   - queue/
-    - module.rs (UsersQueueModule — imports UsersCoreModule)
+    - module.rs (UsersQueueModule — imports UsersModule)
     - processor.rs
 </FileTree>
 
-An app that needs only HTTP imports `UsersCoreModule` +
-`UsersHttpModule`. A worker imports `UsersCoreModule` +
+An app that needs only HTTP imports `UsersModule` +
+`UsersHttpModule`. A worker imports `UsersModule` +
 `UsersQueueModule`. The same data layer, different surface.
 
 <Aside>
@@ -175,7 +175,7 @@ pub struct A;
 ```
 
 `Common`'s providers are registered once — not twice. The boot log emits
-`nestrs::module: module dependencies initialized` per module, exactly
+`nest_rs::module: module dependencies initialized` per module, exactly
 once per type.
 
 ## Going further

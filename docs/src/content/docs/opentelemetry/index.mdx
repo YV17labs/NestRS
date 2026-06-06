@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-`nestrs-opentelemetry` is the OpenTelemetry layer of the framework. It installs
+`nest-rs-opentelemetry` is the OpenTelemetry layer of the framework. It installs
 a [`tracing`](https://docs.rs/tracing) subscriber, batches traces / logs /
 metrics through the official
 [`opentelemetry`](https://crates.io/crates/opentelemetry) +
@@ -34,9 +34,9 @@ Three signal types ship in one crate, behind one import:
 
 ```rust title="apps/platform-api/src/main.rs"
 use anyhow::Result;
-use nestrs_config::Environment;
-use nestrs_core::App;
-use nestrs_opentelemetry::OpenTelemetry;
+use nest_rs_config::Environment;
+use nest_rs_core::App;
+use nest_rs_opentelemetry::OpenTelemetry;
 
 use platform_api::PlatformApiModule;
 
@@ -106,23 +106,23 @@ reqwest client is the right pick, the upstream-recommended pairing.
 
 ## Feature flags
 
-`nestrs-opentelemetry` ships two features:
+`nest-rs-opentelemetry` ships two features:
 
 - **`otlp`** (default) — pulls the `opentelemetry-*` crates, installs the OTLP
   exporters for traces / metrics / logs, and bridges `tracing` events into OTel
   logs. Without it, the subscriber stays a pure `tracing-subscriber` setup —
   useful for a tiny binary that should not link the OTel SDK.
-- **`http`** — pulls `poem` + `nestrs-http` + `nestrs-middleware` so the
+- **`http`** — pulls `poem` + `nest-rs-http` + `nest-rs-middleware` so the
   per-request HTTP interceptor compiles. A headless app (a queue worker) uses
   `otlp` **without** `http` and stays free of the HTTP transport. Requires
   `otlp` — the interceptor reads the trace id off the OTel span.
 
 ```toml title="apps/platform-worker/Cargo.toml"
-nestrs-opentelemetry.workspace = true
+nest-rs-opentelemetry.workspace = true
 ```
 
 ```toml title="apps/platform-api/Cargo.toml"
-nestrs-opentelemetry = { workspace = true, features = ["http"] }
+nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 ```
 
 ## Boot-time safety
@@ -131,7 +131,7 @@ nestrs-opentelemetry = { workspace = true, features = ["http"] }
 thread 'main' panicked at 'OpenTelemetryModule was imported without calling
 `OpenTelemetry::init` first — the global tracer and meter are no-ops, so
 traces and metrics would be silently dropped. Add `let _opentelemetry =
-nestrs_opentelemetry::OpenTelemetry::init("<service>")?;` at the top of
+nest_rs_opentelemetry::OpenTelemetry::init("<service>")?;` at the top of
 `main`, before building the app.'
 ```
 
@@ -144,7 +144,7 @@ binary locally.
 ## Tests
 
 ```rust
-use nestrs_testing::TestApp;
+use nest_rs_testing::TestApp;
 
 #[tokio::test]
 async fn users_list_returns_a_page() {
@@ -162,7 +162,7 @@ async fn users_list_returns_a_page() {
 `with_test_telemetry` calls `OpenTelemetry::init_for_tests` — a console-only
 init honouring `RUST_LOG` (default `warn` for noise control). It is
 idempotent; the first test to run wins, the rest no-op. It is gated by the
-`opentelemetry` feature on `nestrs-testing`.
+`opentelemetry` feature on `nest-rs-testing`.
 
 A test that does **not** import `OpenTelemetryModule` does not need it.
 
@@ -171,16 +171,16 @@ A test that does **not** import `OpenTelemetryModule` does not need it.
 - **Per-request context** — the request span carries `request_id`,
   `actor_id`, `tenant_id` when an authn module is mounted. Layer your own
   fields with `tracing::info!(target: "api::users", actor = %auth.sub, …)`.
-- **`Server-Timing`** — the companion `nestrs-server-timing` crate adds a
+- **`Server-Timing`** — the companion `nest-rs-server-timing` crate adds a
   `Server-Timing` header summarising the request's main spans. Mount with
   `ServerTimingModule`.
-- **Module lifecycle** — `tracing::info!` on `nestrs::module` fires once per
+- **Module lifecycle** — `tracing::info!` on `nest_rs::module` fires once per
   module when its providers register, so the boot trace shows your import
   tree in resolution order.
 
 ## Reference
 
-- `crates/nestrs-opentelemetry/` — `OpenTelemetry::init`,
+- `crates/nest-rs-opentelemetry/` — `OpenTelemetry::init`,
   `OpenTelemetryConfig`, `OpenTelemetryModule`, `OpenTelemetryMeter`,
   `OpenTelemetryHttp`.
-- `crates/nestrs-server-timing/` — the `Server-Timing` header middleware.
+- `crates/nest-rs-server-timing/` — the `Server-Timing` header middleware.

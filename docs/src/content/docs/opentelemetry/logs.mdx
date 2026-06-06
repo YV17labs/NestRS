@@ -16,13 +16,13 @@ request.
 
 | Concern | Target | Default level |
 |---|---|---|
-| HTTP request log | `nestrs::access` | `info` |
-| HTTP span | `nestrs::http` | `info` |
-| ORM queries | `nestrs::orm` | `trace` |
-| Authn / Authz | `nestrs::authn` / `nestrs::authz` | `info` (denials `warn`) |
-| WebSocket events | `nestrs::ws` | `info` |
-| Queue / Schedule | `nestrs::queue` / `nestrs::schedule` | `info` |
-| Module lifecycle | `nestrs::module` | `info` |
+| HTTP request log | `nest_rs::access` | `info` |
+| HTTP span | `nest_rs::http` | `info` |
+| ORM queries | `nest_rs::orm` | `trace` |
+| Authn / Authz | `nest_rs::authn` / `nest_rs::authz` | `info` (denials `warn`) |
+| WebSocket events | `nest_rs::ws` | `info` |
+| Queue / Schedule | `nest_rs::queue` / `nest_rs::schedule` | `info` |
+| Module lifecycle | `nest_rs::module` | `info` |
 | App-specific spans | `<app>::<feature>` | `info` |
 
 Controllers, resolvers, gateways log at `info` on success. Services at `debug`.
@@ -64,11 +64,11 @@ span structure, and duplicating it in the console line is noise.
 
 ## Access log
 
-The HTTP interceptor emits one access event per request on `nestrs::access`,
+The HTTP interceptor emits one access event per request on `nest_rs::access`,
 at end-of-body, with byte-accurate `bytes` and `duration_ms`:
 
 ```text frame="terminal"
-INFO nestrs::access: GET /users 200 28ms request_id=01J… bytes=412 client_ip=10.0.0.1 trace_id=4bf92f…
+INFO nest_rs::access: GET /users 200 28ms request_id=01J… bytes=412 client_ip=10.0.0.1 trace_id=4bf92f…
 ```
 
 The same fields land on the OTel HTTP span (see

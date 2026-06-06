@@ -12,8 +12,8 @@ a value out of the request (a path segment, a query param, a JSON body),
 hands it to the pipe, and the pipe either returns the transformed value
 or rejects with a `PipeError` the transport renders as a `400`.
 
-The trait lives in `nestrs-pipes`, transport-agnostic. The HTTP binding
-ships as the `Valid<E>` and `Piped<P, E>` extractors in `nestrs-http`.
+The trait lives in `nest-rs-pipes`, transport-agnostic. The HTTP binding
+ships as the `Valid<E>` and `Piped<P, E>` extractors in `nest-rs-http`.
 
 ```rust
 pub trait Pipe {
@@ -32,7 +32,7 @@ pipe is a pure transform, the same input always produces the same
 output, and the type name is enough to pick which one runs.
 
 ```rust
-use nestrs_pipes::{Pipe, PipeError};
+use nest_rs_pipes::{Pipe, PipeError};
 
 pub struct Trim;
 
@@ -50,7 +50,7 @@ or an interceptor — not a pipe.
 
 ## The built-in set
 
-`nestrs-pipes` ships the common cases. Reach for them before writing
+`nest-rs-pipes` ships the common cases. Reach for them before writing
 your own:
 
 | Pipe | In → Out | Use it for |
@@ -77,7 +77,7 @@ A `PipeError` rejection becomes a JSON `400`:
 `E`, then validate.
 
 ```rust
-use nestrs_http::Valid;
+use nest_rs_http::Valid;
 use poem::web::Json;
 use serde::Deserialize;
 use validator::Validate;
@@ -121,8 +121,8 @@ When the input needs a transform other than `Validate`, name the pipe at
 the call site:
 
 ```rust
-use nestrs_http::Piped;
-use nestrs_pipes::ParseUuidV7;
+use nest_rs_http::Piped;
+use nest_rs_pipes::ParseUuidV7;
 use poem::web::Path;
 
 #[get("/:id")]
@@ -167,7 +167,7 @@ Three rules:
 
 1. **Stateless.** `transform` is an associated function; no `&self`, no
    container.
-2. **One file per pipe** under `crates/nestrs-pipes/src/pipes/` (one role,
+2. **One file per pipe** under `crates/nest-rs-pipes/src/pipes/` (one role,
    one file). Reusable pipes belong to the framework crate — never to an
    app.
 3. **Use the error envelope.** Return `PipeError::new(msg)` for a simple
@@ -175,7 +175,7 @@ Three rules:
    field-level errors.
 
 ```rust
-use nestrs_pipes::{Pipe, PipeError};
+use nest_rs_pipes::{Pipe, PipeError};
 
 pub struct NonEmpty;
 
@@ -204,7 +204,7 @@ async fn create(&self, Piped(name): Piped<NonEmpty, Json<String>>) -> &'static s
 <Aside>
 **Reusable pipes live in the framework, never in an app.** A
 single-feature transform is a service. A pattern that recurs in two
-apps belongs in `crates/nestrs-pipes/`.
+apps belongs in `crates/nest-rs-pipes/`.
 </Aside>
 
 ## Going further

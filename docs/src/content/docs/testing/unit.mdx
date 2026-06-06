@@ -14,8 +14,8 @@ private items the integration tree cannot see.
 `#[cfg(test)] mod tests` inside the `src/` file under test —
 [Rust's standard layout](https://doc.rust-lang.org/book/ch11-03-test-organization.html#the-tests-module-and-cfgtest):
 
-```rust title="crates/features/src/pricing/core/service.rs"
-use nestrs_core::injectable;
+```rust title="crates/features/src/pricing/service.rs"
+use nest_rs_core::injectable;
 
 #[injectable]
 pub struct PricingService {}
@@ -66,7 +66,7 @@ e2e instead.
   formatters, anything that takes inputs and returns outputs without
   reaching the injected dependencies. Call them as associated
   functions, or extract the logic onto a value type.
-- **Pure functions and value types in `core/`** — parsers, conversions,
+- **Pure functions and value types at the feature root** — parsers, conversions,
   arithmetic on domain types.
 - **Trait impls with a knowable shape** — a `Display`, a `From`, an
   error → response mapping.

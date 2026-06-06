@@ -11,9 +11,9 @@ NestRS's data layer is built on [SeaORM](https://www.sea-ql.org/SeaORM/) —
 entities, queries and migrations are SeaORM's. NestRS wraps it so every access
 goes through a service and a request-scoped `Repo`, never the ORM directly.
 
-The data layer ships as two crates. `nestrs-database` defines the executor
+The data layer ships as two crates. `nest-rs-database` defines the executor
 abstractions and task-local seam — a **store-agnostic** contract that fits
-SQL, NoSQL, or anything carrying a connection. `nestrs-seaorm` is the
+SQL, NoSQL, or anything carrying a connection. `nest-rs-seaorm` is the
 first-class SeaORM implementation that lives on top of that seam: `Repo`,
 `CrudService`, the transparent transactional interceptor, response
 masking. Apps depend on both. To plug a different store — MongoDB, sqlx
@@ -25,7 +25,7 @@ through `Repo`, which:
 1. Runs against the **ambient executor** — a pool on safe routes, a
    transaction on mutating routes — installed automatically by importing
    `DatabaseModule`;
-2. Emits an instrumentation span (`target: nestrs::orm`) per query.
+2. Emits an instrumentation span (`target: nest_rs::orm`) per query.
 
 The invariant: **every data access goes through a service, and a service
 reaches the DB only through `Repo`**.
@@ -36,7 +36,7 @@ masking are tied to abilities and live in [Security](/security/).
 ## Declare an entity
 
 ```rust title="src/items/entity.rs"
-use nestrs_resource::expose;
+use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -79,8 +79,8 @@ useful for private fields you do not want on the JSON / GraphQL body.
 
 ```rust title="src/items/service.rs"
 use std::sync::Arc;
-use nestrs_core::injectable;
-use nestrs_seaorm::{CrudService, Repo};
+use nest_rs_core::injectable;
+use nest_rs_seaorm::{CrudService, Repo};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use uuid::Uuid;
 use validator::Validate;
@@ -131,17 +131,17 @@ impl ItemsService {
 ## Hook it up
 
 ```rust title="src/items/module.rs"
-use nestrs_core::module;
+use nest_rs_core::module;
 use super::service::ItemsService;
 
 #[module(providers = [ItemsService])]
-pub struct ItemsCoreModule;
+pub struct ItemsModule;
 ```
 
 The HTTP-adapter module imports it:
 
 ```rust title="src/items/http/module.rs"
-#[module(imports = [ItemsCoreModule], providers = [ItemsController])]
+#[module(imports = [ItemsModule], providers = [ItemsController])]
 pub struct ItemsHttpModule;
 ```
 
@@ -152,7 +152,7 @@ pool + the ambient executor interceptor):
 #[module(
     imports = [
         DatabaseModule::for_root(None),
-        ItemsCoreModule,
+        ItemsModule,
         ItemsHttpModule,
     ],
 )]
@@ -171,7 +171,7 @@ single query.
 
 ```rust title="src/items/service.rs"
 use std::collections::HashMap;
-use nestrs_graphql::dataloader;
+use nest_rs_graphql::dataloader;
 
 #[dataloader]
 impl ItemsService {
@@ -267,7 +267,7 @@ DatabaseModule::for_root(DatabaseConfig {
 
 When this flag is on, the `DbContext` interceptor matches a conflict at the
 commit boundary against the SQLSTATE markers above and **logs it at `warn`
-with the conflict tag** (target `nestrs::orm`) so ops sees the failure
+with the conflict tag** (target `nest_rs::orm`) so ops sees the failure
 mode distinctly from a generic commit error.
 
 <Aside type="caution">
@@ -283,12 +283,12 @@ serialization conflicts in my logs", not "I want them invisible".
 ### The working retry primitive
 
 For an actually-retried operation, wrap a replayable closure in
-`nestrs_seaorm::retry::retry_on_conflict` inside a service method that
+`nest_rs_seaorm::retry::retry_on_conflict` inside a service method that
 owns its programmatic transaction boundary:
 
 ```rust title="src/orders/service.rs"
 use std::time::Duration;
-use nestrs_seaorm::retry::{
+use nest_rs_seaorm::retry::{
     retry_on_conflict, DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF,
 };
 use sea_orm::TransactionTrait;
@@ -338,11 +338,11 @@ the request body is upstream of where it sits.
 
 ### Reference
 
-- `crates/features/src/users/core/` — a feature with relations,
+- `crates/features/src/users/` — a feature with relations,
   dataloaders and credentials helpers.
-- `crates/nestrs-database/` — the executor trait, task-local seam, and
+- `crates/nest-rs-database/` — the executor trait, task-local seam, and
   `JobContext` abstractions (ORM-agnostic).
-- `crates/nestrs-seaorm/` — the [SeaORM](https://www.sea-ql.org/SeaORM/)
+- `crates/nest-rs-seaorm/` — the [SeaORM](https://www.sea-ql.org/SeaORM/)
   integration: `Repo`, `CrudService`, the ambient executor.
-- `crates/nestrs-resource/` — `#[expose]`, the GraphQL+OpenAPI
+- `crates/nest-rs-resource/` — `#[expose]`, the GraphQL+OpenAPI
   generation, pagination envelopes.

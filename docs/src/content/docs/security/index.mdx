@@ -25,7 +25,7 @@ checklist.
 #[module(
     imports = [
         DatabaseModule::for_root(None),
-        AuthnCoreModule,
+        AuthnModule,
         AuthzHttpModule,           // ← HTTP authz
         AuthzGraphqlModule,        // ← GraphQL authz
         UsersHttpModule,
@@ -52,7 +52,7 @@ That's the whole opt-in surface. From there, the framework does the rest.
 A resource-server app declares a single alias:
 
 ```rust title="crates/features/src/authn/core.rs"
-pub type AuthGuard = nestrs_authn::AuthGuard<JwtStrategy<Claims>>;
+pub type AuthGuard = nest_rs_authn::AuthGuard<JwtStrategy<Claims>>;
 ```
 
 `JwtStrategy<C>` is provided by the framework; it verifies an
@@ -210,5 +210,5 @@ The guard reads `Reflector::new(req).get::<Roles>()` and decides.
 - `crates/features/src/authn/` — `Strategy`, `Outcome`, the JWT alias.
 - `crates/features/src/authz/` — `AppAbility`, the three transport modules.
 - `crates/features/src/oauth/` — the OAuth2 authorization-code flow.
-- `crates/nestrs-authn/` — the trait, the strategies, JWT signing/verifying.
-- `crates/nestrs-authz/` — `Ability`, `mask`, `condition_for`, the shaper.
+- `crates/nest-rs-authn/` — the trait, the strategies, JWT signing/verifying.
+- `crates/nest-rs-authz/` — `Ability`, `mask`, `condition_for`, the shaper.

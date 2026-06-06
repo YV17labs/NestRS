@@ -14,7 +14,7 @@ at boot.
 
 ```rust
 use std::sync::Arc;
-use nestrs_core::injectable;
+use nest_rs_core::injectable;
 
 #[injectable]
 pub struct UsersService {
@@ -78,7 +78,7 @@ them (singletons exist before any request does). Reach a request-scoped
 provider through the request boundary, not through `#[inject]`:
 
 ```rust
-use nestrs_http::Scoped;
+use nest_rs_http::Scoped;
 
 #[get("/log")]
 async fn log(&self, logger: Scoped<RequestLogger>) -> String {
@@ -96,7 +96,7 @@ Useful when the provider carries throw-away state a single caller fully
 consumes (a one-shot builder, a per-call audit trail, a fresh id source):
 
 ```rust
-use nestrs_core::injectable;
+use nest_rs_core::injectable;
 use uuid::Uuid;
 
 #[injectable(scope = transient)]
@@ -130,7 +130,7 @@ or first request rather than a stack overflow.
 
 A module exposes a service to its importers by binding a `pub trait`:
 
-```rust title="crates/features/src/users/core/service.rs"
+```rust title="crates/features/src/users/service.rs"
 use std::sync::Arc;
 use async_trait::async_trait;
 
@@ -146,9 +146,9 @@ pub(crate) struct UsersServiceImpl { /* ... */ }
 impl UsersService for UsersServiceImpl { /* ... */ }
 ```
 
-```rust title="users/core/module.rs"
+```rust title="users/module.rs"
 #[module(providers = [UsersServiceImpl as dyn UsersService])]
-pub struct UsersCoreModule;
+pub struct UsersModule;
 ```
 
 The `as dyn UsersService` clause tells `#[module]` to register the impl

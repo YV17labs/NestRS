@@ -18,7 +18,7 @@ Subdirectories are **not** compiled as binaries — they hold modules a
 top-level entry file pulls in with `mod`. The standard layout:
 
 ```text frame="none"
-crates/nestrs-authn/
+crates/nest-rs-authn/
 ├── src/
 │   ├── error.rs
 │   ├── jwt/
@@ -39,7 +39,7 @@ crates/nestrs-authn/
 Each `tests/*.rs` is a normal Rust crate root: declare its modules with
 `mod`, pull in shared helpers from `tests/common/mod.rs`.
 
-```rust title="crates/nestrs-authn/tests/jwt.rs"
+```rust title="crates/nest-rs-authn/tests/jwt.rs"
 mod common;
 mod jwt;
 ```
@@ -65,13 +65,13 @@ for shared test helpers: put them in `tests/common/mod.rs`, not
 `tests/common.rs`. The `mod.rs` form keeps Cargo from compiling them as
 their own integration test binary.
 
-```rust title="crates/nestrs-authn/tests/common/mod.rs"
+```rust title="crates/nest-rs-authn/tests/common/mod.rs"
 pub const DEV_PRIVATE_KEY: &str = include_str!("../fixtures/dev.key");
 pub const DEV_PUBLIC_KEY: &str = include_str!("../fixtures/dev.pub");
 ```
 
-```rust title="crates/nestrs-authn/tests/jwt/config.rs"
-use nestrs_authn::{JwtConfig, JwtKey, JwtService};
+```rust title="crates/nest-rs-authn/tests/jwt/config.rs"
+use nest_rs_authn::{JwtConfig, JwtKey, JwtService};
 
 #[test]
 fn into_options_selects_eddsa_from_key_pair() {
@@ -89,14 +89,14 @@ fn into_options_selects_eddsa_from_key_pair() {
 
 ## Cross-crate framework wiring
 
-`crates/nestrs-testing/tests/*.rs` is the home for harnesses that
+`crates/nest-rs-testing/tests/*.rs` is the home for harnesses that
 exercise framework wiring across crates — boot-time access-graph
 rejection, lifecycle hook ordering, transport contribution. One file
 per behaviour cluster, same Cargo conventions.
 
 ## When a crate owns persistence
 
-If the crate genuinely owns database access (e.g. `nestrs-seaorm`, the
+If the crate genuinely owns database access (e.g. `nest-rs-seaorm`, the
 SeaORM integration), a real Postgres via
 [`EphemeralDatabase`](/testing/e2e/#ephemeral-postgres) is fair game in
 its integration tests. A test that mocks the database to assert query

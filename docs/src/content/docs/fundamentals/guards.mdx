@@ -16,8 +16,8 @@ Because the borrow is mutable, a guard can also **attach typed context**
 the handler reads back via `Ctx<T>` — that's how `AuthGuard` puts the
 authenticated `Claims` on the request without going through extractors.
 
-The trait is named in `nestrs-middleware` and re-exported as
-`nestrs_http::Guard`. It wraps [poem](https://docs.rs/poem)'s endpoint
+The trait is named in `nest-rs-middleware` and re-exported as
+`nest_rs_http::Guard`. It wraps [poem](https://docs.rs/poem)'s endpoint
 layer:
 
 ```rust
@@ -30,8 +30,8 @@ pub trait Guard: Send + Sync + 'static {
 ## A minimal guard
 
 ```rust
-use nestrs_core::injectable;
-use nestrs_http::{async_trait, Guard};
+use nest_rs_core::injectable;
+use nest_rs_http::{async_trait, Guard};
 use poem::http::StatusCode;
 use poem::{Request, Response};
 
@@ -112,7 +112,7 @@ impl Guard for AuthGuard {
 The handler reads it back:
 
 ```rust
-use nestrs_http::Ctx;
+use nest_rs_http::Ctx;
 
 #[get("/me")]
 async fn me(&self, auth: Ctx<Claims>) -> Json<User> {

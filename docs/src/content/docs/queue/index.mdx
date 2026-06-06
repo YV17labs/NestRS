@@ -13,11 +13,11 @@ impl block. Importing `QueueWorkerModule` in the worker app's `AppModule`
 attaches the worker runtime at boot.
 
 The abstractions — `Job`, `Processor`, `ProcessMethod`, the `#[processor]`
-macro — ship in **`nestrs-queue`**. The first-class storage, **Redis**,
-ships in **`nestrs-redis`** (built on [`apalis`](https://docs.rs/apalis)):
+macro — ship in **`nest-rs-queue`**. The first-class storage, **Redis**,
+ships in **`nest-rs-redis`** (built on [`apalis`](https://docs.rs/apalis)):
 the `QueueConnection` producer, the `QueueWorker` transport, and the
 `QueueModule` / `QueueWorkerModule` activation seams. An app depends on
-both: `nestrs-queue` for the macro + abstractions, `nestrs-redis` for the
+both: `nest-rs-queue` for the macro + abstractions, `nest-rs-redis` for the
 Redis-bound types.
 
 ## A first queue handler
@@ -30,10 +30,10 @@ as a queue consumer.
 use std::sync::Arc;
 
 use anyhow::Result;
-use nestrs_core::injectable;
-use nestrs_queue::processor;
+use nest_rs_core::injectable;
+use nest_rs_queue::processor;
 
-use crate::audio::core::{Transcoder, TranscodeJob};
+use crate::audio::{Transcoder, TranscodeJob};
 
 #[injectable]
 pub struct AudioJobs {
@@ -102,7 +102,7 @@ block — same convention as `#[routes]` and `#[scheduled]`.
 
 ## The payload
 
-```rust title="crates/features/src/audio/core/dto.rs"
+```rust title="crates/features/src/audio/dto.rs"
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -128,13 +128,13 @@ handler the `api` app exposes — a request enqueues a job the separate
 ```rust title="crates/features/src/audio/http/controller.rs"
 use std::sync::Arc;
 
-use nestrs_http::{controller, routes};
-use nestrs_redis::QueueConnection;
+use nest_rs_http::{controller, routes};
+use nest_rs_redis::QueueConnection;
 use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};
 
-use crate::audio::core::{TranscodeJob, AUDIO_QUEUE};
+use crate::audio::{TranscodeJob, AUDIO_QUEUE};
 
 #[controller(path = "/audio")]
 #[use_guards(AuthGuard, AppAbilityGuard)]
@@ -175,16 +175,16 @@ Two modules, two roles:
   doesn't run.
 
 ```rust title="apps/platform-worker/src/module.rs"
-use nestrs_core::module;
-use nestrs_redis::{QueueModule, QueueWorkerModule};
+use nest_rs_core::module;
+use nest_rs_redis::{QueueModule, QueueWorkerModule};
 
-use features::audio::{AudioCoreModule, AudioQueueModule};
+use features::audio::{AudioModule, AudioQueueModule};
 
 #[module(imports = [
     ConfigModule::for_root(),
     QueueModule::for_root(None),
     QueueWorkerModule,
-    AudioCoreModule,
+    AudioModule,
     AudioQueueModule,
 ])]
 pub struct PlatformWorkerModule;
@@ -194,7 +194,7 @@ And `main` is the universal skeleton:
 
 ```rust title="apps/platform-worker/src/main.rs"
 use anyhow::Result;
-use nestrs_core::App;
+use nest_rs_core::App;
 
 use platform_worker::PlatformWorkerModule;
 
@@ -221,10 +221,10 @@ $ just dev platform-worker
 ```
 
 ```text frame="terminal"
-2026-06-03T10:18:41Z  INFO nestrs::transport: attached module-contributed transport transport=QueueWorker
-2026-06-03T10:18:41Z  INFO nestrs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
+2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
+2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
 2026-06-03T10:18:46Z  INFO features::audio: transcoded file=track-1717405126521.mp3
-2026-06-03T10:18:46Z  INFO nestrs::queue: job ok queue=audio elapsed=342ms
+2026-06-03T10:18:46Z  INFO nest_rs::queue: job ok queue=audio elapsed=342ms
 ```
 
 Here producer and consumer are **split across deploys**: `apps/platform-api`
@@ -258,7 +258,7 @@ Like a scheduled method, a `#[process]` handler runs as **system work**:
 The worker depends on the shared `features` crate, so the audio
 controller's code is *compiled in* — but **module-gating** keeps every
 provider the worker doesn't import inert. Importing only
-`AudioCoreModule + AudioQueueModule`, the HTTP controller, the OpenAPI
+`AudioModule + AudioQueueModule`, the HTTP controller, the OpenAPI
 doc, and the GraphQL schema never mount: present in the binary, dead at
 runtime.
 
@@ -267,7 +267,7 @@ runtime.
 - [Schedule](/schedule/) — `#[scheduled]` providers whose methods push
   onto a queue on a timer.
 - [OpenTelemetry](/opentelemetry/) — every queue span targets
-  `nestrs::queue` with structured `queue`, `job_id`, `elapsed_ms`,
+  `nest_rs::queue` with structured `queue`, `job_id`, `elapsed_ms`,
   `attempt` fields.
 
 ### Reference
@@ -275,7 +275,7 @@ runtime.
 - `crates/features/src/audio/queue/processor.rs` — the consumer (worker).
 - `crates/features/src/audio/http/controller.rs` — the HTTP producer (api).
 - `crates/features/src/audio/schedule/producer.rs` — the scheduled producer (api).
-- `crates/nestrs-queue/` — the abstractions: `#[processor]`, `#[process]`,
+- `crates/nest-rs-queue/` — the abstractions: `#[processor]`, `#[process]`,
   `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
-- `crates/nestrs-redis/` — the Redis storage: `QueueConnection`,
+- `crates/nest-rs-redis/` — the Redis storage: `QueueConnection`,
   `QueueWorker`, `QueueModule`, `QueueWorkerModule`.

@@ -17,7 +17,7 @@ and database-backed loaders are in their own categories.
 ## The minimal resolver
 
 ```rust title="src/greeting/resolver.rs"
-use nestrs_graphql::{query, resolver};
+use nest_rs_graphql::{query, resolver};
 
 #[resolver]
 pub struct GreetingResolver;
@@ -42,8 +42,8 @@ impl GreetingResolver {
 Mount the GraphQL transport once at the app root:
 
 ```rust title="src/module.rs"
-use nestrs_core::module;
-use nestrs_graphql::GraphqlModule;
+use nest_rs_core::module;
+use nest_rs_graphql::GraphqlModule;
 use crate::greeting::GreetingModule;
 
 #[module(imports = [GreetingModule, GraphqlModule::for_root(None)])]
@@ -51,7 +51,7 @@ pub struct GreetingsAppModule;
 ```
 
 ```rust title="src/greeting/module.rs"
-use nestrs_core::module;
+use nest_rs_core::module;
 use super::resolver::GreetingResolver;
 
 #[module(providers = [GreetingResolver])]
@@ -79,7 +79,7 @@ A resolver injects providers like any other struct:
 
 ```rust
 use std::sync::Arc;
-use nestrs_graphql::{query, resolver};
+use nest_rs_graphql::{query, resolver};
 use crate::greeting::service::GreetingService;
 
 #[resolver]
@@ -128,7 +128,7 @@ impl GreetingResolver {
 
 - `InputObject` makes a struct usable as an argument type;
   `SimpleObject` makes one usable as a return type. Both come from
-  `async-graphql` (re-exported by `nestrs-graphql`).
+  `async-graphql` (re-exported by `nest-rs-graphql`).
 - Add `#[mutation]` on a method to declare it a mutation rather than a
   query.
 
@@ -213,7 +213,7 @@ schema changes show up in diffs without a separate generator pass.
 
 - `crates/features/src/users/graphql/resolver.rs` — a production-grade
   resolver with relations, dataloaders and authorization.
-- `crates/nestrs-graphql/` — `#[resolver]`, `#[query]`, `#[mutation]`,
+- `crates/nest-rs-graphql/` — `#[resolver]`, `#[query]`, `#[mutation]`,
   `#[field]`, schema composition.
-- `crates/nestrs-resource/` — `#[expose]` for an entity that becomes a
+- `crates/nest-rs-resource/` — `#[expose]` for an entity that becomes a
   GraphQL type *and* an OpenAPI schema from one declaration.

@@ -20,8 +20,8 @@ aggregations, reach for [OpenTelemetry](/opentelemetry/).
 ## Mount it
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_core::module;
-use nestrs_server_timing::ServerTimingModule;
+use nest_rs_core::module;
+use nest_rs_server_timing::ServerTimingModule;
 
 #[module(imports = [ServerTimingModule])]
 pub struct PlatformApiModule;
@@ -48,8 +48,8 @@ out:
 ```rust title="src/items/http/controller.rs"
 use std::time::Instant;
 
-use nestrs_http::{controller, routes};
-use nestrs_server_timing::Timings;
+use nest_rs_http::{controller, routes};
+use nest_rs_server_timing::Timings;
 use poem::Request;
 
 #[controller(path = "/items")]
@@ -99,5 +99,5 @@ server-timing: db;dur=7.82, render;dur=0.41;desc="wire transform", total;dur=8.9
 
 ### Reference
 
-- `crates/nestrs-server-timing/` — `ServerTimingModule`, `Timings`,
+- `crates/nest-rs-server-timing/` — `ServerTimingModule`, `Timings`,
   `Entry`.

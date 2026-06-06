@@ -18,7 +18,7 @@ self-composing route table.
 
 ```rust title="apps/hello/src/controller.rs"
 use std::sync::Arc;
-use nestrs_http::{controller, routes};
+use nest_rs_http::{controller, routes};
 use crate::service::HelloService;
 
 #[controller(path = "/")]
@@ -50,7 +50,7 @@ Run it:
 ```bash frame="terminal"
 $ just dev
 …
-2026-06-03T10:14:22Z  INFO nestrs::http: bound 1 route on 0.0.0.0:3000
+2026-06-03T10:14:22Z  INFO nest_rs::http: bound 1 route on 0.0.0.0:3000
   GET / → HelloController::hello
 
 $ curl http://localhost:3000
@@ -105,7 +105,7 @@ Bonjour le monde
 ## Accepting a JSON body, validated
 
 ```rust
-use nestrs_http::{Valid, input};
+use nest_rs_http::{Valid, input};
 use poem::web::Json;
 use poem::Result;
 use serde::Serialize;
@@ -188,7 +188,7 @@ sit beside the verb attribute and shape the response without touching the
 handler logic:
 
 ```rust
-use nestrs_http::{http_code, response_header, redirect};
+use nest_rs_http::{http_code, response_header, redirect};
 use poem::http::StatusCode;
 
 #[post("/items")]
@@ -275,7 +275,7 @@ structured error body conforming to
 [RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html):
 
 ```rust
-use nestrs_http::ProblemDetails;
+use nest_rs_http::ProblemDetails;
 use poem::Result;
 use poem::web::Json;
 
@@ -314,7 +314,7 @@ for one-off problem responses, not a replacement for typed feature errors.
 ## Reading the client IP
 
 ```rust
-use nestrs_http::ClientIp;
+use nest_rs_http::ClientIp;
 
 #[get("/whoami")]
 async fn whoami(&self, ip: ClientIp) -> String {
@@ -357,7 +357,7 @@ the whole body into [`Bytes`](https://docs.rs/bytes), capped at
 unbounded memory.
 
 ```rust
-use nestrs_http::RawBody;
+use nest_rs_http::RawBody;
 
 #[post("/webhooks/stripe")]
 async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
@@ -370,7 +370,7 @@ async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
 For a tighter cap on a specific route, take the body manually:
 
 ```rust
-use nestrs_http::RawBody;
+use nest_rs_http::RawBody;
 use poem::{Result, RequestBody};
 
 #[post("/webhooks/small")]
@@ -390,7 +390,7 @@ A guard runs **before** the handler. Bind it on a single route, or on the
 whole controller:
 
 ```rust
-use nestrs_http::Guard;
+use nest_rs_http::Guard;
 
 #[injectable]
 pub struct RateLimitGuard;

@@ -21,7 +21,7 @@ unrestricted grant allows, a self-call sees the self-visible fields, a
 stranger sees the public subset, and `#[expose(skip)]` columns never
 escape.
 
-```rust title="crates/features/src/users/core/policy.rs"
+```rust title="crates/features/src/users/policy.rs"
 #[cfg(test)]
 mod tests {
     use super::*;

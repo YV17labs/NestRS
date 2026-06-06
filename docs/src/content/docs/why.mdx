@@ -93,7 +93,7 @@ contexts (jobs, processors) install a pool executor for the same code path.
 ```rust
 // no @Transactional, no begin/commit — the executor is ambient.
 impl UsersService {
-    pub async fn rename(&self, id: Uuid, name: String) -> Result<User, UserError> {
+    pub async fn rename(&self, id: Uuid, name: String) -> Result<User, ServiceError> {
         let user = self.repo.find_by_id(id).await?;
         self.repo.update(user, |m| m.name = name).await
     }
@@ -104,15 +104,15 @@ impl UsersService {
 
 A feature decomposes into a **port** (the entity, the service, the contract)
 and one **adapter** per transport it exposes (HTTP controller, GraphQL
-resolver, WebSocket gateway, queue processor, MCP tool). Each adapter lives
-in its own folder under the feature, with its own `module.rs`. The
-composition rule is symmetric across transports: import the feature's
-`Core` module + the matching `Authz<Transport>` module, and the wiring is
-done.
+resolver, WebSocket gateway, queue processor, MCP tool). The port sits at
+the feature root; each adapter lives in its own sub-folder, with its own
+`module.rs`. The composition rule is symmetric across transports: import
+the feature's `Module` + the matching `Authz<Transport>` module, and the
+wiring is done.
 
 ```
 features/users/
-  core/      ← entity, service, dto, error
+  entity.rs, service.rs, dto.rs, error.rs, module.rs   ← the port
   http/      ← controller
   graphql/   ← resolver
   ws/        ← gateway
@@ -120,8 +120,9 @@ features/users/
   mcp/       ← tool
 ```
 
-An app picks the edges it serves. A worker imports `Core + Queue`; an API
-imports `Core + Http + Graphql + Ws`.
+An app picks the edges it serves. A worker imports `UsersModule +
+UsersQueueModule`; an API imports `UsersModule + UsersHttpModule +
+UsersGraphqlModule + UsersWsModule`.
 
 ### 5. Wiring verified at boot
 

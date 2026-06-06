@@ -105,6 +105,15 @@ impl TestAppBuilder {
         self
     }
 
+    /// Replace a concrete provider with a pre-shared `Arc<T>`. Use when a test
+    /// already holds the fake in an `Arc` — typically because it inspects the
+    /// fake's state after a request — and would otherwise have to give up
+    /// ownership through [`override_value`](Self::override_value).
+    pub fn override_provider<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+        self.inner = self.inner.override_provider(value);
+        self
+    }
+
     pub fn http(mut self, transport: HttpTransport) -> Self {
         self.http = Some(transport);
         self

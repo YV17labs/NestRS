@@ -22,6 +22,12 @@ mod module;
 /// per request (and resolved through a `RequestScope` — e.g. the HTTP
 /// `Scoped<T>` extractor). A request-scoped provider may depend on singletons
 /// but not on other request-scoped providers.
+///
+/// `#[injectable(scope = transient)]` registers a factory rebuilt on every
+/// resolution: each `container.get::<T>()` (or `Scoped<T>` extraction) yields
+/// a fresh instance. A transient may depend on singletons and request-scoped
+/// providers; a transient depending (transitively) on itself panics with a
+/// cycle diagnostic at resolution time.
 #[proc_macro_attribute]
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     injectable::injectable(args, input)

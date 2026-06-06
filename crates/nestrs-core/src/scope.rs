@@ -41,19 +41,20 @@ impl RequestScope {
     }
 
     /// Resolve `T`. Request-scoped providers are built once and cached for
-    /// this scope; non-scoped types fall through to the singleton container.
+    /// this scope; transient providers are rebuilt on every call; non-scoped
+    /// types fall through to the singleton container.
     pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         let id = TypeId::of::<T>();
-        match self.root.scoped_factory(id) {
-            Some(factory) => {
-                let mut cache = self.cache.lock();
-                let any = cache
-                    .entry(id)
-                    .or_insert_with(|| factory(&self.root))
-                    .clone();
-                any.downcast::<T>().ok()
-            }
-            None => self.root.get::<T>(),
+        if let Some(factory) = self.root.scoped_factory(id) {
+            let mut cache = self.cache.lock();
+            let any = cache
+                .entry(id)
+                .or_insert_with(|| factory(&self.root))
+                .clone();
+            return any.downcast::<T>().ok();
         }
+        // Transients route through `Container::get` so the re-entrancy guard
+        // catches a self-cycle, regardless of which surface initiates the call.
+        self.root.get::<T>()
     }
 }

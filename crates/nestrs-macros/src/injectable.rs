@@ -10,8 +10,8 @@ use nestrs_codegen::{
 };
 
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
-    let request_scoped = match parse_injectable_scope(args.into()) {
-        Ok(scoped) => scoped,
+    let scope = match parse_injectable_scope(args.into()) {
+        Ok(s) => s,
         Err(err) => return err.to_compile_error().into(),
     };
     let mut item = parse_macro_input!(input as ItemStruct);
@@ -31,25 +31,11 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     let from_container = from_container_method(&ctor);
     let injected = injected_method(&dep_keys);
 
-    // Request-scoped: lazy build, no register-phase ordering deps, registers
-    // a factory not a value. `injected` is still reported for the access graph.
-    let (dependencies, dependency_names, optional_dependencies, register_fn) = if request_scoped {
-        (
-            dependencies_method(&[]),
-            dependency_names_method(&[]),
-            optional_dependencies_method(&[]),
-            quote! {
-                fn register(
-                    builder: ::nestrs_core::ContainerBuilder,
-                ) -> ::nestrs_core::ContainerBuilder {
-                    builder.provide_scoped::<Self, _>(|__container| {
-                        Self::from_container(__container)
-                    })
-                }
-            },
-        )
-    } else {
-        (
+    // Request-scoped and transient: lazy build, no register-phase ordering deps,
+    // each registers a factory not a value. `injected` is still reported for
+    // the access graph regardless of build timing.
+    let (dependencies, dependency_names, optional_dependencies, register_fn) = match scope {
+        InjectableScope::Singleton => (
             dependencies_method(&dep_keys),
             dependency_names_method(&dep_names),
             optional_dependencies_method(&opt_keys),
@@ -62,7 +48,35 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
                     builder.provide(__value)
                 }
             },
-        )
+        ),
+        InjectableScope::Request => (
+            dependencies_method(&[]),
+            dependency_names_method(&[]),
+            optional_dependencies_method(&[]),
+            quote! {
+                fn register(
+                    builder: ::nestrs_core::ContainerBuilder,
+                ) -> ::nestrs_core::ContainerBuilder {
+                    builder.provide_scoped::<Self, _>(|__container| {
+                        Self::from_container(__container)
+                    })
+                }
+            },
+        ),
+        InjectableScope::Transient => (
+            dependencies_method(&[]),
+            dependency_names_method(&[]),
+            optional_dependencies_method(&[]),
+            quote! {
+                fn register(
+                    builder: ::nestrs_core::ContainerBuilder,
+                ) -> ::nestrs_core::ContainerBuilder {
+                    builder.provide_transient::<Self, _>(|__container| {
+                        Self::from_container(__container)
+                    })
+                }
+            },
+        ),
     };
 
     quote! {
@@ -84,28 +98,38 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Parse `#[injectable(scope = request|singleton)]`. Returns `true` for
-/// request-scoped; empty or `singleton` returns `false`.
-fn parse_injectable_scope(args: TokenStream2) -> syn::Result<bool> {
+#[derive(Clone, Copy)]
+enum InjectableScope {
+    Singleton,
+    Request,
+    Transient,
+}
+
+/// Parse `#[injectable(scope = singleton|request|transient)]`. Empty defaults
+/// to [`InjectableScope::Singleton`].
+fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
     if args.is_empty() {
-        return Ok(false);
+        return Ok(InjectableScope::Singleton);
     }
-    let parser = |input: ParseStream| -> syn::Result<bool> {
+    let parser = |input: ParseStream| -> syn::Result<InjectableScope> {
         let key: Ident = input.parse()?;
         if key != "scope" {
             return Err(syn::Error::new(
                 key.span(),
-                "expected `scope = request` or `scope = singleton`",
+                "expected `scope = singleton`, `scope = request`, or `scope = transient`",
             ));
         }
         input.parse::<Token![=]>()?;
         let value: Ident = input.parse()?;
         match value.to_string().as_str() {
-            "request" => Ok(true),
-            "singleton" => Ok(false),
+            "singleton" => Ok(InjectableScope::Singleton),
+            "request" => Ok(InjectableScope::Request),
+            "transient" => Ok(InjectableScope::Transient),
             other => Err(syn::Error::new(
                 value.span(),
-                format!("unknown scope `{other}` (expected `request` or `singleton`)"),
+                format!(
+                    "unknown scope `{other}` (expected `singleton`, `request`, or `transient`)"
+                ),
             )),
         }
     };

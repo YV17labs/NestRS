@@ -250,6 +250,17 @@ impl AppBuilder {
         self
     }
 
+    /// Replace a concrete provider with a pre-shared `Arc<T>` after the module
+    /// tree registers — the same swap as [`override_value`](Self::override_value)
+    /// for cases a test already has the value in an `Arc` (a fake holding state
+    /// the test inspects after the request, for instance). Eager-build caveat
+    /// applies (see [`override_value`](Self::override_value)).
+    pub fn override_provider<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+        self.overrides
+            .push(Box::new(move |builder| builder.replace_arc(value)));
+        self
+    }
+
     /// Promote the default unreachable-resolver `warn` into a boot
     /// [`UnreachableResolversError`]. Use in apps where a forgotten
     /// `<Feature>GraphqlModule` import should be a CI gate; leave default in

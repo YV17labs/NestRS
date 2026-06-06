@@ -1,0 +1,14 @@
+[package]
+name = "nest-rs-database"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "ORM-agnostic data-layer seam for nestrs: the ambient request/job Executor task-local + the object-safe Executor trait a third-party ORM module implements (sqlx, diesel, prisma-client-rust, mongo, …). The first-party SeaORM integration lives in nest-rs-seaorm; the row-level filter and response masker are SeaORM-specific by design."
+
+
+[dependencies]
+# The ambient executor + scope are carried in `tokio::task_local!`s.
+tokio.workspace = true

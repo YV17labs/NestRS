@@ -2,16 +2,16 @@ use std::sync::Arc;
 
 use async_graphql::dataloader::DataLoader;
 use async_graphql::{Context, Result};
-use nestrs_authz::graphql::authorize;
-use nestrs_authz::{Create, Read};
-use nestrs_seaorm::graphql::bind;
-use nestrs_graphql::{crud, resolver};
+use nest_rs_authz::graphql::authorize;
+use nest_rs_authz::{Create, Read};
+use nest_rs_seaorm::graphql::bind;
+use nest_rs_graphql::{crud, resolver};
 use uuid::Uuid;
 
 use crate::Claims;
 use crate::authz::graphql::GraphqlAuthGuard;
 use crate::orgs::{Org, OrgsServiceById};
-use crate::users::core::{
+use crate::users::{
     CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService, UsersServiceByName,
 };
 

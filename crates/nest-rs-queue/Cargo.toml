@@ -1,0 +1,26 @@
+[package]
+name = "nest-rs-queue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Backend-agnostic queue contract for nestrs: traits and the link-time #[process] registry that any backend (Redis via nest-rs-redis, SQS, NATS, in-memory) plugs into."
+
+
+[dependencies]
+nest-rs-core.workspace = true
+# Re-exported so call sites write `nest_rs_queue::processor` for the macro
+# even though it physically lives in the macros crate; the macro emits paths
+# rooted at `::nest_rs_queue::*`, so the macro and the abstractions ship from
+# the same import root.
+nest-rs-queue-macros.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio-util.workspace = true
+# Re-exported for the `#[processor]` macro emission so the call site doesn't
+# need a direct `tracing` dependency for the unversioned-payload warning.
+tracing.workspace = true

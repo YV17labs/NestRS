@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use nestrs_seaorm::CrudService;
-use nestrs_ws::{gateway, messages};
+use nest_rs_seaorm::{CrudService, ServiceError};
+use nest_rs_ws::{gateway, messages};
 
 use crate::authn::AuthGuard;
 use crate::authz::AppAbilityGuard;
 use crate::authz::ws::WsAuthGuard;
-use crate::users::core::{User, UserError, UsersService};
+use crate::users::{User, UsersService};
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthGuard, AppAbilityGuard)]
@@ -19,7 +19,7 @@ pub struct UsersGateway {
 impl UsersGateway {
     #[subscribe_message("users.list")]
     #[use_guards(WsAuthGuard)]
-    async fn list(&self) -> Result<Vec<User>, UserError> {
+    async fn list(&self) -> Result<Vec<User>, ServiceError> {
         let rows = self.svc.list().await?;
         Ok(rows.iter().map(User::from).collect())
     }

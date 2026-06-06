@@ -1,5 +1,5 @@
-use nestrs_authz::http::AbilityGuard;
+use nest_rs_authz::http::AbilityGuard;
 
-use crate::authz::core::AppAbility;
+use crate::authz::AppAbility;
 
 pub type AppAbilityGuard = AbilityGuard<AppAbility>;

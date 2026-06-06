@@ -1,0 +1,29 @@
+[package]
+name = "nest-rs-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Configuration loading for nestrs apps — the @nestjs/config analog (namespaced env mapping)."
+
+
+[dependencies]
+thiserror.workspace = true
+# `Config::load` runs declarative `#[validate(...)]` checks after the explicit
+# `from_env` mapping — the same `validator` the HTTP `ValidationPipe` uses.
+validator.workspace = true
+# `ConfigModule::for_feature` queues a config-loading factory on the container,
+# so this crate reaches into the kernel. The reverse never holds — `nest-rs-core`
+# does not depend on `nest-rs-config`, so there is no cycle.
+nest-rs-core.workspace = true
+# `anyhow::Error` is the factory's error type (a failed load aborts the boot).
+anyhow.workspace = true
+# Re-exported `#[config]` decorator. A `*-macros` crate emits absolute-path
+# tokens, so it never depends back on this surface crate.
+nest-rs-config-macros.workspace = true
+
+[dev-dependencies]
+# `figment::Jail` isolates the process env + cwd for the loader/cascade tests.
+figment = { workspace = true, features = ["test"] }

@@ -1,8 +1,8 @@
 use chat::ChatModule;
 use futures_util::{SinkExt, StreamExt};
-use nestrs_http::HttpTransport;
-use nestrs_http::poem::http::StatusCode;
-use nestrs_testing::TestApp;
+use nest_rs_http::HttpTransport;
+use nest_rs_http::poem::http::StatusCode;
+use nest_rs_testing::TestApp;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 

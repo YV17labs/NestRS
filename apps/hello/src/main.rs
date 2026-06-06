@@ -1,5 +1,5 @@
 use anyhow::Result;
-use nestrs_core::App;
+use nest_rs_core::App;
 
 use hello::HelloModule;
 

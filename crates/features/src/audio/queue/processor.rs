@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nestrs_core::injectable;
-use nestrs_queue::processor;
+use nest_rs_core::injectable;
+use nest_rs_queue::processor;
 
-use crate::audio::core::{TranscodeJob, Transcoder};
+use crate::audio::{TranscodeJob, Transcoder};
 
 /// Consumer side: the `worker` app mounts this and processes jobs the `api`
 /// app pushed onto the shared `audio` queue. A single provider holds every
@@ -29,15 +29,15 @@ impl AudioJobs {
 mod tests {
     use std::any::TypeId;
 
-    use nestrs_core::Discoverable;
-    use nestrs_queue::ProcessMethod;
+    use nest_rs_core::Discoverable;
+    use nest_rs_queue::ProcessMethod;
 
     use super::AudioJobs;
-    use crate::audio::core::{AUDIO_QUEUE, Transcoder};
+    use crate::audio::{AUDIO_QUEUE, Transcoder};
 
     #[test]
     fn process_method_is_discovered_through_the_inventory() {
-        let entries: Vec<&ProcessMethod> = nestrs_core::inventory::iter::<ProcessMethod>()
+        let entries: Vec<&ProcessMethod> = nest_rs_core::inventory::iter::<ProcessMethod>()
             .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioJobs>())
             .collect();
         let transcode = entries

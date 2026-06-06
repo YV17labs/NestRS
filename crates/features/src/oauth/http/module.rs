@@ -1,11 +1,11 @@
-use nestrs_core::module;
-use nestrs_throttler::ThrottlerGuard;
+use nest_rs_core::module;
+use nest_rs_throttler::ThrottlerGuard;
 
 use super::controller::OAuthController;
-use crate::oauth::core::OAuthCoreModule;
+use crate::oauth::OAuthModule;
 
 #[module(
-    imports = [OAuthCoreModule],
+    imports = [OAuthModule],
     providers = [ThrottlerGuard, OAuthController],
 )]
 pub struct OAuthHttpModule;

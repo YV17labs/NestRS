@@ -1,11 +1,11 @@
-use nestrs_core::module;
+use nest_rs_core::module;
 
 use super::controller::OrgsController;
 use crate::authz::AuthzHttpModule;
-use crate::orgs::core::OrgsCoreModule;
+use crate::orgs::OrgsModule;
 
 #[module(
-    imports = [OrgsCoreModule, AuthzHttpModule],
+    imports = [OrgsModule, AuthzHttpModule],
     providers = [OrgsController],
 )]
 pub struct OrgsHttpModule;

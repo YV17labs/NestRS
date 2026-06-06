@@ -10,19 +10,19 @@ publish = false
 description = "The product's feature library — vertical slices as port + adapter modules (entities, services, controllers, resolvers, gateways). Each feature exposes a core module plus per-transport edge modules; apps compose by listing the edges they serve."
 
 [dependencies]
-nestrs-core.workspace = true
-nestrs-seaorm = { workspace = true, features = ["http", "graphql", "ws"] }
-nestrs-authn.workspace = true
-nestrs-authz = { workspace = true, features = ["http", "graphql"] }
-nestrs-config.workspace = true
-nestrs-graphql.workspace = true
-nestrs-http.workspace = true
-nestrs-queue.workspace = true
-nestrs-redis.workspace = true
-nestrs-schedule.workspace = true
-nestrs-throttler.workspace = true
-nestrs-ws.workspace = true
-nestrs-resource.workspace = true
+nest-rs-core.workspace = true
+nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "ws"] }
+nest-rs-authn.workspace = true
+nest-rs-authz = { workspace = true, features = ["http", "graphql"] }
+nest-rs-config.workspace = true
+nest-rs-graphql.workspace = true
+nest-rs-http.workspace = true
+nest-rs-queue.workspace = true
+nest-rs-redis.workspace = true
+nest-rs-schedule.workspace = true
+nest-rs-throttler.workspace = true
+nest-rs-ws.workspace = true
+nest-rs-resource.workspace = true
 async-graphql.workspace = true
 async-trait.workspace = true
 poem.workspace = true
@@ -39,9 +39,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-nestrs-testing = { workspace = true, features = ["orm"] }
-nestrs-authz.workspace = true
-nestrs-seaorm.workspace = true
+nest-rs-testing = { workspace = true, features = ["orm"] }
+nest-rs-authz.workspace = true
+nest-rs-seaorm.workspace = true
 async-graphql.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true

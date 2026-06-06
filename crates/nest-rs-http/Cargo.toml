@@ -1,0 +1,55 @@
+[package]
+name = "nest-rs-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "HTTP transport for nestrs: HttpTransport, Controller trait and HttpControllerMeta, built on top of poem."
+
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-http-macros.workspace = true
+nest-rs-middleware.workspace = true
+# `TlsConfig::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
+# framework-wide env scheme (`env_var`, empty-as-unset), like every other
+# per-crate `from_env` shortcut.
+nest-rs-config.workspace = true
+# The pipes themselves are transport-agnostic; this crate only adapts them to
+# poem (the `Valid`/`Piped` extractors). `validator` is needed for the `Validate`
+# bound on `Valid`; `serde_json` renders a `PipeError` as a JSON 400.
+nest-rs-pipes.workspace = true
+validator.workspace = true
+serde_json.workspace = true
+# `#[routes]` captures the JSON schema of each `Json<T>` payload into
+# `HttpRouteMeta` so an OpenAPI generator (nest-rs-openapi) can read it. schemars
+# does the schema derivation — the same crate (and `JsonSchema` derive) that MCP
+# tool parameters already use. Re-exported below so macro-generated
+# `::nest_rs_http::schemars::…` paths resolve at the call site.
+schemars.workspace = true
+poem.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+# `serde` derives `Serialize` on the RFC 9457 `ProblemDetails` body so the
+# response carries an `application/problem+json` payload.
+serde.workspace = true
+# `RawBody` returns the body as `bytes::Bytes` (zero-copy view) with a size
+# guard.
+bytes.workspace = true
+
+[dev-dependencies]
+# Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
+# the `Json<T>` extractor in `from_request` test paths.
+serde.workspace = true
+# `tests/global_prefix.rs` drives an in-process server through poem's
+# `TestClient`, gated behind poem's `test` feature.
+poem = { workspace = true, features = ["test"] }
+tokio.workspace = true
+# `tests/global_prefix.rs` env-path test isolates the process env via
+# `figment::Jail`, matching how `nest-rs-config` itself tests env reads.
+figment = { workspace = true, features = ["test"] }

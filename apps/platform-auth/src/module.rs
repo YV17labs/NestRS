@@ -1,11 +1,11 @@
-use nestrs_authn::{AuthnModule, OAuth2Module};
-use nestrs_config::ConfigModule;
-use nestrs_core::module;
-use nestrs_seaorm::DatabaseModule;
-use nestrs_health::HealthModule;
-use nestrs_http::{HttpConfig, HttpModule};
-use nestrs_opentelemetry::OpenTelemetryModule;
-use nestrs_throttler::ThrottlerModule;
+use nest_rs_authn::{AuthnModule, OAuth2Module};
+use nest_rs_config::ConfigModule;
+use nest_rs_core::module;
+use nest_rs_seaorm::DatabaseModule;
+use nest_rs_health::HealthModule;
+use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_opentelemetry::OpenTelemetryModule;
+use nest_rs_throttler::ThrottlerModule;
 
 use features::oauth::OAuthHttpModule;
 

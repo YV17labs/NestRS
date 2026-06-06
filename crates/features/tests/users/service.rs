@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use features::users::{CreateUserInput, UserError, UsersService};
+use features::users::{CreateUserInput, UsersService};
+use nest_rs_seaorm::ServiceError;
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
@@ -22,7 +23,7 @@ async fn create_rejects_invalid_email() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, UserError::Validation(_)));
+    assert!(matches!(err, ServiceError::Validation(_)));
 }
 
 #[tokio::test]
@@ -37,5 +38,5 @@ async fn create_rejects_empty_name() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, UserError::Validation(_)));
+    assert!(matches!(err, ServiceError::Validation(_)));
 }

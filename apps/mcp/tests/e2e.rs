@@ -1,7 +1,7 @@
 use mcp::McpModule;
-use nestrs_core::DiscoveryService;
-use nestrs_http::HttpEndpointMeta;
-use nestrs_testing::TestApp;
+use nest_rs_core::DiscoveryService;
+use nest_rs_http::HttpEndpointMeta;
+use nest_rs_testing::TestApp;
 use serde_json::json;
 
 async fn boot() -> TestApp {

@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use nestrs_authz::http::Authorize;
-use nestrs_authz::{Create, Read};
-use nestrs_seaorm::Bind;
-use nestrs_http::{Ctx, Valid, controller, crud};
+use nest_rs_authz::http::Authorize;
+use nest_rs_authz::{Create, Read};
+use nest_rs_seaorm::Bind;
+use nest_rs_http::{Ctx, Valid, controller, crud};
 use poem::Result;
 use poem::web::Json;
 
 use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AppAbilityGuard;
-use crate::users::core::{
+use crate::users::{
     CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService,
 };
 

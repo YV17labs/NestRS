@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use features::authz::ws::WsAuthGuard;
-use nestrs_authz::{Ability, with_ability};
-use nestrs_ws::{MessageGuard, WsClient};
+use nest_rs_authz::{Ability, with_ability};
+use nest_rs_ws::{MessageGuard, WsClient};
 use serde_json::json;
 
 #[tokio::test]

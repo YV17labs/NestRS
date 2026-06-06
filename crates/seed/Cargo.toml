@@ -12,5 +12,5 @@ fake.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-nestrs-testing = { workspace = true, features = ["orm"] }
+nest-rs-testing = { workspace = true, features = ["orm"] }
 migrations.workspace = true

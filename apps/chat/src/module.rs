@@ -1,7 +1,7 @@
-use nestrs_core::module;
-use nestrs_health::HealthModule;
-use nestrs_http::{HttpConfig, HttpModule};
-use nestrs_opentelemetry::OpenTelemetryModule;
+use nest_rs_core::module;
+use nest_rs_health::HealthModule;
+use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_opentelemetry::OpenTelemetryModule;
 
 use crate::chat::ChatModule as ChatFeatureModule;
 use crate::notify::NotifyModule;

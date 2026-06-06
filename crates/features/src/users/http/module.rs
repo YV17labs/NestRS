@@ -1,11 +1,11 @@
-use nestrs_core::module;
+use nest_rs_core::module;
 
 use super::controller::UsersController;
 use crate::authz::AuthzHttpModule;
-use crate::users::core::UsersCoreModule;
+use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersCoreModule, AuthzHttpModule],
+    imports = [UsersModule, AuthzHttpModule],
     providers = [UsersController],
 )]
 pub struct UsersHttpModule;

@@ -1,0 +1,38 @@
+[package]
+name = "nest-rs-redis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Redis-backed queue integration for nest-rs-queue (via apalis-redis): the QueueConnection producer, the QueueWorker consumer transport, and the #[processor] decorator re-export. The user-facing storage is Redis; apalis is an implementation detail."
+
+
+[dependencies]
+nest-rs-core.workspace = true
+# The abstractions: `Job`, `Processor`, `ProcessMethod`, the `JobProducer`
+# seam, and (re-exported through it) the `#[processor]` macro. Application
+# code reaches both this crate's Redis types AND the abstractions through
+# the same import root by depending on `nest-rs-queue` + `nest-rs-redis`.
+nest-rs-queue.workspace = true
+# `QueueModule` owns its `#[config]` `QueueConfig` (namespace `queue`), loaded
+# from `NESTRS_QUEUE__*`; `validator` backs its `#[validate]` rules.
+nest-rs-config.workspace = true
+validator.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+apalis = { workspace = true, features = ["retry", "timeout", "catch-panic"] }
+apalis-redis.workspace = true
+
+[dev-dependencies]
+nest-rs-core.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+tower = "0.5"

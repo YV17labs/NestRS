@@ -1,4 +1,4 @@
-use nestrs_core::module;
+use nest_rs_core::module;
 
 use super::controller::AudioController;
 use crate::authz::AuthzHttpModule;

@@ -1,5 +1,5 @@
 use hello::HelloModule;
-use nestrs_testing::TestApp;
+use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 
 #[tokio::test]

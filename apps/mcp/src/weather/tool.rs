@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use nestrs_mcp::mcp;
-use nestrs_mcp::{
+use nest_rs_mcp::mcp;
+use nest_rs_mcp::{
     CallToolResult, Content, McpError, Parameters, ServerHandler, tool, tool_handler, tool_router,
 };
 use validator::Validate;
@@ -58,7 +58,7 @@ mod tests {
     use std::any::TypeId;
     use std::sync::Arc;
 
-    use nestrs_core::Discoverable;
+    use nest_rs_core::Discoverable;
 
     use super::WeatherTool;
     use crate::weather::service::WeatherProvider;

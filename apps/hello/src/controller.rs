@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nestrs_http::{controller, routes};
+use nest_rs_http::{controller, routes};
 use poem::error::ResponseError;
 use poem::http::{HeaderValue, StatusCode, header};
 use poem::{IntoResponse, Response};
@@ -76,7 +76,7 @@ impl ResponseError for ForbiddenError {
 mod tests {
     use std::any::TypeId;
 
-    use nestrs_core::Discoverable;
+    use nest_rs_core::Discoverable;
 
     use super::HelloController;
     use crate::service::HelloService;

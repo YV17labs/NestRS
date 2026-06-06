@@ -1,5 +1,5 @@
 use migrations::Migrator;
-use nestrs_testing::EphemeralDatabase;
+use nest_rs_testing::EphemeralDatabase;
 
 #[tokio::test]
 async fn migrate_then_seed_populates_and_is_idempotent() {

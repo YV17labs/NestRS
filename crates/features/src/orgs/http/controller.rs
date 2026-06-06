@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use nestrs_http::{controller, crud};
+use nest_rs_http::{controller, crud};
 
 use crate::authn::AuthGuard;
 use crate::authz::AppAbilityGuard;
-use crate::orgs::core::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
+use crate::orgs::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
 
 #[controller(path = "/orgs")]
 #[use_guards(AuthGuard, AppAbilityGuard)]

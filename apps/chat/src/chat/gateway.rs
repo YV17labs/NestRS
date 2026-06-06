@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nestrs_ws::{WsClient, gateway, messages};
+use nest_rs_ws::{WsClient, gateway, messages};
 
 use crate::chat::dto::{ChatMessage, SendMessage};
 use crate::chat::guard::ModeratedGuard;
@@ -51,7 +51,7 @@ impl ChatGateway {
 mod tests {
     use std::any::TypeId;
 
-    use nestrs_core::Discoverable;
+    use nest_rs_core::Discoverable;
 
     use super::ChatGateway;
     use crate::chat::service::RoomService;

@@ -1,0 +1,55 @@
+[package]
+name = "nest-rs-authn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Authentication for nestrs: a JwtService (sign/verify), a pluggable Strategy trait, and the request-scoped AuthGuard that establishes the caller's identity."
+
+
+[dependencies]
+# `AuthGuard` is `#[injectable]` (it resolves the app's `Strategy`); `AuthnModule`
+# is a `DynamicModule` that provides the configured `JwtService` as global infra.
+nest-rs-core.workspace = true
+# `AuthnModule`/`OAuth2Module` own their `#[config]` (`JwtConfig`/`OAuth2Config`,
+# namespace `authn`), loaded from `NESTRS_AUTHN__*`; `validator` backs the derives.
+nest-rs-config.workspace = true
+validator.workspace = true
+# `Strategy` reads the `poem::Request`; `AuthGuard` implements the `Guard` trait
+# re-exported by the HTTP surface.
+nest-rs-http.workspace = true
+poem.workspace = true
+async-trait.workspace = true
+# Token signing/verification — kept internal to this crate (apps never depend on
+# jsonwebtoken directly), mirroring how nest-rs-redis hides apalis.
+jsonwebtoken.workspace = true
+# OAuth2 Authorization Code flow; its bundled reqwest (re-exported as
+# `oauth2::reqwest`) drives the token exchange, so we add no second reqwest. The
+# default features (reqwest + rustls-tls) are exactly what we want.
+oauth2.workspace = true
+# Decoding `Authorization: Basic` for the `basic_credentials` helper (the building
+# block of OAuth2 client authentication, symmetric to `bearer_token`).
+base64.workspace = true
+serde.workspace = true
+# Parsing the OAuth userinfo response (oauth2's reqwest is built without its
+# `json` feature, so we read the body and deserialize it ourselves).
+serde_json.workspace = true
+thiserror.workspace = true
+# Argon2id for local credential storage (`hash_password` / `verify_password`).
+argon2.workspace = true
+# `OAuth2Module::for_root` provides the client through the factory phase, whose
+# error channel is anyhow (the container's `Result`).
+anyhow.workspace = true
+# `AuthGuard` logs the authentication outcome — a failure at `warn` so it is
+# visible in production, the audit point every strategy shares.
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+jsonwebtoken = { workspace = true }
+serde = { workspace = true }
+base64 = { workspace = true }
+poem = { workspace = true }
+validator = { workspace = true }

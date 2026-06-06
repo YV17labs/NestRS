@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use crate::oauth::core::{
+use crate::oauth::{
     AccessToken, AuthenticatedClient, Caller, ClientAuthGuard, LoginInput, OAuthGuard, TokenIssuer,
 };
-use nestrs_http::{Ctx, Valid, controller, routes};
-use nestrs_throttler::{Throttle, ThrottlerGuard};
+use nest_rs_http::{Ctx, Valid, controller, routes};
+use nest_rs_throttler::{Throttle, ThrottlerGuard};
 use poem::Result;
 use poem::web::{Form, Json};
 use serde::Deserialize;

@@ -5,15 +5,15 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-nestrs-core.workspace = true
-nestrs-authn.workspace = true
-nestrs-authz.workspace = true
-nestrs-config.workspace = true
-nestrs-seaorm.workspace = true
-nestrs-health.workspace = true
-nestrs-http.workspace = true
-nestrs-opentelemetry = { workspace = true, features = ["http"] }
-nestrs-throttler.workspace = true
+nest-rs-core.workspace = true
+nest-rs-authn.workspace = true
+nest-rs-authz.workspace = true
+nest-rs-config.workspace = true
+nest-rs-seaorm.workspace = true
+nest-rs-health.workspace = true
+nest-rs-http.workspace = true
+nest-rs-opentelemetry = { workspace = true, features = ["http"] }
+nest-rs-throttler.workspace = true
 features.workspace = true
 poem.workspace = true
 sea-orm.workspace = true
@@ -28,7 +28,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 poem = { workspace = true, features = ["test"] }
-nestrs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
+nest-rs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
 migrations = { workspace = true }
 base64.workspace = true
 

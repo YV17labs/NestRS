@@ -1,5 +1,5 @@
-use nestrs_core::module;
-use nestrs_http::HttpModule;
+use nest_rs_core::module;
+use nest_rs_http::HttpModule;
 
 use crate::controller::HelloController;
 use crate::service::HelloService;

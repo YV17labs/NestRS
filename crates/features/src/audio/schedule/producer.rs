@@ -2,11 +2,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use nestrs_core::injectable;
-use nestrs_redis::QueueConnection;
-use nestrs_schedule::{CronExpression, scheduled};
+use nest_rs_core::injectable;
+use nest_rs_redis::QueueConnection;
+use nest_rs_schedule::{CronExpression, scheduled};
 
-use crate::audio::core::{AUDIO_QUEUE, TranscodeJob};
+use crate::audio::{AUDIO_QUEUE, TranscodeJob};
 
 /// Producer side: a recurring schedule that enqueues jobs the `worker` app
 /// consumes. Lives with the producing app (`api`), not the worker, so the
@@ -59,15 +59,15 @@ impl AudioTasks {
 mod tests {
     use std::any::TypeId;
 
-    use nestrs_core::{Discoverable, ReachableProviders};
-    use nestrs_redis::QueueConnection;
-    use nestrs_schedule::ScheduledMethod;
+    use nest_rs_core::{Discoverable, ReachableProviders};
+    use nest_rs_redis::QueueConnection;
+    use nest_rs_schedule::ScheduledMethod;
 
     use super::AudioTasks;
 
     #[test]
     fn three_methods_are_discovered_through_the_inventory() {
-        let names: Vec<&'static str> = nestrs_core::inventory::iter::<ScheduledMethod>()
+        let names: Vec<&'static str> = nest_rs_core::inventory::iter::<ScheduledMethod>()
             .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioTasks>())
             .map(|m| m.name)
             .collect();

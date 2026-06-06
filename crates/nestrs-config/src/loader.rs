@@ -5,9 +5,16 @@
 //! maps **its own** domain; sibling vars may only be borrowed via an
 //! **explicit fallback** in a `from_env` (own > borrowed > code default), since
 //! the `.env` cascade is merged once before any `from_env` runs.
+//!
+//! The reader's backing store is a [`ConfigSource`] — [`EnvSource`] is the
+//! default (process env + `.env` cascade). A third-party crate can ship an
+//! alternative source (Vault, K8s ConfigMap, AWS Parameter Store, …) by
+//! implementing [`ConfigSource`] and constructing
+//! [`ConfigService::with_source`].
 
 use std::env;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::dotenv;
 use crate::error::ConfigError;
@@ -23,16 +30,53 @@ pub fn env_var(name: &str) -> Option<String> {
     }
 }
 
+/// Where a [`ConfigService`] reads raw values from. The default is
+/// [`EnvSource`] (process env + `.env` cascade); a third-party crate can ship
+/// an alternative (Vault, K8s ConfigMap, AWS Parameter Store) by implementing
+/// this trait and passing an instance to [`ConfigService::with_source`].
+///
+/// Sync on purpose: `Config::from_env` runs sync at boot. A remote source
+/// pre-fetches into an in-memory map and serves `get` from that map.
+pub trait ConfigSource: Send + Sync + 'static {
+    /// Return the raw value for the fully-qualified variable name (e.g.
+    /// `"NESTRS_DATABASE__URL"`). Empty strings should be treated as unset.
+    fn get(&self, var: &str) -> Option<String>;
+}
+
+/// Default [`ConfigSource`] — reads from the process environment after the
+/// `.env` cascade has been merged. The merge runs on the **first** call to
+/// [`EnvSource::get`] (guarded by a `Once`), so a [`ConfigService`] built on a
+/// custom [`ConfigSource`] never triggers it and the process env stays
+/// untouched.
+#[derive(Default)]
+pub struct EnvSource;
+
+impl ConfigSource for EnvSource {
+    fn get(&self, var: &str) -> Option<String> {
+        dotenv::ensure_env_loaded();
+        env_var(var)
+    }
+}
+
 /// Typed reader bound to one namespace; resolves `NESTRS_<NAMESPACE>__<KEY>`.
 pub struct ConfigService {
     namespace: String,
+    source: Arc<dyn ConfigSource>,
 }
 
 impl ConfigService {
     pub fn for_namespace(namespace: &str) -> Self {
-        dotenv::ensure_env_loaded();
+        Self::with_source(namespace, Arc::new(EnvSource))
+    }
+
+    /// Build a reader backed by a custom [`ConfigSource`]. The `.env` cascade
+    /// is **not** merged — the source is the sole authority for resolution,
+    /// and the process env stays untouched (no global side effect from
+    /// constructing this reader).
+    pub fn with_source(namespace: &str, source: Arc<dyn ConfigSource>) -> Self {
         Self {
             namespace: namespace.to_ascii_uppercase(),
+            source,
         }
     }
 
@@ -41,7 +85,7 @@ impl ConfigService {
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
-        env_var(&self.var(key))
+        self.source.get(&self.var(key))
     }
 
     /// `Err` (naming the variable) when set-but-unparseable — boot-fatal, no
@@ -150,6 +194,55 @@ mod tests {
             jail.set_env("NESTRS_TESTL__SCOPES", "read:user, write , ,admin");
             let env = ConfigService::for_namespace("testl");
             assert_eq!(env.list("SCOPES"), vec!["read:user", "write", "admin"]);
+            Ok(())
+        });
+    }
+
+    // A `with_source` reader bypasses the env entirely — pin that the source
+    // is the sole authority so a third-party Vault/ConfigMap impl is not
+    // shadowed by stale process env.
+    #[test]
+    fn with_source_reads_from_the_custom_source_only() {
+        use std::collections::HashMap;
+        struct Map(HashMap<&'static str, &'static str>);
+        impl ConfigSource for Map {
+            fn get(&self, var: &str) -> Option<String> {
+                self.0.get(var).map(|s| (*s).to_owned())
+            }
+        }
+        let source = Arc::new(Map(HashMap::from([("NESTRS_CUSTOM__URL", "value-from-map")])));
+        let env = ConfigService::with_source("custom", source);
+        assert_eq!(env.get("URL").as_deref(), Some("value-from-map"));
+        assert!(env.get("MISSING").is_none());
+    }
+
+    // The dotenv cascade used to fire from `for_namespace`, which meant any
+    // `ConfigService` — including one built on a custom source — would
+    // permanently merge `.env` into the process env. Pin that a non-env
+    // source never triggers the merge: `.env` exists in the jail with a
+    // marker, and after a `with_source` read, that marker must still be
+    // unset in `std::env`.
+    #[test]
+    fn with_source_does_not_load_dotenv_into_process_env() {
+        struct Empty;
+        impl ConfigSource for Empty {
+            fn get(&self, _var: &str) -> Option<String> {
+                None
+            }
+        }
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                ".env",
+                "NESTRS_LEAK_GUARD__SHOULD_STAY_UNSET=loaded-from-dotenv",
+            )?;
+            // Build + use the custom-source reader. If dotenv leaked here it
+            // would set the marker in the jailed process env.
+            let env = ConfigService::with_source("leakguard", Arc::new(Empty));
+            assert!(env.get("ANYTHING").is_none());
+            assert!(
+                std::env::var("NESTRS_LEAK_GUARD__SHOULD_STAY_UNSET").is_err(),
+                "custom-source path must not merge .env into the process env",
+            );
             Ok(())
         });
     }

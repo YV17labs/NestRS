@@ -1,0 +1,266 @@
+---
+title: Writing a database driver
+description: A backend-agnostic scaffold — the shape of a driver for any store with a handle and an optional transaction concept, SQL or NoSQL, with the framework's seams filled in and the store-specific code marked as your own.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The [`nestrs-database`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-database)
+crate is a seam: an object-safe `Executor` trait, two `tokio::task_local!`s,
+and the install helpers that thread "the request's current handle, optionally
+inside a transaction" across every layer. The seam names no store and no
+query API — a handle is a handle. The same scaffold fits a SQL pool, a
+document-store client, a key-value session, a graph driver, an in-memory
+map. This page gives you the **shape** of a driver, not its implementation:
+the trait you implement, the methods you wire, with `// your code here`
+markers where the store-specific work lands. The reference impl is
+[`nestrs-seaorm`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-seaorm) —
+read it once when a placeholder is unclear.
+
+## What you'll implement
+
+- An `Executor` enum holding your store's handles, with the trait impl.
+- A request interceptor that wraps mutating handlers in a transaction.
+- A `JobContext` that installs the non-transactional handle for worker paths.
+
+A driver lives in a `nestrs-<technology>` crate that depends on
+`nestrs-core`, `nestrs-database`, `nestrs-http`, plus whatever your store
+needs. The app picks a driver by importing its module instead of
+`nestrs-seaorm`.
+
+## Step 1 — The Executor enum
+
+An enum is the right shape because the interceptor branches on it to
+decide commit vs rollback, and a single query helper returns one type
+whichever mode the request is in. Two variants: one for ordinary work,
+one carrying a transaction. A store with no transaction primitive
+collapses to a single variant — the seam absorbs that too.
+
+```rust
+use std::any::Any;
+
+/// Your driver's handle, threaded through the framework's task-local.
+/// The framework only reaches it via the trait; the variants are yours.
+#[derive(Clone)]
+pub enum Executor {
+    /// Non-transactional handle — pool, client, connection.
+    /// Used on safe routes (GET/HEAD/OPTIONS) and worker jobs.
+    Default(/* your handle, e.g. YourPool */),
+    /// Transactional handle — your store's unit of work.
+    /// Used on mutating routes; committed or rolled back at the boundary.
+    Transactional(/* your tx/session type, wrapped in Arc<Mutex<_>> */),
+}
+
+impl nestrs_database::Executor for Executor {
+    fn as_any(&self) -> &dyn Any { self }
+}
+```
+
+The `Arc<Mutex<_>>` around the transactional variant is the common pattern
+because most stores' transaction handles take `&mut` on their query
+methods, and the interceptor needs to keep one reference while the handler
+holds another.
+
+## Step 2 — The request interceptor
+
+This is the centerpiece. The interceptor classifies the HTTP method,
+installs the right executor in the task-local, and on the way out commits
+or rolls back. The framework owns the task-local install, the `Arc`
+lifecycle, and the response branching. The five numbered comments mark the
+five places you write store-specific code.
+
+```rust
+use std::sync::Arc;
+use async_trait::async_trait;
+use nestrs_core::injectable;
+use nestrs_middleware::{Interceptor, Next};
+use poem::http::{Method, StatusCode};
+use poem::{Error, Request, Response, Result};
+use tokio::sync::Mutex;
+
+#[injectable]
+pub struct YourDbContext {
+    // #[inject] your pool / client here
+}
+
+#[async_trait]
+impl Interceptor for YourDbContext {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+        let mutating = !matches!(
+            *req.method(),
+            Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE,
+        );
+
+        if !mutating {
+            // (1) Safe route — install the non-transactional handle.
+            //     Your code: clone your pool/client into Executor::Default(...).
+            return nestrs_database::with_request_executor(
+                Arc::new(Executor::Default(/* your handle clone */)),
+                next.run(req),
+            ).await;
+        }
+
+        // (2) Mutating route — open a transaction in your store's terms.
+        //     Your code: `self.pool.begin().await?`, `client.start_session().await?`, ...
+        let tx = /* your store's transaction handle */;
+        let tx_arc = Arc::new(Mutex::new(tx));
+
+        // (3) Install it as the request executor and run the handler.
+        let result = nestrs_database::with_request_executor(
+            Arc::new(Executor::Transactional(tx_arc.clone())),
+            next.run(req),
+        ).await;
+
+        // (4) Reclaim sole ownership. Failure means the executor escaped
+        //     into a spawned task — fail closed.
+        let tx = match Arc::try_unwrap(tx_arc) {
+            Ok(mutex) => mutex.into_inner(),
+            Err(_) => return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
+        };
+
+        // (5) Commit on 2xx/3xx, roll back otherwise.
+        //     Your code: tx.commit().await? / tx.rollback().await?
+        //     (or commit_transaction / abort_transaction, etc.)
+        match &result {
+            Ok(resp) if resp.status().is_success() || resp.status().is_redirection() => {
+                // commit using your store's API
+            }
+            _ => {
+                // roll back using your store's API
+            }
+        }
+        result
+    }
+}
+```
+
+The escape check at (4) is not paranoia — a handler that `tokio::spawn`s
+a task carrying the executor lets the spawned task outlive the request.
+Failing closed beats reporting committed data the spawned task may still
+write.
+
+## Step 3 — The worker context
+
+Cron jobs and queue processors run outside any HTTP request — no method
+to classify, no response to inspect. The worker side installs the
+non-transactional handle through the `JobContext` seam. No caller means
+no ambient ability, which means a job runs unscoped: correct for system
+work.
+
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use nestrs_core::{JobContext, injectable};
+
+#[injectable]
+pub struct YourWorkerContext {
+    // #[inject] your pool / client here
+}
+
+impl JobContext for YourWorkerContext {
+    fn scope<'a>(
+        &'a self,
+        inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        // Your code: clone your pool/client into Executor::Default(...).
+        Box::pin(nestrs_database::with_job_executor(
+            Arc::new(Executor::Default(/* your handle clone */)),
+            inner,
+        ))
+    }
+}
+```
+
+A worker transport (`#[scheduled]`, `#[processor]`) resolves
+`Arc<dyn JobContext>` from the container before each job; binding your
+context as that `dyn` target makes your driver's handle the ambient
+executor for every job in the binary.
+
+## Step 4 — The Module
+
+The activation seam an app imports. A `DynamicModule` that seeds the
+connection at the factory phase, registers the interceptor, and binds the
+worker context to `dyn JobContext`. Every field of the config is settable
+from both the environment (`NESTRS_<NAMESPACE>__<KEY>`) and a pinned
+struct — the framework-wide dual-path rule.
+
+```rust
+use std::sync::Arc;
+use nestrs_config::ConfigModule;
+use nestrs_core::{ContainerBuilder, DynamicModule};
+
+pub struct YourDbModule;
+
+impl YourDbModule {
+    pub fn for_root(config: impl Into<Option<YourConfig>>) -> YourDbSetup {
+        YourDbSetup { pinned: config.into() }
+    }
+}
+
+pub struct YourDbSetup {
+    pinned: Option<YourConfig>,
+}
+
+impl DynamicModule for YourDbSetup {
+    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+        let builder = <YourDbContext as nestrs_core::Discoverable>::register(builder);
+        let snapshot = builder.snapshot();
+        let worker = YourWorkerContext::from_container(&snapshot);
+        builder.provide_dyn::<dyn nestrs_core::JobContext>(Arc::new(worker))
+    }
+
+    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
+        builder.provide_factory::</* YourHandle */, _, _>(|container| async move {
+            // Your code: build your pool / client from container.get::<YourConfig>().
+        })
+    }
+}
+```
+
+## A query helper (sketch)
+
+Services don't touch the task-local directly — they call a small helper
+your driver ships. The helper reads the current executor, downcasts to
+your enum, and hands the caller a store-native handle.
+
+```rust
+pub fn current_executor() -> Option<Executor> {
+    nestrs_database::current_executor()?
+        .as_any()
+        .downcast_ref::<Executor>()
+        .cloned()
+}
+```
+
+A service then writes `let exec = current_executor().ok_or(...)?;` and
+issues queries against whichever variant came back — your problem from
+here, against types your users already recognise.
+
+## What you don't get vs SeaORM
+
+Be honest with readers. The SeaORM-typed primitives — `Repo<E>`'s ambient
+row-level filter via `Ability::condition_for`, the `#[expose]` response
+mask, `Bind<S, A>`, `CrudService` — all read SeaORM's typed `Column` /
+`EntityTrait` model layer. Your driver doesn't get them for free; if you
+need their equivalents, you ship them yourself in store-native terms
+(e.g. Postgres RLS, an ability-derived filter document, a per-collection
+helper). What every driver does keep: transparent transactions on
+mutating requests, the ambient executor across HTTP and workers, the
+access graph and module wiring, structured observability under
+`nestrs::orm`.
+
+## Reference
+
+- [`crates/nestrs-seaorm/`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-seaorm) —
+  the first-party driver; read its `executor.rs`, `interceptor.rs`,
+  `worker.rs`, and `module.rs` whenever a placeholder above needs a
+  concrete shape.
+- [`crates/nestrs-database/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-database/README.md) —
+  the trait contract, the task-local seam, the install helpers in detail.
+- [`crates/nestrs-redis/`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-redis) —
+  an analogous worker-side integration on the queue runtime, for a second
+  read on the `JobContext` pattern.

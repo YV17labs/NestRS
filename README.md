@@ -49,6 +49,67 @@
   OpenTelemetry and an in-process test harness — each an opt-in crate, so you
   compile only what you import.
 
+## Hello world
+
+The umbrella `nestrs` crate re-exports the surface behind Cargo features; one
+`use nestrs::prelude::*;` brings in the everyday decorators and types.
+
+```toml
+# Cargo.toml
+nestrs = { version = "0", features = ["http"] }
+```
+
+```rust
+use nestrs::prelude::*;
+
+#[injectable]
+#[derive(Default)]
+struct HelloService;
+
+impl HelloService {
+    fn greeting(&self) -> &'static str { "Hello World" }
+}
+
+#[controller(path = "/")]
+struct HelloController { #[inject] svc: std::sync::Arc<HelloService> }
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> &'static str { self.svc.greeting() }
+}
+
+#[module(imports = [HttpModule::for_root(None)], providers = [HelloService, HelloController])]
+struct AppModule;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    App::builder().module::<AppModule>().build().await?.run().await
+}
+```
+
+Prefer per-crate imports (`use nestrs_http::controller;`) when you want to
+see exactly which surface you reach for — both spellings resolve to the same
+items.
+
+## Pluggable layers
+
+Every concern in NestRS is split into an **abstractions crate** (the trait
+the framework calls) and a **first-party integration** (the default
+implementation). Swap any layer by writing a sibling crate against the
+public trait — no fork required.
+
+| Abstraction | First-party implementation |
+| ----------- | -------------------------- |
+| `nestrs-database` (`Executor`, `Repo`) | `nestrs-seaorm` (SeaORM) |
+| `nestrs-queue` (`QueueBackend`) | `nestrs-redis` (Redis via apalis) |
+| `nestrs-throttler` (`ThrottlerStore`) | bundled in-memory store |
+| `nestrs-config` (`ConfigSource`) | bundled env-based source |
+| `nestrs-authn` (`Strategy`) | JWT + OAuth2 strategies |
+
+Each crate's `README.md` under [`crates/`](crates/) is the source of truth
+for the contract its extension point exposes.
+
 ## Benchmark
 
 The same "Hello World" HTTP service — a provider, a controller, a module —

@@ -1,0 +1,107 @@
+---
+title: Extension architecture
+description: How nestrs splits a concern from a technology — abstractions vs. implementations, the trait seams a third party plugs into without forking the framework.
+sidebar:
+  order: 9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A new technology never lands inside a framework crate that names the
+concern. `nestrs-database` does not know about SeaORM; `nestrs-queue`
+does not know about apalis or Redis. Each pairs a **concern crate**
+(traits + task-local seams + macro surface) with one or more
+**technology crates** (a concrete implementation that plugs into the
+seam). The community can ship `nestrs-<other-tech>` without touching
+framework code, and an app switches by changing a Cargo dependency.
+
+## Two crates per concern, by convention
+
+| Concern (abstractions) | First-party tech (implementation) |
+|---|---|
+| [`nestrs-database`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-database/README.md) — `Executor` trait, `with_request_executor` / `with_job_executor` task-locals | [`nestrs-seaorm`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-seaorm/) — `Repo`, `CrudService`, `DatabaseModule`, transactional interceptor, response masking, all over [SeaORM](https://www.sea-ql.org/SeaORM/) |
+| [`nestrs-queue`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-queue/README.md) — `QueueBackend`, `JobProducer`, `JobConsumer`, the `#[processor]` macro, the link-time `ProcessMethod` registry | [`nestrs-redis`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-redis/) — Redis-backed queue via [apalis-redis](https://docs.rs/apalis-redis) |
+
+The split is **load-bearing**. `nestrs-database` ships only the seam —
+the trait every driver integration plugs into and the task-locals that
+carry "the request's current handle on a unit of work" across the
+framework. `nestrs-seaorm` ships everything that couples tightly to
+SeaORM's `EntityTrait` / `Model` types (`Repo`, `Bind`, the row-level
+filter, the HTTP mask shaper) — pieces that an abstraction over multiple
+ORMs would lose 80% of their value to. The same shape applies to
+`nestrs-queue` + `nestrs-redis`.
+
+A third-party crate switching the backend reuses the abstractions and
+ships the implementation:
+
+```text frame="none"
+crates/
+├── nestrs-database/         (concern — seam + task-locals)
+├── nestrs-seaorm/           (tech — first-party impl)
+└── nestrs-sqlx/             (tech — community impl, hypothetical)
+```
+
+The application's `#[crud]` macros, `#[processor]` decorators, and module
+imports stay unchanged across the swap — the call site sees the
+abstractions, not the technology.
+
+## The seams
+
+Every extension point is a Rust trait. The list below is exhaustive for
+the seams a community crate plugs into today:
+
+| Trait | Crate | Default impl | What a custom impl ships |
+|-------|-------|--------------|--------------------------|
+| `Executor` | `nestrs-database` | `nestrs-seaorm::Executor` | A handle for another data-store integration — SQL (sqlx), NoSQL (MongoDB), or anything with a connection — plus a module that installs it via `with_request_executor` |
+| `JobProducer` / `JobConsumer` / `QueueBackend` | `nestrs-queue` | `nestrs-redis` | An alternative queue backend (SQS, NATS JetStream, SQL queue, in-memory test backend) |
+| [`ConfigSource`](/configuration/#alternative-sources--vault-k8s-anywhere) | `nestrs-config` | `EnvSource` | Vault, K8s ConfigMap, AWS Parameter Store — anywhere raw values come from at boot |
+| [`ThrottlerStore`](/throttler/#alternative-stores--redis-sliding-window-anywhere) | `nestrs-throttler` | `InMemoryThrottler` | A distributed counter (Redis, Memcached) or a different algorithm (sliding window, token bucket) |
+| [`Strategy`](/security/) | `nestrs-authn` | `JwtStrategy<C>` | A custom authentication source — API key headers, mTLS client cert, OAuth provider, SAML |
+
+Each trait sits in the concern crate; nothing forces the implementation
+to live in the workspace. A community-shipped
+`nestrs-throttler-redis` depends on `nestrs-throttler`, implements
+`ThrottlerStore`, and ships its own module that registers the
+implementor — the rest of the framework integrates it through the same
+seams the in-memory default uses.
+
+## Why this matters
+
+Traditional frameworks bake the technology choice into the framework
+itself — swapping the ORM means forking. nestrs's split keeps the
+**concern's vocabulary** (the macros, the request-scoped data context,
+the `#[processor]` orchestrator) on the framework side and the
+**technology's mechanics** (the connection type, the query DSL, the
+serializer) on the integration side. The cost is one trait per concern;
+the benefit is that a new technology is a Cargo dependency, not a fork.
+
+The two `README.md` files in the seam crates carry the integration
+contract per concern — what each method must guarantee, where the
+boundaries are, what to test:
+
+- [`crates/nestrs-database/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-database/README.md)
+  — how to add a driver integration (SQL or NoSQL); `Executor`, `ExecutorScope`, the
+  task-local invariants.
+- [`crates/nestrs-queue/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-queue/README.md)
+  — how to add a queue backend; `QueueBackend`, `JobProducer`,
+  `JobConsumer`, the link-time `ProcessMethod` registry.
+
+<Aside>
+The conventions extend the macro contract too: the `#[crud]` macro stays
+on the controller and resolver, agnostic of which `Executor` is
+installed at request time; `#[processor]` stays in `nestrs-queue` and
+never names a backend type. A new technology must not require a new
+macro — if it does, the seam is the wrong shape.
+</Aside>
+
+## Going further
+
+- [Database](/database/) — the SeaORM integration walked through, end
+  to end.
+- [Queue](/queue/) — `#[processor]` + `#[process]` and the Redis backend.
+- [Configuration](/configuration/) — typed configs, the `.env`
+  cascade, and the `ConfigSource` seam.
+- [Throttler](/throttler/) — per-route rate limiting and the
+  `ThrottlerStore` seam.
+- [Security](/security/) — authentication strategies and the
+  `Strategy` seam.

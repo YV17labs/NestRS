@@ -90,7 +90,7 @@ instead of `#[injectable] + impl Interceptor`. The framework discovers
 it, builds it, and folds it around the assembled route tree in
 registration order — no `#[use_interceptors]` needed anywhere.
 
-```rust title="crates/nestrs-database/src/interceptor.rs"
+```rust title="crates/nestrs-seaorm/src/interceptor.rs"
 #[interceptor]
 pub(crate) struct DbContext {
     #[inject]

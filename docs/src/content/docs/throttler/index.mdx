@@ -122,6 +122,53 @@ $ for i in {1..11}; do
 `Retry-After` is the time until the window resets — clients respecting
 it back off cleanly and resume on the same window.
 
+## Alternative stores — Redis, sliding window, anywhere
+
+The counter is hidden behind a **`ThrottlerStore`** trait. The default
+`InMemoryThrottler` (fixed-window, process-local) is what ships with the
+module; a third-party crate can implement the trait against any backend —
+the canonical use case is `nestrs-throttler-redis` for a distributed
+counter shared across replicas:
+
+```rust
+use std::net::IpAddr;
+use nestrs_throttler::{Decision, Throttle, ThrottlerStore};
+
+pub struct RedisThrottler {
+    client: redis::Client,
+    default: Throttle,
+    trusted_proxies: Vec<IpAddr>,
+}
+
+impl ThrottlerStore for RedisThrottler {
+    fn hit(&self, key: &str, limit: Throttle) -> Decision {
+        // INCR a key with TTL = limit.window; on the first hit, set the TTL.
+        // Return `allowed = count <= limit.limit` and `retry_after = pttl`.
+        // ...
+    }
+
+    fn default_limit(&self) -> Throttle { self.default }
+    fn trusted_proxies(&self) -> &[IpAddr] { &self.trusted_proxies }
+}
+```
+
+The trait is **sync on purpose** — keeping `Guard::check` free of an extra
+await point for the in-memory default. A Redis implementor either fronts
+the call with `tokio::task::block_in_place`, or — preferable — wraps a
+non-async driver (`redis::Commands`) on a dedicated thread pool.
+
+<Aside type="caution">
+**Data model trade-off.** Today the trait works against
+`Throttle { limit, window }` — a **fixed-window** rate-limit description.
+That maps cleanly to a counter+TTL backend, but a sliding-window or
+token-bucket implementation needs richer state per key (a list of
+timestamps, or a `(tokens, refilled_at)` pair). Implementing those
+algorithms against the current `Throttle` shape is possible but lossy;
+a future iteration may carry a richer rate-limit type so the wire shape
+matches the algorithm. Stick with fixed-window backends until then, or
+extend the trait in a downstream crate.
+</Aside>
+
 ## Going further
 
 - [Configuration](/configuration/) — `NESTRS_THROTTLER__*` follows the

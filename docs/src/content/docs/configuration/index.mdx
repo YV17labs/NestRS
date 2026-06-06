@@ -240,6 +240,55 @@ becomes implicit (which vars exist? what are their types?). With
 - A reviewer reads the contract by reading 10 lines, not by chasing
   serde attributes.
 
+## Alternative sources — Vault, K8s, anywhere
+
+`ConfigService` reads its raw values through a **`ConfigSource`** trait;
+the default `EnvSource` returns process env vars (after the `.env`
+cascade has merged). A third-party crate can ship an alternative source —
+HashiCorp Vault, a K8s ConfigMap mount, AWS Parameter Store, an
+in-process map for tests — by implementing the trait and constructing a
+custom reader:
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use nestrs_config::{ConfigService, ConfigSource};
+
+struct VaultSource {
+    snapshot: HashMap<String, String>, // pre-fetched at startup
+}
+
+impl ConfigSource for VaultSource {
+    fn get(&self, var: &str) -> Option<String> {
+        // `var` is the fully-qualified name (e.g. "NESTRS_DATABASE__URL").
+        self.snapshot.get(var).cloned()
+    }
+}
+
+let env = ConfigService::with_source(
+    "database",
+    Arc::new(VaultSource { snapshot: fetched }),
+);
+let cfg = DatabaseConfig::from_env(&env)?;
+```
+
+The trait is **sync on purpose**: `Config::from_env` runs synchronously at
+boot. A remote source pre-fetches its keys into an in-memory map (during a
+factory phase) and serves `get` from that map. Empty strings count as
+unset, same rule as `EnvSource`.
+
+<Aside type="caution">
+**Known limitation — `for_namespace` still touches the global env.**
+`ConfigService::for_namespace(ns)` calls `dotenv::ensure_env_loaded()`
+process-globally before returning the reader. Even when a downstream
+caller swaps in a custom `ConfigSource` later, the `.env` cascade has
+already populated `std::env`, so any subsequent `std::env::var` lookup
+sees it — the source doesn't *isolate* the process environment, it just
+overrides where `ConfigService` itself reads from. A genuinely hermetic
+test wires its source through `ConfigService::with_source` directly and
+never calls `for_namespace`.
+</Aside>
+
 ## Going further
 
 - **Sibling fallbacks** — a config that legitimately needs another

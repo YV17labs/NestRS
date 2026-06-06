@@ -96,8 +96,8 @@ per behaviour cluster, same Cargo conventions.
 
 ## When a crate owns persistence
 
-If the crate genuinely owns database access (e.g. `nestrs-database`
-itself), a real Postgres via
+If the crate genuinely owns database access (e.g. `nestrs-seaorm`, the
+SeaORM integration), a real Postgres via
 [`EphemeralDatabase`](/testing/e2e/#ephemeral-postgres) is fair game in
 its integration tests. A test that mocks the database to assert query
 shape belongs deleted, not rewritten — the queries are exercised

@@ -105,13 +105,13 @@ Bonjour le monde
 ## Accepting a JSON body, validated
 
 ```rust
-use nestrs_http::Valid;
+use nestrs_http::{Valid, input};
 use poem::web::Json;
 use poem::Result;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use validator::Validate;
 
-#[derive(Deserialize, Validate)]
+#[input]
 struct GreetInput {
     #[validate(length(min = 1))]
     name: String,
@@ -130,10 +130,18 @@ async fn shout(&self, Valid(Json(input)): Valid<Json<GreetInput>>) -> Result<Jso
 }
 ```
 
+- **`#[input]`** is the shorthand for input DTOs. It appends
+  `#[derive(::serde::Deserialize, ::validator::Validate)]` and
+  `#[serde(deny_unknown_fields)]` — an unknown field on the wire
+  (`{"name":"Ada","is_admin":true}`) is rejected with `400` at parse time
+  instead of silently dropped. Don't use `#[input]` together with a manual
+  `#[derive(Deserialize, Validate)]` — pick one (the macro errors on a
+  double-derive otherwise). Need a custom `Deserialize` shape (e.g.
+  untagged enums)? Skip `#[input]` and derive by hand.
 - **`Json<T>`** parses the request body into `T`. Malformed JSON is `400`.
-- **`Valid<E>`** runs `validator` on the extracted value. A failure
-  returns `400` with the structured error list — no manual checks in the
-  handler.
+- **`Valid<E>`** runs [validator](https://docs.rs/validator) on the
+  extracted value. A failure returns `400` with the structured error list
+  — no manual checks in the handler.
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/ \
@@ -172,6 +180,59 @@ async fn enqueue(&self) -> (StatusCode, &'static str) {
 
 Tuples up to `(StatusCode, Headers, Body)` are valid responses.
 
+## Shape a response declaratively
+
+When the handler body would otherwise return `Ok(value)` and you just want
+to change the status, append a header, or redirect, three attribute macros
+sit beside the verb attribute and shape the response without touching the
+handler logic:
+
+```rust
+use nestrs_http::{http_code, response_header, redirect};
+use poem::http::StatusCode;
+
+#[post("/items")]
+#[http_code(201)]
+#[response_header("x-trace-id", "abc-123")]
+async fn create(&self, /* ... */) -> Json<Item> {
+    Json(Item { /* ... */ })
+}
+
+#[get("/old-path")]
+#[redirect("/new-path", 301)]
+async fn moved(&self) {} // body unused — the redirect provides the response
+
+#[post("/sse")]
+#[response_header("cache-control", "no-store")]
+#[response_header("x-accel-buffering", "no")]
+async fn stream(&self) -> EventStream { /* ... */ }
+```
+
+- **`#[http_code(N)]`** overrides the response status. `N` must be in
+  `100..=999` and is validated at compile time. Mutually exclusive with
+  `#[redirect]`.
+- **`#[response_header("name", "value")]`** appends a header. Repeatable.
+  The header name must be lowercase ASCII (HTTP/2 / HTTP/3 grammar); the
+  value must be printable ASCII (no CR/LF/NUL). Both checks run at compile
+  time.
+- **`#[redirect("url"[, status])]`** discards the handler payload and
+  returns a `Location: <url>` response. Status defaults to `307`, must be
+  in `300..=399`. The handler still runs (extractors fire, side effects
+  happen) but the return value is dropped.
+
+<Aside type="caution">
+**Known limitation — handler `Err(...)` is silently rewritten.** The
+shaper wraps the return value through `IntoResponse`, then applies the
+status from `#[http_code]` unconditionally. If the handler returns
+`Err(MyError)`, `MyError`'s `ResponseError` impl decides the error body
+and status, but `#[http_code(N)]` then *overwrites* that status with `N`
+— you'll see a `201` response carrying a `MyError` body. Today the
+workaround is to map errors before the return (so the handler never
+yields an `Err` on a route decorated with `#[http_code]`). The macro
+should reject this combination at compile time; see the open issue
+tracker.
+</Aside>
+
 ## Custom errors with `?`
 
 Define a feature-level error type and let the framework map it:
@@ -206,6 +267,122 @@ async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>,
 
 The `?` operator carries the error through; `ResponseError` decides the
 status and body.
+
+## Structured error bodies — RFC 9457
+
+A glue route that doesn't own a feature error enum can still emit a
+structured error body conforming to
+[RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html):
+
+```rust
+use nestrs_http::ProblemDetails;
+use poem::Result;
+use poem::web::Json;
+
+#[get("/orders/:id")]
+async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Order>, ProblemDetails> {
+    let order = self.svc.find(id).await
+        .map_err(|e| ProblemDetails::internal().with_detail(e.to_string()))?
+        .ok_or_else(|| {
+            ProblemDetails::not_found()
+                .with_detail(format!("order {id} does not exist"))
+                .with_instance(format!("/orders/{id}"))
+        })?;
+    Ok(Json(order))
+}
+```
+
+Constructors cover the well-known statuses — `bad_request`, `unauthorized`,
+`forbidden`, `not_found`, `conflict`, `unprocessable`, `internal` — each
+preset with a stable `type` URI pointing at the matching RFC 9110
+section. Builders extend the body:
+
+| Builder | Field |
+|---------|-------|
+| `.with_detail("…")` | Free-form human-readable description |
+| `.with_instance("/orders/17")` | URI of the specific occurrence |
+| `.with_type("urn:problem:order-invalid")` | Override the type URI |
+| `.with_title("Order invalid")` | Override the title |
+| `ProblemDetails::from_error(status, title, err)` | Build from any `Display`-impl |
+
+The response carries `Content-Type: application/problem+json`
+automatically; an absent `detail` or `instance` is omitted from the body
+(per RFC 9457). Feature-level error enums that already implement
+`ResponseError` keep their own mapping — `ProblemDetails` is the right tool
+for one-off problem responses, not a replacement for typed feature errors.
+
+## Reading the client IP
+
+```rust
+use nestrs_http::ClientIp;
+
+#[get("/whoami")]
+async fn whoami(&self, ip: ClientIp) -> String {
+    format!("you look like {} (forwarded={})", ip.ip, ip.forwarded)
+}
+```
+
+`ClientIp` resolves in this order, first hit wins:
+
+1. The transport peer reported by [poem](https://docs.rs/poem)
+   (`remote_addr().as_socket_addr()`);
+2. The **leftmost** entry of `X-Forwarded-For` (a bare IP or `IP:port`);
+3. `X-Real-IP`;
+4. `0.0.0.0` as a last-resort default — the extractor never fails.
+
+`ip.forwarded` is `true` when the address came from a header (2 or 3),
+`false` when it came from the transport peer or the default.
+
+<Aside type="caution">
+**`X-Forwarded-For` and `X-Real-IP` are spoofable.** Any client can put
+whatever value it likes in those headers — `ClientIp` does no trusted-proxy
+validation. Treat the result as **observational only** (logging,
+geolocation hints, sampling keys), never as an authn or authz input. If
+your deployment terminates TLS at a load balancer, the LB must strip and
+rewrite those headers so only its own value reaches the app.
+
+Trusted-proxy validation (peer ∈ allow-list before honoring
+`X-Forwarded-For`) lives in the [throttler](/throttler/), not here — the
+throttler is the one place where the spoofable header is consumed for a
+behavioural decision.
+</Aside>
+
+## Reading a raw body
+
+Some handlers — webhook signatures (Stripe, GitHub), proxied protobuf
+bodies — need the exact byte string before any parsing. `RawBody` reads
+the whole body into [`Bytes`](https://docs.rs/bytes), capped at
+`RawBody::DEFAULT_LIMIT` (2 MiB). Past the cap the extractor returns
+`413 Payload Too Large` — never silently truncates, never buffers
+unbounded memory.
+
+```rust
+use nestrs_http::RawBody;
+
+#[post("/webhooks/stripe")]
+async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
+    verify_stripe_signature(&body, /* ... */)?;
+    self.svc.handle_event(&body).await?;
+    Ok("ok")
+}
+```
+
+For a tighter cap on a specific route, take the body manually:
+
+```rust
+use nestrs_http::RawBody;
+use poem::{Result, RequestBody};
+
+#[post("/webhooks/small")]
+async fn small(&self, mut body: RequestBody) -> Result<&'static str> {
+    let raw = RawBody::extract_with_limit(&mut body, 16 * 1024).await?;
+    self.svc.handle_small(&raw).await?;
+    Ok("ok")
+}
+```
+
+Anything that can deserialize through `Json<T>` should use that instead —
+`RawBody` is for handlers that genuinely care about the bytes.
 
 ## Per-route guards
 

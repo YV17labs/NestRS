@@ -11,6 +11,14 @@ NestRS's data layer is built on [SeaORM](https://www.sea-ql.org/SeaORM/) —
 entities, queries and migrations are SeaORM's. NestRS wraps it so every access
 goes through a service and a request-scoped `Repo`, never the ORM directly.
 
+The data layer ships as two crates. `nestrs-database` defines the executor
+abstractions and task-local seam — a **store-agnostic** contract that fits
+SQL, NoSQL, or anything carrying a connection. `nestrs-seaorm` is the
+first-class SeaORM implementation that lives on top of that seam: `Repo`,
+`CrudService`, the transparent transactional interceptor, response
+masking. Apps depend on both. To plug a different store — MongoDB, sqlx
+raw, ClickHouse — see [Writing a driver](/database/writing-a-driver/).
+
 A service is the entity's single DB gateway. Every read and write flows
 through `Repo`, which:
 
@@ -72,7 +80,7 @@ useful for private fields you do not want on the JSON / GraphQL body.
 ```rust title="src/items/service.rs"
 use std::sync::Arc;
 use nestrs_core::injectable;
-use nestrs_database::{CrudService, Repo};
+use nestrs_seaorm::{CrudService, Repo};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use uuid::Uuid;
 use validator::Validate;
@@ -236,6 +244,84 @@ context for you:
 A safe `GET` runs the same way with a pool executor and no transaction.
 A worker job (queue processor, cron job) also gets a pool executor.
 
+## Retrying transient transaction conflicts
+
+Postgres' serializable isolation surfaces a conflicting transaction as
+SQLSTATE `40001` (`serialization_failure`); a deadlock as `40P01`. MySQL
+surfaces a deadlock as `1213`; SQL Server as `1205`. The conventional
+answer is "retry the whole transaction" — and the framework exposes two
+pieces, on purpose split, that behave honestly about what each can do.
+
+### The observability flag
+
+```bash frame="terminal"
+NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS=true
+```
+
+```rust
+DatabaseModule::for_root(DatabaseConfig {
+    retry_serialization_conflicts: true,
+    ..Default::default()
+})
+```
+
+When this flag is on, the `DbContext` interceptor matches a conflict at the
+commit boundary against the SQLSTATE markers above and **logs it at `warn`
+with the conflict tag** (target `nestrs::orm`) so ops sees the failure
+mode distinctly from a generic commit error.
+
+<Aside type="caution">
+**The flag does not actually retry the commit today.** SeaORM's
+`DatabaseTransaction` handle is **consumed** by the failed commit — the
+interceptor cannot replay the same handle, and the request body is no
+longer available to re-run the handler from scratch. So the response
+still surfaces as `500` after the warn line; the flag is currently an
+**observability tag**, not a retry mechanism. Treat it as "I want to see
+serialization conflicts in my logs", not "I want them invisible".
+</Aside>
+
+### The working retry primitive
+
+For an actually-retried operation, wrap a replayable closure in
+`nestrs_seaorm::retry::retry_on_conflict` inside a service method that
+owns its programmatic transaction boundary:
+
+```rust title="src/orders/service.rs"
+use std::time::Duration;
+use nestrs_seaorm::retry::{
+    retry_on_conflict, DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF,
+};
+use sea_orm::TransactionTrait;
+
+impl OrdersService {
+    pub async fn settle(&self, id: Uuid) -> Result<Order, OrderError> {
+        let db = self.db.clone();
+        retry_on_conflict(DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF, || {
+            let db = db.clone();
+            async move {
+                let txn = db.begin().await?;
+                // ... read + update + insert against `txn` ...
+                txn.commit().await?;
+                Ok::<_, sea_orm::DbErr>(/* updated order */)
+            }
+        })
+        .await
+        .map_err(OrderError::from)
+    }
+}
+```
+
+`retry_on_conflict` runs the closure up to `attempts` times, sleeping
+`initial_backoff << attempt` between tries (5 ms → 10 ms → 20 ms with the
+defaults). Non-retryable errors short-circuit immediately; `DbErr`s
+matching the SQLSTATE markers (or the textual "serialization" / "deadlock"
+phrasing) trigger a retry. The closure is `FnMut` because it re-runs from
+scratch each attempt — that's what makes the retry honest, the body
+re-opens a fresh transaction against a fresh snapshot.
+
+This is the primitive any service can use; the interceptor cannot, because
+the request body is upstream of where it sits.
+
 ## Going further
 
 - [CRUD](/database/crud/) — `#[crud(...)]` on a controller or resolver:
@@ -254,7 +340,9 @@ A worker job (queue processor, cron job) also gets a pool executor.
 
 - `crates/features/src/users/core/` — a feature with relations,
   dataloaders and credentials helpers.
-- `crates/nestrs-database/` — the [SeaORM](https://www.sea-ql.org/SeaORM/)
+- `crates/nestrs-database/` — the executor trait, task-local seam, and
+  `JobContext` abstractions (ORM-agnostic).
+- `crates/nestrs-seaorm/` — the [SeaORM](https://www.sea-ql.org/SeaORM/)
   integration: `Repo`, `CrudService`, the ambient executor.
 - `crates/nestrs-resource/` — `#[expose]`, the GraphQL+OpenAPI
   generation, pagination envelopes.

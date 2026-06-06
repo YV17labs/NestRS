@@ -95,17 +95,17 @@ crate that owns the dependency, behind a Cargo feature — that way an app
 that does not import `HealthModule` does not pay for the indicator. The
 SeaORM pool ping is the first one to ship.
 
-`nestrs-database` exposes it as `DatabaseHealthModule`, which registers
+`nestrs-seaorm` exposes it as `DatabaseHealthModule`, which registers
 `DbHealthIndicator`. The indicator's `#[readiness]` and `#[startup]`
 methods both call `DatabaseConnection::ping` — exactly what most apps need
 and zero code in your app:
 
 ```toml title="apps/platform-api/Cargo.toml"
-nestrs-database = { workspace = true, features = ["http", "graphql", "health"] }
+nestrs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
 ```
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_database::{DatabaseHealthModule, DatabaseModule};
+use nestrs_seaorm::{DatabaseHealthModule, DatabaseModule};
 use nestrs_health::HealthModule;
 
 #[module(
@@ -264,5 +264,5 @@ and inherits its tracing target.
   `HealthController`, the `#[indicators]` / `#[liveness]` /
   `#[readiness]` / `#[startup]` macros, and the `HealthIndicator`
   inventory entry.
-- `crates/nestrs-database/src/health.rs` (Cargo feature `health`) —
+- `crates/nestrs-seaorm/src/health.rs` (Cargo feature `health`) —
   `DatabaseHealthModule` and `DbHealthIndicator`.

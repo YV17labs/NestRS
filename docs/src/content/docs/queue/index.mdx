@@ -1,6 +1,8 @@
 ---
 title: Queue
 description: Redis-backed durable job queues — handlers declared as methods on any provider, activated by importing one module.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -10,9 +12,13 @@ A queue handler is **a method** on any `#[injectable]` provider, tagged with
 impl block. Importing `QueueWorkerModule` in the worker app's `AppModule`
 attaches the worker runtime at boot.
 
-Backed by Redis through [`apalis`](https://docs.rs/apalis), wrapped by
-`nestrs-queue` so the framework owns the DI shape and the discovery
-registry.
+The abstractions — `Job`, `Processor`, `ProcessMethod`, the `#[processor]`
+macro — ship in **`nestrs-queue`**. The first-class storage, **Redis**,
+ships in **`nestrs-redis`** (built on [`apalis`](https://docs.rs/apalis)):
+the `QueueConnection` producer, the `QueueWorker` transport, and the
+`QueueModule` / `QueueWorkerModule` activation seams. An app depends on
+both: `nestrs-queue` for the macro + abstractions, `nestrs-redis` for the
+Redis-bound types.
 
 ## A first queue handler
 
@@ -123,7 +129,7 @@ handler the `api` app exposes — a request enqueues a job the separate
 use std::sync::Arc;
 
 use nestrs_http::{controller, routes};
-use nestrs_queue::QueueConnection;
+use nestrs_redis::QueueConnection;
 use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};
@@ -170,7 +176,7 @@ Two modules, two roles:
 
 ```rust title="apps/platform-worker/src/module.rs"
 use nestrs_core::module;
-use nestrs_queue::{QueueModule, QueueWorkerModule};
+use nestrs_redis::{QueueModule, QueueWorkerModule};
 
 use features::audio::{AudioCoreModule, AudioQueueModule};
 
@@ -269,5 +275,7 @@ runtime.
 - `crates/features/src/audio/queue/processor.rs` — the consumer (worker).
 - `crates/features/src/audio/http/controller.rs` — the HTTP producer (api).
 - `crates/features/src/audio/schedule/producer.rs` — the scheduled producer (api).
-- `crates/nestrs-queue/` — `#[processor]`, `#[process]`, `QueueConnection`,
-  `QueueModule`, `QueueWorkerModule`.
+- `crates/nestrs-queue/` — the abstractions: `#[processor]`, `#[process]`,
+  `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
+- `crates/nestrs-redis/` — the Redis storage: `QueueConnection`,
+  `QueueWorker`, `QueueModule`, `QueueWorkerModule`.

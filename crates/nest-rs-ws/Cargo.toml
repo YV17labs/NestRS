@@ -1,0 +1,34 @@
+[package]
+name = "nest-rs-ws"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "WebSocket gateways for nestrs: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport, built on poem's WebSocket upgrade."
+
+
+[dependencies]
+nest-rs-core.workspace = true
+# The gateway self-mounts as an HttpEndpointMeta (the upgrade is an HTTP GET),
+# so it rides the existing HTTP transport — reusing its guards, CORS, port and
+# TLS — rather than opening a second server.
+nest-rs-http.workspace = true
+nest-rs-middleware.workspace = true
+nest-rs-ws-macros.workspace = true
+# `websocket` is a non-default poem feature; enabling it here turns it on for the
+# whole build (Cargo features are additive).
+poem = { workspace = true, features = ["websocket"] }
+serde = { workspace = true }
+serde_json.workspace = true
+async-trait.workspace = true
+# `StreamExt`/`SinkExt` to split and drive poem's `WebSocketStream`: the connection
+# loop reads while a spawned writer task drains the per-connection outbox.
+futures-util.workspace = true
+# `tokio::spawn` for the writer task and `mpsc` for the per-connection outbox the
+# registry pushes through.
+tokio = { workspace = true }
+tracing.workspace = true
+# Connection registry lock — parking_lot for poison-free, panic-free locking.
+parking_lot.workspace = true

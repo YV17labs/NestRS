@@ -1,4 +1,4 @@
-use nestrs_core::module;
+use nest_rs_core::module;
 
 use crate::weather::service::{OpenMeteoClient, WeatherProvider};
 use crate::weather::tool::WeatherTool;
@@ -9,7 +9,7 @@ pub struct WeatherModule;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nestrs_core::{Container, Module};
+    use nest_rs_core::{Container, Module};
     use std::sync::Arc;
 
     #[test]

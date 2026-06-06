@@ -1,7 +1,7 @@
 use base64::Engine as _;
 use features::{Claims, Role};
-use nestrs_authn::{JwtConfig, JwtOptions, JwtService, OAuth2Config, hash_password};
-use nestrs_testing::{EphemeralDatabase, TestApp};
+use nest_rs_authn::{JwtConfig, JwtOptions, JwtService, OAuth2Config, hash_password};
+use nest_rs_testing::{EphemeralDatabase, TestApp};
 use platform_auth::{IssuerConfig, PlatformAuthModule, RegisteredClient};
 use poem::http::StatusCode;
 use sea_orm::sea_query::{OnConflict, Query};

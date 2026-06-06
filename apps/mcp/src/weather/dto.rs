@@ -1,4 +1,4 @@
-use nestrs_mcp::schemars;
+use nest_rs_mcp::schemars;
 use serde::Deserialize;
 use validator::Validate;
 

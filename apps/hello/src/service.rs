@@ -1,4 +1,4 @@
-use nestrs_core::injectable;
+use nest_rs_core::injectable;
 
 #[injectable]
 #[derive(Default)]

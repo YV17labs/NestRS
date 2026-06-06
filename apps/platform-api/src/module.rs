@@ -1,17 +1,17 @@
-use nestrs_config::ConfigModule;
-use nestrs_core::module;
-use nestrs_seaorm::{DatabaseHealthModule, DatabaseModule};
-use nestrs_graphql::GraphqlModule;
-use nestrs_health::HealthModule;
-use nestrs_http::{HttpConfig, HttpModule};
-use nestrs_openapi::OpenApiModule;
-use nestrs_opentelemetry::OpenTelemetryModule;
-use nestrs_redis::QueueModule;
-use nestrs_schedule::ScheduleModule;
-use nestrs_server_timing::ServerTimingModule;
+use nest_rs_config::ConfigModule;
+use nest_rs_core::module;
+use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
+use nest_rs_graphql::GraphqlModule;
+use nest_rs_health::HealthModule;
+use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_openapi::OpenApiModule;
+use nest_rs_opentelemetry::OpenTelemetryModule;
+use nest_rs_redis::QueueModule;
+use nest_rs_schedule::ScheduleModule;
+use nest_rs_server_timing::ServerTimingModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
-use features::authn::AuthnCoreModule;
+use features::authn::AuthnModule;
 use features::authz::{AuthzGraphqlModule, AuthzHttpModule};
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
 use features::users::{UsersGraphqlModule, UsersHttpModule};
@@ -21,7 +21,7 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         ConfigModule::for_root(),
         DatabaseModule::for_root(None),
         QueueModule::for_root(None),
-        AuthnCoreModule,
+        AuthnModule,
         AuthzHttpModule,
         AuthzGraphqlModule,
         OrgsHttpModule,

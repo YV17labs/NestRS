@@ -1,0 +1,19 @@
+[package]
+name = "nest-rs-server-timing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "W3C Server-Timing response header interceptor for nestrs apps (independent of OpenTelemetry)."
+
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-http.workspace = true
+nest-rs-middleware.workspace = true
+poem.workspace = true
+async-trait.workspace = true
+# Per-request entry accumulator lock — poison-free locking.
+parking_lot.workspace = true

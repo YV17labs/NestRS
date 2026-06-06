@@ -1,9 +1,15 @@
-pub mod core;
+mod dto;
+mod module;
+mod service;
+
 pub mod http;
 pub mod queue;
 pub mod schedule;
 
-pub use core::{AUDIO_QUEUE, AudioCoreModule, TranscodeJob, Transcoder};
+pub use dto::{AUDIO_QUEUE, TranscodeJob};
+pub use module::AudioModule;
+pub use service::Transcoder;
+
 pub use http::{AudioController, AudioHttpModule};
 pub use queue::{AudioJobs, AudioQueueModule};
 pub use schedule::{AudioScheduleModule, AudioTasks};

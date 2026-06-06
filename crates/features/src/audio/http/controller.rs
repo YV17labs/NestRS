@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use nestrs_http::{controller, routes};
-use nestrs_redis::QueueConnection;
+use nest_rs_http::{controller, routes};
+use nest_rs_redis::QueueConnection;
 use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};
 
-use crate::audio::core::{AUDIO_QUEUE, TranscodeJob};
+use crate::audio::{AUDIO_QUEUE, TranscodeJob};
 use crate::authn::AuthGuard;
 use crate::authz::AppAbilityGuard;
 

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use nestrs_authz::current_ability;
-use nestrs_core::injectable;
-use nestrs_ws::{MessageGuard, WsClient};
+use nest_rs_authz::current_ability;
+use nest_rs_core::injectable;
+use nest_rs_ws::{MessageGuard, WsClient};
 
 /// Access-graph marker + runtime fail-closed check: rejects the message when
 /// no ambient ability is installed, preventing the "no-ability ⇒ unscoped
@@ -21,7 +21,7 @@ impl MessageGuard for WsAuthGuard {
     ) -> Result<(), String> {
         if current_ability().is_none() {
             tracing::warn!(
-                target: "nestrs::authz",
+                target: "nest_rs::authz",
                 "ws message rejected: no ambient ability — bind connection-level \
                  AuthGuard + AppAbilityGuard on the gateway and \
                  WsDataContext as dyn SocketContext on its module",

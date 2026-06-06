@@ -5,11 +5,11 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-nestrs-core.workspace = true
-nestrs-http.workspace = true
+nest-rs-core.workspace = true
+nest-rs-http.workspace = true
 poem.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-nestrs-testing.workspace = true
+nest-rs-testing.workspace = true

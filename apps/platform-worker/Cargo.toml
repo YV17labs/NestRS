@@ -5,17 +5,17 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-nestrs-core.workspace = true
-nestrs-config.workspace = true
-nestrs-queue.workspace = true
-nestrs-redis.workspace = true
-nestrs-opentelemetry.workspace = true
+nest-rs-core.workspace = true
+nest-rs-config.workspace = true
+nest-rs-queue.workspace = true
+nest-rs-redis.workspace = true
+nest-rs-opentelemetry.workspace = true
 features.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-nestrs-testing.workspace = true
+nest-rs-testing.workspace = true
 serde.workspace = true
 
 [lints]

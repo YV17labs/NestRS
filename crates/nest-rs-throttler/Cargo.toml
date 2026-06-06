@@ -1,0 +1,28 @@
+[package]
+name = "nest-rs-throttler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Rate limiting for nestrs: a per-route ThrottlerGuard reading a #[meta(Throttle)] override, backed by an in-memory fixed-window counter."
+
+
+[dependencies]
+# `ThrottlerGuard` is `#[injectable]`; `ThrottlerModule` is a `DynamicModule`.
+nest-rs-core.workspace = true
+# `ThrottlerModule` owns its `#[config]` (`ThrottlerConfig`, namespace `throttler`),
+# loaded from `NESTRS_THROTTLER__*`; `validator` backs the derives.
+nest-rs-config.workspace = true
+validator.workspace = true
+# The guard implements the `Guard` trait and reads route metadata via `Reflector`,
+# both re-exported here.
+nest-rs-http.workspace = true
+poem.workspace = true
+async-trait.workspace = true
+# Window-map lock — poison-free locking on the rate-limit hot path.
+parking_lot.workspace = true
+# `ThrottlerModule::for_root` provides the throttler through the factory phase,
+# whose error channel is anyhow (the container's `Result`).
+anyhow.workspace = true

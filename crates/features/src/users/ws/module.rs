@@ -1,11 +1,11 @@
-use nestrs_core::module;
+use nest_rs_core::module;
 
 use super::gateway::UsersGateway;
 use crate::authz::AuthzWsModule;
-use crate::users::core::UsersCoreModule;
+use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersCoreModule, AuthzWsModule],
+    imports = [UsersModule, AuthzWsModule],
     providers = [UsersGateway],
 )]
 pub struct UsersWsModule;

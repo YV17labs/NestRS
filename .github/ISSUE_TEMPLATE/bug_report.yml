@@ -27,7 +27,7 @@ body:
     id: crate
     attributes:
       label: Affected crate(s)
-      placeholder: "nestrs-core, nestrs-http, …"
+      placeholder: "nest-rs-core, nest-rs-http, …"
   - type: textarea
     id: env
     attributes:

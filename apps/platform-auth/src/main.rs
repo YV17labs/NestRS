@@ -1,7 +1,7 @@
 use anyhow::Result;
-use nestrs_config::Environment;
-use nestrs_core::App;
-use nestrs_opentelemetry::OpenTelemetry;
+use nest_rs_config::Environment;
+use nest_rs_core::App;
+use nest_rs_opentelemetry::OpenTelemetry;
 
 use platform_auth::PlatformAuthModule;
 

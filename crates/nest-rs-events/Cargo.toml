@@ -1,0 +1,21 @@
+[package]
+name = "nest-rs-events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Typed in-process event bus for nestrs: emit a typed event, dispatch to discovered #[on_event] methods grouped under #[listeners] — the @nestjs/event-emitter analog."
+
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-events-macros.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+# Listener-registry lock — poison-free locking on the emit path.
+parking_lot.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

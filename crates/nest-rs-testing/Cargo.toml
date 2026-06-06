@@ -1,0 +1,40 @@
+[package]
+name = "nest-rs-testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "In-process testing harness for nestrs: boot an app's real DI graph and drive its HTTP/GraphQL/MCP surfaces with poem's TestClient, with provider overrides and no socket bound."
+
+
+[features]
+# Satisfy the OpenTelemetryModule boot guard in tests (`with_test_telemetry`).
+opentelemetry = ["dep:nest-rs-opentelemetry"]
+# An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`).
+orm = ["dep:sea-orm", "dep:sea-orm-migration"]
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-http.workspace = true
+anyhow.workspace = true
+# `test` adds poem's in-process TestClient; `tower-compat` comes from the
+# workspace default and is harmless here.
+poem = { workspace = true, features = ["test"] }
+# A headless app drives non-HTTP transports on a cancellable background task.
+tokio.workspace = true
+tokio-util.workspace = true
+# Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
+nest-rs-opentelemetry = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
+sea-orm-migration = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+# The config DI test boots a module wiring `ConfigModule::for_feature` and a
+# service injecting the loaded config; serde + validator back the `#[config]`
+# struct's derives.
+nest-rs-config.workspace = true
+serde.workspace = true
+validator.workspace = true

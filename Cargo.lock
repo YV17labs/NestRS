@@ -768,12 +768,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures-util",
- "nestrs-core",
- "nestrs-health",
- "nestrs-http",
- "nestrs-opentelemetry",
- "nestrs-testing",
- "nestrs-ws",
+ "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-opentelemetry",
+ "nest-rs-testing",
+ "nest-rs-ws",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1419,20 +1419,20 @@ dependencies = [
  "async-graphql",
  "async-trait",
  "migrations",
- "nestrs-authn",
- "nestrs-authz",
- "nestrs-config",
- "nestrs-core",
- "nestrs-graphql",
- "nestrs-http",
- "nestrs-queue",
- "nestrs-redis",
- "nestrs-resource",
- "nestrs-schedule",
- "nestrs-seaorm",
- "nestrs-testing",
- "nestrs-throttler",
- "nestrs-ws",
+ "nest-rs-authn",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-http",
+ "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-resource",
+ "nest-rs-schedule",
+ "nest-rs-seaorm",
+ "nest-rs-testing",
+ "nest-rs-throttler",
+ "nest-rs-ws",
  "poem",
  "schemars",
  "sea-orm",
@@ -1862,9 +1862,9 @@ name = "hello"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "nestrs-core",
- "nestrs-http",
- "nestrs-testing",
+ "nest-rs-core",
+ "nest-rs-http",
+ "nest-rs-testing",
  "poem",
  "tokio",
 ]
@@ -2491,15 +2491,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "nestrs-config",
- "nestrs-core",
- "nestrs-health",
- "nestrs-http",
- "nestrs-mcp",
- "nestrs-middleware",
- "nestrs-opentelemetry",
- "nestrs-server-timing",
- "nestrs-testing",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-mcp",
+ "nest-rs-middleware",
+ "nest-rs-opentelemetry",
+ "nest-rs-server-timing",
+ "nest-rs-testing",
  "poem",
  "reqwest 0.13.4",
  "rmcp",
@@ -2582,33 +2582,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs"
+name = "nest-rs"
 version = "0.1.0"
 dependencies = [
- "nestrs-authn",
- "nestrs-authz",
- "nestrs-config",
- "nestrs-core",
- "nestrs-database",
- "nestrs-events",
- "nestrs-graphql",
- "nestrs-health",
- "nestrs-http",
- "nestrs-mcp",
- "nestrs-openapi",
- "nestrs-opentelemetry",
- "nestrs-queue",
- "nestrs-redis",
- "nestrs-schedule",
- "nestrs-seaorm",
- "nestrs-server-timing",
- "nestrs-testing",
- "nestrs-throttler",
- "nestrs-ws",
+ "nest-rs-authn",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-database",
+ "nest-rs-events",
+ "nest-rs-graphql",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-mcp",
+ "nest-rs-openapi",
+ "nest-rs-opentelemetry",
+ "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-schedule",
+ "nest-rs-seaorm",
+ "nest-rs-server-timing",
+ "nest-rs-testing",
+ "nest-rs-throttler",
+ "nest-rs-ws",
 ]
 
 [[package]]
-name = "nestrs-authn"
+name = "nest-rs-authn"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2616,9 +2616,9 @@ dependencies = [
  "async-trait",
  "base64",
  "jsonwebtoken",
- "nestrs-config",
- "nestrs-core",
- "nestrs-http",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-http",
  "oauth2",
  "poem",
  "serde",
@@ -2630,17 +2630,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-authz"
+name = "nest-rs-authz"
 version = "0.1.0"
 dependencies = [
  "async-graphql",
- "nestrs-core",
- "nestrs-graphql",
- "nestrs-http",
- "nestrs-mcp",
- "nestrs-middleware",
- "nestrs-resource",
- "nestrs-testing",
+ "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-http",
+ "nest-rs-mcp",
+ "nest-rs-middleware",
+ "nest-rs-resource",
+ "nest-rs-testing",
  "poem",
  "sea-orm",
  "serde",
@@ -2649,7 +2649,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-codegen"
+name = "nest-rs-codegen"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -2658,19 +2658,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-config"
+name = "nest-rs-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "figment",
- "nestrs-config-macros",
- "nestrs-core",
+ "nest-rs-config-macros",
+ "nest-rs-core",
  "thiserror 2.0.18",
  "validator",
 ]
 
 [[package]]
-name = "nestrs-config-macros"
+name = "nest-rs-config-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -2679,13 +2679,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-core"
+name = "nest-rs-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "inventory",
- "nestrs-macros",
+ "nest-rs-macros",
  "parking_lot",
  "thiserror 2.0.18",
  "tokio",
@@ -2695,47 +2695,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-database"
+name = "nest-rs-database"
 version = "0.1.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
-name = "nestrs-events"
+name = "nest-rs-events"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "nestrs-core",
- "nestrs-events-macros",
+ "nest-rs-core",
+ "nest-rs-events-macros",
  "parking_lot",
  "tokio",
  "tracing",
 ]
 
 [[package]]
-name = "nestrs-events-macros"
+name = "nest-rs-events-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-codegen",
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
 
 [[package]]
-name = "nestrs-graphql"
+name = "nest-rs-graphql"
 version = "0.1.0"
 dependencies = [
  "async-graphql",
  "async-graphql-poem",
  "async-trait",
  "inventory",
- "nestrs-config",
- "nestrs-core",
- "nestrs-graphql-macros",
- "nestrs-http",
- "nestrs-testing",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-graphql-macros",
+ "nest-rs-http",
+ "nest-rs-testing",
  "poem",
  "serde",
  "serde_json",
@@ -2745,23 +2745,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-graphql-macros"
+name = "nest-rs-graphql-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-codegen",
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
 
 [[package]]
-name = "nestrs-health"
+name = "nest-rs-health"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "nestrs-core",
- "nestrs-health-macros",
- "nestrs-http",
+ "nest-rs-core",
+ "nest-rs-health-macros",
+ "nest-rs-http",
  "poem",
  "serde",
  "serde_json",
@@ -2770,7 +2770,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-health-macros"
+name = "nest-rs-health-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -2779,18 +2779,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-http"
+name = "nest-rs-http"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
  "figment",
- "nestrs-config",
- "nestrs-core",
- "nestrs-http-macros",
- "nestrs-middleware",
- "nestrs-pipes",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-http-macros",
+ "nest-rs-middleware",
+ "nest-rs-pipes",
  "poem",
  "schemars",
  "serde",
@@ -2802,34 +2802,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-http-macros"
+name = "nest-rs-http-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-codegen",
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
 
 [[package]]
-name = "nestrs-macros"
+name = "nest-rs-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-codegen",
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
 
 [[package]]
-name = "nestrs-mcp"
+name = "nest-rs-mcp"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "nestrs-core",
- "nestrs-http",
- "nestrs-mcp-macros",
- "nestrs-middleware",
+ "nest-rs-core",
+ "nest-rs-http",
+ "nest-rs-mcp-macros",
+ "nest-rs-middleware",
  "poem",
  "rmcp",
  "schemars",
@@ -2837,17 +2837,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-mcp-macros"
+name = "nest-rs-mcp-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-codegen",
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
 
 [[package]]
-name = "nestrs-middleware"
+name = "nest-rs-middleware"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -2855,12 +2855,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-openapi"
+name = "nest-rs-openapi"
 version = "0.1.0"
 dependencies = [
- "nestrs-config",
- "nestrs-core",
- "nestrs-http",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-http",
  "poem",
  "schemars",
  "serde",
@@ -2869,16 +2869,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-opentelemetry"
+name = "nest-rs-opentelemetry"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
  "futures-core",
- "nestrs-config",
- "nestrs-core",
- "nestrs-http",
- "nestrs-middleware",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-http",
+ "nest-rs-middleware",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-http",
@@ -2895,7 +2895,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-pipes"
+name = "nest-rs-pipes"
 version = "0.1.0"
 dependencies = [
  "serde_json",
@@ -2905,13 +2905,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-queue"
+name = "nest-rs-queue"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "nestrs-core",
- "nestrs-queue-macros",
+ "nest-rs-core",
+ "nest-rs-queue-macros",
  "serde",
  "serde_json",
  "tokio-util",
@@ -2919,7 +2919,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-queue-macros"
+name = "nest-rs-queue-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -2928,16 +2928,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-redis"
+name = "nest-rs-redis"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "apalis",
  "apalis-redis",
  "async-trait",
- "nestrs-config",
- "nestrs-core",
- "nestrs-queue",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-queue",
  "serde",
  "serde_json",
  "tokio",
@@ -2948,11 +2948,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-resource"
+name = "nest-rs-resource"
 version = "0.1.0"
 dependencies = [
  "async-graphql",
- "nestrs-resource-macros",
+ "nest-rs-resource-macros",
  "schemars",
  "sea-orm",
  "serde",
@@ -2961,17 +2961,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-resource-macros"
+name = "nest-rs-resource-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-codegen",
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
 
 [[package]]
-name = "nestrs-schedule"
+name = "nest-rs-schedule"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2980,15 +2980,15 @@ dependencies = [
  "chrono-tz",
  "croner",
  "libc",
- "nestrs-core",
- "nestrs-schedule-macros",
+ "nest-rs-core",
+ "nest-rs-schedule-macros",
  "tokio",
  "tokio-util",
  "tracing",
 ]
 
 [[package]]
-name = "nestrs-schedule-macros"
+name = "nest-rs-schedule-macros"
 version = "0.1.0"
 dependencies = [
  "croner",
@@ -2998,24 +2998,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-seaorm"
+name = "nest-rs-seaorm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-graphql",
  "async-trait",
- "nestrs-authz",
- "nestrs-config",
- "nestrs-core",
- "nestrs-database",
- "nestrs-graphql",
- "nestrs-health",
- "nestrs-http",
- "nestrs-middleware",
- "nestrs-ws",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-database",
+ "nest-rs-graphql",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-middleware",
+ "nest-rs-ws",
  "poem",
  "sea-orm",
  "serde",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",
@@ -3023,26 +3024,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-server-timing"
+name = "nest-rs-server-timing"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "nestrs-core",
- "nestrs-http",
- "nestrs-middleware",
+ "nest-rs-core",
+ "nest-rs-http",
+ "nest-rs-middleware",
  "parking_lot",
  "poem",
 ]
 
 [[package]]
-name = "nestrs-testing"
+name = "nest-rs-testing"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "nestrs-config",
- "nestrs-core",
- "nestrs-http",
- "nestrs-opentelemetry",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-http",
+ "nest-rs-opentelemetry",
  "poem",
  "sea-orm",
  "sea-orm-migration",
@@ -3053,29 +3054,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-throttler"
+name = "nest-rs-throttler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "nestrs-config",
- "nestrs-core",
- "nestrs-http",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-http",
  "parking_lot",
  "poem",
  "validator",
 ]
 
 [[package]]
-name = "nestrs-ws"
+name = "nest-rs-ws"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures-util",
- "nestrs-core",
- "nestrs-http",
- "nestrs-middleware",
- "nestrs-ws-macros",
+ "nest-rs-core",
+ "nest-rs-http",
+ "nest-rs-middleware",
+ "nest-rs-ws-macros",
  "parking_lot",
  "poem",
  "serde",
@@ -3085,10 +3086,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "nestrs-ws-macros"
+name = "nest-rs-ws-macros"
 version = "0.1.0"
 dependencies = [
- "nestrs-codegen",
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -3624,23 +3625,23 @@ dependencies = [
  "async-graphql",
  "features",
  "migrations",
- "nestrs-authn",
- "nestrs-authz",
- "nestrs-config",
- "nestrs-core",
- "nestrs-graphql",
- "nestrs-health",
- "nestrs-http",
- "nestrs-middleware",
- "nestrs-openapi",
- "nestrs-opentelemetry",
- "nestrs-queue",
- "nestrs-redis",
- "nestrs-resource",
- "nestrs-schedule",
- "nestrs-seaorm",
- "nestrs-server-timing",
- "nestrs-testing",
+ "nest-rs-authn",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-middleware",
+ "nest-rs-openapi",
+ "nest-rs-opentelemetry",
+ "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-resource",
+ "nest-rs-schedule",
+ "nest-rs-seaorm",
+ "nest-rs-server-timing",
+ "nest-rs-testing",
  "poem",
  "schemars",
  "sea-orm",
@@ -3661,16 +3662,16 @@ dependencies = [
  "base64",
  "features",
  "migrations",
- "nestrs-authn",
- "nestrs-authz",
- "nestrs-config",
- "nestrs-core",
- "nestrs-health",
- "nestrs-http",
- "nestrs-opentelemetry",
- "nestrs-seaorm",
- "nestrs-testing",
- "nestrs-throttler",
+ "nest-rs-authn",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-opentelemetry",
+ "nest-rs-seaorm",
+ "nest-rs-testing",
+ "nest-rs-throttler",
  "poem",
  "schemars",
  "sea-orm",
@@ -3688,12 +3689,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "features",
- "nestrs-config",
- "nestrs-core",
- "nestrs-opentelemetry",
- "nestrs-queue",
- "nestrs-redis",
- "nestrs-testing",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-opentelemetry",
+ "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-testing",
  "serde",
  "tokio",
 ]
@@ -4794,7 +4795,7 @@ dependencies = [
  "anyhow",
  "fake",
  "migrations",
- "nestrs-testing",
+ "nest-rs-testing",
  "sea-orm",
  "tokio",
  "uuid",

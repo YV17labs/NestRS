@@ -1,0 +1,19 @@
+[package]
+name = "nest-rs-pipes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Transport-agnostic validation & transformation pipes for nestrs (NestJS-style). A surface (HTTP, …) applies them at its request boundary."
+
+
+[dependencies]
+# Pipes are pure data transforms — no transport, no DI container.
+thiserror.workspace = true
+# `ValidationPipe` surfaces field-level errors as structured `details`.
+serde_json.workspace = true
+validator.workspace = true
+# `ParseUuid` / `ParseUuidVersion`.
+uuid.workspace = true

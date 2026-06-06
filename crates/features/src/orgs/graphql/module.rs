@@ -1,12 +1,12 @@
-use nestrs_core::module;
+use nest_rs_core::module;
 
 use super::resolver::OrgsResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
-use crate::orgs::core::OrgsCoreModule;
-use crate::users::core::UsersCoreModule;
+use crate::orgs::OrgsModule;
+use crate::users::UsersModule;
 
 #[module(
-    imports = [OrgsCoreModule, UsersCoreModule, AuthzGraphqlModule],
+    imports = [OrgsModule, UsersModule, AuthzGraphqlModule],
     providers = [OrgsResolver],
 )]
 pub struct OrgsGraphqlModule;

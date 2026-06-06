@@ -1,5 +1,5 @@
-use nestrs_core::module;
-use nestrs_ws::WsModule;
+use nest_rs_core::module;
+use nest_rs_ws::WsModule;
 
 use crate::chat::gateway::ChatGateway;
 use crate::chat::guard::ModeratedGuard;
@@ -11,7 +11,7 @@ pub struct ChatModule;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nestrs_core::{Container, Module};
+    use nest_rs_core::{Container, Module};
     use std::sync::Arc;
 
     #[test]

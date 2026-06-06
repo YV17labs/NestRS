@@ -1,0 +1,27 @@
+[package]
+name = "nest-rs-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Core building blocks (DI container, module trait, lifecycle, access graph) for the nestrs framework."
+
+
+[dependencies]
+thiserror.workspace = true
+nest-rs-macros.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+# Link-time registry: each `#[hooks]` method submits a lifecycle hook so `App`
+# composes them at boot with no central list (same mechanism as GraphQL).
+inventory.workspace = true
+# Request-scope cache lock — poison-free locking off the request hot path.
+parking_lot.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

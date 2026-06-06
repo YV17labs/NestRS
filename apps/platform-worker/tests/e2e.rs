@@ -1,10 +1,10 @@
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nestrs_core::{injectable, module};
-use nestrs_queue::processor;
-use nestrs_redis::{QueueConfig, QueueConnection, QueueModule, QueueWorker};
-use nestrs_testing::TestApp;
+use nest_rs_core::{injectable, module};
+use nest_rs_queue::processor;
+use nest_rs_redis::{QueueConfig, QueueConnection, QueueModule, QueueWorker};
+use nest_rs_testing::TestApp;
 use platform_worker::PlatformWorkerModule;
 use serde::{Deserialize, Serialize};
 

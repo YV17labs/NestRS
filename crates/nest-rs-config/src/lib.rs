@@ -1,0 +1,24 @@
+//! Typed configuration loading for nestrs from the environment.
+//!
+//! A config is a namespaced [`Config`] struct that maps `NESTRS_<DOMAIN>__<KEY>`
+//! variables to fields **explicitly** in its `from_env`, read through a
+//! [`ConfigService`]; `ConfigModule` owns loading (the `.env` cascade + the
+//! namespaced reader) and registers each config as `Arc<C>` for injection.
+
+mod config;
+mod dotenv;
+mod environment;
+mod error;
+mod loader;
+mod module;
+
+pub use config::{Config, Namespaced};
+pub use environment::Environment;
+pub use error::{ConfigError, Result};
+pub use loader::{ConfigService, ConfigSource, EnvSource, env_var};
+pub use module::{ConfigFeature, ConfigModule, ConfigRoot};
+
+/// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
+/// injectable [`Config`]. Re-exported from `nestrs-config-macros` so apps write
+/// `nest_rs_config::config`.
+pub use nest_rs_config_macros::config;

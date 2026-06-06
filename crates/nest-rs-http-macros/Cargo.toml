@@ -1,0 +1,18 @@
+[package]
+name = "nest-rs-http-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Internal — HTTP decorator macros (#[controller], #[routes], verb attributes, #[interceptor]); re-exported by nest-rs-http, not a direct dependency."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true
+nest-rs-codegen.workspace = true

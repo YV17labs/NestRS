@@ -1,0 +1,56 @@
+[package]
+name = "nest-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "nestrs framework umbrella — re-exports the core and the surface crates an app reaches for, with a `prelude` for the common case."
+
+
+[features]
+default = ["http", "config"]
+
+http = ["dep:nest-rs-http"]
+config = ["dep:nest-rs-config"]
+database = ["dep:nest-rs-database"]
+seaorm = ["dep:nest-rs-seaorm", "database"]
+graphql = ["dep:nest-rs-graphql", "http"]
+ws = ["dep:nest-rs-ws", "http"]
+mcp = ["dep:nest-rs-mcp", "http"]
+queue = ["dep:nest-rs-queue"]
+redis = ["dep:nest-rs-redis", "queue"]
+schedule = ["dep:nest-rs-schedule"]
+events = ["dep:nest-rs-events"]
+authn = ["dep:nest-rs-authn"]
+authz = ["dep:nest-rs-authz"]
+opentelemetry = ["dep:nest-rs-opentelemetry"]
+openapi = ["dep:nest-rs-openapi", "http"]
+health = ["dep:nest-rs-health", "http"]
+throttler = ["dep:nest-rs-throttler", "http"]
+server-timing = ["dep:nest-rs-server-timing", "http"]
+testing = ["dep:nest-rs-testing"]
+
+[dependencies]
+nest-rs-core.workspace = true
+
+nest-rs-http = { workspace = true, optional = true }
+nest-rs-config = { workspace = true, optional = true }
+nest-rs-database = { workspace = true, optional = true }
+nest-rs-seaorm = { workspace = true, optional = true }
+nest-rs-graphql = { workspace = true, optional = true }
+nest-rs-ws = { workspace = true, optional = true }
+nest-rs-mcp = { workspace = true, optional = true }
+nest-rs-queue = { workspace = true, optional = true }
+nest-rs-redis = { workspace = true, optional = true }
+nest-rs-schedule = { workspace = true, optional = true }
+nest-rs-events = { workspace = true, optional = true }
+nest-rs-authn = { workspace = true, optional = true }
+nest-rs-authz = { workspace = true, optional = true }
+nest-rs-opentelemetry = { workspace = true, optional = true }
+nest-rs-openapi = { workspace = true, optional = true }
+nest-rs-health = { workspace = true, optional = true }
+nest-rs-throttler = { workspace = true, optional = true }
+nest-rs-server-timing = { workspace = true, optional = true }
+nest-rs-testing = { workspace = true, optional = true }

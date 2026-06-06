@@ -1,6 +1,6 @@
 use anyhow::Result;
-use nestrs_core::App;
-use nestrs_opentelemetry::OpenTelemetry;
+use nest_rs_core::App;
+use nest_rs_opentelemetry::OpenTelemetry;
 
 use chat::ChatModule;
 

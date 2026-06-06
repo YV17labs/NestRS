@@ -1,0 +1,24 @@
+[package]
+name = "nest-rs-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Model Context Protocol server support for nestrs — wraps the rmcp SDK behind the nestrs DI container and exposes a poem endpoint."
+
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-mcp-macros.workspace = true
+poem.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+nest-rs-core.workspace = true
+nest-rs-http.workspace = true
+nest-rs-middleware.workspace = true
+tokio.workspace = true
+async-trait.workspace = true

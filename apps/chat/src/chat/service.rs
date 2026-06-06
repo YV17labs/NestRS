@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nestrs_core::injectable;
-use nestrs_ws::WsServer;
+use nest_rs_core::injectable;
+use nest_rs_ws::WsServer;
 use parking_lot::Mutex;
 
 use crate::chat::dto::{ChatMessage, SendMessage};

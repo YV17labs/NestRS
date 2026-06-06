@@ -15,7 +15,7 @@ mod module;
 pub use config::{Config, Namespaced};
 pub use environment::Environment;
 pub use error::{ConfigError, Result};
-pub use loader::{ConfigService, env_var};
+pub use loader::{ConfigService, ConfigSource, EnvSource, env_var};
 pub use module::{ConfigFeature, ConfigModule, ConfigRoot};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,

@@ -22,7 +22,7 @@ nestrs-http.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on
-# jsonwebtoken directly), mirroring how nestrs-queue hides apalis.
+# jsonwebtoken directly), mirroring how nestrs-redis hides apalis.
 jsonwebtoken.workspace = true
 # OAuth2 Authorization Code flow; its bundled reqwest (re-exported as
 # `oauth2::reqwest`) drives the token exchange, so we add no second reqwest. The

@@ -6,26 +6,20 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Discovered Redis-backed job queues for nestrs: the #[processor] decorator, a Queue producer handle, and a QueueWorker transport, built on apalis."
+description = "Backend-agnostic queue contract for nestrs: traits and the link-time #[process] registry that any backend (Redis via nestrs-redis, SQS, NATS, in-memory) plugs into."
 
 [dependencies]
 nestrs-core.workspace = true
+# Re-exported so call sites write `nestrs_queue::processor` for the macro
+# even though it physically lives in the macros crate; the macro emits paths
+# rooted at `::nestrs_queue::*`, so the macro and the abstractions ship from
+# the same import root.
 nestrs-queue-macros.workspace = true
-# `QueueModule` owns its `#[config]` `QueueConfig` (namespace `queue`), loaded
-# from `NESTRS_QUEUE__*`; `validator` backs its `#[validate]` rules.
-nestrs-config.workspace = true
-validator.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 serde.workspace = true
-tokio.workspace = true
+serde_json.workspace = true
 tokio-util.workspace = true
+# Re-exported for the `#[processor]` macro emission so the call site doesn't
+# need a direct `tracing` dependency for the unversioned-payload warning.
 tracing.workspace = true
-apalis = { workspace = true, features = ["retry", "timeout", "catch-panic"] }
-apalis-redis.workspace = true
-
-[dev-dependencies]
-nestrs-core.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
-async-trait.workspace = true

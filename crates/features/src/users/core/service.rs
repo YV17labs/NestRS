@@ -5,7 +5,7 @@ use anyhow::Result;
 use nestrs_authn::{burn_verify, hash_password, verify_password};
 use nestrs_authz::Action;
 use nestrs_core::{hooks, injectable};
-use nestrs_database::{CreateModel, CrudService, Repo};
+use nestrs_seaorm::{CreateModel, CrudService, Repo};
 use nestrs_graphql::dataloader;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,

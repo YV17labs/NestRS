@@ -40,7 +40,7 @@ pub struct WsDataContext {
 impl SocketContext for WsDataContext {
     fn capture(&self, req: &Request) -> Captured {
         Arc::new(CapturedContext {
-            executor: Executor::Pool(self.db.clone()),
+            executor: Executor::Pool((*self.db).clone()),
             ability: req.extensions().get::<Arc<Ability>>().cloned(),
         })
     }

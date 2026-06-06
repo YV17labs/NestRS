@@ -31,7 +31,7 @@ pub struct LoaderScope {
 impl BatchContext for LoaderScope {
     fn spawner(&self) -> BatchSpawner {
         let ability = current_ability();
-        let executor = Executor::Pool(self.db.clone());
+        let executor = Executor::Pool((*self.db).clone());
         Box::new(move |fut| {
             let ability = ability.clone();
             let executor = executor.clone();

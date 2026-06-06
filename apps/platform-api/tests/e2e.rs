@@ -3,7 +3,7 @@ use std::sync::Arc;
 use features::{Claims, Role};
 use nestrs_authn::{JwtConfig, JwtOptions, JwtService};
 use nestrs_authz::{AbilityBuilder, Action, with_ability};
-use nestrs_database::{Executor, Repo, with_executor};
+use nestrs_seaorm::{Executor, Repo, with_executor};
 use nestrs_testing::{EphemeralDatabase, TestApp};
 use platform_api::PlatformApiModule;
 use poem::http::{StatusCode, header};
@@ -346,7 +346,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
         b.build()
     });
     let (update, delete) = with_executor(
-        Executor::Pool(conn.clone()),
+        Executor::Pool((*conn).clone()),
         with_ability(blocked, async move {
             let model = user_row::Entity::find_by_id(user_a_id)
                 .one(&*conn)

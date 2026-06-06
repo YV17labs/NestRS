@@ -24,7 +24,7 @@ pub use context::{BoxFuture, OperationGuard};
 pub use guard::ResolverGuard;
 /// Re-establishes per-request ambient state inside a DataLoader batch (the
 /// batch runs on a spawned task where request task-locals are gone).
-/// Implemented by `nestrs_database::graphql::LoaderScope`.
+/// Implemented by `nestrs_seaorm::graphql::LoaderScope`.
 pub use loader::{BatchContext, BatchFuture, BatchSpawner};
 pub use loader::{LoaderRegistration, batch_spawner};
 pub use module::{GraphqlModule, GraphqlSetup};

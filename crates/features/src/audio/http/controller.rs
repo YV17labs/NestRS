@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nestrs_http::{controller, routes};
-use nestrs_queue::QueueConnection;
+use nestrs_redis::QueueConnection;
 use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};

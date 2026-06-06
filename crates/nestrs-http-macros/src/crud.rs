@@ -69,7 +69,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     &self,
                     _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Read, #entity>,
                 ) -> ::poem::Result<::poem::web::Json<::std::vec::Vec<#output>>> {
-                    let __rows = ::nestrs_database::CrudService::list(&*self.#service)
+                    let __rows = ::nestrs_seaorm::CrudService::list(&*self.#service)
                         .await
                         .map_err(#internal)?;
                     ::core::result::Result::Ok(::poem::web::Json(
@@ -85,9 +85,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 async fn list(
                     &self,
                     _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Read, #entity>,
-                    __page: ::poem::web::Query<::nestrs_database::PageParams>,
+                    __page: ::poem::web::Query<::nestrs_seaorm::PageParams>,
                 ) -> ::poem::Result<::poem::Response> {
-                    let __p = ::nestrs_database::CrudService::page(
+                    let __p = ::nestrs_seaorm::CrudService::page(
                         &*self.#service,
                         __page.0.limit(),
                         __page.0.after_uuid(),
@@ -131,7 +131,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 __id: ::poem::web::Path<::uuid::Uuid>,
             ) -> ::poem::Result<::poem::web::Json<#output>> {
                 #id_v7_check
-                match ::nestrs_database::CrudService::access(
+                match ::nestrs_seaorm::CrudService::access(
                     &*self.#service,
                     ::nestrs_authz::Action::Read,
                     __id.0,
@@ -139,13 +139,13 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 .await
                 .map_err(#internal)?
                 {
-                    ::nestrs_database::Access::Found(__m) => {
+                    ::nestrs_seaorm::Access::Found(__m) => {
                         ::core::result::Result::Ok(::poem::web::Json(#output::from(&__m)))
                     }
-                    ::nestrs_database::Access::Denied => ::core::result::Result::Err(
+                    ::nestrs_seaorm::Access::Denied => ::core::result::Result::Err(
                         ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
                     ),
-                    ::nestrs_database::Access::Missing => ::core::result::Result::Err(
+                    ::nestrs_seaorm::Access::Missing => ::core::result::Result::Err(
                         ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
                     ),
                 }
@@ -166,7 +166,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     _authz: ::nestrs_authz::http::Authorize<::nestrs_authz::Create, #entity>,
                     __body: ::nestrs_http::Valid<::poem::web::Json<#create>>,
                 ) -> ::poem::Result<::poem::web::Json<#output>> {
-                    let __row = ::nestrs_database::CrudService::create(
+                    let __row = ::nestrs_seaorm::CrudService::create(
                         &*self.#service,
                         __body.into_inner(),
                     )
@@ -191,7 +191,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __body: ::nestrs_http::Valid<::poem::web::Json<#update>>,
                 ) -> ::poem::Result<::poem::web::Json<#output>> {
                     #id_v7_check
-                    match ::nestrs_database::CrudService::access(
+                    match ::nestrs_seaorm::CrudService::access(
                         &*self.#service,
                         ::nestrs_authz::Action::Update,
                         __id.0,
@@ -199,8 +199,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     .await
                     .map_err(#internal)?
                     {
-                        ::nestrs_database::Access::Found(__m) => {
-                            let __row = ::nestrs_database::CrudService::update(
+                        ::nestrs_seaorm::Access::Found(__m) => {
+                            let __row = ::nestrs_seaorm::CrudService::update(
                                 &*self.#service,
                                 __m,
                                 __body.into_inner(),
@@ -209,10 +209,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                             .map_err(#internal)?;
                             ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
                         }
-                        ::nestrs_database::Access::Denied => ::core::result::Result::Err(
+                        ::nestrs_seaorm::Access::Denied => ::core::result::Result::Err(
                             ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
                         ),
-                        ::nestrs_database::Access::Missing => ::core::result::Result::Err(
+                        ::nestrs_seaorm::Access::Missing => ::core::result::Result::Err(
                             ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
                         ),
                     }
@@ -231,7 +231,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id: ::poem::web::Path<::uuid::Uuid>,
                 ) -> ::poem::Result<::poem::http::StatusCode> {
                     #id_v7_check
-                    match ::nestrs_database::CrudService::access(
+                    match ::nestrs_seaorm::CrudService::access(
                         &*self.#service,
                         ::nestrs_authz::Action::Delete,
                         __id.0,
@@ -239,16 +239,16 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     .await
                     .map_err(#internal)?
                     {
-                        ::nestrs_database::Access::Found(__m) => {
-                            ::nestrs_database::CrudService::delete(&*self.#service, __m)
+                        ::nestrs_seaorm::Access::Found(__m) => {
+                            ::nestrs_seaorm::CrudService::delete(&*self.#service, __m)
                                 .await
                                 .map_err(#internal)?;
                             ::core::result::Result::Ok(::poem::http::StatusCode::NO_CONTENT)
                         }
-                        ::nestrs_database::Access::Denied => ::core::result::Result::Err(
+                        ::nestrs_seaorm::Access::Denied => ::core::result::Result::Err(
                             ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
                         ),
-                        ::nestrs_database::Access::Missing => ::core::result::Result::Err(
+                        ::nestrs_seaorm::Access::Missing => ::core::result::Result::Err(
                             ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
                         ),
                     }

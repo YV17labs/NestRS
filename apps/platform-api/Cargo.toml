@@ -14,9 +14,10 @@ nestrs-health.workspace = true
 nestrs-http.workspace = true
 nestrs-middleware.workspace = true
 nestrs-openapi.workspace = true
-nestrs-database = { workspace = true, features = ["http", "graphql", "health"] }
+nestrs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
 nestrs-resource.workspace = true
 nestrs-queue.workspace = true
+nestrs-redis.workspace = true
 nestrs-schedule.workspace = true
 nestrs-server-timing.workspace = true
 nestrs-opentelemetry = { workspace = true, features = ["http"] }

@@ -48,7 +48,7 @@ impl<E: EntityTrait> Repo<E> {
         current_executor().ok_or_else(|| {
             DbErr::Custom(
                 "no ambient database executor — a Repo query must run inside the request \
-                 scope installed by nestrs-database's DbContext interceptor"
+                 scope installed by nestrs-seaorm's DbContext interceptor"
                     .to_owned(),
             )
         })
@@ -169,7 +169,7 @@ mod tests {
     // A bug that defaults to `TRUE` here leaks every row to every caller.
     #[tokio::test]
     async fn request_scope_without_ability_denies_all_rows() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         with_request_executor(pool, async {
             let s = sql(scope_for::<widget::Entity>(Action::Read));
             assert!(s.contains("1 = 0"), "request paths fail closed: {s}");
@@ -181,7 +181,7 @@ mod tests {
     // the documented invariant, and the regression check is paranoid.
     #[tokio::test]
     async fn job_scope_without_ability_remains_unscoped() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         with_job_executor(pool, async {
             let s = sql(scope_for::<widget::Entity>(Action::Read));
             assert!(!s.contains("1 = 0"), "worker paths stay unscoped: {s}");
@@ -191,7 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_ambient_ability_wins_over_the_scope_default() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity)
             .when(|p| p.eq(widget::Column::OrgId, 7));
@@ -248,7 +248,7 @@ mod tests {
     // query off `scoped` cannot accidentally bypass row-level security.
     #[tokio::test]
     async fn scoped_in_request_without_ability_renders_deny_all() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         with_request_executor(pool, async {
             let s = select_sql(Repo::<widget::Entity>::scoped(Action::Read));
             assert!(s.contains("1 = 0"), "scoped() fails closed too: {s}");
@@ -260,7 +260,7 @@ mod tests {
     // predicate — the canonical "admin" shape.
     #[tokio::test]
     async fn scoped_with_unconditional_grant_renders_unrestricted() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
         let ability = Arc::new(b.build());
@@ -281,7 +281,7 @@ mod tests {
     // all actions to one bucket would surface as identical SQL across calls.
     #[tokio::test]
     async fn scope_for_per_action_uses_distinct_predicates() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity)
             .when(|p| p.eq(widget::Column::OrgId, 1));
@@ -322,7 +322,7 @@ mod tests {
     // privilege-escalation regression.
     #[tokio::test]
     async fn scope_for_denies_an_unmentioned_action_inside_request() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
         let ability = Arc::new(b.build());
@@ -344,7 +344,7 @@ mod tests {
     // both must observe the same executor under `Repo::conn`.
     #[tokio::test]
     async fn repo_conn_returns_the_installed_request_executor() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         with_request_executor(pool, async {
             let conn = Repo::<widget::Entity>::conn().expect("an executor is installed");
             assert!(matches!(conn, Executor::Pool(_)));
@@ -354,7 +354,7 @@ mod tests {
 
     #[tokio::test]
     async fn repo_conn_returns_the_installed_job_executor() {
-        let pool = Executor::Pool(Arc::new(sea_orm::DatabaseConnection::default()));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         with_job_executor(pool, async {
             let conn = Repo::<widget::Entity>::conn().expect("an executor is installed");
             assert!(matches!(conn, Executor::Pool(_)));

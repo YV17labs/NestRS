@@ -1,7 +1,7 @@
 use nestrs_authn::{AuthnModule, OAuth2Module};
 use nestrs_config::ConfigModule;
 use nestrs_core::module;
-use nestrs_database::DatabaseModule;
+use nestrs_seaorm::DatabaseModule;
 use nestrs_health::HealthModule;
 use nestrs_http::{HttpConfig, HttpModule};
 use nestrs_opentelemetry::OpenTelemetryModule;

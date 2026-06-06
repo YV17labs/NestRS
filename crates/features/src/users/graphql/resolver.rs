@@ -4,7 +4,7 @@ use async_graphql::dataloader::DataLoader;
 use async_graphql::{Context, Result};
 use nestrs_authz::graphql::authorize;
 use nestrs_authz::{Create, Read};
-use nestrs_database::graphql::bind;
+use nestrs_seaorm::graphql::bind;
 use nestrs_graphql::{crud, resolver};
 use uuid::Uuid;
 

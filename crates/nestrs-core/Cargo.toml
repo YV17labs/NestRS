@@ -21,3 +21,6 @@ tracing.workspace = true
 inventory.workspace = true
 # Request-scope cache lock — poison-free locking off the request hot path.
 parking_lot.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

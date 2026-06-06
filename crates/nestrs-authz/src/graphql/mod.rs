@@ -5,7 +5,7 @@
 //! this module submits the `ContextSeed` that forwards `Arc<Ability>` into
 //! each operation's GraphQL context.
 //!
-//! Data-coupled bindings live in `nestrs_database::graphql` (`bind`,
+//! Data-coupled bindings live in `nestrs_seaorm::graphql` (`bind`,
 //! `LoaderScope`).
 //!
 //! ```ignore

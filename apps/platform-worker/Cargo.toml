@@ -8,6 +8,7 @@ publish = false
 nestrs-core.workspace = true
 nestrs-config.workspace = true
 nestrs-queue.workspace = true
+nestrs-redis.workspace = true
 nestrs-opentelemetry.workspace = true
 features.workspace = true
 tokio.workspace = true

@@ -67,7 +67,7 @@
 //! task-locals an HTTP request installs have unwound by the time a message
 //! handler runs. The [`SocketContext`] seam captures opaque per-connection
 //! state from the post-guard upgrade request and re-installs it around each
-//! dispatch — this is how `nestrs_database::ws` re-binds executor + ability
+//! dispatch — this is how `nestrs_seaorm::ws` re-binds executor + ability
 //! per message without `nestrs-ws` depending on the ORM or authz.
 
 mod context;

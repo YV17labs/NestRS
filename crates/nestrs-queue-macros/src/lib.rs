@@ -1,4 +1,7 @@
-//! The `#[processor]` decorator, re-exported by `nestrs-queue`.
+//! The `#[processor]` decorator, re-exported by `nestrs-queue` (the
+//! backend-agnostic abstractions crate) so the call site keeps writing
+//! `use nestrs_queue::processor;` regardless of which backend integration
+//! (nestrs-redis, …) is wired in.
 
 use proc_macro::TokenStream;
 

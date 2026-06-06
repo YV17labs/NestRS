@@ -1,11 +1,20 @@
 //! Ambient, request-scoped database executor.
 //!
-//! [`Executor`] is the request's current connection — pool or transaction —
-//! carried in a task-local that [`DbContext`](crate::DbContext) installs and
-//! [`Repo`](crate::Repo) reads back. The enum exists because SeaORM's
-//! `ConnectionTrait` has generic methods (not object-safe); forwarding via a
-//! variant restores a single `&Executor` that drives any SeaORM query.
+//! [`Executor`] is the request's current SeaORM connection — pool or
+//! transaction — implementing both SeaORM's `ConnectionTrait` (so it can
+//! drive any query) and [`nestrs_database::Executor`] (so it lives in the
+//! ORM-agnostic task-local the request boundary installs and [`Repo`]
+//! reads back). The enum exists because `ConnectionTrait` has generic
+//! methods (not object-safe); forwarding via a variant restores a single
+//! `&Executor` that drives any SeaORM query.
+//!
+//! The task-local plumbing itself lives in `nestrs-database`; this module
+//! re-exports it with SeaORM-typed convenience signatures so existing
+//! callers see no change.
+//!
+//! [`Repo`]: crate::Repo
 
+use std::any::Any;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -15,11 +24,21 @@ use sea_orm::{
     QueryResult, Statement,
 };
 
+pub use nestrs_database::ExecutorScope;
+pub use nestrs_database::current_executor_scope;
+
 /// The connection a request's queries run against: the shared pool, or the
 /// per-request [`DatabaseTransaction`]. Cheap to clone.
+///
+/// `DatabaseConnection` is internally `Arc`-shaped (a `Clone` handle on the
+/// connection manager), so the `Pool` variant holds it directly — wrapping
+/// it in an outer `Arc` would carry a redundant refcount on every request
+/// (the executor is already re-wrapped as `Arc<dyn nestrs_database::Executor>`
+/// when installed in the task-local). `DatabaseTransaction` is **not**
+/// internally `Arc`-shaped, so the `Txn` variant keeps its `Arc`.
 #[derive(Clone)]
 pub enum Executor {
-    Pool(Arc<DatabaseConnection>),
+    Pool(DatabaseConnection),
     Txn(Arc<DatabaseTransaction>),
 }
 
@@ -75,47 +94,47 @@ impl ConnectionTrait for Executor {
     }
 }
 
-tokio::task_local! {
-    static EXECUTOR: Executor;
+/// Slots the SeaORM `Executor` into the ORM-agnostic ambient task-local.
+/// The downcast back to `Executor` is what [`Repo::conn`](crate::Repo::conn)
+/// uses to recover a typed handle for SeaORM queries.
+impl nestrs_database::Executor for Executor {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
-/// Whether the ambient executor belongs to a request or a worker job. Used by
-/// [`crate::repo::scope_for`] to fail closed on request paths that lack an
-/// ambient [`Ability`](nestrs_authz::Ability).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutorScope {
-    Request,
-    Job,
-}
-
-tokio::task_local! {
-    static EXECUTOR_SCOPE: ExecutorScope;
-}
-
+/// The SeaORM `Executor` installed in the ambient task-local for this
+/// request or job, or `None` outside any scope. A downcast miss is a
+/// framework bug (some other ORM installed its handle in the same
+/// task-local) — it logs an error and surfaces as `None`.
 pub fn current_executor() -> Option<Executor> {
-    EXECUTOR.try_with(Clone::clone).ok()
+    let dynamic = nestrs_database::current_executor()?;
+    match dynamic.as_any().downcast_ref::<Executor>() {
+        Some(executor) => Some(executor.clone()),
+        None => {
+            tracing::error!(
+                target: "nestrs::orm",
+                "ambient executor is not a SeaORM Executor — another ORM module installed it; \
+                 returning None so the Repo error path runs instead of a downcast panic",
+            );
+            None
+        }
+    }
 }
 
-pub fn current_executor_scope() -> Option<ExecutorScope> {
-    EXECUTOR_SCOPE.try_with(Clone::clone).ok()
-}
-
-/// Install `executor` without tagging a scope. Prefer the request/job variants
-/// at framework boundaries so authorization can distinguish the two paths.
+/// Install `executor` without tagging a scope. Prefer the request/job
+/// variants at framework boundaries so authorization can distinguish the
+/// two paths.
 pub async fn with_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
-    EXECUTOR.scope(executor, fut).await
+    nestrs_database::with_executor(Arc::new(executor), fut).await
 }
 
 pub async fn with_request_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
-    EXECUTOR
-        .scope(executor, EXECUTOR_SCOPE.scope(ExecutorScope::Request, fut))
-        .await
+    nestrs_database::with_request_executor(Arc::new(executor), fut).await
 }
 
 pub async fn with_job_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
-    EXECUTOR
-        .scope(executor, EXECUTOR_SCOPE.scope(ExecutorScope::Job, fut))
-        .await
+    nestrs_database::with_job_executor(Arc::new(executor), fut).await
 }
 
 #[cfg(test)]
@@ -124,7 +143,7 @@ mod tests {
     use super::*;
 
     fn pool() -> Executor {
-        Executor::Pool(Arc::new(DatabaseConnection::default()))
+        Executor::Pool(DatabaseConnection::default())
     }
 
     #[tokio::test]
@@ -226,9 +245,10 @@ mod tests {
         .await;
     }
 
-    // `Executor` is `Clone`; the variant must round-trip without disturbing
-    // the inner `Arc` (cheap reference bumps, no deep copy). Pinning this
-    // here so a refactor to a non-`Arc` field surfaces immediately.
+    // `Executor` is `Clone`; the variant must round-trip without changing
+    // shape. `DatabaseConnection` is already internally `Arc`-shaped, so the
+    // clone is a cheap reference bump, no deep copy. Pinning this here so a
+    // refactor to a non-`Clone` field surfaces immediately.
     #[test]
     fn executor_clone_preserves_the_pool_variant() {
         let p = pool();

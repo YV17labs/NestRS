@@ -1,12 +1,12 @@
 use nestrs_config::ConfigModule;
 use nestrs_core::module;
-use nestrs_database::{DatabaseHealthModule, DatabaseModule};
+use nestrs_seaorm::{DatabaseHealthModule, DatabaseModule};
 use nestrs_graphql::GraphqlModule;
 use nestrs_health::HealthModule;
 use nestrs_http::{HttpConfig, HttpModule};
 use nestrs_openapi::OpenApiModule;
 use nestrs_opentelemetry::OpenTelemetryModule;
-use nestrs_queue::QueueModule;
+use nestrs_redis::QueueModule;
 use nestrs_schedule::ScheduleModule;
 use nestrs_server_timing::ServerTimingModule;
 

@@ -1,10 +1,18 @@
 //! `#[processor]` — orchestrator on a provider's `impl` block. Walks the
 //! methods; for each one tagged with `#[process(queue = …, concurrency, retries)]`
-//! emits a free handler `fn`, a monomorphic `register` thunk, and a
-//! `ProcessMethod` inventory submission the `QueueWorker` drains at boot.
+//! emits a type-erased handler `fn` and a `ProcessMethod` inventory submission
+//! the active queue backend (e.g. Redis via `nestrs-redis`) drains at boot.
 //!
 //! Like `#[scheduled]`, this does NOT emit `Discoverable` for the host
 //! struct — the user's own `#[injectable]` owns it. Inventory is the seam.
+//!
+//! The handler is emitted as a `nestrs_queue::JobHandler` — a fn pointer
+//! that takes the raw JSON payload + a `Container`, deserializes to the
+//! method's job type, resolves the provider, and dispatches. Every reference
+//! is to `::nestrs_queue::*` (the abstractions crate, which also re-exports
+//! this macro and `serde_json`), so the call site reaches the macro and the
+//! emission targets through the same import root regardless of which
+//! backend integration (nestrs-redis, …) is wired in.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -64,11 +72,6 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
             provider_snake,
             method_snake
         );
-        let register_ident = format_ident!(
-            "__nestrs_process_register_{}_{}",
-            provider_snake,
-            method_snake
-        );
 
         let concurrency_lit = LitInt::new(&concurrency.to_string(), proc_macro2::Span::call_site());
         let retries_lit = LitInt::new(&retries.to_string(), proc_macro2::Span::call_site());
@@ -77,11 +80,8 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
             #[doc(hidden)]
             #[allow(non_snake_case)]
             fn #handler_ident(
-                __job: #job_ty,
-                __container: ::nestrs_queue::Data<::nestrs_core::Container>,
-                __ctx: ::nestrs_queue::Data<
-                    ::std::option::Option<::std::sync::Arc<dyn ::nestrs_core::JobContext>>,
-                >,
+                __payload: ::nestrs_queue::serde_json::Value,
+                __container: ::nestrs_core::Container,
             ) -> ::std::pin::Pin<
                 ::std::boxed::Box<
                     dyn ::std::future::Future<
@@ -95,40 +95,120 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                 >,
             > {
                 ::std::boxed::Box::pin(async move {
-                    let __provider = ::nestrs_core::Container::get::<#self_ty>(&__container)
-                        .expect(::std::concat!(
-                            "queue processor provider `",
-                            #provider_name,
-                            "` is not registered — add it to a reachable module's \
-                             `providers = [...]`",
-                        ));
-                    let __ctx_ref: &::std::option::Option<
-                        ::std::sync::Arc<dyn ::nestrs_core::JobContext>,
-                    > = &__ctx;
+                    // Unwrap the wire envelope `{ "v": <n>, "payload": <…> }`.
+                    // Detection is strict to avoid mis-classifying a user `Job`
+                    // struct that happens to have `v`+`payload` fields plus
+                    // anything else:
+                    //   - the object MUST have exactly two top-level keys, and
+                    //     they MUST be `v` and `payload`;
+                    //   - `v` MUST be a JSON Number with a non-negative integer
+                    //     value (accepting both `1` and `1.0` — a hand-rolled
+                    //     producer may serialize as a float).
+                    // Anything else falls through to the legacy raw-decode path
+                    // (with a warning), so jobs left in Redis from a prior
+                    // deploy still drain.
+                    let __is_envelope = match &__payload {
+                        ::nestrs_queue::serde_json::Value::Object(__obj) => {
+                            __obj.len() == 2
+                                && __obj.contains_key("v")
+                                && __obj.contains_key("payload")
+                                && match __obj.get("v") {
+                                    ::std::option::Option::Some(
+                                        ::nestrs_queue::serde_json::Value::Number(__n),
+                                    ) => {
+                                        __n.as_u64().is_some()
+                                            || __n.as_f64().is_some_and(|__f| {
+                                                __f.is_finite()
+                                                    && __f >= 0.0
+                                                    && __f.fract() == 0.0
+                                            })
+                                    }
+                                    _ => false,
+                                }
+                        }
+                        _ => false,
+                    };
+                    let __raw: ::nestrs_queue::serde_json::Value = if __is_envelope {
+                        let ::nestrs_queue::serde_json::Value::Object(mut __obj) = __payload else {
+                            ::std::unreachable!("__is_envelope guarantees an Object");
+                        };
+                        let __v_value = __obj.remove("v").unwrap_or(
+                            ::nestrs_queue::serde_json::Value::Null,
+                        );
+                        let __v = match &__v_value {
+                            ::nestrs_queue::serde_json::Value::Number(__n) => __n
+                                .as_u64()
+                                .or_else(|| __n.as_f64().map(|__f| __f as u64))
+                                .unwrap_or(u64::MAX),
+                            _ => u64::MAX,
+                        };
+                        if __v != ::nestrs_queue::WIRE_FORMAT_VERSION as u64 {
+                            let __msg = if __v > ::nestrs_queue::WIRE_FORMAT_VERSION as u64 {
+                                ::std::format!(
+                                    "unsupported job wire-format version {} on queue `{}`; \
+                                     the producer is from a newer release; either roll back \
+                                     this consumer or wait for the producer to drain",
+                                    __v,
+                                    #queue,
+                                )
+                            } else {
+                                ::std::format!(
+                                    "unsupported job wire-format version {0} on queue `{1}`; \
+                                     the producer is from an older release; either drain \
+                                     the queue or pin the consumer at version {0}",
+                                    __v,
+                                    #queue,
+                                )
+                            };
+                            return ::std::result::Result::Err(::std::boxed::Box::<
+                                dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
+                            >::from(__msg));
+                        }
+                        __obj.remove("payload").unwrap_or(
+                            ::nestrs_queue::serde_json::Value::Null,
+                        )
+                    } else {
+                        ::nestrs_queue::tracing::warn!(
+                            target: "nestrs::queue",
+                            queue = #queue,
+                            "processed an unversioned job payload — producer predates the \
+                             wire envelope; drain the queue to clear legacy jobs",
+                        );
+                        __payload
+                    };
+                    let __job: #job_ty = match ::nestrs_queue::serde_json::from_value(__raw) {
+                        ::std::result::Result::Ok(j) => j,
+                        ::std::result::Result::Err(e) => {
+                            return ::std::result::Result::Err(::std::boxed::Box::<
+                                dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
+                            >::from(::std::format!(
+                                "failed to deserialize job for queue `{}`: {e}",
+                                #queue,
+                            )));
+                        }
+                    };
+                    let __provider = match ::nestrs_core::Container::get::<#self_ty>(&__container) {
+                        ::std::option::Option::Some(p) => p,
+                        ::std::option::Option::None => {
+                            return ::std::result::Result::Err(::std::boxed::Box::<
+                                dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
+                            >::from(::std::format!(
+                                "queue processor provider `{}` not registered in the running \
+                                 container — add it to a reachable module's `providers = [...]`",
+                                ::std::any::type_name::<#self_ty>(),
+                            )));
+                        }
+                    };
+                    let __job_context = ::nestrs_core::Container::get_dyn::<
+                        dyn ::nestrs_core::JobContext,
+                    >(&__container);
                     ::nestrs_core::run_in_job_context(
-                        __ctx_ref.as_ref(),
+                        __job_context.as_ref(),
                         async move { <#self_ty>::#method_ident(&__provider, __job).await },
                     )
                     .await
                     .map_err(::std::convert::Into::into)
                 })
-            }
-
-            #[doc(hidden)]
-            #[allow(non_snake_case)]
-            fn #register_ident(
-                __monitor: ::nestrs_queue::Monitor,
-                __conn: ::nestrs_queue::QueueConnection,
-                __container: ::nestrs_core::Container,
-                __meta: &::nestrs_queue::ProcessorMeta,
-            ) -> ::nestrs_queue::Monitor {
-                ::nestrs_queue::register_method::<#job_ty>(
-                    __monitor,
-                    __conn,
-                    __container,
-                    __meta,
-                    #handler_ident,
-                )
             }
 
             ::nestrs_core::inventory::submit! {
@@ -138,7 +218,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                     concurrency: #concurrency_lit,
                     retries: #retries_lit,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
-                    register: #register_ident,
+                    handler: #handler_ident,
                 }
             }
         });

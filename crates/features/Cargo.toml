@@ -11,13 +11,14 @@ description = "The product's feature library — vertical slices as port + adapt
 
 [dependencies]
 nestrs-core.workspace = true
-nestrs-database = { workspace = true, features = ["http", "graphql", "ws"] }
+nestrs-seaorm = { workspace = true, features = ["http", "graphql", "ws"] }
 nestrs-authn.workspace = true
 nestrs-authz = { workspace = true, features = ["http", "graphql"] }
 nestrs-config.workspace = true
 nestrs-graphql.workspace = true
 nestrs-http.workspace = true
 nestrs-queue.workspace = true
+nestrs-redis.workspace = true
 nestrs-schedule.workspace = true
 nestrs-throttler.workspace = true
 nestrs-ws.workspace = true
@@ -40,7 +41,7 @@ tracing.workspace = true
 tokio.workspace = true
 nestrs-testing = { workspace = true, features = ["orm"] }
 nestrs-authz.workspace = true
-nestrs-database.workspace = true
+nestrs-seaorm.workspace = true
 async-graphql.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true

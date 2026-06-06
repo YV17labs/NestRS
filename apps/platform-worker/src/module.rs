@@ -1,6 +1,6 @@
 use nestrs_config::ConfigModule;
 use nestrs_core::module;
-use nestrs_queue::{QueueModule, QueueWorkerModule};
+use nestrs_redis::{QueueModule, QueueWorkerModule};
 
 use features::audio::{AudioCoreModule, AudioQueueModule};
 

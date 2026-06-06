@@ -72,7 +72,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 __ctx: &::nestrs_graphql::async_graphql::Context<'_>,
             ) -> ::nestrs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
                 ::nestrs_authz::graphql::authorize::<::nestrs_authz::Read, #entity>(__ctx)?;
-                let __rows = ::nestrs_database::CrudService::list(&*self.#service)
+                let __rows = ::nestrs_seaorm::CrudService::list(&*self.#service)
                     .await
                     .map_err(#gql_err)?;
                 ::core::result::Result::Ok(__rows.iter().map(#output::from).collect())
@@ -90,7 +90,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ) -> ::nestrs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 let _ = __ctx;
                 #parse_id
-                match ::nestrs_database::CrudService::access(
+                match ::nestrs_seaorm::CrudService::access(
                     &*self.#service,
                     ::nestrs_authz::Action::Read,
                     __id,
@@ -98,11 +98,11 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 .await
                 .map_err(#gql_err)?
                 {
-                    ::nestrs_database::Access::Found(__m) => {
+                    ::nestrs_seaorm::Access::Found(__m) => {
                         ::core::result::Result::Ok(::core::option::Option::Some(#output::from(&__m)))
                     }
-                    ::nestrs_database::Access::Denied => ::core::result::Result::Err(#forbidden),
-                    ::nestrs_database::Access::Missing => {
+                    ::nestrs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
+                    ::nestrs_seaorm::Access::Missing => {
                         ::core::result::Result::Ok(::core::option::Option::None)
                     }
                 }
@@ -122,7 +122,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     input: #create,
                 ) -> ::nestrs_graphql::async_graphql::Result<#output> {
                     ::nestrs_authz::graphql::authorize::<::nestrs_authz::Create, #entity>(__ctx)?;
-                    let __row = ::nestrs_database::CrudService::create(&*self.#service, input)
+                    let __row = ::nestrs_seaorm::CrudService::create(&*self.#service, input)
                         .await
                         .map_err(#gql_err)?;
                     ::core::result::Result::Ok(#output::from(&__row))
@@ -143,7 +143,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     ) -> ::nestrs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                         let _ = __ctx;
                         #parse_id
-                        match ::nestrs_database::CrudService::access(
+                        match ::nestrs_seaorm::CrudService::access(
                             &*self.#service,
                             ::nestrs_authz::Action::Update,
                             __id,
@@ -151,8 +151,8 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         .await
                         .map_err(#gql_err)?
                         {
-                            ::nestrs_database::Access::Found(__m) => {
-                                let __row = ::nestrs_database::CrudService::update(
+                            ::nestrs_seaorm::Access::Found(__m) => {
+                                let __row = ::nestrs_seaorm::CrudService::update(
                                     &*self.#service,
                                     __m,
                                     input,
@@ -161,8 +161,8 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                 .map_err(#gql_err)?;
                                 ::core::result::Result::Ok(::core::option::Option::Some(#output::from(&__row)))
                             }
-                            ::nestrs_database::Access::Denied => ::core::result::Result::Err(#forbidden),
-                            ::nestrs_database::Access::Missing => {
+                            ::nestrs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
+                            ::nestrs_seaorm::Access::Missing => {
                                 ::core::result::Result::Ok(::core::option::Option::None)
                             }
                         }
@@ -180,7 +180,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 ) -> ::nestrs_graphql::async_graphql::Result<bool> {
                     let _ = __ctx;
                     #parse_id
-                    match ::nestrs_database::CrudService::access(
+                    match ::nestrs_seaorm::CrudService::access(
                         &*self.#service,
                         ::nestrs_authz::Action::Delete,
                         __id,
@@ -188,14 +188,14 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     .await
                     .map_err(#gql_err)?
                     {
-                        ::nestrs_database::Access::Found(__m) => {
-                            ::nestrs_database::CrudService::delete(&*self.#service, __m)
+                        ::nestrs_seaorm::Access::Found(__m) => {
+                            ::nestrs_seaorm::CrudService::delete(&*self.#service, __m)
                                 .await
                                 .map_err(#gql_err)?;
                             ::core::result::Result::Ok(true)
                         }
-                        ::nestrs_database::Access::Denied => ::core::result::Result::Err(#forbidden),
-                        ::nestrs_database::Access::Missing => ::core::result::Result::Ok(false),
+                        ::nestrs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
+                        ::nestrs_seaorm::Access::Missing => ::core::result::Result::Ok(false),
                     }
                 }
             });

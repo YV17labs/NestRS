@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nestrs_core::injectable;
-use nestrs_queue::QueueConnection;
+use nestrs_redis::QueueConnection;
 use nestrs_schedule::{CronExpression, scheduled};
 
 use crate::audio::core::{AUDIO_QUEUE, TranscodeJob};
@@ -60,7 +60,7 @@ mod tests {
     use std::any::TypeId;
 
     use nestrs_core::{Discoverable, ReachableProviders};
-    use nestrs_queue::QueueConnection;
+    use nestrs_redis::QueueConnection;
     use nestrs_schedule::ScheduledMethod;
 
     use super::AudioTasks;

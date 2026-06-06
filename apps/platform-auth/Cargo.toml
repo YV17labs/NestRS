@@ -9,7 +9,7 @@ nestrs-core.workspace = true
 nestrs-authn.workspace = true
 nestrs-authz.workspace = true
 nestrs-config.workspace = true
-nestrs-database.workspace = true
+nestrs-seaorm.workspace = true
 nestrs-health.workspace = true
 nestrs-http.workspace = true
 nestrs-opentelemetry = { workspace = true, features = ["http"] }

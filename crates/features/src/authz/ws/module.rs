@@ -1,5 +1,5 @@
 use nestrs_core::module;
-use nestrs_database::ws::WsDataContext;
+use nestrs_seaorm::ws::WsDataContext;
 use nestrs_ws::{SocketContext, WsModule};
 
 use super::guard::WsAuthGuard;

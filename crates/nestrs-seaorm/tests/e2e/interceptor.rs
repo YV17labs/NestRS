@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nestrs_database::{DbContext, current_executor};
+use nestrs_seaorm::{DatabaseConfig, DbContext, current_executor};
 use nestrs_middleware::EndpointExt;
 use poem::endpoint::make;
 use poem::http::{Method, StatusCode};
@@ -16,6 +16,10 @@ async fn db() -> Arc<sea_orm::DatabaseConnection> {
     let url = std::env::var("NESTRS_DATABASE__URL")
         .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
     Arc::new(Database::connect(&url).await.expect("connect to Postgres"))
+}
+
+fn config() -> Arc<DatabaseConfig> {
+    Arc::new(DatabaseConfig::default())
 }
 
 fn mutating_request() -> Request {
@@ -34,7 +38,7 @@ fn status_of(result: Result<Response>) -> StatusCode {
 
 #[tokio::test]
 async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
-    let ctx = DbContext::new(db().await);
+    let ctx = DbContext::new(db().await, config());
 
     let endpoint = make(|_req: Request| async {
         let escaped = current_executor().expect("the handler runs with an ambient executor");
@@ -55,7 +59,7 @@ async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
 
 #[tokio::test]
 async fn a_well_behaved_mutating_handler_keeps_its_status() {
-    let ctx = DbContext::new(db().await);
+    let ctx = DbContext::new(db().await, config());
 
     let endpoint = make(|_req: Request| async {
         current_executor().expect("the handler runs with an ambient executor");

@@ -396,7 +396,7 @@ transaction — is kept by a **request-scoped data context** held in two
 `task_local!`s (a singleton service has no other way to read
 per-request state):
 
-- the **executor** (`nestrs-database`'s `Executor` enum: pool or transaction);
+- the **executor** (`nestrs-seaorm`'s `Executor` enum: pool or transaction);
 - the **ability** (`nestrs-authz`'s ambient `Arc<Ability>`).
 
 **Hard invariant: every data access goes through a service, and a
@@ -451,7 +451,7 @@ exposes the authz-only bridges behind Cargo features — `http` (the
 `GraphqlAbilityBridge` operation guard, the `authorize` gate, the
 `ability` accessor), `mcp` (the `McpAbilityBridge`); the bridges that
 also need the data layer (`Bind`, the GraphQL `bind` helper,
-`LoaderScope`, `WsDataContext`) live in `nestrs-database` behind
+`LoaderScope`, `WsDataContext`) live in `nestrs-seaorm` behind
 matching `http`/`graphql`/`ws` features — that split keeps the engine
 free of a circular dependency on the data layer. So GraphQL's
 `OperationGuard` is `GraphqlAbilityBridge` (re-runs the guard chain on
@@ -488,15 +488,23 @@ what was decided.
   at compile time; presets/timezones at boot — a bad value fails the
   boot naming the offending job. The `Scheduler` is a `Transport`
   contributed by `ScheduleModule` via `TransportContribution`.
-- **`nestrs-queue`** — Redis-backed via `apalis` (the
-  `@nestjs/bullmq` analog): durable, distributed, with retries.
-  `#[processor]` orchestrates `#[process(queue, concurrency, retries)]`
-  methods into apalis consumers. Queues are **identified by name**
-  (stringly-typed, the known cost). Producer and consumer are
-  decoupled. Connection seeded as a factory at the root via
-  `QueueModule::for_root`; the consumer runtime activates by importing
-  the separate `QueueWorkerModule` (producer-only apps don't import
-  it). No apalis types leak to apps.
+- **`nestrs-queue` + `nestrs-redis`** — backend-agnostic queue contract
+  (`nestrs-queue`: the `Job`/`Processor`/`ProcessMethod` traits, the
+  `#[processor]` macro, the inventory seam) with Redis as the first-class
+  integration (`nestrs-redis`, on `apalis` — the `@nestjs/bullmq` analog).
+  Apps depend on both crates: `nestrs-queue` for the abstractions and the
+  macro, `nestrs-redis` for the `QueueConnection` producer + the
+  `QueueWorker` transport + the activation modules. Crate name follows the
+  **storage the developer sees** (Redis), not the framework (apalis); a
+  hypothetical NATS or SQS backend ships as its own `nestrs-<storage>`
+  crate against the same `nestrs-queue` contract. `#[processor]`
+  orchestrates `#[process(queue, concurrency, retries)]` methods into
+  per-storage consumers. Queues are **identified by name**
+  (stringly-typed, the known cost). Producer and consumer are decoupled.
+  Connection seeded as a factory at the root via `QueueModule::for_root`;
+  the consumer runtime activates by importing the separate
+  `QueueWorkerModule` (producer-only apps don't import it). No apalis
+  types leak to apps.
 - **`nestrs-http`** — the only activation seam is
   `HttpModule::for_root(...)` in `AppModule.imports`; `App` has no
   public `.transport(...)` method. Every option of `HttpConfig { host,
@@ -558,7 +566,7 @@ dotted variants.
   appears twice — keep the whole `UsersService` in `service.rs` (extra
   `impl` blocks for `CrudService`, `#[dataloader]`, `#[hooks]` are
   required by macros, not extra files). A single-role crate stays flat
-  (`nestrs-database/config.rs`).
+  (`nestrs-seaorm/config.rs`).
 - **Multiple files of the same role ⇒ pluralized sub-folder.** Several
   `Pipe` impls in `nestrs-pipes` go in `pipes/`; several `Strategy`
   impls in `nestrs-authn/passport/` go in `strategies/`. The trait

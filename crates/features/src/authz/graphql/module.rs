@@ -1,5 +1,5 @@
 use nestrs_core::module;
-use nestrs_database::graphql::LoaderScope;
+use nestrs_seaorm::graphql::LoaderScope;
 use nestrs_graphql::{BatchContext, OperationGuard};
 
 use super::bridge::AppGraphqlGuard;

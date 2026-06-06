@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use nestrs_authz::Action;
 use nestrs_core::injectable;
-use nestrs_database::{CrudService, Repo};
+use nestrs_seaorm::{CrudService, Repo};
 use nestrs_graphql::dataloader;
 use sea_orm::{ColumnTrait, QueryFilter};
 use uuid::Uuid;

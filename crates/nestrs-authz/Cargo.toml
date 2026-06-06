@@ -6,14 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "CASL-style authorization for nestrs: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`, `LoaderScope`, `WsDataContext`) live in `nestrs-database` so the engine stays free of a data-layer dependency."
+description = "CASL-style authorization for nestrs: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`, `LoaderScope`, `WsDataContext`) live in `nestrs-seaorm` so the engine stays free of a data-layer dependency."
 
 [features]
 default = []
 # HTTP surface: poem extractors (`Authorize`, `Scope`), the request-scoped
 # `AbilityGuard`, and the `RouteResponseShaper` that masks responses
 # transparently. The `Bind` route-model extractor lives in
-# `nestrs_database::Bind` (it must use the data layer).
+# `nestrs_seaorm::Bind` (it must use the data layer).
 http = [
     "dep:nestrs-core",
     "dep:nestrs-http",
@@ -23,7 +23,7 @@ http = [
 # GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
 # accessor + `ContextSeed`, and the `authorize` class-level gate. The
 # resolver-side `bind` helper and `LoaderScope` live in
-# `nestrs_database::graphql`.
+# `nestrs_seaorm::graphql`.
 graphql = [
     "dep:nestrs-core",
     "dep:nestrs-graphql",

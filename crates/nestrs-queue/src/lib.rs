@@ -1,38 +1,50 @@
-//! Redis-backed, distributed job queues with retries. Queue names are
-//! stringly-typed (a known cost: the consuming `#[processor]` and every
-//! producer must agree on the literal).
+//! The open queue contract for nestrs.
 //!
-//! Two sides:
-//! - **Consumer**: `#[processor(queue = "...")]` on a struct + `impl Processor`.
-//!   The `QueueWorker` transport reads `ProcessorMeta` from the fully-assembled
-//!   container and runs one apalis worker per processor.
-//! - **Producer**: inject [`QueueConnection`] and call
-//!   `.of::<Job>("name").push(job).await?`.
+//! `nestrs-queue` defines **what every queue backend must agree on**: the
+//! [`Job`] marker, the [`Processor`] trait, the [`ProcessMethod`] inventory
+//! entry the `#[processor]` macro submits, and the three pluggable seams a
+//! backend implements — [`QueueBackend`], [`JobProducer`], [`JobConsumer`].
 //!
-//! Connection is async, so it is seeded at the composition root as a factory
-//! — apalis types never leak into apps.
+//! The first-class backend is **Redis** (via apalis-redis), shipped as
+//! `nestrs-redis`. Application code keeps writing `nestrs_queue::*` for the
+//! abstractions — the `#[processor]` macro, `Job`, `Processor`,
+//! `ProcessMethod`, `JobProducer` — and reaches for `nestrs_redis::*` only
+//! when it needs the Redis-specific types (the `QueueConnection` producer,
+//! the `QueueWorker` transport, the activation modules). A third-party
+//! `nestrs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
+//! directly — see this crate's README for the extension contract.
 
-mod config;
-mod connection;
-mod module;
+mod consumer;
+mod method;
 mod processor;
-mod worker;
-mod worker_module;
+mod producer;
 
-pub use config::QueueConfig;
-pub use connection::{Queue, QueueConnection};
-pub use module::{QueueModule, QueueSetup};
-pub use processor::{Job, MethodHandler, ProcessMethod, Processor, ProcessorMeta};
-pub use worker::QueueWorker;
-pub use worker_module::QueueWorkerModule;
+pub use consumer::JobConsumer;
+pub use method::{JobHandler, ProcessMethod, ProcessorMeta, WIRE_FORMAT_VERSION};
+pub use processor::{FromContainer, Job, Processor};
+pub use producer::{JobProducer, JobProducerExt, QueueBackend};
 
+// Re-export `async_trait` so backends and macros don't need to depend on it
+// directly to implement the async traits this crate defines.
+pub use async_trait::async_trait;
+
+// The `inventory::collect!` lives in `method.rs` — the registry is the open
+// seam between the `#[process]` macro emission and any backend that drains
+// it at boot.
+
+// `#[processor]`-generated code names `::nestrs_queue::ProcessMethod`,
+// `::nestrs_queue::JobHandler`, and `::nestrs_queue::serde_json::*`, so this
+// crate re-exports both the macro and `serde_json` — keeping the macro free
+// of any backend dependency and letting the call site reach the macro
+// through `nestrs_queue::processor` regardless of which backend integration
+// (nestrs-redis, …) the app imports.
 #[doc(hidden)]
-pub use processor::{FromContainer, register_method, register_worker};
-// Apalis surface re-exported for the generated handler/register code. Apps
-// never reach for these directly — the macro emits them.
+pub use serde_json;
+
+// Re-exported for `#[processor]`-generated code that emits a `warn!` for
+// unversioned legacy payloads. Keeps the macro free of any extra dependency
+// at the call site.
 #[doc(hidden)]
-pub use apalis::prelude::{Data, Monitor};
+pub use tracing;
 
 pub use nestrs_queue_macros::processor;
-
-pub use async_trait::async_trait;

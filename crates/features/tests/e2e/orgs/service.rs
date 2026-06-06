@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use features::orgs::{ActiveModel, Column, Entity, OrgsService};
 use nestrs_authz::{Ability, AbilityBuilder, Action, with_ability};
-use nestrs_database::{Access, CrudService, Executor, with_request_executor};
+use nestrs_seaorm::{Access, CrudService, Executor, with_request_executor};
 use nestrs_testing::EphemeralDatabase;
 use sea_orm::{ActiveModelTrait, Set};
 use uuid::Uuid;
@@ -31,7 +31,7 @@ async fn list_returns_seeded_orgs_for_an_unrestricted_reader() {
     let org_id = Uuid::now_v7();
     seed_org(db.connection().as_ref(), org_id, "Acme").await;
 
-    with_request_executor(Executor::Pool(db.connection()), async {
+    with_request_executor(Executor::Pool((*db.connection()).clone()), async {
         with_ability(read_all_ability(), async {
             let rows = OrgsService.list().await.expect("list succeeds");
             assert!(
@@ -61,7 +61,7 @@ async fn access_hides_out_of_scope_orgs() {
         b.build()
     });
 
-    with_request_executor(Executor::Pool(db.connection()), async {
+    with_request_executor(Executor::Pool((*db.connection()).clone()), async {
         with_ability(ability, async {
             let service = OrgsService;
             assert!(matches!(

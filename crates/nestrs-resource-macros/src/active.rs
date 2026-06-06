@@ -42,7 +42,7 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
 
     let create = &model.create_input_ident;
     quote! {
-        impl ::nestrs_database::CreateModel<Entity> for #create {
+        impl ::nestrs_seaorm::CreateModel<Entity> for #create {
             fn into_active_model(self) -> ActiveModel {
                 let mut __am = <ActiveModel as ::core::default::Default>::default();
                 #pk_seed
@@ -69,7 +69,7 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
 
     let update = &model.update_input_ident;
     quote! {
-        impl ::nestrs_database::UpdateModel<Entity> for #update {
+        impl ::nestrs_seaorm::UpdateModel<Entity> for #update {
             fn apply_to(self, mut __am: ActiveModel) -> ActiveModel {
                 #(#setters)*
                 __am

@@ -17,6 +17,16 @@ pub struct DatabaseConfig {
     pub min_connections: Option<u32>,
     pub connect_timeout_secs: Option<u64>,
     pub sqlx_logging: bool,
+    /// Retry a mutating request's transaction when it fails with a Postgres
+    /// `40001` (`serialization_failure`), `40P01` (`deadlock_detected`), or
+    /// the MySQL/SQL-Server analogs (`1213`, `1205`). Off by default — opt
+    /// in when the app uses serializable isolation and accepts the extra
+    /// latency on contention. The interceptor can only retry at the commit
+    /// boundary; for handler-time conflicts use
+    /// [`retry_on_conflict`](crate::retry::retry_on_conflict) at the
+    /// service's programmatic transaction boundary.
+    /// `NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS`.
+    pub retry_serialization_conflicts: bool,
 }
 
 impl Config for DatabaseConfig {
@@ -27,6 +37,8 @@ impl Config for DatabaseConfig {
             min_connections: env.parse("MIN_CONNECTIONS")?, //         NESTRS_DATABASE__MIN_CONNECTIONS
             connect_timeout_secs: env.parse("CONNECT_TIMEOUT_SECS")?, //NESTRS_DATABASE__CONNECT_TIMEOUT_SECS
             sqlx_logging: env.flag("SQLX_LOGGING", false)?, //         NESTRS_DATABASE__SQLX_LOGGING (else false)
+            retry_serialization_conflicts: env
+                .flag("RETRY_SERIALIZATION_CONFLICTS", false)?, //     NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS
         })
     }
 }
@@ -81,6 +93,7 @@ mod tests {
             min_connections: Some(5),
             connect_timeout_secs: Some(8),
             sqlx_logging: true,
+            retry_serialization_conflicts: false,
         }
         .connect_options();
         assert_eq!(opts.get_max_connections(), Some(50));
@@ -93,6 +106,15 @@ mod tests {
     fn connect_options_disables_sqlx_logging_by_default() {
         let opts = pinned("postgres://localhost/app").connect_options();
         assert!(!opts.get_sqlx_logging(), "noisy by default would spam prod logs");
+    }
+
+    #[test]
+    fn retry_serialization_conflicts_defaults_off() {
+        let cfg = DatabaseConfig::default();
+        assert!(
+            !cfg.retry_serialization_conflicts,
+            "retry must default off — never change behaviour silently",
+        );
     }
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -121,6 +143,7 @@ mod tests {
                 ("NESTRS_DATABASE__MIN_CONNECTIONS", Some("2")),
                 ("NESTRS_DATABASE__CONNECT_TIMEOUT_SECS", Some("12")),
                 ("NESTRS_DATABASE__SQLX_LOGGING", Some("true")),
+                ("NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS", Some("true")),
             ],
             || {
                 let cfg =
@@ -130,6 +153,7 @@ mod tests {
                 assert_eq!(cfg.min_connections, Some(2));
                 assert_eq!(cfg.connect_timeout_secs, Some(12));
                 assert!(cfg.sqlx_logging);
+                assert!(cfg.retry_serialization_conflicts);
             },
         );
     }
@@ -143,6 +167,7 @@ mod tests {
                 ("NESTRS_DATABASE__MIN_CONNECTIONS", None),
                 ("NESTRS_DATABASE__CONNECT_TIMEOUT_SECS", None),
                 ("NESTRS_DATABASE__SQLX_LOGGING", None),
+                ("NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS", None),
             ],
             || {
                 let cfg =
@@ -151,6 +176,7 @@ mod tests {
                 assert!(cfg.url.is_empty());
                 assert!(cfg.max_connections.is_none());
                 assert!(!cfg.sqlx_logging, "off by default — never noisy in prod");
+                assert!(!cfg.retry_serialization_conflicts, "retry off by default");
             },
         );
     }

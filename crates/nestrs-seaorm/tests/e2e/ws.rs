@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use nestrs_authz::{Ability, AbilityBuilder, Action, current_ability};
 use nestrs_core::Container;
-use nestrs_database::ws::WsDataContext;
-use nestrs_database::{Executor, current_executor};
+use nestrs_seaorm::ws::WsDataContext;
+use nestrs_seaorm::{Executor, current_executor};
 use nestrs_ws::{Captured, SocketContext, WsReply};
 use poem::Request;
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection};

@@ -7,7 +7,7 @@
 //! installs the ability as ambient state (data-layer scoping) and masks the
 //! response — no `mask` call in the handler.
 //!
-//! By-id route-model binding lives in `nestrs_database::Bind` (it `use`s the
+//! By-id route-model binding lives in `nestrs_seaorm::Bind` (it `use`s the
 //! data layer).
 
 mod extractor;

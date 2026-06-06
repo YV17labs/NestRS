@@ -1,7 +1,7 @@
 //! `scope_for` denies every row on request-scoped executors without an ability.
 
 use nestrs_authz::Action;
-use nestrs_database::{Executor, scope_for, with_request_executor};
+use nestrs_seaorm::{Executor, scope_for, with_request_executor};
 use sea_orm::{Database, EntityTrait, QueryFilter, QueryTrait};
 
 mod widget {
@@ -27,7 +27,7 @@ async fn request_scope_without_ability_denies_all_rows() {
         .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
     let conn = Database::connect(&url).await.expect("connect to Postgres");
 
-    with_request_executor(Executor::Pool(conn.into()), async {
+    with_request_executor(Executor::Pool(conn), async {
         let sql = widget::Entity::find()
             .filter(scope_for::<widget::Entity>(Action::Read))
             .build(sea_orm::DatabaseBackend::Postgres)
@@ -46,7 +46,7 @@ async fn job_scope_without_ability_remains_unscoped() {
         .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
     let conn = Database::connect(&url).await.expect("connect to Postgres");
 
-    nestrs_database::with_job_executor(Executor::Pool(conn.into()), async {
+    nestrs_seaorm::with_job_executor(Executor::Pool(conn), async {
         let sql = widget::Entity::find()
             .filter(scope_for::<widget::Entity>(Action::Read))
             .build(sea_orm::DatabaseBackend::Postgres)

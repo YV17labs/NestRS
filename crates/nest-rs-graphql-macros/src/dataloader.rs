@@ -8,7 +8,7 @@ use syn::{
     Type, parse_macro_input,
 };
 
-use nest_rs_codegen::impl_self_ident;
+use nest_rs_codegen::{impl_self_ident, pascal_case};
 
 pub fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
@@ -128,22 +128,6 @@ fn dataloader_for_method(
             }
         }
     })
-}
-
-fn pascal_case(ident: &Ident) -> Ident {
-    let mut out = String::new();
-    let mut upper = true;
-    for ch in ident.to_string().chars() {
-        if ch == '_' {
-            upper = true;
-        } else if upper {
-            out.extend(ch.to_uppercase());
-            upper = false;
-        } else {
-            out.push(ch);
-        }
-    }
-    Ident::new(&out, ident.span())
 }
 
 fn loader_key_type(sig: &Signature) -> syn::Result<Type> {

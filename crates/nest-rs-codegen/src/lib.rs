@@ -10,11 +10,13 @@
 //! emitted absolute-path tokens (`::nest_rs_core::*`) resolve at the call site.
 
 mod args;
+mod casing;
 mod crud;
 mod inject;
 mod ty;
 
 pub use args::parse_named_str_arg;
+pub use casing::pascal_case;
 pub use crud::{CrudConfig, Paginate, parse_crud_args, singular_of};
 pub use inject::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,

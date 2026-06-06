@@ -63,8 +63,10 @@ nest-rs = { version = "0", features = ["http"] }
 works — the library exports under the `nestrs` name.)
 
 ```rust
+// src/main.rs
 use nest_rs::prelude::*;
 
+// --- src/hello/service.rs ---
 #[injectable]
 #[derive(Default)]
 struct HelloService;
@@ -73,6 +75,7 @@ impl HelloService {
     fn greeting(&self) -> &'static str { "Hello World" }
 }
 
+// --- src/hello/controller.rs ---
 #[controller(path = "/")]
 struct HelloController { #[inject] svc: std::sync::Arc<HelloService> }
 
@@ -82,14 +85,20 @@ impl HelloController {
     async fn hello(&self) -> &'static str { self.svc.greeting() }
 }
 
+// --- src/hello/module.rs ---
 #[module(imports = [HttpModule::for_root(None)], providers = [HelloService, HelloController])]
 struct AppModule;
 
+// --- src/main.rs ---
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::builder().module::<AppModule>().build().await?.run().await
 }
 ```
+
+For this minimal quickstart everything fits in a single `main.rs`; the
+file headers above show where each piece lives once the app grows beyond
+"Hello World" — one folder per feature, one file per role.
 
 Prefer per-crate imports (`use nest_rs_http::controller;`) when you want to
 see exactly which surface you reach for — both spellings resolve to the same

@@ -3,7 +3,7 @@ import Default from '@astrojs/starlight/components/PageFrame.astro';
 import BrandBackground from './BrandBackground.astro';
 ---
 
-<div class="nest-rs-page-shell">
+<div class="nestrs-page-shell">
   <BrandBackground />
   <Default {...Astro.props}>
     <slot />
@@ -19,7 +19,7 @@ import BrandBackground from './BrandBackground.astro';
 <script>
   /** One-shot fade-in when a marked block enters the viewport; no loop. */
   (() => {
-    const blocks = document.querySelectorAll('.nest-rs-reveal');
+    const blocks = document.querySelectorAll('.nestrs-reveal');
     if (!blocks.length) return;
 
     const reveal = (el) => el.classList.add('is-revealed');
@@ -29,7 +29,7 @@ import BrandBackground from './BrandBackground.astro';
       return;
     }
 
-    document.documentElement.classList.add('nest-rs-reveal-ready');
+    document.documentElement.classList.add('nestrs-reveal-ready');
 
     const io = new IntersectionObserver(
       (entries, obs) => {

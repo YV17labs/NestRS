@@ -4,10 +4,14 @@
 //! [`HttpConfig`] (host + port + optional TLS), populated either by the
 //! `NESTRS_HTTP__*` env scheme or by the pinned struct.
 
+use async_trait::async_trait;
 use nestrs_config::ConfigModule;
 use nestrs_core::{ContainerBuilder, DynamicModule, TransportContribution};
+use nestrs_middleware::{Interceptor, Next};
+use poem::{Request, Response, Result};
 
 use crate::config::HttpConfig;
+use crate::raw_body::RawBodyLimit;
 use crate::transport::HttpTransport;
 
 pub struct HttpModule;
@@ -47,8 +51,30 @@ impl DynamicModule for HttpSetup {
                 if cfg.server_header {
                     http = http.server_header(concat!("nestrs/", env!("CARGO_PKG_VERSION")));
                 }
+                if let Some(prefix) = cfg.global_prefix.clone() {
+                    http = http.global_prefix(prefix);
+                }
+                if let Some(limit) = cfg.max_body_bytes {
+                    // Install the per-request cap via an interceptor — the
+                    // `RawBody` extractor reads it back from the extensions,
+                    // analogous to how `Reflector` reads typed metadata.
+                    http = http.interceptor(RawBodyLimitInterceptor(limit));
+                }
                 Ok(Box::new(http))
             },
         })
+    }
+}
+
+/// Inserts a [`RawBodyLimit`] into every request's extensions so the
+/// [`RawBody`](crate::RawBody) extractor honors `HttpConfig.max_body_bytes`
+/// without per-route plumbing.
+struct RawBodyLimitInterceptor(usize);
+
+#[async_trait]
+impl Interceptor for RawBodyLimitInterceptor {
+    async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
+        req.extensions_mut().insert(RawBodyLimit(self.0));
+        next.run(req).await
     }
 }

@@ -57,7 +57,19 @@ pub struct HttpTransport {
     cors: Option<Cors>,
     tls: Option<TlsConfig>,
     server_header: Option<&'static str>,
+    global_prefix: Option<String>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
+}
+
+/// Normalize a global prefix: trim whitespace, drop empty/`"/"` to `None`,
+/// prepend a leading `/`, strip a trailing one. `Some("/api/v1")` is the
+/// canonical form.
+fn normalize_global_prefix(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(format!("/{trimmed}"))
 }
 
 impl Default for HttpTransport {
@@ -77,8 +89,18 @@ impl HttpTransport {
             cors: None,
             tls: None,
             server_header: None,
+            global_prefix: None,
             endpoint: None,
         }
+    }
+
+    /// Mount every controller under a shared prefix (e.g. `/api`). Useful
+    /// behind a reverse proxy that hands off a sub-path. Empty / `"/"`
+    /// collapse to no-op; a missing leading `/` is added; a trailing `/` is
+    /// stripped.
+    pub fn global_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.global_prefix = normalize_global_prefix(&prefix.into());
+        self
     }
 
     /// Emit `Server: <value>` on every response — off by default
@@ -181,6 +203,13 @@ impl Transport for HttpTransport {
         }
         for mount in self.mounts.drain(..) {
             route = mount(container, route);
+        }
+
+        // Apply the global prefix once around the fully-assembled tree so
+        // every controller, every self-mounting endpoint, and every imperative
+        // `mount(...)` lands under it.
+        if let Some(prefix) = self.global_prefix.take() {
+            route = Route::new().nest(prefix, route);
         }
 
         let mut endpoint: BoxEndpoint<'static, Response> = route.map_to_response().boxed();

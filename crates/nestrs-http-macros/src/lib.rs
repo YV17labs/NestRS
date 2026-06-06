@@ -8,7 +8,9 @@ use proc_macro::TokenStream;
 mod attr;
 mod controller;
 mod crud;
+mod input;
 mod interceptor;
+mod response_decorators;
 mod routes;
 
 /// `#[controller(path = "/health")]` — paired with `#[routes]` on the impl
@@ -74,4 +76,38 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
     crud::entry(args, input)
+}
+
+/// `#[input]` — shorthand for input DTOs. Appends
+/// `#[derive(::serde::Deserialize, ::validator::Validate)]` and
+/// `#[serde(deny_unknown_fields)]` so an unknown field on the wire
+/// (e.g. `is_admin: true`) is rejected at parse time instead of silently
+/// dropped.
+#[proc_macro_attribute]
+pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
+    input::input(args, item)
+}
+
+/// `#[http_code(N)]` — override the response status (`100..=999`). Passthrough
+/// marker consumed by `#[routes]`. Mutually exclusive with `#[redirect]`.
+#[proc_macro_attribute]
+pub fn http_code(args: TokenStream, item: TokenStream) -> TokenStream {
+    response_decorators::passthrough(args, item)
+}
+
+/// `#[response_header("name", "value")]` — append a header to the response.
+/// Stacks with `#[http_code]` and `#[redirect]`; repeatable. Passthrough
+/// marker consumed by `#[routes]`.
+#[proc_macro_attribute]
+pub fn response_header(args: TokenStream, item: TokenStream) -> TokenStream {
+    response_decorators::passthrough(args, item)
+}
+
+/// `#[redirect("url"[, code])]` — discard the handler's payload and return a
+/// redirect. Status defaults to `307` and must be in `300..=399`. Mutually
+/// exclusive with `#[http_code]`. The decorated method's body must be empty
+/// — `#[routes]` does not call it. Passthrough marker consumed by `#[routes]`.
+#[proc_macro_attribute]
+pub fn redirect(args: TokenStream, item: TokenStream) -> TokenStream {
+    response_decorators::passthrough(args, item)
 }

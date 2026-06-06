@@ -19,8 +19,8 @@ attached.
 ## Mount the throttler
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_core::module;
-use nestrs_throttler::ThrottlerModule;
+use nest_rs_core::module;
+use nest_rs_throttler::ThrottlerModule;
 
 #[module(imports = [ThrottlerModule::for_root(None)])]
 pub struct PlatformApiModule;
@@ -41,8 +41,8 @@ NESTRS_THROTTLER__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
 ## Guard a controller
 
 ```rust title="src/items/http/controller.rs"
-use nestrs_http::controller;
-use nestrs_throttler::ThrottlerGuard;
+use nest_rs_http::controller;
+use nest_rs_throttler::ThrottlerGuard;
 
 #[controller(path = "/items")]
 #[use_guards(ThrottlerGuard)]
@@ -55,8 +55,8 @@ default limit applies unless a handler overrides it.
 ## Override per route
 
 ```rust title="src/items/http/controller.rs"
-use nestrs_http::{controller, routes};
-use nestrs_throttler::{Throttle, ThrottlerGuard};
+use nest_rs_http::{controller, routes};
+use nest_rs_throttler::{Throttle, ThrottlerGuard};
 
 #[controller(path = "/items")]
 #[use_guards(ThrottlerGuard)]
@@ -127,12 +127,12 @@ it back off cleanly and resume on the same window.
 The counter is hidden behind a **`ThrottlerStore`** trait. The default
 `InMemoryThrottler` (fixed-window, process-local) is what ships with the
 module; a third-party crate can implement the trait against any backend —
-the canonical use case is `nestrs-throttler-redis` for a distributed
+the canonical use case is `nest-rs-throttler-redis` for a distributed
 counter shared across replicas:
 
 ```rust
 use std::net::IpAddr;
-use nestrs_throttler::{Decision, Throttle, ThrottlerStore};
+use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
 
 pub struct RedisThrottler {
     client: redis::Client,
@@ -178,5 +178,5 @@ extend the trait in a downstream crate.
 
 ### Reference
 
-- `crates/nestrs-throttler/` — `ThrottlerModule`, `ThrottlerGuard`,
+- `crates/nest-rs-throttler/` — `ThrottlerModule`, `ThrottlerGuard`,
   `ThrottlerConfig`, `Throttle`, `InMemoryThrottler`.

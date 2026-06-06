@@ -29,8 +29,8 @@ TOML loader, no YAML, no remote source.
 This is the real `IssuerConfig` from `features/oauth` (signs the OAuth
 clients accepted by `apps/platform-auth`):
 
-```rust title="crates/features/src/oauth/core/config.rs"
-use nestrs_config::{config, Config, ConfigError, ConfigService};
+```rust title="crates/features/src/oauth/config.rs"
+use nest_rs_config::{config, Config, ConfigError, ConfigService};
 use serde::Deserialize;
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
@@ -63,7 +63,7 @@ impl Validate for IssuerConfig {
 }
 
 impl Config for IssuerConfig {
-    fn from_env(env: &ConfigService) -> nestrs_config::Result<Self> {
+    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
         let clients = match env.get("CLIENTS") {
             Some(raw) => serde_json::from_str(&raw)
                 .map_err(|e| ConfigError::parse(env.var("CLIENTS"), e.to_string()))?,
@@ -107,26 +107,26 @@ impl Config for IssuerConfig {
 
 The wiring is two module imports:
 
-```rust title="crates/features/src/oauth/core/module.rs"
-use nestrs_config::ConfigModule;
+```rust title="crates/features/src/oauth/module.rs"
+use nest_rs_config::ConfigModule;
 use super::config::IssuerConfig;
 use super::service::OAuthFlow;
 
 #[module(
-    imports = [ConfigModule::for_feature::<IssuerConfig>(), UsersCoreModule],
+    imports = [ConfigModule::for_feature::<IssuerConfig>(), UsersModule],
     providers = [OAuthFlow],
 )]
-pub struct OAuthCoreModule;
+pub struct OAuthModule;
 ```
 
 ```rust title="apps/platform-auth/src/module.rs"
-use nestrs_config::ConfigModule;
+use nest_rs_config::ConfigModule;
 
 #[module(
     imports = [
         ConfigModule::for_root(),       // ← first: merges the .env cascade
         // ...
-        OAuthHttpModule,                // brings in OAuthCoreModule → loads IssuerConfig
+        OAuthHttpModule,                // brings in OAuthModule → loads IssuerConfig
     ],
 )]
 pub struct PlatformAuthModule;
@@ -144,7 +144,7 @@ pub struct PlatformAuthModule;
 
 A consumer injects `Arc<IssuerConfig>` like any provider:
 
-```rust title="crates/features/src/oauth/core/service.rs"
+```rust title="crates/features/src/oauth/service.rs"
 #[injectable]
 pub struct OAuthFlow {
     #[inject]
@@ -189,8 +189,8 @@ Real process environment variables always win over any `.env` file.
 $ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","org_id":"...","scopes":["read"]}]' \
   just dev auth
 …
-2026-06-03T10:42:11Z INFO nestrs::config: loaded issuer (2 fields)
-2026-06-03T10:42:11Z INFO nestrs::http: bound 5 routes on 0.0.0.0:3000
+2026-06-03T10:42:11Z INFO nest_rs::config: loaded issuer (2 fields)
+2026-06-03T10:42:11Z INFO nest_rs::http: bound 5 routes on 0.0.0.0:3000
 ```
 
 A bad value fails the boot before any port opens:
@@ -252,7 +252,7 @@ custom reader:
 ```rust
 use std::collections::HashMap;
 use std::sync::Arc;
-use nestrs_config::{ConfigService, ConfigSource};
+use nest_rs_config::{ConfigService, ConfigSource};
 
 struct VaultSource {
     snapshot: HashMap<String, String>, // pre-fetched at startup
@@ -300,6 +300,6 @@ never calls `for_namespace`.
 
 ### Reference
 
-- `crates/features/src/oauth/core/config.rs` — the full real example.
-- `crates/nestrs-config/` — `#[config]`, `Config`, `ConfigService`,
+- `crates/features/src/oauth/config.rs` — the full real example.
+- `crates/nest-rs-config/` — `#[config]`, `Config`, `ConfigService`,
   `ConfigModule`, the `.env` cascade.

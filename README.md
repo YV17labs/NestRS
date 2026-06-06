@@ -52,15 +52,18 @@
 ## Hello world
 
 The umbrella `nestrs` crate re-exports the surface behind Cargo features; one
-`use nestrs::prelude::*;` brings in the everyday decorators and types.
+`use nest_rs::prelude::*;` brings in the everyday decorators and types.
 
 ```toml
 # Cargo.toml
-nestrs = { version = "0", features = ["http"] }
+nest-rs = { version = "0", features = ["http"] }
 ```
 
+(The published name is `nest-rs` on crates.io; in code, `use nest_rs::prelude::*;` still
+works — the library exports under the `nestrs` name.)
+
 ```rust
-use nestrs::prelude::*;
+use nest_rs::prelude::*;
 
 #[injectable]
 #[derive(Default)]
@@ -88,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-Prefer per-crate imports (`use nestrs_http::controller;`) when you want to
+Prefer per-crate imports (`use nest_rs_http::controller;`) when you want to
 see exactly which surface you reach for — both spellings resolve to the same
 items.
 
@@ -101,11 +104,11 @@ public trait — no fork required.
 
 | Abstraction | First-party implementation |
 | ----------- | -------------------------- |
-| `nestrs-database` (`Executor`, `Repo`) | `nestrs-seaorm` (SeaORM) |
-| `nestrs-queue` (`QueueBackend`) | `nestrs-redis` (Redis via apalis) |
-| `nestrs-throttler` (`ThrottlerStore`) | bundled in-memory store |
-| `nestrs-config` (`ConfigSource`) | bundled env-based source |
-| `nestrs-authn` (`Strategy`) | JWT + OAuth2 strategies |
+| `nest-rs-database` (`Executor`, `Repo`) | `nest-rs-seaorm` (SeaORM) |
+| `nest-rs-queue` (`QueueBackend`) | `nest-rs-redis` (Redis via apalis) |
+| `nest-rs-throttler` (`ThrottlerStore`) | bundled in-memory store |
+| `nest-rs-config` (`ConfigSource`) | bundled env-based source |
+| `nest-rs-authn` (`Strategy`) | JWT + OAuth2 strategies |
 
 Each crate's `README.md` under [`crates/`](crates/) is the source of truth
 for the contract its extension point exposes.
@@ -185,8 +188,8 @@ nestrs/
 │  ├─ features/        product features — port + adapters (users, authn, authz, …)
 │  ├─ migrations/      shared-database SeaORM migrations (CLI)
 │  ├─ seed/            shared-database demo data (CLI)
-│  ├─ nestrs-core/     IoC container, modules, DI, bootstrap
-│  ├─ nestrs-http/     REST controllers & routing
+│  ├─ nest-rs-core/     IoC container, modules, DI, bootstrap
+│  ├─ nest-rs-http/     REST controllers & routing
 │  └─ …                one framework crate per capability
 └─ docs/               the nestrs.dev site (Astro Starlight)
 ```

@@ -12,14 +12,14 @@ HTTP transport at boot. Pass `None` to read every option from the
 environment, or pin `HttpConfig` in code:
 
 ```rust title="apps/hello/src/module.rs"
-use nestrs_http::HttpModule;
+use nest_rs_http::HttpModule;
 
 #[module(imports = [HttpModule::for_root(None)])]
 pub struct HelloModule;
 ```
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_http::{HttpConfig, HttpModule};
+use nest_rs_http::{HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
@@ -74,7 +74,7 @@ Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
 tests (production deploys carry secrets in the environment):
 
 ```rust
-use nestrs_http::{HttpConfig, HttpModule, TlsConfig};
+use nest_rs_http::{HttpConfig, HttpModule, TlsConfig};
 
 let cert = std::fs::read("fullchain.pem")?;
 let key  = std::fs::read("privkey.pem")?;
@@ -108,7 +108,7 @@ NESTRS_HTTP__CORS_MAX_AGE=3600
 
 ```rust title="apps/platform-api/src/module.rs"
 use std::time::Duration;
-use nestrs_http::{CorsConfig, HttpConfig, HttpModule};
+use nest_rs_http::{CorsConfig, HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig {
@@ -137,8 +137,8 @@ controller can be mounted under one prefix without touching `path = "…"`
 on each:
 
 ```rust title="apps/platform-api/src/main.rs"
-use nestrs_core::App;
-use nestrs_http::HttpTransport;
+use nest_rs_core::App;
+use nest_rs_http::HttpTransport;
 use platform_api::PlatformApiModule;
 
 #[tokio::main]
@@ -188,7 +188,7 @@ HttpModule::for_root(HttpConfig {
 })
 ```
 
-The value is sourced from the `nestrs-http` crate's `CARGO_PKG_VERSION` at
+The value is sourced from the `nest-rs-http` crate's `CARGO_PKG_VERSION` at
 build time — it tracks the framework, not your app version.
 
 ## Going further

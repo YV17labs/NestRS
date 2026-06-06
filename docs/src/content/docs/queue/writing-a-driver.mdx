@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-The [`nestrs-queue`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-queue)
+The [`nest-rs-queue`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-queue)
 crate is a seam: a `JobProducer` trait on the push side, a link-time
 `ProcessMethod` inventory + a wire envelope on the consume side, and a
 `Transport` slot the framework drives at boot. The seam names no storage
@@ -16,7 +16,7 @@ in-process channel, a Postgres queue table all plug in the same way.
 This page gives you the **shape** of a driver, not its implementation:
 the traits you implement, the registry you drain, with `// your code
 here` markers where the storage-specific work lands. The reference impl
-is [`nestrs-redis`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-redis)
+is [`nest-rs-redis`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-redis)
 (apalis on Redis) — read it once when a placeholder is unclear.
 
 ## What you'll implement
@@ -28,9 +28,9 @@ is [`nestrs-redis`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-red
   one for the worker (apps that consume).
 
 A driver lives in a `nestrs-<technology>` crate that depends on
-`nestrs-core`, `nestrs-queue`, plus whatever your storage and runtime
+`nest-rs-core`, `nest-rs-queue`, plus whatever your storage and runtime
 need. An app picks a driver by importing its module instead of
-`nestrs-redis`.
+`nest-rs-redis`.
 
 ## The wire envelope
 
@@ -42,7 +42,7 @@ JSON.
 { "v": 1, "payload": <user job as JSON> }
 ```
 
-`WIRE_FORMAT_VERSION` is exported from `nestrs-queue`; use it instead of
+`WIRE_FORMAT_VERSION` is exported from `nest-rs-queue`; use it instead of
 hard-coding `1`. The macro on the `#[process]` side validates the
 version and fails closed with a clear error on mismatch, so a producer
 that wraps a different shape surfaces immediately. Mismatching this is
@@ -65,12 +65,12 @@ pub struct YourConnection {
 }
 
 #[async_trait]
-impl nestrs_queue::JobProducer for YourConnection {
+impl nest_rs_queue::JobProducer for YourConnection {
     async fn push_json(&self, queue: &str, payload: serde_json::Value) -> anyhow::Result<()> {
         // (1) Wrap in the wire envelope — required for the
         //     macro-emitted consumer to decode it.
         let envelope = serde_json::json!({
-            "v": nestrs_queue::WIRE_FORMAT_VERSION,
+            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
             "payload": payload,
         });
 
@@ -88,7 +88,7 @@ blanket impl on top of `push_json` — no extra code on your side.
 
 ## Step 2 — The worker (Transport)
 
-This is the meat. The worker is a `nestrs_core::Transport`: the
+This is the meat. The worker is a `nest_rs_core::Transport`: the
 framework calls `configure` with the assembled container at boot, then
 `serve` with a cancellation token. Drain the inventory, route by queue
 name, hand each envelope to the matching `ProcessMethod::handler` — the
@@ -102,8 +102,8 @@ and visibility timeouts wire up. Those are storage decisions.
 
 ```rust
 use async_trait::async_trait;
-use nestrs_core::{Container, ReachableProviders, Transport, injectable, inventory};
-use nestrs_queue::ProcessMethod;
+use nest_rs_core::{Container, ReachableProviders, Transport, injectable, inventory};
+use nest_rs_queue::ProcessMethod;
 use tokio_util::sync::CancellationToken;
 
 #[injectable]
@@ -122,7 +122,7 @@ impl Transport for YourWorker {
     {
         // (1) Snapshot the inventory of #[process] methods. Filter by
         //     module reachability so a linked-but-unimported processor
-        //     is silently skipped — same property nestrs-redis relies on.
+        //     is silently skipped — same property nest-rs-redis relies on.
         let reachable = container.get::<ReachableProviders>();
         let methods: Vec<&'static ProcessMethod> = inventory::iter::<ProcessMethod>()
             .filter(|m| {
@@ -184,12 +184,12 @@ code is the transport. The macro is the dispatcher.
 
 ## Step 3 — The modules
 
-Two modules — same split as `nestrs-redis::{QueueModule, QueueWorkerModule}`.
+Two modules — same split as `nest-rs-redis::{QueueModule, QueueWorkerModule}`.
 A producer-only app (an API binary that enqueues but doesn't drain)
 imports the first; a worker app imports both.
 
 ```rust
-use nestrs_core::{ContainerBuilder, DynamicModule, Module, TransportContribution};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Module, TransportContribution};
 
 /// Producer-side activation. Seeds `YourConnection` from config.
 pub struct YourQueueModule;
@@ -208,7 +208,7 @@ impl DynamicModule for YourQueueSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         // Your code: build your client from config (env + pinned),
         // seed it as `YourConnection`, and bind it to
-        // `Arc<dyn nestrs_queue::JobProducer>` so callers stay portable.
+        // `Arc<dyn nest_rs_queue::JobProducer>` so callers stay portable.
         builder
     }
 }
@@ -277,10 +277,10 @@ the driver's README.
 
 ## Reference
 
-- [`crates/nestrs-redis/`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-redis) —
+- [`crates/nest-rs-redis/`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-redis) —
   the reference impl; read its `connection.rs`, `worker.rs`, and
   `module.rs` whenever a placeholder above needs a concrete shape.
-- [`crates/nestrs-queue/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-queue/README.md) —
+- [`crates/nest-rs-queue/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-queue/README.md) —
   the extension contract, the `ProcessMethod` registry, the envelope spec.
 - [Database driver](/database/writing-a-driver/) — the analogous scaffold
   for the data layer, same shape, same seams.

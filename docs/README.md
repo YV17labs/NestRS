@@ -51,7 +51,7 @@ queue-schedule/        Durable jobs, cron, processors
 mcp/                   Model Context Protocol tools
 observability/         Telemetry, OTLP, Server-Timing, conventions
 configuration/         Typed config from env + TOML, validation
-testing/               nestrs-testing, overrides, e2e
+testing/               nest-rs-testing, overrides, e2e
 ```
 
 Each section index follows the same four-tier shape: **Basics**,

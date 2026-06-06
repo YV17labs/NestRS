@@ -21,10 +21,10 @@ The leverage is **procedural macros**: decorators that keep application
 code as declarative in Rust as decorators make it in TypeScript. Crates
 under `crates/nestrs-*` provide the framework building blocks (IoC
 container, module trait, decorator macros); `crates/features/` holds the
-product's vertical slices, each a port (`core/`) plus per-transport
-adapter modules (`http/`, `graphql/`, `ws/`, `queue/`, `mcp/`); binaries
-under `apps/<name>/` are `main.rs` + `module.rs` composing the edge
-modules they serve.
+product's vertical slices, each a port (the feature root) plus one
+adapter sub-folder per transport (`http/`, `graphql/`, `ws/`, `queue/`,
+`mcp/`); binaries under `apps/<name>/` are `main.rs` + `module.rs`
+composing the edge modules they serve.
 
 Describe features by what they do in nestrs, on their own terms — the
 decorators and folder layout are the vocabulary.
@@ -55,17 +55,17 @@ Deliberate departures. Do not "fix" them back to the conventional style.
 
 | Common habit | nestrs decision | Why |
 |---|---|---|
-| `UsersModule` umbrella re-exporting every edge | A feature ships `UsersCoreModule` (the port) + one `Users<Edge>Module` per transport; an app lists the edges it serves | Imports reflect what the binary actually serves |
+| One umbrella module re-exporting every edge | A feature ships `UsersModule` (the port — entity, service at the feature root) + one `Users<Edge>Module` per transport; an app lists the edges it serves | Imports reflect what the binary actually serves |
 | Split a feature's service into many topic files | One `service.rs` holding the whole `UsersService` is fine — do not fragment for aesthetics | No premature decomposition |
 | Return `[]` when the DB fails | **Forbidden** — batch/loader methods return `Result` and surface the error | Silent failure violates the Rust-first rule |
-| `impl ResponseError` next to the error type | Pure errors in `<feature>/core/error.rs`; HTTP mapping in `<feature>/http/error.rs` | A non-HTTP app must not link the poem types |
+| Per-feature error enum for plumbing failures (DB, validation, auth, OAuth) | The framework ships those errors with their HTTP mapping already wired: `nest_rs_seaorm::ServiceError` (DB + validation, mapping behind the crate's `http` feature so a worker does not link poem), `nest_rs_authn::AuthError` / `CredentialError` / `TokenError`. A feature **never** redefines them | A feature only writes its own error type when the failure is genuinely domain-specific (a wire contract its consumers read, a security-critical opaque variant) |
 | Re-exporting a service via an `exports` list | `pub trait` + module-private impl, injected as `Arc<dyn Trait>` | Rust visibility is the encapsulation primitive; a list is redundant |
 | Per-method transaction decorator | Ambient `task_local!` executor wraps mutating handlers | One concern, no per-method ceremony |
 | Per-module sub-container | Single flat container | Simpler; orphan rules already prevent accidental coupling |
 | Manual per-endpoint response serialization | `Ability::mask` runs automatically after every handler | Forgetting to redact a field is structurally hard |
 | Listing every controller/provider | Inventory-based discovery for resolvers, cron jobs, processors, hooks | The list in a module = the things decorated in it |
 | Class-based DI with reflection metadata | Type-id based DI with `#[inject]` fields | Rust has no reflection; types are the source of truth |
-| Implicit access check at runtime injection | Compile-time + boot-time access graph (`crates/nestrs-core/src/access.rs`) | Boot fails with a clear graph error instead of a deep "Cannot resolve" at first request |
+| Implicit access check at runtime injection | Compile-time + boot-time access graph (`crates/nest-rs-core/src/access.rs`) | Boot fails with a clear graph error instead of a deep "Cannot resolve" at first request |
 | `nest generate` scaffolding | None — copy the reference feature | A manual copy forces reading the pattern once |
 
 ## North Star — what "good" looks like
@@ -110,10 +110,12 @@ cannot generalize*.
   *over* them (`JwtStrategy<C>`, `AbilityGuard<F>`).
 - **`crates/features` — the product's feature library.** Every feature is
   a folder under `crates/features/src/`. **Hexagonal architecture applied
-  per vertical slice**: each feature has a **port** (`core/`: entity,
-  service, DTOs, errors) and one **adapter** sub-folder per transport
-  (`http/`, `graphql/`, `ws/`, `queue/`, `mcp/`), each carrying its own
-  `module.rs`.
+  per vertical slice**: the **port** lives at the feature root
+  (`entity.rs`, `service.rs`, `dto.rs`, `error.rs`, `module.rs`); each
+  **adapter** is a sub-folder per transport (`http/`, `graphql/`, `ws/`,
+  `queue/`, `mcp/`) carrying its own `module.rs`. The port being the
+  default — not a sub-folder named `core/` — is deliberate: the things
+  every transport needs sit at the obvious place.
 - **`apps/<name>` — pure composition.** `main.rs` + `module.rs` (and
   nothing else by default): `module.rs` is a `#[module(imports = [...])]`
   listing the edge modules this binary serves. A feature folder under
@@ -123,25 +125,25 @@ cannot generalize*.
 
 **Port + adapters in practice** (using `users/`):
 
-| Folder | Contents | Module struct |
-|--------|----------|---------------|
-| `users/core/` | `entity.rs`, `service.rs`, `dto.rs`, `error.rs` | `UsersCoreModule` (the port) |
-| `users/http/` | `controller.rs`, `error.rs` (HTTP error mapping) | `UsersHttpModule` (imports core) |
-| `users/graphql/` | `resolver.rs` (field + root) | `UsersGraphqlModule` (imports core) |
-| `users/ws/` | `gateway.rs` | `UsersWsModule` (imports core + WsModule) |
-| `users/queue/` | `processor.rs` | `UsersQueueModule` (imports core) |
-| `users/mcp/` | `tool.rs` | `UsersMcpModule` (imports core) |
+| Path | Contents | Module struct |
+|------|----------|---------------|
+| `users/` (root) | `entity.rs`, `service.rs`, `dto.rs`, `error.rs`, `module.rs` | `UsersModule` (the port) |
+| `users/http/` | `controller.rs`, `error.rs` (HTTP error mapping) | `UsersHttpModule` (imports `UsersModule`) |
+| `users/graphql/` | `resolver.rs` (field + root) | `UsersGraphqlModule` (imports `UsersModule`) |
+| `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `UsersModule` + `WsModule`) |
+| `users/queue/` | `processor.rs` | `UsersQueueModule` (imports `UsersModule`) |
+| `users/mcp/` | `tool.rs` | `UsersMcpModule` (imports `UsersModule`) |
 
-An app that needs only HTTP imports `UsersCoreModule + UsersHttpModule`.
-A worker imports `UsersCoreModule + UsersQueueModule`. The `core` module
-provides the service; importing only it gets the data layer without
-mounting any endpoint. Each adapter imports its core explicitly —
+An app that needs only HTTP imports `UsersModule + UsersHttpModule`. A
+worker imports `UsersModule + UsersQueueModule`. `UsersModule` provides
+the service; importing only it gets the data layer without mounting any
+endpoint. Each adapter imports `UsersModule` explicitly —
 **composition, not inheritance** (the access graph carries the
 dependency, not a class hierarchy).
 
 Orphan rules still bind co-location, but inside the same crate. A
 `#[field]` resolver expands to `#[ComplexObject] impl Entity`; the entity
-is in `users/core/entity.rs`, the resolver in `users/graphql/resolver.rs`
+is in `users/entity.rs`, the resolver in `users/graphql/resolver.rs`
 — both in the `features` crate, so the impl is local. Field and root
 resolvers merge into a single `UsersResolver` in `users/graphql/`.
 
@@ -167,11 +169,11 @@ is in *When (not) to write a new decorator* below).
 
 A `proc-macro` crate can export only macros, so each decorator lives in
 a companion `*-macros` crate re-exported by its home crate (e.g.
-`#[controller]` in `nestrs-http-macros`, re-exported so apps write
-`nestrs_http::controller`). Shared token helpers go in `nestrs-codegen`.
+`#[controller]` in `nest-rs-http-macros`, re-exported so apps write
+`nest_rs_http::controller`). Shared token helpers go in `nest-rs-codegen`.
 A `*-macros` crate **must not** depend on its surface crate — it emits
 absolute-path tokens resolved at the call site, so there is no cycle.
-Macro-generated code always uses absolute paths (`::nestrs_core::*`,
+Macro-generated code always uses absolute paths (`::nest_rs_core::*`,
 `::poem::*`, `::std::sync::Arc`); never rely on call-site scope.
 
 ### Controllers are thin
@@ -193,7 +195,7 @@ handler is drift — push it into the matching layer.
 ### The DI container is internal
 
 The Rust DI ecosystem was surveyed; none met our maintenance bar. The
-container in `crates/nestrs-core` is ours and stays ours. **Do not
+container in `crates/nest-rs-core` is ours and stays ours. **Do not
 propose adopting an external DI crate.** If ergonomics fall short,
 extend ours.
 
@@ -213,7 +215,7 @@ extend ours.
   from the singleton root. **One level deep**: request-scoped may inject
   singletons, never the reverse and never another request-scoped. Reach
   one through the request boundary (today **HTTP only**:
-  `nestrs_http::Scoped<T>`), never a `#[inject]` field. GraphQL/MCP do
+  `nest_rs_http::Scoped<T>`), never a `#[inject]` field. GraphQL/MCP do
   not bridge the scope yet.
 - **Modules compose by type or by configured value.** `#[module(imports
   = [...])]` takes a bare type (a static `Module`) or a call expression
@@ -232,7 +234,7 @@ extend ours.
   impl as module-private and exposes a `pub` **trait** bound with
   `provide_dyn`. Consumers inject `Arc<dyn Trait>`, never the impl.
 - **The import contract** is enforced at boot by the access graph
-  (`crates/nestrs-core/src/access.rs`): `#[module]` records its imports
+  (`crates/nest-rs-core/src/access.rs`): `#[module]` records its imports
   and each provider's injected `TypeId`s into an `inventory` registry;
   `App` walks the graph from the root and **fails the boot**
   (`AccessGraphError`) if a provider injects something its module
@@ -302,13 +304,13 @@ failure aborts boot, shutdown is best-effort.
 
 A `Guard` borrows the request **mutably** — it gates access (return
 `Err(Response)`) and may attach request context a handler reads back
-with `nestrs_http::Ctx<T>`. Bind guards/filters/interceptors three ways
+with `nest_rs_http::Ctx<T>`. Bind guards/filters/interceptors three ways
 — **global** (imperative), **controller** (on the struct), or
 **handler** (beside the verb) — each container-resolved, no import,
 first listed outermost. Per-route order, inner→outer: **shaper →
 interceptors → guards → filters → meta**. Declarative per-handler
 metadata a guard reads ships as `#[meta(EXPR)]` +
-`nestrs_http::Reflector`. The one asymmetry: **global** interceptors
+`nest_rs_http::Reflector`. The one asymmetry: **global** interceptors
 wrap *outside* the global guards, because the data context must install
 the executor/transaction around the guards too.
 
@@ -317,12 +319,12 @@ under `/v1` (`version_path` is the single source of truth).
 
 ## Authentication and authorization
 
-`nestrs-authn` answers *who the caller is*; `nestrs-authz` answers
+`nest-rs-authn` answers *who the caller is*; `nest-rs-authz` answers
 *what they may do*. They compose at the request boundary: bind
 `#[use_guards(AuthGuard, AppAbilityGuard)]` — `AuthGuard` attaches the
 principal, `AbilityGuard` builds the caller's `Ability`. Both the
 verification alias and the policy live in `crates/features`
-(`authn/core/`, `authz/core/` + `authz/http/`); apps only mount them.
+(`authn/`, `authz/` + `authz/http/`); apps only mount them.
 
 A **`Strategy`** turns a request into a principal (a plain
 `#[injectable]`, no macro). **`AuthGuard<S>`** is generic over it.
@@ -344,7 +346,7 @@ never RPC each other.
 
 | Folder | Provides |
 |--------|----------|
-| `authz/core/` | `AppAbility` (the policy), `AuthzCoreModule` |
+| `authz/` (root) | `AppAbility` (the policy), `AuthzModule` |
 | `authz/http/` | `AppAbilityGuard` (`AbilityGuard<AppAbility>`), `AuthzHttpModule` |
 | `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<AuthGuard, AppAbilityGuard>`) as `dyn OperationGuard`, `GraphqlAuthGuard` (`ResolverGuard` — access-graph marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
 | `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `WsAuthGuard` (`MessageGuard` — access-graph marker), `AuthzWsModule` |
@@ -359,13 +361,13 @@ Each transport surfaces its auth dep via the same mechanism:
 transport exposes. Each feature's `<Feature><Transport>Module` then
 imports its matching `Authz<Transport>Module` — **and only that** —
 because the transport module transitively brings every layer it needs
-(HTTP → AuthzCore → AuthnCore for the underlying guards).
+(`AuthzHttpModule → AuthzModule → AuthnModule` for the underlying guards).
 
 | Transport | Handler decorator | Auth guard binding | Module import |
 |-----------|------------------|--------------------|---|
-| HTTP | `#[controller]` | `#[use_guards(AuthGuard, AppAbilityGuard)]` on the impl block | `[<Feature>CoreModule, AuthzHttpModule]` |
-| GraphQL | `#[resolver]` | `#[use_guards(GraphqlAuthGuard)]` on the impl block | `[<Feature>CoreModule, AuthzGraphqlModule]` |
-| WS gateway | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AppAbilityGuard)]` on the gateway struct (connection) + `#[use_guards(WsAuthGuard)]` on each `#[subscribe_message]` (per-message marker) | `[<Feature>CoreModule, AuthzWsModule]` |
+| HTTP | `#[controller]` | `#[use_guards(AuthGuard, AppAbilityGuard)]` on the impl block | `[<Feature>Module, AuthzHttpModule]` |
+| GraphQL | `#[resolver]` | `#[use_guards(GraphqlAuthGuard)]` on the impl block | `[<Feature>Module, AuthzGraphqlModule]` |
+| WS gateway | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AppAbilityGuard)]` on the gateway struct (connection) + `#[use_guards(WsAuthGuard)]` on each `#[subscribe_message]` (per-message marker) | `[<Feature>Module, AuthzWsModule]` |
 
 Every transport reduces to the **same two-line shape**: import the
 feature's core, import the matching `Authz<Transport>Module`. The
@@ -396,8 +398,8 @@ transaction — is kept by a **request-scoped data context** held in two
 `task_local!`s (a singleton service has no other way to read
 per-request state):
 
-- the **executor** (`nestrs-seaorm`'s `Executor` enum: pool or transaction);
-- the **ability** (`nestrs-authz`'s ambient `Arc<Ability>`).
+- the **executor** (`nest-rs-seaorm`'s `Executor` enum: pool or transaction);
+- the **ability** (`nest-rs-authz`'s ambient `Arc<Ability>`).
 
 **Hard invariant: every data access goes through a service, and a
 service reaches the DB only through `Repo`.** The service
@@ -406,7 +408,7 @@ service reaches the DB only through `Repo`.** The service
 never touch `Repo` or the ORM directly** (resolver/gateway code — not
 the service methods that implement batch loads). `CrudService`'s
 `list`/`page`/`access`/`create`/`update`/`delete` each go through
-`Repo` and emit a `nestrs::orm` span (denials at `warn`). `Repo` runs
+`Repo` and emit a `nest_rs::orm` span (denials at `warn`). `Repo` runs
 every query against the ambient executor (joining the request's
 transaction with nothing threaded) and filters reads **and** by-id
 writes by `condition_for` from the ambient ability — so a feature
@@ -420,9 +422,9 @@ outermost via the auto-registered `DbContext` interceptor (just import
 a transaction committed on 2xx/3xx and rolled back otherwise; the
 **ability** inside the per-route guards, via the `#[routes]` **shaper**
 (the only seam that runs after `AbilityGuard` and still wraps the
-handler) — keeping `nestrs-http` unaware of authz/ORM.
+handler) — keeping `nest-rs-http` unaware of authz/ORM.
 
-**HTTP response masking** (`nestrs-authz` `http` feature / `Authorize`).
+**HTTP response masking** (`nest-rs-authz` `http` feature / `Authorize`).
 After a successful handler, the shaper parses the JSON body, runs
 `Ability::mask` / `mask_many` on `Entity::Model`, and re-serializes.
 Handlers should return the **`#[expose]` output type** (e.g.
@@ -445,13 +447,13 @@ building its own query). A route using `Bind` must also bind an
 `AbilityGuard`.
 
 The same transparency extends past HTTP through **symmetric,
-authz/ORM-agnostic seams** the surface crates expose. `nestrs-authz`
+authz/ORM-agnostic seams** the surface crates expose. `nest-rs-authz`
 exposes the authz-only bridges behind Cargo features — `http` (the
 `Authorize` shaper, `AbilityGuard`, `Scope`), `graphql` (the
 `GraphqlAbilityBridge` operation guard, the `authorize` gate, the
 `ability` accessor), `mcp` (the `McpAbilityBridge`); the bridges that
 also need the data layer (`Bind`, the GraphQL `bind` helper,
-`LoaderScope`, `WsDataContext`) live in `nestrs-seaorm` behind
+`LoaderScope`, `WsDataContext`) live in `nest-rs-seaorm` behind
 matching `http`/`graphql`/`ws` features — that split keeps the engine
 free of a circular dependency on the data layer. So GraphQL's
 `OperationGuard` is `GraphqlAbilityBridge` (re-runs the guard chain on
@@ -478,26 +480,26 @@ Exemplar apps: `apps/platform-api` (REST + GraphQL + WS, DB + authz);
 ## Surface crates — decisions, not mechanics
 
 Each realizes the "new concern = new crate + decorator, no
-`nestrs-macros` change" claim. Read the crate for how; here is only
+`nest-rs-macros` change" claim. Read the crate for how; here is only
 what was decided.
 
-- **`nestrs-schedule`** — `#[scheduled]` orchestrator on an
+- **`nest-rs-schedule`** — `#[scheduled]` orchestrator on an
   `#[injectable]` provider's `impl` block; each method tagged with
   exactly one of `#[every]` (interval), `#[cron]` (cron expression,
   optional `tz`), or `#[after]` (one-shot). String literals validated
   at compile time; presets/timezones at boot — a bad value fails the
   boot naming the offending job. The `Scheduler` is a `Transport`
   contributed by `ScheduleModule` via `TransportContribution`.
-- **`nestrs-queue` + `nestrs-redis`** — backend-agnostic queue contract
-  (`nestrs-queue`: the `Job`/`Processor`/`ProcessMethod` traits, the
+- **`nest-rs-queue` + `nest-rs-redis`** — backend-agnostic queue contract
+  (`nest-rs-queue`: the `Job`/`Processor`/`ProcessMethod` traits, the
   `#[processor]` macro, the inventory seam) with Redis as the first-class
-  integration (`nestrs-redis`, on `apalis` — the `@nestjs/bullmq` analog).
-  Apps depend on both crates: `nestrs-queue` for the abstractions and the
-  macro, `nestrs-redis` for the `QueueConnection` producer + the
+  integration (`nest-rs-redis`, on `apalis` — the `@nestjs/bullmq` analog).
+  Apps depend on both crates: `nest-rs-queue` for the abstractions and the
+  macro, `nest-rs-redis` for the `QueueConnection` producer + the
   `QueueWorker` transport + the activation modules. Crate name follows the
   **storage the developer sees** (Redis), not the framework (apalis); a
   hypothetical NATS or SQS backend ships as its own `nestrs-<storage>`
-  crate against the same `nestrs-queue` contract. `#[processor]`
+  crate against the same `nest-rs-queue` contract. `#[processor]`
   orchestrates `#[process(queue, concurrency, retries)]` methods into
   per-storage consumers. Queues are **identified by name**
   (stringly-typed, the known cost). Producer and consumer are decoupled.
@@ -505,24 +507,24 @@ what was decided.
   the consumer runtime activates by importing the separate
   `QueueWorkerModule` (producer-only apps don't import it). No apalis
   types leak to apps.
-- **`nestrs-http`** — the only activation seam is
+- **`nest-rs-http`** — the only activation seam is
   `HttpModule::for_root(...)` in `AppModule.imports`; `App` has no
   public `.transport(...)` method. Every option of `HttpConfig { host,
   port, tls, … }` is settable both via `NESTRS_HTTP__*` env vars and
   via the pinned struct — the framework-wide **dual-path config rule**
   (applies to every `nestrs-*` module).
-- **`nestrs-pipes`** — transport-agnostic, **one `Pipe` per file**,
+- **`nest-rs-pipes`** — transport-agnostic, **one `Pipe` per file**,
   stateless (`transform(In) -> Result<Out, _>`, never a DI provider).
   The base set covers the common cases (`Parse<T>`, `ParseUuid`,
   `ValidationPipe<T>`, …). HTTP binds them with the
   `Valid<E>` / `Piped<P, E>` extractors. Reusable pipes are framework
   primitives — never define one in an app.
-- **`nestrs-openapi`** — import `OpenApiModule`; it self-mounts
+- **`nest-rs-openapi`** — import `OpenApiModule`; it self-mounts
   `GET /api-json` (OpenAPI 3.1) + a bundled offline Swagger UI at
   `GET /api`. The document is **composed** from the route table, not
   listed. Payload schemas come from **schemars** (`Json<T>`'s
   `T: JsonSchema`); `#[api(...)]` enriches an operation.
-- **`nestrs-ws`** — **not a `Transport`**: a WS upgrade is an HTTP
+- **`nest-rs-ws`** — **not a `Transport`**: a WS upgrade is an HTTP
   GET, so `#[gateway(path = "/ws")]` self-mounts on the existing
   `HttpTransport` (inheriting its port/CORS/TLS). `#[messages]`
   orchestrates `#[subscribe_message]` +
@@ -533,7 +535,7 @@ what was decided.
 ## Naming rules — strict
 
 The file name encodes the role; the folder supplies the feature prefix
-(`users/core/service.rs`). Snake_case, role-prefixed by folder. No
+(`users/service.rs`). Snake_case, role-prefixed by folder. No
 dotted variants.
 
 | Role | File name |
@@ -548,8 +550,7 @@ dotted variants.
 | Tool (MCP) | `tool.rs` |
 | Entity (ORM model + `#[expose]`) | `entity.rs` |
 | DTO / Input types | `dto.rs` |
-| Errors of the feature (pure type) | `error.rs` |
-| HTTP error mapping (`impl ResponseError`) | `<feature>/http/error.rs` |
+| Domain-specific error (a wire contract, an opaque security variant) | `error.rs` — only when the framework's `ServiceError` / `AuthError` / `TokenError` cannot carry it |
 | GraphQL bridge type alias | `<feature>/graphql/bridge.rs` |
 | Guard / Strategy (authn machinery) | `guard.rs` / `strategy.rs` |
 | Static constants | `constants.rs` |
@@ -566,10 +567,10 @@ dotted variants.
   appears twice — keep the whole `UsersService` in `service.rs` (extra
   `impl` blocks for `CrudService`, `#[dataloader]`, `#[hooks]` are
   required by macros, not extra files). A single-role crate stays flat
-  (`nestrs-seaorm/config.rs`).
+  (`nest-rs-seaorm/config.rs`).
 - **Multiple files of the same role ⇒ pluralized sub-folder.** Several
-  `Pipe` impls in `nestrs-pipes` go in `pipes/`; several `Strategy`
-  impls in `nestrs-authn/passport/` go in `strategies/`. The trait
+  `Pipe` impls in `nest-rs-pipes` go in `pipes/`; several `Strategy`
+  impls in `nest-rs-authn/passport/` go in `strategies/`. The trait
   file (singular) stays at the parent (`pipe.rs`, `strategy.rs`);
   `pipes/mod.rs` / `strategies/mod.rs` re-export the impls flat.
 - **Errors of a feature** belong in `error.rs` (or one clearly named
@@ -604,7 +605,7 @@ unambiguous. Write code when it is none of the three.
 - anything that needs `unsafe` or runtime reflection.
 
 A new decorator must ship with: a doc comment showing the expanded
-form, a test in the home crate's `tests/` (or in `nestrs-testing` for
+form, a test in the home crate's `tests/` (or in `nest-rs-testing` for
 cross-crate wiring) proving the wiring, and a use site in an app or in
 `features` so the integration is exercised end-to-end. Measure
 incremental compile cost per use site; > 0.5 s is a defect
@@ -631,8 +632,8 @@ incremental compile cost per use site; > 0.5 s is a defect
 ## Observability conventions
 
 - **Span targets are dotted, lowercase, framework-prefixed.**
-  `nestrs::http`, `nestrs::orm`, `nestrs::authn`, `nestrs::authz`,
-  `nestrs::ws`, `nestrs::queue`, `nestrs::schedule`. Application spans
+  `nest_rs::http`, `nest_rs::orm`, `nest_rs::authn`, `nest_rs::authz`,
+  `nest_rs::ws`, `nest_rs::queue`, `nest_rs::schedule`. Application spans
   use the app name (`api::users`, `auth::oauth`). One target per
   concern per crate.
 - **Default level per layer.** Controllers / resolvers / gateways:
@@ -645,7 +646,7 @@ incremental compile cost per use site; > 0.5 s is a defect
   one) so a query filters cleanly. Prefer `user_id = %id` to
   `format!("user {} did X")`.
 - **Production output is OTLP, not stdout.** The
-  `nestrs-opentelemetry` crate ships an OTLP appender; an app opts in
+  `nest-rs-opentelemetry` crate ships an OTLP appender; an app opts in
   via `OpenTelemetryModule`. Dev pretty-print is acceptable only
   under a `dev` profile.
 
@@ -677,7 +678,7 @@ control**.
   exercising routes, DI wiring, and transports.
 
 **Cross-crate framework wiring** lives as integration tests in
-`nestrs-testing` (`tests/*.rs`) — boot-time access-graph rejection,
+`nest-rs-testing` (`tests/*.rs`) — boot-time access-graph rejection,
 lifecycle hook ordering, transport contribution.
 
 **Test commands are `just`-driven recipes — three of them, no more:**
@@ -732,7 +733,7 @@ transcripts are not injected automatically.
 
 1. **This file** — durable rules.
 2. **`crates/features/src/users/`** — the reference feature; copy
-   before inventing. Read `core/`, then any `<edge>/`.
+   before inventing. Read the feature root files, then any `<edge>/`.
 3. **`apps/platform-api/`** — the reference app (REST + GraphQL + WS +
    DB + authz); `module.rs` is the canonical composition example.
 4. **The relevant `crates/nestrs-<concern>/`** for whatever you are

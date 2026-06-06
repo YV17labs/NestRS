@@ -89,7 +89,7 @@ regenerate the committed SDL by running the dev server (see CLAUDE.md).
 3. **Add tests.** A bug fix gets a regression test; a feature gets coverage of
    the new behaviour. **Apps**: one `tests/e2e.rs` (real Postgres, no mocks).
    **Crates**: integration tests in a tree that **mirrors `src/`** (one
-   `tests/<short>.rs` entry, subpaths = modules — see CLAUDE.md and `nestrs-authn`
+   `tests/<short>.rs` entry, subpaths = modules — see CLAUDE.md and `nest-rs-authn`
    as the reference). Prefer that over ad-hoc `tests/<behaviour>.rs` names.
    Use `#[cfg(test)]` in `src/` only when tests must see private code; otherwise
    add `Type::new(...)` so integration tests can construct providers without boot.

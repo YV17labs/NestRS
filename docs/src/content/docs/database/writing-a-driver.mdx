@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-The [`nestrs-database`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-database)
+The [`nest-rs-database`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-database)
 crate is a seam: an object-safe `Executor` trait, two `tokio::task_local!`s,
 and the install helpers that thread "the request's current handle, optionally
 inside a transaction" across every layer. The seam names no store and no
@@ -16,7 +16,7 @@ document-store client, a key-value session, a graph driver, an in-memory
 map. This page gives you the **shape** of a driver, not its implementation:
 the trait you implement, the methods you wire, with `// your code here`
 markers where the store-specific work lands. The reference impl is
-[`nestrs-seaorm`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-seaorm) —
+[`nest-rs-seaorm`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-seaorm) —
 read it once when a placeholder is unclear.
 
 ## What you'll implement
@@ -26,9 +26,9 @@ read it once when a placeholder is unclear.
 - A `JobContext` that installs the non-transactional handle for worker paths.
 
 A driver lives in a `nestrs-<technology>` crate that depends on
-`nestrs-core`, `nestrs-database`, `nestrs-http`, plus whatever your store
+`nest-rs-core`, `nest-rs-database`, `nest-rs-http`, plus whatever your store
 needs. The app picks a driver by importing its module instead of
-`nestrs-seaorm`.
+`nest-rs-seaorm`.
 
 ## Step 1 — The Executor enum
 
@@ -53,7 +53,7 @@ pub enum Executor {
     Transactional(/* your tx/session type, wrapped in Arc<Mutex<_>> */),
 }
 
-impl nestrs_database::Executor for Executor {
+impl nest_rs_database::Executor for Executor {
     fn as_any(&self) -> &dyn Any { self }
 }
 ```
@@ -74,8 +74,8 @@ five places you write store-specific code.
 ```rust
 use std::sync::Arc;
 use async_trait::async_trait;
-use nestrs_core::injectable;
-use nestrs_middleware::{Interceptor, Next};
+use nest_rs_core::injectable;
+use nest_rs_middleware::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use tokio::sync::Mutex;
@@ -96,7 +96,7 @@ impl Interceptor for YourDbContext {
         if !mutating {
             // (1) Safe route — install the non-transactional handle.
             //     Your code: clone your pool/client into Executor::Default(...).
-            return nestrs_database::with_request_executor(
+            return nest_rs_database::with_request_executor(
                 Arc::new(Executor::Default(/* your handle clone */)),
                 next.run(req),
             ).await;
@@ -108,7 +108,7 @@ impl Interceptor for YourDbContext {
         let tx_arc = Arc::new(Mutex::new(tx));
 
         // (3) Install it as the request executor and run the handler.
-        let result = nestrs_database::with_request_executor(
+        let result = nest_rs_database::with_request_executor(
             Arc::new(Executor::Transactional(tx_arc.clone())),
             next.run(req),
         ).await;
@@ -153,7 +153,7 @@ work.
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use nestrs_core::{JobContext, injectable};
+use nest_rs_core::{JobContext, injectable};
 
 #[injectable]
 pub struct YourWorkerContext {
@@ -166,7 +166,7 @@ impl JobContext for YourWorkerContext {
         inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         // Your code: clone your pool/client into Executor::Default(...).
-        Box::pin(nestrs_database::with_job_executor(
+        Box::pin(nest_rs_database::with_job_executor(
             Arc::new(Executor::Default(/* your handle clone */)),
             inner,
         ))
@@ -189,8 +189,8 @@ struct — the framework-wide dual-path rule.
 
 ```rust
 use std::sync::Arc;
-use nestrs_config::ConfigModule;
-use nestrs_core::{ContainerBuilder, DynamicModule};
+use nest_rs_config::ConfigModule;
+use nest_rs_core::{ContainerBuilder, DynamicModule};
 
 pub struct YourDbModule;
 
@@ -206,10 +206,10 @@ pub struct YourDbSetup {
 
 impl DynamicModule for YourDbSetup {
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = <YourDbContext as nestrs_core::Discoverable>::register(builder);
+        let builder = <YourDbContext as nest_rs_core::Discoverable>::register(builder);
         let snapshot = builder.snapshot();
         let worker = YourWorkerContext::from_container(&snapshot);
-        builder.provide_dyn::<dyn nestrs_core::JobContext>(Arc::new(worker))
+        builder.provide_dyn::<dyn nest_rs_core::JobContext>(Arc::new(worker))
     }
 
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
@@ -229,7 +229,7 @@ your enum, and hands the caller a store-native handle.
 
 ```rust
 pub fn current_executor() -> Option<Executor> {
-    nestrs_database::current_executor()?
+    nest_rs_database::current_executor()?
         .as_any()
         .downcast_ref::<Executor>()
         .cloned()
@@ -251,16 +251,16 @@ need their equivalents, you ship them yourself in store-native terms
 helper). What every driver does keep: transparent transactions on
 mutating requests, the ambient executor across HTTP and workers, the
 access graph and module wiring, structured observability under
-`nestrs::orm`.
+`nest_rs::orm`.
 
 ## Reference
 
-- [`crates/nestrs-seaorm/`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-seaorm) —
+- [`crates/nest-rs-seaorm/`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-seaorm) —
   the first-party driver; read its `executor.rs`, `interceptor.rs`,
   `worker.rs`, and `module.rs` whenever a placeholder above needs a
   concrete shape.
-- [`crates/nestrs-database/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nestrs-database/README.md) —
+- [`crates/nest-rs-database/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-database/README.md) —
   the trait contract, the task-local seam, the install helpers in detail.
-- [`crates/nestrs-redis/`](https://github.com/NestRS/NestRS/tree/main/crates/nestrs-redis) —
+- [`crates/nest-rs-redis/`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-redis) —
   an analogous worker-side integration on the queue runtime, for a second
   read on the `JobContext` pattern.

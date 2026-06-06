@@ -25,10 +25,10 @@ method as a listener for the event type read from its second parameter.
 ```rust title="crates/features/src/points/event/listener.rs"
 use std::sync::Arc;
 
-use nestrs_core::injectable;
-use nestrs_events::listeners;
+use nest_rs_core::injectable;
+use nest_rs_events::listeners;
 
-use crate::points::core::{Ledger, PointsAwarded};
+use crate::points::{Ledger, PointsAwarded};
 
 #[injectable]
 pub struct PointsListeners {
@@ -100,7 +100,7 @@ provider in the same block — same convention as `#[routes]`,
 
 ## Define an event
 
-```rust title="crates/features/src/points/core/event.rs"
+```rust title="crates/features/src/points/event.rs"
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -118,12 +118,12 @@ parameter is `PointsAwarded` subscribes to it.
 
 The emitter injects `Arc<EventBus>` like any other dep and calls `emit`:
 
-```rust title="crates/features/src/points/core/service.rs"
+```rust title="crates/features/src/points/service.rs"
 use std::sync::Arc;
 use uuid::Uuid;
 
-use nestrs_core::injectable;
-use nestrs_events::EventBus;
+use nest_rs_core::injectable;
+use nest_rs_events::EventBus;
 
 use super::event::PointsAwarded;
 
@@ -151,24 +151,24 @@ listed in the feature's module. The app activates the bus by importing
 `EventModule`:
 
 ```rust title="crates/features/src/points/event/module.rs"
-use nestrs_core::module;
+use nest_rs_core::module;
 
-use crate::points::core::PointsCoreModule;
+use crate::points::PointsModule;
 use super::listener::PointsListeners;
 
-#[module(imports = [PointsCoreModule], providers = [PointsListeners])]
+#[module(imports = [PointsModule], providers = [PointsListeners])]
 pub struct PointsEventModule;
 ```
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_core::module;
-use nestrs_events::EventModule;
+use nest_rs_core::module;
+use nest_rs_events::EventModule;
 
-use features::points::{PointsCoreModule, PointsEventModule};
+use features::points::{PointsModule, PointsEventModule};
 
 #[module(imports = [
     EventModule,
-    PointsCoreModule,
+    PointsModule,
     PointsEventModule,
 ])]
 pub struct PlatformApiModule;
@@ -203,7 +203,7 @@ with its own clone of the event. Three consequences worth naming:
 ## Module-gated, even when the crate is shared
 
 A worker app that links `features` for the data layer but only imports
-`PointsCoreModule` keeps the listener inert: the inventory entry is
+`PointsModule` keeps the listener inert: the inventory entry is
 present in the binary but skipped at boot because the provider is not
 reachable from the worker's module tree. Same property as queue
 processors and scheduled jobs.
@@ -219,7 +219,7 @@ processors and scheduled jobs.
 
 ### Reference
 
-- `crates/nestrs-events/` — `EventBus`, `EventModule`, `#[listeners]`,
+- `crates/nest-rs-events/` — `EventBus`, `EventModule`, `#[listeners]`,
   `#[on_event]`.
-- `crates/nestrs-events/tests/bus.rs` — end-to-end test wiring a producer
+- `crates/nest-rs-events/tests/bus.rs` — end-to-end test wiring a producer
   and a multi-method `#[listeners]` provider in one module.

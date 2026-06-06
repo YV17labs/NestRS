@@ -32,8 +32,8 @@ masking lives, where tracing spans wrap a request.
 ## A minimal interceptor
 
 ```rust
-use nestrs_core::injectable;
-use nestrs_http::{async_trait, Interceptor, Next};
+use nest_rs_core::injectable;
+use nest_rs_http::{async_trait, Interceptor, Next};
 use poem::{Request, Response, Result};
 
 #[injectable]
@@ -90,7 +90,7 @@ instead of `#[injectable] + impl Interceptor`. The framework discovers
 it, builds it, and folds it around the assembled route tree in
 registration order — no `#[use_interceptors]` needed anywhere.
 
-```rust title="crates/nestrs-seaorm/src/interceptor.rs"
+```rust title="crates/nest-rs-seaorm/src/interceptor.rs"
 #[interceptor]
 pub(crate) struct DbContext {
     #[inject]
@@ -153,7 +153,7 @@ pre-handler work runs.
 - **Transform the response** — add headers (`Server-Timing`,
   `X-Request-Id`), compress, paginate.
 - **Time the call** — measure latency by route, emit a metric.
-- **Mask the body** — `nestrs-authz`'s `Authorize` shaper is technically
+- **Mask the body** — `nest-rs-authz`'s `Authorize` shaper is technically
   a "shaper" (inside the interceptors), but the pattern is the same: see
   the response, decide what to send.
 

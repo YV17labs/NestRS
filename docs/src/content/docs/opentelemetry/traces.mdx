@@ -17,15 +17,15 @@ per crate.
 
 | Layer | Target |
 |---|---|
-| HTTP request span | `nestrs::http` |
-| HTTP access event | `nestrs::access` |
-| ORM queries | `nestrs::orm` |
-| Authentication | `nestrs::authn` |
-| Authorization | `nestrs::authz` |
-| WebSocket events | `nestrs::ws` |
-| Queue jobs | `nestrs::queue` |
-| Scheduled jobs | `nestrs::schedule` |
-| Module lifecycle | `nestrs::module` |
+| HTTP request span | `nest_rs::http` |
+| HTTP access event | `nest_rs::access` |
+| ORM queries | `nest_rs::orm` |
+| Authentication | `nest_rs::authn` |
+| Authorization | `nest_rs::authz` |
+| WebSocket events | `nest_rs::ws` |
+| Queue jobs | `nest_rs::queue` |
+| Scheduled jobs | `nest_rs::schedule` |
+| Module lifecycle | `nest_rs::module` |
 | Application spans | `<app>::<feature>` (e.g. `api::users`) |
 
 ## Custom spans
@@ -78,7 +78,7 @@ Ratios are clamped to `[0.0, 1.0]`.
 Importing `OpenTelemetryModule` activates the `OpenTelemetryHttp` interceptor
 automatically — there's nothing else to mount. Per request it:
 
-1. Opens a span on `nestrs::http` named `http.request`, with the OTel HTTP
+1. Opens a span on `nest_rs::http` named `http.request`, with the OTel HTTP
    semantic-convention attributes — `http.request.method`, `http.route`,
    `http.response.status_code`, `http.response.body.size`, `client.address`,
    `user_agent.original` — via

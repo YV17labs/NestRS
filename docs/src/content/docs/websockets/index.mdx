@@ -21,7 +21,7 @@ in `apps/chat`:
 ```rust title="apps/chat/src/chat/gateway.rs"
 use std::sync::Arc;
 
-use nestrs_ws::{gateway, messages, WsClient};
+use nest_rs_ws::{gateway, messages, WsClient};
 
 use crate::chat::dto::{ChatMessage, SendMessage};
 use crate::chat::service::RoomService;
@@ -93,7 +93,7 @@ just dev chat
 ```
 
 ```text frame="terminal"
-2026-06-03T10:23:14Z  INFO nestrs::http: bound 1 gateway on 0.0.0.0:3000
+2026-06-03T10:23:14Z  INFO nest_rs::http: bound 1 gateway on 0.0.0.0:3000
   GET /ws → ChatGateway (4 messages, 2 lifecycle hooks)
 ```
 
@@ -147,7 +147,7 @@ queue processors pushing progress, scheduled jobs sending notifications,
 or any event bus subscriber wanting to reach connected clients:
 
 ```rust
-use nestrs_ws::WsServer;
+use nest_rs_ws::WsServer;
 
 #[injectable]
 pub struct NotifyService {
@@ -177,6 +177,6 @@ without holding a client handle.
 ### Reference
 
 - `apps/chat/` — the full real-time example.
-- `crates/nestrs-ws/` — `#[gateway]`, `#[messages]`,
+- `crates/nest-rs-ws/` — `#[gateway]`, `#[messages]`,
   `#[subscribe_message]`, `#[on_connect]`, `#[on_disconnect]`,
   `WsClient`, `WsServer`.

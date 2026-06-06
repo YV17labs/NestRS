@@ -25,11 +25,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use nestrs_core::injectable;
-use nestrs_redis::QueueConnection;
-use nestrs_schedule::scheduled;
+use nest_rs_core::injectable;
+use nest_rs_redis::QueueConnection;
+use nest_rs_schedule::scheduled;
 
-use crate::audio::core::{TranscodeJob, AUDIO_QUEUE};
+use crate::audio::{TranscodeJob, AUDIO_QUEUE};
 
 #[injectable]
 pub struct AudioTasks {
@@ -68,7 +68,7 @@ owns the deps once, and as many decorated methods as you need share them.
 Mix triggers freely:
 
 ```rust title="crates/features/src/audio/schedule/producer.rs"
-use nestrs_schedule::{scheduled, CronExpression};
+use nest_rs_schedule::{scheduled, CronExpression};
 
 #[injectable]
 pub struct AudioTasks {
@@ -130,7 +130,7 @@ the job and the offending value — never silently skipped.
 The provider goes in its feature module like any other `#[injectable]`:
 
 ```rust title="crates/features/src/audio/schedule/module.rs"
-use nestrs_core::module;
+use nest_rs_core::module;
 use super::producer::AudioTasks;
 
 #[module(providers = [AudioTasks])]
@@ -141,8 +141,8 @@ The app activates the scheduler by importing `ScheduleModule` —
 `ScheduleModule` contributes the scheduler to `App::run` itself:
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_core::module;
-use nestrs_schedule::ScheduleModule;
+use nest_rs_core::module;
+use nest_rs_schedule::ScheduleModule;
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 
 #[module(imports = [
@@ -154,7 +154,7 @@ pub struct PlatformApiModule;
 ```
 
 ```rust title="apps/platform-api/src/main.rs"
-use nestrs_core::App;
+use nest_rs_core::App;
 use platform_api::PlatformApiModule;
 
 #[tokio::main]
@@ -183,10 +183,10 @@ from the app's module tree.
 ```bash frame="terminal"
 $ just dev platform-api
 …
-2026-06-03T10:18:41Z  INFO nestrs::transport: attached module-contributed transport transport=Scheduler
-2026-06-03T10:18:41Z  INFO nestrs::schedule: scheduled job (interval) job=AudioTasks::enqueue_transcode interval_ms=5000
-2026-06-03T10:18:41Z  INFO nestrs::schedule: scheduled job (one-shot) job=AudioTasks::warmup_on_boot delay_ms=3000
-2026-06-03T10:18:41Z  INFO nestrs::schedule: scheduled job (cron)     job=AudioTasks::heartbeat timezone=UTC
+2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=Scheduler
+2026-06-03T10:18:41Z  INFO nest_rs::schedule: scheduled job (interval) job=AudioTasks::enqueue_transcode interval_ms=5000
+2026-06-03T10:18:41Z  INFO nest_rs::schedule: scheduled job (one-shot) job=AudioTasks::warmup_on_boot delay_ms=3000
+2026-06-03T10:18:41Z  INFO nest_rs::schedule: scheduled job (cron)     job=AudioTasks::heartbeat timezone=UTC
 2026-06-03T10:18:44Z  INFO features::audio: audio producer warmup — pipeline is ready to enqueue
 2026-06-03T10:18:46Z  INFO features::audio: scheduled transcode job file=track-1717405126521.mp3
 2026-06-03T10:19:00Z  INFO features::audio: audio producer heartbeat
@@ -231,11 +231,11 @@ Just importing `DatabaseModule` is enough — no manual connection plumbing.
 - [Queue](/queue/) — pair a scheduled producer with a durable consumer
   for distributed work.
 - [OpenTelemetry](/opentelemetry/) — every job span is targeted on
-  `nestrs::schedule`; structured fields (`job`, `ran_for`) are
+  `nest_rs::schedule`; structured fields (`job`, `ran_for`) are
   automatic.
 
 ### Reference
 
 - `crates/features/src/audio/schedule/producer.rs` — the canonical multi-method exemplar.
-- `crates/nestrs-schedule/` — `#[scheduled]`, `ScheduleModule`,
+- `crates/nest-rs-schedule/` — `#[scheduled]`, `ScheduleModule`,
   `Scheduler`, `CronExpression`, `Trigger`.

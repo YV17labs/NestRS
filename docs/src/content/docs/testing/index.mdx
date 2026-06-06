@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-`nestrs-testing` boots the **real** `AppBuilder` (the four-phase collect →
+`nest-rs-testing` boots the **real** `AppBuilder` (the four-phase collect →
 factories → register → access-graph check) in-process, configures an
 `HttpTransport` without a socket, and exposes a typed client over
 [`poem::test::TestClient`](https://docs.rs/poem/latest/poem/test/struct.TestClient.html).
@@ -31,7 +31,7 @@ Three categories, Rust's standard model plus the app e2e:
 |---|---|---|
 | `crates/<crate>/src/**.rs` (`#[cfg(test)]`) | In-file logic, private items | no |
 | `crates/<crate>/tests/*.rs` | Crate's public API | no |
-| `crates/nestrs-testing/tests/*.rs` | Cross-crate framework wiring | tailored |
+| `crates/nest-rs-testing/tests/*.rs` | Cross-crate framework wiring | tailored |
 | `apps/<app>/tests/e2e.rs` | The app's real top-level module | ✓ real |
 
 ## Picking the right tool
@@ -96,7 +96,7 @@ persistence. `just test-e2e` covers the rest. The full suite is
 
 ## Reference
 
-- `crates/nestrs-testing/` — `TestApp`, `TestAppBuilder`,
+- `crates/nest-rs-testing/` — `TestApp`, `TestAppBuilder`,
   `EphemeralDatabase`, the in-process HTTP client.
 - `apps/platform-api/tests/e2e.rs` and `apps/platform-auth/tests/e2e.rs` —
   the live baseline tests.

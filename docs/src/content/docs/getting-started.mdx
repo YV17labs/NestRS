@@ -98,7 +98,7 @@ lists them directly:
 </FileTree>
 
 ```rust title="src/service.rs"
-use nestrs_core::injectable;
+use nest_rs_core::injectable;
 
 #[injectable]
 #[derive(Default)]
@@ -111,7 +111,7 @@ impl HelloService {
 
 ```rust title="src/controller.rs"
 use std::sync::Arc;
-use nestrs_http::{controller, routes};
+use nest_rs_http::{controller, routes};
 use crate::service::HelloService;
 
 #[controller(path = "/")]
@@ -130,8 +130,8 @@ impl HelloController {
 ```
 
 ```rust title="src/module.rs"
-use nestrs_core::module;
-use nestrs_http::HttpModule;
+use nest_rs_core::module;
+use nest_rs_http::HttpModule;
 use crate::{controller::HelloController, service::HelloService};
 
 #[module(
@@ -147,7 +147,7 @@ different port in code with
 `HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })`.
 
 ```rust title="src/main.rs"
-use nestrs_core::App;
+use nest_rs_core::App;
 mod controller;
 mod module;
 mod service;
@@ -170,11 +170,14 @@ across every app in the workspace.
 
 ```toml title="Cargo.toml"
 [dependencies]
-anyhow      = "1"
-tokio       = { version = "1", features = ["macros", "rt-multi-thread"] }
-nestrs-core = { git = "https://github.com/NestRS/NestRS" }
-nestrs-http = { git = "https://github.com/NestRS/NestRS" }
+anyhow         = "1"
+tokio          = { version = "1", features = ["macros", "rt-multi-thread"] }
+nest-rs-core   = "0"
+nest-rs-http   = "0"
 ```
+
+(`nest-rs-*` is the kebab-case name on crates.io. In code you still write
+`use nest_rs_core::App;` — the lib names keep the `nestrs_*` form.)
 
 ```bash
 cargo run
@@ -183,20 +186,20 @@ cargo run
 
 ## One import instead of many — the `nestrs` umbrella
 
-The example above pulls each surface from its own crate (`nestrs-core`,
-`nestrs-http`, …) — that split is the public, versioned source of truth
+The example above pulls each surface from its own crate (`nest-rs-core`,
+`nest-rs-http`, …) — that split is the public, versioned source of truth
 and keeps working. For app code that just wants the everyday decorators
 without naming each crate, the optional `nestrs` umbrella crate collects
 them behind Cargo features:
 
 ```toml title="Cargo.toml"
 [dependencies]
-nestrs = { git = "https://github.com/NestRS/NestRS", features = ["http", "database", "seaorm"] }
+nest-rs = { version = "0", features = ["http", "database", "seaorm"] }
 ```
 
 ```rust title="src/controller.rs"
 use std::sync::Arc;
-use nestrs::prelude::*;
+use nest_rs::prelude::*;
 use crate::service::HelloService;
 
 #[controller(path = "/")]
@@ -214,7 +217,7 @@ impl HelloController {
 }
 ```
 
-`use nestrs::prelude::*;` brings in `App`, `AppBuilder`, `Container`,
+`use nest_rs::prelude::*;` brings in `App`, `AppBuilder`, `Container`,
 `Module`, `hooks`, `injectable`, `module`, and — when the `http` feature
 is on — `controller`, `routes`, `http_code`, `redirect`,
 `response_header`, `input`, `Valid`, `Scoped`, `Ctx`, `ClientIp`,
@@ -224,15 +227,15 @@ extractors `Json`, `Path`, `Query`. Verb attributes (`#[get]`, `#[post]`,
 
 | Feature flag | Surface it pulls in |
 |--------------|---------------------|
-| `http` (default) | `nestrs-http` — controllers, routes, extractors |
-| `config` (default) | `nestrs-config` — typed config + `.env` cascade |
-| `database` / `seaorm` | the data layer (`nestrs-database` seam, SeaORM impl) |
+| `http` (default) | `nest-rs-http` — controllers, routes, extractors |
+| `config` (default) | `nest-rs-config` — typed config + `.env` cascade |
+| `database` / `seaorm` | the data layer (`nest-rs-database` seam, SeaORM impl) |
 | `graphql`, `ws`, `mcp` | the corresponding transport |
 | `queue` / `redis` | the queue seam + the Redis backend |
 | `schedule`, `events` | cron jobs, in-process pub/sub |
 | `authn`, `authz` | the auth machinery |
 | `openapi`, `health`, `throttler`, `server-timing`, `opentelemetry` | the matching module |
-| `testing` | `nestrs-testing` — `TestApp`, `EphemeralDatabase` |
+| `testing` | `nest-rs-testing` — `TestApp`, `EphemeralDatabase` |
 
 Pick the features the app uses; nothing else compiles. The per-crate
 imports keep working unchanged — the umbrella is opt-in, not a

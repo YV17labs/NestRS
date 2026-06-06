@@ -17,7 +17,7 @@ Add `OpenApiModule::for_root` to the app root, alongside the controllers it
 should document:
 
 ```rust title="apps/platform-api/src/module.rs"
-use nestrs_openapi::OpenApiModule;
+use nest_rs_openapi::OpenApiModule;
 
 #[module(
     imports = [
@@ -109,7 +109,7 @@ Or pass an `OpenApiConfig` at the import site instead of reading the
 environment:
 
 ```rust
-use nestrs_openapi::{OpenApiConfig, OpenApiModule};
+use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 
 OpenApiModule::for_root(OpenApiConfig {
     title: "Acme API".into(),
@@ -131,5 +131,5 @@ OpenApiModule::for_root(OpenApiConfig {
 
 - `apps/platform-api/` — mounts `OpenApiModule::for_root(None)` next to REST + GraphQL.
 - `crates/features/src/users/http/controller.rs` — real `#[api(...)]` usage.
-- `crates/nestrs-openapi/` — `OpenApiModule`, `OpenApiConfig`, the document
+- `crates/nest-rs-openapi/` — `OpenApiModule`, `OpenApiConfig`, the document
   composer, the bundled Swagger UI.

@@ -181,6 +181,63 @@ cargo run
 # → GET http://localhost:3000 returns "Hello World"
 ```
 
+## One import instead of many — the `nestrs` umbrella
+
+The example above pulls each surface from its own crate (`nestrs-core`,
+`nestrs-http`, …) — that split is the public, versioned source of truth
+and keeps working. For app code that just wants the everyday decorators
+without naming each crate, the optional `nestrs` umbrella crate collects
+them behind Cargo features:
+
+```toml title="Cargo.toml"
+[dependencies]
+nestrs = { git = "https://github.com/NestRS/NestRS", features = ["http", "database", "seaorm"] }
+```
+
+```rust title="src/controller.rs"
+use std::sync::Arc;
+use nestrs::prelude::*;
+use crate::service::HelloService;
+
+#[controller(path = "/")]
+pub struct HelloController {
+    #[inject]
+    svc: Arc<HelloService>,
+}
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> String {
+        self.svc.greeting()
+    }
+}
+```
+
+`use nestrs::prelude::*;` brings in `App`, `AppBuilder`, `Container`,
+`Module`, `hooks`, `injectable`, `module`, and — when the `http` feature
+is on — `controller`, `routes`, `http_code`, `redirect`,
+`response_header`, `input`, `Valid`, `Scoped`, `Ctx`, `ClientIp`,
+`RawBody`, `Reflector`, `HttpConfig`, `HttpModule`, plus the poem
+extractors `Json`, `Path`, `Query`. Verb attributes (`#[get]`, `#[post]`,
+…) come in via `#[routes]`.
+
+| Feature flag | Surface it pulls in |
+|--------------|---------------------|
+| `http` (default) | `nestrs-http` — controllers, routes, extractors |
+| `config` (default) | `nestrs-config` — typed config + `.env` cascade |
+| `database` / `seaorm` | the data layer (`nestrs-database` seam, SeaORM impl) |
+| `graphql`, `ws`, `mcp` | the corresponding transport |
+| `queue` / `redis` | the queue seam + the Redis backend |
+| `schedule`, `events` | cron jobs, in-process pub/sub |
+| `authn`, `authz` | the auth machinery |
+| `openapi`, `health`, `throttler`, `server-timing`, `opentelemetry` | the matching module |
+| `testing` | `nestrs-testing` — `TestApp`, `EphemeralDatabase` |
+
+Pick the features the app uses; nothing else compiles. The per-crate
+imports keep working unchanged — the umbrella is opt-in, not a
+replacement.
+
 ## What just happened
 
 - **`#[injectable]`** marked `HelloService` as a provider; `App::build()`

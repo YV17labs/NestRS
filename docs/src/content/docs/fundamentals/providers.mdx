@@ -49,7 +49,7 @@ provider:
 Every one of them implements `Discoverable` (the trait the framework's
 transports drain) and ships through `#[module(providers = [...])]`.
 
-## Singleton by default, request-scoped on opt-in
+## Three scopes — singleton, request, transient
 
 ```rust
 #[injectable]                              // singleton — the default
@@ -57,18 +57,25 @@ pub struct UsersService { /* ... */ }
 
 #[injectable(scope = request)]             // built fresh per request
 pub struct RequestLogger { /* ... */ }
+
+#[injectable(scope = transient)]           // built fresh per resolution
+pub struct IdGenerator { /* ... */ }
 ```
+
+| Scope | Built | Cached |
+|-------|-------|--------|
+| `singleton` (default) | Once at boot | Forever |
+| `request` | Once per request | For that request |
+| `transient` | On every resolution | Never |
 
 Singletons are built once at boot, shared as `Arc<T>` everywhere. The
 container is a flat singleton store; injecting a singleton is a typed
 `Arc<T>` lookup.
 
-Request-scoped providers are built **once per request**, cached for that
-request. They may inject singletons; singletons may **not** inject them
-(singletons exist before any request does).
-
-The model is one level deep. Reach a request-scoped provider through the
-request boundary, not through `#[inject]`:
+**Request-scoped providers** are built once per request and cached for
+that request. They may inject singletons; singletons may **not** inject
+them (singletons exist before any request does). Reach a request-scoped
+provider through the request boundary, not through `#[inject]`:
 
 ```rust
 use nestrs_http::Scoped;
@@ -82,6 +89,42 @@ async fn log(&self, logger: Scoped<RequestLogger>) -> String {
 
 The HTTP transport installs a fresh `RequestScope` per request. GraphQL
 and MCP don't bridge the scope yet — singleton-only there.
+
+**Transient providers** rebuild on every resolution — each
+`container.get::<T>()` or `Scoped<T>` extraction yields a fresh instance.
+Useful when the provider carries throw-away state a single caller fully
+consumes (a one-shot builder, a per-call audit trail, a fresh id source):
+
+```rust
+use nestrs_core::injectable;
+use uuid::Uuid;
+
+#[injectable(scope = transient)]
+pub struct CorrelationId(pub Uuid);
+
+impl Default for CorrelationId {
+    fn default() -> Self {
+        Self(Uuid::now_v7())
+    }
+}
+
+#[get("/orders")]
+async fn place(
+    &self,
+    correlation: Scoped<CorrelationId>, // a fresh id, every request
+    Json(input): Json<PlaceOrderInput>,
+) -> Result<Json<Order>, OrderError> {
+    tracing::info!(correlation_id = %correlation.0, "placing order");
+    let order = self.svc.place(input).await?;
+    Ok(Json(order))
+}
+```
+
+A transient may depend on singletons and request-scoped providers. **A
+transient that depends (directly or transitively) on itself panics at
+resolution time** with a cycle diagnostic — the container tracks
+re-entrancy through a `task_local` guard, so the cycle surfaces in a test
+or first request rather than a stack overflow.
 
 ## The `pub trait` + module-private impl pattern
 

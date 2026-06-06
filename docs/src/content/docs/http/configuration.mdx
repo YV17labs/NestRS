@@ -130,6 +130,46 @@ pub struct PlatformApiModule;
 `origins: vec!["*".into()]` is allowed for fully open APIs (the wildcard
 is passed straight through to poem).
 
+## Mounting under a shared prefix
+
+Behind a reverse proxy that hands off a sub-path (`/api/*`), every
+controller can be mounted under one prefix without touching `path = "…"`
+on each:
+
+```rust title="apps/platform-api/src/main.rs"
+use nestrs_core::App;
+use nestrs_http::HttpTransport;
+use platform_api::PlatformApiModule;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    App::builder()
+        .module::<PlatformApiModule>()
+        .transport(HttpTransport::new().global_prefix("/api"))
+        .build()
+        .await?
+        .run()
+        .await
+}
+```
+
+`HttpTransport::global_prefix("/api")` normalizes the input
+(`"api"`, `"/api"`, `"/api/"` all yield `Some("/api")`; empty / `"/"`
+collapse to no-op), then prepends it to every route at mount time —
+`#[get("/users")]` ends up at `GET /api/users`. The boot log and the
+OpenAPI document reflect the prefix.
+
+<Aside type="caution">
+**Known limitation — imperative only, no env / `HttpConfig` field.** Today
+`global_prefix` is a builder call on `HttpTransport`. There is **no**
+`HttpConfig.global_prefix` field and **no** `NESTRS_HTTP__GLOBAL_PREFIX`
+env var; you cannot toggle it through the standard config dual path the
+rest of the framework uses. Apps that need it set the prefix in `main` and
+take the build-time hit on every deployment. A follow-up moves the prefix
+to `HttpConfig` so it lives in the same env/struct contract every other
+field follows.
+</Aside>
+
 ## Framework `Server:` header
 
 Off by default — a production-safe choice: no fingerprint of the

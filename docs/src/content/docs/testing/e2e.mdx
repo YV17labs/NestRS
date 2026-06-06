@@ -171,9 +171,15 @@ assert!(paths.get_opt("/users").is_some());
 
 ## Provider overrides
 
-`override_value` and `override_dyn` swap any provider after the
-four-phase build. The override applies before any consumer resolves the
-type, so controllers, resolvers, and guards pick it up.
+Three builders swap a provider after the four-phase build. The override
+applies before any consumer resolves the type, so controllers, resolvers,
+and guards pick it up.
+
+| Builder | Takes | Use when |
+|---------|-------|----------|
+| `override_value::<T>(value)` | `T` (owned) | The test does not need to hold the fake — let the container own it |
+| `override_dyn::<T>(Arc<T>)` | `Arc<dyn Trait>` | The provider is registered behind a `pub trait` |
+| `override_provider::<T>(Arc<T>)` | `Arc<T>` (concrete) | The test still holds the fake to read its state |
 
 ```rust
 struct StubWeather;
@@ -197,6 +203,58 @@ let app = TestApp::builder()
     .build()
     .await?;
 ```
+
+`override_provider` is the right shape when the test needs to observe what
+the fake recorded — wrap it in `Arc` once, hand the same handle to the
+container *and* the test, then assert against the shared state after the
+request:
+
+```rust
+use std::sync::Arc;
+use parking_lot::Mutex;
+
+#[injectable]
+#[derive(Default)]
+struct RecordingMailer {
+    sent: Mutex<Vec<String>>,
+}
+
+impl RecordingMailer {
+    fn sent(&self) -> Vec<String> { self.sent.lock().clone() }
+}
+
+impl Mailer for RecordingMailer {
+    fn send(&self, to: &str) -> Result<(), MailError> {
+        self.sent.lock().push(to.to_owned());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn signup_emails_the_new_user() {
+    let mailer = Arc::new(RecordingMailer::default());
+    let app = TestApp::builder()
+        .module::<UsersModule>()
+        .override_provider::<RecordingMailer>(Arc::clone(&mailer))
+        .build()
+        .await
+        .unwrap();
+
+    app.http()
+        .post("/users")
+        .body_json(&json!({ "email": "ada@example.com" }))
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    assert_eq!(mailer.sent(), vec!["ada@example.com".to_string()]);
+}
+```
+
+`override_provider` and `override_value` both replace a concrete provider.
+The difference is who keeps the handle: `override_value` consumes its
+argument (you can't read it back later), `override_provider` takes a
+pre-cloned `Arc` so the test and the container share the same instance.
 
 External-IO services — HTTP clients to third-party APIs, queue producers
 reaching an outside system — are the right override target. **The

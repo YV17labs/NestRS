@@ -54,7 +54,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         let Some(idx) = attr_idx else { continue };
         let attr = method.attrs.remove(idx);
 
-        if !attr.meta.require_path_only().is_ok() {
+        if attr.meta.require_path_only().is_err() {
             return syn::Error::new_spanned(
                 attr,
                 "#[on_event] takes no arguments; the event is read from the method's \

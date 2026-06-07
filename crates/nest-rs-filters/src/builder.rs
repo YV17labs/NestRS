@@ -2,7 +2,7 @@
 //! [`AppBuilder`](nest_rs_core::AppBuilder).
 
 use nest_rs_core::AppBuilder;
-use nest_rs_http::{HttpInterceptorMeta, http_interceptor_priority};
+use nest_rs_http::{HttpEndpointWrap, endpoint_wrap_priority};
 use poem::endpoint::BoxEndpoint;
 use poem::{EndpointExt, Response};
 
@@ -27,7 +27,7 @@ use crate::registry::{FilterSpec, FilterSpecs};
 /// 1. [`FilterSpecs`] into the container — the per-route shaper reads
 ///    them for TypeId-based dedup against controller / method
 ///    declarations.
-/// 2. An [`HttpInterceptorMeta`] wrap that resolves the specs at HTTP
+/// 2. An [`HttpEndpointWrap`] wrap that resolves the specs at HTTP
 ///    `configure` time and folds every global filter around the
 ///    assembled endpoint — so they fire on the error path of every
 ///    endpoint the HTTP transport mounts, including self-mounting
@@ -45,8 +45,8 @@ impl AppBuilderFiltersExt for AppBuilder {
     {
         let collected: Vec<FilterSpec> = specs.into_iter().collect();
         self.provide(FilterSpecs(collected))
-            .provide_meta(HttpInterceptorMeta::with_priority(
-                http_interceptor_priority::FILTERS,
+            .provide_meta(HttpEndpointWrap::with_priority(
+                endpoint_wrap_priority::FILTERS,
                 |container, mut endpoint: BoxEndpoint<'static, Response>| {
                     let Some(specs) = container.get::<FilterSpecs>() else {
                         return endpoint;

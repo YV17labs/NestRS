@@ -395,7 +395,7 @@ fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -
             > = __chain
                 .into_iter()
                 .map(|__e| {
-                    let __wrapped = ::nest_rs_guards::GuardAsWsLayer::new(
+                    let __wrapped = ::nest_rs_guards::GuardAsWsMessageCheck::new(
                         ::std::sync::Arc::clone(&__e.layer),
                         __e.type_id,
                         __e.name,

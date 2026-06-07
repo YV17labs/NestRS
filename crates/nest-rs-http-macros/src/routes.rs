@@ -386,11 +386,11 @@ fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
 /// Build one routed handler. Layout, inner → outer:
 ///
 /// shaper → per-route interceptors → per-route filters → metadata data →
-/// `LayersRouteInterceptor` (Layer System dedup of global + controller +
+/// `RouteShaper` (Layer System dedup of global + controller +
 /// method guards and pipes).
 ///
 /// Per-route guards are NOT inline-wrapped any more — they're handed to the
-/// `LayersRouteInterceptor` as `RouteGuardSpec` entries so the interceptor
+/// `RouteShaper` as `ScopedGuardSpec` entries so the interceptor
 /// can dedup them against the global chain by `TypeId` and run the result in
 /// canonical category order.
 fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
@@ -418,7 +418,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     expr = wrap_interceptors(expr, interceptors);
     expr = wrap_filters(expr, filters);
 
-    // LayersRouteInterceptor sits *inside* the metadata wrap so per-route
+    // RouteShaper sits *inside* the metadata wrap so per-route
     // guards reading `#[meta(...)]` via `Reflector` see it; outside the
     // per-route `use_interceptors`/`use_filters` wraps so a denial
     // short-circuits before any handler-side work.
@@ -436,7 +436,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         ::nest_rs_interceptors::InterceptorExt::interceptor(
             #expr,
             ::std::sync::Arc::new(
-                ::nest_rs_guards::LayersRouteInterceptor::new(
+                ::nest_rs_guards::RouteShaper::new(
                     #route_label_lit,
                     <#self_ty>::__nestrs_controller_guard_specs(),
                     #method_guard_specs,
@@ -451,7 +451,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         )
     };
 
-    // Metadata is attached *after* the LayersRouteInterceptor so per-route
+    // Metadata is attached *after* the RouteShaper so per-route
     // guards see the route's `#[meta]` value when the chain runs.
     for m in metas {
         expr = quote! { ::poem::EndpointExt::data(#expr, #m) };
@@ -469,7 +469,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     expr
 }
 
-/// Build the `Vec<RouteGuardSpec>` for the method-level guards. Each entry
+/// Build the `Vec<ScopedGuardSpec>` for the method-level guards. Each entry
 /// captures the type id + resolver fn — the interceptor calls them at first
 /// request.
 fn guard_specs(paths: &[Path]) -> TokenStream2 {
@@ -478,7 +478,7 @@ fn guard_specs(paths: &[Path]) -> TokenStream2 {
     }
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::integration::RouteLayerSpec {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
@@ -489,14 +489,14 @@ fn guard_specs(paths: &[Path]) -> TokenStream2 {
     quote! { ::std::vec![#(#entries),*] }
 }
 
-/// Build the `Vec<RoutePipeSpec>` for the method-level pipes.
+/// Build the `Vec<ScopedPipeSpec>` for the method-level pipes.
 fn pipe_specs(paths: &[Path]) -> TokenStream2 {
     if paths.is_empty() {
         return quote! { ::std::vec![] };
     }
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::integration::RouteLayerSpec {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
@@ -507,7 +507,7 @@ fn pipe_specs(paths: &[Path]) -> TokenStream2 {
     quote! { ::std::vec![#(#entries),*] }
 }
 
-/// Build the `Vec<RouteExceptionFilterSpec>` for the method-level
+/// Build the `Vec<ScopedExceptionFilterSpec>` for the method-level
 /// exception filters. Each entry erases the filter to
 /// `dyn ExceptionFilterErased` via its blanket impl.
 fn exception_filter_specs(paths: &[Path]) -> TokenStream2 {
@@ -516,7 +516,7 @@ fn exception_filter_specs(paths: &[Path]) -> TokenStream2 {
     }
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::integration::RouteLayerSpec {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
@@ -541,9 +541,9 @@ fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
 /// to `BoxEndpoint<'static, Response>` so the conditional dedup against
 /// `InterceptorSpecs` (the global scope) produces matching types in both
 /// branches: when an interceptor is already declared globally, the
-/// transport-level [`HttpInterceptorMeta`] wrap from
+/// transport-level [`HttpEndpointWrap`] wrap from
 /// `use_interceptors_global` runs it, and the per-route wrap is skipped to
-/// keep single-execution semantics — same shape as `LayersRouteInterceptor`'s
+/// keep single-execution semantics — same shape as `RouteShaper`'s
 /// Global filter for guards / pipes / exception filters.
 fn wrap_interceptors(mut expr: TokenStream2, paths: &[Path]) -> TokenStream2 {
     for p in paths.iter().rev() {

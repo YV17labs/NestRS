@@ -10,7 +10,7 @@ use std::sync::Arc;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
 use crate::Guard;
-use crate::integration::denial_to_http_response;
+use crate::dispatch::denial_to_http_response;
 
 /// Wraps any poem endpoint with a [`Guard`]'s `check_http` step.
 pub struct GuardEndpoint<E, G: ?Sized> {

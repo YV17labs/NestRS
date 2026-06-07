@@ -18,8 +18,7 @@
 //! ```
 
 pub use crate::{
-    AppBuilderGuardsExt, AppBuilderPipesExt, Denial, GlobalGuards, Guard, GuardSpec, PipeSpec,
-    guard, pipe,
+    AppBuilderGuardsExt, AppBuilderPipesExt, Denial, Guard, GuardSpec, PipeSpec, guard, pipe,
 };
 pub use async_trait::async_trait;
 pub use nest_rs_core::{Layer, LayerKind, LayerScope, Public, injectable};

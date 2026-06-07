@@ -204,7 +204,7 @@ impl AppBuilder {
     /// Seed module-less metadata of type `M` (the [`ContainerBuilder::provide_meta`]
     /// shortcut at the app root). Used by global builder extensions —
     /// `use_guards_global`, `use_interceptors_global`, etc. — that need to
-    /// publish a [`HttpInterceptorMeta`](crate)-style descriptor without
+    /// publish a [`HttpEndpointWrap`](crate)-style descriptor without
     /// owning a [`Module`].
     pub fn provide_meta<M: Any + Send + Sync>(mut self, meta: M) -> Self {
         self.builder = self.builder.provide_meta(meta);

@@ -30,7 +30,7 @@ pub use controller::{
 };
 pub use cors::CorsConfig;
 pub use endpoint::HttpEndpointMeta;
-pub use interceptor::{HttpInterceptorMeta, priority as http_interceptor_priority};
+pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
 pub use module::{HttpModule, HttpSetup};
 pub use pipe::{IntoInner, Piped, Valid};
 pub use problem::ProblemDetails;

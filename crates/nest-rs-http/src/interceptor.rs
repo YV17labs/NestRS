@@ -13,8 +13,8 @@
 //!
 //! Layer System wraps that need to participate (global guards, global
 //! interceptors, global filters, …) construct the wrap closure themselves
-//! and attach it via [`HttpInterceptorMeta::new`] or
-//! [`HttpInterceptorMeta::with_priority`].
+//! and attach it via [`HttpEndpointWrap::new`] or
+//! [`HttpEndpointWrap::with_priority`].
 
 use nest_rs_core::Container;
 use poem::Response;
@@ -33,7 +33,7 @@ type WrapFn = Box<
 ///   Interceptors  →  Filters  →  Guards  →  per-route shaper  →  handler
 /// ```
 ///
-/// The transport iterates `HttpInterceptorMeta` entries sorted by priority
+/// The transport iterates `HttpEndpointWrap` entries sorted by priority
 /// ascending; lower priority is applied first and therefore ends up
 /// innermost. `Interceptors` get the highest priority so their wrap
 /// installs *outermost* — that's how an ambient `DbContext` interceptor
@@ -56,20 +56,20 @@ pub mod priority {
 }
 
 /// Discovery metadata attached at boot. The HTTP transport collects every
-/// `HttpInterceptorMeta` at `configure` time, sorts by [`priority()`], and
+/// `HttpEndpointWrap` at `configure` time, sorts by [`priority()`], and
 /// folds them around the assembled route (after per-route layers, before
 /// CORS / server header).
 ///
 /// The wrap closure receives the container so it can resolve providers it
 /// needs (e.g. a global registry of `GuardSpec`s).
 ///
-/// [`priority()`]: HttpInterceptorMeta::priority
-pub struct HttpInterceptorMeta {
+/// [`priority()`]: HttpEndpointWrap::priority
+pub struct HttpEndpointWrap {
     priority: i32,
     wrap: WrapFn,
 }
 
-impl HttpInterceptorMeta {
+impl HttpEndpointWrap {
     /// Construct from any wrap closure with the default priority
     /// ([`priority::INTERCEPTORS`]). Use [`Self::with_priority`] when you
     /// need an explicit band — Layer-System globals (guards, filters)

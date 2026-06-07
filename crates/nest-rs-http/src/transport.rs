@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::controller::HttpControllerMeta;
 use crate::endpoint::HttpEndpointMeta;
-use crate::interceptor::HttpInterceptorMeta;
+use crate::interceptor::HttpEndpointWrap;
 use crate::raw_body::RawBodyLimit;
 use crate::tls::TlsConfig;
 
@@ -45,10 +45,10 @@ pub fn version_path(version: Option<&str>, path: &str) -> String {
 /// HTTP [`Transport`] backed by poem. At [`Transport::configure`] time, mounts
 /// every `#[module(providers = [...])]`-declared [`HttpControllerMeta`] and
 /// [`HttpEndpointMeta`], then any imperative [`HttpTransport::mount`], then
-/// folds every discovered [`HttpInterceptorMeta`] wrap around the assembled
+/// folds every discovered [`HttpEndpointWrap`] wrap around the assembled
 /// endpoint. Global Layer System wraps (guards / interceptors / filters /
 /// pipes / exception filters) attach themselves through
-/// [`HttpInterceptorMeta`] from their own crates — this transport stays free
+/// [`HttpEndpointWrap`] from their own crates — this transport stays free
 /// of the cross-transport trait crates and only knows about poem.
 pub struct HttpTransport {
     bind: String,
@@ -205,13 +205,13 @@ impl Transport for HttpTransport {
 
         let mut endpoint: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
         // Layer-System globals (guards / interceptors / filters / pipes /
-        // exception filters) attach a `HttpInterceptorMeta` from their own
+        // exception filters) attach a `HttpEndpointWrap` from their own
         // crate. The transport sorts by priority ascending so the
         // documented HTTP order is enforced regardless of AppBuilder call
         // sequence: Guards (innermost) → Filters → Interceptors
         // (outermost). Insertion order is the tiebreaker within a band.
-        let mut metas: Vec<std::sync::Arc<HttpInterceptorMeta>> = discovery
-            .meta::<HttpInterceptorMeta>()
+        let mut metas: Vec<std::sync::Arc<HttpEndpointWrap>> = discovery
+            .meta::<HttpEndpointWrap>()
             .into_iter()
             .map(|d| d.meta)
             .collect();

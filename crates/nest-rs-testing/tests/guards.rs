@@ -148,7 +148,7 @@ async fn a_global_guard_protects_every_route_without_use_guards() {
 async fn without_a_global_guard_the_same_routes_stay_open() {
     // The default-derived `DenyGuard` provider stays registered, but with no
     // `use_guards_global` call no `GuardSpecs` is seeded, so the global chain
-    // is empty — `LayersRouteInterceptor` runs no global, no controller, no
+    // is empty — `RouteShaper` runs no global, no controller, no
     // method guards, and the route stays open.
     let app = TestApp::builder()
         .module::<PublicModule>()

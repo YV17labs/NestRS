@@ -1,7 +1,8 @@
 //! WebSocket gateway-scope guard dedup against Global on the WS upgrade.
 //!
 //! A WS upgrade is an HTTP `GET`; the global guard chain runs through the
-//! transport-level [`GlobalGuardsHttpInterceptor`]. A gateway that
+//! transport-level `HttpEndpointWrap` that `use_guards_global` attaches.
+//! A gateway that
 //! redeclares the same guard via `#[use_guards(...)]` would otherwise wrap
 //! the upgrade endpoint twice — `#[gateway]` skips its inline wrap at
 //! mount time when the TypeId matches a `GuardSpecs` entry. The check
@@ -89,7 +90,7 @@ async fn gateway_scope_guard_redeclared_against_global_runs_once() {
     // Global declares `CountingDenyGuard`; the `DupGateway` redeclares it
     // on the gateway struct. `#[gateway]` skips its inline wrap because
     // the TypeId is in `GuardSpecs`, so only the transport-level
-    // `GlobalGuardsHttpInterceptor` runs the guard — counter bumps once.
+    // `HttpEndpointWrap` runs the guard — counter bumps once.
     let app = TestApp::builder()
         .module::<GatewayDedupModule>()
         .use_guards_global([guard::<CountingDenyGuard>()])
@@ -117,8 +118,8 @@ async fn bare_gateway_runs_global_guard_once() {
     reset_counter();
 
     // Sanity check: a gateway with no `#[use_guards]` still has the
-    // global guard applied through `GlobalGuardsHttpInterceptor`, exactly
-    // once.
+    // global guard applied through the transport-level `HttpEndpointWrap`,
+    // exactly once.
     let app = TestApp::builder()
         .module::<GatewayDedupModule>()
         .use_guards_global([guard::<CountingDenyGuard>()])

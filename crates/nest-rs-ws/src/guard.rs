@@ -14,7 +14,7 @@ use crate::server::WsClient;
 /// table can store any guard without importing the trait directly (avoids a
 /// nest-rs-ws → nest-rs-guards dep cycle).
 ///
-/// `nest-rs-guards` provides a [`GuardAsWsLayer`](../../nest_rs_guards/struct.GuardAsWsLayer.html)
+/// `nest-rs-guards` provides a [`GuardAsWsMessageCheck`](../../nest_rs_guards/struct.GuardAsWsMessageCheck.html)
 /// wrapper that adapts any `Guard` to this trait — the `#[messages]` macro
 /// emits the wrapper at gateway mount.
 #[async_trait::async_trait]

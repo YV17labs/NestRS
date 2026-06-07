@@ -75,7 +75,7 @@
 //! ## Architecture
 //!
 //! Each shaper macro (`#[routes]`, `#[resolver]`, `#[messages]`) emits a
-//! call to one of [`LayersRouteInterceptor`] / [`run_layered_graphql_chain`]
+//! call to one of [`RouteShaper`] / [`run_layered_graphql_chain`]
 //! / [`run_layered_ws_chain`] at the start of every handler. There is no
 //! global interceptor — the per-route entry is the whole point so we get
 //! TypeId-level dedup against the global chain.
@@ -84,7 +84,7 @@ mod builder;
 mod denial;
 mod guard;
 mod guard_endpoint;
-pub mod integration;
+pub mod dispatch;
 pub mod layer_chain;
 pub mod prelude;
 mod registry;
@@ -98,13 +98,13 @@ pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 // Re-exported here for the historical import path used by the macros.
 pub use nest_rs_interceptors::{GraphqlNext, WsNext};
 pub use denial::Denial;
-pub use guard::{Guard, GuardAsWsLayer};
+pub use guard::{Guard, GuardAsWsMessageCheck};
 pub use guard_endpoint::{GuardEndpoint, GuardExt};
 pub use layer_chain::{LayerSource, ResolvedLayer};
-pub use registry::{GlobalGuards, GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
+pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
-// Re-export integration helpers for macro-emitted code.
-pub use integration::{
-    LayersRouteInterceptor, denial_to_graphql_error, denial_to_http_response,
+// Re-export dispatch helpers for macro-emitted code.
+pub use dispatch::{
+    RouteShaper, denial_to_graphql_error, denial_to_http_response,
     run_layered_graphql_chain, run_layered_ws_chain,
 };

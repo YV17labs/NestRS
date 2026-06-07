@@ -1,7 +1,7 @@
 //! Per-handler / per-controller interceptor binding + guard-before-interceptor
 //! ordering, end-to-end through the HTTP harness. Also pins the cross-scope
 //! TypeId dedup: an interceptor declared globally is run by the transport-
-//! level [`HttpInterceptorMeta`] wrap; a redeclaration at controller or
+//! level [`HttpEndpointWrap`] wrap; a redeclaration at controller or
 //! method scope is skipped at mount time, so the interceptor still executes
 //! exactly once.
 
@@ -212,7 +212,7 @@ async fn same_interceptor_global_and_controller_runs_once() {
 
     // Declared globally AND redeclared on the controller. The controller-
     // scope wrap is skipped at mount time when the TypeId is already
-    // seeded as Global — the transport-level `HttpInterceptorMeta` wrap
+    // seeded as Global — the transport-level `HttpEndpointWrap` wrap
     // from `use_interceptors_global` carries the single execution.
     let app = TestApp::builder()
         .module::<DedupModule>()

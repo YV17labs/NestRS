@@ -1,7 +1,7 @@
 //! `#[interceptor]` — mark a struct as a **global** HTTP interceptor (for
 //! infrastructure that must wrap everything: a DB-transaction context,
 //! tracing). The macro attaches an
-//! [`HttpInterceptorMeta`](::nest_rs_http::HttpInterceptorMeta) but does *not*
+//! [`HttpEndpointWrap`](::nest_rs_http::HttpEndpointWrap) but does *not*
 //! register the type as a provider — it is mounted automatically. To bind
 //! per-controller/handler, write a plain `#[injectable] + impl Interceptor`
 //! and list it in `#[use_interceptors(...)]`.
@@ -56,8 +56,8 @@ pub(crate) fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream
                 let __value = Self::from_container(&__snapshot);
                 let __arc: ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor> =
                     ::std::sync::Arc::new(__value);
-                builder.attach_meta::<Self, ::nest_rs_http::HttpInterceptorMeta>(
-                    ::nest_rs_http::HttpInterceptorMeta::new(move |_container, __endpoint| {
+                builder.attach_meta::<Self, ::nest_rs_http::HttpEndpointWrap>(
+                    ::nest_rs_http::HttpEndpointWrap::new(move |_container, __endpoint| {
                         ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
                             ::nest_rs_interceptors::InterceptorExt::interceptor(
                                 __endpoint,

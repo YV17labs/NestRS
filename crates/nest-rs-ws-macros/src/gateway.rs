@@ -160,12 +160,12 @@ fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
 /// `Guard::check_http` (the WS upgrade is an HTTP GET) and maps a `Denial` to
 /// a poem [`Response`].
 ///
-/// **Dedup against Global**: the WS upgrade goes through
-/// `GlobalGuardsHttpInterceptor` at the HTTP transport-level, which
+/// **Dedup against Global**: the WS upgrade goes through the global
+/// guards' `HttpEndpointWrap` at the HTTP transport-level, which
 /// already runs every global guard's `check_http`. If a gateway-scope
 /// `#[use_guards(X)]` matches a TypeId that is also seeded as Global,
 /// the wrap is skipped here — same semantics as
-/// `LayersRouteInterceptor` does for HTTP per-route declarations.
+/// `RouteShaper` does for HTTP per-route declarations.
 fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
     paths
         .iter()

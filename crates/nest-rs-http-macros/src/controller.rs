@@ -114,30 +114,30 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 
             /// Controller-level `#[use_guards(...)]`, exposed for the
             /// `#[routes]` macro to fold into each route's
-            /// `LayersRouteInterceptor`. Empty when none are declared.
+            /// `RouteShaper`. Empty when none are declared.
             #[doc(hidden)]
             pub fn __nestrs_controller_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::integration::RouteGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
             {
                 #guard_specs
             }
 
             /// Controller-level `#[use_pipes(...)]`, exposed for the
             /// `#[routes]` macro to fold into each route's
-            /// `LayersRouteInterceptor`. Empty when none are declared.
+            /// `RouteShaper`. Empty when none are declared.
             #[doc(hidden)]
             pub fn __nestrs_controller_pipe_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::integration::RoutePipeSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedPipeSpec>
             {
                 #pipe_specs
             }
 
             /// Controller-level `#[use_exception_filters(...)]`, exposed for
             /// the `#[routes]` macro to fold into each route's
-            /// `LayersRouteInterceptor`. Empty when none are declared.
+            /// `RouteShaper`. Empty when none are declared.
             #[doc(hidden)]
             pub fn __nestrs_controller_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::integration::RouteExceptionFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedExceptionFilterSpec>
             {
                 #exception_filter_specs
             }
@@ -259,8 +259,8 @@ fn controller_filter_layers(paths: &[Path]) -> Vec<TokenStream2> {
         .collect()
 }
 
-/// Controller-level `#[use_guards(...)]` → `Vec<RouteGuardSpec>` so `#[routes]`
-/// folds each guard into the per-route `LayersRouteInterceptor` and the Layer
+/// Controller-level `#[use_guards(...)]` → `Vec<ScopedGuardSpec>` so `#[routes]`
+/// folds each guard into the per-route `RouteShaper` and the Layer
 /// System dedup sees the controller scope.
 fn controller_guard_specs(paths: &[Path]) -> TokenStream2 {
     if paths.is_empty() {
@@ -268,7 +268,7 @@ fn controller_guard_specs(paths: &[Path]) -> TokenStream2 {
     }
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::integration::RouteLayerSpec {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
@@ -279,14 +279,14 @@ fn controller_guard_specs(paths: &[Path]) -> TokenStream2 {
     quote! { ::std::vec![#(#entries),*] }
 }
 
-/// Controller-level `#[use_pipes(...)]` → `Vec<RoutePipeSpec>`.
+/// Controller-level `#[use_pipes(...)]` → `Vec<ScopedPipeSpec>`.
 fn controller_pipe_specs(paths: &[Path]) -> TokenStream2 {
     if paths.is_empty() {
         return quote! { ::std::vec::Vec::new() };
     }
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::integration::RouteLayerSpec {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
@@ -298,7 +298,7 @@ fn controller_pipe_specs(paths: &[Path]) -> TokenStream2 {
 }
 
 /// Controller-level `#[use_exception_filters(...)]` →
-/// `Vec<RouteExceptionFilterSpec>`. Each entry erases the filter to
+/// `Vec<ScopedExceptionFilterSpec>`. Each entry erases the filter to
 /// `dyn ExceptionFilterErased` via its blanket impl.
 fn controller_exception_filter_specs(paths: &[Path]) -> TokenStream2 {
     if paths.is_empty() {
@@ -306,7 +306,7 @@ fn controller_exception_filter_specs(paths: &[Path]) -> TokenStream2 {
     }
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::integration::RouteLayerSpec {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)

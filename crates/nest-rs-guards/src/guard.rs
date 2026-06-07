@@ -75,13 +75,13 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
 /// [`WsMessageCheck`](nest_rs_ws::WsMessageCheck) interface — the bridge the
 /// `#[messages]` macro uses to put guards in the per-event chain table
 /// without nest-rs-ws depending on nest-rs-guards.
-pub struct GuardAsWsLayer {
+pub struct GuardAsWsMessageCheck {
     inner: Arc<dyn Guard>,
     type_id: TypeId,
     name: &'static str,
 }
 
-impl GuardAsWsLayer {
+impl GuardAsWsMessageCheck {
     pub fn new(inner: Arc<dyn Guard>, type_id: TypeId, name: &'static str) -> Self {
         Self {
             inner,
@@ -92,7 +92,7 @@ impl GuardAsWsLayer {
 }
 
 #[async_trait]
-impl WsMessageCheck for GuardAsWsLayer {
+impl WsMessageCheck for GuardAsWsMessageCheck {
     async fn check(
         &self,
         client: &WsClient,

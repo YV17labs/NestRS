@@ -102,7 +102,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
             /// `run_layered_graphql_chain` call. Empty when none declared.
             #[doc(hidden)]
             pub fn __nestrs_resolver_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::integration::RouteGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
             {
                 #guard_specs
             }
@@ -257,7 +257,7 @@ fn graphql_guard_specs(paths: &[Path]) -> TokenStream2 {
     }
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::integration::RouteLayerSpec {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)

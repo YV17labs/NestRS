@@ -1,7 +1,7 @@
 //! URI versioning (`#[controller(version = "1")]`) and exception filters
 //! (`#[use_filters]`), end-to-end through the HTTP harness. Also pins the
 //! cross-scope TypeId dedup contract: a filter declared globally is run by
-//! the transport-level [`HttpInterceptorMeta`] wrap; a redeclaration at
+//! the transport-level [`HttpEndpointWrap`] wrap; a redeclaration at
 //! controller or method scope is skipped at mount time, so it still
 //! executes exactly once.
 
@@ -192,7 +192,7 @@ async fn same_filter_global_and_controller_runs_once() {
     // Global seeding + a redeclaration on the controller. The
     // controller-scope wrap is skipped at mount time when the TypeId is
     // already in `FilterSpecs` — the transport-level
-    // `HttpInterceptorMeta` wrap from `use_filters_global` carries the
+    // `HttpEndpointWrap` wrap from `use_filters_global` carries the
     // single execution.
     let app = TestApp::builder()
         .module::<DedupFilterModule>()

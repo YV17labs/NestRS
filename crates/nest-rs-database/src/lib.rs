@@ -6,7 +6,7 @@
 //! [`current_executor_scope`]) that carries "the request's current handle
 //! on a unit of work" across the framework. It is what every ORM
 //! integration plugs into — not an ORM itself. The non-HTTP side is wired
-//! through [`nest_rs_core::JobContext`], which a worker transport
+//! through `nest_rs_worker::JobContext`, which a worker transport
 //! (`#[scheduled]`, `#[processor]`) resolves before each job.
 //!
 //! The first-class implementation is `nestrs-seaorm` (SeaORM): it ships
@@ -27,7 +27,7 @@
 //! 2. Ship a `Module` that, for each HTTP request, wraps the handler in
 //!    [`with_request_executor`] passing your `Arc<dyn Executor>`. For
 //!    worker transports do the same with [`with_job_executor`] via
-//!    [`nest_rs_core::JobContext`].
+//!    `nest_rs_worker::JobContext`.
 //! 3. Provide your own `Repo`-equivalent query API that calls
 //!    [`current_executor`] and downcasts to your concrete type.
 //!

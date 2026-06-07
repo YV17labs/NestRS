@@ -360,8 +360,10 @@ the request body is upstream of where it sits.
 
 - `crates/features/src/users/` — a feature with relations,
   dataloaders and credentials helpers.
-- `crates/nest-rs-database/` — the executor trait, task-local seam, and
-  `JobContext` abstractions (ORM-agnostic).
+- `crates/nest-rs-database/` — the executor trait and task-local seam
+  (ORM-agnostic).
+- `crates/nest-rs-worker/` — the `JobContext` seam scheduler/queue
+  transports use to install ambient state per job.
 - `crates/nest-rs-seaorm/` — the [SeaORM](https://www.sea-ql.org/SeaORM/)
   integration: `Repo`, `CrudService`, the ambient executor.
 - `crates/nest-rs-resource/` — `#[expose]`, the GraphQL+OpenAPI

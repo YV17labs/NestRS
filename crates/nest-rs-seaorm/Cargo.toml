@@ -32,6 +32,10 @@ full = ["http", "graphql", "ws", "health"]
 
 [dependencies]
 nest-rs-core.workspace = true
+# `WorkerDbContext` bridges the framework's worker seam (`JobContext`) to install
+# the pool executor around every scheduler tick / queue job. The trait lives in
+# `nest-rs-worker` so neither scheduler nor queue has to depend on the other.
+nest-rs-worker.workspace = true
 # The ORM-agnostic ambient executor + scope seam. SeaORM's `Executor` enum
 # in this crate implements `nest_rs_database::Executor`; the task-local plumbing
 # lives in `nest-rs-database` so a third-party ORM can reuse it.

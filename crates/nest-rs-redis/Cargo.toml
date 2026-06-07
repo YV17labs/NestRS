@@ -32,6 +32,9 @@ apalis-redis.workspace = true
 
 [dev-dependencies]
 nest-rs-core.workspace = true
+# The `#[processor]` macro emits `::nest_rs_worker::*` paths and the test
+# implements `JobContext` directly.
+nest-rs-worker.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true

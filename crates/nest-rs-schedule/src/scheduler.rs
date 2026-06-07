@@ -7,10 +7,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use chrono_tz::Tz;
 use croner::Cron;
-use nest_rs_core::{
-    Container, DiscoveryService, JobContext, ReachableProviders, Transport, inventory,
-    run_in_job_context,
-};
+use nest_rs_core::{Container, DiscoveryService, ReachableProviders, Transport, inventory};
+use nest_rs_worker::{JobContext, run_in_job_context};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval, sleep};
 use tokio_util::sync::CancellationToken;

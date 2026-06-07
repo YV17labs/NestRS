@@ -26,8 +26,8 @@ read it once when a placeholder is unclear.
 - A `JobContext` that installs the non-transactional handle for worker paths.
 
 A driver lives in a `nestrs-<technology>` crate that depends on
-`nest-rs-core`, `nest-rs-database`, `nest-rs-http`, plus whatever your store
-needs. The app picks a driver by importing its module instead of
+`nest-rs-core`, `nest-rs-database`, `nest-rs-http`, `nest-rs-worker`, plus
+whatever your store needs. The app picks a driver by importing its module instead of
 `nest-rs-seaorm`.
 
 ## Step 1 — The Executor enum
@@ -153,7 +153,8 @@ work.
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use nest_rs_core::{JobContext, injectable};
+use nest_rs_core::injectable;
+use nest_rs_worker::JobContext;
 
 #[injectable]
 pub struct YourWorkerContext {
@@ -209,7 +210,7 @@ impl DynamicModule for YourDbSetup {
         let builder = <YourDbContext as nest_rs_core::Discoverable>::register(builder);
         let snapshot = builder.snapshot();
         let worker = YourWorkerContext::from_container(&snapshot);
-        builder.provide_dyn::<dyn nest_rs_core::JobContext>(Arc::new(worker))
+        builder.provide_dyn::<dyn nest_rs_worker::JobContext>(Arc::new(worker))
     }
 
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {

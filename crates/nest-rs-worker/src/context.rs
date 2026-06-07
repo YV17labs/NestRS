@@ -1,7 +1,7 @@
 //! Worker-execution ambient-data seam — the cron/queue counterpart to HTTP's
 //! `DbContext` interceptor and WebSocket's `SocketContext`. A worker transport
 //! (`Scheduler`, `QueueWorker`) resolves an optional [`JobContext`] from the
-//! container and wraps each job, letting e.g. `nestrs-seaorm`'s
+//! container and wraps each job, letting e.g. `nest-rs-seaorm`'s
 //! `WorkerDbContext` install a pool executor so a job's `Repo` calls join a
 //! connection without injecting one. With nothing bound a job runs bare.
 
@@ -36,7 +36,10 @@ pub async fn run_in_job_context<T: Send>(
                 *slot = Some(fut.await);
             }))
             .await;
-            out.expect("the job-context scope ran the inner future")
+            out.expect(
+                "JobContext::scope returned without driving the inner future to completion — \
+                 the impl must await `inner` before returning",
+            )
         }
     }
 }

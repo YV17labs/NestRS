@@ -6,11 +6,11 @@
 //! transport runs through the chain.
 //!
 //! Plug-in point for the Layer System: every guard is a [`Layer`], so the
-//! `#[routes]` / `#[resolver]` / `#[messages]` shapers dedup by `TypeId`
-//! when the same guard is declared at multiple scopes (global + controller
-//! + method) — the broadest scope wins and the rest log a `warn`. The
-//!   framework runs guards in **declaration order**; [`Layer::priority`] is
-//!   an opt-in tiebreaker.
+//! `#[routes]` / `#[resolver]` / `#[messages]` shapers dedup by `TypeId` when
+//! the same guard is declared at multiple sites (global + controller +
+//! method) — the broadest [`LayerSite`](nest_rs_core::LayerSite) wins and the
+//! rest log a `warn`. The framework runs guards in **declaration order**;
+//! [`Layer::priority`] is an opt-in tiebreaker.
 //!
 //! `#[public]` is not a framework-level skip: the macro attaches a
 //! [`Public`](nest_rs_core::Public) marker via the same metadata channel

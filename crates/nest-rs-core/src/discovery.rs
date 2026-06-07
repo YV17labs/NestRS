@@ -1,6 +1,7 @@
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
+use crate::access::{ModuleDescriptor, ReachableProviders, ResolverDescriptor};
 use crate::container::Container;
 
 /// Read-side facade over the container's metadata index, used by transports
@@ -37,6 +38,21 @@ impl<'a> DiscoveryService<'a> {
             })
             .unwrap_or_default()
     }
+
+    /// Read-only snapshot of the access graph as it was validated at boot.
+    ///
+    /// `modules` and `resolvers` are link-time `inventory` registries — the
+    /// snapshot recollects them on each call (cheap; both are immutable past
+    /// boot). `reachable` is the `ReachableProviders` set seeded by
+    /// [`App::run`](crate::App::run); `None` on a hand-built container that
+    /// has no module gating active.
+    pub fn graph(&self) -> AccessGraphSnapshot {
+        AccessGraphSnapshot {
+            modules: inventory::iter::<ModuleDescriptor>().collect(),
+            resolvers: inventory::iter::<ResolverDescriptor>().collect(),
+            reachable: self.container.get::<ReachableProviders>(),
+        }
+    }
 }
 
 /// A discovered piece of metadata, paired with the host provider's `TypeId`
@@ -45,4 +61,22 @@ impl<'a> DiscoveryService<'a> {
 pub struct Discovered<M> {
     pub meta: Arc<M>,
     pub provider_type_id: Option<TypeId>,
+}
+
+/// Snapshot of the validated module/provider graph for read-only consumers
+/// (health endpoints, devtools, runtime introspection). Returned by
+/// [`DiscoveryService::graph`].
+///
+/// All fields are public — callers query directly. `reachable.is_none()`
+/// means "no module gating active" (hand-built container), distinct from
+/// "module-gated and this provider isn't reachable".
+pub struct AccessGraphSnapshot {
+    /// Every module linked into the binary, in `inventory` order.
+    pub modules: Vec<&'static ModuleDescriptor>,
+    /// Every `#[resolver]` linked into the binary, in `inventory` order.
+    pub resolvers: Vec<&'static ResolverDescriptor>,
+    /// Provider keys reachable from the running app's root module, or `None`
+    /// when no [`ReachableProviders`] was seeded (hand-built container ⇒ no
+    /// gating; every provider freely resolvable).
+    pub reachable: Option<Arc<ReachableProviders>>,
 }

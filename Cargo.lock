@@ -1435,6 +1435,7 @@ dependencies = [
  "nest-rs-seaorm",
  "nest-rs-testing",
  "nest-rs-throttler",
+ "nest-rs-worker",
  "nest-rs-ws",
  "poem",
  "schemars",
@@ -2998,6 +2999,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-queue",
+ "nest-rs-worker",
  "serde",
  "serde_json",
  "tokio",
@@ -3042,6 +3044,7 @@ dependencies = [
  "libc",
  "nest-rs-core",
  "nest-rs-schedule-macros",
+ "nest-rs-worker",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3072,6 +3075,7 @@ dependencies = [
  "nest-rs-health",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-worker",
  "nest-rs-ws",
  "poem",
  "sea-orm",
@@ -3136,6 +3140,13 @@ dependencies = [
  "parking_lot",
  "poem",
  "validator",
+]
+
+[[package]]
+name = "nest-rs-worker"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
@@ -3766,6 +3777,7 @@ dependencies = [
  "nest-rs-queue",
  "nest-rs-redis",
  "nest-rs-testing",
+ "nest-rs-worker",
  "serde",
  "tokio",
 ]

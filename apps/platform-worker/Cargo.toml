@@ -16,6 +16,8 @@ anyhow.workspace = true
 
 [dev-dependencies]
 nest-rs-testing.workspace = true
+# `#[processor]` in the e2e test emits absolute `::nest_rs_worker::*` paths.
+nest-rs-worker.workspace = true
 serde.workspace = true
 
 [lints]

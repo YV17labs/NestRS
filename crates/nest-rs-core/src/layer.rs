@@ -14,15 +14,6 @@
 //! Filter on error). Inside a single kind, the chain runs in declaration
 //! order, with [`Layer::priority`] as an optional intra-kind tiebreaker.
 //!
-//! ## `#[public]` is metadata, not framework magic
-//!
-//! `#[public]` attaches a [`Public`] marker to the route via the existing
-//! metadata mechanism — it does **not** cause the framework to skip any
-//! guard. Each guard decides what "public" means for it: an `AbilityGuard`
-//! may still run on a public route to apply visitor rules; an `AuthGuard`
-//! may skip rejection when no token is present. The guard reads the marker
-//! through the transport's reflector helper.
-//!
 //! See `nest_rs_guards`, `nest_rs_pipes`, `nest_rs_interceptors`,
 //! `nest_rs_filters`, `nest_rs_exception_filters` for the sub-traits — one
 //! crate per [`LayerKind`].
@@ -51,25 +42,17 @@ pub enum LayerKind {
     ExceptionFilter,
 }
 
-/// Marker attached as request data when a handler is `#[public]`. The
-/// framework does **not** act on it — guards read it via the transport's
-/// reflector and decide whether to honor it.
-///
-/// ```rust,ignore
-/// // In a guard:
-/// if Reflector::new(req).is_public() {
-///     // policy for public routes
-/// }
-/// ```
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct Public;
-
 /// Where a layer was declared. Used by the dedup logic — when the same
-/// [`TypeId`](std::any::TypeId) appears at several scopes, the *broadest*
-/// scope wins because a wider declaration signals "this must run
+/// [`TypeId`](std::any::TypeId) appears at several sites, the *broadest*
+/// site wins because a wider declaration signals "this must run
 /// everywhere — don't bypass it locally".
+///
+/// Named *Site* (not *Scope*) to disambiguate from request-scoped DI
+/// resolution ([`RequestScope`](crate::RequestScope)). A Layer's site is
+/// the place it was *declared*; it has nothing to do with the DI scope of
+/// the Layer's provider.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum LayerScope {
+pub enum LayerSite {
     /// `App::builder().use_*_global(...)`.
     Global,
     /// `#[module(layers = ...)]`.
@@ -78,13 +61,13 @@ pub enum LayerScope {
     Controller,
     /// `#[use_*]` beside an individual handler/method.
     Method,
-    /// Not bound to any explicit scope.
+    /// Not bound to any explicit site.
     Inherited,
 }
 
-impl LayerScope {
+impl LayerSite {
     /// Lower number = broader. Used to pick the winner when the same
-    /// [`TypeId`](std::any::TypeId) appears at several scopes.
+    /// [`TypeId`](std::any::TypeId) appears at several sites.
     pub fn broadness(self) -> u8 {
         match self {
             Self::Global => 0,
@@ -139,21 +122,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scope_broadness_orders_global_to_method() {
-        let mut scopes = [
-            LayerScope::Method,
-            LayerScope::Global,
-            LayerScope::Controller,
-            LayerScope::Module,
+    fn site_broadness_orders_global_to_method() {
+        let mut sites = [
+            LayerSite::Method,
+            LayerSite::Global,
+            LayerSite::Controller,
+            LayerSite::Module,
         ];
-        scopes.sort_by_key(|s| s.broadness());
+        sites.sort_by_key(|s| s.broadness());
         assert_eq!(
-            scopes,
+            sites,
             [
-                LayerScope::Global,
-                LayerScope::Module,
-                LayerScope::Controller,
-                LayerScope::Method,
+                LayerSite::Global,
+                LayerSite::Module,
+                LayerSite::Controller,
+                LayerSite::Method,
             ]
         );
     }

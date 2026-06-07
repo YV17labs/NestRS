@@ -1,11 +1,12 @@
 //! # nest-rs-interceptors
 //!
-//! HTTP interceptors — the wrap-handler slot of the Layer System on HTTP.
-//! Cross-transport companions live in `nest_rs_guards`
-//! (`GraphqlInterceptor` / `WsInterceptor`).
+//! Transport-spanning interceptors — the wrap-handler slot of the Layer
+//! System. One impl covers HTTP, GraphQL, and WS via one method per
+//! transport (`intercept` on HTTP, [`wrap_graphql`](Interceptor::wrap_graphql)
+//! per resolver, [`wrap_ws`](Interceptor::wrap_ws) per WS message).
 //!
-//! An [`Interceptor`] sees the request before the handler runs and the
-//! response after, in a single `intercept(req, next)` call. It is a
+//! An [`Interceptor`] sees the inputs before the handler runs and the
+//! outputs after, with one continuation per transport. It is a
 //! [`Layer`] sub-trait, so global + per-scope declarations dedup by
 //! [`TypeId`](std::any::TypeId) at mount time (broadest scope wins).
 //!
@@ -55,5 +56,5 @@ mod registry;
 
 pub use builder::AppBuilderInterceptorsExt;
 pub use ext::InterceptorExt;
-pub use interceptor::{Interceptor, InterceptorEndpoint, Next};
+pub use interceptor::{GraphqlNext, Interceptor, InterceptorEndpoint, Next, WsNext};
 pub use registry::{InterceptorSpec, InterceptorSpecs, interceptor};

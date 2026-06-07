@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
+use nest_rs_ws::WsClient;
 use poem::http::{HeaderMap, Method, Uri};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
@@ -28,23 +30,54 @@ impl RequestSnapshot {
     }
 }
 
-/// Maps errors returned by the inner endpoint to a response. Runs only on the
-/// error path; successful responses pass through.
+/// Maps errors returned by the inner handler to a response (HTTP) or a
+/// reshaped error frame (GraphQL / WS). Runs only on the error path;
+/// successful results pass through unchanged.
 ///
-/// `Filter` extends [`Layer`] so the same impl can be declared at any scope
-/// and the Layer System dedups by [`TypeId`](std::any::TypeId).
-///
-/// For graphql / ws error mapping, also implement the matching
-/// `GraphqlFilter` / `WsFilter` trait from `nest_rs_guards`.
+/// One impl, three transports — override only the method(s) the filter
+/// targets. `Filter` extends [`Layer`] so global + per-scope declarations
+/// dedup by [`TypeId`](std::any::TypeId).
 #[async_trait]
 pub trait Filter: Layer {
+    /// HTTP entry — required, no default: a filter that targets HTTP
+    /// without implementing this would silently let errors through.
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
+
+    /// GraphQL entry. Called once per error a resolver raises; the
+    /// returned [`GraphqlError`] replaces the original. Default returns
+    /// `error` unchanged (no-op).
+    async fn filter_graphql<'a>(
+        &self,
+        _ctx: &GraphqlContext<'a>,
+        error: GraphqlError,
+    ) -> GraphqlError {
+        error
+    }
+
+    /// WS entry. Called once per error a message handler raises; the
+    /// returned message replaces the original error frame body. Default
+    /// returns `error` unchanged (no-op).
+    async fn filter_ws(&self, _client: &WsClient, _event: &str, error: String) -> String {
+        error
+    }
 }
 
 #[async_trait]
 impl<T: Filter + ?Sized> Filter for Arc<T> {
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response {
         (**self).filter(req, error).await
+    }
+
+    async fn filter_graphql<'a>(
+        &self,
+        ctx: &GraphqlContext<'a>,
+        error: GraphqlError,
+    ) -> GraphqlError {
+        (**self).filter_graphql(ctx, error).await
+    }
+
+    async fn filter_ws(&self, client: &WsClient, event: &str, error: String) -> String {
+        (**self).filter_ws(client, event, error).await
     }
 }
 

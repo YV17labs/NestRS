@@ -2734,9 +2734,13 @@ dependencies = [
 name = "nest-rs-exception-filters"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-ws",
  "poem",
+ "serde_json",
 ]
 
 [[package]]
@@ -2745,6 +2749,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-ws",
  "poem",
  "tracing",
 ]
@@ -2865,7 +2871,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-ws",
  "poem",
+ "serde_json",
  "tracing",
 ]
 

@@ -6,10 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "HTTP error-mapping filters for nestrs — Layer System sub-trait that maps inner-endpoint errors to responses, declared globally via `use_filters_global` or per-scope through `#[use_filters]`. The cross-transport `filter_graphql` / `filter_ws` companions live in nest-rs-guards."
+description = "Transport-spanning error-mapping filters for nestrs — one Layer System sub-trait that turns inner errors into responses on HTTP, GraphQL, and WS, declared globally via `use_filters_global` or per-scope through `#[use_filters]`."
 
 [dependencies]
 async-trait.workspace = true
 poem.workspace = true
 tracing.workspace = true
 nest-rs-core.workspace = true
+# Native context types for the cross-transport `filter_graphql` /
+# `filter_ws` methods. No cycle (see nest-rs-interceptors Cargo).
+nest-rs-graphql.workspace = true
+nest-rs-ws.workspace = true

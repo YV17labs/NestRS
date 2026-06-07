@@ -12,3 +12,9 @@ description = "Typed exception filters for nestrs — each filter declares the c
 async-trait.workspace = true
 poem.workspace = true
 nest-rs-core.workspace = true
+# Native context + error types for the cross-transport `catch_graphql` /
+# `catch_ws` dispatch (typed downcast over the transport's native error).
+nest-rs-graphql.workspace = true
+nest-rs-ws.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true

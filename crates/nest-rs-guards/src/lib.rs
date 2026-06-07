@@ -81,7 +81,6 @@
 //! TypeId-level dedup against the global chain.
 
 mod builder;
-mod cross_transport;
 mod denial;
 mod guard;
 mod guard_endpoint;
@@ -91,9 +90,13 @@ pub mod prelude;
 mod registry;
 
 pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
-pub use cross_transport::{
-    GraphqlFilter, GraphqlInterceptor, GraphqlNext, WsFilter, WsInterceptor, WsNext,
-};
+// Cross-transport interceptor / filter / exception-filter trait methods
+// (`wrap_graphql`, `wrap_ws`, `filter_graphql`, `filter_ws`,
+// `catch_graphql`, `catch_ws`) and the matching continuation types
+// (`GraphqlNext`, `WsNext`) now live directly on the base traits in
+// `nest-rs-interceptors` / `nest-rs-filters` / `nest-rs-exception-filters`.
+// Re-exported here for the historical import path used by the macros.
+pub use nest_rs_interceptors::{GraphqlNext, WsNext};
 pub use denial::Denial;
 pub use guard::{Guard, GuardAsWsLayer};
 pub use guard_endpoint::{GuardEndpoint, GuardExt};

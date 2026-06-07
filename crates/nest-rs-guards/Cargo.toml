@@ -20,3 +20,4 @@ nest-rs-interceptors.workspace = true
 nest-rs-pipes.workspace = true
 nest-rs-ws.workspace = true
 nest-rs-exception-filters.workspace = true
+nest-rs-filters.workspace = true

@@ -81,6 +81,7 @@
 //! TypeId-level dedup against the global chain.
 
 mod builder;
+mod cross_transport;
 mod denial;
 mod guard;
 mod guard_endpoint;
@@ -90,6 +91,9 @@ pub mod prelude;
 mod registry;
 
 pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
+pub use cross_transport::{
+    GraphqlFilter, GraphqlInterceptor, GraphqlNext, WsFilter, WsInterceptor, WsNext,
+};
 pub use denial::Denial;
 pub use guard::{Guard, GuardAsWsLayer};
 pub use guard_endpoint::{GuardEndpoint, GuardExt};

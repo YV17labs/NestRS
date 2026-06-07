@@ -33,6 +33,9 @@ impl RequestSnapshot {
 ///
 /// `Filter` extends [`Layer`] so the same impl can be declared at any scope
 /// and the Layer System dedups by [`TypeId`](std::any::TypeId).
+///
+/// For graphql / ws error mapping, also implement the matching
+/// `GraphqlFilter` / `WsFilter` trait from `nest_rs_guards`.
 #[async_trait]
 pub trait Filter: Layer {
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;

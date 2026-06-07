@@ -69,7 +69,7 @@ outermost first — the first listed sees the request before the second.
 
 ```rust
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AppAbilityGuard)]      // controller scope, both bound
+#[use_guards(AuthGuard, AuthzGuard)]      // controller scope, both bound
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,

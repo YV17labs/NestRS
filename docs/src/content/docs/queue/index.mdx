@@ -137,7 +137,7 @@ use poem::{Error, Result};
 use crate::audio::{TranscodeJob, AUDIO_QUEUE};
 
 #[controller(path = "/audio")]
-#[use_guards(AuthGuard, AppAbilityGuard)]
+#[use_guards(AuthGuard, AuthzGuard)]
 pub struct AudioController {
     #[inject]
     queue: Arc<QueueConnection>,

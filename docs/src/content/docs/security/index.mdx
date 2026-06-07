@@ -38,7 +38,7 @@ pub struct PlatformApiModule;
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AppAbilityGuard)]   // ← bind both layers
+#[use_guards(AuthGuard, AuthzGuard)]   // ← bind both layers
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,

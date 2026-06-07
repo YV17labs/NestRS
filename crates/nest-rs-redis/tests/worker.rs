@@ -10,9 +10,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use nest_rs_core::{Container, JobContext, Transport, injectable};
+use nest_rs_core::{Container, Transport, injectable};
 use nest_rs_queue::{ProcessMethod, Processor, WIRE_FORMAT_VERSION, processor};
 use nest_rs_redis::QueueWorker;
+use nest_rs_worker::JobContext;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -122,7 +123,7 @@ async fn processors_run_inside_the_bound_job_context() {
     let job_context = container
         .get_dyn::<dyn JobContext>()
         .expect("JobContext bound");
-    nest_rs_core::run_in_job_context(Some(&job_context), async {
+    nest_rs_worker::run_in_job_context(Some(&job_context), async {
         ProbeProcessor.process(1).await.expect("job succeeds");
     })
     .await;

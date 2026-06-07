@@ -6,8 +6,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nest_rs_core::{Container, JobContext};
+use nest_rs_core::Container;
 use nest_rs_seaorm::{Executor, WorkerDbContext, current_executor};
+use nest_rs_worker::JobContext;
 use sea_orm::{ConnectionTrait, Database};
 
 #[tokio::test]

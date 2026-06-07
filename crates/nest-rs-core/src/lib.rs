@@ -3,11 +3,11 @@ pub mod app;
 pub mod container;
 pub mod discoverable;
 pub mod discovery;
-pub mod job;
 pub mod layer;
 pub mod lifecycle;
+pub mod metadata;
 pub mod module;
-pub mod scope;
+pub mod request_scope;
 pub mod transport;
 
 pub use access::{
@@ -17,12 +17,12 @@ pub use access::{
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder};
 pub use discoverable::Discoverable;
-pub use discovery::{Discovered, DiscoveryService};
-pub use job::{JobContext, run_in_job_context};
-pub use layer::{Layer, LayerKind, LayerScope, Public};
+pub use discovery::{AccessGraphSnapshot, Discovered, DiscoveryService};
+pub use layer::{Layer, LayerKind, LayerSite};
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
+pub use metadata::{HandlerMetadata, Public};
 pub use module::{__module_registered, DynamicModule, Module};
-pub use scope::RequestScope;
+pub use request_scope::RequestScope;
 pub use transport::{Transport, TransportContribution};
 
 // Re-exported so `#[hooks]`-generated `inventory::submit!` resolves through the

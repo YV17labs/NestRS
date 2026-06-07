@@ -21,7 +21,7 @@ pub use crate::{
     AppBuilderGuardsExt, AppBuilderPipesExt, Denial, Guard, GuardSpec, PipeSpec, guard, pipe,
 };
 pub use async_trait::async_trait;
-pub use nest_rs_core::{Layer, LayerKind, LayerScope, Public, injectable};
+pub use nest_rs_core::{HandlerMetadata, Layer, LayerKind, LayerSite, Public, injectable};
 pub use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 pub use nest_rs_http::poem::Request as HttpRequest;
 pub use nest_rs_ws::WsClient;

@@ -18,7 +18,7 @@ a transaction.
   framework.
 
 Worker transports (`#[scheduled]`, `#[processor]`) hook in through
-`nest_rs_core::JobContext`, which resolves before each job and is where
+`nest_rs_worker::JobContext`, which resolves before each job and is where
 a driver module installs its job-scope executor.
 
 It is what every driver integration plugs into — SeaORM, sqlx, MongoDB,
@@ -52,7 +52,7 @@ To add a new driver:
 2. Ship a `Module` that, for each HTTP request, wraps the handler in
    `nest_rs_database::with_request_executor(Arc::new(your_executor), fut)`.
    For worker transports do the same with `with_job_executor` via
-   `nest_rs_core::JobContext` (the `WorkerDbContext` in `nest-rs-seaorm`
+   `nest_rs_worker::JobContext` (the `WorkerDbContext` in `nest-rs-seaorm`
    is the reference shape).
 
 3. Provide your own `Repo`-equivalent query API that calls

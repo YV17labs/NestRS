@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Layer, injectable};
+use nest_rs_core::{HandlerMetadata, Layer, injectable};
 use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::{Reflector, async_trait};

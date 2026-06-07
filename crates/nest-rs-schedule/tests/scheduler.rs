@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::{Container, JobContext, Transport};
+use nest_rs_core::{Container, Transport};
 use nest_rs_schedule::{CronExpression, CronJobMeta, Scheduler, Trigger};
+use nest_rs_worker::JobContext;
 use tokio_util::sync::CancellationToken;
 
 static INTERVAL_HITS: AtomicU64 = AtomicU64::new(0);

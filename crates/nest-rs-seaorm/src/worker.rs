@@ -10,8 +10,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nest_rs_core::JobContext;
 use nest_rs_core::injectable;
+use nest_rs_worker::JobContext;
 use sea_orm::DatabaseConnection;
 
 use crate::executor::{Executor, with_job_executor};

@@ -61,5 +61,5 @@ fn install_request_layers(builder: ContainerBuilder) -> ContainerBuilder {
     let builder = <crate::DbContext as nest_rs_core::Discoverable>::register(builder);
     let snapshot = builder.snapshot();
     let job_context = crate::WorkerDbContext::from_container(&snapshot);
-    builder.provide_dyn::<dyn nest_rs_core::JobContext>(Arc::new(job_context))
+    builder.provide_dyn::<dyn nest_rs_worker::JobContext>(Arc::new(job_context))
 }

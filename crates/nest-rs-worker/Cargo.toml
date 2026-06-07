@@ -1,0 +1,17 @@
+[package]
+name = "nest-rs-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Worker-execution primitives for nestrs — the ambient-context seam every transport that runs jobs off the request path (schedulers, queue workers, stream consumers) plugs into."
+
+
+[dependencies]
+# The trait surface is pure std (Future + Pin + Arc); no runtime dep. Tokio
+# only enters the picture in the test binaries, where it drives the seam.
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

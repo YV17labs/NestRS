@@ -204,6 +204,7 @@ nest-rs-schedule-macros = { version = "0.1.0", path = "crates/nest-rs-schedule-m
 nest-rs-server-timing = { version = "0.1.0", path = "crates/nest-rs-server-timing" }
 nest-rs-opentelemetry = { version = "0.1.0", path = "crates/nest-rs-opentelemetry" }
 nest-rs-testing = { version = "0.1.0", path = "crates/nest-rs-testing" }
+nest-rs-worker = { version = "0.1.0", path = "crates/nest-rs-worker" }
 nest-rs-ws = { version = "0.1.0", path = "crates/nest-rs-ws" }
 nest-rs-ws-macros = { version = "0.1.0", path = "crates/nest-rs-ws-macros" }
 

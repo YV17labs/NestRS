@@ -11,6 +11,7 @@ description = "Discovered cron-style scheduled jobs for nestrs: the #[scheduled]
 
 [dependencies]
 nest-rs-core.workspace = true
+nest-rs-worker.workspace = true
 nest-rs-schedule-macros.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true

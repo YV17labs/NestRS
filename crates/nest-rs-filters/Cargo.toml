@@ -17,3 +17,6 @@ nest-rs-core.workspace = true
 # `filter_ws` methods. No cycle (see nest-rs-interceptors Cargo).
 nest-rs-graphql.workspace = true
 nest-rs-ws.workspace = true
+# `use_filters_global` attaches its transport-level wrap via
+# `HttpInterceptorMeta`. Safe direction.
+nest-rs-http.workspace = true

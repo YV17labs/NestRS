@@ -12,8 +12,6 @@ description = "HTTP transport for nestrs: HttpTransport, Controller trait and Ht
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-http-macros.workspace = true
-nest-rs-interceptors.workspace = true
-nest-rs-filters.workspace = true
 # `TlsConfig::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
 # framework-wide env scheme (`env_var`, empty-as-unset), like every other
 # per-crate `from_env` shortcut.
@@ -47,11 +45,13 @@ bytes.workspace = true
 # Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
 # the `Json<T>` extractor in `from_request` test paths.
 serde.workspace = true
-# `#[routes]` macro emits paths to `::nest_rs_guards::GuardsRouteInterceptor`,
-# so any test using `#[routes]` needs the crate in scope. Allowed as a dev-dep
-# despite `nest-rs-guards` depending on `nest-rs-http` — Cargo permits cycles
-# that go through dev-dependencies.
+# `#[routes]` macro emits paths to `::nest_rs_guards::GuardsRouteInterceptor`
+# and `::nest_rs_interceptors::InterceptorExt`, so any test using `#[routes]`
+# needs both crates in scope. Allowed as dev-deps despite the cycle through
+# `nest-rs-graphql → nest-rs-http` — Cargo permits cycles that go through
+# dev-dependencies.
 nest-rs-guards.workspace = true
+nest-rs-interceptors.workspace = true
 # `tests/global_prefix.rs` drives an in-process server through poem's
 # `TestClient`, gated behind poem's `test` feature.
 poem = { workspace = true, features = ["test"] }

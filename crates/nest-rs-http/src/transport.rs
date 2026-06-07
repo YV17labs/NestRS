@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use async_trait::async_trait;
 use nest_rs_core::{Container, DiscoveryService, Transport};
-use nest_rs_filters::{FilterExt, FilterSpecs};
-use nest_rs_interceptors::{Interceptor, InterceptorExt, InterceptorSpecs};
 use poem::endpoint::BoxEndpoint;
 use poem::http::header::{HeaderValue, SERVER};
 use poem::listener::{Listener, TcpListener};
@@ -15,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use crate::controller::HttpControllerMeta;
 use crate::endpoint::HttpEndpointMeta;
 use crate::interceptor::HttpInterceptorMeta;
+use crate::raw_body::RawBodyLimit;
 use crate::tls::TlsConfig;
 
 type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
@@ -48,15 +45,19 @@ pub fn version_path(version: Option<&str>, path: &str) -> String {
 /// HTTP [`Transport`] backed by poem. At [`Transport::configure`] time, mounts
 /// every `#[module(providers = [...])]`-declared [`HttpControllerMeta`] and
 /// [`HttpEndpointMeta`], then any imperative [`HttpTransport::mount`], then
-/// folds the interceptor / guard / filter chain around the assembled route.
+/// folds every discovered [`HttpInterceptorMeta`] wrap around the assembled
+/// endpoint. Global Layer System wraps (guards / interceptors / filters /
+/// pipes / exception filters) attach themselves through
+/// [`HttpInterceptorMeta`] from their own crates — this transport stays free
+/// of the cross-transport trait crates and only knows about poem.
 pub struct HttpTransport {
     bind: String,
-    interceptors: Vec<Arc<dyn Interceptor>>,
     mounts: Vec<MountFn>,
     cors: Option<Cors>,
     tls: Option<TlsConfig>,
     server_header: Option<&'static str>,
     global_prefix: Option<String>,
+    max_body_bytes: Option<usize>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -81,12 +82,12 @@ impl HttpTransport {
     pub fn new() -> Self {
         Self {
             bind: "0.0.0.0:3000".into(),
-            interceptors: Vec::new(),
             mounts: Vec::new(),
             cors: None,
             tls: None,
             server_header: None,
             global_prefix: None,
+            max_body_bytes: None,
             endpoint: None,
         }
     }
@@ -113,8 +114,11 @@ impl HttpTransport {
         self
     }
 
-    pub fn interceptor<I: Interceptor>(mut self, interceptor: I) -> Self {
-        self.interceptors.push(Arc::new(interceptor));
+    /// Cap each request's raw body to `limit` bytes. Read back by the
+    /// [`RawBody`](crate::RawBody) extractor via the
+    /// [`RawBodyLimit`](crate::RawBodyLimit) request extension.
+    pub fn max_body_bytes(mut self, limit: usize) -> Self {
+        self.max_body_bytes = Some(limit);
         self
     }
 
@@ -200,40 +204,18 @@ impl Transport for HttpTransport {
         }
 
         let mut endpoint: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
-        // Layer-System globals: `use_filters_global([...])` seeds `FilterSpecs`
-        // into the container. They wrap inside per-route filters so they map
-        // any error the inner chain bubbles up.
-        if let Some(specs) = container.get::<FilterSpecs>() {
-            for spec in &specs.0 {
-                if let Some(filter) = spec.resolve(container) {
-                    endpoint = FilterExt::filter(endpoint, filter)
-                        .map_to_response()
-                        .boxed();
-                }
-            }
+        // Apply the body-byte cap, if any, as a request-data entry the
+        // `RawBody` extractor reads back. No `Interceptor` trait needed —
+        // poem's `EndpointExt::data` is enough.
+        if let Some(limit) = self.max_body_bytes.take() {
+            endpoint = endpoint.data(RawBodyLimit(limit)).map_to_response().boxed();
         }
+        // Layer-System globals (guards / interceptors / filters / pipes /
+        // exception filters) attach a `HttpInterceptorMeta` from their own
+        // crate; we apply each one once around the assembled endpoint. Wrap
+        // order = registration order (provide_meta order), outermost-last.
         for d in discovery.meta::<HttpInterceptorMeta>() {
-            endpoint = InterceptorExt::interceptor(endpoint, d.meta.interceptor())
-                .map_to_response()
-                .boxed();
-        }
-        // Layer-System globals: `use_interceptors_global([...])` seeds
-        // `InterceptorSpecs` into the container. They wrap outermost (after
-        // discovered metas) so a global interceptor sees every request,
-        // including those that hit unknown routes.
-        if let Some(specs) = container.get::<InterceptorSpecs>() {
-            for spec in &specs.0 {
-                if let Some(interceptor) = spec.resolve(container) {
-                    endpoint = InterceptorExt::interceptor(endpoint, interceptor)
-                        .map_to_response()
-                        .boxed();
-                }
-            }
-        }
-        for interceptor in self.interceptors.drain(..) {
-            endpoint = InterceptorExt::interceptor(endpoint, interceptor)
-                .map_to_response()
-                .boxed();
+            endpoint = d.meta.wrap(container, endpoint);
         }
         // Server header is purely cosmetic — apply before CORS so the
         // preflight short-circuit (no body) still carries it for observability.
@@ -327,7 +309,6 @@ mod tests {
         let n = HttpTransport::new();
         assert_eq!(d.bind, n.bind);
         assert_eq!(d.bind, "0.0.0.0:3000");
-        assert!(d.interceptors.is_empty());
         assert!(d.mounts.is_empty());
         assert!(d.cors.is_none());
         assert!(d.tls.is_none());

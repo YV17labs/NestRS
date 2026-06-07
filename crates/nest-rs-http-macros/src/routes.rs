@@ -433,7 +433,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         quote!(false)
     };
     expr = quote! {
-        ::nest_rs_http::InterceptorExt::interceptor(
+        ::nest_rs_interceptors::InterceptorExt::interceptor(
             #expr,
             ::std::sync::Arc::new(
                 ::nest_rs_guards::LayersRouteInterceptor::new(
@@ -543,7 +543,7 @@ fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
 fn wrap_interceptors(mut expr: TokenStream2, paths: &[Path]) -> TokenStream2 {
     for p in paths.iter().rev() {
         expr = quote! {
-            ::nest_rs_http::InterceptorExt::interceptor(
+            ::nest_rs_interceptors::InterceptorExt::interceptor(
                 #expr,
                 ::nest_rs_core::Container::get::<#p>(container).expect(concat!(
                     "#[use_interceptors] interceptor `",
@@ -560,7 +560,7 @@ fn wrap_interceptors(mut expr: TokenStream2, paths: &[Path]) -> TokenStream2 {
 fn wrap_filters(mut expr: TokenStream2, paths: &[Path]) -> TokenStream2 {
     for p in paths.iter().rev() {
         expr = quote! {
-            ::nest_rs_http::FilterExt::filter(
+            ::nest_rs_filters::FilterExt::filter(
                 #expr,
                 ::nest_rs_core::Container::get::<#p>(container).expect(concat!(
                     "#[use_filters] filter `",

@@ -18,6 +18,7 @@ nest-rs-config.workspace = true
 nest-rs-graphql.workspace = true
 nest-rs-guards.workspace = true
 nest-rs-http.workspace = true
+nest-rs-interceptors.workspace = true
 nest-rs-queue.workspace = true
 nest-rs-redis.workspace = true
 nest-rs-schedule.workspace = true

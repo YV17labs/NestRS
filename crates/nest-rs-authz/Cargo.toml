@@ -79,6 +79,7 @@ nest-rs-core.workspace = true
 nest-rs-http.workspace = true
 nest-rs-graphql.workspace = true
 nest-rs-guards.workspace = true
+nest-rs-interceptors.workspace = true
 nest-rs-resource.workspace = true
 nest-rs-testing.workspace = true
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,

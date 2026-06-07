@@ -185,7 +185,7 @@ fn controller_interceptor_layers(paths: &[Path]) -> Vec<TokenStream2> {
         .map(|p| {
             quote! {
                 let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
-                    ::nest_rs_http::InterceptorExt::interceptor(
+                    ::nest_rs_interceptors::InterceptorExt::interceptor(
                         __ep,
                         ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
                             "#[use_interceptors] controller layer `",
@@ -207,7 +207,7 @@ fn controller_filter_layers(paths: &[Path]) -> Vec<TokenStream2> {
         .map(|p| {
             quote! {
                 let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
-                    ::nest_rs_http::FilterExt::filter(
+                    ::nest_rs_filters::FilterExt::filter(
                         __ep,
                         ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
                             "#[use_filters] controller layer `",

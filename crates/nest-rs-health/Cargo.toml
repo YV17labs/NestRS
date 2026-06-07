@@ -14,6 +14,7 @@ nest-rs-core.workspace = true
 nest-rs-guards.workspace = true
 nest-rs-health-macros.workspace = true
 nest-rs-http.workspace = true
+nest-rs-interceptors.workspace = true
 poem.workspace = true
 serde.workspace = true
 serde_json.workspace = true

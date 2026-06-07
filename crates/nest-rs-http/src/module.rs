@@ -4,14 +4,10 @@
 //! [`HttpConfig`] (host + port + optional TLS), populated either by the
 //! `NESTRS_HTTP__*` env scheme or by the pinned struct.
 
-use async_trait::async_trait;
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Layer, TransportContribution};
-use nest_rs_interceptors::{Interceptor, Next};
-use poem::{Request, Response, Result};
+use nest_rs_core::{ContainerBuilder, DynamicModule, TransportContribution};
 
 use crate::config::HttpConfig;
-use crate::raw_body::RawBodyLimit;
 use crate::transport::HttpTransport;
 
 pub struct HttpModule;
@@ -55,28 +51,16 @@ impl DynamicModule for HttpSetup {
                     http = http.global_prefix(prefix);
                 }
                 if let Some(limit) = cfg.max_body_bytes {
-                    // Install the per-request cap via an interceptor — the
-                    // `RawBody` extractor reads it back from the extensions,
-                    // analogous to how `Reflector` reads typed metadata.
-                    http = http.interceptor(RawBodyLimitInterceptor(limit));
+                    // Install the per-request cap as a request-data entry
+                    // — the `RawBody` extractor reads it back from the
+                    // extensions. Using `EndpointExt::data` directly here
+                    // (rather than a custom `Interceptor` impl) keeps this
+                    // crate free of the cross-transport `Interceptor`
+                    // trait that would otherwise close a dep cycle.
+                    http = http.max_body_bytes(limit);
                 }
                 Ok(Box::new(http))
             },
         })
-    }
-}
-
-/// Inserts a [`RawBodyLimit`] into every request's extensions so the
-/// [`RawBody`](crate::RawBody) extractor honors `HttpConfig.max_body_bytes`
-/// without per-route plumbing.
-struct RawBodyLimitInterceptor(usize);
-
-impl Layer for RawBodyLimitInterceptor {}
-
-#[async_trait]
-impl Interceptor for RawBodyLimitInterceptor {
-    async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
-        req.extensions_mut().insert(RawBodyLimit(self.0));
-        next.run(req).await
     }
 }

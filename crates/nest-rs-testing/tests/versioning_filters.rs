@@ -2,7 +2,8 @@
 //! (`#[use_filters]`), end-to-end through the HTTP harness.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_http::{Filter, RequestSnapshot, async_trait, controller, routes};
+use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_filters::{Filter, RequestSnapshot};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Error, Response};

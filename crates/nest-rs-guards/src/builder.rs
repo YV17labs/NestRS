@@ -11,8 +11,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nest_rs_core::{AppBuilder, Layer, RequestScope};
 use nest_rs_http::HttpInterceptorMeta;
-use nest_rs_interceptors::{Interceptor, Next};
-use poem::{Request, Response, Result};
+use nest_rs_interceptors::{Interceptor, InterceptorExt, Next};
+use poem::endpoint::BoxEndpoint;
+use poem::{EndpointExt, Request, Response, Result};
 
 use crate::Guard;
 use crate::integration::denial_to_http_response;
@@ -55,9 +56,14 @@ impl AppBuilderGuardsExt for AppBuilder {
         // self-mounting endpoints (`/graphql`, MCP, WS upgrade) that don't
         // go through the per-route shaper — without it, a `use_guards_global`
         // registration would silently miss those routes.
-        let interceptor: Arc<dyn Interceptor> = Arc::new(GlobalGuardsHttpInterceptor);
         self.provide(GuardSpecs(collected))
-            .provide_meta(HttpInterceptorMeta::new(interceptor))
+            .provide_meta(HttpInterceptorMeta::new(
+                |_container, endpoint: BoxEndpoint<'static, Response>| {
+                    InterceptorExt::interceptor(endpoint, GlobalGuardsHttpInterceptor)
+                        .map_to_response()
+                        .boxed()
+                },
+            ))
     }
 }
 

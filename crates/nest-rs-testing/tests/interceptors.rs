@@ -3,7 +3,8 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::{Interceptor, Next, async_trait, controller, routes};
+use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_interceptors::{Interceptor, Next};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response, Result};

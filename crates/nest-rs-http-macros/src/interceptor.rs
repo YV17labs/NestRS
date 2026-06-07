@@ -54,10 +54,17 @@ pub(crate) fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream
             ) -> ::nest_rs_core::ContainerBuilder {
                 let __snapshot = builder.snapshot();
                 let __value = Self::from_container(&__snapshot);
-                let __arc: ::std::sync::Arc<dyn ::nest_rs_http::Interceptor> =
+                let __arc: ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor> =
                     ::std::sync::Arc::new(__value);
                 builder.attach_meta::<Self, ::nest_rs_http::HttpInterceptorMeta>(
-                    ::nest_rs_http::HttpInterceptorMeta::new(__arc),
+                    ::nest_rs_http::HttpInterceptorMeta::new(move |_container, __endpoint| {
+                        ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
+                            ::nest_rs_interceptors::InterceptorExt::interceptor(
+                                __endpoint,
+                                ::std::sync::Arc::clone(&__arc),
+                            ),
+                        ))
+                    }),
                 )
             }
         }

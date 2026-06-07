@@ -159,25 +159,49 @@ fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
 /// wraps the endpoint with [`nest_rs_guards::GuardExt::guard`] — which calls
 /// `Guard::check_http` (the WS upgrade is an HTTP GET) and maps a `Denial` to
 /// a poem [`Response`].
+///
+/// **Dedup against Global**: the WS upgrade goes through
+/// `GlobalGuardsHttpInterceptor` at the HTTP transport-level, which
+/// already runs every global guard's `check_http`. If a gateway-scope
+/// `#[use_guards(X)]` matches a TypeId that is also seeded as Global,
+/// the wrap is skipped here — same semantics as
+/// `LayersRouteInterceptor` does for HTTP per-route declarations.
 fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
     paths
         .iter()
         .rev()
         .map(|p| {
             quote! {
-                let __ep = ::nest_rs_ws::poem::EndpointExt::boxed(
-                    ::nest_rs_ws::poem::EndpointExt::map_to_response(
-                    ::nest_rs_guards::GuardExt::guard(
-                        __ep,
-                        ::nest_rs_core::Container::get::<#p>(__container)
-                            .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>)
-                            .expect(concat!(
-                                "#[use_guards] guard `",
-                                stringify!(#p),
-                                "` is not registered — add it to a module's providers"
-                            )),
-                    ),
-                ));
+                let __ep = {
+                    let __type_id = ::core::any::TypeId::of::<#p>();
+                    let __is_global = ::nest_rs_core::Container::get::<
+                        ::nest_rs_guards::GuardSpecs,
+                    >(__container)
+                        .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
+                    if __is_global {
+                        ::tracing::warn!(
+                            target: "nest_rs::layers",
+                            layer = ::core::any::type_name::<#p>(),
+                            scope = "gateway",
+                            "guard declared at multiple scopes — broadest (global) wins, this scope skipped",
+                        );
+                        __ep
+                    } else {
+                        ::nest_rs_ws::poem::EndpointExt::boxed(
+                            ::nest_rs_ws::poem::EndpointExt::map_to_response(
+                            ::nest_rs_guards::GuardExt::guard(
+                                __ep,
+                                ::nest_rs_core::Container::get::<#p>(__container)
+                                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>)
+                                    .expect(concat!(
+                                        "#[use_guards] guard `",
+                                        stringify!(#p),
+                                        "` is not registered — add it to a module's providers"
+                                    )),
+                            ),
+                        ))
+                    }
+                };
             }
         })
         .collect()

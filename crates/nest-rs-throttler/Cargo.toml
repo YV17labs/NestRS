@@ -16,6 +16,8 @@ nest-rs-core.workspace = true
 # loaded from `NESTRS_THROTTLER__*`; `validator` backs the derives.
 nest-rs-config.workspace = true
 validator.workspace = true
+# `ThrottlerGuard` plugs into the Layer System (RateLimit category).
+nest-rs-guards.workspace = true
 # The guard implements the `Guard` trait and reads route metadata via `Reflector`,
 # both re-exported here.
 nest-rs-http.workspace = true

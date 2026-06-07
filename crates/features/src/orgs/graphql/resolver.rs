@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use nest_rs_graphql::{crud, resolver};
 
-use crate::authz::graphql::GraphqlAuthGuard;
 use crate::orgs::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
 
 #[resolver]
@@ -18,5 +17,4 @@ pub struct OrgsResolver {
     create = CreateOrgInput,
     update = UpdateOrgInput,
 )]
-#[use_guards(GraphqlAuthGuard)]
 impl OrgsResolver {}

@@ -1,8 +1,9 @@
 //! `#[meta(...)]` + `Reflector`: guard reads route metadata (the `@Roles`
 //! pattern), end-to-end through the HTTP harness.
 
-use nest_rs_core::{injectable, module};
-use nest_rs_http::{Guard, Reflector, async_trait, controller, routes};
+use nest_rs_core::{Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::{HttpGuard, Reflector, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response};
@@ -14,8 +15,30 @@ struct RequiredRoles(&'static [&'static str]);
 #[derive(Default)]
 struct RolesGuard;
 
+impl Layer for RolesGuard {}
+
 #[async_trait]
 impl Guard for RolesGuard {
+    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+        let required = Reflector::new(req)
+            .get::<RequiredRoles>()
+            .map(|r| r.0)
+            .unwrap_or(&[]);
+        let caller = req
+            .headers()
+            .get("x-role")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if required.is_empty() || required.contains(&caller) {
+            Ok(())
+        } else {
+            Err(Denial::forbidden("forbidden"))
+        }
+    }
+}
+
+#[async_trait]
+impl HttpGuard for RolesGuard {
     async fn check(&self, req: &mut Request) -> Result<(), Response> {
         let required = Reflector::new(req)
             .get::<RequiredRoles>()

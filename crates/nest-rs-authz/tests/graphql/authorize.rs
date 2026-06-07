@@ -10,7 +10,7 @@ use nest_rs_core::module;
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, resolver};
 use nest_rs_http::poem::{Request, Response};
-use nest_rs_http::{Guard, HttpTransport, async_trait};
+use nest_rs_http::{HttpGuard, HttpTransport, async_trait};
 use nest_rs_testing::TestApp;
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`.
@@ -37,7 +37,7 @@ mod widget {
 struct AbilityInjector;
 
 #[async_trait]
-impl Guard for AbilityInjector {
+impl HttpGuard for AbilityInjector {
     async fn check(&self, req: &mut Request) -> Result<(), Response> {
         let admin = req
             .headers()

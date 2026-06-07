@@ -25,6 +25,7 @@ pub struct OAuthController {
 #[routes]
 impl OAuthController {
     #[post("/token")]
+    #[public]
     #[use_guards(ThrottlerGuard, ClientAuthGuard)]
     #[meta(Throttle::per_minute(10))]
     #[api(summary = "OAuth2 token endpoint (client_credentials)", tags("OAuth2"))]
@@ -42,6 +43,7 @@ impl OAuthController {
     }
 
     #[get("/authorize")]
+    #[public]
     #[use_guards(OAuthGuard)]
     #[api(
         summary = "OAuth2 authorization endpoint — redirects to the provider",
@@ -50,6 +52,7 @@ impl OAuthController {
     async fn authorize(&self) {}
 
     #[get("/callback")]
+    #[public]
     #[use_guards(OAuthGuard)]
     #[api(
         summary = "OAuth2 redirect URI — issues this app's token",
@@ -64,6 +67,7 @@ impl OAuthController {
     }
 
     #[post("/login")]
+    #[public]
     #[use_guards(ThrottlerGuard)]
     #[meta(Throttle::per_minute(10))]
     #[api(summary = "Sign in with email and password", tags("Auth"))]

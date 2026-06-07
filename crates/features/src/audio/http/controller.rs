@@ -7,14 +7,11 @@ use poem::web::Json;
 use poem::{Error, Result};
 
 use crate::audio::{AUDIO_QUEUE, TranscodeJob};
-use crate::authn::AuthGuard;
-use crate::authz::AppAbilityGuard;
 
 /// Producer side: an HTTP request enqueues a job for the `worker` app to
 /// consume. Injects only the shared [`QueueConnection`] — no transcoder, no
-/// entity. Authed like the rest of the API.
+/// entity. Authn/authz come from the app-level `use_guards_global` chain.
 #[controller(path = "/audio")]
-#[use_guards(AuthGuard, AppAbilityGuard)]
 pub struct AudioController {
     #[inject]
     queue: Arc<QueueConnection>,

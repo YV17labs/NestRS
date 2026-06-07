@@ -4,7 +4,7 @@
 use nest_rs_core::module;
 use nest_rs_graphql::async_graphql::Context;
 use nest_rs_graphql::{ContextSeed, GraphqlModule, resolver};
-use nest_rs_http::{Guard, HttpTransport, async_trait};
+use nest_rs_http::{HttpGuard, HttpTransport, async_trait};
 use nest_rs_testing::TestApp;
 use poem::{Request, Response};
 
@@ -14,7 +14,7 @@ struct RequestTag(String);
 struct TagGuard;
 
 #[async_trait]
-impl Guard for TagGuard {
+impl HttpGuard for TagGuard {
     async fn check(&self, req: &mut Request) -> Result<(), Response> {
         req.extensions_mut().insert(RequestTag("hello".into()));
         Ok(())

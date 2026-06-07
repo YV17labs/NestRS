@@ -11,6 +11,7 @@ description = "Reusable Kubernetes-style liveness/readiness probe module for nes
 
 [dependencies]
 nest-rs-core.workspace = true
+nest-rs-guards.workspace = true
 nest-rs-health-macros.workspace = true
 nest-rs-http.workspace = true
 poem.workspace = true

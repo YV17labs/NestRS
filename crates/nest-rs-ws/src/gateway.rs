@@ -8,7 +8,7 @@ use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 use crate::WsReply;
 use crate::context::{BoxFuture, Captured, SocketContext};
 use crate::envelope::WsEnvelope;
-use crate::guard::MessageGuardTable;
+use crate::guard::EventLayerTable;
 use crate::server::{Registry, WsClient, WsServer};
 
 /// Per-connection message dispatcher a gateway implements. `#[messages]`
@@ -37,7 +37,7 @@ pub trait Gateway: Send + Sync + 'static {
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
-    guards: MessageGuardTable,
+    guards: EventLayerTable,
     ctx: Option<Arc<dyn SocketContext>>,
 ) -> GatewayEndpoint<G, N> {
     GatewayEndpoint {
@@ -54,7 +54,7 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
 pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
-    guards: Arc<MessageGuardTable>,
+    guards: Arc<EventLayerTable>,
     ctx: Option<Arc<dyn SocketContext>>,
 }
 
@@ -88,7 +88,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
 async fn serve_connection<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
-    guards: Arc<MessageGuardTable>,
+    guards: Arc<EventLayerTable>,
     ambient: Option<(Arc<dyn SocketContext>, Captured)>,
     socket: poem::web::websocket::WebSocketStream,
 ) {
@@ -146,7 +146,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
 /// the handler bare.
 async fn handle_text<G: Gateway>(
     gateway: &G,
-    guards: &MessageGuardTable,
+    guards: &EventLayerTable,
     ambient: Option<&(Arc<dyn SocketContext>, Captured)>,
     client: &WsClient,
     text: &str,

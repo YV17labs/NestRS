@@ -180,6 +180,7 @@ nest-rs-codegen = { version = "0.1.0", path = "crates/nest-rs-codegen" }
 nest-rs-macros = { version = "0.1.0", path = "crates/nest-rs-macros" }
 nest-rs-graphql = { version = "0.1.0", path = "crates/nest-rs-graphql" }
 nest-rs-graphql-macros = { version = "0.1.0", path = "crates/nest-rs-graphql-macros" }
+nest-rs-guards = { version = "0.1.0", path = "crates/nest-rs-guards" }
 nest-rs-health = { version = "0.1.0", path = "crates/nest-rs-health" }
 nest-rs-health-macros = { version = "0.1.0", path = "crates/nest-rs-health-macros" }
 nest-rs-http = { version = "0.1.0", path = "crates/nest-rs-http" }

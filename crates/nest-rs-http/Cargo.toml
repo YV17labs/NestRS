@@ -46,6 +46,11 @@ bytes.workspace = true
 # Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
 # the `Json<T>` extractor in `from_request` test paths.
 serde.workspace = true
+# `#[routes]` macro emits paths to `::nest_rs_guards::GuardsRouteInterceptor`,
+# so any test using `#[routes]` needs the crate in scope. Allowed as a dev-dep
+# despite `nest-rs-guards` depending on `nest-rs-http` — Cargo permits cycles
+# that go through dev-dependencies.
+nest-rs-guards.workspace = true
 # `tests/global_prefix.rs` drives an in-process server through poem's
 # `TestClient`, gated behind poem's `test` feature.
 poem = { workspace = true, features = ["test"] }

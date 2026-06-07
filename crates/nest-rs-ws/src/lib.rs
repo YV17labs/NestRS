@@ -46,9 +46,10 @@
 //! # Guards and lifecycle hooks
 //!
 //! - **Connection-level**: `#[use_guards]` on the gateway struct reuses the
-//!   HTTP [`Guard`] trait and runs on the upgrade request.
-//! - **Per-message**: `#[use_guards]` beside a `#[subscribe_message]`
-//!   implements [`MessageGuard`].
+//!   HTTP `Guard` trait and runs on the upgrade request.
+//! - **Per-message**: `#[use_guards]` beside a `#[subscribe_message]` runs
+//!   the Layer System chain (global + per-message, deduped by `TypeId`)
+//!   each time the event fires — same `Guard::check_ws_message` interface.
 //!
 //! `#[on_connect]` / `#[on_disconnect]` on the `#[messages]` impl block are
 //! the `OnGatewayConnection` / `OnGatewayDisconnect` analogs; `on_disconnect`
@@ -80,13 +81,13 @@ mod server;
 pub use context::{BoxFuture, Captured, SocketContext};
 pub use envelope::{WsEnvelope, WsReply};
 pub use gateway::{Gateway, GatewayEndpoint, gateway_endpoint};
-pub use guard::{MessageGuard, MessageGuardTable};
+pub use guard::{EventLayerTable, WsMessageCheck};
 pub use module::WsModule;
 pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
 // Re-exported so macro-generated code resolves these through the framework.
 pub use async_trait::async_trait;
-pub use nest_rs_middleware::{EndpointExt, Guard};
+pub use nest_rs_middleware::{EndpointExt, HttpGuard};
 pub use serde_json;
 pub use tracing;
 

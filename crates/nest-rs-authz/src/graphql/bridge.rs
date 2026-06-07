@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use nest_rs_core::injectable;
 use nest_rs_graphql::{BoxFuture, OperationGuard};
-use nest_rs_middleware::Guard;
+use nest_rs_middleware::HttpGuard;
 use poem::{Request, Response};
 
 use crate::{Ability, with_ability};
@@ -15,14 +15,14 @@ use crate::{Ability, with_ability};
 /// Runs the controllers' guard chain (`A` then `G`) on the GraphQL request and
 /// scopes the operation to the resulting ability.
 #[injectable]
-pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
+pub struct GraphqlAbilityBridge<A: HttpGuard, G: HttpGuard> {
     #[inject]
     auth: Arc<A>,
     #[inject]
     ability: Arc<G>,
 }
 
-impl<A: Guard, G: Guard> OperationGuard for GraphqlAbilityBridge<A, G> {
+impl<A: HttpGuard, G: HttpGuard> OperationGuard for GraphqlAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             // Best-effort: failed authn leaves no ability, so the resolvers'

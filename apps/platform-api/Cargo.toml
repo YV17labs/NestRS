@@ -10,6 +10,7 @@ nest-rs-authn.workspace = true
 nest-rs-config.workspace = true
 nest-rs-authz = { workspace = true, features = ["http", "graphql"] }
 nest-rs-graphql.workspace = true
+nest-rs-guards.workspace = true
 nest-rs-health.workspace = true
 nest-rs-http.workspace = true
 nest-rs-middleware.workspace = true

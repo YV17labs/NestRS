@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 nest-rs-core.workspace = true
+nest-rs-guards.workspace = true
 nest-rs-http.workspace = true
 nest-rs-ws.workspace = true
 nest-rs-health.workspace = true

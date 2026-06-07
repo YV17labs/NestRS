@@ -1,10 +1,11 @@
 //! `#[use_guards]` on a `#[resolver]` impl — end-to-end through the in-process
 //! harness.
 
-use nest_rs_core::{injectable, module};
+use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Error, Result};
 use nest_rs_graphql::{ContextSeed, GraphqlModule, ResolverGuard, async_trait, resolver};
-use nest_rs_http::{Guard, HttpTransport, async_trait as http_async_trait};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::{HttpGuard, HttpTransport, async_trait as http_async_trait};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response};
@@ -15,7 +16,7 @@ struct Role(String);
 struct RoleHeaderGuard;
 
 #[http_async_trait]
-impl Guard for RoleHeaderGuard {
+impl HttpGuard for RoleHeaderGuard {
     async fn check(&self, req: &mut Request) -> std::result::Result<(), Response> {
         if let Some(role) = req
             .headers()
@@ -40,6 +41,21 @@ nest_rs_graphql::inventory::submit! {
             Some(role) => gql.data(role.clone()),
             None => gql,
         },
+    }
+}
+
+impl Layer for RequireAdmin {}
+
+#[async_trait]
+impl Guard for RequireAdmin {
+    async fn check_graphql(
+        &self,
+        ctx: &Context<'_>,
+    ) -> std::result::Result<(), Denial> {
+        match ctx.data_opt::<Role>() {
+            Some(role) if role.0 == "admin" => Ok(()),
+            _ => Err(Denial::forbidden("forbidden")),
+        }
     }
 }
 

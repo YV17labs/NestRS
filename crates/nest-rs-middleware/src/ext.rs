@@ -2,7 +2,7 @@ use poem::{Endpoint, IntoResponse};
 
 use crate::{
     filter::{Filter, FilterEndpoint},
-    guard::{Guard, GuardEndpoint},
+    guard::{GuardEndpoint, HttpGuard},
     interceptor::{Interceptor, InterceptorEndpoint},
 };
 
@@ -17,7 +17,7 @@ where
         InterceptorEndpoint::new(self, interceptor)
     }
 
-    fn guard<G: Guard>(self, guard: G) -> GuardEndpoint<Self, G> {
+    fn guard<G: HttpGuard>(self, guard: G) -> GuardEndpoint<Self, G> {
         GuardEndpoint::new(self, guard)
     }
 

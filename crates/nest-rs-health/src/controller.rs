@@ -15,16 +15,19 @@ pub struct HealthController {
 #[routes]
 impl HealthController {
     #[get("/live")]
+    #[public]
     async fn live(&self) -> Response {
         respond(self.svc.probe(ProbeKind::Liveness).await)
     }
 
     #[get("/ready")]
+    #[public]
     async fn ready(&self) -> Response {
         respond(self.svc.probe(ProbeKind::Readiness).await)
     }
 
     #[get("/startup")]
+    #[public]
     async fn startup(&self) -> Response {
         respond(self.svc.probe(ProbeKind::Startup).await)
     }

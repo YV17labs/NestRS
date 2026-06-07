@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use nest_rs_core::{Container, DiscoveryService, Transport};
-use nest_rs_middleware::{EndpointExt as NestrsEndpointExt, Filter, Guard, Interceptor};
+use nest_rs_middleware::{EndpointExt as NestrsEndpointExt, Filter, HttpGuard, Interceptor};
 use poem::endpoint::BoxEndpoint;
 use poem::http::header::{HeaderValue, SERVER};
 use poem::listener::{Listener, TcpListener};
@@ -51,7 +51,7 @@ pub fn version_path(version: Option<&str>, path: &str) -> String {
 pub struct HttpTransport {
     bind: String,
     interceptors: Vec<Arc<dyn Interceptor>>,
-    guards: Vec<Arc<dyn Guard>>,
+    guards: Vec<Arc<dyn HttpGuard>>,
     filters: Vec<Arc<dyn Filter>>,
     mounts: Vec<MountFn>,
     cors: Option<Cors>,
@@ -121,7 +121,7 @@ impl HttpTransport {
         self
     }
 
-    pub fn guard<G: Guard>(mut self, guard: G) -> Self {
+    pub fn guard<G: HttpGuard>(mut self, guard: G) -> Self {
         self.guards.push(Arc::new(guard));
         self
     }

@@ -1,6 +1,13 @@
 //! `#[messages]` — bind a `#[gateway]` impl block's `#[subscribe_message]`
 //! methods to WebSocket events; emit the `Gateway` dispatcher and the
 //! `Discoverable` impl that self-mounts on the HTTP transport.
+//!
+//! Each `#[subscribe_message]` handler runs through the Layer System: the
+//! global guard chain (from `App::builder().use_guards_global(...)`) is
+//! merged with per-message `#[use_guards]`, deduped by `TypeId`, then
+//! driven via [`EventLayerTable`] at dispatch in declaration order. The
+//! chain is composed **once at gateway mount** and frozen for the rest of
+//! the process — no per-message container lookup.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -11,17 +18,17 @@ use syn::{
 
 use nest_rs_codegen::{injected_method_with_layers, layer_inject_keys};
 
-use crate::attr::take_use_attr;
+use crate::attr::{take_flag_attr, take_use_attr};
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
     let self_ty = item.self_ty.clone();
 
     let mut arms: Vec<TokenStream2> = Vec::new();
-    let mut guard_inserts: Vec<TokenStream2> = Vec::new();
+    let mut chain_inserts: Vec<TokenStream2> = Vec::new();
     // Folded into `Discoverable::injected` for the access-graph check, same
     // as HTTP per-route layer keys.
-    let mut message_guards: Vec<Path> = Vec::new();
+    let mut all_message_layers: Vec<Path> = Vec::new();
     let mut on_connect: Option<TokenStream2> = None;
     let mut on_disconnect: Option<TokenStream2> = None;
 
@@ -30,9 +37,6 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        // `#[on_connect]` / `#[on_disconnect]` — `OnGatewayConnection` /
-        // `OnGatewayDisconnect` analogs. Consume the marker and emit a
-        // `Gateway` trait override delegating to the method.
         if strip_marker(method, "on_connect") {
             on_connect = Some(match hook_override("on_connect", method) {
                 Ok(tokens) => tokens,
@@ -66,16 +70,20 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        if !guards.is_empty() {
-            guard_inserts.push(guard_insert(&event, &guards));
-            message_guards.extend(guards);
-        }
+        let force_guards = match take_use_attr(&mut method.attrs, "force_guards") {
+            Ok(paths) => paths,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        // `#[public]` is consumed but not acted on at the framework level;
+        // a WS guard that cares can read its own marker from socket state.
+        let _is_public = take_flag_attr(&mut method.attrs, "public");
+        all_message_layers.extend(guards.iter().cloned());
+        all_message_layers.extend(force_guards.iter().cloned());
+
+        chain_inserts.push(chain_insert(&event, &guards, &force_guards));
 
         let method_name = method.sig.ident.clone();
 
-        // Owned arg = the payload (deserialized from the envelope's `data`);
-        // `&`-reference arg = the connected `WsClient`. At most one of each —
-        // same owned/reference split a `#[field_resolver]` resolver uses.
         let mut payload_ty: Option<&Type> = None;
         let mut takes_client = false;
         let mut call_args: Vec<TokenStream2> = Vec::new();
@@ -142,8 +150,6 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                 match { #call } {
                     ::core::result::Result::Ok(()) => ::nest_rs_ws::WsReply::None,
                     ::core::result::Result::Err(__err) => {
-                        // Debug for the server log, Display for the wire —
-                        // handler's error type owns Display wire-safety.
                         ::nest_rs_ws::tracing::warn!(
                             target: "nest_rs::ws",
                             event = #event,
@@ -173,7 +179,7 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         arms.push(quote! { #event => { #arm_body } });
     }
 
-    let message_guard_keys = layer_inject_keys(message_guards.iter());
+    let message_guard_keys = layer_inject_keys(all_message_layers.iter());
     let injected_method = injected_method_with_layers(&self_ty, &message_guard_keys);
 
     quote! {
@@ -219,12 +225,29 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                                 <#self_ty>::from_container(__container),
                             );
                             let __server = <#self_ty>::__nestrs_registry(__container);
-                            let mut __guards = ::nest_rs_ws::MessageGuardTable::new();
-                            #(#guard_inserts)*
+                            let mut __chains = ::nest_rs_ws::EventLayerTable::new();
+                            // Resolve every globally-registered guard once — every
+                            // event arm reuses the same vec to compose its chain.
+                            let __global_guards: ::std::vec::Vec<(
+                                ::core::any::TypeId,
+                                &'static str,
+                                ::std::sync::Arc<dyn ::nest_rs_guards::Guard>,
+                            )> = match ::nest_rs_core::Container::get::<
+                                ::nest_rs_guards::GuardSpecs,
+                            >(__container) {
+                                ::core::option::Option::Some(__specs) => __specs.0
+                                    .iter()
+                                    .filter_map(|__s| __s
+                                        .resolve(__container)
+                                        .map(|__g| (__s.type_id, __s.name, __g)))
+                                    .collect(),
+                                ::core::option::Option::None => ::std::vec![],
+                            };
+                            #(#chain_inserts)*
                             let __ctx = ::nest_rs_core::Container::get_dyn::<
                                 dyn ::nest_rs_ws::SocketContext,
                             >(__container);
-                            let __ep = ::nest_rs_ws::gateway_endpoint(__gw, __server, __guards, __ctx);
+                            let __ep = ::nest_rs_ws::gateway_endpoint(__gw, __server, __chains, __ctx);
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
                             __route.at(<#self_ty>::PATH, __ep)
                         },
@@ -319,23 +342,73 @@ fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
     })
 }
 
-/// Build the `__guards.insert("event", vec![…])` for a guarded handler.
-/// First listed runs first.
-fn guard_insert(event: &LitStr, paths: &[Path]) -> TokenStream2 {
-    let resolved = paths.iter().map(|p| {
+/// Build the chain-insert for one `#[subscribe_message]` event.
+///
+/// The chain is `global + method_guards`, deduped by `TypeId` (broadest
+/// wins). `#[force_guards]` lets a per-message guard replay even when the
+/// same `TypeId` is global.
+fn chain_insert(
+    event: &LitStr,
+    method_guards: &[Path],
+    force_guards: &[Path],
+) -> TokenStream2 {
+    let method_spec_entries = method_guards.iter().map(|p| {
         quote! {
-            {
-                let __g: ::std::sync::Arc<dyn ::nest_rs_ws::MessageGuard> =
-                    ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
-                        "#[use_guards] message guard `",
-                        stringify!(#p),
-                        "` is not registered — add it to a module's providers"
-                    ));
-                __g
+            ::nest_rs_guards::layer_chain::ResolvedLayer {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                source: ::nest_rs_guards::layer_chain::LayerSource::Method,
+                layer: ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
+                    "#[use_guards] WS message guard `",
+                    stringify!(#p),
+                    "` is not registered — add it to a module's providers"
+                )) as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>,
             }
         }
     });
+    let force_typeids = force_guards.iter().map(|p| {
+        quote! { ::core::any::TypeId::of::<#p>() }
+    });
     quote! {
-        __guards.insert(#event, ::std::vec![ #(#resolved),* ]);
+        {
+            let __global: ::std::vec::Vec<
+                ::nest_rs_guards::layer_chain::ResolvedLayer<dyn ::nest_rs_guards::Guard>
+            > = __global_guards
+                .iter()
+                .map(|(__tid, __name, __arc)| ::nest_rs_guards::layer_chain::ResolvedLayer {
+                    type_id: *__tid,
+                    name: __name,
+                    source: ::nest_rs_guards::layer_chain::LayerSource::Global,
+                    layer: ::std::sync::Arc::clone(__arc),
+                })
+                .collect();
+            let __method: ::std::vec::Vec<
+                ::nest_rs_guards::layer_chain::ResolvedLayer<dyn ::nest_rs_guards::Guard>
+            > = ::std::vec![#(#method_spec_entries),*];
+            let __force: ::std::vec::Vec<::core::any::TypeId> = ::std::vec![#(#force_typeids),*];
+            let __label = ::std::format!("ws {}", #event);
+            let __chain = ::nest_rs_guards::layer_chain::compose_chain::<dyn ::nest_rs_guards::Guard>(
+                __global,
+                ::std::vec![],
+                __method,
+                &__force,
+                &__label,
+            );
+            let __ws_chain: ::std::vec::Vec<
+                ::std::sync::Arc<dyn ::nest_rs_ws::WsMessageCheck>
+            > = __chain
+                .into_iter()
+                .map(|__e| {
+                    let __wrapped = ::nest_rs_guards::GuardAsWsLayer::new(
+                        ::std::sync::Arc::clone(&__e.layer),
+                        __e.type_id,
+                        __e.name,
+                    );
+                    ::std::sync::Arc::new(__wrapped)
+                        as ::std::sync::Arc<dyn ::nest_rs_ws::WsMessageCheck>
+                })
+                .collect();
+            __chains.insert(#event, __ws_chain);
+        }
     }
 }

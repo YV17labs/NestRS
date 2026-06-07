@@ -1,0 +1,15 @@
+[package]
+name = "nest-rs-interceptors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "HTTP interceptors for nestrs — Layer System sub-trait that wraps endpoint execution, declared globally via `use_interceptors_global` or per-scope through `#[use_interceptors]`."
+
+[dependencies]
+async-trait.workspace = true
+poem.workspace = true
+tracing.workspace = true
+nest-rs-core.workspace = true

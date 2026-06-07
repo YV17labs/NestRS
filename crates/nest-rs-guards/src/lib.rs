@@ -83,6 +83,7 @@
 mod builder;
 mod denial;
 mod guard;
+mod guard_endpoint;
 pub mod integration;
 pub mod layer_chain;
 pub mod prelude;
@@ -91,6 +92,7 @@ mod registry;
 pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 pub use denial::Denial;
 pub use guard::{Guard, GuardAsWsLayer};
+pub use guard_endpoint::{GuardEndpoint, GuardExt};
 pub use layer_chain::{LayerSource, ResolvedLayer};
 pub use registry::{
     GlobalGuards, GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe,

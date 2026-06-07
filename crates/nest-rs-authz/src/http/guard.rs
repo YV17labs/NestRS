@@ -7,10 +7,9 @@ use std::sync::Arc;
 use nest_rs_core::{Layer, injectable};
 use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::{HttpGuard, Reflector, async_trait};
+use nest_rs_http::{Reflector, async_trait};
 use nest_rs_ws::WsClient;
-use poem::http::StatusCode;
-use poem::{Request, Response};
+use poem::Request;
 use serde_json::Value;
 
 use crate::{AbilityBuilder, AbilityFactory, current_ability};
@@ -80,21 +79,3 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     }
 }
 
-/// Legacy [`HttpGuard`] adapter — kept so `#[use_guards(AbilityGuard<F>)]` on
-/// a controller resolves the same type. The cleaner caller path is the
-/// global [`Guard`] chain via `use_guards_global`, in which case this impl
-/// is unused at runtime.
-#[async_trait]
-impl<F: AbilityFactory> HttpGuard for AbilityGuard<F> {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
-        let Some(actor) = req.extensions().get::<F::Actor>().cloned() else {
-            return Err(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("AbilityGuard requires an authentication guard to run first"));
-        };
-        let mut builder = AbilityBuilder::new();
-        self.factory.define(&actor, &mut builder);
-        req.extensions_mut().insert(Arc::new(builder.build()));
-        Ok(())
-    }
-}

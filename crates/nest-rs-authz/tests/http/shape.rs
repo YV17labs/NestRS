@@ -5,12 +5,13 @@ use std::sync::Arc;
 
 use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
-use nest_rs_core::module;
+use nest_rs_core::{Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::poem::web::Json;
-use nest_rs_http::{HttpGuard, HttpTransport, async_trait, controller, routes};
+use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
-use poem::{Request, Response};
+use poem::Request;
 use serde::Serialize;
 
 mod widget {
@@ -45,11 +46,15 @@ struct WidgetDto {
     name: String,
 }
 
+#[injectable]
+#[derive(Default)]
 struct AbilityInjector;
 
+impl Layer for AbilityInjector {}
+
 #[async_trait]
-impl HttpGuard for AbilityInjector {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+impl Guard for AbilityInjector {
+    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         let admin = req
             .headers()
             .get("x-role")
@@ -65,6 +70,22 @@ impl HttpGuard for AbilityInjector {
                 .when(|p| p.eq(widget::Column::Id, 1))
                 .fields([widget::Column::Name]);
         }
+        req.extensions_mut().insert(Arc::new(b.build()));
+        Ok(())
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct ListAbilityInjector;
+
+impl Layer for ListAbilityInjector {}
+
+#[async_trait]
+impl Guard for ListAbilityInjector {
+    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Read, widget::Entity);
         req.extensions_mut().insert(Arc::new(b.build()));
         Ok(())
     }
@@ -98,13 +119,13 @@ impl WidgetController {
     }
 }
 
-#[module(providers = [WidgetController])]
+#[module(providers = [AbilityInjector, ListAbilityInjector, WidgetController])]
 struct ShapeModule;
 
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<ShapeModule>()
-        .http(HttpTransport::new().guard(AbilityInjector))
+        .use_guards_global([guard::<AbilityInjector>()])
         .build()
         .await
         .expect("shape harness boots")
@@ -153,21 +174,9 @@ async fn an_unrestricted_grant_cannot_leak_skipped_columns() {
 
 #[tokio::test]
 async fn a_list_masks_each_row_and_retains_wire_keys() {
-    struct ListAbilityInjector;
-
-    #[async_trait]
-    impl HttpGuard for ListAbilityInjector {
-        async fn check(&self, req: &mut Request) -> Result<(), Response> {
-            let mut b = AbilityBuilder::new();
-            b.can(Action::Read, widget::Entity);
-            req.extensions_mut().insert(Arc::new(b.build()));
-            Ok(())
-        }
-    }
-
     let app = TestApp::builder()
         .module::<ShapeModule>()
-        .http(HttpTransport::new().guard(ListAbilityInjector))
+        .use_guards_global([guard::<ListAbilityInjector>()])
         .build()
         .await
         .expect("list harness boots");
@@ -194,12 +203,12 @@ async fn a_non_json_response_passes_through() {
         }
     }
 
-    #[module(providers = [PlainController])]
+    #[module(providers = [AbilityInjector, PlainController])]
     struct PlainModule;
 
     let app = TestApp::builder()
         .module::<PlainModule>()
-        .http(HttpTransport::new().guard(AbilityInjector))
+        .use_guards_global([guard::<AbilityInjector>()])
         .build()
         .await
         .expect("plain harness boots");

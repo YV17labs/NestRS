@@ -4,7 +4,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{ItemStruct, LitStr, Meta, Path, Token, parse_macro_input};
@@ -39,6 +39,10 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
+    let pipes = match take_use_attr(&mut item.attrs, "use_pipes") {
+        Ok(paths) => paths,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let InjectableBody { ctor, dep_keys, .. } = match build_injectable_body(&mut item) {
         Ok(body) => body,
@@ -55,7 +59,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // owns `Discoverable`, so the keys are exposed via an inherent fn it reads.
     let injected_keys = injected_keys_with_layers(
         &dep_keys,
-        [&interceptors, &guards, &filters].into_iter().flatten(),
+        [&interceptors, &guards, &filters, &pipes]
+            .into_iter()
+            .flatten(),
     );
 
     // `mount` is emitted by `#[routes]` (separate impl), so the layer lists are
@@ -63,10 +69,15 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // single `BoxEndpoint` so the result type stays stable regardless of count;
     // wrap sits outside every per-route layer (first listed outermost within its
     // layer). Applied inner→outer as interceptors → guards → filters, matching
-    // the per-route order.
-    let interceptor_layers = controller_layers(&interceptors, "interceptor", "use_interceptors");
-    let guard_layers = controller_layers(&guards, "guard", "use_guards");
-    let filter_layers = controller_layers(&filters, "filter", "use_filters");
+    // the per-route order. Guards stay as a controller-level wrap **only** so
+    // the controller's `#[use_guards]` participates in the per-route Layer
+    // System dedup via `__nestrs_controller_guard_specs()`; the wrap below
+    // simply boxes the endpoint without adding a guard, so we'd otherwise drop
+    // the helper entirely. We keep the box for type stability across handlers.
+    let interceptor_layers = controller_interceptor_layers(&interceptors);
+    let filter_layers = controller_filter_layers(&filters);
+    let guard_specs = controller_guard_specs(&guards);
+    let pipe_specs = controller_pipe_specs(&pipes);
 
     quote! {
         #item
@@ -92,9 +103,28 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             {
                 let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(__ep));
                 #(#interceptor_layers)*
-                #(#guard_layers)*
                 #(#filter_layers)*
                 __ep
+            }
+
+            /// Controller-level `#[use_guards(...)]`, exposed for the
+            /// `#[routes]` macro to fold into each route's
+            /// `LayersRouteInterceptor`. Empty when none are declared.
+            #[doc(hidden)]
+            pub fn __nestrs_controller_guard_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::integration::RouteGuardSpec>
+            {
+                #guard_specs
+            }
+
+            /// Controller-level `#[use_pipes(...)]`, exposed for the
+            /// `#[routes]` macro to fold into each route's
+            /// `LayersRouteInterceptor`. Empty when none are declared.
+            #[doc(hidden)]
+            pub fn __nestrs_controller_pipe_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::integration::RoutePipeSpec>
+            {
+                #pipe_specs
             }
         }
     }
@@ -130,22 +160,20 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitS
     Ok((path, version))
 }
 
-/// Build wrap statements for a list of container-resolved layers via
-/// `EndpointExt::<method>`. Each layer is boxed to `BoxEndpoint`; reversed so
-/// the first-listed entry ends up outermost within its layer.
-fn controller_layers(paths: &[Path], method: &str, attr: &str) -> Vec<TokenStream2> {
-    let method = format_ident!("{method}");
-    let prefix = format!("#[{attr}] controller layer `");
+/// Controller-level `#[use_interceptors(...)]` wrap statements. Each layer is
+/// boxed to `BoxEndpoint`; reversed so the first-listed entry ends up
+/// outermost within its layer.
+fn controller_interceptor_layers(paths: &[Path]) -> Vec<TokenStream2> {
     paths
         .iter()
         .rev()
         .map(|p| {
             quote! {
                 let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
-                    ::nest_rs_http::EndpointExt::#method(
+                    ::nest_rs_http::InterceptorExt::interceptor(
                         __ep,
                         ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
-                            #prefix,
+                            "#[use_interceptors] controller layer `",
                             stringify!(#p),
                             "` is not registered — add it to a module's providers"
                         )),
@@ -154,4 +182,64 @@ fn controller_layers(paths: &[Path], method: &str, attr: &str) -> Vec<TokenStrea
             }
         })
         .collect()
+}
+
+/// Controller-level `#[use_filters(...)]` wrap statements.
+fn controller_filter_layers(paths: &[Path]) -> Vec<TokenStream2> {
+    paths
+        .iter()
+        .rev()
+        .map(|p| {
+            quote! {
+                let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
+                    ::nest_rs_http::FilterExt::filter(
+                        __ep,
+                        ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
+                            "#[use_filters] controller layer `",
+                            stringify!(#p),
+                            "` is not registered — add it to a module's providers"
+                        )),
+                    ),
+                ));
+            }
+        })
+        .collect()
+}
+
+/// Controller-level `#[use_guards(...)]` → `Vec<RouteGuardSpec>` so `#[routes]`
+/// folds each guard into the per-route `LayersRouteInterceptor` and the Layer
+/// System dedup sees the controller scope.
+fn controller_guard_specs(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec::Vec::new() };
+    }
+    let entries = paths.iter().map(|p| {
+        quote! {
+            ::nest_rs_guards::integration::RouteLayerSpec {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>),
+            }
+        }
+    });
+    quote! { ::std::vec![#(#entries),*] }
+}
+
+/// Controller-level `#[use_pipes(...)]` → `Vec<RoutePipeSpec>`.
+fn controller_pipe_specs(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec::Vec::new() };
+    }
+    let entries = paths.iter().map(|p| {
+        quote! {
+            ::nest_rs_guards::integration::RouteLayerSpec {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_pipes::GlobalPipe>),
+            }
+        }
+    });
+    quote! { ::std::vec![#(#entries),*] }
 }

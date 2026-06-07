@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::{HttpGuard, Reflector, async_trait};
-use poem::{IntoResponse, Request, Response};
+use nest_rs_http::{Reflector, async_trait};
+use poem::Request;
 
 use crate::passport::{Outcome, Strategy};
 
@@ -66,29 +66,3 @@ impl<S: Strategy> Guard for AuthGuard<S> {
     }
 }
 
-/// Legacy [`HttpGuard`] adapter — kept so `#[use_guards(AuthGuard)]` on a
-/// controller still resolves the same type. The cleaner caller path is the
-/// global [`Guard`] chain via `use_guards_global`, in which case this impl
-/// is unused at runtime. Surface-area cost: a few lines per dual-binding
-/// guard — much smaller than the orphan-rule blanket Rust forbids.
-#[async_trait]
-impl<S: Strategy> HttpGuard for AuthGuard<S> {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
-        let strategy = std::any::type_name::<S>();
-        match self.strategy.authenticate(req).await {
-            Ok(Outcome::Authenticated(principal)) => {
-                tracing::debug!(target: "nest_rs::auth", strategy, "authenticated");
-                req.extensions_mut().insert(principal);
-                Ok(())
-            }
-            Ok(Outcome::Challenge(response)) => {
-                tracing::debug!(target: "nest_rs::auth", strategy, "authentication challenge issued");
-                Err(response)
-            }
-            Err(error) => {
-                tracing::warn!(target: "nest_rs::auth", strategy, error = %error, "authentication failed");
-                Err(error.into_response())
-            }
-        }
-    }
-}

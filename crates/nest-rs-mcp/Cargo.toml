@@ -19,6 +19,4 @@ schemars.workspace = true
 [dev-dependencies]
 nest-rs-core.workspace = true
 nest-rs-http.workspace = true
-nest-rs-middleware.workspace = true
 tokio.workspace = true
-async-trait.workspace = true

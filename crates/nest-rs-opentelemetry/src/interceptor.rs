@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use nest_rs_config::env_var;
+use nest_rs_core::Layer;
 use nest_rs_http::interceptor;
-use nest_rs_middleware::{Interceptor, Next};
+use nest_rs_interceptors::{Interceptor, Next};
 use poem::{Request, Response, Result};
 
 #[cfg(feature = "otlp")]
@@ -66,6 +67,8 @@ fn parse_access_log_flag(raw: Option<&str>) -> bool {
 
 #[cfg(feature = "otlp")]
 const X_TRACE_ID: HeaderName = HeaderName::from_static("x-trace-id");
+
+impl Layer for OpenTelemetryHttp {}
 
 #[async_trait]
 impl Interceptor for OpenTelemetryHttp {
@@ -280,7 +283,7 @@ mod tests {
 
     #[cfg(feature = "otlp")]
     mod otlp {
-        use nest_rs_middleware::EndpointExt;
+        use nest_rs_interceptors::InterceptorExt;
         use poem::http::{Method, StatusCode, header};
         use poem::{Endpoint, IntoResponse, Request, endpoint::make};
 

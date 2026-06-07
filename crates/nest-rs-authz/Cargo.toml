@@ -33,14 +33,14 @@ http = [
 graphql = [
     "dep:nest-rs-core",
     "dep:nest-rs-graphql",
-    "dep:nest-rs-middleware",
+    "dep:nest-rs-guards",
     "dep:poem",
 ]
 # MCP surface: HTTP operation guard (`McpAbilityBridge`) + `with_request_ability`.
 mcp = [
     "dep:nest-rs-core",
     "dep:nest-rs-mcp",
-    "dep:nest-rs-middleware",
+    "dep:nest-rs-guards",
     "dep:poem",
 ]
 # Enable every transport binding at once — useful for
@@ -64,7 +64,6 @@ nest-rs-http = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-guards = { workspace = true, optional = true }
 nest-rs-mcp = { workspace = true, optional = true }
-nest-rs-middleware = { workspace = true, optional = true }
 nest-rs-resource = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }

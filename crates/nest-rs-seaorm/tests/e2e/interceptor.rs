@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_seaorm::{DatabaseConfig, DbContext, current_executor};
-use nest_rs_middleware::EndpointExt;
+use nest_rs_interceptors::InterceptorExt;
 use poem::endpoint::make;
 use poem::http::{Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};

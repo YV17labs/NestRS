@@ -1,8 +1,9 @@
 use std::time::Instant;
 
 use async_trait::async_trait;
+use nest_rs_core::Layer;
 use nest_rs_http::interceptor;
-use nest_rs_middleware::{Interceptor, Next};
+use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::HeaderName;
 use poem::{Request, Response, Result};
 
@@ -14,6 +15,8 @@ const SERVER_TIMING: HeaderName = HeaderName::from_static("server-timing");
 #[interceptor]
 #[derive(Default)]
 pub(crate) struct ServerTiming;
+
+impl Layer for ServerTiming {}
 
 #[async_trait]
 impl Interceptor for ServerTiming {

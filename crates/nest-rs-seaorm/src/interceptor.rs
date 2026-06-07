@@ -22,8 +22,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use nest_rs_core::Layer;
 use nest_rs_http::interceptor;
-use nest_rs_middleware::{Interceptor, Next};
+use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
@@ -45,6 +46,8 @@ impl DbContext {
         Self { db, config }
     }
 }
+
+impl Layer for DbContext {}
 
 #[async_trait]
 impl Interceptor for DbContext {

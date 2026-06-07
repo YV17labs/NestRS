@@ -1,4 +1,9 @@
+//! The [`Filter`] trait — extends [`Layer`] for the Layer System.
+
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use nest_rs_core::Layer;
 use poem::http::{HeaderMap, Method, Uri};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
@@ -14,7 +19,7 @@ pub struct RequestSnapshot {
 }
 
 impl RequestSnapshot {
-    pub(crate) fn from_req(req: &Request) -> Self {
+    pub fn from_req(req: &Request) -> Self {
         Self {
             method: req.method().clone(),
             uri: req.uri().clone(),
@@ -25,13 +30,16 @@ impl RequestSnapshot {
 
 /// Maps errors returned by the inner endpoint to a response. Runs only on the
 /// error path; successful responses pass through.
+///
+/// `Filter` extends [`Layer`] so the same impl can be declared at any scope
+/// and the Layer System dedups by [`TypeId`](std::any::TypeId).
 #[async_trait]
-pub trait Filter: Send + Sync + 'static {
+pub trait Filter: Layer {
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
 }
 
 #[async_trait]
-impl<T: Filter + ?Sized> Filter for std::sync::Arc<T> {
+impl<T: Filter + ?Sized> Filter for Arc<T> {
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response {
         (**self).filter(req, error).await
     }

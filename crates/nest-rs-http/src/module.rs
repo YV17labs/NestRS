@@ -6,8 +6,8 @@
 
 use async_trait::async_trait;
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, TransportContribution};
-use nest_rs_middleware::{Interceptor, Next};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Layer, TransportContribution};
+use nest_rs_interceptors::{Interceptor, Next};
 use poem::{Request, Response, Result};
 
 use crate::config::HttpConfig;
@@ -70,6 +70,8 @@ impl DynamicModule for HttpSetup {
 /// [`RawBody`](crate::RawBody) extractor honors `HttpConfig.max_body_bytes`
 /// without per-route plumbing.
 struct RawBodyLimitInterceptor(usize);
+
+impl Layer for RawBodyLimitInterceptor {}
 
 #[async_trait]
 impl Interceptor for RawBodyLimitInterceptor {

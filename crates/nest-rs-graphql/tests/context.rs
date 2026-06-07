@@ -1,21 +1,26 @@
 //! Per-request context bridge: a value an HTTP guard attaches to the request
 //! reaches a GraphQL resolver — end-to-end through the harness.
 
-use nest_rs_core::module;
+use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Context;
 use nest_rs_graphql::{ContextSeed, GraphqlModule, resolver};
-use nest_rs_http::{HttpGuard, HttpTransport, async_trait};
+use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
-use poem::{Request, Response};
+use poem::Request;
 
 #[derive(Clone)]
 struct RequestTag(String);
 
+#[injectable]
+#[derive(Default)]
 struct TagGuard;
 
+impl Layer for TagGuard {}
+
 #[async_trait]
-impl HttpGuard for TagGuard {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+impl Guard for TagGuard {
+    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         req.extensions_mut().insert(RequestTag("hello".into()));
         Ok(())
     }
@@ -44,14 +49,14 @@ impl TagResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [TagResolver])]
+#[module(imports = [GraphqlModule::for_root(None)], providers = [TagGuard, TagResolver])]
 struct GraphqlTestModule;
 
 #[tokio::test]
 async fn resolver_reads_a_per_request_value_bridged_from_the_poem_request() {
     let app = TestApp::builder()
         .module::<GraphqlTestModule>()
-        .http(HttpTransport::new().guard(TagGuard))
+        .use_guards_global([guard::<TagGuard>()])
         .build()
         .await
         .expect("the schema boots and mounts at /graphql");

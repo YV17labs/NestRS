@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nest_rs_middleware::Interceptor;
+use nest_rs_interceptors::Interceptor;
 
 /// Discovery metadata attached by the `#[interceptor]` macro — the **global**
 /// interceptor form, folded around the assembled route innermost-to-outermost

@@ -2499,7 +2499,6 @@ dependencies = [
  "nest-rs-health",
  "nest-rs-http",
  "nest-rs-mcp",
- "nest-rs-middleware",
  "nest-rs-opentelemetry",
  "nest-rs-server-timing",
  "nest-rs-testing",
@@ -2643,7 +2642,6 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-mcp",
- "nest-rs-middleware",
  "nest-rs-resource",
  "nest-rs-testing",
  "nest-rs-ws",
@@ -2730,6 +2728,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "nest-rs-exception-filters"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nest-rs-core",
+ "poem",
+]
+
+[[package]]
+name = "nest-rs-filters"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nest-rs-core",
+ "poem",
+ "tracing",
+]
+
+[[package]]
 name = "nest-rs-graphql"
 version = "0.1.0"
 dependencies = [
@@ -2769,9 +2786,10 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-graphql",
  "nest-rs-http",
- "nest-rs-middleware",
+ "nest-rs-interceptors",
  "nest-rs-pipes",
  "nest-rs-ws",
+ "poem",
  "serde_json",
  "tracing",
 ]
@@ -2811,9 +2829,10 @@ dependencies = [
  "figment",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-filters",
  "nest-rs-guards",
  "nest-rs-http-macros",
- "nest-rs-middleware",
+ "nest-rs-interceptors",
  "nest-rs-pipes",
  "poem",
  "schemars",
@@ -2836,6 +2855,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nest-rs-interceptors"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nest-rs-core",
+ "poem",
+ "tracing",
+]
+
+[[package]]
 name = "nest-rs-macros"
 version = "0.1.0"
 dependencies = [
@@ -2849,11 +2878,9 @@ dependencies = [
 name = "nest-rs-mcp"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "nest-rs-core",
  "nest-rs-http",
  "nest-rs-mcp-macros",
- "nest-rs-middleware",
  "poem",
  "rmcp",
  "schemars",
@@ -2868,14 +2895,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "nest-rs-middleware"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "poem",
 ]
 
 [[package]]
@@ -2902,7 +2921,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-http",
- "nest-rs-middleware",
+ "nest-rs-interceptors",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-http",
@@ -3036,7 +3055,7 @@ dependencies = [
  "nest-rs-graphql",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-middleware",
+ "nest-rs-interceptors",
  "nest-rs-ws",
  "poem",
  "sea-orm",
@@ -3055,7 +3074,7 @@ dependencies = [
  "async-trait",
  "nest-rs-core",
  "nest-rs-http",
- "nest-rs-middleware",
+ "nest-rs-interceptors",
  "parking_lot",
  "poem",
 ]
@@ -3067,8 +3086,10 @@ dependencies = [
  "anyhow",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-filters",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-interceptors",
  "nest-rs-opentelemetry",
  "poem",
  "sea-orm",
@@ -3103,7 +3124,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-middleware",
  "nest-rs-ws-macros",
  "parking_lot",
  "poem",
@@ -3661,7 +3681,6 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-middleware",
  "nest-rs-openapi",
  "nest-rs-opentelemetry",
  "nest-rs-queue",

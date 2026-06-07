@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use nest_rs_core::{App, AppBuilder, Container, Module, Transport};
+use nest_rs_filters::{AppBuilderFiltersExt, FilterSpec};
+use nest_rs_guards::{AppBuilderGuardsExt, AppBuilderPipesExt, GuardSpec, PipeSpec};
 use nest_rs_http::HttpTransport;
+use nest_rs_interceptors::{AppBuilderInterceptorsExt, InterceptorSpec};
 use poem::Response;
 use poem::endpoint::BoxEndpoint;
 use poem::test::TestClient;
@@ -116,6 +119,42 @@ impl TestAppBuilder {
 
     pub fn http(mut self, transport: HttpTransport) -> Self {
         self.http = Some(transport);
+        self
+    }
+
+    /// Forwards to [`AppBuilderGuardsExt::use_guards_global`].
+    pub fn use_guards_global<I>(mut self, specs: I) -> Self
+    where
+        I: IntoIterator<Item = GuardSpec>,
+    {
+        self.inner = self.inner.use_guards_global(specs);
+        self
+    }
+
+    /// Forwards to [`AppBuilderPipesExt::use_pipes_global`].
+    pub fn use_pipes_global<I>(mut self, specs: I) -> Self
+    where
+        I: IntoIterator<Item = PipeSpec>,
+    {
+        self.inner = self.inner.use_pipes_global(specs);
+        self
+    }
+
+    /// Forwards to [`AppBuilderInterceptorsExt::use_interceptors_global`].
+    pub fn use_interceptors_global<I>(mut self, specs: I) -> Self
+    where
+        I: IntoIterator<Item = InterceptorSpec>,
+    {
+        self.inner = self.inner.use_interceptors_global(specs);
+        self
+    }
+
+    /// Forwards to [`AppBuilderFiltersExt::use_filters_global`].
+    pub fn use_filters_global<I>(mut self, specs: I) -> Self
+    where
+        I: IntoIterator<Item = FilterSpec>,
+    {
+        self.inner = self.inner.use_filters_global(specs);
         self
     }
 

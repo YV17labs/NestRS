@@ -21,7 +21,8 @@ use crate::attr::{expr_str, opt_str, take_flag_attr, take_use_attr};
 /// One route handler: verb ident, wrapper-fn ident, `#[use_guards]` paths,
 /// `#[use_filters]` paths, `#[use_interceptors]` paths, the `Authorize<_, _>`
 /// shaper type (if any), `#[meta(...)]` value expressions, the `#[public]`
-/// opt-out flag, the `#[no_pipes]` opt-out flag, and `#[force_guards]` paths.
+/// opt-out flag, the `#[no_pipes]` opt-out flag, `#[force_guards]` paths,
+/// and `#[use_pipes]` paths.
 type RouteHandler = (
     syn::Ident,
     syn::Ident,
@@ -32,6 +33,7 @@ type RouteHandler = (
     Vec<Expr>,
     bool,
     bool,
+    Vec<Path>,
     Vec<Path>,
 );
 
@@ -116,6 +118,10 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
+        let method_pipes = match take_use_attr(&mut method.attrs, "use_pipes") {
+            Ok(paths) => paths,
+            Err(err) => return err.to_compile_error().into(),
+        };
         // `#[public]` opts out of `Auth` + `Authorization` global layers on
         // this route; `Validation`, `Observability`, `RateLimit` keep running.
         let is_public = take_flag_attr(&mut method.attrs, "public");
@@ -192,6 +198,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             is_public,
             no_pipes,
             force_guards,
+            method_pipes,
         );
         match routes_by_path
             .iter_mut()
@@ -264,12 +271,13 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         routes_by_path
             .iter()
             .flat_map(|(_, handlers)| handlers.iter())
-            .flat_map(|(_, _, guards, filters, interceptors, _, _, _, _, force_guards)| {
+            .flat_map(|(_, _, guards, filters, interceptors, _, _, _, _, force_guards, pipes)| {
                 guards
                     .iter()
                     .chain(filters)
                     .chain(interceptors)
                     .chain(force_guards)
+                    .chain(pipes)
             }),
     );
     let injected_method = injected_method_with_layers(&self_ty, &route_layer_keys);
@@ -280,12 +288,12 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             let mut iter = handlers.iter();
             let first = iter.next().expect("each path has at least one verb");
             let first_label = format!("{} {}", first.0, path.value());
-            let first_ep = guarded_handler(first, &first_label);
+            let first_ep = guarded_handler(first, &first_label, &self_ty);
             let first_verb = &first.0;
             let mut method = quote! { ::poem::#first_verb(#first_ep) };
             for handler in iter {
                 let label = format!("{} {}", handler.0, path.value());
-                let ep = guarded_handler(handler, &label);
+                let ep = guarded_handler(handler, &label, &self_ty);
                 let verb = &handler.0;
                 method = quote! { #method.#verb(#ep) };
             }
@@ -358,14 +366,18 @@ fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
 /// Build one routed handler. Layout, inner → outer:
 ///
 /// shaper → per-route interceptors → per-route filters → metadata data →
-/// `LayersRouteInterceptor` (Layer System dedup of global + per-route guards
-/// and pipes).
+/// `LayersRouteInterceptor` (Layer System dedup of global + controller +
+/// method guards and pipes).
 ///
 /// Per-route guards are NOT inline-wrapped any more — they're handed to the
 /// `LayersRouteInterceptor` as `RouteGuardSpec` entries so the interceptor
 /// can dedup them against the global chain by `TypeId` and run the result in
 /// canonical category order.
-fn guarded_handler(handler: &RouteHandler, route_label: &str) -> TokenStream2 {
+fn guarded_handler(
+    handler: &RouteHandler,
+    route_label: &str,
+    self_ty: &Type,
+) -> TokenStream2 {
     let (
         _verb,
         wrapper,
@@ -377,6 +389,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str) -> TokenStream2 {
         is_public,
         no_pipes,
         force_guards,
+        method_pipes,
     ) = handler;
     let mut expr = match shaper {
         Some(ty) => quote! {
@@ -385,8 +398,8 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str) -> TokenStream2 {
         None => quote! { #wrapper },
     };
     // Inner → outer: call order is the nesting order.
-    expr = wrap_layer(expr, interceptors, "interceptor", "use_interceptors");
-    expr = wrap_layer(expr, filters, "filter", "use_filters");
+    expr = wrap_interceptors(expr, interceptors);
+    expr = wrap_filters(expr, filters);
 
     // LayersRouteInterceptor sits *inside* the metadata wrap so per-route
     // guards reading `#[meta(...)]` via `Reflector` see it; outside the
@@ -395,16 +408,20 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str) -> TokenStream2 {
     let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
     let method_guard_specs = guard_specs(guards);
     let force_guard_typeids = force_guard_typeids(force_guards);
-    let _ = no_pipes; // wire-through reserved for the future no-pipes spec
+    let method_pipe_specs = pipe_specs(method_pipes);
+    let no_pipes_flag = if *no_pipes { quote!(true) } else { quote!(false) };
     expr = quote! {
-        ::nest_rs_http::EndpointExt::interceptor(
+        ::nest_rs_http::InterceptorExt::interceptor(
             #expr,
             ::std::sync::Arc::new(
                 ::nest_rs_guards::LayersRouteInterceptor::new(
                     #route_label_lit,
-                    ::std::vec![],
+                    <#self_ty>::__nestrs_controller_guard_specs(),
                     #method_guard_specs,
                     #force_guard_typeids,
+                    <#self_ty>::__nestrs_controller_pipe_specs(),
+                    #method_pipe_specs,
+                    #no_pipes_flag,
                 )
             ),
         )
@@ -448,6 +465,24 @@ fn guard_specs(paths: &[Path]) -> TokenStream2 {
     quote! { ::std::vec![#(#entries),*] }
 }
 
+/// Build the `Vec<RoutePipeSpec>` for the method-level pipes.
+fn pipe_specs(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec![] };
+    }
+    let entries = paths.iter().map(|p| {
+        quote! {
+            ::nest_rs_guards::integration::RouteLayerSpec {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_pipes::GlobalPipe>),
+            }
+        }
+    });
+    quote! { ::std::vec![#(#entries),*] }
+}
+
 fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
     if paths.is_empty() {
         return quote! { ::std::vec![] };
@@ -458,18 +493,33 @@ fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
     quote! { ::std::vec![#(#entries),*] }
 }
 
-/// Wrap a handler in container-resolved layers via `EndpointExt::<kind>`.
-/// Composes inline (no boxing); the controller-level counterpart that boxes to
-/// a stable type is `controller_layers` in `controller`.
-fn wrap_layer(mut expr: TokenStream2, paths: &[Path], kind: &str, attr: &str) -> TokenStream2 {
-    let method = format_ident!("{kind}");
-    let prefix = format!("#[{attr}] {kind} `");
+/// Wrap a handler in container-resolved interceptors. Composes inline (no
+/// boxing); the controller-level counterpart that boxes to a stable type is
+/// in `controller.rs`.
+fn wrap_interceptors(mut expr: TokenStream2, paths: &[Path]) -> TokenStream2 {
     for p in paths.iter().rev() {
         expr = quote! {
-            ::nest_rs_http::EndpointExt::#method(
+            ::nest_rs_http::InterceptorExt::interceptor(
                 #expr,
                 ::nest_rs_core::Container::get::<#p>(container).expect(concat!(
-                    #prefix,
+                    "#[use_interceptors] interceptor `",
+                    stringify!(#p),
+                    "` is not registered — add it to a module's providers"
+                )),
+            )
+        };
+    }
+    expr
+}
+
+/// Wrap a handler in container-resolved filters. Composes inline.
+fn wrap_filters(mut expr: TokenStream2, paths: &[Path]) -> TokenStream2 {
+    for p in paths.iter().rev() {
+        expr = quote! {
+            ::nest_rs_http::FilterExt::filter(
+                #expr,
+                ::nest_rs_core::Container::get::<#p>(container).expect(concat!(
+                    "#[use_filters] filter `",
                     stringify!(#p),
                     "` is not registered — add it to a module's providers"
                 )),

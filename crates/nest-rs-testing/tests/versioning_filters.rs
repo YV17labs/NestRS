@@ -1,7 +1,7 @@
 //! URI versioning (`#[controller(version = "1")]`) and exception filters
 //! (`#[use_filters]`), end-to-end through the HTTP harness.
 
-use nest_rs_core::{injectable, module};
+use nest_rs_core::{Layer, injectable, module};
 use nest_rs_http::{Filter, RequestSnapshot, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
@@ -10,6 +10,8 @@ use poem::{Error, Response};
 #[injectable]
 #[derive(Default)]
 struct TeapotFilter;
+
+impl Layer for TeapotFilter {}
 
 #[async_trait]
 impl Filter for TeapotFilter {

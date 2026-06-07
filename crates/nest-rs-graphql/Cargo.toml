@@ -22,7 +22,7 @@ validator.workspace = true
 nest-rs-http.workspace = true
 async-graphql.workspace = true
 # `ResolverGuard` is an async trait dispatched concretely from the `#[resolver]`
-# macro; boxed via `async-trait` like `nest-rs-middleware`'s HTTP `Guard`, and
+# macro; boxed via `async-trait` like `nest-rs-guards`' HTTP `Guard`, and
 # re-exported as `nest_rs_graphql::async_trait` for implementors.
 async-trait.workspace = true
 # Re-exported so the GraphqlModule mount code can name the poem integration

@@ -24,8 +24,9 @@
 //! may skip rejection when no token is present. The guard reads the marker
 //! through the transport's reflector helper.
 //!
-//! See `nest_rs_guards`, `nest_rs_pipes`, `nest_rs_middleware` for the
-//! sub-traits.
+//! See `nest_rs_guards`, `nest_rs_pipes`, `nest_rs_interceptors`,
+//! `nest_rs_filters`, `nest_rs_exception_filters` for the sub-traits — one
+//! crate per [`LayerKind`].
 
 use std::sync::Arc;
 
@@ -96,10 +97,11 @@ impl LayerScope {
 }
 
 /// Common metadata for every layer kind. Sub-traits ([`Guard`](../../nest_rs_guards/trait.Guard.html),
-/// [`Interceptor`](../../nest_rs_middleware/trait.Interceptor.html),
-/// [`Filter`](../../nest_rs_middleware/trait.Filter.html),
-/// [`GlobalPipe`](../../nest_rs_pipes/trait.GlobalPipe.html)) extend this to
-/// pick up [`Layer::priority`] and a dedup-friendly identity.
+/// [`Interceptor`](../../nest_rs_interceptors/trait.Interceptor.html),
+/// [`Filter`](../../nest_rs_filters/trait.Filter.html),
+/// [`GlobalPipe`](../../nest_rs_pipes/trait.GlobalPipe.html),
+/// [`ExceptionFilter`](../../nest_rs_exception_filters/trait.ExceptionFilter.html))
+/// extend this to pick up [`Layer::priority`] and a dedup-friendly identity.
 ///
 /// The layer's [`LayerKind`] is determined by its sub-trait — there is no
 /// `kind()` method to override.

@@ -5,9 +5,8 @@ use std::sync::Arc;
 
 use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::{HttpGuard, Reflector, async_trait};
-use poem::http::{StatusCode, header};
-use poem::{Request, Response};
+use nest_rs_http::{Reflector, async_trait};
+use poem::Request;
 
 use crate::store::InMemoryThrottler;
 use crate::throttle::Throttle;
@@ -47,32 +46,6 @@ impl Guard for ThrottlerGuard {
     }
 }
 
-/// Legacy [`HttpGuard`] adapter — keeps `#[use_guards(ThrottlerGuard)]`
-/// working on the legacy per-route path (where the framework wraps via
-/// `EndpointExt::guard`).
-#[async_trait]
-impl HttpGuard for ThrottlerGuard {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
-        let limit = Reflector::new(req)
-            .get::<Throttle>()
-            .copied()
-            .unwrap_or_else(|| self.throttler.default_limit());
-
-        let decision = self
-            .throttler
-            .hit(&client_key(req, self.throttler.trusted_proxies()), limit);
-        if decision.allowed {
-            return Ok(());
-        }
-        Err(Response::builder()
-            .status(StatusCode::TOO_MANY_REQUESTS)
-            .header(
-                header::RETRY_AFTER,
-                decision.retry_after.as_secs().to_string(),
-            )
-            .body("Too Many Requests"))
-    }
-}
 
 /// Direct peer IP unless the peer is a configured trusted proxy — then the
 /// leftmost `X-Forwarded-For` hop.

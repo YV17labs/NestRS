@@ -3,7 +3,7 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::{HttpGuard, Interceptor, Next, async_trait, controller, routes};
+use nest_rs_http::{Interceptor, Next, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response, Result};
@@ -11,6 +11,8 @@ use poem::{Request, Response, Result};
 #[injectable]
 #[derive(Default)]
 struct Tracer;
+
+impl Layer for Tracer {}
 
 #[async_trait]
 impl Interceptor for Tracer {
@@ -35,14 +37,6 @@ impl Guard for DenyGuard {
     }
 }
 
-#[async_trait]
-impl HttpGuard for DenyGuard {
-    async fn check(&self, _req: &mut Request) -> std::result::Result<(), Response> {
-        Err(Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body("denied"))
-    }
-}
 
 #[controller(path = "/a")]
 struct PerHandlerController;

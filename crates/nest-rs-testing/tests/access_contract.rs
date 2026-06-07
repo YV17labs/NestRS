@@ -5,9 +5,8 @@
 
 use nest_rs_core::{AccessGraphError, App, Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::{HttpGuard, async_trait, controller, routes};
-use poem::http::StatusCode;
-use poem::{Request, Response};
+use nest_rs_http::{async_trait, controller, routes};
+use poem::Request;
 
 #[injectable]
 #[derive(Default)]
@@ -22,12 +21,6 @@ impl Guard for AuthzGuard {
     }
 }
 
-#[async_trait]
-impl HttpGuard for AuthzGuard {
-    async fn check(&self, _req: &mut Request) -> std::result::Result<(), Response> {
-        Err(Response::builder().status(StatusCode::FORBIDDEN).finish())
-    }
-}
 
 #[module(providers = [AuthzGuard])]
 struct GuardModule;

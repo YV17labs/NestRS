@@ -25,7 +25,7 @@ default = ["otlp"]
 http = [
     "otlp",
     "dep:nest-rs-http",
-    "dep:nest-rs-middleware",
+    "dep:nest-rs-interceptors",
     "dep:poem",
     "dep:bytes",
     "dep:futures-core",
@@ -45,7 +45,7 @@ otlp = [
 nest-rs-core.workspace = true
 nest-rs-config.workspace = true
 nest-rs-http = { workspace = true, optional = true }
-nest-rs-middleware = { workspace = true, optional = true }
+nest-rs-interceptors = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 futures-core = { workspace = true, optional = true }

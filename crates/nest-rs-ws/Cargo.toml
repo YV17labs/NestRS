@@ -15,7 +15,6 @@ nest-rs-core.workspace = true
 # so it rides the existing HTTP transport — reusing its guards, CORS, port and
 # TLS — rather than opening a second server.
 nest-rs-http.workspace = true
-nest-rs-middleware.workspace = true
 nest-rs-ws-macros.workspace = true
 # `websocket` is a non-default poem feature; enabling it here turns it on for the
 # whole build (Cargo features are additive).

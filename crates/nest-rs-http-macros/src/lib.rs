@@ -32,7 +32,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Mark a struct as a **global** HTTP interceptor. Behaves like `#[injectable]`
 /// for construction and additionally emits a `Discoverable` impl attaching an
 /// `HttpInterceptorMeta`; the HTTP transport reads those metas at boot. The
-/// struct must implement `nest_rs_middleware::Interceptor`.
+/// struct must implement `nest_rs_interceptors::Interceptor`.
 #[proc_macro_attribute]
 pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
     interceptor::interceptor(args, input)

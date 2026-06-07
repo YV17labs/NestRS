@@ -12,7 +12,8 @@ description = "HTTP transport for nestrs: HttpTransport, Controller trait and Ht
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-http-macros.workspace = true
-nest-rs-middleware.workspace = true
+nest-rs-interceptors.workspace = true
+nest-rs-filters.workspace = true
 # `TlsConfig::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
 # framework-wide env scheme (`env_var`, empty-as-unset), like every other
 # per-crate `from_env` shortcut.

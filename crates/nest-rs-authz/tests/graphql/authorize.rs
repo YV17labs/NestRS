@@ -6,11 +6,12 @@ use std::sync::Arc;
 
 use nest_rs_authz::graphql::authorize;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
-use nest_rs_core::module;
+use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, resolver};
-use nest_rs_http::poem::{Request, Response};
-use nest_rs_http::{HttpGuard, HttpTransport, async_trait};
+use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_http::async_trait;
+use nest_rs_http::poem::Request;
 use nest_rs_testing::TestApp;
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`.
@@ -34,11 +35,15 @@ mod widget {
 /// Stands in for the `AuthGuard` + `AbilityGuard` chain: reads the caller's role
 /// from a header and builds the matching `Ability` onto the request. An admin
 /// gets a Read grant on widgets; anyone else gets nothing.
+#[injectable]
+#[derive(Default)]
 struct AbilityInjector;
 
+impl Layer for AbilityInjector {}
+
 #[async_trait]
-impl HttpGuard for AbilityInjector {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+impl Guard for AbilityInjector {
+    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         let admin = req
             .headers()
             .get("x-role")
@@ -67,13 +72,13 @@ impl WidgetResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [WidgetResolver])]
+#[module(imports = [GraphqlModule::for_root(None)], providers = [AbilityInjector, WidgetResolver])]
 struct AuthzGraphqlModule;
 
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<AuthzGraphqlModule>()
-        .http(HttpTransport::new().guard(AbilityInjector))
+        .use_guards_global([guard::<AbilityInjector>()])
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")

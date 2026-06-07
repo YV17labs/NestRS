@@ -1,25 +1,33 @@
+//! The [`Interceptor`] trait — a [`Layer`] sub-trait whose impls wrap
+//! endpoint execution.
+
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use nest_rs_core::Layer;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
 /// Wraps endpoint execution: sees the request before the handler runs and the
 /// response after, in a single `intercept(req, next)` call.
 ///
-/// Bind at three levels: globally (`HttpTransport::interceptor`, or
-/// `#[interceptor]` for zero-config auto-discovery), per-controller
-/// (`#[use_interceptors(...)]` on the struct), or per-handler
-/// (`#[use_interceptors(...)]` beside the verb). A controller/handler
+/// `Interceptor` extends [`Layer`] so the same impl can be declared at any
+/// scope (global / controller / method) and the Layer System dedups by
+/// [`TypeId`](std::any::TypeId).
+///
+/// Bind globally via [`use_interceptors_global`](crate::AppBuilderInterceptorsExt),
+/// per-controller via `#[use_interceptors(...)]` on the struct, or per-handler
+/// via `#[use_interceptors(...)]` beside the verb. A controller/handler
 /// interceptor sits *inside* the guards — a guard runs and may short-circuit
 /// before the interceptor's pre-handler work.
 #[async_trait]
-pub trait Interceptor: Send + Sync + 'static {
+pub trait Interceptor: Layer {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
 }
 
 #[async_trait]
-impl<T: Interceptor + ?Sized> Interceptor for std::sync::Arc<T> {
+impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
         (**self).intercept(req, next).await
     }
@@ -32,7 +40,7 @@ pub struct Next<'a> {
 }
 
 impl<'a> Next<'a> {
-    pub(crate) fn new<E>(endpoint: &'a E) -> Self
+    pub fn new<E>(endpoint: &'a E) -> Self
     where
         E: Endpoint + Send + Sync,
         E::Output: IntoResponse,

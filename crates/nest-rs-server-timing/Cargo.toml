@@ -12,7 +12,7 @@ description = "W3C Server-Timing response header interceptor for nestrs apps (in
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-http.workspace = true
-nest-rs-middleware.workspace = true
+nest-rs-interceptors.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Per-request entry accumulator lock — poison-free locking.

@@ -29,7 +29,7 @@ use nest_rs_graphql::async_graphql::{
 };
 use nest_rs_http::poem::http::StatusCode;
 use nest_rs_http::poem::{Body, Request, Response, Result};
-use nest_rs_middleware::{Interceptor, Next};
+use nest_rs_interceptors::{Interceptor, Next};
 use nest_rs_pipes::GlobalPipe;
 use nest_rs_ws::WsClient;
 use serde_json::Value;
@@ -61,27 +61,43 @@ pub type RoutePipeSpec = RouteLayerSpec<dyn GlobalPipe>;
 /// category-based reordering. Guards decide what `#[public]` means for
 /// them via the [`Public`](nest_rs_core::Public) marker attached as
 /// request data.
+///
+/// Itself a [`Layer`] so it satisfies the `Interceptor: Layer` bound; this
+/// per-route interceptor never participates in the dedup pass (it *is* the
+/// dedup pass), so the default `priority()` / `name()` are correct.
 pub struct LayersRouteInterceptor {
     route_label: &'static str,
     controller_guards: Vec<RouteGuardSpec>,
     method_guards: Vec<RouteGuardSpec>,
     force_guards: Vec<TypeId>,
+    controller_pipes: Vec<RoutePipeSpec>,
+    method_pipes: Vec<RoutePipeSpec>,
+    no_pipes: bool,
     cached_guards: OnceLock<Vec<ResolvedLayer<dyn Guard>>>,
     cached_pipes: OnceLock<Vec<ResolvedLayer<dyn GlobalPipe>>>,
 }
 
 impl LayersRouteInterceptor {
+    // 7 specs feed in here — one per scope + dedup signal. Macros call this,
+    // not humans, so a parameter struct would only add indirection.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         route_label: &'static str,
         controller_guards: Vec<RouteGuardSpec>,
         method_guards: Vec<RouteGuardSpec>,
         force_guards: Vec<TypeId>,
+        controller_pipes: Vec<RoutePipeSpec>,
+        method_pipes: Vec<RoutePipeSpec>,
+        no_pipes: bool,
     ) -> Self {
         Self {
             route_label,
             controller_guards,
             method_guards,
             force_guards,
+            controller_pipes,
+            method_pipes,
+            no_pipes,
             cached_guards: OnceLock::new(),
             cached_pipes: OnceLock::new(),
         }
@@ -111,10 +127,22 @@ impl LayersRouteInterceptor {
             self.route_label,
         );
         log_effective_chain(self.route_label, "guards", &chain);
+        // Globals are run transport-level by
+        // [`crate::builder::GlobalGuardsHttpInterceptor`]; the per-route
+        // chain only executes the controller/method scopes. Globals stay in
+        // the chain *for dedup*: a controller/method declaration with the
+        // same TypeId is skipped here so it doesn't double-fire.
         chain
+            .into_iter()
+            .filter(|entry| entry.source != LayerSource::Global)
+            .collect()
     }
 
     fn resolve_pipes(&self, container: &Container) -> Vec<ResolvedLayer<dyn GlobalPipe>> {
+        // `#[no_pipes]` skips every pipe — globals, controller, method.
+        if self.no_pipes {
+            return Vec::new();
+        }
         let mut global: Vec<ResolvedLayer<dyn GlobalPipe>> = Vec::new();
         if let Some(specs) = container.get::<PipeSpecs>() {
             for spec in &specs.0 {
@@ -128,8 +156,16 @@ impl LayersRouteInterceptor {
                 }
             }
         }
-        let chain =
-            compose_chain::<dyn GlobalPipe>(global, Vec::new(), Vec::new(), &[], self.route_label);
+        let controller =
+            resolve_specs(container, &self.controller_pipes, LayerSource::Controller);
+        let method = resolve_specs(container, &self.method_pipes, LayerSource::Method);
+        let chain = compose_chain::<dyn GlobalPipe>(
+            global,
+            controller,
+            method,
+            &[],
+            self.route_label,
+        );
         log_effective_chain(self.route_label, "pipes", &chain);
         chain
     }
@@ -173,6 +209,8 @@ fn log_effective_chain<L: Layer + ?Sized>(
         "effective layer chain",
     );
 }
+
+impl Layer for LayersRouteInterceptor {}
 
 #[async_trait]
 impl Interceptor for LayersRouteInterceptor {

@@ -4,20 +4,24 @@
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Error, Result};
 use nest_rs_graphql::{ContextSeed, GraphqlModule, ResolverGuard, async_trait, resolver};
-use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::{HttpGuard, HttpTransport, async_trait as http_async_trait};
+use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;
+use poem::Request;
 use poem::http::StatusCode;
-use poem::{Request, Response};
 
 #[derive(Clone)]
 struct Role(String);
 
+#[injectable]
+#[derive(Default)]
 struct RoleHeaderGuard;
 
+impl Layer for RoleHeaderGuard {}
+
 #[http_async_trait]
-impl HttpGuard for RoleHeaderGuard {
-    async fn check(&self, req: &mut Request) -> std::result::Result<(), Response> {
+impl Guard for RoleHeaderGuard {
+    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
         if let Some(role) = req
             .headers()
             .get("x-role")
@@ -92,13 +96,13 @@ impl GuardedResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [RequireAdmin, GuardedResolver])]
+#[module(imports = [GraphqlModule::for_root(None)], providers = [RequireAdmin, RoleHeaderGuard, GuardedResolver])]
 struct GuardedModule;
 
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<GuardedModule>()
-        .http(HttpTransport::new().guard(RoleHeaderGuard))
+        .use_guards_global([guard::<RoleHeaderGuard>()])
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")

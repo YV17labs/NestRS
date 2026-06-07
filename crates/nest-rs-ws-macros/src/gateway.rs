@@ -3,7 +3,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{ItemStruct, LitStr, Meta, Path, Token, parse_macro_input};
@@ -154,8 +154,12 @@ fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
 }
 
 /// Reversed so the first-listed guard ends up outermost (HTTP convention).
+///
+/// Resolves each guard via the container, erases it to `Arc<dyn Guard>`, and
+/// wraps the endpoint with [`nest_rs_guards::GuardExt::guard`] — which calls
+/// `Guard::check_http` (the WS upgrade is an HTTP GET) and maps a `Denial` to
+/// a poem [`Response`].
 fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
-    let method = format_ident!("guard");
     paths
         .iter()
         .rev()
@@ -163,13 +167,15 @@ fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
             quote! {
                 let __ep = ::nest_rs_ws::poem::EndpointExt::boxed(
                     ::nest_rs_ws::poem::EndpointExt::map_to_response(
-                    ::nest_rs_ws::EndpointExt::#method(
+                    ::nest_rs_guards::GuardExt::guard(
                         __ep,
-                        ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
-                            "#[use_guards] guard `",
-                            stringify!(#p),
-                            "` is not registered — add it to a module's providers"
-                        )),
+                        ::nest_rs_core::Container::get::<#p>(__container)
+                            .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>)
+                            .expect(concat!(
+                                "#[use_guards] guard `",
+                                stringify!(#p),
+                                "` is not registered — add it to a module's providers"
+                            )),
                     ),
                 ));
             }

@@ -19,6 +19,8 @@ orm = ["dep:sea-orm", "dep:sea-orm-migration"]
 nest-rs-core.workspace = true
 nest-rs-guards.workspace = true
 nest-rs-http.workspace = true
+nest-rs-interceptors.workspace = true
+nest-rs-filters.workspace = true
 anyhow.workspace = true
 # `test` adds poem's in-process TestClient; `tower-compat` comes from the
 # workspace default and is harmless here.

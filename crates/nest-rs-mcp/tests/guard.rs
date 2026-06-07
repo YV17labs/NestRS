@@ -3,27 +3,21 @@ use std::sync::Arc;
 use nest_rs_mcp::{
     McpOperationGuard, ServerHandler, endpoint_with_guard, tool_handler, tool_router,
 };
-use nest_rs_middleware::HttpGuard;
 use poem::http::StatusCode;
 use poem::test::TestClient;
 use poem::{Error, Request, Response};
 
-struct RejectAll;
-
-#[async_trait::async_trait]
-impl HttpGuard for RejectAll {
-    async fn check(&self, _req: &mut Request) -> Result<(), Response> {
-        Err(Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .body("nope"))
-    }
-}
-
 struct RejectGuard;
 
 impl McpOperationGuard for RejectGuard {
-    fn before<'a>(&'a self, req: &'a mut Request) -> nest_rs_mcp::BoxFuture<'a, poem::Result<()>> {
-        Box::pin(async move { RejectAll.check(req).await.map_err(Error::from_response) })
+    fn before<'a>(&'a self, _req: &'a mut Request) -> nest_rs_mcp::BoxFuture<'a, poem::Result<()>> {
+        Box::pin(async move {
+            Err(Error::from_response(
+                Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body("nope"),
+            ))
+        })
     }
 }
 

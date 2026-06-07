@@ -87,7 +87,6 @@ pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
 // Re-exported so macro-generated code resolves these through the framework.
 pub use async_trait::async_trait;
-pub use nest_rs_middleware::{EndpointExt, HttpGuard};
 pub use serde_json;
 pub use tracing;
 

@@ -6,8 +6,16 @@
 //! - [`AppBuilderPipesExt::use_pipes_global`] — register
 //!   request-body pipes once, applied to every JSON HTTP handler.
 
-use nest_rs_core::AppBuilder;
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use nest_rs_core::{AppBuilder, Layer, RequestScope};
+use nest_rs_http::HttpInterceptorMeta;
+use nest_rs_interceptors::{Interceptor, Next};
+use poem::{Request, Response, Result};
+
+use crate::Guard;
+use crate::integration::denial_to_http_response;
 use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 
 /// Adds `.use_guards_global(...)` to [`AppBuilder`].
@@ -40,7 +48,16 @@ impl AppBuilderGuardsExt for AppBuilder {
     {
         let collected: Vec<GuardSpec> = specs.into_iter().collect();
         validate_order_by_name(&collected);
+        // Seed the chain for the per-route `LayersRouteInterceptor` (which
+        // dedups global+controller+method by `TypeId`) AND for the
+        // transport-level [`GlobalGuardsHttpInterceptor`] that wraps every
+        // poem endpoint at HTTP configure-time. The latter covers
+        // self-mounting endpoints (`/graphql`, MCP, WS upgrade) that don't
+        // go through the per-route shaper — without it, a `use_guards_global`
+        // registration would silently miss those routes.
+        let interceptor: Arc<dyn Interceptor> = Arc::new(GlobalGuardsHttpInterceptor);
         self.provide(GuardSpecs(collected))
+            .provide_meta(HttpInterceptorMeta::new(interceptor))
     }
 }
 
@@ -59,6 +76,43 @@ impl AppBuilderPipesExt for AppBuilder {
         I: IntoIterator<Item = PipeSpec>,
     {
         self.provide(PipeSpecs(specs.into_iter().collect()))
+    }
+}
+
+/// Transport-level interceptor that applies global guards to **every** poem
+/// endpoint the HTTP transport assembles — including self-mounting endpoints
+/// (`/graphql`, MCP, WS upgrade) that don't traverse the per-route
+/// [`LayersRouteInterceptor`](crate::integration::LayersRouteInterceptor)
+/// shaper.
+///
+/// Seeded automatically by [`AppBuilderGuardsExt::use_guards_global`] via an
+/// [`HttpInterceptorMeta`]: the HTTP transport reads those metas at configure
+/// time and folds the interceptor outermost around the assembled tree. The
+/// per-route shaper still runs its own dedup-by-`TypeId` chain (catching
+/// controller/method declarations) — so a guard listed both globally and
+/// per-route is executed once at the transport seam and skipped by the route
+/// shaper.
+pub struct GlobalGuardsHttpInterceptor;
+
+impl Layer for GlobalGuardsHttpInterceptor {}
+
+#[async_trait]
+impl Interceptor for GlobalGuardsHttpInterceptor {
+    async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
+        let Some(scope) = req.extensions().get::<Arc<RequestScope>>().cloned() else {
+            return next.run(req).await;
+        };
+        let container = scope.root();
+        if let Some(specs) = container.get::<GuardSpecs>() {
+            for spec in &specs.0 {
+                if let Some(guard) = spec.resolve(container)
+                    && let Err(denial) = guard.check_http(&mut req).await
+                {
+                    return Ok(denial_to_http_response(denial));
+                }
+            }
+        }
+        next.run(req).await
     }
 }
 

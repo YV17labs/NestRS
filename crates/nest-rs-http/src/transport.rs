@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use nest_rs_core::{Container, DiscoveryService, Transport};
-use nest_rs_middleware::{EndpointExt as NestrsEndpointExt, Filter, HttpGuard, Interceptor};
+use nest_rs_filters::{FilterExt, FilterSpecs};
+use nest_rs_interceptors::{Interceptor, InterceptorExt, InterceptorSpecs};
 use poem::endpoint::BoxEndpoint;
 use poem::http::header::{HeaderValue, SERVER};
 use poem::listener::{Listener, TcpListener};
@@ -51,8 +52,6 @@ pub fn version_path(version: Option<&str>, path: &str) -> String {
 pub struct HttpTransport {
     bind: String,
     interceptors: Vec<Arc<dyn Interceptor>>,
-    guards: Vec<Arc<dyn HttpGuard>>,
-    filters: Vec<Arc<dyn Filter>>,
     mounts: Vec<MountFn>,
     cors: Option<Cors>,
     tls: Option<TlsConfig>,
@@ -83,8 +82,6 @@ impl HttpTransport {
         Self {
             bind: "0.0.0.0:3000".into(),
             interceptors: Vec::new(),
-            guards: Vec::new(),
-            filters: Vec::new(),
             mounts: Vec::new(),
             cors: None,
             tls: None,
@@ -118,16 +115,6 @@ impl HttpTransport {
 
     pub fn interceptor<I: Interceptor>(mut self, interceptor: I) -> Self {
         self.interceptors.push(Arc::new(interceptor));
-        self
-    }
-
-    pub fn guard<G: HttpGuard>(mut self, guard: G) -> Self {
-        self.guards.push(Arc::new(guard));
-        self
-    }
-
-    pub fn filter<F: Filter>(mut self, filter: F) -> Self {
-        self.filters.push(Arc::new(filter));
         self
     }
 
@@ -213,23 +200,38 @@ impl Transport for HttpTransport {
         }
 
         let mut endpoint: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
-        for filter in self.filters.drain(..) {
-            endpoint = NestrsEndpointExt::filter(endpoint, filter)
-                .map_to_response()
-                .boxed();
-        }
-        for guard in self.guards.drain(..) {
-            endpoint = NestrsEndpointExt::guard(endpoint, guard)
-                .map_to_response()
-                .boxed();
+        // Layer-System globals: `use_filters_global([...])` seeds `FilterSpecs`
+        // into the container. They wrap inside per-route filters so they map
+        // any error the inner chain bubbles up.
+        if let Some(specs) = container.get::<FilterSpecs>() {
+            for spec in &specs.0 {
+                if let Some(filter) = spec.resolve(container) {
+                    endpoint = FilterExt::filter(endpoint, filter)
+                        .map_to_response()
+                        .boxed();
+                }
+            }
         }
         for d in discovery.meta::<HttpInterceptorMeta>() {
-            endpoint = NestrsEndpointExt::interceptor(endpoint, d.meta.interceptor())
+            endpoint = InterceptorExt::interceptor(endpoint, d.meta.interceptor())
                 .map_to_response()
                 .boxed();
         }
+        // Layer-System globals: `use_interceptors_global([...])` seeds
+        // `InterceptorSpecs` into the container. They wrap outermost (after
+        // discovered metas) so a global interceptor sees every request,
+        // including those that hit unknown routes.
+        if let Some(specs) = container.get::<InterceptorSpecs>() {
+            for spec in &specs.0 {
+                if let Some(interceptor) = spec.resolve(container) {
+                    endpoint = InterceptorExt::interceptor(endpoint, interceptor)
+                        .map_to_response()
+                        .boxed();
+                }
+            }
+        }
         for interceptor in self.interceptors.drain(..) {
-            endpoint = NestrsEndpointExt::interceptor(endpoint, interceptor)
+            endpoint = InterceptorExt::interceptor(endpoint, interceptor)
                 .map_to_response()
                 .boxed();
         }
@@ -326,8 +328,6 @@ mod tests {
         assert_eq!(d.bind, n.bind);
         assert_eq!(d.bind, "0.0.0.0:3000");
         assert!(d.interceptors.is_empty());
-        assert!(d.guards.is_empty());
-        assert!(d.filters.is_empty());
         assert!(d.mounts.is_empty());
         assert!(d.cors.is_none());
         assert!(d.tls.is_none());

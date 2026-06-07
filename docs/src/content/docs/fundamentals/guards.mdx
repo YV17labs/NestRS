@@ -63,7 +63,7 @@ module.
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
 | **Global** | `App::builder().use_guards_global([guard::<AuthGuard>()])` in `main` | A transport-level interceptor + the per-route shaper |
-| **Controller / Resolver / Gateway** | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct (HTTP, WS) or `impl` block (GraphQL) | The container, at mount |
+| **Controller / Resolver / Gateway** | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct (uniform across HTTP, GraphQL, WS) | The container, at mount |
 | **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 
 Multiple guards listed in one attribute run in declaration order,

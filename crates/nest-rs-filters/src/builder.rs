@@ -2,7 +2,7 @@
 //! [`AppBuilder`](nest_rs_core::AppBuilder).
 
 use nest_rs_core::AppBuilder;
-use nest_rs_http::HttpInterceptorMeta;
+use nest_rs_http::{HttpInterceptorMeta, http_interceptor_priority};
 use poem::endpoint::BoxEndpoint;
 use poem::{EndpointExt, Response};
 
@@ -45,7 +45,8 @@ impl AppBuilderFiltersExt for AppBuilder {
     {
         let collected: Vec<FilterSpec> = specs.into_iter().collect();
         self.provide(FilterSpecs(collected))
-            .provide_meta(HttpInterceptorMeta::new(
+            .provide_meta(HttpInterceptorMeta::with_priority(
+                http_interceptor_priority::FILTERS,
                 |container, mut endpoint: BoxEndpoint<'static, Response>| {
                     let Some(specs) = container.get::<FilterSpecs>() else {
                         return endpoint;

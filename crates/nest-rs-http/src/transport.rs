@@ -204,18 +204,29 @@ impl Transport for HttpTransport {
         }
 
         let mut endpoint: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
-        // Apply the body-byte cap, if any, as a request-data entry the
-        // `RawBody` extractor reads back. No `Interceptor` trait needed —
-        // poem's `EndpointExt::data` is enough.
-        if let Some(limit) = self.max_body_bytes.take() {
-            endpoint = endpoint.data(RawBodyLimit(limit)).map_to_response().boxed();
-        }
         // Layer-System globals (guards / interceptors / filters / pipes /
         // exception filters) attach a `HttpInterceptorMeta` from their own
-        // crate; we apply each one once around the assembled endpoint. Wrap
-        // order = registration order (provide_meta order), outermost-last.
-        for d in discovery.meta::<HttpInterceptorMeta>() {
-            endpoint = d.meta.wrap(container, endpoint);
+        // crate. The transport sorts by priority ascending so the
+        // documented HTTP order is enforced regardless of AppBuilder call
+        // sequence: Guards (innermost) → Filters → Interceptors
+        // (outermost). Insertion order is the tiebreaker within a band.
+        let mut metas: Vec<std::sync::Arc<HttpInterceptorMeta>> = discovery
+            .meta::<HttpInterceptorMeta>()
+            .into_iter()
+            .map(|d| d.meta)
+            .collect();
+        metas.sort_by_key(|m| m.priority());
+        for meta in metas {
+            endpoint = meta.wrap(container, endpoint);
+        }
+        // Apply the body-byte cap, if any, as a request-data entry the
+        // `RawBody` extractor reads back. Installed OUTSIDE the Layer
+        // System globals so every interceptor / filter / guard that
+        // inspects `req.extensions().get::<RawBodyLimit>()` before calling
+        // `next` sees the configured value — pre-v5 behavior, preserved.
+        // No `Interceptor` trait needed — `EndpointExt::data` is enough.
+        if let Some(limit) = self.max_body_bytes.take() {
+            endpoint = endpoint.data(RawBodyLimit(limit)).map_to_response().boxed();
         }
         // Server header is purely cosmetic — apply before CORS so the
         // preflight short-circuit (no body) still carries it for observability.

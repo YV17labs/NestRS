@@ -62,7 +62,8 @@ impl Interceptor for RequestId {
 ```
 
 Bind it globally — either by adding `#[interceptor]` on the struct
-(auto-mount on every route) or by writing `HttpTransport::interceptor(...)`
+(auto-mount on every route) or via
+`App::builder().use_interceptors_global([interceptor::<RequestId>()])`
 in `main`.
 
 ### "I want to validate the request before any handler runs and block it if invalid."

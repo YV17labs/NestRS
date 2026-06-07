@@ -562,7 +562,7 @@ fn wrap_interceptors(mut expr: TokenStream2, paths: &[Path]) -> TokenStream2 {
                         target: "nest_rs::layers",
                         layer = ::core::any::type_name::<#p>(),
                         scope = "method",
-                        "interceptor declared at multiple scopes — broadest (global) wins, this scope skipped (use `#[force_*]` to force a re-run)",
+                        "interceptor declared at multiple scopes — broadest (global) wins, this scope skipped",
                     );
                     __ep
                 } else {

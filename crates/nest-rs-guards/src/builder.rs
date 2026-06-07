@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::{AppBuilder, Layer, RequestScope};
-use nest_rs_http::HttpInterceptorMeta;
+use nest_rs_http::{HttpInterceptorMeta, http_interceptor_priority};
 use nest_rs_interceptors::{Interceptor, InterceptorExt, Next};
 use poem::endpoint::BoxEndpoint;
 use poem::{EndpointExt, Request, Response, Result};
@@ -57,7 +57,8 @@ impl AppBuilderGuardsExt for AppBuilder {
         // go through the per-route shaper — without it, a `use_guards_global`
         // registration would silently miss those routes.
         self.provide(GuardSpecs(collected))
-            .provide_meta(HttpInterceptorMeta::new(
+            .provide_meta(HttpInterceptorMeta::with_priority(
+                http_interceptor_priority::GUARDS,
                 |_container, endpoint: BoxEndpoint<'static, Response>| {
                     InterceptorExt::interceptor(endpoint, GlobalGuardsHttpInterceptor)
                         .map_to_response()

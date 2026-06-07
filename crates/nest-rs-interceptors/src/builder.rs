@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::AppBuilder;
-use nest_rs_http::HttpInterceptorMeta;
+use nest_rs_http::{HttpInterceptorMeta, http_interceptor_priority};
 use poem::endpoint::BoxEndpoint;
 use poem::{EndpointExt, Response};
 
@@ -52,7 +52,8 @@ impl AppBuilderInterceptorsExt for AppBuilder {
     {
         let collected: Vec<InterceptorSpec> = specs.into_iter().collect();
         self.provide(InterceptorSpecs(collected))
-            .provide_meta(HttpInterceptorMeta::new(
+            .provide_meta(HttpInterceptorMeta::with_priority(
+                http_interceptor_priority::INTERCEPTORS,
                 |container, mut endpoint: BoxEndpoint<'static, Response>| {
                     let Some(specs) = container.get::<InterceptorSpecs>() else {
                         return endpoint;

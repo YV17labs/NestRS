@@ -43,6 +43,10 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
+    let exception_filters = match take_use_attr(&mut item.attrs, "use_exception_filters") {
+        Ok(paths) => paths,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let InjectableBody { ctor, dep_keys, .. } = match build_injectable_body(&mut item) {
         Ok(body) => body,
@@ -59,7 +63,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // owns `Discoverable`, so the keys are exposed via an inherent fn it reads.
     let injected_keys = injected_keys_with_layers(
         &dep_keys,
-        [&interceptors, &guards, &filters, &pipes]
+        [&interceptors, &guards, &filters, &pipes, &exception_filters]
             .into_iter()
             .flatten(),
     );
@@ -78,6 +82,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let filter_layers = controller_filter_layers(&filters);
     let guard_specs = controller_guard_specs(&guards);
     let pipe_specs = controller_pipe_specs(&pipes);
+    let exception_filter_specs = controller_exception_filter_specs(&exception_filters);
 
     quote! {
         #item
@@ -125,6 +130,16 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
                 -> ::std::vec::Vec<::nest_rs_guards::integration::RoutePipeSpec>
             {
                 #pipe_specs
+            }
+
+            /// Controller-level `#[use_exception_filters(...)]`, exposed for
+            /// the `#[routes]` macro to fold into each route's
+            /// `LayersRouteInterceptor`. Empty when none are declared.
+            #[doc(hidden)]
+            pub fn __nestrs_controller_exception_filter_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::integration::RouteExceptionFilterSpec>
+            {
+                #exception_filter_specs
             }
         }
     }
@@ -238,6 +253,26 @@ fn controller_pipe_specs(paths: &[Path]) -> TokenStream2 {
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
                     .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_pipes::GlobalPipe>),
+            }
+        }
+    });
+    quote! { ::std::vec![#(#entries),*] }
+}
+
+/// Controller-level `#[use_exception_filters(...)]` →
+/// `Vec<RouteExceptionFilterSpec>`. Each entry erases the filter to
+/// `dyn ExceptionFilterErased` via its blanket impl.
+fn controller_exception_filter_specs(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec::Vec::new() };
+    }
+    let entries = paths.iter().map(|p| {
+        quote! {
+            ::nest_rs_guards::integration::RouteLayerSpec {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_exception_filters::ExceptionFilterErased>),
             }
         }
     });

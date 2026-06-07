@@ -22,7 +22,7 @@ use crate::attr::{expr_str, opt_str, take_flag_attr, take_use_attr};
 /// `#[use_filters]` paths, `#[use_interceptors]` paths, the `Authorize<_, _>`
 /// shaper type (if any), `#[meta(...)]` value expressions, the `#[public]`
 /// opt-out flag, the `#[no_pipes]` opt-out flag, `#[force_guards]` paths,
-/// and `#[use_pipes]` paths.
+/// `#[use_pipes]` paths, and `#[use_exception_filters]` paths.
 type RouteHandler = (
     syn::Ident,
     syn::Ident,
@@ -33,6 +33,7 @@ type RouteHandler = (
     Vec<Expr>,
     bool,
     bool,
+    Vec<Path>,
     Vec<Path>,
     Vec<Path>,
 );
@@ -122,6 +123,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
+        let method_exception_filters =
+            match take_use_attr(&mut method.attrs, "use_exception_filters") {
+                Ok(paths) => paths,
+                Err(err) => return err.to_compile_error().into(),
+            };
         // `#[public]` opts out of `Auth` + `Authorization` global layers on
         // this route; `Validation`, `Observability`, `RateLimit` keep running.
         let is_public = take_flag_attr(&mut method.attrs, "public");
@@ -196,6 +202,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             no_pipes,
             force_guards,
             method_pipes,
+            method_exception_filters,
         );
         match routes_by_path
             .iter_mut()
@@ -269,13 +276,27 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             .iter()
             .flat_map(|(_, handlers)| handlers.iter())
             .flat_map(
-                |(_, _, guards, filters, interceptors, _, _, _, _, force_guards, pipes)| {
+                |(
+                    _,
+                    _,
+                    guards,
+                    filters,
+                    interceptors,
+                    _,
+                    _,
+                    _,
+                    _,
+                    force_guards,
+                    pipes,
+                    exception_filters,
+                )| {
                     guards
                         .iter()
                         .chain(filters)
                         .chain(interceptors)
                         .chain(force_guards)
                         .chain(pipes)
+                        .chain(exception_filters)
                 },
             ),
     );
@@ -385,6 +406,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         no_pipes,
         force_guards,
         method_pipes,
+        method_exception_filters,
     ) = handler;
     let mut expr = match shaper {
         Some(ty) => quote! {
@@ -404,6 +426,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     let method_guard_specs = guard_specs(guards);
     let force_guard_typeids = force_guard_typeids(force_guards);
     let method_pipe_specs = pipe_specs(method_pipes);
+    let method_exception_filter_specs = exception_filter_specs(method_exception_filters);
     let no_pipes_flag = if *no_pipes {
         quote!(true)
     } else {
@@ -421,6 +444,8 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
                     <#self_ty>::__nestrs_controller_pipe_specs(),
                     #method_pipe_specs,
                     #no_pipes_flag,
+                    <#self_ty>::__nestrs_controller_exception_filter_specs(),
+                    #method_exception_filter_specs,
                 )
             ),
         )
@@ -476,6 +501,26 @@ fn pipe_specs(paths: &[Path]) -> TokenStream2 {
                 name: ::core::any::type_name::<#p>(),
                 resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
                     .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_pipes::GlobalPipe>),
+            }
+        }
+    });
+    quote! { ::std::vec![#(#entries),*] }
+}
+
+/// Build the `Vec<RouteExceptionFilterSpec>` for the method-level
+/// exception filters. Each entry erases the filter to
+/// `dyn ExceptionFilterErased` via its blanket impl.
+fn exception_filter_specs(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec![] };
+    }
+    let entries = paths.iter().map(|p| {
+        quote! {
+            ::nest_rs_guards::integration::RouteLayerSpec {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_exception_filters::ExceptionFilterErased>),
             }
         }
     });

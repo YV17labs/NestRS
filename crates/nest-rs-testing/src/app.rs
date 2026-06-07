@@ -7,6 +7,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use nest_rs_core::{App, AppBuilder, Container, Module, Transport};
+use nest_rs_exception_filters::{
+    AppBuilderExceptionFiltersExt, ExceptionFilterSpec,
+};
 use nest_rs_filters::{AppBuilderFiltersExt, FilterSpec};
 use nest_rs_guards::{AppBuilderGuardsExt, AppBuilderPipesExt, GuardSpec, PipeSpec};
 use nest_rs_http::HttpTransport;
@@ -155,6 +158,16 @@ impl TestAppBuilder {
         I: IntoIterator<Item = FilterSpec>,
     {
         self.inner = self.inner.use_filters_global(specs);
+        self
+    }
+
+    /// Forwards to
+    /// [`AppBuilderExceptionFiltersExt::use_exception_filters_global`].
+    pub fn use_exception_filters_global<I>(mut self, specs: I) -> Self
+    where
+        I: IntoIterator<Item = ExceptionFilterSpec>,
+    {
+        self.inner = self.inner.use_exception_filters_global(specs);
         self
     }
 

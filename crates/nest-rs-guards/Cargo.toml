@@ -19,3 +19,4 @@ nest-rs-graphql.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-pipes.workspace = true
 nest-rs-ws.workspace = true
+nest-rs-exception-filters.workspace = true

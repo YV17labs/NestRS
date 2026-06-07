@@ -37,7 +37,8 @@ use serde_json::Value;
 use crate::Guard;
 use crate::denial::Denial;
 use crate::layer_chain::{LayerSource, ResolvedLayer, compose_chain};
-use crate::registry::{GuardSpecs, PipeSpecs};
+use crate::registry::{ExceptionFilterSpecs, GuardSpecs, PipeSpecs};
+use nest_rs_exception_filters::ExceptionFilterErased;
 
 /// A per-route guard the macro emitted from `#[use_guards(X)]`. Carries
 /// the `TypeId` so dedup sees it as the same key as the global registration.
@@ -52,6 +53,9 @@ pub type RouteGuardSpec = RouteLayerSpec<dyn Guard>;
 /// A pipe spec for a specific route — used when the route declares
 /// `#[use_pipes(...)]` (rare; most pipes are global).
 pub type RoutePipeSpec = RouteLayerSpec<dyn GlobalPipe>;
+/// An exception-filter spec for a specific route — used when the route or its
+/// controller declares `#[use_exception_filters(...)]`.
+pub type RouteExceptionFilterSpec = RouteLayerSpec<dyn ExceptionFilterErased>;
 
 /// HTTP per-route interceptor.
 ///
@@ -73,13 +77,16 @@ pub struct LayersRouteInterceptor {
     controller_pipes: Vec<RoutePipeSpec>,
     method_pipes: Vec<RoutePipeSpec>,
     no_pipes: bool,
+    controller_exception_filters: Vec<RouteExceptionFilterSpec>,
+    method_exception_filters: Vec<RouteExceptionFilterSpec>,
     cached_guards: OnceLock<Vec<ResolvedLayer<dyn Guard>>>,
     cached_pipes: OnceLock<Vec<ResolvedLayer<dyn GlobalPipe>>>,
+    cached_exception_filters: OnceLock<Vec<ResolvedLayer<dyn ExceptionFilterErased>>>,
 }
 
 impl LayersRouteInterceptor {
-    // 7 specs feed in here — one per scope + dedup signal. Macros call this,
-    // not humans, so a parameter struct would only add indirection.
+    // Macros emit this — a parameter struct would only add indirection at the
+    // call sites the user never reads.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         route_label: &'static str,
@@ -89,6 +96,8 @@ impl LayersRouteInterceptor {
         controller_pipes: Vec<RoutePipeSpec>,
         method_pipes: Vec<RoutePipeSpec>,
         no_pipes: bool,
+        controller_exception_filters: Vec<RouteExceptionFilterSpec>,
+        method_exception_filters: Vec<RouteExceptionFilterSpec>,
     ) -> Self {
         Self {
             route_label,
@@ -98,8 +107,11 @@ impl LayersRouteInterceptor {
             controller_pipes,
             method_pipes,
             no_pipes,
+            controller_exception_filters,
+            method_exception_filters,
             cached_guards: OnceLock::new(),
             cached_pipes: OnceLock::new(),
+            cached_exception_filters: OnceLock::new(),
         }
     }
 
@@ -161,6 +173,44 @@ impl LayersRouteInterceptor {
         let chain =
             compose_chain::<dyn GlobalPipe>(global, controller, method, &[], self.route_label);
         log_effective_chain(self.route_label, "pipes", &chain);
+        chain
+    }
+
+    fn resolve_exception_filters(
+        &self,
+        container: &Container,
+    ) -> Vec<ResolvedLayer<dyn ExceptionFilterErased>> {
+        let mut global: Vec<ResolvedLayer<dyn ExceptionFilterErased>> = Vec::new();
+        if let Some(specs) = container.get::<ExceptionFilterSpecs>() {
+            for spec in &specs.0 {
+                if let Some(layer) = spec.resolve(container) {
+                    global.push(ResolvedLayer {
+                        type_id: spec.type_id,
+                        name: spec.name,
+                        source: LayerSource::Global,
+                        layer,
+                    });
+                }
+            }
+        }
+        let controller = resolve_specs(
+            container,
+            &self.controller_exception_filters,
+            LayerSource::Controller,
+        );
+        let method = resolve_specs(
+            container,
+            &self.method_exception_filters,
+            LayerSource::Method,
+        );
+        let chain = compose_chain::<dyn ExceptionFilterErased>(
+            global,
+            controller,
+            method,
+            &[],
+            self.route_label,
+        );
+        log_effective_chain(self.route_label, "exception_filters", &chain);
         chain
     }
 }
@@ -227,7 +277,24 @@ impl Interceptor for LayersRouteInterceptor {
             apply_body_pipes(&mut req, pipes).await?;
         }
 
-        next.run(req).await
+        let filters = self
+            .cached_exception_filters
+            .get_or_init(|| self.resolve_exception_filters(container));
+
+        match next.run(req).await {
+            Ok(resp) => Ok(resp),
+            Err(err) if filters.is_empty() => Err(err),
+            Err(err) => {
+                let mut current = err;
+                for entry in filters {
+                    match entry.layer.try_catch(current).await {
+                        Ok(resp) => return Ok(resp),
+                        Err(unchanged) => current = unchanged,
+                    }
+                }
+                Err(current)
+            }
+        }
     }
 }
 

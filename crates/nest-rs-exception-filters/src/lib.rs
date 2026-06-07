@@ -6,9 +6,8 @@
 //! via its [`ExceptionFilter::Exception`] associated type and only catches
 //! matching errors. Non-matching errors keep flowing through any outer filter.
 //!
-//! This crate ships the trait and the Layer System wiring. Concrete catch
-//! adapters (downcasting `poem::Error` into a domain error, panic capture)
-//! are app-side.
+//! Dispatch is via `poem::Error::downcast::<Exception>()` — anything carryable
+//! as a `Box<dyn std::error::Error + Send + Sync + 'static>` is catchable.
 //!
 //! ## Defining an exception filter
 //!
@@ -18,6 +17,8 @@
 //! use poem::{Response, http::StatusCode};
 //! use async_trait::async_trait;
 //!
+//! #[derive(Debug, thiserror::Error)]
+//! #[error("domain error")]
 //! pub struct DomainError;
 //!
 //! #[injectable]
@@ -34,7 +35,25 @@
 //!     }
 //! }
 //! ```
+//!
+//! ## Registering globally
+//!
+//! ```rust,ignore
+//! use nest_rs::App;
+//! use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
+//!
+//! App::builder()
+//!     .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+//!     .module::<AppModule>()
+//!     .build().await?.run().await
+//! ```
 
+mod builder;
+mod erased;
 mod exception;
+mod registry;
 
+pub use builder::AppBuilderExceptionFiltersExt;
+pub use erased::ExceptionFilterErased;
 pub use exception::ExceptionFilter;
+pub use registry::{ExceptionFilterSpec, ExceptionFilterSpecs, exception_filter};

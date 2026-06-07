@@ -10,6 +10,8 @@ use nest_rs_pipes::GlobalPipe;
 
 use crate::Guard;
 
+pub use nest_rs_exception_filters::ExceptionFilterSpecs;
+
 /// One entry in the `use_guards_global` list. Created by [`guard::<T>()`];
 /// resolved against the live container at configure time.
 pub struct GuardSpec {

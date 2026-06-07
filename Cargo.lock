@@ -3110,6 +3110,7 @@ dependencies = [
  "nest-rs-interceptors",
  "nest-rs-opentelemetry",
  "nest-rs-pipes",
+ "nest-rs-ws",
  "poem",
  "sea-orm",
  "sea-orm-migration",

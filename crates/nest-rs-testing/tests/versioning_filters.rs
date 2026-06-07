@@ -1,12 +1,19 @@
 //! URI versioning (`#[controller(version = "1")]`) and exception filters
-//! (`#[use_filters]`), end-to-end through the HTTP harness.
+//! (`#[use_filters]`), end-to-end through the HTTP harness. Also pins the
+//! cross-scope TypeId dedup contract: a filter declared globally is run by
+//! the transport-level [`HttpInterceptorMeta`] wrap; a redeclaration at
+//! controller or method scope is skipped at mount time, so it still
+//! executes exactly once.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
+use nest_rs_filters::{Filter, RequestSnapshot, filter};
 use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_filters::{Filter, RequestSnapshot};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Error, Response};
+use tokio::sync::Mutex;
 
 #[injectable]
 #[derive(Default)]
@@ -96,4 +103,158 @@ async fn controller_level_filter_maps_errors_without_a_per_route_filter() {
     let resp = app.http().get("/gadgets/boom").send().await;
     resp.assert_status(StatusCode::IM_A_TEAPOT);
     resp.assert_text("filtered").await;
+}
+
+// --- TypeId dedup across scopes ---------------------------------------------
+//
+// The filter under test ([`CountingFilter`]) returns a fixed body and bumps
+// a process-global counter every call. Tests share that counter, so a
+// `tokio::sync::Mutex` serializes them — `cargo nextest` parallelizes by
+// default.
+
+static FILTER_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static GATE: Mutex<()> = Mutex::const_new(());
+
+fn reset_filter_counter() {
+    FILTER_COUNTER.store(0, Ordering::SeqCst);
+}
+
+fn filter_calls() -> usize {
+    FILTER_COUNTER.load(Ordering::SeqCst)
+}
+
+#[injectable]
+#[derive(Default)]
+struct CountingFilter;
+
+impl Layer for CountingFilter {}
+
+#[async_trait]
+impl Filter for CountingFilter {
+    async fn filter(&self, _req: &RequestSnapshot, _error: Error) -> Response {
+        FILTER_COUNTER.fetch_add(1, Ordering::SeqCst);
+        Response::builder()
+            .status(StatusCode::IM_A_TEAPOT)
+            .body("counted")
+    }
+}
+
+#[controller(path = "/dup-global-ctrl")]
+#[use_filters(CountingFilter)]
+struct DupGlobalCtrl;
+
+#[routes]
+impl DupGlobalCtrl {
+    #[get("/boom")]
+    async fn dup_global_ctrl_boom(&self) -> poem::Result<&'static str> {
+        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    }
+}
+
+#[controller(path = "/dup-global-method")]
+struct DupGlobalMethod;
+
+#[routes]
+impl DupGlobalMethod {
+    #[get("/boom")]
+    #[use_filters(CountingFilter)]
+    async fn dup_global_method_boom(&self) -> poem::Result<&'static str> {
+        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    }
+}
+
+#[controller(path = "/dup-ctrl-method")]
+#[use_filters(CountingFilter)]
+struct DupCtrlMethod;
+
+#[routes]
+impl DupCtrlMethod {
+    #[get("/boom")]
+    #[use_filters(CountingFilter)]
+    async fn dup_ctrl_method_boom(&self) -> poem::Result<&'static str> {
+        Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    }
+}
+
+#[module(providers = [
+    CountingFilter,
+    DupGlobalCtrl,
+    DupGlobalMethod,
+    DupCtrlMethod,
+])]
+struct DedupFilterModule;
+
+#[tokio::test]
+async fn same_filter_global_and_controller_runs_once() {
+    let _gate = GATE.lock().await;
+    reset_filter_counter();
+
+    // Global seeding + a redeclaration on the controller. The
+    // controller-scope wrap is skipped at mount time when the TypeId is
+    // already in `FilterSpecs` — the transport-level
+    // `HttpInterceptorMeta` wrap from `use_filters_global` carries the
+    // single execution.
+    let app = TestApp::builder()
+        .module::<DedupFilterModule>()
+        .use_filters_global([filter::<CountingFilter>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/dup-global-ctrl/boom").send().await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(
+        filter_calls(),
+        1,
+        "TypeId dedup: global + controller redeclaration must execute once",
+    );
+}
+
+#[tokio::test]
+async fn same_filter_global_and_method_runs_once() {
+    let _gate = GATE.lock().await;
+    reset_filter_counter();
+
+    // Same shape: the method-scope wrap is skipped at mount time when
+    // the TypeId is already in `FilterSpecs`.
+    let app = TestApp::builder()
+        .module::<DedupFilterModule>()
+        .use_filters_global([filter::<CountingFilter>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/dup-global-method/boom").send().await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(
+        filter_calls(),
+        1,
+        "TypeId dedup: global + method redeclaration must execute once",
+    );
+}
+
+#[tokio::test]
+async fn same_filter_controller_and_method_without_global_runs_once_by_chain_shape() {
+    let _gate = GATE.lock().await;
+    reset_filter_counter();
+
+    // No Global seeding — both wraps are emitted at mount time (the HTTP
+    // per-scope dedup is wired against `FilterSpecs` (Global) only).
+    // The single execution comes from the [`Filter`] chain shape, not
+    // from a TypeId dedup: a filter runs on the **error path** only,
+    // returning an `Ok(Response)`. The innermost wrap catches the
+    // handler's `Err` and rewrites it; the outer wrap therefore only
+    // ever sees the success path and passes it through. Net effect: one
+    // execution, same as the global-redeclaration cases above.
+    let app = TestApp::for_module::<DedupFilterModule>()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/dup-ctrl-method/boom").send().await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(
+        filter_calls(),
+        1,
+        "the inner filter rewrites Err → Ok; the outer wrap never fires",
+    );
 }

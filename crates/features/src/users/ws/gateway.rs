@@ -3,9 +3,12 @@ use std::sync::Arc;
 use nest_rs_seaorm::{CrudService, ServiceError};
 use nest_rs_ws::{gateway, messages};
 
+use crate::authn::AuthGuard;
+use crate::authz::AuthzGuard;
 use crate::users::{User, UsersService};
 
 #[gateway(path = "/ws")]
+#[use_guards(AuthGuard, AuthzGuard)]
 pub struct UsersGateway {
     #[inject]
     svc: Arc<UsersService>,

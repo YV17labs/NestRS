@@ -71,13 +71,13 @@ impl ResolverGuard for RequireAdmin {
 }
 
 #[resolver]
+#[use_guards(RequireAdmin)]
 struct GuardedResolver;
 
 // `secret` has no `&Context` of its own — the macro injects one to run the
 // guard. `whoami` already declares one; the macro reuses it (the path the
 // `#[crud]`-generated ops follow).
 #[resolver]
-#[use_guards(RequireAdmin)]
 impl GuardedResolver {
     #[query]
     async fn secret(&self) -> Result<String> {

@@ -19,3 +19,7 @@ nest-rs-core.workspace = true
 # transport-level wrap goes through HttpInterceptorMeta + a wrap closure).
 nest-rs-graphql.workspace = true
 nest-rs-ws.workspace = true
+# `use_interceptors_global` attaches its transport-level wrap via
+# `HttpInterceptorMeta`. Safe direction (nest-rs-http depends on no
+# trait crate any more).
+nest-rs-http.workspace = true

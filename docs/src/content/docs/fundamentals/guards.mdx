@@ -1,6 +1,6 @@
 ---
 title: Guards
-description: Pre-handler authorization — gate access, short-circuit with a response, attach request-scoped context.
+description: Transport-spanning pre-handler authorization — gate access, attach request context, declare once and run on HTTP / GraphQL / WS through the Layer System.
 sidebar:
   order: 4
 ---
@@ -8,68 +8,70 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A guard decides *whether* a handler runs. It sees the request before the
-handler does, borrows it mutably, and either returns `Ok(())` (let it
-through) or `Err(Response)` (short-circuit with that response — typically
-401, 403, 429).
+handler does and either lets it through (`Ok(())`) or short-circuits
+with a typed [`Denial`](https://docs.rs/nest-rs-guards/latest/nest_rs_guards/enum.Denial.html)
+the framework maps to a 401 / 403 / 429 response.
 
-Because the borrow is mutable, a guard can also **attach typed context**
-the handler reads back via `Ctx<T>` — that's how `AuthGuard` puts the
-authenticated `Claims` on the request without going through extractors.
-
-The trait is named in `nest-rs-middleware` and re-exported as
-`nest_rs_http::Guard`. It wraps [poem](https://docs.rs/poem)'s endpoint
-layer:
+`Guard` is a [`Layer`](/fundamentals/) sub-trait shipped by
+[`nest-rs-guards`](https://crates.io/crates/nest-rs-guards). One impl,
+three transports: declared once, every handler on HTTP, GraphQL, and WS
+runs through the same chain.
 
 ```rust
 #[async_trait]
-pub trait Guard: Send + Sync + 'static {
-    async fn check(&self, req: &mut Request) -> Result<(), Response>;
+pub trait Guard: Layer {
+    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> { Ok(()) }
+    async fn check_graphql(&self, _ctx: &GraphqlContext<'_>) -> Result<(), Denial> { Ok(()) }
+    async fn check_ws_message(&self, _client: &WsClient, _event: &str, _data: &Value) -> Result<(), Denial> { Ok(()) }
 }
 ```
+
+Override only the `check_*` method(s) where the guard has work to do —
+the rest inherit `Ok(())` defaults. A no-op default means "doesn't apply
+to this transport", not "skip security".
 
 ## A minimal guard
 
 ```rust
-use nest_rs_core::injectable;
-use nest_rs_http::{async_trait, Guard};
-use poem::http::StatusCode;
-use poem::{Request, Response};
+use nest_rs_guards::prelude::*;
+use nest_rs_http::poem::Request as HttpRequest;
 
 #[injectable]
 #[derive(Default)]
 pub struct RateLimitGuard;
 
+impl Layer for RateLimitGuard {}
+
 #[async_trait]
 impl Guard for RateLimitGuard {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
         if over_quota(req) {
-            return Err(Response::builder()
-                .status(StatusCode::TOO_MANY_REQUESTS)
-                .body("rate limited"));
+            return Err(Denial::rate_limited("rate limited", 60));
         }
         Ok(())
     }
 }
 ```
 
-A guard is just an `#[injectable]` provider that implements `Guard`. It
-goes in some module's `providers = [...]`, and the access graph holds
-controllers/handlers that reference it to importing its module.
+A guard is an `#[injectable]` provider that implements `Guard`. It goes
+in some module's `providers = [...]`, and the access graph enforces that
+every controller / resolver / gateway referencing it imports the right
+module.
 
-## Three binding scopes
+## The three scopes
 
-| Scope | Binding | Resolved from |
-|-------|---------|---------------|
-| **Global** | `HttpTransport::guard(Arc::new(g))` in your `main` | Built imperatively before `App::run` |
-| **Controller** | `#[use_guards(AuthGuard)]` on the controller struct | The container, at mount |
-| **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb | The container, at mount |
+| Scope | Binding | Resolved by |
+|-------|---------|-------------|
+| **Global** | `App::builder().use_guards_global([guard::<AuthGuard>()])` in `main` | A transport-level interceptor + the per-route shaper |
+| **Controller / Resolver / Gateway** | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct (HTTP, WS) or `impl` block (GraphQL) | The container, at mount |
+| **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 
-Multiple guards listed in a single attribute run in declaration order,
+Multiple guards listed in one attribute run in declaration order,
 outermost first — the first listed sees the request before the second.
 
 ```rust
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]      // controller scope, both bound
+#[use_guards(AuthGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -83,15 +85,78 @@ impl UsersController {
     }
 
     #[delete("/:id")]
-    #[use_guards(AdminGuard)]                  // handler scope, in addition
+    #[use_guards(AdminGuard)]
     async fn delete(&self, id: Path<Uuid>) -> Result<()> {
         self.svc.delete(*id).await
     }
 }
 ```
 
-`AdminGuard` runs *on top of* the controller's two guards — it doesn't
-replace them. Per-handler is additive.
+`AdminGuard` runs *on top of* the controller's two guards. Per-handler
+is additive, not substitutive.
+
+## TypeId dedup — redeclaration is free
+
+The Layer System dedups by [`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html)
+across the three scopes. When the same guard is declared at several
+levels, the **broadest scope wins** and the other declarations log a
+`warn` at mount but never re-execute.
+
+```rust
+// In main.rs
+App::builder()
+    .use_guards_global([guard::<AuthGuard>(), guard::<AuthzGuard>()])
+    .module::<AppModule>()
+
+// In crates/features/src/users/http/controller.rs
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AuthzGuard)]   // <- redeclared
+pub struct UsersController { /* … */ }
+```
+
+`AuthGuard` and `AuthzGuard` run **exactly once** per request, not twice.
+The transport-level `GlobalGuardsHttpInterceptor` executes the globals
+once at the HTTP boundary, and the per-route `LayersRouteInterceptor`
+filters Global-source entries out of the per-route chain to avoid a
+second execution.
+
+## Why redeclare on the controller, then?
+
+Defense in depth across crates. A `crates/features` controller is
+designed to be portable — the same `UsersController` may be mounted by
+`platform-api` today and by another app tomorrow. If the controller
+relies only on `use_guards_global([AuthGuard, AuthzGuard])` to be
+secure, **forgetting that line in the second app silently turns every
+route public**. The compiler will not complain; the controller has no
+visible relationship to authentication.
+
+Redeclaring on the controller binds the security policy to the code that
+needs it, not to the app that happens to mount it. The cost is one line
+and zero runtime overhead (the dedup logic above), the payoff is a
+controller that can't accidentally ship unguarded.
+
+The same logic applies symmetrically:
+
+- A `#[public]` handler stays open by intent — the absence of guards is
+  the explicit decision, marked by the attribute.
+- A handler that needs an extra check beyond the controller's stays
+  additive: `#[use_guards(AdminGuard)]` on the method runs on top of the
+  controller's `AuthGuard + AuthzGuard`.
+
+<Aside type="caution">
+**The dedup runs at the HTTP route level only.** It is what makes
+controller redeclaration free for HTTP. The WS gateway and GraphQL
+resolver scopes do *not* have an equivalent dedup against the global
+chain today — declaring `#[use_guards(AuthGuard)]` on a `#[gateway]` or
+on a `#[resolver]` impl while the same guard is global would double-run
+the check (the WS upgrade and the `POST /graphql` are HTTP requests that
+already go through `GlobalGuardsHttpInterceptor`, and the gateway /
+resolver level adds its own wrap on top). On these transports, rely on
+the global declaration; for cross-transport guards with custom
+per-resolver / per-message logic, override `check_graphql` /
+`check_ws_message` on the same `Guard` impl rather than redeclaring it
+at a finer scope.
+</Aside>
 
 ## Attaching request context
 
@@ -100,16 +165,16 @@ handler needs. `AuthGuard` is the canonical case:
 
 ```rust
 #[async_trait]
-impl Guard for AuthGuard {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
-        let claims = verify_bearer(req)?;
-        req.extensions_mut().insert(claims);    // attach
+impl Guard for AuthGuard<MyStrategy> {
+    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
+        let claims = self.strategy.authenticate(req).await?;
+        req.extensions_mut().insert(claims);   // attach
         Ok(())
     }
 }
 ```
 
-The handler reads it back:
+The handler reads it back with `Ctx<T>`:
 
 ```rust
 use nest_rs_http::Ctx;
@@ -120,9 +185,9 @@ async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
 }
 ```
 
-`Ctx<T>` rejects with `500` if the value isn't on the request — a missing
-context means the guard that should have set it never ran. The error
-explicitly names the missing type and points at the wiring fix.
+`Ctx<T>` rejects with a 500 if the value is absent — a missing context
+means the guard that should have set it never ran. The error names the
+missing type so the wiring fix is obvious.
 
 ## Reading per-handler metadata
 
@@ -138,15 +203,17 @@ pub struct Roles(pub &'static [&'static str]);
 #[derive(Default)]
 pub struct RolesGuard;
 
+impl Layer for RolesGuard {}
+
 #[async_trait]
 impl Guard for RolesGuard {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
-        let claims = req.extensions().get::<Claims>().ok_or_else(forbidden)?;
+    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
+        let claims = req.extensions().get::<Claims>().ok_or_else(Denial::forbidden_empty)?;
         let required = Reflector::new(req).get::<Roles>().map(|r| r.0).unwrap_or(&[]);
         if required.iter().any(|r| claims.roles.contains(r)) {
             Ok(())
         } else {
-            Err(forbidden())
+            Err(Denial::forbidden("insufficient roles"))
         }
     }
 }
@@ -160,12 +227,33 @@ async fn admin(&self) -> &'static str { "ok" }
 ```
 
 <Aside type="caution">
-`#[meta(...)]` only reaches a guard bound **per controller** or **per
-handler**. A global guard runs before routing resolves a handler, so
-route metadata is not yet attached and the reflector finds nothing.
+`#[meta(...)]` only reaches a guard bound at controller or per-handler
+scope. A global guard runs before routing resolves a handler, so the
+reflector finds nothing.
 </Aside>
 
-## Ordering with the other layers
+## `#[public]` is metadata, not a framework skip
+
+`#[public]` attaches a [`Public`](https://docs.rs/nest-rs-core/latest/nest_rs_core/struct.Public.html)
+marker to the route via the same channel as `#[meta(...)]`. The
+framework does **not** act on it — each guard decides what "public"
+means for it:
+
+- `AuthGuard` typically still runs and authenticates if a token is
+  present (so a downstream policy sees the principal), but does not
+  reject when the request is anonymous.
+- `AbilityGuard` may still run on a public route to apply visitor rules.
+
+Reading the marker:
+
+```rust
+if Reflector::new(req).is_public() { /* relaxed policy */ }
+```
+
+This keeps the *what* (run on every route) separate from the *how* (the
+guard's own policy).
+
+## Ordering inside a route
 
 Per-route, inner → outer:
 
@@ -173,30 +261,27 @@ Per-route, inner → outer:
 shaper → interceptors → guards → filters → meta
 ```
 
-- **Shaper** wraps the handler innermost (the response masking gate
-  emitted by `#[routes]` when a handler declares an `Authorize`
-  parameter).
-- **Interceptors** wrap the shaper and may install ambient state across
-  the guards.
-- **Guards** run after interceptors — that's how `DbContext` (a global
-  interceptor) installs the executor before `AbilityGuard` reads from it.
-- **Filters** see the error coming out of the chain.
+- **Shaper** wraps the handler innermost (e.g. response masking emitted
+  by `#[routes]` when a handler takes an `Authorize` parameter).
+- **Interceptors** wrap the shaper and can install ambient state across
+  the guards (`DbContext` for example installs the SeaORM executor
+  before `AbilityGuard` reads from it).
+- **Guards** run after interceptors, in declaration order. Inside the
+  chain, [`Layer::priority`] is an optional tiebreaker — most guards
+  leave it at 0 and rely on declaration order.
+- **Filters** map errors coming out of the chain to responses.
 - **Meta** is read by guards via `Reflector`.
 
-So a guard reads request context that an upstream interceptor or
-upstream guard may have attached, and a downstream handler reads what
-*this* guard attaches.
+## GraphQL and WebSocket
 
-## GraphQL and WebSocket guards
+`Guard` spans all three transports through `check_http`,
+`check_graphql`, and `check_ws_message`. For most apps the global HTTP
+declaration is enough — the GraphQL `POST /graphql` and the WS upgrade
+are both HTTP requests that pass through the global chain.
 
-The trait is HTTP-shaped (it takes `&mut Request`). GraphQL and
-WebSockets use their own guard traits — `ResolverGuard` and
-`MessageGuard` — but the *binding model* is the same:
-`#[use_guards(...)]` on the `#[resolver]` impl, on the gateway struct,
-or beside a `#[subscribe_message]`. The framework's authz feature
-provides the cross-transport bridges so a single `AppAbility` covers all
-three.
-
+GraphQL also exposes `ResolverGuard` (a per-resolver marker) and the
+async-graphql `OperationGuard`, both wired through the
+`AuthzGraphqlModule` for projects that want a finer per-operation check.
 See [Security](/security/) for the bridge between HTTP, GraphQL, and WS
 authz.
 
@@ -204,8 +289,9 @@ authz.
 
 - [Interceptors](/fundamentals/interceptors/) — the sibling layer; wraps
   the handler instead of gating it.
-- [Exception filters](/fundamentals/exception-filters/) — what happens
-  after a handler (or guard) returns `Err`.
+- [Pipes](/fundamentals/pipes/) — input transform / validation.
+- [Exception filters](/fundamentals/exception-filters/) — typed catch
+  for handler errors.
 - [Security](/security/) — `AuthGuard`, `AbilityGuard`, the full chain.
 - [HTTP / controllers](/http/controllers/) — per-route bindings end to
   end.

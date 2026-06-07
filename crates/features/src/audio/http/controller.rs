@@ -6,8 +6,11 @@ use poem::web::Json;
 use poem::{Error, Result};
 
 use crate::audio::{AudioService, TranscodeJob};
+use crate::authn::AuthGuard;
+use crate::authz::AuthzGuard;
 
 #[controller(path = "/audio")]
+#[use_guards(AuthGuard, AuthzGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,

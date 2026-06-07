@@ -3,7 +3,7 @@ use std::sync::Arc;
 use nest_rs_mcp::{
     McpOperationGuard, ServerHandler, endpoint_with_guard, tool_handler, tool_router,
 };
-use nest_rs_middleware::Guard;
+use nest_rs_middleware::HttpGuard;
 use poem::http::StatusCode;
 use poem::test::TestClient;
 use poem::{Error, Request, Response};
@@ -11,7 +11,7 @@ use poem::{Error, Request, Response};
 struct RejectAll;
 
 #[async_trait::async_trait]
-impl Guard for RejectAll {
+impl HttpGuard for RejectAll {
     async fn check(&self, _req: &mut Request) -> Result<(), Response> {
         Err(Response::builder()
             .status(StatusCode::UNAUTHORIZED)

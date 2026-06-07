@@ -7,7 +7,6 @@ use nest_rs_seaorm::graphql::bind;
 use nest_rs_graphql::{crud, resolver};
 
 use crate::Claims;
-use crate::authz::graphql::GraphqlAuthGuard;
 use crate::users::{
     CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService,
 };
@@ -25,7 +24,6 @@ pub struct UsersResolver {
     create = CreateUserInput,
     update = UpdateUserInput,
 )]
-#[use_guards(GraphqlAuthGuard)]
 impl UsersResolver {
     #[mutation]
     async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {

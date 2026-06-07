@@ -45,7 +45,7 @@ pub use poem;
 pub use schemars;
 
 pub use async_trait::async_trait;
-pub use nest_rs_middleware::{EndpointExt, Filter, Guard, Interceptor, Next, RequestSnapshot};
+pub use nest_rs_middleware::{EndpointExt, Filter, HttpGuard, Interceptor, Next, RequestSnapshot};
 
 pub use nest_rs_http_macros::{
     controller, crud, http_code, input, interceptor, redirect, response_header, routes,

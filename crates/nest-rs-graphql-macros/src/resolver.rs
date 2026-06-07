@@ -6,8 +6,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    Attribute, FnArg, Ident, ImplItem, Item, ItemImpl, ItemStruct, Path, Signature, Token, Type,
-    parse_macro_input, parse_quote,
+    Attribute, FnArg, Ident, ImplItem, Item, ItemImpl, ItemStruct, LitStr, Path, Signature, Token,
+    Type, parse_macro_input, parse_quote,
 };
 
 use nest_rs_codegen::{
@@ -105,20 +105,60 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 /// The attribute is consumed so it never reaches the compiler as an unknown
 /// attribute. At most one per item.
 fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    let Some(pos) = attrs.iter().position(|a| a.path().is_ident("use_guards")) else {
+    take_path_list(attrs, "use_guards")
+}
+
+/// `#[force_guards(...)]` — the Layer-System opt-in that lets a per-method
+/// guard re-run even when the same `TypeId` is already in the global chain.
+/// Same shape as `#[use_guards]`.
+fn take_force_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
+    take_path_list(attrs, "force_guards")
+}
+
+fn take_path_list(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Vec<Path>> {
+    let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
         return Ok(Vec::new());
     };
     let attr = attrs.remove(pos);
-    if attrs.iter().any(|a| a.path().is_ident("use_guards")) {
+    if attrs.iter().any(|a| a.path().is_ident(ident)) {
         return Err(syn::Error::new_spanned(
             &attr,
-            "at most one `#[use_guards(...)]` here; list every guard in it",
+            format!("at most one `#[{ident}(...)]` here; list every guard in it"),
         ));
     }
     Ok(attr
         .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?
         .into_iter()
         .collect())
+}
+
+/// Extract and remove a flag attribute (no args, no parens) like `#[public]`.
+/// Returns `true` when present (and removes it), `false` when absent.
+fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> bool {
+    let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
+        return false;
+    };
+    attrs.remove(pos);
+    true
+}
+
+/// True when the method's return type's last path segment is `Result` — the
+/// macro only emits the global guard chain (with its `?`-propagated
+/// `async_graphql::Error`) on `Result`-returning queries/mutations. A bare-
+/// return resolver is treated as `#[public]` by signature: it can't surface
+/// an authn/authz failure, so the global chain stays off it.
+fn sig_returns_result(sig: &Signature) -> bool {
+    match &sig.output {
+        syn::ReturnType::Default => false,
+        syn::ReturnType::Type(_, ty) => match &**ty {
+            Type::Path(tp) => tp
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "Result"),
+            _ => false,
+        },
+    }
 }
 
 /// The ident of a method's `&Context<'_>` parameter (matched on the last
@@ -155,37 +195,75 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
     (sig, ident)
 }
 
-/// Emit guard checks before a resolver operation. A missing provider should
-/// have been caught by the access graph at boot; a slip-through converts to a
-/// GraphQL error rather than panicking the worker.
-fn guard_checks(guards: &[Path], ctx: &Ident) -> TokenStream2 {
-    let checks = guards.iter().map(|g| {
-        let msg = format!(
-            "#[use_guards] resolver guard `{}` is not registered — add it to a module's providers",
-            quote!(#g),
-        );
+/// Emit the unified Layer System chain for a resolver operation: global +
+/// per-resolver (controller-level) + per-method guards, deduped by `TypeId`.
+/// `needs_global = false` (a bare-return resolver that can't surface a
+/// denial) skips the chain entirely.
+///
+/// `controller_guards` are the `#[use_guards]` declared on the impl block;
+/// `method_guards` are the `#[use_guards]` declared beside the
+/// `#[query]` / `#[mutation]` / `#[field_resolver]`.
+///
+/// `#[public]` is NOT propagated to the framework — the macro attaches a
+/// `Public` marker in `ContextSeed`-emitted glue (handled outside this
+/// helper) so guards can read it from the GraphQL context if they care.
+fn layered_resolver_chain(
+    controller_guards: &[Path],
+    method_guards: &[Path],
+    force_guards: &[Path],
+    ctx: &Ident,
+    route_label: &str,
+    needs_global: bool,
+) -> TokenStream2 {
+    let label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
+    let controller_specs = graphql_guard_specs(controller_guards);
+    let method_specs = graphql_guard_specs(method_guards);
+    let force_typeids = force_guard_typeids(force_guards);
+    if !needs_global
+        && controller_guards.is_empty()
+        && method_guards.is_empty()
+        && force_guards.is_empty()
+    {
+        return quote!();
+    }
+    quote! {
+        {
+            let __container = #ctx.data_unchecked::<::nest_rs_core::Container>();
+            ::nest_rs_guards::run_layered_graphql_chain(
+                #ctx,
+                __container,
+                &#controller_specs,
+                &#method_specs,
+                &#force_typeids,
+                #label_lit,
+            ).await?;
+        }
+    }
+}
+
+fn graphql_guard_specs(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec![] };
+    }
+    let entries = paths.iter().map(|p| {
         quote! {
-            {
-                let __guard = match ::nest_rs_core::Container::get::<#g>(
-                    #ctx.data_unchecked::<::nest_rs_core::Container>(),
-                ) {
-                    ::core::option::Option::Some(__g) => __g,
-                    ::core::option::Option::None => {
-                        ::tracing::error!(
-                            target: "nest_rs::graphql",
-                            guard = stringify!(#g),
-                            "resolver guard is missing from the container — boot wiring bug",
-                        );
-                        return ::core::result::Result::Err(
-                            ::nest_rs_graphql::async_graphql::Error::new(#msg),
-                        );
-                    }
-                };
-                ::nest_rs_graphql::ResolverGuard::check(&*__guard, #ctx).await?;
+            ::nest_rs_guards::integration::RouteLayerSpec {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>),
             }
         }
     });
-    quote! { #(#checks)* }
+    quote! { ::std::vec![#(#entries),*] }
+}
+
+fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec![] };
+    }
+    let entries = paths.iter().map(|p| quote! { ::core::any::TypeId::of::<#p>() });
+    quote! { ::std::vec![#(#entries),*] }
 }
 
 /// `#[resolver]` on the impl: split `#[query]`/`#[mutation]` methods into
@@ -250,7 +328,16 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             Ok(guards) => guards,
             Err(err) => return err.to_compile_error().into(),
         };
+        let force_method_guards = match take_force_guards(&mut method.attrs) {
+            Ok(paths) => paths,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        // Consume `#[public]` so it isn't emitted as an unknown attribute;
+        // GraphQL guards that care can inspect a custom marker the dev
+        // seeds via `ContextSeed` (the framework does not act on the flag).
+        let _is_public = take_flag_attr(&mut method.attrs, "public");
         all_guard_paths.extend(method_guards.iter().cloned());
+        all_guard_paths.extend(force_method_guards.iter().cloned());
         // `#[field_resolver]` skips resolver-level guards: a field resolver
         // runs per-row, and the operation's auth posture is already enforced
         // by the operation guard plus the resolver-level guard on the root
@@ -259,15 +346,6 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         // gate still binds `#[use_guards]` at the method level. The access
         // graph still sees the resolver-level dependency via `all_guard_paths`.
         let is_field = verb_attr.path().is_ident("field_resolver");
-        let op_guards: Vec<Path> = if is_field {
-            method_guards
-        } else {
-            resolver_guards
-                .iter()
-                .cloned()
-                .chain(method_guards)
-                .collect()
-        };
 
         // The delegating method keeps the signature and any remaining attrs
         // (`#[graphql(...)]` belongs there); the inherent method holds the body.
@@ -276,11 +354,20 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         let method_name = method.sig.ident.clone();
 
         if is_field {
-            let (parent_ty, deleg, deps) =
-                match field_method(&self_ty, &deleg_attrs, &sig, &op_guards) {
-                    Ok(triple) => triple,
-                    Err(err) => return err.to_compile_error().into(),
-                };
+            // Field resolvers gate per-row — they never replay the global
+            // chain; only their own `#[use_guards]` apply.
+            let field_label = format!("{}.{}", quote!(#self_ty), method_name);
+            let (parent_ty, deleg, deps) = match field_method(
+                &self_ty,
+                &deleg_attrs,
+                &sig,
+                &method_guards,
+                &force_method_guards,
+                &field_label,
+            ) {
+                Ok(triple) => triple,
+                Err(err) => return err.to_compile_error().into(),
+            };
             field_dep_types.extend(deps);
             let key = quote!(#parent_ty).to_string();
             match field_groups
@@ -301,14 +388,34 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             } else {
                 quote! { self.0.#method_name(#(#arg_idents),*) }
             };
-            let delegating = if op_guards.is_empty() {
+            // Global guard chain runs on `Result`-returning queries/mutations
+            // only (bare-return resolvers can't surface a denial). Local
+            // `#[use_guards]` chain runs through the same chain helper.
+            let needs_global = sig_returns_result(&sig);
+            let route_label = format!(
+                "{} {}",
+                if is_query { "query" } else { "mutation" },
+                method_name,
+            );
+            let delegating = if !needs_global
+                && resolver_guards.is_empty()
+                && method_guards.is_empty()
+                && force_method_guards.is_empty()
+            {
                 quote! {
                     #(#deleg_attrs)*
                     #sig { #call }
                 }
             } else {
                 let (gsig, gctx) = ensure_ctx_param(&sig);
-                let checks = guard_checks(&op_guards, &gctx);
+                let checks = layered_resolver_chain(
+                    &resolver_guards,
+                    &method_guards,
+                    &force_method_guards,
+                    &gctx,
+                    &route_label,
+                    needs_global,
+                );
                 quote! {
                     #(#deleg_attrs)*
                     #gsig { #checks #call }
@@ -378,6 +485,8 @@ fn field_method(
     deleg_attrs: &[Attribute],
     sig: &Signature,
     guards: &[Path],
+    force_guards: &[Path],
+    field_label: &str,
 ) -> syn::Result<(Type, TokenStream2, Vec<Type>)> {
     let mut inputs = sig.inputs.iter();
     match inputs.next() {
@@ -465,7 +574,17 @@ fn field_method(
         quote!()
     };
 
-    let checks = guard_checks(guards, &format_ident!("__ctx"));
+    // `#[field_resolver]` never runs global guards (operation-level enforcement
+    // already happened), so `needs_global` is `false`. `is_public` is irrelevant
+    // here since there's no global chain to skip.
+    let checks = layered_resolver_chain(
+        &[],
+        guards,
+        force_guards,
+        &format_ident!("__ctx"),
+        field_label,
+        false,
+    );
     let method = quote! {
         #(#deleg_attrs)*
         #asyncness fn #method_name #generics (

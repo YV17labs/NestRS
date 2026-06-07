@@ -30,3 +30,13 @@ pub(crate) fn take_use_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Res
         .into_iter()
         .collect())
 }
+
+/// Consumes a marker attribute (`#[public]`, etc.) so it never reaches the
+/// compiler as unknown. Returns `true` when present.
+pub(crate) fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> bool {
+    let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
+        return false;
+    };
+    attrs.remove(pos);
+    true
+}

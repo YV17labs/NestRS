@@ -1,0 +1,20 @@
+[package]
+name = "nest-rs-guards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Transport-spanning guards for nestrs — one trait, three transports (HTTP, GraphQL, WS), declared once with App::builder().use_guards_global(...)."
+
+[dependencies]
+async-trait.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+nest-rs-core.workspace = true
+nest-rs-http.workspace = true
+nest-rs-graphql.workspace = true
+nest-rs-middleware.workspace = true
+nest-rs-pipes.workspace = true
+nest-rs-ws.workspace = true

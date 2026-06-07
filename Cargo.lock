@@ -769,6 +769,7 @@ dependencies = [
  "anyhow",
  "futures-util",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-health",
  "nest-rs-http",
  "nest-rs-opentelemetry",
@@ -1424,6 +1425,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-graphql",
+ "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-queue",
  "nest-rs-redis",
@@ -1863,6 +1865,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-testing",
  "poem",
@@ -2618,6 +2621,7 @@ dependencies = [
  "jsonwebtoken",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http",
  "oauth2",
  "poem",
@@ -2636,11 +2640,13 @@ dependencies = [
  "async-graphql",
  "nest-rs-core",
  "nest-rs-graphql",
+ "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-mcp",
  "nest-rs-middleware",
  "nest-rs-resource",
  "nest-rs-testing",
+ "nest-rs-ws",
  "poem",
  "sea-orm",
  "serde",
@@ -2734,6 +2740,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-graphql-macros",
+ "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-testing",
  "poem",
@@ -2755,11 +2762,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nest-rs-guards"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-http",
+ "nest-rs-middleware",
+ "nest-rs-pipes",
+ "nest-rs-ws",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "nest-rs-health"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-health-macros",
  "nest-rs-http",
  "poem",
@@ -2788,6 +2811,7 @@ dependencies = [
  "figment",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http-macros",
  "nest-rs-middleware",
  "nest-rs-pipes",
@@ -2898,6 +2922,7 @@ dependencies = [
 name = "nest-rs-pipes"
 version = "0.1.0"
 dependencies = [
+ "nest-rs-core",
  "serde_json",
  "thiserror 2.0.18",
  "uuid",
@@ -3042,6 +3067,7 @@ dependencies = [
  "anyhow",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-opentelemetry",
  "poem",
@@ -3061,6 +3087,7 @@ dependencies = [
  "async-trait",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http",
  "parking_lot",
  "poem",
@@ -3074,6 +3101,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-middleware",
  "nest-rs-ws-macros",
@@ -3630,6 +3658,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-graphql",
+ "nest-rs-guards",
  "nest-rs-health",
  "nest-rs-http",
  "nest-rs-middleware",

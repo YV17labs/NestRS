@@ -32,3 +32,9 @@ tokio = { workspace = true }
 tracing.workspace = true
 # Connection registry lock — parking_lot for poison-free, panic-free locking.
 parking_lot.workspace = true
+
+[dev-dependencies]
+# The `#[messages]` macro emits `::nest_rs_guards::*` for the Layer-System
+# chain (global + per-message guard dedup). nest-rs-guards depends on
+# nest-rs-ws at the lib level, so this stays a dev-only edge.
+nest-rs-guards.workspace = true

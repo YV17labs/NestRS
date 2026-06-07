@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use nest_rs_core::injectable;
 use nest_rs_mcp::{BoxFuture, McpOperationGuard};
-use nest_rs_middleware::Guard;
+use nest_rs_middleware::HttpGuard;
 use poem::http::StatusCode;
 use poem::{Error, Request, Response, Result};
 
@@ -16,14 +16,14 @@ use crate::{Ability, with_ability};
 /// Runs `A` then `G` on each MCP HTTP request and scopes the handler to the
 /// resulting ability when present. Inject it as `dyn McpOperationGuard`.
 #[injectable]
-pub struct McpAbilityBridge<A: Guard, G: Guard> {
+pub struct McpAbilityBridge<A: HttpGuard, G: HttpGuard> {
     #[inject]
     auth: Arc<A>,
     #[inject]
     ability: Arc<G>,
 }
 
-impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
+impl<A: HttpGuard, G: HttpGuard> McpOperationGuard for McpAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             if self.auth.check(req).await.is_err() {

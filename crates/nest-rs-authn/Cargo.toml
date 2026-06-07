@@ -20,6 +20,7 @@ validator.workspace = true
 # `Strategy` reads the `poem::Request`; `AuthGuard` implements the `Guard` trait
 # re-exported by the HTTP surface.
 nest-rs-http.workspace = true
+nest-rs-guards.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on

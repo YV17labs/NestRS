@@ -32,9 +32,10 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ... }`; the owned parameter is deserialized from `data`, the return value
 /// serialized back under the same event (`()` => no reply).
 ///
-/// `#[use_guards(...)]` beside a handler binds per-message `MessageGuard`s.
-/// `#[on_connect]` / `#[on_disconnect]` are the lifecycle-hook analogs —
-/// `&self` with an optional `&WsClient`.
+/// `#[use_guards(...)]` beside a handler binds per-message guards that the
+/// Layer System dedups against the global chain. `#[on_connect]` /
+/// `#[on_disconnect]` are the lifecycle-hook analogs — `&self` with an
+/// optional `&WsClient`.
 ///
 /// Emits `Gateway` (dispatcher + hooks) and `Discoverable` — the latter
 /// attaches an `HttpEndpointMeta` so the gateway self-mounts on the HTTP

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_authn::{AuthError, AuthGuard, Outcome, Strategy};
-use nest_rs_http::Guard;
+use nest_rs_http::HttpGuard;
 use poem::http::StatusCode;
 use poem::{Body, Request, Response};
 

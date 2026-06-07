@@ -1,12 +1,20 @@
 //! Transport-agnostic validation and transformation pipes.
-//! A [`Pipe`] is a pure transform run at a surface's request boundary,
-//! between extraction and the handler; the surface binds it to a parameter
-//! (HTTP does so via the `Valid<E>` / `Piped<P, E>` extractors in
-//! `nestrs-http`).
+//!
+//! Two flavors:
+//!
+//! - **Per-extractor [`Pipe`]** — pure transform run at a surface's
+//!   request boundary, between extraction and the handler. HTTP binds it
+//!   via the `Valid<E>` / `Piped<P, E>` extractors in `nestrs-http`.
+//! - **[`GlobalPipe`]** — `useGlobalPipes`-style: applies to every JSON
+//!   request body across the app. Declared with
+//!   `App::builder().use_pipes_global(...)`. Runs after Guards, before the
+//!   handler — the canonical NestJS Pipe slot.
 
+mod global;
 mod pipe;
 mod pipes;
 
+pub use global::GlobalPipe;
 pub use pipe::{Pipe, PipeError};
 pub use pipes::{
     Lowercase, Parse, ParseArray, ParseBool, ParseFloat, ParseInt, ParseUuid, ParseUuidV3,

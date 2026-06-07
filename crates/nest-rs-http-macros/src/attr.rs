@@ -21,6 +21,16 @@ pub(crate) fn opt_str(value: &Option<LitStr>) -> TokenStream2 {
     }
 }
 
+/// Extract and remove a flag attribute (no args, no parens) like `#[public]`.
+/// Returns `true` when present (and removes it), `false` when absent.
+pub(crate) fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> bool {
+    let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
+        return false;
+    };
+    attrs.remove(pos);
+    true
+}
+
 /// Extract and remove a `#[<ident>(PathA, PathB)]` attribute (empty when
 /// absent); the attribute is consumed so it never reaches the compiler as
 /// unknown. At most one accepted; a second of the same ident is rejected with

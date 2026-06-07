@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
-/// Pre-handler authorization. Returning `Err(response)` short-circuits the
-/// chain with that response (typically 401/403/429); the handler never runs.
+/// HTTP-flavored guard. Returning `Err(response)` short-circuits the chain
+/// with that response (typically 401/403/429); the handler never runs.
 ///
 /// The request is borrowed **mutably**, so a guard may also *attach*
 /// request-scoped context the handler reads back via
@@ -11,14 +11,16 @@ use poem::{Endpoint, IntoResponse, Request, Response, Result};
 ///
 /// Bind globally (`HttpTransport::guard`) or per-handler with
 /// `#[use_guards(MyGuard)]`, where the guard is resolved from the container as
-/// any `#[injectable]` provider.
+/// any `#[injectable]` provider. For a transport-spanning guard (HTTP +
+/// GraphQL + WS) implemented once and bound via `App::builder().use_guards_global(...)`,
+/// see [`nest_rs_guards::Guard`].
 #[async_trait]
-pub trait Guard: Send + Sync + 'static {
+pub trait HttpGuard: Send + Sync + 'static {
     async fn check(&self, req: &mut Request) -> std::result::Result<(), Response>;
 }
 
 #[async_trait]
-impl<T: Guard + ?Sized> Guard for std::sync::Arc<T> {
+impl<T: HttpGuard + ?Sized> HttpGuard for std::sync::Arc<T> {
     async fn check(&self, req: &mut Request) -> std::result::Result<(), Response> {
         (**self).check(req).await
     }
@@ -39,7 +41,7 @@ impl<E, G> Endpoint for GuardEndpoint<E, G>
 where
     E: Endpoint + Send + Sync,
     E::Output: IntoResponse,
-    G: Guard,
+    G: HttpGuard,
 {
     type Output = Response;
 

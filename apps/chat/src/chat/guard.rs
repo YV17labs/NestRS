@@ -1,21 +1,24 @@
-use nest_rs_core::injectable;
+use nest_rs_core::{Layer, injectable};
+use nest_rs_guards::{Denial, Guard};
 use nest_rs_ws::serde_json::Value;
-use nest_rs_ws::{MessageGuard, WsClient, async_trait};
+use nest_rs_ws::{WsClient, async_trait};
 
 #[injectable]
 #[derive(Default)]
 pub struct ModeratedGuard;
 
+impl Layer for ModeratedGuard {}
+
 #[async_trait]
-impl MessageGuard for ModeratedGuard {
-    async fn can_activate(
+impl Guard for ModeratedGuard {
+    async fn check_ws_message(
         &self,
         _client: &WsClient,
         _event: &str,
         data: &Value,
-    ) -> Result<(), String> {
+    ) -> Result<(), Denial> {
         match data.get("author").and_then(Value::as_str) {
-            Some("banned") => Err("author `banned` is not allowed to post".into()),
+            Some("banned") => Err(Denial::forbidden("author `banned` is not allowed to post")),
             _ => Ok(()),
         }
     }
@@ -36,7 +39,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_a_banned_author() {
         let denied = ModeratedGuard
-            .can_activate(
+            .check_ws_message(
                 &client(),
                 "message",
                 &json!({ "author": "banned", "text": "x" }),
@@ -48,7 +51,7 @@ mod tests {
     #[tokio::test]
     async fn allows_everyone_else() {
         let ok = ModeratedGuard
-            .can_activate(
+            .check_ws_message(
                 &client(),
                 "message",
                 &json!({ "author": "ada", "text": "x" }),

@@ -7,7 +7,7 @@ use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::module;
 use nest_rs_http::poem::web::Json;
-use nest_rs_http::{Guard, HttpTransport, async_trait, controller, routes};
+use nest_rs_http::{HttpGuard, HttpTransport, async_trait, controller, routes};
 use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
 use poem::{Request, Response};
@@ -48,7 +48,7 @@ struct WidgetDto {
 struct AbilityInjector;
 
 #[async_trait]
-impl Guard for AbilityInjector {
+impl HttpGuard for AbilityInjector {
     async fn check(&self, req: &mut Request) -> Result<(), Response> {
         let admin = req
             .headers()
@@ -156,7 +156,7 @@ async fn a_list_masks_each_row_and_retains_wire_keys() {
     struct ListAbilityInjector;
 
     #[async_trait]
-    impl Guard for ListAbilityInjector {
+    impl HttpGuard for ListAbilityInjector {
         async fn check(&self, req: &mut Request) -> Result<(), Response> {
             let mut b = AbilityBuilder::new();
             b.can(Action::Read, widget::Entity);

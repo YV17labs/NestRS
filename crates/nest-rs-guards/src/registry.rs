@@ -1,0 +1,156 @@
+//! Layer registration — typed specs the builder uses to seed the global
+//! layer chain into the container. Each transport's shaper resolves them
+//! against the live container at configure time.
+
+use std::any::TypeId;
+use std::sync::Arc;
+
+use nest_rs_core::Container;
+use nest_rs_pipes::GlobalPipe;
+
+use crate::Guard;
+
+/// One entry in the `use_guards_global` list. Created by [`guard::<T>()`];
+/// resolved against the live container at configure time.
+pub struct GuardSpec {
+    pub type_id: TypeId,
+    pub name: &'static str,
+    pub(crate) resolve: fn(&Container) -> Option<Arc<dyn Guard>>,
+}
+
+/// Construct a [`GuardSpec`] for the given guard type.
+///
+/// Use inside `App::builder().use_guards_global([...])` to declare which
+/// guards run on every request across all transports.
+///
+/// ```rust,ignore
+/// App::builder()
+///     .use_guards_global([guard::<AuthGuard>(), guard::<AuthzGuard>()])
+///     .module::<AppModule>()
+/// ```
+pub fn guard<G: Guard + 'static>() -> GuardSpec {
+    GuardSpec {
+        type_id: TypeId::of::<G>(),
+        name: std::any::type_name::<G>(),
+        resolve: |c| c.get::<G>().map(|arc| arc as Arc<dyn Guard>),
+    }
+}
+
+impl GuardSpec {
+    /// Resolve this spec against the live container.
+    pub fn resolve(&self, container: &Container) -> Option<Arc<dyn Guard>> {
+        (self.resolve)(container)
+    }
+}
+
+/// One entry in the `use_pipes_global` list — same shape as [`GuardSpec`].
+pub struct PipeSpec {
+    pub type_id: TypeId,
+    pub name: &'static str,
+    pub(crate) resolve: fn(&Container) -> Option<Arc<dyn GlobalPipe>>,
+}
+
+/// Construct a [`PipeSpec`] for the given pipe type.
+///
+/// ```rust,ignore
+/// App::builder()
+///     .use_pipes_global([pipe::<StripUnknownFields>()])
+///     .module::<AppModule>()
+/// ```
+pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
+    PipeSpec {
+        type_id: TypeId::of::<P>(),
+        name: std::any::type_name::<P>(),
+        resolve: |c| c.get::<P>().map(|arc| arc as Arc<dyn GlobalPipe>),
+    }
+}
+
+impl PipeSpec {
+    pub fn resolve(&self, container: &Container) -> Option<Arc<dyn GlobalPipe>> {
+        (self.resolve)(container)
+    }
+}
+
+/// The unresolved `Vec<GuardSpec>` seeded into the container by
+/// `AppBuilder::use_guards_global(...)`. Each transport reads it at
+/// configure time and resolves against the live container.
+pub struct GuardSpecs(pub Vec<GuardSpec>);
+
+impl GuardSpecs {
+    pub fn resolve_all(&self, container: &Container) -> GlobalGuards {
+        let resolved: Vec<Arc<dyn Guard>> = self
+            .0
+            .iter()
+            .filter_map(|s| match s.resolve(container) {
+                Some(g) => Some(g),
+                None => {
+                    tracing::warn!(
+                        target: "nest_rs::layers",
+                        layer = s.name,
+                        "global guard not registered — skipping at runtime (boot-time access-graph validation should have caught this)",
+                    );
+                    None
+                }
+            })
+            .collect();
+        GlobalGuards::from_vec(resolved)
+    }
+
+    /// Type-ids paired with names, for dedup queries from the per-route shaper.
+    pub fn type_ids(&self) -> Vec<(TypeId, &'static str)> {
+        self.0.iter().map(|s| (s.type_id, s.name)).collect()
+    }
+}
+
+/// The unresolved `Vec<PipeSpec>` seeded by `AppBuilder::use_pipes_global`.
+pub struct PipeSpecs(pub Vec<PipeSpec>);
+
+impl PipeSpecs {
+    pub fn resolve_all(&self, container: &Container) -> Vec<Arc<dyn GlobalPipe>> {
+        self.0
+            .iter()
+            .filter_map(|s| match s.resolve(container) {
+                Some(p) => Some(p),
+                None => {
+                    tracing::warn!(
+                        target: "nest_rs::layers",
+                        layer = s.name,
+                        "global pipe not registered — skipping at runtime (boot-time access-graph validation should have caught this)",
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn type_ids(&self) -> Vec<(TypeId, &'static str)> {
+        self.0.iter().map(|s| (s.type_id, s.name)).collect()
+    }
+}
+
+/// The resolved global guard chain — each transport pulls this at configure
+/// time and folds it into its request handling.
+#[derive(Clone, Default)]
+pub struct GlobalGuards(Vec<Arc<dyn Guard>>);
+
+impl GlobalGuards {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn from_vec(guards: Vec<Arc<dyn Guard>>) -> Self {
+        Self(guards)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Guard>> + '_ {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}

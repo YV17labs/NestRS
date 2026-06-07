@@ -4,8 +4,9 @@
 //! through the HTTP harness. One `#[test]` per scenario; the fixtures are tiny
 //! inline controllers, no product entities and no database.
 
-use nest_rs_core::{injectable, module};
-use nest_rs_http::{Guard, HttpTransport, async_trait, controller, routes};
+use nest_rs_core::{Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::{HttpGuard, HttpTransport, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response};
@@ -15,8 +16,17 @@ use poem::{Request, Response};
 #[derive(Default)]
 struct DenyGuard;
 
+impl Layer for DenyGuard {}
+
 #[async_trait]
 impl Guard for DenyGuard {
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        Err(Denial::forbidden("forbidden"))
+    }
+}
+
+#[async_trait]
+impl HttpGuard for DenyGuard {
     async fn check(&self, _req: &mut Request) -> std::result::Result<(), Response> {
         Err(Response::builder()
             .status(StatusCode::FORBIDDEN)
@@ -29,8 +39,17 @@ impl Guard for DenyGuard {
 #[derive(Default)]
 struct ChallengeGuard;
 
+impl Layer for ChallengeGuard {}
+
 #[async_trait]
 impl Guard for ChallengeGuard {
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        Err(Denial::unauthorized("unauthorized"))
+    }
+}
+
+#[async_trait]
+impl HttpGuard for ChallengeGuard {
     async fn check(&self, _req: &mut Request) -> std::result::Result<(), Response> {
         Err(Response::builder()
             .status(StatusCode::UNAUTHORIZED)

@@ -7,6 +7,7 @@
 //! routing resolves a handler, so route metadata is not yet attached and the
 //! reflector finds nothing.
 
+use nest_rs_core::Public;
 use poem::Request;
 
 pub struct Reflector<'a>(&'a Request);
@@ -18,5 +19,11 @@ impl<'a> Reflector<'a> {
 
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
         self.0.extensions().get::<T>()
+    }
+
+    /// Whether the route was marked `#[public]`. Guards decide what that
+    /// means for them — there is no framework-level skip.
+    pub fn is_public(&self) -> bool {
+        self.get::<Public>().is_some()
     }
 }

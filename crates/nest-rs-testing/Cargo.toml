@@ -17,6 +17,7 @@ orm = ["dep:sea-orm", "dep:sea-orm-migration"]
 
 [dependencies]
 nest-rs-core.workspace = true
+nest-rs-guards.workspace = true
 nest-rs-http.workspace = true
 anyhow.workspace = true
 # `test` adds poem's in-process TestClient; `tower-compat` comes from the

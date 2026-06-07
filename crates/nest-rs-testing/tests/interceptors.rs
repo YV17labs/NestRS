@@ -1,8 +1,9 @@
 //! Per-handler / per-controller interceptor binding + guard-before-interceptor
 //! ordering, end-to-end through the HTTP harness.
 
-use nest_rs_core::{injectable, module};
-use nest_rs_http::{Guard, Interceptor, Next, async_trait, controller, routes};
+use nest_rs_core::{Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::{HttpGuard, Interceptor, Next, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::{Request, Response, Result};
@@ -25,8 +26,17 @@ impl Interceptor for Tracer {
 #[derive(Default)]
 struct DenyGuard;
 
+impl Layer for DenyGuard {}
+
 #[async_trait]
 impl Guard for DenyGuard {
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        Err(Denial::forbidden("denied"))
+    }
+}
+
+#[async_trait]
+impl HttpGuard for DenyGuard {
     async fn check(&self, _req: &mut Request) -> std::result::Result<(), Response> {
         Err(Response::builder()
             .status(StatusCode::FORBIDDEN)

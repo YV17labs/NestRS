@@ -9,5 +9,5 @@ pub use ability::AppAbility;
 pub use module::AuthzModule;
 
 pub use graphql::{AppGraphqlGuard, AuthzGraphqlModule};
-pub use http::{AppAbilityGuard, AuthzHttpModule};
+pub use http::{AuthzGuard, AuthzHttpModule};
 pub use ws::AuthzWsModule;

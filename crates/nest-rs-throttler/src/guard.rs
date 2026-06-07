@@ -3,8 +3,9 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use nest_rs_core::injectable;
-use nest_rs_http::{Guard, Reflector, async_trait};
+use nest_rs_core::{Layer, injectable};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::{HttpGuard, Reflector, async_trait};
 use poem::http::{StatusCode, header};
 use poem::{Request, Response};
 
@@ -23,8 +24,34 @@ pub struct ThrottlerGuard {
     throttler: Arc<InMemoryThrottler>,
 }
 
+impl Layer for ThrottlerGuard {}
+
 #[async_trait]
 impl Guard for ThrottlerGuard {
+    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+        let limit = Reflector::new(req)
+            .get::<Throttle>()
+            .copied()
+            .unwrap_or_else(|| self.throttler.default_limit());
+
+        let decision = self
+            .throttler
+            .hit(&client_key(req, self.throttler.trusted_proxies()), limit);
+        if decision.allowed {
+            return Ok(());
+        }
+        Err(Denial::rate_limited(
+            decision.retry_after.as_secs() as u32,
+            "Too Many Requests",
+        ))
+    }
+}
+
+/// Legacy [`HttpGuard`] adapter — keeps `#[use_guards(ThrottlerGuard)]`
+/// working on the legacy per-route path (where the framework wraps via
+/// `EndpointExt::guard`).
+#[async_trait]
+impl HttpGuard for ThrottlerGuard {
     async fn check(&self, req: &mut Request) -> Result<(), Response> {
         let limit = Reflector::new(req)
             .get::<Throttle>()

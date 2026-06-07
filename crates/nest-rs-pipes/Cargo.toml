@@ -17,3 +17,5 @@ serde_json.workspace = true
 validator.workspace = true
 # `ParseUuid` / `ParseUuidVersion`.
 uuid.workspace = true
+# `GlobalPipe` extends `nest_rs_core::Layer` for the Layer System.
+nest-rs-core.workspace = true

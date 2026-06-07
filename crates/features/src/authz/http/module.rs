@@ -1,10 +1,10 @@
 use nest_rs_core::module;
 
-use super::guard::AppAbilityGuard;
+use super::guard::AuthzGuard;
 use crate::authz::AuthzModule;
 
 #[module(
     imports = [AuthzModule],
-    providers = [AppAbilityGuard],
+    providers = [AuthzGuard],
 )]
 pub struct AuthzHttpModule;

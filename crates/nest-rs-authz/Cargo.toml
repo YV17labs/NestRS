@@ -14,11 +14,16 @@ default = []
 # HTTP surface: poem extractors (`Authorize`, `Scope`), the request-scoped
 # `AbilityGuard`, and the `RouteResponseShaper` that masks responses
 # transparently. The `Bind` route-model extractor lives in
-# `nest_rs_seaorm::Bind` (it must use the data layer).
+# `nest_rs_seaorm::Bind` (it must use the data layer). Also activates the
+# unified `nest_rs_guards::Guard` impl so `AbilityGuard` can be used both
+# per-route and globally via `App::builder().use_guards_global(...)`.
 http = [
     "dep:nest-rs-core",
     "dep:nest-rs-http",
+    "dep:nest-rs-guards",
+    "dep:nest-rs-graphql",
     "dep:nest-rs-resource",
+    "dep:nest-rs-ws",
     "dep:poem",
 ]
 # GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
@@ -57,9 +62,11 @@ tokio.workspace = true
 nest-rs-core = { workspace = true, optional = true }
 nest-rs-http = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
+nest-rs-guards = { workspace = true, optional = true }
 nest-rs-mcp = { workspace = true, optional = true }
 nest-rs-middleware = { workspace = true, optional = true }
 nest-rs-resource = { workspace = true, optional = true }
+nest-rs-ws = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -72,6 +79,7 @@ serde.workspace = true
 nest-rs-core.workspace = true
 nest-rs-http.workspace = true
 nest-rs-graphql.workspace = true
+nest-rs-guards.workspace = true
 nest-rs-resource.workspace = true
 nest-rs-testing.workspace = true
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,

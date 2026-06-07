@@ -3,8 +3,9 @@
 //! fails the boot with `AccessGraphError`, never silently resolves or panics
 //! at mount.
 
-use nest_rs_core::{AccessGraphError, App, injectable, module};
-use nest_rs_http::{Guard, async_trait, controller, routes};
+use nest_rs_core::{AccessGraphError, App, Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::{HttpGuard, async_trait, controller, routes};
 use poem::http::StatusCode;
 use poem::{Request, Response};
 
@@ -12,8 +13,17 @@ use poem::{Request, Response};
 #[derive(Default)]
 struct AuthzGuard;
 
+impl Layer for AuthzGuard {}
+
 #[async_trait]
 impl Guard for AuthzGuard {
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        Err(Denial::forbidden("forbidden"))
+    }
+}
+
+#[async_trait]
+impl HttpGuard for AuthzGuard {
     async fn check(&self, _req: &mut Request) -> std::result::Result<(), Response> {
         Err(Response::builder().status(StatusCode::FORBIDDEN).finish())
     }

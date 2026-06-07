@@ -1,11 +1,13 @@
 //! # nest-rs-interceptors
 //!
-//! HTTP interceptors — the wrap-handler slot of the Layer System.
+//! HTTP interceptors — the wrap-handler slot of the Layer System on HTTP.
+//! Cross-transport companions live in `nest_rs_guards`
+//! (`GraphqlInterceptor` / `WsInterceptor`).
 //!
-//! An [`Interceptor`] sees the request before the handler runs and the response
-//! after, in a single `intercept(req, next)` call. It is a [`Layer`] sub-trait,
-//! so global + per-scope declarations dedup by [`TypeId`](std::any::TypeId) at
-//! mount time (broadest scope wins).
+//! An [`Interceptor`] sees the request before the handler runs and the
+//! response after, in a single `intercept(req, next)` call. It is a
+//! [`Layer`] sub-trait, so global + per-scope declarations dedup by
+//! [`TypeId`](std::any::TypeId) at mount time (broadest scope wins).
 //!
 //! ## Defining an interceptor
 //!

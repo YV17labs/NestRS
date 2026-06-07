@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "HTTP interceptors for nestrs — Layer System sub-trait that wraps endpoint execution, declared globally via `use_interceptors_global` or per-scope through `#[use_interceptors]`."
+description = "HTTP interceptors for nestrs — Layer System sub-trait that wraps endpoint execution, declared globally via `use_interceptors_global` or per-scope through `#[use_interceptors]`. The cross-transport `wrap_graphql` / `wrap_ws` companions live in nest-rs-guards to avoid pulling graphql/ws deps into nest-rs-http's own dependency closure."
 
 [dependencies]
 async-trait.workspace = true

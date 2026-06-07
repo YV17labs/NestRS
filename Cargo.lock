@@ -2785,6 +2785,7 @@ dependencies = [
  "async-trait",
  "nest-rs-core",
  "nest-rs-exception-filters",
+ "nest-rs-filters",
  "nest-rs-graphql",
  "nest-rs-http",
  "nest-rs-interceptors",

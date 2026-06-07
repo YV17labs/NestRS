@@ -357,6 +357,12 @@ async fn apply_body_pipes(
 
 /// GraphQL shaper helper. Called by `#[resolver]` at the start of every
 /// resolver method. Dedups per-resolver guards against the global chain.
+///
+/// GraphQL pipes ([`GlobalPipe::transform_graphql_variables`]) are not
+/// invoked here — variables live at the operation level, not per
+/// resolver, so wiring them belongs at the GraphQL transport's request
+/// entry. The trait method exists today for surface symmetry; runtime
+/// wiring at the operation level is queued.
 pub async fn run_layered_graphql_chain(
     ctx: &GraphqlContext<'_>,
     container: &Container,
@@ -392,6 +398,11 @@ pub async fn run_layered_graphql_chain(
 /// WS shaper helper. Called by `#[messages]` at the start of every
 /// `#[subscribe_message]` handler. Dedups per-message guards against the
 /// global chain.
+///
+/// WS pipes ([`GlobalPipe::transform_ws_data`]) are not invoked here —
+/// the `#[messages]` macro composes its own per-event chain table inline
+/// (so pipe wiring belongs there). The trait method exists today for
+/// surface symmetry; wiring at the event-dispatcher level is queued.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_layered_ws_chain(
     client: &WsClient,

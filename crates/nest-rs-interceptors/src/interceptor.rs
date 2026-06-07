@@ -1,5 +1,14 @@
 //! The [`Interceptor`] trait — a [`Layer`] sub-trait whose impls wrap
-//! endpoint execution.
+//! HTTP endpoint execution.
+//!
+//! The cross-transport companions ([`wrap_graphql`] / [`wrap_ws`]) live in
+//! `nest_rs_guards` as separate sub-traits (`GraphqlInterceptor` /
+//! `WsInterceptor`) so this crate stays free of graphql/ws dependencies —
+//! `nest-rs-http` re-exports `Interceptor` for the HTTP shaper, and pulling
+//! graphql/ws here would close a cycle through `nest-rs-http`.
+//!
+//! [`wrap_graphql`]: ../../nest_rs_guards/trait.GraphqlInterceptor.html
+//! [`wrap_ws`]: ../../nest_rs_guards/trait.WsInterceptor.html
 
 use std::future::Future;
 use std::pin::Pin;
@@ -21,6 +30,9 @@ use poem::{Endpoint, IntoResponse, Request, Response, Result};
 /// via `#[use_interceptors(...)]` beside the verb. A controller/handler
 /// interceptor sits *inside* the guards — a guard runs and may short-circuit
 /// before the interceptor's pre-handler work.
+///
+/// For graphql / ws wraps, also implement the matching `GraphqlInterceptor` /
+/// `WsInterceptor` trait from `nest_rs_guards`.
 #[async_trait]
 pub trait Interceptor: Layer {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;

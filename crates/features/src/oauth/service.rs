@@ -301,7 +301,10 @@ mod tests {
 
     #[test]
     fn display_name_prefers_name_then_login_then_synthesised() {
-        assert_eq!(profile(Some("ada"), Some("Ada Lovelace"), None).display_name(), "Ada Lovelace");
+        assert_eq!(
+            profile(Some("ada"), Some("Ada Lovelace"), None).display_name(),
+            "Ada Lovelace"
+        );
         assert_eq!(profile(Some("ada"), None, None).display_name(), "ada");
         assert_eq!(profile(Some("ada"), Some(""), None).display_name(), "ada");
         assert_eq!(profile(None, None, None).display_name(), "user-42");
@@ -404,8 +407,8 @@ mod tests {
     // token_type, `expires_in == jwt.ttl_secs()`, and `sub` round-trips
     // exactly as supplied (machine grants must omit `sub`, see Claims tests).
 
-    use std::time::Duration;
     use nest_rs_authn::{JwtOptions, JwtService};
+    use std::time::Duration;
 
     fn jwt_with_ttl(ttl: Duration) -> JwtService {
         let mut opts = JwtOptions::new("test-secret");
@@ -500,13 +503,9 @@ mod tests {
     #[test]
     fn grant_client_credentials_rejects_unknown_grant_type() {
         let jwt = jwt_with_ttl(Duration::from_secs(60));
-        let err = grant_client_credentials_with_jwt(
-            &jwt,
-            "password",
-            None,
-            &auth_client(&["user"]),
-        )
-        .expect_err("non-CC grant rejected");
+        let err =
+            grant_client_credentials_with_jwt(&jwt, "password", None, &auth_client(&["user"]))
+                .expect_err("non-CC grant rejected");
         assert!(matches!(err, TokenError::UnsupportedGrant));
         assert_eq!(err.to_string(), "unsupported_grant_type");
     }
@@ -531,13 +530,9 @@ mod tests {
         let jwt = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["user", "admin"]);
         let org = client.org_id;
-        let token = grant_client_credentials_with_jwt(
-            &jwt,
-            "client_credentials",
-            Some("user"),
-            &client,
-        )
-        .expect("happy path");
+        let token =
+            grant_client_credentials_with_jwt(&jwt, "client_credentials", Some("user"), &client)
+                .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
         let claims: Claims = jwt.verify(&token.access_token).expect("verify");
         assert!(
@@ -594,7 +589,9 @@ mod tests {
         let issuer = token_issuer(Duration::from_secs(120));
         let sub = Uuid::now_v7();
         let org = Uuid::now_v7();
-        let token = issuer.issue(Some(sub), org, vec![Role::Admin]).expect("issue");
+        let token = issuer
+            .issue(Some(sub), org, vec![Role::Admin])
+            .expect("issue");
         assert_eq!(token.expires_in, 120);
         assert!(!token.access_token.is_empty());
     }
@@ -673,13 +670,8 @@ mod tests {
         // "scope omitted ⇒ everything I'm registered for".
         let jwt = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["admin"]);
-        let token = grant_client_credentials_with_jwt(
-            &jwt,
-            "client_credentials",
-            None,
-            &client,
-        )
-        .expect("blank scope ok");
+        let token = grant_client_credentials_with_jwt(&jwt, "client_credentials", None, &client)
+            .expect("blank scope ok");
         let claims: Claims = jwt.verify(&token.access_token).expect("verify");
         assert!(claims.is_admin(), "blank scope should grant the full set");
     }

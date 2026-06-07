@@ -32,7 +32,9 @@ impl OrgsController {
 #[module(providers = [UsersController, OrgsController])]
 struct TwoControllersModule;
 
-async fn boot_with_prefix(prefix: Option<&str>) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
+async fn boot_with_prefix(
+    prefix: Option<&str>,
+) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
     let app = App::builder()
         .module::<TwoControllersModule>()
         .build()
@@ -120,7 +122,8 @@ async fn global_prefix_root_slash_is_a_noop() {
 
 /// Boot the same controller surface but resolve the prefix through
 /// `HttpConfig::from_env` — pins the dual-path rule from the env side.
-async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
+async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>>
+{
     let app = App::builder()
         .module::<TwoControllersModule>()
         .build()

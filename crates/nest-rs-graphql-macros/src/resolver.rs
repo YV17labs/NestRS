@@ -151,11 +151,7 @@ fn sig_returns_result(sig: &Signature) -> bool {
     match &sig.output {
         syn::ReturnType::Default => false,
         syn::ReturnType::Type(_, ty) => match &**ty {
-            Type::Path(tp) => tp
-                .path
-                .segments
-                .last()
-                .is_some_and(|s| s.ident == "Result"),
+            Type::Path(tp) => tp.path.segments.last().is_some_and(|s| s.ident == "Result"),
             _ => false,
         },
     }
@@ -262,7 +258,9 @@ fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
     if paths.is_empty() {
         return quote! { ::std::vec![] };
     }
-    let entries = paths.iter().map(|p| quote! { ::core::any::TypeId::of::<#p>() });
+    let entries = paths
+        .iter()
+        .map(|p| quote! { ::core::any::TypeId::of::<#p>() });
     quote! { ::std::vec![#(#entries),*] }
 }
 

@@ -37,7 +37,6 @@ impl Guard for RolesGuard {
     }
 }
 
-
 #[controller(path = "/")]
 struct AdminController;
 

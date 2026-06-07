@@ -103,12 +103,7 @@ mod tests {
 
     #[async_trait]
     impl WsMessageCheck for Allow {
-        async fn check(
-            &self,
-            _: &WsClient,
-            _: &str,
-            _: &serde_json::Value,
-        ) -> Result<(), String> {
+        async fn check(&self, _: &WsClient, _: &str, _: &serde_json::Value) -> Result<(), String> {
             Ok(())
         }
 
@@ -119,12 +114,7 @@ mod tests {
 
     #[async_trait]
     impl WsMessageCheck for Deny {
-        async fn check(
-            &self,
-            _: &WsClient,
-            _: &str,
-            _: &serde_json::Value,
-        ) -> Result<(), String> {
+        async fn check(&self, _: &WsClient, _: &str, _: &serde_json::Value) -> Result<(), String> {
             Err("nope".into())
         }
 

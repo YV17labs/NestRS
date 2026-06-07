@@ -106,7 +106,9 @@ async fn health_ready_probe_reports_db_indicator_up() {
     // `HealthModule`'s `OnApplicationBootstrap` hook installs the container
     // on `HealthService` so it can drain the indicator registry. `TestApp`
     // deliberately leaves init opt-in, so we call it before probing.
-    app.init().await.expect("lifecycle init wires the indicator registry");
+    app.init()
+        .await
+        .expect("lifecycle init wires the indicator registry");
     let resp = app.http().get("/health/ready").send().await;
     resp.assert_status_is_ok();
     let body = resp.json().await;
@@ -714,7 +716,10 @@ async fn graphql_auto_resolved_relations_respect_ability_scope() {
     );
     for u in users_a.iter() {
         let org_id = u.object().get("org").object().get("id").string();
-        assert_eq!(org_id, org_a, "auto-resolved org must be caller's: {org_id}");
+        assert_eq!(
+            org_id, org_a,
+            "auto-resolved org must be caller's: {org_id}"
+        );
     }
 
     // HasMany: `{ orgs { users { email } } }` returns only org A's users,

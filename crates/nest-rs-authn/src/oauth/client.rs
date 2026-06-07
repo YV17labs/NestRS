@@ -69,22 +69,18 @@ impl OAuth2Client {
         AuthError,
     > {
         let parse = |s: &str| AuthError::Failed(format!("invalid OAuth URL: {s}"));
-        Ok(
-            BasicClient::new(ClientId::new(config.client_id.clone()))
-                .set_client_secret(ClientSecret::new(config.client_secret.clone()))
-                .set_auth_uri(
-                    AuthUrl::new(config.auth_url.clone())
-                        .map_err(|_| parse(&config.auth_url))?,
-                )
-                .set_token_uri(
-                    TokenUrl::new(config.token_url.clone())
-                        .map_err(|_| parse(&config.token_url))?,
-                )
-                .set_redirect_uri(
-                    RedirectUrl::new(config.redirect_url.clone())
-                        .map_err(|_| parse(&config.redirect_url))?,
-                ),
-        )
+        Ok(BasicClient::new(ClientId::new(config.client_id.clone()))
+            .set_client_secret(ClientSecret::new(config.client_secret.clone()))
+            .set_auth_uri(
+                AuthUrl::new(config.auth_url.clone()).map_err(|_| parse(&config.auth_url))?,
+            )
+            .set_token_uri(
+                TokenUrl::new(config.token_url.clone()).map_err(|_| parse(&config.token_url))?,
+            )
+            .set_redirect_uri(
+                RedirectUrl::new(config.redirect_url.clone())
+                    .map_err(|_| parse(&config.redirect_url))?,
+            ))
     }
 
     /// Begin the flow: produce the provider redirect URL and the signed
@@ -195,7 +191,10 @@ mod tests {
         let Err(AuthError::Failed(msg)) = OAuth2Client::basic_client(&config) else {
             panic!("expected Failed");
         };
-        assert!(msg.contains("not a url"), "error names the offending value: {msg}");
+        assert!(
+            msg.contains("not a url"),
+            "error names the offending value: {msg}"
+        );
     }
 
     #[test]

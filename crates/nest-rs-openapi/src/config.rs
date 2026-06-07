@@ -71,8 +71,8 @@ mod tests {
                 ("NESTRS_OPENAPI__DESCRIPTION", None),
             ],
             || {
-                let cfg = OpenApiConfig::from_env(&ConfigService::for_namespace("openapi"))
-                    .expect("ok");
+                let cfg =
+                    OpenApiConfig::from_env(&ConfigService::for_namespace("openapi")).expect("ok");
                 let d = OpenApiConfig::default();
                 assert_eq!(cfg.title, d.title);
                 assert_eq!(cfg.version, d.version);
@@ -90,8 +90,8 @@ mod tests {
                 ("NESTRS_OPENAPI__DESCRIPTION", Some("Generated docs")),
             ],
             || {
-                let cfg = OpenApiConfig::from_env(&ConfigService::for_namespace("openapi"))
-                    .expect("ok");
+                let cfg =
+                    OpenApiConfig::from_env(&ConfigService::for_namespace("openapi")).expect("ok");
                 assert_eq!(cfg.title, "Custom API");
                 assert_eq!(cfg.version, "9.9.9");
                 assert_eq!(cfg.description.as_deref(), Some("Generated docs"));

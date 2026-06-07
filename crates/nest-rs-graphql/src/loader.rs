@@ -57,6 +57,61 @@ pub fn batch_spawner(container: &Container) -> BatchSpawner {
     }
 }
 
+/// Seeds every discovered DataLoader into each GraphQL request.
+pub(crate) struct LoaderExtensionFactory {
+    container: Container,
+}
+
+impl LoaderExtensionFactory {
+    pub(crate) fn new(container: Container) -> Self {
+        Self { container }
+    }
+}
+
+impl ExtensionFactory for LoaderExtensionFactory {
+    fn create(&self) -> Arc<dyn Extension> {
+        Arc::new(LoaderExtension {
+            container: self.container.clone(),
+        })
+    }
+}
+
+struct LoaderExtension {
+    container: Container,
+}
+
+#[async_trait]
+impl Extension for LoaderExtension {
+    async fn prepare_request(
+        &self,
+        ctx: &ExtensionContext<'_>,
+        mut request: Request,
+        next: NextPrepareRequest<'_>,
+    ) -> ServerResult<Request> {
+        // Module-gate: a loader from an unimported module would panic on
+        // `container.get::<Owner>()`. Fail closed when the gate is missing —
+        // a hand-rolled container is the only way for `ReachableProviders`
+        // to be unseeded, and we prefer skipping every loader to panicking
+        // on the first request that touches one.
+        let Some(reachable) = self.container.get::<ReachableProviders>() else {
+            tracing::warn!(
+                target: "nest_rs::graphql",
+                "LoaderExtension: no ReachableProviders seeded — skipping every loader. \
+                 Build the schema through App::builder/App::new (production) or seed \
+                 the marker on the hand-rolled container."
+            );
+            return next.run(ctx, request).await;
+        };
+        for reg in inventory::iter::<LoaderRegistration>() {
+            if !reachable.0.contains(&(reg.owner_type_id)()) {
+                continue;
+            }
+            request = (reg.seed)(&self.container, request);
+        }
+        next.run(ctx, request).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -118,60 +173,5 @@ mod tests {
             1,
             "the bridge's spawner must wrap the future, not be bypassed",
         );
-    }
-}
-
-/// Seeds every discovered DataLoader into each GraphQL request.
-pub(crate) struct LoaderExtensionFactory {
-    container: Container,
-}
-
-impl LoaderExtensionFactory {
-    pub(crate) fn new(container: Container) -> Self {
-        Self { container }
-    }
-}
-
-impl ExtensionFactory for LoaderExtensionFactory {
-    fn create(&self) -> Arc<dyn Extension> {
-        Arc::new(LoaderExtension {
-            container: self.container.clone(),
-        })
-    }
-}
-
-struct LoaderExtension {
-    container: Container,
-}
-
-#[async_trait]
-impl Extension for LoaderExtension {
-    async fn prepare_request(
-        &self,
-        ctx: &ExtensionContext<'_>,
-        mut request: Request,
-        next: NextPrepareRequest<'_>,
-    ) -> ServerResult<Request> {
-        // Module-gate: a loader from an unimported module would panic on
-        // `container.get::<Owner>()`. Fail closed when the gate is missing —
-        // a hand-rolled container is the only way for `ReachableProviders`
-        // to be unseeded, and we prefer skipping every loader to panicking
-        // on the first request that touches one.
-        let Some(reachable) = self.container.get::<ReachableProviders>() else {
-            tracing::warn!(
-                target: "nest_rs::graphql",
-                "LoaderExtension: no ReachableProviders seeded — skipping every loader. \
-                 Build the schema through App::builder/App::new (production) or seed \
-                 the marker on the hand-rolled container."
-            );
-            return next.run(ctx, request).await;
-        };
-        for reg in inventory::iter::<LoaderRegistration>() {
-            if !reachable.0.contains(&(reg.owner_type_id)()) {
-                continue;
-            }
-            request = (reg.seed)(&self.container, request);
-        }
-        next.run(ctx, request).await
     }
 }

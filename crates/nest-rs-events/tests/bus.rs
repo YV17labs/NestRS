@@ -35,12 +35,16 @@ struct PointsListeners {
 impl PointsListeners {
     #[on_event]
     async fn on_awarded(&self, event: PointsAwarded) {
-        self.ledger.credited.fetch_add(event.amount, Ordering::SeqCst);
+        self.ledger
+            .credited
+            .fetch_add(event.amount, Ordering::SeqCst);
     }
 
     #[on_event]
     async fn on_redeemed(&self, event: PointsRedeemed) {
-        self.ledger.debited.fetch_add(event.amount, Ordering::SeqCst);
+        self.ledger
+            .debited
+            .fetch_add(event.amount, Ordering::SeqCst);
     }
 }
 

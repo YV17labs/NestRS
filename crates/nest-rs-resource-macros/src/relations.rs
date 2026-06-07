@@ -171,11 +171,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
         let fk_ty = &fk_field.ty;
         let fk_col_pascal = pascal_case(from);
         let method_name = format_ident!("by_{}", from);
-        let loader_ident = format_ident!(
-            "{}By{}",
-            last_segment_ident(service),
-            fk_col_pascal,
-        );
+        let loader_ident = format_ident!("{}By{}", last_segment_ident(service), fk_col_pascal,);
         let wire = &model.output_ident;
         let target_label = format!("loading {} by {}", wire, from);
 
@@ -353,5 +349,9 @@ fn wire_key_expr(ty: &Type, ident: &Ident) -> TokenStream2 {
 /// Last segment of a `syn::Path`. `syn::Path::parse` guarantees at least one
 /// segment, so the index is infallible — kept as an inlined ident lookup.
 fn last_segment_ident(path: &syn::Path) -> &Ident {
-    &path.segments.last().expect("syn::Path has ≥ 1 segment").ident
+    &path
+        .segments
+        .last()
+        .expect("syn::Path has ≥ 1 segment")
+        .ident
 }

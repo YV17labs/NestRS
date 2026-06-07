@@ -64,7 +64,8 @@ mod tests {
         with_env(
             &[("NESTRS_QUEUE__URL", Some("redis://redis.staging:6379/2"))],
             || {
-                let cfg = QueueConfig::from_env(&ConfigService::for_namespace("queue")).expect("ok");
+                let cfg =
+                    QueueConfig::from_env(&ConfigService::for_namespace("queue")).expect("ok");
                 assert_eq!(cfg.url, "redis://redis.staging:6379/2");
             },
         );

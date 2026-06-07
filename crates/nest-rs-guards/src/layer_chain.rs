@@ -81,7 +81,11 @@ where
     let mut entries: Vec<ResolvedLayer<L>> = Vec::new();
     let mut seen: Vec<(TypeId, LayerSource)> = Vec::new();
 
-    for source in [LayerSource::Global, LayerSource::Controller, LayerSource::Method] {
+    for source in [
+        LayerSource::Global,
+        LayerSource::Controller,
+        LayerSource::Method,
+    ] {
         let bucket = match source {
             LayerSource::Global => &global,
             LayerSource::Controller => &controller,
@@ -133,10 +137,7 @@ mod tests {
     struct Audit;
     impl Layer for Audit {}
 
-    fn entry<L: Layer>(layer: L, source: LayerSource) -> ResolvedLayer<dyn Layer>
-    where
-        L: 'static,
-    {
+    fn entry<L: Layer + 'static>(layer: L, source: LayerSource) -> ResolvedLayer<dyn Layer> {
         ResolvedLayer {
             type_id: TypeId::of::<L>(),
             name: std::any::type_name::<L>(),

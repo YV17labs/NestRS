@@ -268,15 +268,16 @@ mod tests {
     #[tokio::test]
     async fn retries_until_success_within_budget() {
         let attempts = std::sync::atomic::AtomicUsize::new(0);
-        let result: Result<&str, DbErr> = retry_on_conflict(3, Duration::from_millis(1), || async {
-            let n = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n < 2 {
-                Err(sqlx_db_err(Some("40001"), "could not serialize access"))
-            } else {
-                Ok("ok")
-            }
-        })
-        .await;
+        let result: Result<&str, DbErr> =
+            retry_on_conflict(3, Duration::from_millis(1), || async {
+                let n = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n < 2 {
+                    Err(sqlx_db_err(Some("40001"), "could not serialize access"))
+                } else {
+                    Ok("ok")
+                }
+            })
+            .await;
         assert_eq!(result.unwrap(), "ok");
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
     }

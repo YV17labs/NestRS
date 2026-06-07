@@ -57,10 +57,10 @@ pub type RoutePipeSpec = RouteLayerSpec<dyn GlobalPipe>;
 ///
 /// Constructed by the `#[routes]` macro at mount time. Resolves the global
 /// + per-route guard / pipe chain on first request, dedups by `TypeId`,
-/// caches, runs every layer in order — no `#[public]` skip, no
-/// category-based reordering. Guards decide what `#[public]` means for
-/// them via the [`Public`](nest_rs_core::Public) marker attached as
-/// request data.
+///   caches, runs every layer in order — no `#[public]` skip, no
+///   category-based reordering. Guards decide what `#[public]` means for
+///   them via the [`Public`](nest_rs_core::Public) marker attached as
+///   request data.
 ///
 /// Itself a [`Layer`] so it satisfies the `Interceptor: Layer` bound; this
 /// per-route interceptor never participates in the dedup pass (it *is* the
@@ -156,16 +156,10 @@ impl LayersRouteInterceptor {
                 }
             }
         }
-        let controller =
-            resolve_specs(container, &self.controller_pipes, LayerSource::Controller);
+        let controller = resolve_specs(container, &self.controller_pipes, LayerSource::Controller);
         let method = resolve_specs(container, &self.method_pipes, LayerSource::Method);
-        let chain = compose_chain::<dyn GlobalPipe>(
-            global,
-            controller,
-            method,
-            &[],
-            self.route_label,
-        );
+        let chain =
+            compose_chain::<dyn GlobalPipe>(global, controller, method, &[], self.route_label);
         log_effective_chain(self.route_label, "pipes", &chain);
         chain
     }
@@ -189,11 +183,7 @@ fn resolve_specs<L: ?Sized>(
         .collect()
 }
 
-fn log_effective_chain<L: Layer + ?Sized>(
-    route: &str,
-    kind: &str,
-    chain: &[ResolvedLayer<L>],
-) {
+fn log_effective_chain<L: Layer + ?Sized>(route: &str, kind: &str, chain: &[ResolvedLayer<L>]) {
     if chain.is_empty() {
         return;
     }
@@ -221,14 +211,18 @@ impl Interceptor for LayersRouteInterceptor {
         };
         let container = scope.root();
 
-        let guards = self.cached_guards.get_or_init(|| self.resolve_guards(container));
+        let guards = self
+            .cached_guards
+            .get_or_init(|| self.resolve_guards(container));
         for entry in guards {
             if let Err(denial) = entry.layer.check_http(&mut req).await {
                 return Ok(denial_to_http_response(denial));
             }
         }
 
-        let pipes = self.cached_pipes.get_or_init(|| self.resolve_pipes(container));
+        let pipes = self
+            .cached_pipes
+            .get_or_init(|| self.resolve_pipes(container));
         if !pipes.is_empty() {
             apply_body_pipes(&mut req, pipes).await?;
         }
@@ -319,8 +313,7 @@ pub async fn run_layered_graphql_chain(
     }
     let controller = resolve_specs(container, controller_guards, LayerSource::Controller);
     let method = resolve_specs(container, method_guards, LayerSource::Method);
-    let chain =
-        compose_chain::<dyn Guard>(global, controller, method, force_guards, route_label);
+    let chain = compose_chain::<dyn Guard>(global, controller, method, force_guards, route_label);
     for entry in &chain {
         if let Err(denial) = entry.layer.check_graphql(ctx).await {
             return Err(denial_to_graphql_error(denial));
@@ -332,6 +325,7 @@ pub async fn run_layered_graphql_chain(
 /// WS shaper helper. Called by `#[messages]` at the start of every
 /// `#[subscribe_message]` handler. Dedups per-message guards against the
 /// global chain.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_layered_ws_chain(
     client: &WsClient,
     event: &str,
@@ -357,8 +351,7 @@ pub async fn run_layered_ws_chain(
     }
     let controller = resolve_specs(container, controller_guards, LayerSource::Controller);
     let method = resolve_specs(container, method_guards, LayerSource::Method);
-    let chain =
-        compose_chain::<dyn Guard>(global, controller, method, force_guards, route_label);
+    let chain = compose_chain::<dyn Guard>(global, controller, method, force_guards, route_label);
     for entry in &chain {
         if let Err(denial) = entry.layer.check_ws_message(client, event, data).await {
             return Err(denial.message().to_owned());

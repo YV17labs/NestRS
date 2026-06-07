@@ -1,6 +1,6 @@
 use nest_rs_core::module;
 
-use super::service::Transcoder;
+use super::service::AudioService;
 
-#[module(providers = [Transcoder])]
+#[module(providers = [AudioService])]
 pub struct AudioModule;

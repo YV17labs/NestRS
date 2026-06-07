@@ -271,8 +271,9 @@ mod tests {
     #[tokio::test]
     async fn piped_from_request_pipes_the_extracted_value() {
         let (req, mut body) = json_request(&"hello".to_string());
-        let piped: Piped<ToUpper, Json<String>> =
-            Piped::from_request(&req, &mut body).await.expect("happy path");
+        let piped: Piped<ToUpper, Json<String>> = Piped::from_request(&req, &mut body)
+            .await
+            .expect("happy path");
         assert_eq!(piped.into_inner(), "HELLO");
     }
 
@@ -302,9 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn valid_from_request_returns_the_validated_payload() {
-        let payload = Greeting {
-            msg: "hi".into(),
-        };
+        let payload = Greeting { msg: "hi".into() };
         let (req, mut body) = json_request(&payload);
         let v: Valid<Json<Greeting>> = Valid::from_request(&req, &mut body)
             .await

@@ -159,10 +159,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 &wrapper_args,
                 returns_result,
             );
-            (
-                quote! { ::poem::Result<::poem::Response> },
-                body,
-            )
+            (quote! { ::poem::Result<::poem::Response> }, body)
         };
 
         wrappers.push(quote! {
@@ -271,14 +268,16 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         routes_by_path
             .iter()
             .flat_map(|(_, handlers)| handlers.iter())
-            .flat_map(|(_, _, guards, filters, interceptors, _, _, _, _, force_guards, pipes)| {
-                guards
-                    .iter()
-                    .chain(filters)
-                    .chain(interceptors)
-                    .chain(force_guards)
-                    .chain(pipes)
-            }),
+            .flat_map(
+                |(_, _, guards, filters, interceptors, _, _, _, _, force_guards, pipes)| {
+                    guards
+                        .iter()
+                        .chain(filters)
+                        .chain(interceptors)
+                        .chain(force_guards)
+                        .chain(pipes)
+                },
+            ),
     );
     let injected_method = injected_method_with_layers(&self_ty, &route_layer_keys);
 
@@ -373,11 +372,7 @@ fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
 /// `LayersRouteInterceptor` as `RouteGuardSpec` entries so the interceptor
 /// can dedup them against the global chain by `TypeId` and run the result in
 /// canonical category order.
-fn guarded_handler(
-    handler: &RouteHandler,
-    route_label: &str,
-    self_ty: &Type,
-) -> TokenStream2 {
+fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
     let (
         _verb,
         wrapper,
@@ -409,7 +404,11 @@ fn guarded_handler(
     let method_guard_specs = guard_specs(guards);
     let force_guard_typeids = force_guard_typeids(force_guards);
     let method_pipe_specs = pipe_specs(method_pipes);
-    let no_pipes_flag = if *no_pipes { quote!(true) } else { quote!(false) };
+    let no_pipes_flag = if *no_pipes {
+        quote!(true)
+    } else {
+        quote!(false)
+    };
     expr = quote! {
         ::nest_rs_http::InterceptorExt::interceptor(
             #expr,

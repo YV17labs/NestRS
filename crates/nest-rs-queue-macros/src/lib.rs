@@ -13,8 +13,8 @@ mod processor;
 ///
 /// A single provider may carry several `#[process]` methods (different
 /// queues, different concurrencies) sharing the same `#[inject]`
-/// dependencies — the NestJS-style pattern of pooling related queue handlers
-/// on one service.
+/// dependencies — pooling related queue handlers on one service keeps
+/// shared state (clients, repositories) in one place.
 ///
 /// Per-method attributes (exactly one `#[process]` per method):
 ///

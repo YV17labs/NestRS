@@ -96,8 +96,8 @@ mod tests {
                 ("NESTRS_GRAPHQL__EMIT_SDL", None),
             ],
             || {
-                let cfg = GraphqlConfig::from_env(&ConfigService::for_namespace("graphql"))
-                    .expect("ok");
+                let cfg =
+                    GraphqlConfig::from_env(&ConfigService::for_namespace("graphql")).expect("ok");
                 let d = GraphqlConfig::default();
                 assert_eq!(cfg.path, d.path);
                 assert_eq!(cfg.playground, d.playground);
@@ -117,8 +117,8 @@ mod tests {
                 ("NESTRS_GRAPHQL__EMIT_SDL", Some("true")),
             ],
             || {
-                let cfg = GraphqlConfig::from_env(&ConfigService::for_namespace("graphql"))
-                    .expect("ok");
+                let cfg =
+                    GraphqlConfig::from_env(&ConfigService::for_namespace("graphql")).expect("ok");
                 assert_eq!(cfg.path, "/api/graphql");
                 assert!(cfg.playground);
                 assert_eq!(cfg.schema_path, PathBuf::from("./schema-out.graphql"));

@@ -26,15 +26,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nest_rs_core::injectable;
-use nest_rs_redis::QueueConnection;
 use nest_rs_schedule::scheduled;
 
-use crate::audio::{TranscodeJob, AUDIO_QUEUE};
+use crate::audio::AudioService;
 
 #[injectable]
 pub struct AudioTasks {
     #[inject]
-    queue: Arc<QueueConnection>,
+    svc: Arc<AudioService>,
 }
 
 #[scheduled]
@@ -42,13 +41,7 @@ impl AudioTasks {
     #[every("5s")]
     async fn enqueue_transcode(&self) -> Result<()> {
         let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        let file = format!("track-{id}.mp3");
-        self.queue
-            .of::<TranscodeJob>(AUDIO_QUEUE)
-            .push(TranscodeJob { file: file.clone() })
-            .await?;
-        tracing::info!(target: "features::audio", %file, "scheduled transcode job");
-        Ok(())
+        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await
     }
 }
 ```
@@ -60,6 +53,12 @@ impl AudioTasks {
 - **`#[every("5s")]`** runs the method on a fixed interval. A failure
   returns `Err`; it is logged and the schedule continues — one failed run
   never stops the job.
+- **The cron method is thin.** Its only job is to decide *when* and
+  *what payload* (here a synthetic file id). The enqueue plumbing —
+  the `QueueConnection`, the queue name, the `TranscodeJob` shape —
+  lives inside `AudioService::enqueue_transcode`. The same service
+  call is used by the HTTP producer and by this scheduler, so there is
+  exactly one place where the "enqueue an audio job" decision lives.
 
 ## Several methods on the same provider
 
@@ -73,13 +72,15 @@ use nest_rs_schedule::{scheduled, CronExpression};
 #[injectable]
 pub struct AudioTasks {
     #[inject]
-    queue: Arc<QueueConnection>,
+    svc: Arc<AudioService>,
 }
 
 #[scheduled]
 impl AudioTasks {
     #[every("5s")]
-    async fn enqueue_transcode(&self) -> Result<()> { /* push a TranscodeJob */ }
+    async fn enqueue_transcode(&self) -> Result<()> {
+        self.svc.enqueue_transcode(next_file_name()).await
+    }
 
     #[after("3s")]
     async fn warmup_on_boot(&self) -> Result<()> {
@@ -95,15 +96,14 @@ impl AudioTasks {
         tracing::info!(target: "features::audio", "audio producer heartbeat");
         Ok(())
     }
-
-    fn next_file_name(&self) -> String { /* … */ }
 }
 ```
 
 Three cron entries land in the scheduler — `AudioTasks::enqueue_transcode`,
 `AudioTasks::warmup_on_boot`, `AudioTasks::heartbeat` — all pointing at the
-same `AudioTasks` instance. Same `Arc<QueueConnection>`, three triggers, no
-ceremony.
+same `AudioTasks` instance. Same `Arc<AudioService>`, three triggers, no
+ceremony. Each method calls into the service or logs; none of them
+build a queue payload or reach for a connection.
 
 <Aside>
 A single `#[scheduled]` impl block per struct (multiple would conflict at
@@ -131,11 +131,18 @@ The provider goes in its feature module like any other `#[injectable]`:
 
 ```rust title="crates/features/src/audio/schedule/module.rs"
 use nest_rs_core::module;
-use super::producer::AudioTasks;
 
-#[module(providers = [AudioTasks])]
+use super::producer::AudioTasks;
+use crate::audio::AudioModule;
+
+#[module(imports = [AudioModule], providers = [AudioTasks])]
 pub struct AudioScheduleModule;
 ```
+
+The module imports `AudioModule` because `AudioTasks` injects
+`Arc<AudioService>`. Forget the import and the access graph fails the
+boot with a clear message naming `AudioService` as the missing
+dependency — the same Rust-visibility rule every other adapter follows.
 
 The app activates the scheduler by importing `ScheduleModule` —
 `ScheduleModule` contributes the scheduler to `App::run` itself:

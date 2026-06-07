@@ -2,9 +2,7 @@ use std::sync::OnceLock;
 
 use nest_rs_core::{Container, ReachableProviders, injectable, inventory};
 
-use crate::indicator::{
-    HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport,
-};
+use crate::indicator::{HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport};
 
 /// Aggregates every reachable [`HealthIndicator`] submitted via `#[indicators]`
 /// into a per-probe [`ProbeReport`]. Apps don't usually touch this directly —
@@ -133,7 +131,10 @@ mod tests {
 
     #[tokio::test]
     async fn aggregates_indicators_into_info_and_error_buckets() {
-        let container = Container::builder().provide(UpHost).provide(DownHost).build();
+        let container = Container::builder()
+            .provide(UpHost)
+            .provide(DownHost)
+            .build();
         let svc = HealthService::default();
         svc.install_container(container);
 
@@ -142,10 +143,15 @@ mod tests {
         assert_eq!(report.info.len(), 1);
         assert!(report.info.contains_key("up_host"));
         assert_eq!(report.error.len(), 1);
-        let down = report.error.get("down_host").expect("down_host in error bucket");
+        let down = report
+            .error
+            .get("down_host")
+            .expect("down_host in error bucket");
         assert_eq!(down.status, IndicatorStatus::Down);
         assert!(
-            down.error.as_deref().is_some_and(|e| e.contains("simulated outage")),
+            down.error
+                .as_deref()
+                .is_some_and(|e| e.contains("simulated outage")),
             "error string should carry the indicator's message, got: {:?}",
             down.error,
         );
@@ -154,7 +160,10 @@ mod tests {
 
     #[tokio::test]
     async fn other_probes_ignore_readiness_indicators() {
-        let container = Container::builder().provide(UpHost).provide(DownHost).build();
+        let container = Container::builder()
+            .provide(UpHost)
+            .provide(DownHost)
+            .build();
         let svc = HealthService::default();
         svc.install_container(container);
 

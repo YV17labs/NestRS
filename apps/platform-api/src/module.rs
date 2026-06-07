@@ -1,6 +1,5 @@
 use nest_rs_config::ConfigModule;
 use nest_rs_core::module;
-use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
 use nest_rs_graphql::GraphqlModule;
 use nest_rs_health::HealthModule;
 use nest_rs_http::{HttpConfig, HttpModule};
@@ -8,6 +7,7 @@ use nest_rs_openapi::OpenApiModule;
 use nest_rs_opentelemetry::OpenTelemetryModule;
 use nest_rs_redis::QueueModule;
 use nest_rs_schedule::ScheduleModule;
+use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
 use nest_rs_server_timing::ServerTimingModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};

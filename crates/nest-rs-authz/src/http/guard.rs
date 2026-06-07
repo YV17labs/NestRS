@@ -46,7 +46,8 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
                 // empty by default. A dev that wants visitor *rules*
                 // grants them explicitly in their `AbilityFactory`'s
                 // visitor branch — out of scope here.
-                req.extensions_mut().insert(Arc::new(AbilityBuilder::new().build()));
+                req.extensions_mut()
+                    .insert(Arc::new(AbilityBuilder::new().build()));
                 Ok(())
             }
             None => Err(Denial::internal(
@@ -78,4 +79,3 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         Ok(())
     }
 }
-

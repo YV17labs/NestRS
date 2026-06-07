@@ -37,8 +37,7 @@ impl Config for DatabaseConfig {
             min_connections: env.parse("MIN_CONNECTIONS")?, //         NESTRS_DATABASE__MIN_CONNECTIONS
             connect_timeout_secs: env.parse("CONNECT_TIMEOUT_SECS")?, //NESTRS_DATABASE__CONNECT_TIMEOUT_SECS
             sqlx_logging: env.flag("SQLX_LOGGING", false)?, //         NESTRS_DATABASE__SQLX_LOGGING (else false)
-            retry_serialization_conflicts: env
-                .flag("RETRY_SERIALIZATION_CONFLICTS", false)?, //     NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS
+            retry_serialization_conflicts: env.flag("RETRY_SERIALIZATION_CONFLICTS", false)?, //     NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS
         })
     }
 }
@@ -105,7 +104,10 @@ mod tests {
     #[test]
     fn connect_options_disables_sqlx_logging_by_default() {
         let opts = pinned("postgres://localhost/app").connect_options();
-        assert!(!opts.get_sqlx_logging(), "noisy by default would spam prod logs");
+        assert!(
+            !opts.get_sqlx_logging(),
+            "noisy by default would spam prod logs"
+        );
     }
 
     #[test]
@@ -143,11 +145,14 @@ mod tests {
                 ("NESTRS_DATABASE__MIN_CONNECTIONS", Some("2")),
                 ("NESTRS_DATABASE__CONNECT_TIMEOUT_SECS", Some("12")),
                 ("NESTRS_DATABASE__SQLX_LOGGING", Some("true")),
-                ("NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS", Some("true")),
+                (
+                    "NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS",
+                    Some("true"),
+                ),
             ],
             || {
-                let cfg =
-                    DatabaseConfig::from_env(&ConfigService::for_namespace("database")).expect("ok");
+                let cfg = DatabaseConfig::from_env(&ConfigService::for_namespace("database"))
+                    .expect("ok");
                 assert_eq!(cfg.url, "postgres://u@h/d");
                 assert_eq!(cfg.max_connections, Some(25));
                 assert_eq!(cfg.min_connections, Some(2));
@@ -170,8 +175,8 @@ mod tests {
                 ("NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS", None),
             ],
             || {
-                let cfg =
-                    DatabaseConfig::from_env(&ConfigService::for_namespace("database")).expect("ok");
+                let cfg = DatabaseConfig::from_env(&ConfigService::for_namespace("database"))
+                    .expect("ok");
                 // Empty URL ⇒ module-level `for_root` aborts with a clear message.
                 assert!(cfg.url.is_empty());
                 assert!(cfg.max_connections.is_none());

@@ -16,8 +16,8 @@ use syn::{Attribute, Block, Expr, ExprLit, Lit, LitInt, LitStr};
 /// (per RFC 7230 §3.2.2). Decorators emit `.append()` for these so an
 /// explicit `#[response_header("set-cookie", …)]` is additive, not
 /// overriding. Everything else is single-valued and overrides via `.insert()`
-/// — matching `@Header` in NestJS and avoiding the duplicate-header footgun
-/// when the handler already set the same name.
+/// — avoiding the duplicate-header footgun when the handler already set the
+/// same name.
 fn is_multi_value_header(name: &str) -> bool {
     matches!(name, "set-cookie")
 }
@@ -165,8 +165,7 @@ pub(crate) fn take_response_decorators(
 fn parse_header_args(attr: &Attribute) -> syn::Result<(LitStr, LitStr)> {
     use syn::Token;
     use syn::punctuated::Punctuated;
-    let list: Punctuated<LitStr, Token![,]> =
-        attr.parse_args_with(Punctuated::parse_terminated)?;
+    let list: Punctuated<LitStr, Token![,]> = attr.parse_args_with(Punctuated::parse_terminated)?;
     let mut iter = list.into_iter();
     let name = iter.next().ok_or_else(|| {
         syn::Error::new_spanned(
@@ -410,10 +409,9 @@ pub(crate) fn apply_response_decorators(
 /// Emit one header write per `#[response_header]`. Single-valued headers
 /// (the overwhelming majority — `Content-Type`, `Cache-Control`, `Location`,
 /// …) use `.insert()` so the decorator overrides whatever the handler or an
-/// `IntoResponse` impl already set, matching NestJS `@Header` and dodging
-/// the duplicate-header footgun. Multi-value headers in `is_multi_value_header`
-/// (today: `Set-Cookie`) use `.append()` so the decorator stacks instead of
-/// clobbering prior cookies.
+/// `IntoResponse` impl already set, dodging the duplicate-header footgun.
+/// Multi-value headers in `is_multi_value_header` (today: `Set-Cookie`) use
+/// `.append()` so the decorator stacks instead of clobbering prior cookies.
 fn headers_tokens(headers: &[(LitStr, LitStr)]) -> TokenStream2 {
     if headers.is_empty() {
         return quote! {};
@@ -433,4 +431,3 @@ fn headers_tokens(headers: &[(LitStr, LitStr)]) -> TokenStream2 {
     });
     quote! { #(#writes)* }
 }
-

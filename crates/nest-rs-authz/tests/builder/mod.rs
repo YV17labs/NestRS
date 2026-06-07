@@ -102,12 +102,7 @@ fn manage_grants_pass_the_class_gate_for_every_action() {
     let ability = b.build();
 
     let subj = TypeId::of::<widget::Entity>();
-    for action in [
-        Action::Read,
-        Action::Create,
-        Action::Update,
-        Action::Delete,
-    ] {
+    for action in [Action::Read, Action::Create, Action::Update, Action::Delete] {
         assert!(
             ability.can_class(action, subj),
             "Manage must satisfy the gate for {action:?}",
@@ -135,5 +130,8 @@ fn no_grant_for_a_subject_produces_a_one_equals_zero_filter() {
         .filter(ability.condition_for::<widget::Entity>(Action::Read))
         .build(DatabaseBackend::Postgres)
         .to_string();
-    assert!(sql.contains("1 = 0"), "absent grant ⇒ matches nothing: {sql}");
+    assert!(
+        sql.contains("1 = 0"),
+        "absent grant ⇒ matches nothing: {sql}"
+    );
 }

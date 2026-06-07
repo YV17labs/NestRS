@@ -33,22 +33,29 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_queue::processor;
 
-use crate::audio::{Transcoder, TranscodeJob};
+use crate::audio::{AudioService, TranscodeJob};
 
 #[injectable]
 pub struct AudioJobs {
     #[inject]
-    transcoder: Arc<Transcoder>,
+    svc: Arc<AudioService>,
 }
 
 #[processor]
 impl AudioJobs {
     #[process(queue = "audio", concurrency = 5, retries = 3)]
     async fn transcode(&self, job: TranscodeJob) -> Result<()> {
-        self.transcoder.transcode(&job.file).await
+        self.svc.transcode(&job.file).await
     }
 }
 ```
+
+The processor is **thin**: it owns no business logic of its own — it
+hands `job.file` to `AudioService::transcode` and propagates the result.
+The same `AudioService` is what the HTTP producer below calls to
+enqueue, so a single audited choke point describes everything the
+feature can do. Adapters carry transport mechanics; the service carries
+intent.
 
 - **`#[injectable]`** makes `AudioJobs` a regular DI provider.
 - **`#[processor]`** on the impl block orchestrates the per-method
@@ -68,31 +75,37 @@ different concurrencies, same service:
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[injectable]
 pub struct AudioJobs {
-    #[inject] transcoder: Arc<Transcoder>,
-    #[inject] svc: Arc<MediaService>,
+    #[inject] svc_audio: Arc<AudioService>,
+    #[inject] svc_media: Arc<MediaService>,
 }
 
 #[processor]
 impl AudioJobs {
     #[process(queue = "audio", concurrency = 5, retries = 3)]
     async fn transcode(&self, job: TranscodeJob) -> Result<()> {
-        self.transcoder.transcode(&job.file).await
+        self.svc_audio.transcode(&job.file).await
     }
 
     #[process(queue = "audio.preview", concurrency = 10, retries = 1)]
-    async fn preview(&self, job: PreviewJob) -> Result<()> { /* … */ }
+    async fn preview(&self, job: PreviewJob) -> Result<()> {
+        self.svc_media.preview(&job.file).await
+    }
 
     #[process(queue = "audio.cleanup")]
-    async fn cleanup(&self, job: CleanupJob) -> Result<()> { /* … */ }
+    async fn cleanup(&self, job: CleanupJob) -> Result<()> {
+        self.svc_media.cleanup(job.older_than).await
+    }
 }
-
-`#[process(queue = "audio.cleanup")]` omits the optional `concurrency` (default
-`1`) and `retries` (default `0`).
 ```
 
+`#[process(queue = "audio.cleanup")]` omits the optional `concurrency`
+(default `1`) and `retries` (default `0`).
+
 Three inventory entries — `AudioJobs::transcode`, `AudioJobs::preview`,
-`AudioJobs::cleanup` — all pointing at the same `AudioJobs` instance. Same
-`Arc<Transcoder>`, same `Arc<MediaService>`, three queues.
+`AudioJobs::cleanup` — all pointing at the same `AudioJobs` instance.
+Same `Arc<AudioService>`, same `Arc<MediaService>`, three queues. Each
+method still delegates: the processor is a router, never a place where
+business logic accumulates.
 
 <Aside>
 A single `#[processor]` impl block per struct (multiple would conflict at
@@ -121,26 +134,59 @@ to the work, not the work itself).
 
 ## A producer
 
-A producer is any code holding `Arc<QueueConnection>`. Here it's the HTTP
-handler the `api` app exposes — a request enqueues a job the separate
-`worker` app consumes:
+A producer is any code that asks the **service** to enqueue. The HTTP
+controller is a thin transport adapter: it accepts the body, calls the
+service, returns the wire response. It does **not** hold
+`Arc<QueueConnection>` and does **not** know the queue name — those are
+internal to `AudioService`.
+
+```rust title="crates/features/src/audio/service.rs"
+use std::sync::Arc;
+
+use anyhow::Result;
+use nest_rs_core::injectable;
+use nest_rs_redis::QueueConnection;
+
+use super::dto::{AUDIO_QUEUE, TranscodeJob};
+
+#[injectable]
+pub struct AudioService {
+    #[inject]
+    queue: Arc<QueueConnection>,
+}
+
+impl AudioService {
+    pub async fn enqueue_transcode(&self, file: String) -> Result<()> {
+        self.queue
+            .of::<TranscodeJob>(AUDIO_QUEUE)
+            .push(TranscodeJob { file: file.clone() })
+            .await?;
+        tracing::info!(target: "features::audio", %file, "enqueued transcode job");
+        Ok(())
+    }
+
+    pub async fn transcode(&self, file: &str) -> Result<()> {
+        // … the consumer-side work
+        Ok(())
+    }
+}
+```
 
 ```rust title="crates/features/src/audio/http/controller.rs"
 use std::sync::Arc;
 
 use nest_rs_http::{controller, routes};
-use nest_rs_redis::QueueConnection;
 use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};
 
-use crate::audio::{TranscodeJob, AUDIO_QUEUE};
+use crate::audio::{AudioService, TranscodeJob};
 
 #[controller(path = "/audio")]
 #[use_guards(AuthGuard, AuthzGuard)]
 pub struct AudioController {
     #[inject]
-    queue: Arc<QueueConnection>,
+    svc: Arc<AudioService>,
 }
 
 #[routes]
@@ -148,9 +194,8 @@ impl AudioController {
     #[post("/transcode")]
     async fn transcode(&self, body: Json<TranscodeJob>) -> Result<Json<TranscodeJob>> {
         let job = body.0;
-        self.queue
-            .of::<TranscodeJob>(AUDIO_QUEUE)
-            .push(job.clone())
+        self.svc
+            .enqueue_transcode(job.file.clone())
             .await
             .map_err(|e| Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
         Ok(Json(job))
@@ -158,9 +203,11 @@ impl AudioController {
 }
 ```
 
-`queue.of::<T>(name)` returns a typed publisher bound to the queue name.
-The producer and consumer share the type by importing it from the same
-crate — the queue name is the only stringly-typed coupling.
+`queue.of::<T>(name)` returns a typed publisher bound to the queue name
+— and it lives **inside the service**, the single place that knows
+`AUDIO_QUEUE`. The producer and consumer share the payload type by
+importing it from the same crate; the queue name is the only
+stringly-typed coupling, and it stays private to `AudioService`.
 
 ## Wire it in
 
@@ -272,9 +319,14 @@ runtime.
 
 ### Reference
 
-- `crates/features/src/audio/queue/processor.rs` — the consumer (worker).
-- `crates/features/src/audio/http/controller.rs` — the HTTP producer (api).
-- `crates/features/src/audio/schedule/producer.rs` — the scheduled producer (api).
+- `crates/features/src/audio/service.rs` — the single service both
+  sides delegate to (`enqueue_transcode`, `transcode`).
+- `crates/features/src/audio/queue/processor.rs` — the consumer
+  (worker), delegating to `AudioService::transcode`.
+- `crates/features/src/audio/http/controller.rs` — the HTTP producer
+  (api), delegating to `AudioService::enqueue_transcode`.
+- `crates/features/src/audio/schedule/producer.rs` — the scheduled
+  producer (api), delegating to `AudioService::enqueue_transcode`.
 - `crates/nest-rs-queue/` — the abstractions: `#[processor]`, `#[process]`,
   `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
 - `crates/nest-rs-redis/` — the Redis storage: `QueueConnection`,

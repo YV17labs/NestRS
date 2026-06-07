@@ -37,7 +37,6 @@ impl Guard for DenyGuard {
     }
 }
 
-
 #[controller(path = "/a")]
 struct PerHandlerController;
 

@@ -99,7 +99,10 @@ mod tests {
         let cfg = TlsConfig::new(vec![0; 128], b"super secret key material".to_vec());
         let debug = format!("{cfg:?}");
         assert!(!debug.contains("super secret"), "key leaked: {debug}");
-        assert!(debug.contains("redacted"), "missing redaction marker: {debug}");
+        assert!(
+            debug.contains("redacted"),
+            "missing redaction marker: {debug}"
+        );
         assert!(debug.contains("128 bytes"), "cert length missing: {debug}");
     }
 

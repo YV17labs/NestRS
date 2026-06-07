@@ -212,11 +212,7 @@ mod tests {
                 .type_uri
                 .starts_with("https://www.rfc-editor.org/rfc/rfc9110"),
         );
-        assert!(
-            ProblemDetails::unprocessable()
-                .type_uri
-                .contains("rfc9110"),
-        );
+        assert!(ProblemDetails::unprocessable().type_uri.contains("rfc9110"),);
     }
 
     #[test]
@@ -252,7 +248,9 @@ mod tests {
         let resp = ProblemDetails::not_found().as_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).map(|v| v.as_bytes()),
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .map(|v| v.as_bytes()),
             Some(b"application/problem+json".as_slice()),
         );
     }

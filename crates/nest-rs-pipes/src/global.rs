@@ -1,4 +1,4 @@
-//! Global pipes — the NestJS `useGlobalPipes` analog.
+//! Global pipes — JSON-body shaping that applies to every handler.
 //!
 //! A [`GlobalPipe`] inspects or rewrites the JSON request body **before** the
 //! extractor runs. Registered once with

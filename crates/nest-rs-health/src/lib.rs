@@ -20,9 +20,7 @@ mod module;
 mod service;
 
 pub use controller::HealthController;
-pub use indicator::{
-    HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport,
-};
+pub use indicator::{HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport};
 pub use module::HealthModule;
 pub use nest_rs_health_macros::indicators;
 pub use service::HealthService;

@@ -4,24 +4,19 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_queue::processor;
 
-use crate::audio::{TranscodeJob, Transcoder};
+use crate::audio::{AudioService, TranscodeJob};
 
-/// Consumer side: the `worker` app mounts this and processes jobs the `api`
-/// app pushed onto the shared `audio` queue. A single provider holds every
-/// queue handler — the NestJS-style pattern of pooling related processors on
-/// one service so they share `#[inject]` dependencies (here a single
-/// [`Transcoder`]).
 #[injectable]
 pub struct AudioJobs {
     #[inject]
-    transcoder: Arc<Transcoder>,
+    svc: Arc<AudioService>,
 }
 
 #[processor]
 impl AudioJobs {
     #[process(queue = "audio", concurrency = 5, retries = 3)]
     async fn transcode(&self, job: TranscodeJob) -> Result<()> {
-        self.transcoder.transcode(&job.file).await
+        self.svc.transcode(&job.file).await
     }
 }
 
@@ -33,7 +28,7 @@ mod tests {
     use nest_rs_queue::ProcessMethod;
 
     use super::AudioJobs;
-    use crate::audio::{AUDIO_QUEUE, Transcoder};
+    use crate::audio::{AUDIO_QUEUE, AudioService};
 
     #[test]
     fn process_method_is_discovered_through_the_inventory() {
@@ -51,9 +46,7 @@ mod tests {
 
     #[test]
     fn injected_dependency_is_recorded_for_the_access_graph() {
-        // `#[injectable]` emits Discoverable; `#[processor]` only adds
-        // inventory entries — same separation as `#[scheduled]`.
-        assert!(AudioJobs::dependencies().contains(&TypeId::of::<Transcoder>()));
-        assert!(AudioJobs::injected().contains(&TypeId::of::<Transcoder>()));
+        assert!(AudioJobs::dependencies().contains(&TypeId::of::<AudioService>()));
+        assert!(AudioJobs::injected().contains(&TypeId::of::<AudioService>()));
     }
 }

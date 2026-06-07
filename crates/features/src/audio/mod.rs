@@ -8,7 +8,7 @@ pub mod schedule;
 
 pub use dto::{AUDIO_QUEUE, TranscodeJob};
 pub use module::AudioModule;
-pub use service::Transcoder;
+pub use service::AudioService;
 
 pub use http::{AudioController, AudioHttpModule};
 pub use queue::{AudioJobs, AudioQueueModule};

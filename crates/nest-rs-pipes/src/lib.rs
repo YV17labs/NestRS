@@ -5,10 +5,10 @@
 //! - **Per-extractor [`Pipe`]** — pure transform run at a surface's
 //!   request boundary, between extraction and the handler. HTTP binds it
 //!   via the `Valid<E>` / `Piped<P, E>` extractors in `nestrs-http`.
-//! - **[`GlobalPipe`]** — `useGlobalPipes`-style: applies to every JSON
-//!   request body across the app. Declared with
-//!   `App::builder().use_pipes_global(...)`. Runs after Guards, before the
-//!   handler — the canonical NestJS Pipe slot.
+//! - **[`GlobalPipe`]** — applies to every JSON request body across the
+//!   app. Declared with `App::builder().use_pipes_global(...)`. Runs after
+//!   Guards, before the handler — the [`LayerKind::Pipe`](nest_rs_core::LayerKind)
+//!   slot.
 
 mod global;
 mod pipe;

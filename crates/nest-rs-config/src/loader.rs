@@ -210,7 +210,10 @@ mod tests {
                 self.0.get(var).map(|s| (*s).to_owned())
             }
         }
-        let source = Arc::new(Map(HashMap::from([("NESTRS_CUSTOM__URL", "value-from-map")])));
+        let source = Arc::new(Map(HashMap::from([(
+            "NESTRS_CUSTOM__URL",
+            "value-from-map",
+        )])));
         let env = ConfigService::with_source("custom", source);
         assert_eq!(env.get("URL").as_deref(), Some("value-from-map"));
         assert!(env.get("MISSING").is_none());

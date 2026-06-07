@@ -100,7 +100,9 @@ mod tests {
 
     #[test]
     fn into_middleware_accepts_a_basic_origin_list() {
-        cfg(&["https://app.example.com"]).into_middleware().expect("valid config");
+        cfg(&["https://app.example.com"])
+            .into_middleware()
+            .expect("valid config");
     }
 
     fn err_string(result: Result<Cors>) -> String {
@@ -155,7 +157,8 @@ mod tests {
             credentials: true,
             max_age: Some(Duration::from_secs(60 * 60)),
         };
-        cfg.into_middleware().expect("a fully-specified config builds");
+        cfg.into_middleware()
+            .expect("a fully-specified config builds");
     }
 
     #[test]
@@ -207,7 +210,10 @@ mod tests {
     fn from_env_reads_origins_methods_headers_when_set() {
         with_env(
             &[
-                ("NESTRS_HTTP__CORS_ORIGINS", Some("https://a.example,https://b.example")),
+                (
+                    "NESTRS_HTTP__CORS_ORIGINS",
+                    Some("https://a.example,https://b.example"),
+                ),
                 ("NESTRS_HTTP__CORS_METHODS", Some("GET,POST")),
                 ("NESTRS_HTTP__CORS_HEADERS", Some("content-type")),
             ],
@@ -215,7 +221,10 @@ mod tests {
                 let cfg = CorsConfig::from_env(&http_env())
                     .expect("no error")
                     .expect("Some when origins set");
-                assert_eq!(cfg.origins, vec!["https://a.example".to_string(), "https://b.example".into()]);
+                assert_eq!(
+                    cfg.origins,
+                    vec!["https://a.example".to_string(), "https://b.example".into()]
+                );
                 assert_eq!(cfg.methods, vec!["GET".to_string(), "POST".into()]);
                 assert_eq!(cfg.headers, vec!["content-type".to_string()]);
                 assert!(!cfg.credentials, "off by default");

@@ -71,7 +71,10 @@ impl Parse for CrudConfig {
                         "cursor" => Paginate::Cursor,
                         "page" => Paginate::Page,
                         _ => {
-                            return Err(syn::Error::new(mode.span(), "expected `cursor` or `page`"));
+                            return Err(syn::Error::new(
+                                mode.span(),
+                                "expected `cursor` or `page`",
+                            ));
                         }
                     });
                 }

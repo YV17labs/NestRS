@@ -5,8 +5,8 @@ use anyhow::Result;
 use nest_rs_authn::{CredentialError, burn_verify, hash_password, verify_password};
 use nest_rs_authz::Action;
 use nest_rs_core::{hooks, injectable};
-use nest_rs_seaorm::{CreateModel, CrudService, Repo, ServiceError};
 use nest_rs_graphql::dataloader;
+use nest_rs_seaorm::{CreateModel, CrudService, Repo, ServiceError};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, Set,
@@ -130,7 +130,6 @@ pub(crate) fn prepare_new_user(
     Ok(active_for_new_user(input, org_id, password_hash))
 }
 
-
 /// Branch a loaded user against a supplied password into the
 /// `Ok(model)` / `Err(CredentialError)` decision the authenticate handler
 /// returns. Burns a dummy verify on every miss path so timing does not
@@ -190,7 +189,6 @@ impl UsersService {
             .await?;
         Ok(group_users_by_name(names, rows))
     }
-
 }
 
 #[hooks]
@@ -307,7 +305,10 @@ mod tests {
         let org = Uuid::now_v7();
         let active = active_for_new_user(input("ada", "ada@example.com"), org, None);
 
-        assert_eq!(active_into_get::<Uuid>(&active, entity::Column::OrgId), Some(org));
+        assert_eq!(
+            active_into_get::<Uuid>(&active, entity::Column::OrgId),
+            Some(org)
+        );
         assert_eq!(
             active_into_get::<String>(&active, entity::Column::Role).as_deref(),
             Some(DEFAULT_ROLE),

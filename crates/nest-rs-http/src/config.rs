@@ -73,7 +73,11 @@ impl Config for HttpConfig {
     fn from_env(env: &ConfigService) -> Result<Self> {
         let global_prefix = env.get("GLOBAL_PREFIX").and_then(|raw| {
             let trimmed = raw.trim();
-            if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
         });
         Ok(Self {
             host: env.get("HOST").unwrap_or_else(|| DEFAULT_HOST.to_string()),

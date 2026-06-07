@@ -8,7 +8,7 @@
 //! sub-trait so global + per-scope declarations dedup by
 //! [`TypeId`](std::any::TypeId) at mount time.
 //!
-//! For panic-catching error handlers (NestJS `@Catch(...)`), see
+//! For handlers that catch a single typed exception, see
 //! [`nest_rs_exception_filters::ExceptionFilter`].
 //!
 //! ## Defining a filter

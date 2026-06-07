@@ -102,7 +102,9 @@ mod tests {
         let org = Uuid::now_v7();
         let ab = admin(org);
         assert!(ab.can::<user::Entity>(Action::Delete, &user_model(Uuid::now_v7(), org)));
-        assert!(!ab.can::<user::Entity>(Action::Delete, &user_model(Uuid::now_v7(), Uuid::now_v7())));
+        assert!(
+            !ab.can::<user::Entity>(Action::Delete, &user_model(Uuid::now_v7(), Uuid::now_v7()))
+        );
     }
 
     #[test]
@@ -123,7 +125,8 @@ mod tests {
             .to_string();
         assert!(sql.contains("org_id"), "member must scope by org_id: {sql}");
 
-        let fields = member(org).permitted_fields::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org));
+        let fields = member(org)
+            .permitted_fields::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org));
         match fields {
             FieldSet::Only(cols) => {
                 assert!(cols.contains("id"));

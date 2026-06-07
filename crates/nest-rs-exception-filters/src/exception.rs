@@ -1,4 +1,4 @@
-//! [`ExceptionFilter`] — catches a single typed exception, NestJS-style.
+//! [`ExceptionFilter`] — catches a single typed exception.
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;

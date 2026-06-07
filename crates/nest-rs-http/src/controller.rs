@@ -134,8 +134,7 @@ mod tests {
         let mut generator = schemars::SchemaGenerator::default();
         let schema = schema_of::<String>(&mut generator);
         // The subschema is a JSON-schema object whose serialization round-trips.
-        let value: serde_json::Value =
-            serde_json::to_value(&schema).expect("schema serializes");
+        let value: serde_json::Value = serde_json::to_value(&schema).expect("schema serializes");
         assert!(value.is_object(), "schema serializes to a JSON object");
     }
 

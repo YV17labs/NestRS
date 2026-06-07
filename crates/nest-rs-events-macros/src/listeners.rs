@@ -65,12 +65,9 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         if method.sig.asyncness.is_none() {
-            return syn::Error::new_spanned(
-                &method.sig,
-                "#[on_event] methods must be `async fn`",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(&method.sig, "#[on_event] methods must be `async fn`")
+                .to_compile_error()
+                .into();
         }
 
         if !matches!(method.sig.output, ReturnType::Default) {
@@ -92,11 +89,8 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         let method_name = method_ident.to_string();
         let qualified_name = format!("{provider_name}::{method_name}");
         let method_snake = to_snake(&method_name);
-        let wire_ident = format_ident!(
-            "__nestrs_listener_wire_{}_{}",
-            provider_snake,
-            method_snake
-        );
+        let wire_ident =
+            format_ident!("__nestrs_listener_wire_{}_{}", provider_snake, method_snake);
 
         emissions.push(quote! {
             #[doc(hidden)]

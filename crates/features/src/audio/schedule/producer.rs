@@ -3,22 +3,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nest_rs_core::injectable;
-use nest_rs_redis::QueueConnection;
 use nest_rs_schedule::{CronExpression, scheduled};
 
-use crate::audio::{AUDIO_QUEUE, TranscodeJob};
+use crate::audio::{AUDIO_QUEUE, AudioService};
 
-/// Producer side: a recurring schedule that enqueues jobs the `worker` app
-/// consumes. Lives with the producing app (`api`), not the worker, so the
-/// worker stays a pure consumer. Shares the `core` contract.
-///
-/// Three triggers on one provider — the NestJS-style pattern of pooling
-/// related cron methods on a single service so they share `#[inject]`s
-/// (here a single [`QueueConnection`]).
 #[injectable]
 pub struct AudioTasks {
     #[inject]
-    queue: Arc<QueueConnection>,
+    svc: Arc<AudioService>,
 }
 
 #[scheduled]
@@ -26,13 +18,7 @@ impl AudioTasks {
     #[every("5s")]
     async fn enqueue_transcode(&self) -> Result<()> {
         let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        let file = format!("track-{id}.mp3");
-        self.queue
-            .of::<TranscodeJob>(AUDIO_QUEUE)
-            .push(TranscodeJob { file: file.clone() })
-            .await?;
-        tracing::info!(target: "features::audio", %file, "scheduled transcode job");
-        Ok(())
+        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await
     }
 
     #[after("3s")]
@@ -60,10 +46,10 @@ mod tests {
     use std::any::TypeId;
 
     use nest_rs_core::{Discoverable, ReachableProviders};
-    use nest_rs_redis::QueueConnection;
     use nest_rs_schedule::ScheduledMethod;
 
     use super::AudioTasks;
+    use crate::audio::AudioService;
 
     #[test]
     fn three_methods_are_discovered_through_the_inventory() {
@@ -81,18 +67,12 @@ mod tests {
 
     #[test]
     fn injected_dependency_is_recorded_for_the_access_graph() {
-        // The provider's own `#[injectable]` emits Discoverable; `#[scheduled]`
-        // only adds inventory entries. `dependencies()` records the eagerly
-        // required deps the register-phase fixpoint orders against, and
-        // `injected()` records the same set for the access-graph check.
-        assert!(AudioTasks::dependencies().contains(&TypeId::of::<QueueConnection>()));
-        assert!(AudioTasks::injected().contains(&TypeId::of::<QueueConnection>()));
+        assert!(AudioTasks::dependencies().contains(&TypeId::of::<AudioService>()));
+        assert!(AudioTasks::injected().contains(&TypeId::of::<AudioService>()));
     }
 
     #[test]
     fn reachable_providers_marker_is_a_normal_provider() {
-        // Sanity: ReachableProviders is a concrete type that gets seeded at
-        // boot; the scheduler keys its filter on this exact type.
         let _ = TypeId::of::<ReachableProviders>();
     }
 }

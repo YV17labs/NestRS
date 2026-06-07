@@ -261,14 +261,20 @@ mod tests {
     #[test]
     fn canonical_falsy_values_turn_access_log_off() {
         for raw in ["0", "false", "off", "no"] {
-            assert!(!parse_access_log_flag(Some(raw)), "expected off for {raw:?}");
+            assert!(
+                !parse_access_log_flag(Some(raw)),
+                "expected off for {raw:?}"
+            );
         }
     }
 
     #[test]
     fn falsy_values_are_case_and_whitespace_tolerant() {
         for raw in ["  FALSE  ", "Off", "NO", "0\n"] {
-            assert!(!parse_access_log_flag(Some(raw)), "expected off for {raw:?}");
+            assert!(
+                !parse_access_log_flag(Some(raw)),
+                "expected off for {raw:?}"
+            );
         }
     }
 
@@ -287,7 +293,7 @@ mod tests {
         use poem::http::{Method, StatusCode, header};
         use poem::{Endpoint, IntoResponse, Request, endpoint::make};
 
-        use super::super::{OpenTelemetryHttp, current_trace_id, client_ip, user_agent};
+        use super::super::{OpenTelemetryHttp, client_ip, current_trace_id, user_agent};
 
         #[test]
         fn user_agent_reads_the_header_when_present() {
@@ -309,7 +315,10 @@ mod tests {
                 header::USER_AGENT,
                 poem::http::HeaderValue::from_bytes(&[0xff, 0xfe, 0xfd]).unwrap(),
             );
-            assert!(user_agent(&req).is_none(), "non-utf8 ua must not panic or surface");
+            assert!(
+                user_agent(&req).is_none(),
+                "non-utf8 ua must not panic or surface"
+            );
         }
 
         #[test]
@@ -335,19 +344,24 @@ mod tests {
 
         #[tokio::test]
         async fn intercept_attaches_x_trace_id_header_to_response_when_traceparent_present() {
-            let endpoint = make(|_req: Request| async {
-                "hello-world".into_response()
-            });
+            let endpoint = make(|_req: Request| async { "hello-world".into_response() });
             let wrapped = endpoint.interceptor(OpenTelemetryHttp { access_log: true });
 
             // A W3C traceparent the propagator accepts: trace id all-1s, span id all-1s.
             let req = Request::builder()
                 .method(Method::GET)
                 .uri("/path".parse().unwrap())
-                .header("traceparent", "00-11111111111111111111111111111111-1111111111111111-01")
+                .header(
+                    "traceparent",
+                    "00-11111111111111111111111111111111-1111111111111111-01",
+                )
                 .header(header::USER_AGENT, "curl/8.0")
                 .finish();
-            let resp = wrapped.call(req).await.expect("handler runs").into_response();
+            let resp = wrapped
+                .call(req)
+                .await
+                .expect("handler runs")
+                .into_response();
             assert_eq!(resp.status(), StatusCode::OK);
             // The interceptor sets X-Trace-Id whenever a valid span context exists;
             // with the propagator extracting the traceparent, it must be present.
@@ -365,16 +379,18 @@ mod tests {
             // No traceparent header: the interceptor's fast path skips the
             // propagator extraction, but everything else (status recording,
             // body wrapping, access log) must still run.
-            let endpoint = make(|_req: Request| async {
-                "ok".into_response()
-            });
+            let endpoint = make(|_req: Request| async { "ok".into_response() });
             let wrapped = endpoint.interceptor(OpenTelemetryHttp { access_log: true });
 
             let req = Request::builder()
                 .method(Method::GET)
                 .uri("/no-tp".parse().unwrap())
                 .finish();
-            let resp = wrapped.call(req).await.expect("handler runs").into_response();
+            let resp = wrapped
+                .call(req)
+                .await
+                .expect("handler runs")
+                .into_response();
             assert_eq!(resp.status(), StatusCode::OK);
             let body = read_body_to_bytes(resp).await;
             assert_eq!(body, b"ok");
@@ -394,7 +410,11 @@ mod tests {
                 .method(Method::POST)
                 .uri("/teapot".parse().unwrap())
                 .finish();
-            let resp = wrapped.call(req).await.expect("interceptor normalises err").into_response();
+            let resp = wrapped
+                .call(req)
+                .await
+                .expect("interceptor normalises err")
+                .into_response();
             assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
             let _ = read_body_to_bytes(resp).await;
         }
@@ -404,16 +424,18 @@ mod tests {
             // access_log = false still wraps the body and records the status,
             // but skips the tracing::info! emission. Exercising the false
             // branch covers the second arm of `AccessLog::emit`.
-            let endpoint = make(|_req: Request| async {
-                "silent".into_response()
-            });
+            let endpoint = make(|_req: Request| async { "silent".into_response() });
             let wrapped = endpoint.interceptor(OpenTelemetryHttp { access_log: false });
 
             let req = Request::builder()
                 .method(Method::GET)
                 .uri("/quiet".parse().unwrap())
                 .finish();
-            let resp = wrapped.call(req).await.expect("handler runs").into_response();
+            let resp = wrapped
+                .call(req)
+                .await
+                .expect("handler runs")
+                .into_response();
             assert_eq!(resp.status(), StatusCode::OK);
             let body = read_body_to_bytes(resp).await;
             assert_eq!(body, b"silent");
@@ -424,16 +446,18 @@ mod tests {
             // Drop-on-disconnect: build the Response, then drop the body
             // without polling to end-of-stream. `AccessLogBody::Drop` must
             // run `emit_once` exactly once.
-            let endpoint = make(|_req: Request| async {
-                "abandoned".into_response()
-            });
+            let endpoint = make(|_req: Request| async { "abandoned".into_response() });
             let wrapped = endpoint.interceptor(OpenTelemetryHttp { access_log: true });
 
             let req = Request::builder()
                 .method(Method::GET)
                 .uri("/dropped".parse().unwrap())
                 .finish();
-            let resp = wrapped.call(req).await.expect("handler runs").into_response();
+            let resp = wrapped
+                .call(req)
+                .await
+                .expect("handler runs")
+                .into_response();
             // Drop without reading — exercises AccessLogBody::Drop.
             drop(resp);
         }
@@ -454,7 +478,11 @@ mod tests {
                 .method(Method::GET)
                 .uri("/big".parse().unwrap())
                 .finish();
-            let resp = wrapped.call(req).await.expect("handler runs").into_response();
+            let resp = wrapped
+                .call(req)
+                .await
+                .expect("handler runs")
+                .into_response();
             let body = read_body_to_bytes(resp).await;
             assert_eq!(body.len(), payload.len());
         }

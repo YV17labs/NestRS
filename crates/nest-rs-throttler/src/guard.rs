@@ -46,7 +46,6 @@ impl Guard for ThrottlerGuard {
     }
 }
 
-
 /// Direct peer IP unless the peer is a configured trusted proxy — then the
 /// leftmost `X-Forwarded-For` hop.
 fn client_key(req: &Request, trusted_proxies: &[IpAddr]) -> String {

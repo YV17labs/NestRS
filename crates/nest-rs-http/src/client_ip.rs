@@ -62,13 +62,10 @@ fn parse_forwarded_entry(raw: &str) -> Option<IpAddr> {
     if let Ok(ip) = trimmed.parse::<IpAddr>() {
         return Some(ip);
     }
-    if let Some(inner) = trimmed
-        .strip_prefix('[')
-        .and_then(|s| s.strip_suffix(']'))
+    if let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+        && let Ok(ip) = inner.parse::<IpAddr>()
     {
-        if let Ok(ip) = inner.parse::<IpAddr>() {
-            return Some(ip);
-        }
+        return Some(ip);
     }
     trimmed.parse::<SocketAddr>().ok().map(|sa| sa.ip())
 }

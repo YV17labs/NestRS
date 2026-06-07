@@ -7,9 +7,16 @@ async fn unbound_service_reports_up_with_empty_details() {
     // empty `up`: the framework prefers "permissive while warming" over a
     // flapping 503.
     let svc = HealthService::default();
-    for kind in [ProbeKind::Liveness, ProbeKind::Readiness, ProbeKind::Startup] {
+    for kind in [
+        ProbeKind::Liveness,
+        ProbeKind::Readiness,
+        ProbeKind::Startup,
+    ] {
         let report = svc.probe(kind).await;
         assert_eq!(report.status, IndicatorStatus::Up);
-        assert!(report.details.is_empty(), "{kind:?} reports must be empty when unbound");
+        assert!(
+            report.details.is_empty(),
+            "{kind:?} reports must be empty when unbound"
+        );
     }
 }

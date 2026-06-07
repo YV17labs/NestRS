@@ -672,10 +672,7 @@ mod tests {
         // (Counter), then loops back to A.
         let greeter_at = msg.find("Greeter").unwrap();
         let counter_at = msg.find("Counter").unwrap();
-        assert!(
-            greeter_at < counter_at,
-            "chain must read A then B: {msg}",
-        );
+        assert!(greeter_at < counter_at, "chain must read A then B: {msg}",);
     }
 
     #[test]

@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Transport-agnostic validation & transformation pipes for nestrs (NestJS-style). A surface (HTTP, …) applies them at its request boundary."
+description = "Transport-agnostic validation & transformation pipes for nestrs. A surface (HTTP, …) applies them at its request boundary."
 
 
 [dependencies]

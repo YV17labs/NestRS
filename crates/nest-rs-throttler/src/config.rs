@@ -73,7 +73,10 @@ mod tests {
             &[
                 ("NESTRS_THROTTLER__LIMIT", Some("120")),
                 ("NESTRS_THROTTLER__WINDOW_SECS", Some("90")),
-                ("NESTRS_THROTTLER__TRUSTED_PROXIES", Some("10.0.0.1,192.168.0.1")),
+                (
+                    "NESTRS_THROTTLER__TRUSTED_PROXIES",
+                    Some("10.0.0.1,192.168.0.1"),
+                ),
             ],
             || {
                 let cfg = ThrottlerConfig::from_env(&env_service()).expect("no error");

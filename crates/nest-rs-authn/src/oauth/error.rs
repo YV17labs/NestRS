@@ -39,7 +39,10 @@ mod tests {
     // RFC 6749 wire codes — a rename here breaks every conforming client.
     #[test]
     fn display_emits_rfc6749_codes() {
-        assert_eq!(TokenError::UnsupportedGrant.to_string(), "unsupported_grant_type");
+        assert_eq!(
+            TokenError::UnsupportedGrant.to_string(),
+            "unsupported_grant_type"
+        );
         assert_eq!(TokenError::InvalidScope.to_string(), "invalid_scope");
         assert_eq!(
             TokenError::InvalidCredentials.to_string(),
@@ -58,7 +61,10 @@ mod tests {
 
     #[test]
     fn unsupported_grant_is_400() {
-        assert_eq!(TokenError::UnsupportedGrant.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            TokenError::UnsupportedGrant.status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]

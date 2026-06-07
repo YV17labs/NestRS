@@ -83,7 +83,9 @@ mod tests {
         let resp = asset("text/css", b"body{}");
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get("content-type").and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
             Some("text/css"),
         );
         let cache = resp

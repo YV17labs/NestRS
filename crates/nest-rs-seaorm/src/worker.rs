@@ -29,9 +29,6 @@ impl JobContext for WorkerDbContext {
         &'a self,
         inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(with_job_executor(
-            Executor::Pool((*self.db).clone()),
-            inner,
-        ))
+        Box::pin(with_job_executor(Executor::Pool((*self.db).clone()), inner))
     }
 }

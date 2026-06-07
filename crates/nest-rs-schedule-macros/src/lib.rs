@@ -24,8 +24,9 @@ mod scheduled;
 /// offending job.
 ///
 /// Multiple decorated methods on the same `#[scheduled]` impl block all
-/// share the provider's `#[inject]` dependencies — the NestJS-equivalent
-/// pattern of pooling related cron methods on one service.
+/// share the provider's `#[inject]` dependencies — pooling related cron
+/// methods on a single service keeps shared state (clients, caches) in
+/// one place.
 #[proc_macro_attribute]
 pub fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
     scheduled::scheduled(args, input)

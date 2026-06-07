@@ -59,7 +59,14 @@ mod tests {
         // Every length-1 validation must trip — including client_secret which
         // means an unconfigured app fails the boot loudly rather than
         // accepting the empty default.
-        for required in ["client_id", "client_secret", "auth_url", "token_url", "redirect_url", "userinfo_url"] {
+        for required in [
+            "client_id",
+            "client_secret",
+            "auth_url",
+            "token_url",
+            "redirect_url",
+            "userinfo_url",
+        ] {
             assert!(
                 fields.contains_key(required),
                 "expected {required} in {:?}",
@@ -78,7 +85,8 @@ mod tests {
         // Each of the six URL/credential fields blocks validation on its own —
         // a regression that allowed any of them to default to "" would let an
         // app boot with broken OAuth flow.
-        let setters: [(fn(&mut OAuth2Config), &str); 6] = [
+        type Setter = fn(&mut OAuth2Config);
+        let setters: [(Setter, &str); 6] = [
             (|c| c.client_id = String::new(), "client_id"),
             (|c| c.client_secret = String::new(), "client_secret"),
             (|c| c.auth_url = String::new(), "auth_url"),

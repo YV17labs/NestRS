@@ -58,7 +58,11 @@ pub(crate) fn next_cursor_from<M>(
     has_more: bool,
     pk: impl FnMut(&M) -> Option<Uuid>,
 ) -> Option<Uuid> {
-    if has_more { items.last().and_then(pk) } else { None }
+    if has_more {
+        items.last().and_then(pk)
+    } else {
+        None
+    }
 }
 
 /// The `?first=&after=` cursor query. An unparsable `after` is ignored — paging
@@ -195,7 +199,10 @@ mod tests {
     fn split_overfetched_over_limit_drops_the_probe_row_and_flags_more() {
         let (items, more) = split_overfetched(vec![1, 2, 3, 4], 3);
         assert_eq!(items, vec![1, 2, 3], "the probe row is truncated");
-        assert!(more, "an over-fetched row means there is at least one more page");
+        assert!(
+            more,
+            "an over-fetched row means there is at least one more page"
+        );
     }
 
     #[test]

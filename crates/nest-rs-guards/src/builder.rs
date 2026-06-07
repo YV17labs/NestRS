@@ -61,9 +61,8 @@ impl AppBuilderGuardsExt for AppBuilder {
     }
 }
 
-/// Adds `.use_pipes_global(...)` to [`AppBuilder`] — the NestJS
-/// `useGlobalPipes` analog. Each pipe runs before every JSON HTTP handler;
-/// per-route opt-out via `#[no_pipes]`.
+/// Adds `.use_pipes_global(...)` to [`AppBuilder`]. Each pipe runs before
+/// every JSON HTTP handler; per-route opt-out via `#[no_pipes]`.
 pub trait AppBuilderPipesExt: Sized {
     fn use_pipes_global<I>(self, specs: I) -> Self
     where

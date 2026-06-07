@@ -84,9 +84,7 @@ pub struct ResourceModel {
 impl ResourceModel {
     /// True iff at least one non-skip relation needs a `#[ComplexObject]`.
     pub fn has_auto_relations(&self) -> bool {
-        self.fields
-            .iter()
-            .any(|f| !f.skip && f.relation.is_some())
+        self.fields.iter().any(|f| !f.skip && f.relation.is_some())
     }
 }
 
@@ -238,9 +236,7 @@ pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceM
                     target,
                 })
             }
-            (Some((Cardinality::Many, target)), _, true) => {
-                Some(RelationKind::HasMany { target })
-            }
+            (Some((Cardinality::Many, target)), _, true) => Some(RelationKind::HasMany { target }),
             (Some((Cardinality::One, _)), false, _) => {
                 return Err(syn::Error::new_spanned(
                     &field.ident,

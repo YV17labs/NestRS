@@ -52,10 +52,7 @@ impl Layer for RequireAdmin {}
 
 #[async_trait]
 impl Guard for RequireAdmin {
-    async fn check_graphql(
-        &self,
-        ctx: &Context<'_>,
-    ) -> std::result::Result<(), Denial> {
+    async fn check_graphql(&self, ctx: &Context<'_>) -> std::result::Result<(), Denial> {
         match ctx.data_opt::<Role>() {
             Some(role) if role.0 == "admin" => Ok(()),
             _ => Err(Denial::forbidden("forbidden")),

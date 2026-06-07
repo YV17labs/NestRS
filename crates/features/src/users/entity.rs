@@ -44,7 +44,10 @@ mod tests {
         let mut body: Map<String, serde_json::Value> = Map::new();
         Entity::fill_wire_defaults(&mut body);
 
-        assert_eq!(body.get("role"), Some(&serde_json::Value::String(String::new())));
+        assert_eq!(
+            body.get("role"),
+            Some(&serde_json::Value::String(String::new()))
+        );
         assert_eq!(body.get("password_hash"), Some(&serde_json::Value::Null));
     }
 

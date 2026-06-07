@@ -23,7 +23,9 @@ mod tests {
 
     #[test]
     fn valid_input_passes() {
-        input("alice@example.com", "longenough").validate().expect("valid");
+        input("alice@example.com", "longenough")
+            .validate()
+            .expect("valid");
     }
 
     #[test]
@@ -45,6 +47,8 @@ mod tests {
 
     #[test]
     fn exactly_eight_characters_passes() {
-        input("alice@example.com", "12345678").validate().expect("8 chars is valid");
+        input("alice@example.com", "12345678")
+            .validate()
+            .expect("8 chars is valid");
     }
 }

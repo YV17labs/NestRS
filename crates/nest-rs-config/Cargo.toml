@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Configuration loading for nestrs apps — the @nestjs/config analog (namespaced env mapping)."
+description = "Configuration loading for nestrs apps — namespaced env mapping bound to typed pinned configs."
 
 
 [dependencies]

@@ -21,7 +21,6 @@ impl Guard for AuthzGuard {
     }
 }
 
-
 #[module(providers = [AuthzGuard])]
 struct GuardModule;
 

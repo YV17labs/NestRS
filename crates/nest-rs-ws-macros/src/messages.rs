@@ -347,11 +347,7 @@ fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
 /// The chain is `global + method_guards`, deduped by `TypeId` (broadest
 /// wins). `#[force_guards]` lets a per-message guard replay even when the
 /// same `TypeId` is global.
-fn chain_insert(
-    event: &LitStr,
-    method_guards: &[Path],
-    force_guards: &[Path],
-) -> TokenStream2 {
+fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
     let method_spec_entries = method_guards.iter().map(|p| {
         quote! {
             ::nest_rs_guards::layer_chain::ResolvedLayer {

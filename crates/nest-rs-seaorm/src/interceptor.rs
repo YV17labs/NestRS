@@ -88,12 +88,7 @@ impl Interceptor for DbContext {
             }
         };
 
-        finalize_transaction(
-            txn,
-            &result,
-            self.config.retry_serialization_conflicts,
-        )
-        .await?;
+        finalize_transaction(txn, &result, self.config.retry_serialization_conflicts).await?;
         result
     }
 }

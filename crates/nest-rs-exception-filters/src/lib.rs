@@ -1,6 +1,6 @@
 //! # nest-rs-exception-filters
 //!
-//! [`ExceptionFilter`] — the NestJS `@Catch(...)` analog. Unlike a [`Filter`]
+//! [`ExceptionFilter`] catches a single typed exception. Unlike a [`Filter`]
 //! from `nest-rs-filters` (which unconditionally maps every inner error to a
 //! response), an `ExceptionFilter` declares the concrete error type it claims
 //! via its [`ExceptionFilter::Exception`] associated type and only catches

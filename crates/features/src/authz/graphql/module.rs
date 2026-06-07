@@ -1,6 +1,6 @@
 use nest_rs_core::module;
-use nest_rs_seaorm::graphql::LoaderScope;
 use nest_rs_graphql::{BatchContext, OperationGuard};
+use nest_rs_seaorm::graphql::LoaderScope;
 
 use super::bridge::AppGraphqlGuard;
 use super::guard::GraphqlAuthGuard;

@@ -9,8 +9,8 @@
 //! `#[routes]` / `#[resolver]` / `#[messages]` shapers dedup by `TypeId`
 //! when the same guard is declared at multiple scopes (global + controller
 //! + method) — the broadest scope wins and the rest log a `warn`. The
-//! framework runs guards in **declaration order**; [`Layer::priority`] is
-//! an opt-in tiebreaker.
+//!   framework runs guards in **declaration order**; [`Layer::priority`] is
+//!   an opt-in tiebreaker.
 //!
 //! `#[public]` is not a framework-level skip: the macro attaches a
 //! [`Public`](nest_rs_core::Public) marker via the same metadata channel
@@ -94,9 +94,7 @@ pub use denial::Denial;
 pub use guard::{Guard, GuardAsWsLayer};
 pub use guard_endpoint::{GuardEndpoint, GuardExt};
 pub use layer_chain::{LayerSource, ResolvedLayer};
-pub use registry::{
-    GlobalGuards, GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe,
-};
+pub use registry::{GlobalGuards, GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
 // Re-export integration helpers for macro-emitted code.
 pub use integration::{

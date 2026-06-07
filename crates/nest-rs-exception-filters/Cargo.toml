@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "NestJS-style exception filters for nestrs — catches typed errors (the `@Catch(...)` analog) and maps them to responses; distinct from the unconditional error-mapping `Filter`."
+description = "Typed exception filters for nestrs — each filter declares the concrete error it claims and only catches matching errors; distinct from the unconditional error-mapping `Filter`."
 
 [dependencies]
 async-trait.workspace = true

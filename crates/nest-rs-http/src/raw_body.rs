@@ -48,7 +48,9 @@ impl RawBody {
         let raw = body.take()?;
         match raw.into_bytes_limit(limit).await {
             Ok(bytes) => Ok(Self(bytes)),
-            Err(ReadBodyError::PayloadTooLarge) => Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE)),
+            Err(ReadBodyError::PayloadTooLarge) => {
+                Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE))
+            }
             Err(err) => Err(err.into()),
         }
     }
@@ -125,7 +127,9 @@ mod tests {
     async fn extract_with_limit_passes_when_payload_fits() {
         let payload = vec![b'x'; 32];
         let (_req, mut body) = request_with_body(payload);
-        let raw = RawBody::extract_with_limit(&mut body, 32).await.expect("fits");
+        let raw = RawBody::extract_with_limit(&mut body, 32)
+            .await
+            .expect("fits");
         assert_eq!(raw.0.len(), 32);
     }
 

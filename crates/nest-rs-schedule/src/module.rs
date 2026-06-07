@@ -12,10 +12,10 @@ use crate::Scheduler;
 
 /// Activates the scheduler runtime for the app.
 ///
-/// Importing this module is the symmetric equivalent of NestJS's
-/// `ScheduleModule.forRoot()` — every `#[scheduled]` method on a provider
-/// reachable from the app's module tree fires under its declared trigger.
-/// Without this import, `#[scheduled]` methods compile in but never tick.
+/// Importing this module turns on the scheduler at boot: every
+/// `#[scheduled]` method on a provider reachable from the app's module
+/// tree fires under its declared trigger. Without this import,
+/// `#[scheduled]` methods compile in but never tick.
 pub struct ScheduleModule;
 
 impl Module for ScheduleModule {

@@ -152,11 +152,13 @@ mod tests {
             .with_deployment_environment("staging");
         let r = build_resource(&cfg);
         assert_eq!(
-            r.get(&Key::new(SERVICE_VERSION)).map(|v| v.as_str().to_string()),
+            r.get(&Key::new(SERVICE_VERSION))
+                .map(|v| v.as_str().to_string()),
             Some("1.2.3".to_string()),
         );
         assert_eq!(
-            r.get(&Key::new(DEPLOYMENT_ENVIRONMENT_NAME)).map(|v| v.as_str().to_string()),
+            r.get(&Key::new(DEPLOYMENT_ENVIRONMENT_NAME))
+                .map(|v| v.as_str().to_string()),
             Some("staging".to_string()),
         );
     }
@@ -186,7 +188,8 @@ mod tests {
         };
         let r = build_resource(&cfg);
         assert_eq!(
-            r.get(&Key::new(SERVICE_INSTANCE_ID)).map(|v| v.as_str().to_string()),
+            r.get(&Key::new(SERVICE_INSTANCE_ID))
+                .map(|v| v.as_str().to_string()),
             Some("pinned-instance".to_string()),
         );
     }
@@ -242,8 +245,8 @@ mod tests {
         // the difference from outside; the test pins that trailing-slash input
         // continues to build successfully and remains the documented contract.
         let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let cfg = OpenTelemetryConfig::new("svc-trailing")
-            .with_otlp_endpoint("http://localhost:4318/");
+        let cfg =
+            OpenTelemetryConfig::new("svc-trailing").with_otlp_endpoint("http://localhost:4318/");
         let exporters = build(&cfg).expect("build succeeds with trailing slash endpoint");
         assert!(exporters.meter_provider.is_some());
         assert!(exporters.logger_provider.is_some());

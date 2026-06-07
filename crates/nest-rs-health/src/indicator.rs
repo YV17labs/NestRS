@@ -102,8 +102,7 @@ impl ProbeReport {
     }
 }
 
-pub type IndicatorFuture<'a> =
-    Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
+pub type IndicatorFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
 pub type IndicatorRun = for<'a> fn(&'a Container) -> IndicatorFuture<'a>;
 

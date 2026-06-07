@@ -241,7 +241,10 @@ mod tests {
     #[allow(clippy::result_large_err)]
     fn load_file_skips_empty_key_and_lines_with_only_whitespace_key() {
         figment::Jail::expect_with(|jail| {
-            jail.create_file(".env", "=value-without-key\n   =whitespace-key\nVALID_KEY=ok\n")?;
+            jail.create_file(
+                ".env",
+                "=value-without-key\n   =whitespace-key\nVALID_KEY=ok\n",
+            )?;
             load_cascade(Path::new("."), Environment::Development);
             assert_eq!(std::env::var("VALID_KEY").unwrap(), "ok");
             // The bad lines must not be loaded under any key.

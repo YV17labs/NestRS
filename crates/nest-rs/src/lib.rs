@@ -77,7 +77,9 @@ pub use nest_rs_testing as testing;
 /// is enabled. The default features (`http`, `config`) cover the typical
 /// HTTP-API case.
 pub mod prelude {
-    pub use nest_rs_core::{App, AppBuilder, Container, ContainerBuilder, Module, hooks, injectable, module};
+    pub use nest_rs_core::{
+        App, AppBuilder, Container, ContainerBuilder, Module, hooks, injectable, module,
+    };
 
     #[cfg(feature = "http")]
     pub use nest_rs_http::{

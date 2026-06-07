@@ -41,3 +41,7 @@ tokio.workspace = true
 nest-rs-config.workspace = true
 serde.workspace = true
 validator.workspace = true
+# The pipes test (`tests/pipes.rs`) needs the `GlobalPipe` trait + a
+# `serde_json::Value` body to observe a pipe rewriting it.
+nest-rs-pipes.workspace = true
+serde_json.workspace = true

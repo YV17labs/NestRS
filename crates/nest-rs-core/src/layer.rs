@@ -1,17 +1,16 @@
 //! Layer System — the unified vocabulary for cross-cutting concerns.
 //!
-//! A *layer* is any cross-cutting concern that wraps a handler. The five
-//! canonical [`LayerKind`]s map 1:1 to NestJS:
+//! A *layer* is any cross-cutting concern that wraps a handler. There are
+//! four canonical [`LayerKind`]s:
 //!
-//! - [`LayerKind::Middleware`] — general request pre-/post-processing.
-//! - [`LayerKind::Guard`] — gates access (the `CanActivate` analog).
+//! - [`LayerKind::Guard`] — gates access.
 //! - [`LayerKind::Interceptor`] — wraps handler execution (logging, txn,
-//!   response shaping).
+//!   response shaping, request preprocessing).
 //! - [`LayerKind::Pipe`] — input transform / validation.
 //! - [`LayerKind::ExceptionFilter`] — maps thrown errors to responses.
 //!
-//! The execution order across kinds is fixed by the framework (Middleware →
-//! Guard → Interceptor → Pipe → handler → Interceptor (post) → Exception
+//! The execution order across kinds is fixed by the framework (Guard →
+//! Interceptor → Pipe → handler → Interceptor (post) → Exception
 //! Filter on error). Inside a single kind, the chain runs in declaration
 //! order, with [`Layer::priority`] as an optional intra-kind tiebreaker.
 //!
@@ -30,18 +29,19 @@
 
 use std::sync::Arc;
 
-/// What kind of layer this is — one of the five NestJS-canonical roles.
-/// Drives the fixed execution order across kinds; intra-kind order comes
-/// from declaration plus [`Layer::priority`].
+/// What kind of layer this is — one of the four canonical roles. Drives
+/// the fixed execution order across kinds; intra-kind order comes from
+/// declaration plus [`Layer::priority`].
 ///
 /// Each sub-trait corresponds to exactly one variant — the kind is
 /// determined by the trait, not by an instance method, so there is no
 /// runtime ambiguity about what role a layer plays.
+///
+/// Pre-handler request shaping has no dedicated variant: it is expressed
+/// as an [`Interceptor`](../../nest_rs_interceptors/trait.Interceptor.html).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LayerKind {
-    /// General request preprocessing/postprocessing.
-    Middleware,
-    /// Gates access — the `CanActivate` analog.
+    /// Gates access.
     Guard,
     /// Wraps handler execution.
     Interceptor,

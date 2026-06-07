@@ -253,10 +253,16 @@ mod tests {
                 ("NESTRS_OPENTELEMETRY__SERVICE_NAME", Some("override-svc")),
                 ("NESTRS_OPENTELEMETRY__SERVICE_VERSION", Some("9.9.9")),
                 ("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT", Some("prod")),
-                ("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID", Some("pinned-1")),
+                (
+                    "NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID",
+                    Some("pinned-1"),
+                ),
                 ("NESTRS_OPENTELEMETRY__LOG_LEVEL", Some("debug,hyper=warn")),
                 ("NESTRS_OPENTELEMETRY__LOG_FORMAT", Some("json")),
-                ("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT", Some("http://otel:4318")),
+                (
+                    "NESTRS_OPENTELEMETRY__OTLP_ENDPOINT",
+                    Some("http://otel:4318"),
+                ),
                 ("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("0.25")),
             ],
             || {
@@ -276,17 +282,13 @@ mod tests {
     #[test]
     fn from_env_clamps_ratio_outside_zero_to_one() {
         with_env(
-            &[
-                ("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("2.5")),
-            ],
+            &[("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("2.5"))],
             || {
                 assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 1.0);
             },
         );
         with_env(
-            &[
-                ("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("-0.5")),
-            ],
+            &[("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("-0.5"))],
             || {
                 assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 0.0);
             },

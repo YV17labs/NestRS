@@ -17,12 +17,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+type ProbeFuture =
+    Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>;
+
 // A link-time `ProcessMethod` so `QueueWorker::configure` sees at least one
 // processor in this test binary and exercises the missing-connection branch.
-fn probe_handler(
-    _payload: serde_json::Value,
-    _container: Container,
-) -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>> {
+fn probe_handler(_payload: serde_json::Value, _container: Container) -> ProbeFuture {
     Box::pin(async { Ok(()) })
 }
 
@@ -453,10 +453,7 @@ async fn catch_panic_layer_converts_a_panicking_handler_into_err() {
         type Response = ();
         type Error = apalis::prelude::Error;
         type Future = std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<Self::Response, Self::Error>>
-                    + Send,
-            >,
+            Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
         >;
 
         fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

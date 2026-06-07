@@ -3,13 +3,11 @@ use std::sync::Arc;
 use async_graphql::{Context, Result};
 use nest_rs_authz::graphql::authorize;
 use nest_rs_authz::{Create, Read};
-use nest_rs_seaorm::graphql::bind;
 use nest_rs_graphql::{crud, resolver};
+use nest_rs_seaorm::graphql::bind;
 
 use crate::Claims;
-use crate::users::{
-    CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService,
-};
+use crate::users::{CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService};
 
 #[resolver]
 pub struct UsersResolver {

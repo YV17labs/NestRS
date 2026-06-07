@@ -65,4 +65,3 @@ impl<S: Strategy> Guard for AuthGuard<S> {
         }
     }
 }
-

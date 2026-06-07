@@ -175,47 +175,85 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitS
     Ok((path, version))
 }
 
-/// Controller-level `#[use_interceptors(...)]` wrap statements. Each layer is
-/// boxed to `BoxEndpoint`; reversed so the first-listed entry ends up
-/// outermost within its layer.
+/// Controller-level `#[use_interceptors(...)]` wrap statements. Each layer
+/// is boxed to `BoxEndpoint`; reversed so the first-listed entry ends up
+/// outermost. The wrap is skipped when the same interceptor is also
+/// declared globally — the transport-level wrap from
+/// `use_interceptors_global` already runs it, and the per-route shaper
+/// matches the dedup semantics of guards / pipes / exception filters.
 fn controller_interceptor_layers(paths: &[Path]) -> Vec<TokenStream2> {
     paths
         .iter()
         .rev()
         .map(|p| {
             quote! {
-                let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
-                    ::nest_rs_interceptors::InterceptorExt::interceptor(
-                        __ep,
-                        ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
-                            "#[use_interceptors] controller layer `",
-                            stringify!(#p),
-                            "` is not registered — add it to a module's providers"
-                        )),
-                    ),
-                ));
+                let __ep = {
+                    let __type_id = ::core::any::TypeId::of::<#p>();
+                    let __is_global = ::nest_rs_core::Container::get::<
+                        ::nest_rs_interceptors::InterceptorSpecs,
+                    >(__container)
+                        .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
+                    if __is_global {
+                        ::tracing::warn!(
+                            target: "nest_rs::layers",
+                            layer = ::core::any::type_name::<#p>(),
+                            scope = "controller",
+                            "interceptor declared at multiple scopes — broadest (global) wins, this scope skipped",
+                        );
+                        __ep
+                    } else {
+                        ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
+                            ::nest_rs_interceptors::InterceptorExt::interceptor(
+                                __ep,
+                                ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
+                                    "#[use_interceptors] controller layer `",
+                                    stringify!(#p),
+                                    "` is not registered — add it to a module's providers"
+                                )),
+                            ),
+                        ))
+                    }
+                };
             }
         })
         .collect()
 }
 
-/// Controller-level `#[use_filters(...)]` wrap statements.
+/// Controller-level `#[use_filters(...)]` wrap statements. Same dedup
+/// pattern against `FilterSpecs` (Global) as `controller_interceptor_layers`.
 fn controller_filter_layers(paths: &[Path]) -> Vec<TokenStream2> {
     paths
         .iter()
         .rev()
         .map(|p| {
             quote! {
-                let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
-                    ::nest_rs_filters::FilterExt::filter(
-                        __ep,
-                        ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
-                            "#[use_filters] controller layer `",
-                            stringify!(#p),
-                            "` is not registered — add it to a module's providers"
-                        )),
-                    ),
-                ));
+                let __ep = {
+                    let __type_id = ::core::any::TypeId::of::<#p>();
+                    let __is_global = ::nest_rs_core::Container::get::<
+                        ::nest_rs_filters::FilterSpecs,
+                    >(__container)
+                        .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
+                    if __is_global {
+                        ::tracing::warn!(
+                            target: "nest_rs::layers",
+                            layer = ::core::any::type_name::<#p>(),
+                            scope = "controller",
+                            "filter declared at multiple scopes — broadest (global) wins, this scope skipped",
+                        );
+                        __ep
+                    } else {
+                        ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
+                            ::nest_rs_filters::FilterExt::filter(
+                                __ep,
+                                ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
+                                    "#[use_filters] controller layer `",
+                                    stringify!(#p),
+                                    "` is not registered — add it to a module's providers"
+                                )),
+                            ),
+                        ))
+                    }
+                };
             }
         })
         .collect()

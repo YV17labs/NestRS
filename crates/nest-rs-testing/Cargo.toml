@@ -53,3 +53,6 @@ serde_json.workspace = true
 # trait + a typed error to throw and catch.
 thiserror.workspace = true
 async-trait.workspace = true
+# The WS gateway-guard dedup test (`tests/ws_gateway_guards.rs`) drives a
+# `#[gateway]` + `#[messages]` impl, so it needs the macros + `WsModule`.
+nest-rs-ws.workspace = true

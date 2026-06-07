@@ -12,8 +12,8 @@ use syn::{
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, forwarded_arg_idents, forwarded_idents,
-    from_container_method, impl_self_ident, injected_keys_expr, injected_method_with_layers,
-    layer_inject_keys,
+    from_container_method, impl_self_ident, injected_keys_with_layers,
+    injected_method_with_layers, layer_inject_keys,
 };
 
 pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -39,18 +39,19 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-/// `#[resolver]` on the struct: construction only, like `#[injectable]`.
+/// `#[resolver]` on the struct: construction + provider-scope layer
+/// declarations (parallel to `#[controller]` on the struct, `#[gateway]` on
+/// the struct). The impl-form macro reads the layer specs back at runtime
+/// via the inherent `__nestrs_resolver_*_specs()` helpers emitted here.
 fn resolver_struct(mut item: ItemStruct) -> TokenStream {
-    // Guards bind to the impl block, not the struct — catch the mistake here
-    // because the impl-form macro can't see the struct's attributes.
-    if let Some(attr) = item.attrs.iter().find(|a| a.path().is_ident("use_guards")) {
-        return syn::Error::new_spanned(
-            attr,
-            "put `#[use_guards(...)]` on the resolver's `impl` block, not the struct",
-        )
-        .to_compile_error()
-        .into();
-    }
+    // Resolver-scope (provider) guard declarations — same shape and same
+    // mental model as `#[controller] struct` + `#[gateway] struct`. Stored
+    // here so the impl-form macro can fold them into the per-operation
+    // chain at runtime through `__nestrs_resolver_guard_specs()`.
+    let guards = match take_use_guards(&mut item.attrs) {
+        Ok(paths) => paths,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let InjectableBody { ctor, dep_keys, .. } = match build_injectable_body(&mut item) {
         Ok(body) => body,
@@ -61,11 +62,12 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let name_str = name.to_string();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // The struct's `#[inject]` keys, exposed for the impl-block macro to fold
-    // into `Discoverable::injected` together with operation guards and
-    // `#[field_resolver]` `&Service` deps. Same struct/impl split as
-    // `#[controller]`/`#[routes]`.
-    let injected_keys = injected_keys_expr(&dep_keys);
+    // The struct's `#[inject]` keys + any resolver-scope guards, exposed
+    // for the impl-block macro to fold into `Discoverable::injected`
+    // together with method guards and `#[field_resolver]` `&Service`
+    // deps. Same struct/impl split as `#[controller]`/`#[routes]`.
+    let injected_keys = injected_keys_with_layers(&dep_keys, guards.iter());
+    let guard_specs = graphql_guard_specs(&guards);
 
     // Resolver-membership marker so the boot can require this resolver be
     // listed in a reachable module's `providers` (its schema presence is
@@ -93,6 +95,16 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
                 #injected_keys
+            }
+
+            /// Resolver-scope `#[use_guards(...)]`, exposed for the
+            /// impl-form macro to fold into each operation's per-chain
+            /// `run_layered_graphql_chain` call. Empty when none declared.
+            #[doc(hidden)]
+            pub fn __nestrs_resolver_guard_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::integration::RouteGuardSpec>
+            {
+                #guard_specs
             }
         }
 
@@ -192,19 +204,20 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
 }
 
 /// Emit the unified Layer System chain for a resolver operation: global +
-/// per-resolver (controller-level) + per-method guards, deduped by `TypeId`.
+/// resolver-scope + per-method guards, deduped by `TypeId`. Resolver-scope
+/// guards are read at runtime via `<Self>::__nestrs_resolver_guard_specs()`
+/// — emitted by the struct-form `#[resolver]` macro, parallel to how
+/// `#[controller]` exposes `__nestrs_controller_guard_specs()` for
+/// `#[routes]` to consume. This is what makes the declaration site uniform:
+/// the developer writes `#[use_guards(...)]` on the struct, same as for
+/// HTTP controllers and WS gateways.
+///
 /// `needs_global = false` (a bare-return resolver that can't surface a
-/// denial) skips the chain entirely.
-///
-/// `controller_guards` are the `#[use_guards]` declared on the impl block;
-/// `method_guards` are the `#[use_guards]` declared beside the
-/// `#[query]` / `#[mutation]` / `#[field_resolver]`.
-///
-/// `#[public]` is NOT propagated to the framework — the macro attaches a
-/// `Public` marker in `ContextSeed`-emitted glue (handled outside this
-/// helper) so guards can read it from the GraphQL context if they care.
+/// denial) AND no method/force guards skips the chain entirely. Resolver-
+/// scope guards alone still trigger the chain because the struct may have
+/// declared them.
 fn layered_resolver_chain(
-    controller_guards: &[Path],
+    self_ty: &Type,
     method_guards: &[Path],
     force_guards: &[Path],
     ctx: &Ident,
@@ -212,14 +225,15 @@ fn layered_resolver_chain(
     needs_global: bool,
 ) -> TokenStream2 {
     let label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
-    let controller_specs = graphql_guard_specs(controller_guards);
     let method_specs = graphql_guard_specs(method_guards);
     let force_typeids = force_guard_typeids(force_guards);
-    if !needs_global
-        && controller_guards.is_empty()
-        && method_guards.is_empty()
-        && force_guards.is_empty()
-    {
+    if !needs_global && method_guards.is_empty() && force_guards.is_empty() {
+        // Bare-return resolver with no method/force guards. Bare-return
+        // can't surface an `Err`, so emitting a chain that propagates `?`
+        // would not compile; it also can't enforce any auth posture, so
+        // skipping is honest. Resolver-scope guards on the struct only
+        // run when the method returns `Result` — which is also where
+        // auth/authz denials make sense semantically.
         return quote!();
     }
     quote! {
@@ -228,7 +242,7 @@ fn layered_resolver_chain(
             ::nest_rs_guards::run_layered_graphql_chain(
                 #ctx,
                 __container,
-                &#controller_specs,
+                &<#self_ty>::__nestrs_resolver_guard_specs(),
                 &#method_specs,
                 &#force_typeids,
                 #label_lit,
@@ -288,12 +302,20 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         .into();
     }
 
-    // `#[use_guards(...)]` on the impl block — `@UseGuards` on a `@Resolver`
-    // class analog. Per-method guards stack inside.
-    let resolver_guards = match take_use_guards(&mut item.attrs) {
-        Ok(guards) => guards,
-        Err(err) => return err.to_compile_error().into(),
-    };
+    // `#[use_guards(...)]` belongs on the struct (provider scope), uniform
+    // with `#[controller]` and `#[gateway]`. Catch the legacy impl-block
+    // placement here with a redirect message — the impl-form has no other
+    // role for it (the struct-form parses and exposes it via
+    // `__nestrs_resolver_guard_specs()`).
+    if let Some(attr) = item.attrs.iter().find(|a| a.path().is_ident("use_guards")) {
+        return syn::Error::new_spanned(
+            attr,
+            "put `#[use_guards(...)]` on the resolver's `struct`, not its `impl` block — \
+             uniform with `#[controller]` and `#[gateway]`",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let query_obj = format_ident!("__{}Query", base);
     let mutation_obj = format_ident!("__{}Mutation", base);
@@ -304,8 +326,10 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
     // resolver's `#[field_resolver]` methods for the same parent merge into one impl.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
     // Extra access-contract deps on top of the struct's `#[inject]` keys:
-    // operation guards + `#[field_resolver]` `&Service` injections.
-    let mut all_guard_paths: Vec<Path> = resolver_guards.clone();
+    // per-method guards + `#[field_resolver]` `&Service` injections.
+    // Resolver-scope guards live in the struct's `__nestrs_injected()`
+    // (parallel to `#[controller]` / `#[gateway]`).
+    let mut all_guard_paths: Vec<Path> = Vec::new();
     let mut field_dep_types: Vec<Type> = Vec::new();
 
     for impl_item in item.items.iter_mut() {
@@ -395,29 +419,25 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                 if is_query { "query" } else { "mutation" },
                 method_name,
             );
-            let delegating = if !needs_global
-                && resolver_guards.is_empty()
-                && method_guards.is_empty()
-                && force_method_guards.is_empty()
-            {
-                quote! {
-                    #(#deleg_attrs)*
-                    #sig { #call }
-                }
-            } else {
-                let (gsig, gctx) = ensure_ctx_param(&sig);
-                let checks = layered_resolver_chain(
-                    &resolver_guards,
-                    &method_guards,
-                    &force_method_guards,
-                    &gctx,
-                    &route_label,
-                    needs_global,
-                );
-                quote! {
-                    #(#deleg_attrs)*
-                    #gsig { #checks #call }
-                }
+            // Always emit the chain: even when the method declares no
+            // method-scope guards, the struct may have declared
+            // resolver-scope guards (read at runtime through
+            // `__nestrs_resolver_guard_specs()`). Bare-return resolvers
+            // can't surface a denial, so they still skip globals — the
+            // chain helper's `run_layered_graphql_chain` is harmless when
+            // every scope is empty.
+            let (gsig, gctx) = ensure_ctx_param(&sig);
+            let checks = layered_resolver_chain(
+                &self_ty,
+                &method_guards,
+                &force_method_guards,
+                &gctx,
+                &route_label,
+                needs_global,
+            );
+            let delegating = quote! {
+                #(#deleg_attrs)*
+                #gsig { #checks #call }
             };
             if is_query {
                 query_methods.push(delegating);
@@ -572,11 +592,13 @@ fn field_method(
         quote!()
     };
 
-    // `#[field_resolver]` never runs global guards (operation-level enforcement
-    // already happened), so `needs_global` is `false`. `is_public` is irrelevant
-    // here since there's no global chain to skip.
+    // `#[field_resolver]` never runs global guards (operation-level
+    // enforcement already happened), so `needs_global` is `false`. The
+    // chain helper still consults `<Self>::__nestrs_resolver_guard_specs()`
+    // for resolver-scope guards declared on the struct — same uniform
+    // mental model. `is_public` is irrelevant: there's no global chain to skip.
     let checks = layered_resolver_chain(
-        &[],
+        self_ty,
         guards,
         force_guards,
         &format_ident!("__ctx"),

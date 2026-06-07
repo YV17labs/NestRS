@@ -12,10 +12,27 @@ runs, holds the response after, and in between calls `next.run(req)` to
 delegate to whatever sits inside it (another interceptor, eventually the
 handler). One call, both sides of the boundary.
 
+`Interceptor` is a [`Layer`](/fundamentals/) sub-trait shipped by
+[`nest-rs-interceptors`](https://crates.io/crates/nest-rs-interceptors).
+The HTTP continuation builds on [`poem`](https://crates.io/crates/poem)'s
+endpoint chain; the GraphQL one on
+[`async-graphql`](https://crates.io/crates/async-graphql)'s resolver
+context. One impl, three transports — override the method(s) the
+interceptor targets, the rest inherit a pass-through default.
+
 ```rust
 #[async_trait]
-pub trait Interceptor: Send + Sync + 'static {
+pub trait Interceptor: Layer {
+    /// HTTP entry — required. Per-route, runs once per request.
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
+
+    /// GraphQL per-resolver-call entry. Default just awaits `next`.
+    async fn wrap_graphql<'a>(&self, ctx: &GraphqlContext<'a>, next: GraphqlNext<'a>)
+        -> ServerResult<GraphqlValue> { next.await }
+
+    /// WS per-message entry. Default just awaits `next`.
+    async fn wrap_ws<'a>(&self, client: &WsClient, event: &str, data: &Value, next: WsNext<'a>)
+        -> Result<Option<Value>, String> { next.await }
 }
 ```
 
@@ -32,13 +49,15 @@ masking lives, where tracing spans wrap a request.
 ## A minimal interceptor
 
 ```rust
-use nest_rs_core::injectable;
-use nest_rs_http::{async_trait, Interceptor, Next};
-use poem::{Request, Response, Result};
+use nest_rs_core::{Layer, injectable};
+use nest_rs_interceptors::{Interceptor, Next};
+use poem::{async_trait, Request, Response, Result};
 
 #[injectable]
 #[derive(Default)]
 pub struct Tracer;
+
+impl Layer for Tracer {}
 
 #[async_trait]
 impl Interceptor for Tracer {
@@ -52,17 +71,16 @@ impl Interceptor for Tracer {
 ```
 
 A plain `#[injectable]` provider that implements `Interceptor`. Listed
-in a module's `providers = [...]`, then bound per controller, per
-handler, or globally.
+in a module's `providers = [...]`, then bound globally, per controller,
+or per handler.
 
-## Three binding scopes
+## The three scopes
 
-| Scope | Binding | Notes |
-|-------|---------|-------|
-| **Global (manual)** | `HttpTransport::interceptor(Arc::new(t))` | Imperatively, before `App::run` |
-| **Global (auto)** | `#[interceptor]` on the struct | Auto-discovered, folded around every route. Used for infrastructure — `DbContext`, tracing |
-| **Controller** | `#[use_interceptors(Tracer)]` on the controller struct | Wraps every handler in the controller |
-| **Per-handler** | `#[use_interceptors(Tracer)]` beside the verb | Wraps that one handler |
+| Scope | Binding | Resolved by |
+|-------|---------|-------------|
+| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main` | A transport-level `HttpInterceptorMeta` wrap + the per-route shaper |
+| **Controller / Resolver / Gateway** | `#[use_interceptors(Tracer)]` on the struct | The container, at mount |
+| **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 
 ```rust
 #[controller(path = "/api")]
@@ -82,6 +100,44 @@ impl ApiController {
 Multiple interceptors in one attribute run outermost-first: the first
 listed sees the request before the second, and its response wraps the
 second's.
+
+## TypeId dedup — redeclaration is free
+
+Like every other [`Layer`](/fundamentals/), an `Interceptor` declared
+globally and redeclared on the controller or method runs **exactly
+once** per request. The transport-level `HttpInterceptorMeta` wrap from
+`use_interceptors_global` carries the single execution; the
+controller- and method-scope wraps are skipped at mount time when their
+TypeId is already seeded as Global and log a `warn` for visibility.
+
+```rust
+// In main.rs
+App::builder()
+    .use_interceptors_global([interceptor::<ServerTiming>()])
+    .module::<AppModule>()
+
+// In crates/features/src/users/http/controller.rs
+#[controller(path = "/users")]
+#[use_interceptors(ServerTiming)]   // <- redeclared, skipped, runs once
+pub struct UsersController { /* … */ }
+```
+
+The same defense-in-depth rationale as
+[guards](/fundamentals/guards/#why-redeclare-on-the-controller-then)
+applies: a portable `crates/features` controller that depends on an
+interceptor (a database transaction, an authorization shaper) should
+say so in its own source, not rely on a `main.rs` line an app may
+forget to write. Redeclaring binds the dependency to the code that
+needs it; the dedup keeps the cost at zero.
+
+<Aside type="caution">
+Per-resolver and per-message dispatch for `wrap_graphql` / `wrap_ws` is
+not wired into the GraphQL / WS chains today — those methods exist on
+the trait so an `Interceptor` impl can target all three transports
+without splitting types, but only the HTTP scope dedup currently runs
+them through the Layer System. GraphQL and WS overrides fire from the
+global declaration only.
+</Aside>
 
 ## Auto-discovered global interceptors
 

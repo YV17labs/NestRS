@@ -144,18 +144,29 @@ The same logic applies symmetrically:
   controller's `AuthGuard + AuthzGuard`.
 
 <Aside type="caution">
-**The dedup runs at the HTTP route level only.** It is what makes
-controller redeclaration free for HTTP. The WS gateway and GraphQL
-resolver scopes do *not* have an equivalent dedup against the global
-chain today — declaring `#[use_guards(AuthGuard)]` on a `#[gateway]` or
-on a `#[resolver]` impl while the same guard is global would double-run
-the check (the WS upgrade and the `POST /graphql` are HTTP requests that
-already go through `GlobalGuardsHttpInterceptor`, and the gateway /
-resolver level adds its own wrap on top). On these transports, rely on
-the global declaration; for cross-transport guards with custom
-per-resolver / per-message logic, override `check_graphql` /
-`check_ws_message` on the same `Guard` impl rather than redeclaring it
-at a finer scope.
+**Dedup wiring varies by transport.**
+
+- **HTTP routes** dedup at the per-route shaper *and* at mount time.
+  Controller and method redeclarations of a global guard are skipped
+  before the route is ever assembled.
+- **WS gateway upgrade** (`#[gateway] + #[use_guards(...)]`) dedups
+  against the global chain at mount time — the gateway-scope wrap is
+  skipped when the TypeId is already seeded as Global, so the
+  transport-level `GlobalGuardsHttpInterceptor` carries the single
+  execution.
+- **GraphQL resolver / operation** dedups inside
+  `run_layered_graphql_chain` — operation guards and resolver-scope
+  markers compose through the same `compose_chain` as HTTP, so
+  redeclarations across the global / resolver / per-operation scopes
+  collapse to one run.
+
+Still queued: per-resolver and per-message dispatch for the
+`Interceptor::wrap_graphql` / `wrap_ws`,
+`Filter::filter_graphql` / `filter_ws`, and
+`ExceptionFilter::catch_graphql` / `catch_ws` methods. The traits
+expose those entry points today (one impl, three transports), but only
+the HTTP scopes are wired into the per-operation chain — overrides for
+GraphQL and WS still ride alongside the global declaration only.
 </Aside>
 
 ## Attaching request context

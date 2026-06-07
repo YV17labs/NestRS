@@ -227,7 +227,7 @@ URI versioning: `#[controller(version = "1")]` mounts under `/v1`
 
 `nest-rs-authn` answers *who*; `nest-rs-authz` answers *what they may
 do*. Compose at the boundary: `#[use_guards(AuthGuard,
-AppAbilityGuard)]`. Verification alias and policy live in
+AuthzGuard)]`. Verification alias and policy live in
 `crates/features` (`authn/`, `authz/` + `authz/http/`); apps only mount.
 
 **`Strategy`** turns a request into a principal (plain `#[injectable]`,
@@ -247,7 +247,7 @@ share `crates/features` and the DB, never RPC each other.
 | Folder | Provides |
 |---|---|
 | `authz/` (root) | `AppAbility`, `AuthzModule` |
-| `authz/http/` | `AppAbilityGuard` (`AbilityGuard<AppAbility>`), `AuthzHttpModule` |
+| `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>`), `AuthzHttpModule` |
 | `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthGuard` (`ResolverGuard` marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
 | `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `WsAuthGuard` (`MessageGuard` marker), `AuthzWsModule` |
 
@@ -261,9 +261,9 @@ bring every layer they need).
 
 | Transport | Handler | Guard binding | Module import |
 |---|---|---|---|
-| HTTP | `#[controller]` | `#[use_guards(AuthGuard, AppAbilityGuard)]` on impl | `[<Feature>Module, AuthzHttpModule]` |
+| HTTP | `#[controller]` | `#[use_guards(AuthGuard, AuthzGuard)]` on impl | `[<Feature>Module, AuthzHttpModule]` |
 | GraphQL | `#[resolver]` | `#[use_guards(GraphqlAuthGuard)]` on impl | `[<Feature>Module, AuthzGraphqlModule]` |
-| WS | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AppAbilityGuard)]` on gateway struct + `#[use_guards(WsAuthGuard)]` on each `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
+| WS | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AuthzGuard)]` on gateway struct + `#[use_guards(WsAuthGuard)]` on each `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
 
 **Why markers (not real guards) for GraphQL/WS?** HTTP guards run on
 `&mut Request` before the handler — they *are* the auth chain.

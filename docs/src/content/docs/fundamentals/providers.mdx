@@ -206,8 +206,8 @@ the first request.
 
 The graph also governs **attribute-bound** layers
 (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`): a
-controller listing `#[use_guards(AppAbilityGuard)]` must reach
-`AppAbilityGuard` through its module's imports, or boot fails the same
+controller listing `#[use_guards(AuthzGuard)]` must reach
+`AuthzGuard` through its module's imports, or boot fails the same
 way.
 
 ## The runtime escape hatch (and when to skip it)

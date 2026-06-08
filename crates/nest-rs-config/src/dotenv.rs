@@ -54,7 +54,10 @@ fn load_file(path: &Path) {
         if key.is_empty() || std::env::var_os(key).is_some() {
             continue;
         }
-        // FIXME: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: `ensure_env_loaded` is guarded by a `Once` and runs at boot
+        // (collect phase) before any worker is spawned — no other thread can
+        // be reading the environment yet, so the Edition 2024 `unsafe` is
+        // sound in this codebase.
         unsafe { std::env::set_var(key, parse_value(value.trim())) };
     }
 }

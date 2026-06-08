@@ -19,9 +19,22 @@
 use nest_rs_codegen::pascal_case;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Ident, Type};
+use syn::{Expr, Ident, Type, parse_quote};
 
 use crate::attr::{RelationKind, ResourceField, ResourceModel, is_uuid};
+
+/// Default complexity for an auto-emitted `HasMany` field resolver. The list
+/// is unbounded (the loader returns every child of the parent row), so each
+/// step of fanout multiplies the cost of selected sub-fields by `10` — a
+/// conservative ceiling on the typical fan-out factor. A 3-deep chain of
+/// HasMany relations (`users { posts { comments { id } } }`) reaches a
+/// score of `10^3 = 1000`, which is exactly the configured `max_complexity`
+/// ceiling production apps should pin. Users override per relation with
+/// `#[expose(complexity = "…")]` (e.g. a paginated relation taking a `first`
+/// arg might use `"first * child_complexity"`).
+fn default_has_many_complexity() -> Expr {
+    parse_quote!("10 * child_complexity")
+}
 
 pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     let Some(service) = model.service.clone() else {
@@ -245,10 +258,10 @@ fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Resul
         };
         match kind {
             RelationKind::BelongsTo { from, target, .. } => {
-                methods.push(emit_belongs_to_method(model, &field.ident, from, target)?);
+                methods.push(emit_belongs_to_method(model, field, from, target)?);
             }
             RelationKind::HasMany { target, .. } => {
-                methods.push(emit_has_many_method(&field.ident, target, pk)?);
+                methods.push(emit_has_many_method(field, target, pk)?);
             }
         }
     }
@@ -265,16 +278,19 @@ fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Resul
 }
 
 /// One BelongsTo field resolver: load the parent's FK column via the target
-/// entity's PK loader, returning its wire DTO.
+/// entity's PK loader, returning its wire DTO. Default complexity (async-graphql's
+/// `1 + child_complexity`) already matches the runtime cost — one parent row
+/// loaded — so we emit no override unless the user pinned one.
 fn emit_belongs_to_method(
     model: &ResourceModel,
-    field: &Ident,
+    field: &ResourceField,
     fk: &Ident,
     target: &syn::Path,
 ) -> syn::Result<TokenStream2> {
+    let name = &field.ident;
     let fk_field = model.fields.iter().find(|f| &f.ident == fk).ok_or_else(|| {
         syn::Error::new_spanned(
-            field,
+            name,
             format!(
                 "`belongs_to` declares `from = \"{}\"` but no column with that name is exposed on this entity",
                 fk,
@@ -283,9 +299,14 @@ fn emit_belongs_to_method(
     })?;
 
     let key_expr = wire_key_expr(&fk_field.ty, fk);
+    let complexity = match &field.complexity {
+        Some(expr) => quote! { #[graphql(complexity = #expr)] },
+        None => quote! {},
+    };
 
     Ok(quote! {
-        async fn #field(
+        #complexity
+        async fn #name(
             &self,
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>,
         ) -> ::nest_rs_graphql::async_graphql::Result<
@@ -305,15 +326,28 @@ fn emit_belongs_to_method(
 /// One HasMany field resolver: load the children of `self` via the target's
 /// `RelatedTo<Self::Entity>::Loader`, keyed on `self`'s PK. The target's macro
 /// is responsible for declaring the `RelatedTo` impl from its own `belongs_to`.
+///
+/// The auto-emitted loader returns *every* child of the parent — unbounded
+/// fanout. We penalize that with [`default_has_many_complexity`] so a multi-
+/// level has_many query reaches the configured `max_complexity` ceiling before
+/// async-graphql resolves it. `#[expose(complexity = "…")]` on the field wins
+/// over the default — set it when the relation is paginated by hand or a
+/// realistic ceiling differs from the default fanout factor.
 fn emit_has_many_method(
-    field: &Ident,
+    field: &ResourceField,
     target: &syn::Path,
     pk: &ResourceField,
 ) -> syn::Result<TokenStream2> {
+    let name = &field.ident;
     let key_expr = wire_key_expr(&pk.ty, &pk.ident);
+    let complexity_expr = field
+        .complexity
+        .clone()
+        .unwrap_or_else(default_has_many_complexity);
 
     Ok(quote! {
-        async fn #field(
+        #[graphql(complexity = #complexity_expr)]
+        async fn #name(
             &self,
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>,
         ) -> ::nest_rs_graphql::async_graphql::Result<

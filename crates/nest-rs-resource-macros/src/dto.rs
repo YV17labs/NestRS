@@ -15,12 +15,20 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
 
     for field in model.fields.iter().filter(|f| f.in_output_struct()) {
         let name = &field.ident;
+        // `#[expose(complexity = …)]` on a scalar wire field maps straight
+        // through to the SimpleObject derive — async-graphql's depth/complexity
+        // visitor honors `#[graphql(complexity = …)]` on SimpleObject fields
+        // just as it does on `#[ComplexObject]` resolvers.
+        let complexity = match &field.complexity {
+            Some(expr) => quote! { #[graphql(complexity = #expr)] },
+            None => quote! {},
+        };
         if is_uuid(&field.ty) {
-            decls.push(quote! { pub #name: ::std::string::String });
+            decls.push(quote! { #complexity pub #name: ::std::string::String });
             inits.push(quote! { #name: ::std::string::ToString::to_string(&model.#name) });
         } else {
             let ty = &field.ty;
-            decls.push(quote! { pub #name: #ty });
+            decls.push(quote! { #complexity pub #name: #ty });
             inits.push(quote! { #name: ::core::clone::Clone::clone(&model.#name) });
         }
     }

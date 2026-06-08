@@ -16,3 +16,6 @@ anyhow.workspace = true
 tracing.workspace = true
 # Listener-registry lock — poison-free locking on the emit path.
 parking_lot.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

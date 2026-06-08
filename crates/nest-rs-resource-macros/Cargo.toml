@@ -12,7 +12,11 @@ description = "Internal — the #[expose] attribute (SeaORM entity to GraphQL + 
 proc-macro = true
 
 [dependencies]
-syn.workspace = true
+# `extra-traits` supplies the `PartialEq`/`Eq`/`Debug` impls for `syn` types
+# (`Path`, `Ident`) that `attr::RelationKind` derives. Workspace feature
+# unification hides the need in a full build, but the crate must declare it to
+# compile standalone (e.g. `cargo publish` verify, docs.rs).
+syn = { workspace = true, features = ["extra-traits"] }
 quote.workspace = true
 proc-macro2.workspace = true
 nest-rs-codegen.workspace = true

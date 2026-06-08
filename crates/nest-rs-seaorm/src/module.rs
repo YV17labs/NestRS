@@ -58,6 +58,10 @@ async fn connect(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> 
 /// `WorkerDbContext as dyn JobContext` bridge for jobs. Built eagerly from the
 /// snapshot — the pool is a factory output present before the register phase.
 fn install_request_layers(builder: ContainerBuilder) -> ContainerBuilder {
+    // The `DbContext` interceptor only exists with the `http` feature (it is the
+    // HTTP request seam). Without it there is no HTTP layer to install — the
+    // worker bridge below still applies.
+    #[cfg(feature = "http")]
     let builder = <crate::DbContext as nest_rs_core::Discoverable>::register(builder);
     let snapshot = builder.snapshot();
     let job_context = crate::WorkerDbContext::from_container(&snapshot);

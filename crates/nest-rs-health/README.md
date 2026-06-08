@@ -1,5 +1,7 @@
 # nest-rs-health
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/health)** · [Health probes](https://nestrs.dev/health/) · [Getting started](https://nestrs.dev/getting-started/)
+
 Liveness/readiness/startup probes for nestrs. Importing `HealthModule`
 mounts three routes (`GET /health/live`, `GET /health/ready`,
 `GET /health/startup`); each runs every registered indicator for its

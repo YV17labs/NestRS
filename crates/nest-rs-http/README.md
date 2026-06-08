@@ -1,5 +1,7 @@
 # nest-rs-http
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/http)** · [HTTP](https://nestrs.dev/http/) · [Getting started](https://nestrs.dev/getting-started/)
+
 The poem-backed HTTP transport for [nestrs](https://nestrs.dev). It mounts
 `#[controller]` routes, hosts self-mounting endpoints contributed by other
 surfaces (GraphQL, MCP, WebSocket gateways), wires the framework's named

@@ -1,5 +1,7 @@
 # nest-rs-authn
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/security/authentication)** · [Authentication](https://nestrs.dev/security/authentication/) · [Getting started](https://nestrs.dev/getting-started/)
+
 Authentication for nestrs — establishing *who* the caller is. Composable
 machinery (`jwt`, `oauth`, `passport`, `password`); the product wiring
 (`Claims`, the `AuthGuard` type alias, the OAuth controller) lives in

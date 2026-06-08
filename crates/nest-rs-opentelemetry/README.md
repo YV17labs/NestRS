@@ -1,5 +1,7 @@
 # nest-rs-opentelemetry
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/opentelemetry)** · [OpenTelemetry](https://nestrs.dev/opentelemetry/) · [Getting started](https://nestrs.dev/getting-started/)
+
 OpenTelemetry init + an HTTP interceptor for `traceparent` propagation,
 per-request spans, status recording, the `X-Trace-Id` response header, and
 one access event per request.

@@ -1,5 +1,7 @@
 # nest-rs-graphql
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/graphql)** · [GraphQL](https://nestrs.dev/graphql/) · [Getting started](https://nestrs.dev/getting-started/)
+
 GraphQL resolver discovery + schema composition for [nestrs](https://nestrs.dev)
 apps, built on [async-graphql](https://docs.rs/async-graphql) and served
 over HTTP through [async-graphql-poem](https://docs.rs/async-graphql-poem)

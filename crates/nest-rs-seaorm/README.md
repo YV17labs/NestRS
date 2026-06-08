@@ -1,5 +1,7 @@
 # nest-rs-seaorm
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/database)** · [Database (SeaORM)](https://nestrs.dev/database/) · [Getting started](https://nestrs.dev/getting-started/)
+
 The first-class SeaORM integration for nestrs — the canonical
 implementation of the `nest-rs-database` extension contract.
 

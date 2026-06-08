@@ -1,5 +1,7 @@
 # nest-rs-throttler
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/throttler)** · [Rate limiting](https://nestrs.dev/throttler/) · [Getting started](https://nestrs.dev/getting-started/)
+
 Rate limiting for nestrs — a per-route `ThrottlerGuard` reading a
 `#[meta(Throttle::...)]` override, backed by an in-memory fixed-window
 counter.

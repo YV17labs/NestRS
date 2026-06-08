@@ -1,5 +1,7 @@
 # nest-rs-redis
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/queue)** · [Queues (Redis)](https://nestrs.dev/queue/) · [Getting started](https://nestrs.dev/getting-started/)
+
 The **Redis-backed integration** of [`nest-rs-queue`](../nest-rs-queue/) — the
 first-class storage for nestrs's job queue layer. Built on
 [`apalis`](https://docs.rs/apalis) + apalis-redis: durable, distributed

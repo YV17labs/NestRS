@@ -1,5 +1,7 @@
 # nest-rs-database
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/database)** · [Database](https://nestrs.dev/database/) · [Getting started](https://nestrs.dev/getting-started/)
+
 Store-agnostic data-layer extension contract for nestrs — works for SQL,
 NoSQL, key-value, or any backend with a handle and an optional notion of
 a transaction.

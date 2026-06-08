@@ -1,5 +1,7 @@
 # nest-rs-queue
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/queue)** · [Queues](https://nestrs.dev/queue/) · [Getting started](https://nestrs.dev/getting-started/)
+
 The **backend-agnostic** contract that opens nestrs's queue layer to multiple
 storage technologies. Today's first-class backend is **Redis** (via
 apalis-redis), shipped as [`nest-rs-redis`](../nest-rs-redis/). A third-party

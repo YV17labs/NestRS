@@ -1,5 +1,7 @@
 # nest-rs-events
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/events)** · [Events](https://nestrs.dev/events/) · [Getting started](https://nestrs.dev/getting-started/)
+
 Typed in-process event bus for nestrs — the `@nestjs/event-emitter` analog.
 
 Emit a `Clone + Send + 'static` event with `EventBus::emit(event)`; every

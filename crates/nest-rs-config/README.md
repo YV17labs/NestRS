@@ -1,5 +1,7 @@
 # nest-rs-config
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/configuration)** · [Configuration](https://nestrs.dev/configuration/) · [Getting started](https://nestrs.dev/getting-started/)
+
 Typed, namespaced configuration for nestrs — the `@nestjs/config` analog.
 
 A `#[config(namespace = "…")]` struct maps `NESTRS_<NAMESPACE>__<KEY>`

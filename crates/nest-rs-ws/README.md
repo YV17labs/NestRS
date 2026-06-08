@@ -1,5 +1,7 @@
 # nest-rs-ws
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/websockets)** · [WebSockets](https://nestrs.dev/websockets/) · [Getting started](https://nestrs.dev/getting-started/)
+
 WebSocket gateways for [nestrs](https://nestrs.dev), built on
 [poem's `WebSocket`](https://docs.rs/poem/latest/poem/web/websocket/index.html)
 upgrade. A `#[gateway] + #[messages]` impl decoratively maps

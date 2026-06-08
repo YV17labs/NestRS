@@ -1,5 +1,7 @@
 # nest-rs-server-timing
 
+> Part of **[NestRS](https://nestrs.dev)** (alpha). **[Documentation](https://nestrs.dev/server-timing)** · [Server-Timing](https://nestrs.dev/server-timing/) · [Getting started](https://nestrs.dev/getting-started/)
+
 W3C [Server-Timing] interceptor for nestrs. Importing `ServerTimingModule`
 adds a `Server-Timing` header to every response so browsers render the cost
 in their Network panel. Handlers record sub-step durations by pulling

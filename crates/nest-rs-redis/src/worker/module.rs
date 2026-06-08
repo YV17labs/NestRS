@@ -9,7 +9,7 @@
 
 use nest_rs_core::{ContainerBuilder, Module, TransportContribution};
 
-use crate::QueueWorker;
+use super::QueueWorker;
 
 pub struct QueueWorkerModule;
 

@@ -1,4 +1,4 @@
-//! HTTP decorator macros, re-exported by `nestrs-http`. Generated code uses
+//! HTTP attribute macros, re-exported by `nestrs-http`. Generated code uses
 //! absolute paths (`::nest_rs_http::*`, `::poem::*`, `::nest_rs_core::*`), so
 //! this crate has no dependency on its surface crate — they resolve at the
 //! call site.
@@ -10,7 +10,7 @@ mod controller;
 mod crud;
 mod input;
 mod interceptor;
-mod response_decorators;
+mod response;
 mod routes;
 
 /// `#[controller(path = "/health")]` — paired with `#[routes]` on the impl
@@ -92,7 +92,7 @@ pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
 /// marker consumed by `#[routes]`. Mutually exclusive with `#[redirect]`.
 #[proc_macro_attribute]
 pub fn http_code(args: TokenStream, item: TokenStream) -> TokenStream {
-    response_decorators::passthrough(args, item)
+    response::passthrough(args, item)
 }
 
 /// `#[response_header("name", "value")]` — append a header to the response.
@@ -100,7 +100,7 @@ pub fn http_code(args: TokenStream, item: TokenStream) -> TokenStream {
 /// marker consumed by `#[routes]`.
 #[proc_macro_attribute]
 pub fn response_header(args: TokenStream, item: TokenStream) -> TokenStream {
-    response_decorators::passthrough(args, item)
+    response::passthrough(args, item)
 }
 
 /// `#[redirect("url"[, code])]` — discard the handler's payload and return a
@@ -109,5 +109,5 @@ pub fn response_header(args: TokenStream, item: TokenStream) -> TokenStream {
 /// — `#[routes]` does not call it. Passthrough marker consumed by `#[routes]`.
 #[proc_macro_attribute]
 pub fn redirect(args: TokenStream, item: TokenStream) -> TokenStream {
-    response_decorators::passthrough(args, item)
+    response::passthrough(args, item)
 }

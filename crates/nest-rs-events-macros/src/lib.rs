@@ -8,7 +8,7 @@ mod listeners;
 /// tagged with `#[on_event]`, subscribes a closure to the
 /// [`EventBus`](../nest_rs_events/struct.EventBus.html) at bootstrap and
 /// submits a `ListenerMethod` to the link-time inventory the
-/// [`EventModule`](../nest_rs_events/struct.EventModule.html) drains.
+/// [`EventsModule`](../nest_rs_events/struct.EventsModule.html) drains.
 ///
 /// The struct itself must be a regular `#[injectable]`. Multiple `#[on_event]`
 /// methods on the same impl block share the provider's `#[inject]`

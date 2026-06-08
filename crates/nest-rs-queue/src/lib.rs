@@ -15,12 +15,12 @@
 //! directly — see this crate's README for the extension contract.
 
 mod consumer;
-mod method;
+mod inventory;
 mod processor;
 mod producer;
 
 pub use consumer::JobConsumer;
-pub use method::{JobHandler, ProcessMethod, ProcessorMeta, WIRE_FORMAT_VERSION};
+pub use inventory::{JobHandler, ProcessMethod, ProcessorMeta, WIRE_FORMAT_VERSION};
 pub use processor::{FromContainer, Job, Processor};
 pub use producer::{JobProducer, JobProducerExt, QueueBackend};
 
@@ -28,9 +28,9 @@ pub use producer::{JobProducer, JobProducerExt, QueueBackend};
 // directly to implement the async traits this crate defines.
 pub use async_trait::async_trait;
 
-// The `inventory::collect!` lives in `method.rs` — the registry is the open
-// seam between the `#[process]` macro emission and any backend that drains
-// it at boot.
+// The `inventory::collect!` lives in `inventory.rs` — the registry is the
+// open seam between the `#[process]` macro emission and any backend that
+// drains it at boot.
 
 // `#[processor]`-generated code names `::nest_rs_queue::ProcessMethod`,
 // `::nest_rs_queue::JobHandler`, and `::nest_rs_queue::serde_json::*`, so this

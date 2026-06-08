@@ -36,10 +36,8 @@ mod config;
 mod connection;
 mod module;
 mod worker;
-mod worker_module;
 
 pub use config::QueueConfig;
 pub use connection::{Queue, QueueConnection};
 pub use module::{QueueModule, QueueSetup};
-pub use worker::QueueWorker;
-pub use worker_module::QueueWorkerModule;
+pub use worker::{QueueWorker, QueueWorkerModule};

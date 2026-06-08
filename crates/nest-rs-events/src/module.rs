@@ -11,9 +11,9 @@ use crate::{EventBus, ListenerMethod};
 
 /// Registers the [`EventBus`] and wires every discovered `#[on_event]` method
 /// at application bootstrap against the fully-assembled container.
-pub struct EventModule;
+pub struct EventsModule;
 
-impl Module for EventModule {
+impl Module for EventsModule {
     fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
         if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
             return builder;
@@ -22,11 +22,11 @@ impl Module for EventModule {
     }
 }
 
-// No-op when EventModule was not imported (the bus is then absent).
+// No-op when EventsModule was not imported (the bus is then absent).
 nest_rs_core::inventory::submit! {
     LifecycleHook {
         phase: LifecyclePhase::OnApplicationBootstrap,
-        provider: "EventModule",
+        provider: "EventsModule",
         method: "wire_listeners",
         run: wire_listeners,
     }

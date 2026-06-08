@@ -21,7 +21,7 @@ impl EventBus {
         Self::default()
     }
 
-    /// Called by `EventModule` at bootstrap; apps don't call it directly.
+    /// Called by `EventsModule` at bootstrap; apps don't call it directly.
     pub fn subscribe<E, H, Fut>(&self, listener: H)
     where
         E: Any + Send + 'static,

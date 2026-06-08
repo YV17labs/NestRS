@@ -1,5 +1,7 @@
 //! Link-time registry of `#[scheduled]` method jobs, submitted by
-//! `nest_rs_schedule_macros::scheduled` on a per-method basis.
+//! `nest_rs_schedule_macros::scheduled` on a per-method basis, plus the
+//! synthesized [`CronJobMeta`] the [`Scheduler`](crate::Scheduler) builds
+//! from each entry.
 //!
 //! `#[scheduled]` lets a single `#[injectable]` provider own several scheduled
 //! methods sharing the same `#[inject]` deps. Each method submits one
@@ -13,13 +15,32 @@
 //! registration; [`crate::Scheduler`] merges both sources.
 
 use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
+
+use nest_rs_core::Container;
 
 use crate::Trigger;
-use crate::meta::RunFn;
 
+/// The async closure a [`ScheduledMethod`] / [`CronJobMeta`] dispatches.
+/// Resolves the provider from the assembled container and runs the method.
+pub type RunFn =
+    for<'a> fn(&'a Container) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
+
+/// The synthesized metadata one running job carries. Tests register this
+/// directly via `attach_meta::<…, CronJobMeta>`; the `#[scheduled]` path
+/// builds one from each [`ScheduledMethod`] at boot.
+pub struct CronJobMeta {
+    pub name: &'static str,
+    pub trigger: Trigger,
+    pub run: RunFn,
+}
+
+/// Link-time inventory entry submitted by `#[scheduled]` per `#[every]` /
+/// `#[cron]` / `#[after]`-tagged method.
 pub struct ScheduledMethod {
     /// `"ProviderType::method"` — the human-readable label `Scheduler` logs and
-    /// the `name` field of the synthesized [`crate::CronJobMeta`].
+    /// the `name` field of the synthesized [`CronJobMeta`].
     pub name: &'static str,
     /// `TypeId::of::<Provider>()` — checked against
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so an

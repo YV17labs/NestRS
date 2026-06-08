@@ -15,7 +15,7 @@ use crate::service::HealthService;
 pub struct HealthModule;
 
 // Stash the assembled container on `HealthService` so its `probe()` can
-// resolve indicator providers at request time. The `EventModule` uses the
+// resolve indicator providers at request time. The `EventsModule` uses the
 // same lifecycle-hook seam to wire its discovered handlers — see
 // `crates/nestrs-events/src/module.rs`.
 nest_rs_core::inventory::submit! {

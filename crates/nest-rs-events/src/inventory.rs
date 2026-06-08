@@ -5,7 +5,7 @@ use nest_rs_core::Container;
 use crate::EventBus;
 
 /// Link-time inventory entry submitted by `#[listeners]` for each
-/// `#[on_event]`-tagged method. [`crate::EventModule`] drains the registry at
+/// `#[on_event]`-tagged method. [`crate::EventsModule`] drains the registry at
 /// bootstrap and filters by
 /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so a method on a
 /// provider not reachable from the app's module tree is silently skipped.

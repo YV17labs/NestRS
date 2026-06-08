@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use nest_rs_core::Container;
 use tokio_util::sync::CancellationToken;
 
-use crate::method::ProcessMethod;
+use crate::inventory::ProcessMethod;
 
 /// Drains a list of `#[process]` methods until cancellation. One per app —
 /// the `Transport` a queue backend contributes typically wraps a

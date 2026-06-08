@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 An event listener is **a method** on any `#[injectable]` provider, tagged
 with `#[on_event]` inside a `#[listeners]` impl block. Importing
-`EventModule` in the app's `AppModule` wires every discovered listener
+`EventsModule` in the app's `AppModule` wires every discovered listener
 from the fully-assembled container at bootstrap.
 
 An event is any `Clone + Send + 'static` type. Dispatch is in-process and
@@ -148,7 +148,7 @@ later does not require touching the emitter.
 
 The listener provider and the producer are providers like any other,
 listed in the feature's module. The app activates the bus by importing
-`EventModule`:
+`EventsModule`:
 
 ```rust title="crates/features/src/points/event/module.rs"
 use nest_rs_core::module;
@@ -162,12 +162,12 @@ pub struct PointsEventModule;
 
 ```rust title="apps/platform-api/src/module.rs"
 use nest_rs_core::module;
-use nest_rs_events::EventModule;
+use nest_rs_events::EventsModule;
 
 use features::points::{PointsModule, PointsEventModule};
 
 #[module(imports = [
-    EventModule,
+    EventsModule,
     PointsModule,
     PointsEventModule,
 ])]
@@ -175,7 +175,7 @@ pub struct PlatformApiModule;
 ```
 
 <Aside>
-Without `EventModule`, the `EventBus` is absent — every `#[listeners]`
+Without `EventsModule`, the `EventBus` is absent — every `#[listeners]`
 provider compiles in but stays inert (no subscription is wired). This is
 the same "linked but unreachable" property the rest of the framework
 relies on: an app that does not want the bus simply omits the module.
@@ -219,7 +219,7 @@ processors and scheduled jobs.
 
 ### Reference
 
-- `crates/nest-rs-events/` — `EventBus`, `EventModule`, `#[listeners]`,
+- `crates/nest-rs-events/` — `EventBus`, `EventsModule`, `#[listeners]`,
   `#[on_event]`.
 - `crates/nest-rs-events/tests/bus.rs` — end-to-end test wiring a producer
   and a multi-method `#[listeners]` provider in one module.

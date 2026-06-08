@@ -4,8 +4,8 @@
 //! recognizes the attribute name and so they have a documentation home.
 //!
 //! The actual response transformation is emitted by `#[routes]` around the
-//! generated handler wrapper (see [`take_response_decorators`] and
-//! [`apply_response_decorators`]).
+//! generated handler wrapper (see [`take_response_shapers`] and
+//! [`apply_response_shapers`]).
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -13,7 +13,7 @@ use quote::quote;
 use syn::{Attribute, Block, Expr, ExprLit, Lit, LitInt, LitStr};
 
 /// Header names that legitimately appear multiple times in a single response
-/// (per RFC 7230 §3.2.2). Decorators emit `.append()` for these so an
+/// (per RFC 7230 §3.2.2). The shaper emits `.append()` for these so an
 /// explicit `#[response_header("set-cookie", …)]` is additive, not
 /// overriding. Everything else is single-valued and overrides via `.insert()`
 /// — avoiding the duplicate-header footgun when the handler already set the
@@ -22,7 +22,7 @@ fn is_multi_value_header(name: &str) -> bool {
     matches!(name, "set-cookie")
 }
 
-/// Empty passthrough shared by every response-decorator entry point.
+/// Empty passthrough shared by every response-shaper attribute entry point.
 /// `#[routes]` consumes the attribute; if one survives to rustc (the
 /// attribute is on something that is not a `#[routes]` method), this
 /// expands to the original item unchanged so the error message blames
@@ -31,10 +31,10 @@ pub(crate) fn passthrough(_args: TokenStream, input: TokenStream) -> TokenStream
     input
 }
 
-/// Parsed response decorators for one handler. All three are composable
+/// Parsed response shapers for one handler. All three are composable
 /// except `http_code` and `redirect` (the latter sets the status itself).
 #[derive(Default)]
-pub(crate) struct ResponseDecorators {
+pub(crate) struct ResponseShapers {
     pub http_code: Option<LitInt>,
     pub headers: Vec<(LitStr, LitStr)>,
     pub redirect: Option<RedirectSpec>,
@@ -47,7 +47,7 @@ pub(crate) struct RedirectSpec {
     pub attr: Attribute,
 }
 
-impl ResponseDecorators {
+impl ResponseShapers {
     pub fn is_empty(&self) -> bool {
         self.http_code.is_none() && self.headers.is_empty() && self.redirect.is_none()
     }
@@ -64,11 +64,11 @@ impl ResponseDecorators {
 /// empty-body check (the macro never calls the user method, so any
 /// statements in the body are silently dropped — that is a footgun and
 /// must fail the build).
-pub(crate) fn take_response_decorators(
+pub(crate) fn take_response_shapers(
     attrs: &mut Vec<Attribute>,
     body: &Block,
-) -> syn::Result<ResponseDecorators> {
-    let mut out = ResponseDecorators::default();
+) -> syn::Result<ResponseShapers> {
+    let mut out = ResponseShapers::default();
 
     while let Some(idx) = attrs.iter().position(|a| a.path().is_ident("http_code")) {
         if out.http_code.is_some() {
@@ -143,7 +143,7 @@ pub(crate) fn take_response_decorators(
     // `#[redirect]` produces the response itself — the user method is never
     // called, so any side-effect work inside the body silently disappears.
     // Reject a non-empty body at compile time, naming the redirect URL so
-    // the operator knows which decorator stole the call.
+    // the operator knows which redirect attribute stole the call.
     if let Some(spec) = &out.redirect
         && !body.stmts.is_empty()
     {
@@ -329,19 +329,19 @@ fn parse_redirect_args(attr: &Attribute) -> syn::Result<RedirectSpec> {
 /// (set by the error's `ResponseError`) survives and the `#[http_code]` /
 /// `#[response_header]` overrides only touch the success path. The returned
 /// tokens produce a `::poem::Result<::poem::Response>`.
-pub(crate) fn apply_response_decorators(
-    decorators: &ResponseDecorators,
+pub(crate) fn apply_response_shapers(
+    shapers: &ResponseShapers,
     call_expr: TokenStream2,
     wrapper_args: &[syn::Ident],
     returns_result: bool,
 ) -> TokenStream2 {
-    if let Some(redirect) = &decorators.redirect {
+    if let Some(redirect) = &shapers.redirect {
         let url = &redirect.url;
         let status_lit = match &redirect.code {
             Some(lit) => quote! { #lit },
             None => quote! { 307u16 },
         };
-        let header_writes = headers_tokens(&decorators.headers);
+        let header_writes = headers_tokens(&shapers.headers);
         return quote! {
             {
                 // The user method is not called — `#[redirect]` produces the
@@ -364,7 +364,7 @@ pub(crate) fn apply_response_decorators(
         };
     }
 
-    let status_apply = match &decorators.http_code {
+    let status_apply = match &shapers.http_code {
         Some(lit) => quote! {
             __response.set_status(
                 ::poem::http::StatusCode::from_u16(#lit)
@@ -373,7 +373,7 @@ pub(crate) fn apply_response_decorators(
         },
         None => quote! {},
     };
-    let header_writes = headers_tokens(&decorators.headers);
+    let header_writes = headers_tokens(&shapers.headers);
 
     // Bug 1 / Bug 5: matching the Result inside the wrapper keeps the
     // handler's error status (e.g. 403 via `ResponseError`) instead of
@@ -408,10 +408,10 @@ pub(crate) fn apply_response_decorators(
 
 /// Emit one header write per `#[response_header]`. Single-valued headers
 /// (the overwhelming majority — `Content-Type`, `Cache-Control`, `Location`,
-/// …) use `.insert()` so the decorator overrides whatever the handler or an
+/// …) use `.insert()` so the shaper overrides whatever the handler or an
 /// `IntoResponse` impl already set, dodging the duplicate-header footgun.
 /// Multi-value headers in `is_multi_value_header` (today: `Set-Cookie`) use
-/// `.append()` so the decorator stacks instead of clobbering prior cookies.
+/// `.append()` so the shaper stacks instead of clobbering prior cookies.
 fn headers_tokens(headers: &[(LitStr, LitStr)]) -> TokenStream2 {
     if headers.is_empty() {
         return quote! {};

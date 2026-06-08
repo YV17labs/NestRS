@@ -140,7 +140,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         // status / header / redirect override. The method's block is forwarded
         // so `#[redirect]` can reject a non-empty body (which the macro would
         // silently drop).
-        let response_decorators = match crate::response_decorators::take_response_decorators(
+        let response_shapers = match crate::response::take_response_shapers(
             &mut method.attrs,
             &method.block,
         ) {
@@ -153,14 +153,14 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             ReturnType::Type(_, ty) => result_inner(ty).is_some(),
             ReturnType::Default => false,
         };
-        let (wrapper_return_type, wrapper_body) = if response_decorators.is_empty() {
+        let (wrapper_return_type, wrapper_body) = if response_shapers.is_empty() {
             (return_type.clone(), call_expr)
         } else {
             let mut wrapper_args: Vec<syn::Ident> = Vec::with_capacity(arg_idents.len() + 1);
             wrapper_args.push(syn::Ident::new("__ctrl", proc_macro2::Span::call_site()));
             wrapper_args.extend(arg_idents.iter().cloned());
-            let body = crate::response_decorators::apply_response_decorators(
-                &response_decorators,
+            let body = crate::response::apply_response_shapers(
+                &response_shapers,
                 call_expr,
                 &wrapper_args,
                 returns_result,
@@ -687,7 +687,7 @@ fn request_payload(inputs: &[FnArg]) -> Option<Type> {
 /// alias whose last segment is `Result` is matched while a renamed
 /// `type Outcome<T, E> = Result<T, E>;` is not. That limitation is
 /// acceptable: drives both response-payload schema capture and the
-/// `Err` short-circuit in `apply_response_decorators`, and a non-`Result`
+/// `Err` short-circuit in `apply_response_shapers`, and a non-`Result`
 /// caller cannot accidentally match.
 pub(crate) fn result_inner(ty: &Type) -> Option<&Type> {
     nth_generic_type(ty, "Result", 0)

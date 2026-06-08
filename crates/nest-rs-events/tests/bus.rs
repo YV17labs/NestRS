@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{App, injectable, module};
-use nest_rs_events::{EventBus, EventModule, listeners};
+use nest_rs_events::{EventBus, EventsModule, listeners};
 
 #[derive(Clone)]
 struct PointsAwarded {
@@ -64,7 +64,7 @@ impl Awarder {
     }
 }
 
-#[module(imports = [EventModule], providers = [Ledger, PointsListeners, Awarder])]
+#[module(imports = [EventsModule], providers = [Ledger, PointsListeners, Awarder])]
 struct EventsTestModule;
 
 #[tokio::test]

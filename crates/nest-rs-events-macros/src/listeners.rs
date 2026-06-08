@@ -2,7 +2,7 @@
 //! methods; for each one tagged with `#[on_event]`, emits a free `wire` fn
 //! that resolves the provider from the assembled container and subscribes a
 //! closure to the [`EventBus`], then submits a `ListenerMethod` inventory
-//! entry the [`EventModule`] drains at bootstrap.
+//! entry the [`EventsModule`] drains at bootstrap.
 //!
 //! Mirrors `#[processor]`/`#[process]` and `#[scheduled]`/`#[every]`: the
 //! host struct keeps its own `#[injectable]` (which owns `Discoverable`), and

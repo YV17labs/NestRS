@@ -9,13 +9,11 @@
 //! boot naming the offending job.
 
 mod inventory;
-mod meta;
 mod module;
 mod scheduler;
 mod trigger;
 
-pub use inventory::ScheduledMethod;
-pub use meta::{CronJobMeta, RunFn};
+pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};

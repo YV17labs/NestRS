@@ -82,8 +82,8 @@
 
 mod builder;
 mod denial;
+mod endpoint;
 mod guard;
-mod guard_endpoint;
 pub mod dispatch;
 pub mod layer_chain;
 pub mod prelude;
@@ -98,8 +98,8 @@ pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 // Re-exported here for the historical import path used by the macros.
 pub use nest_rs_interceptors::{GraphqlNext, WsNext};
 pub use denial::Denial;
+pub use endpoint::{GuardEndpoint, GuardExt};
 pub use guard::{Guard, GuardAsWsMessageCheck};
-pub use guard_endpoint::{GuardEndpoint, GuardExt};
 pub use layer_chain::{LayerSource, ResolvedLayer};
 pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 

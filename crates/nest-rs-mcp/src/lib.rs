@@ -1,4 +1,11 @@
 //! MCP transport — `#[mcp]` mounts tools on the existing HTTP transport.
+//!
+//! Unlike HTTP / GraphQL / Queue / Schedule, this crate ships no `McpModule`
+//! and no `Transport` impl. MCP is **not a transport**, it is a graft on
+//! `HttpTransport` (the same pattern as WS): `#[mcp]` on a struct emits an
+//! `endpoint()` factory that mounts under the HTTP server. Apps activate MCP
+//! by listing the `#[mcp]`-decorated provider — no `<Transport>Module`
+//! activation seam to import.
 
 mod endpoint;
 mod guard;

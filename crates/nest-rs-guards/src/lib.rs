@@ -79,6 +79,14 @@
 //! / [`run_layered_ws_chain`] at the start of every handler. There is no
 //! global interceptor — the per-route entry is the whole point so we get
 //! TypeId-level dedup against the global chain.
+//!
+//! **Larger than its siblings on purpose.** Where `nest-rs-interceptors` /
+//! `nest-rs-filters` / `nest-rs-exception-filters` each carry only their own
+//! trait + a builder + a registry, this crate also owns the cross-transport
+//! [`dispatch`] machinery (the [`RouteShaper`] entry, the layer-chain helpers,
+//! the graphql/ws chain runners) that the other three trio members consume.
+//! Splitting it would mean duplicating the chain across crates or routing
+//! through a fifth — both worse than the asymmetry.
 
 mod builder;
 mod denial;

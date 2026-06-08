@@ -16,7 +16,7 @@ mod source;
 pub use config::{Config, Namespaced};
 pub use environment::Environment;
 pub use error::{ConfigError, Result};
-pub use module::{ConfigFeature, ConfigModule, ConfigRoot};
+pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup};
 pub use service::ConfigService;
 pub use source::{ConfigSource, EnvSource, env_var};
 

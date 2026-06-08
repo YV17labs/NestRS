@@ -20,20 +20,19 @@
 mod config;
 mod error;
 mod executor;
-mod interceptor;
-mod job_context;
 mod module;
 mod page;
 mod repo;
 pub mod retry;
 mod service;
+mod worker;
 
-#[cfg(feature = "http")]
-mod bind;
 #[cfg(feature = "graphql")]
 pub mod graphql;
 #[cfg(feature = "health")]
 mod health;
+#[cfg(feature = "http")]
+mod http;
 #[cfg(feature = "ws")]
 pub mod ws;
 
@@ -47,11 +46,9 @@ pub use module::{DatabaseModule, DatabaseSetup};
 pub use page::{Page, PageParams};
 pub use repo::{Repo, scope_for};
 pub use service::{Access, CreateModel, CrudService, UpdateModel};
-pub use job_context::WorkerDbContext;
+pub use worker::WorkerDbContext;
 
-#[cfg(feature = "http")]
-pub use bind::Bind;
 #[cfg(feature = "health")]
 pub use health::{DatabaseHealthModule, DbHealthIndicator};
-
-pub use interceptor::DbContext;
+#[cfg(feature = "http")]
+pub use http::{Bind, DbContext};

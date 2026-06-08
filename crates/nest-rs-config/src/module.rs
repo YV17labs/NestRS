@@ -14,14 +14,14 @@ use crate::environment::Environment;
 pub struct ConfigModule;
 
 impl ConfigModule {
-    pub fn for_root() -> ConfigRoot {
-        ConfigRoot
+    pub fn for_root() -> ConfigRootSetup {
+        ConfigRootSetup
     }
 
     /// Loads in the **factory phase**, becoming global infrastructure. A test
     /// that seeds `C` directly wins over this factory.
-    pub fn for_feature<C: Config>() -> ConfigFeature<C> {
-        ConfigFeature(PhantomData)
+    pub fn for_feature<C: Config>() -> ConfigFeatureSetup<C> {
+        ConfigFeatureSetup(PhantomData)
     }
 
     /// `None` loads from the environment; `Some(cfg)` pins the value (what an
@@ -38,9 +38,9 @@ impl ConfigModule {
     }
 }
 
-pub struct ConfigFeature<C>(PhantomData<fn() -> C>);
+pub struct ConfigFeatureSetup<C>(PhantomData<fn() -> C>);
 
-impl<C: Config> DynamicModule for ConfigFeature<C> {
+impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
     // Loading is sync-but-fallible and `register` cannot return an error, so
     // we queue a factory the build awaits — an Err there aborts boot with the
     // variable named.
@@ -50,9 +50,9 @@ impl<C: Config> DynamicModule for ConfigFeature<C> {
     }
 }
 
-pub struct ConfigRoot;
+pub struct ConfigRootSetup;
 
-impl DynamicModule for ConfigRoot {
+impl DynamicModule for ConfigRootSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         crate::dotenv::ensure_env_loaded();
         builder.provide(Environment::from_env())

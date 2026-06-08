@@ -12,11 +12,9 @@
 //! (Phase 2). Opt out per relation with `#[expose(skip)]` and write a manual
 //! `#[field_resolver]` if a custom resolver is needed.
 
-mod pagination;
-mod relations;
-mod wire;
+mod exposures;
 
+pub use exposures::pagination::PageArgs;
+pub use exposures::relations::{PkLoadable, RelatedTo};
+pub use exposures::wire::WireModelDefaults;
 pub use nest_rs_resource_macros::expose;
-pub use pagination::PageArgs;
-pub use relations::{PkLoadable, RelatedTo};
-pub use wire::WireModelDefaults;

@@ -9,6 +9,13 @@
 //! Dispatch is via `poem::Error::downcast::<Exception>()` — anything carryable
 //! as a `Box<dyn std::error::Error + Send + Sync + 'static>` is catchable.
 //!
+//! Unlike [`Filter`](nest_rs_filters::Filter), there is no `ExceptionFilterExt`
+//! `.except_filter(_)` shim because an exception filter is **typed** — its
+//! `Self::Exception` cannot be erased through a poem endpoint wrapper without
+//! losing the downcast. Wiring runs through `ScopedExceptionFilterSpec` + the
+//! shared dispatcher in `nest-rs-guards`, which holds the typed list and
+//! attempts each downcast in order.
+//!
 //! ## Defining an exception filter
 //!
 //! ```rust,ignore

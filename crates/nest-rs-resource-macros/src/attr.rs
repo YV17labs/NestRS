@@ -5,7 +5,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::format_ident;
 use syn::parse::Parse;
 use syn::{
-    Fields, GenericArgument, Ident, ItemStruct, LitStr, Path, PathArguments, Token, Type, TypePath,
+    Expr, Fields, GenericArgument, Ident, ItemStruct, LitStr, Path, PathArguments, Token, Type,
+    TypePath,
 };
 
 /// SeaORM marker on a relation field: `HasOne<T>` ⇔ `belongs_to`,
@@ -53,6 +54,11 @@ pub(crate) struct ResourceField {
     /// Detected `HasOne<T>` / `HasMany<T>` association. Drives auto-generated
     /// field resolvers + loader trait impls. Scalar columns leave this `None`.
     pub relation: Option<RelationKind>,
+    /// Override async-graphql's per-field complexity for the auto-emitted
+    /// field resolver. Accepts a literal (`complexity = 5`) or an expression
+    /// string (`complexity = "first * child_complexity"`). When `None`, the
+    /// macro picks a safe default per relation kind (see `relations::emit`).
+    pub complexity: Option<Expr>,
 }
 
 impl ResourceField {
@@ -138,6 +144,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut in_create = false;
         let mut in_update = false;
         let mut validate = Vec::new();
+        let mut complexity: Option<Expr> = None;
 
         // Pull PK + relation column info out of the `#[sea_orm(...)]` attrs in
         // the same pass. The attrs stay on the field so SeaORM still owns them
@@ -198,9 +205,15 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     let content;
                     syn::parenthesized!(content in m.input);
                     validate.push(content.parse()?);
+                } else if m.path.is_ident("complexity") {
+                    // Accepts a literal int (`complexity = 5`) or an expression
+                    // string async-graphql parses (`complexity = "first *
+                    // child_complexity"`) — both re-emit verbatim into the
+                    // generated `#[graphql(complexity = ...)]`.
+                    complexity = Some(m.value()?.parse::<Expr>()?);
                 } else {
                     return Err(m.error(
-                        "unknown #[expose(...)] field option (expected `skip`, `input(...)`, or `validate(...)`)",
+                        "unknown #[expose(...)] field option (expected `skip`, `input(...)`, `validate(...)`, or `complexity = ...`)",
                     ));
                 }
                 Ok(())
@@ -261,6 +274,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             is_pk,
             validate,
             relation,
+            complexity,
         });
     }
 

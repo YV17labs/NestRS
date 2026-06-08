@@ -78,13 +78,13 @@ async fn depth_limit_rejects_too_deep_query() {
     let json = resp.json().await;
     let errors = json.value().object().get("errors").array();
     assert!(
-        errors.len() >= 1,
+        !errors.is_empty(),
         "expected at least one validation error for over-depth query"
     );
     let msg = errors
         .iter()
         .next()
-        .unwrap()
+        .expect("at least one error")
         .object()
         .get("message")
         .string()
@@ -115,13 +115,13 @@ async fn complexity_limit_rejects_too_complex_query() {
     let json = resp.json().await;
     let errors = json.value().object().get("errors").array();
     assert!(
-        errors.len() >= 1,
+        !errors.is_empty(),
         "expected at least one validation error for over-complex query"
     );
     let msg = errors
         .iter()
         .next()
-        .unwrap()
+        .expect("at least one error")
         .object()
         .get("message")
         .string()

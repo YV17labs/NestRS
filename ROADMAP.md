@@ -16,8 +16,8 @@ The authoritative record of *what was decided and why* is
 - Settle the public API of the core crates so early adopters stop chasing
   breaking changes.
 - **Cold-start benchmark** — publish the cold-start figure alongside the
-  throughput and memory numbers already in the README.
-- Fill in crate-level docs and grow the `apps/` examples.
+  throughput and memory numbers already in the README (boot time is claimed in
+  prose today, but not measured in the benchmark table).
 
 ## Next — hardening the guarantees
 
@@ -45,15 +45,15 @@ framework that only **documents** the same concerns.
 
 Known, deliberate gaps in features that already ship:
 
-- **OpenAPI completeness** — the emitted document omits query parameters entirely,
-  types every path parameter as `string`, and documents no security schemes;
-  a committed `openapi.json` snapshot written on boot (mirroring the GraphQL SDL)
-  is also missing.
-- **Dependency-injection scopes** — what remains beyond request scope is a
-  `transient` scope (fresh per resolution), request-scoped → request-scoped
-  dependencies (the model is one level deep over singletons today), and bridging
-  the scope into the GraphQL and MCP request paths (which carry per-request state
-  through their own context / DataLoaders for now).
+- **OpenAPI completeness** — the emitted document omits query and header
+  parameters, types every path parameter as `string`, and documents no security
+  schemes; a committed `openapi.json` snapshot written on boot (mirroring the
+  GraphQL SDL) is also missing.
+- **Dependency-injection scopes** — request and transient scopes ship on HTTP via
+  `Scoped<T>`. What remains is request-scoped → request-scoped dependencies (the
+  model is one level deep over singletons today), and bridging the scope into the
+  GraphQL and MCP request paths (which carry per-request state through their own
+  context / DataLoaders for now).
 - **`nest-rs-resource`** — a first-class `#[expose]` enum mode (an enum column
   already passes through if it derives the surface traits), HasMany pagination
   via `Connection<T>` (the auto-emitted resolver returns a raw `Vec<T>` today —
@@ -61,7 +61,8 @@ Known, deliberate gaps in features that already ship:
   HasMany so non-conventional FK columns work without falling back to a manual
   `#[field_resolver]`.
 - **API versioning strategies** — header- and media-type-based selection
-  (which need request-time dispatch).
+  (which need request-time dispatch); URI versioning (`#[controller(version =
+  "1")]`) already ships.
 - **TLS certificate hot-reload** — `HttpTransport::tls` loads the certificate once
   at boot; rotating it on renewal needs a restart today. Watching the PEM source and
   swapping the `rustls` config live would close it.
@@ -73,47 +74,57 @@ Common server building blocks an app still has to hand-roll. Listed because they
 The verdict on what is **not** worth reproducing is in *Not on the roadmap*.
 
 - **Redis-backed rate-limit store** — `nest-rs-throttler` ships with an in-memory
-  fixed-window counter; a Redis store would share limits across processes,
-  reusing the queue's connection pattern. The guard would take a storage trait
-  object then.
+  fixed-window counter and a `ThrottlerStore` trait; a Redis implementation would
+  share limits across processes, reusing the queue's connection pattern.
 - **Caching** — a `CacheModule` + a response-caching interceptor + an injectable
   `Cache` provider, memory- or Redis-backed.
 - **File upload & streaming responses** — a multipart extractor for uploads and a
   `StreamableFile` response for large or generated payloads.
 
+## Shipped — project & release infrastructure
+
+Landed with the first `0.1.0` crates.io release and the alpha docs push:
+
+- **crates.io publishing** — every `nest-rs-*` framework crate is on
+  [crates.io](https://crates.io/crates/nest-rs); `apps/` and product crates stay
+  `publish = false`.
+- **Release automation** — versions move in **lockstep** (one number for the whole
+  workspace, centralised in `[workspace.package]`). Push a `v*.*.*` tag and
+  `.github/workflows/publish.yml` runs `cargo publish --workspace` in dependency
+  order. Independent per-crate versioning waits until crates stabilise at different
+  rates.
+- **The `nest-rs` facade crate** — one dependency and one feature set on
+  crates.io (`nest-rs`); in code, `use nest_rs::prelude::*;` for the common case.
+- **GitHub organisation** — canonical home at
+  [github.com/NestRS/NestRS](https://github.com/NestRS/NestRS).
+- **The [nestrs.dev](https://nestrs.dev) docs site** — Starlight site with getting
+  started, an end-to-end tutorial, fundamentals, and one section per surface crate
+  (HTTP, GraphQL, security, database, queue, events, MCP, health, OpenTelemetry,
+  testing, …). Published on every push to `main` via
+  `.github/workflows/docs-pages.yml`.
+- **Reference apps** — six example binaries under `apps/` (`hello`, `platform-auth`,
+  `platform-api`, `platform-worker`, `mcp`, `chat`), plus a multi-binary Docker
+  image and a dev container with Postgres and Redis.
+- **Crate-level READMEs** — every framework crate ships a `README.md` with its
+  extension-point contract.
+
 ## Next — project & release infrastructure
 
-What turns the workspace into a project others can build on and contribute to. The
-repo stays a **single monorepo** (the model every multi-crate Rust framework uses —
+What remains before the workspace is easy to adopt and contribute to. The repo
+stays a **single monorepo** (the model every multi-crate Rust framework uses —
 `tokio`, `bevy`, `axum`): one atomic commit can span a crate, its `*-macros`
 companion, and an example app, which a repo-per-crate split would make impossible.
 
-- **Grow the `docs/` site** — the Starlight skeleton under `docs/` is live
-  (getting started, core concepts, and one page per surface). What remains:
-  the end-to-end tutorial, the Basics → All options tier split per section,
-  CI-verified code snippets, and pages aligned with the current API (authz,
-  testing harness). Adoption lives or dies on this — it is a release blocker,
-  not a nicety.
+- **Polish the `docs/` site** — CI-verified code snippets, the Basics → All options
+  tier split per section, and keeping pages aligned as the API shifts during alpha.
 - **Continuous integration** — one workflow on every PR that gates merges:
   `fmt --check`, `clippy -D warnings`, `build`, and `test --workspace`. The e2e
   tests exercise live Postgres and Redis, so CI provisions both as service
   containers. It publishes nothing — its only artifact is a green/red signal.
-- **Release automation** — versions move in **lockstep** (one number for the whole
-  workspace, centralised in `[workspace.package]`) while the alpha API churns;
-  independent per-crate versioning waits until crates stabilise at different rates.
-  Publishing to crates.io is automated — a release PR bumps versions and changelogs,
-  then publishes each crate in dependency order. The `apps/` stay `publish = false`.
-- **A `nestrs` facade crate** — re-exports the building blocks behind one
-  dependency and one feature set, so an app adds `nestrs` rather than wiring the
-  internal crates by name (the way `tokio` and `bevy` front their workspaces). It
-  is also the single version an app pins.
 - **A scaffolding CLI** — `nestrs new <app>` generates a working starter, and
   generators (`nestrs g controller`, `... entity`, `... resource`) emit the
   declarative boilerplate from the same macros apps use. It ships as another
   workspace crate.
-- **A GitHub organisation** — one canonical home and repository URL (the
-  `Cargo.toml` `repository` and the docs currently disagree on the owner), with a
-  single primary repo.
 
 ## Later — deferred
 

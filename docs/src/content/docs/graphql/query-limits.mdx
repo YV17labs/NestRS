@@ -1,0 +1,205 @@
+---
+title: Query limits
+description: Bound query depth and complexity at the schema level — two ceilings that catch the recursive bomb, the wide flat sweep, and the volumetric fanout before any resolver runs.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A GraphQL endpoint accepts whatever the client asks for. Without a
+ceiling, three shapes of query can take a production app down before
+auth even runs:
+
+- **Recursive** — `{ a { a { a { … 50 levels … } } } }`. Tiny payload,
+  massive resolve work.
+- **Wide / flat** — a single selection with hundreds of fields.
+- **Volumetric fanout** — `{ users { posts { comments { … } } } }`
+  where every step is `has_many`. Three levels of 10× fanout = 1000
+  rows resolved per parent.
+
+nestrs wraps async-graphql's two validation visitors that cover the
+three vectors. Both are opt-in; production apps pin them.
+
+## The two ceilings
+
+| Limit | Catches | Config field | Env var |
+|---|---|---|---|
+| Depth | Recursive | `max_depth` | `NESTRS_GRAPHQL__MAX_DEPTH` |
+| Complexity | Wide + fanout (with per-field annotations) | `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` |
+
+Both default `None`. Set both — depth alone misses wide queries,
+complexity alone misses queries that depth-bomb the parser before the
+visitor even runs.
+
+```rust title="src/module.rs — production pin"
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule};
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        max_depth: Some(15),
+        max_complexity: Some(1000),
+        ..Default::default()
+    }),
+])]
+pub struct AppModule;
+```
+
+```bash title=".env.production"
+NESTRS_GRAPHQL__MAX_DEPTH=15
+NESTRS_GRAPHQL__MAX_COMPLEXITY=1000
+```
+
+The validation runs before any resolver, so a query that exceeds
+either limit costs the parse pass plus one visit — no DB round-trip,
+no dataloader batch, no `Repo` call.
+
+## What each ceiling does
+
+### Depth
+
+The visitor walks the AST and tracks the deepest selection chain.
+A query nesting deeper than `max_depth` returns a validation error.
+
+Typical production value: **10 to 20**. Real queries rarely go past
+6 even with multi-level relation traversal; 15 leaves headroom for
+admin tooling.
+
+### Complexity
+
+The visitor sums a score across every selected field. The default
+scoring is async-graphql's: each field contributes `1 +
+child_complexity` (one for the field itself, plus the sum of its
+selected sub-fields). A flat wide query of 500 fields scores 500;
+a 4-level relation chain scores roughly 4.
+
+The **per-field override** is where complexity becomes a real
+anti-DoS mechanism. The `#[expose]` macro applies one
+automatically — see below.
+
+Typical production value: **1000 to 5000**, tuned from observed
+legitimate queries. Log denials at `warn` and watch a few hundred
+samples before locking the ceiling in.
+
+## The auto-emitted `HasMany` factor
+
+A `HasMany` relation resolves through an unbounded loader: the
+dataloader returns *every* child row of the parent. With async-graphql's
+default scoring, that field costs 1 — no penalty for the fanout, even
+though 10 000 rows resolve.
+
+`#[expose]` patches that automatically:
+
+```rust title="from the macro expansion"
+#[graphql(complexity = "10 * child_complexity")]
+async fn users(&self, …) -> Vec<User> { … }
+```
+
+The 10× factor models a typical fan-out — three levels of `HasMany`
+(`organizations → teams → members`) score `10^3 = 1000`, which lines
+up with a sensible `max_complexity` ceiling. Tune the ceiling, not the
+factor — the same scoring applies app-wide.
+
+`BelongsTo` resolvers keep the default `1 + child_complexity`:
+they load at most one parent row, so no fanout penalty is needed.
+
+## Override on the field
+
+`#[expose(complexity = …)]` overrides the auto-emitted factor:
+
+```rust title="src/orgs/entity.rs"
+#[expose(name = "Org", service = …)]
+#[sea_orm::model]
+pub struct Model {
+    pub id: Uuid,
+    pub name: String,
+
+    #[sea_orm(has_many)]
+    #[expose(complexity = "20 * child_complexity")]
+    pub users: HasMany<crate::users::Entity>,
+}
+```
+
+Two shapes:
+
+- **Literal** — `#[expose(complexity = 5)]` pins a fixed score.
+- **Expression** — `#[expose(complexity = "first * child_complexity")]`
+  uses async-graphql's expression grammar over field arguments
+  (`first`, `count`, …) and the reserved `child_complexity` variable.
+  Useful when a custom `#[field_resolver]` paginates the relation:
+  the score scales with the requested page size.
+
+The override applies to **any** non-skip field, scalar or relation:
+
+```rust title="cost an expensive computed scalar"
+#[expose(name = "Report", service = …)]
+pub struct Model {
+    pub id: Uuid,
+    /// Aggregates 24h of metric points server-side.
+    #[expose(complexity = 50)]
+    pub rolling_avg: f64,
+}
+```
+
+`#[expose(skip)]` plus a hand-written `#[field_resolver]` lets you
+combine a custom shape (cursor connection, filter args) with a
+manually crafted `#[graphql(complexity = "…")]` — the same async-graphql
+attribute, no `#[expose]` indirection.
+
+## On the wire
+
+Validation failures come back as a regular `errors[]` array with a
+200 OK:
+
+```json
+{
+  "errors": [{ "message": "Query is nested too deep." }],
+  "data": null
+}
+```
+
+The message comes straight from async-graphql. Inspect it as you would
+any other validation error.
+
+## Calibration walkthrough
+
+1. Set `max_depth = 15` from day one. Cheap, almost never a false
+   positive, catches the recursive bomb.
+2. Set `max_complexity = 5000` (generous) and **log every denial at
+   `warn`** for a few weeks. Watch what hits the ceiling.
+3. Once denials cluster around abusive queries (deep relation chains
+   on public endpoints, scrapers requesting hundreds of fields),
+   tighten to the lowest value that doesn't trip legitimate traffic.
+4. Override on individual fields only when a relation's realistic
+   fanout differs from the 10× default — a paginated cursor connection
+   typically uses `first * child_complexity`; a known-bounded set
+   can use a smaller literal.
+
+<Aside type="tip">
+**Complexity scoring runs before authn.** The validation visitor
+fires during async-graphql's parse pipeline, which runs before guards.
+That means a depth or complexity violation rejects the query with no
+principal involved — the right behaviour for anti-DoS, since
+unauthenticated scrapers shouldn't even hit the auth chain.
+</Aside>
+
+## Underlying library
+
+The depth and complexity visitors live in
+[`async-graphql`](https://docs.rs/async-graphql). The framework
+just exposes them through `GraphqlConfig` and threads the
+`#[graphql(complexity = "…")]` attribute through `#[expose]`. The
+expression grammar — `child_complexity` plus field arguments —
+is async-graphql's; see its
+[query complexity docs](https://async-graphql.github.io/async-graphql/en/depth_and_complexity.html)
+for the full reference.
+
+## Reference
+
+- `crates/nest-rs-graphql/src/config.rs` — the two `Option<usize>`
+  config fields and their env parsing.
+- `crates/nest-rs-graphql/src/resolver.rs` — `build_schema` applies
+  the limits to the `SchemaBuilder` before `.finish()`.
+- `crates/nest-rs-resource-macros/src/relations.rs` — the
+  `default_has_many_complexity()` constant and the
+  `#[expose(complexity = …)]` parsing.

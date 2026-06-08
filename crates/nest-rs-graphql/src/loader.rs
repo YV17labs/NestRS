@@ -1,7 +1,7 @@
 //! Request-scoped DataLoaders, discovered at link time.
 //!
 //! `#[dataloader]` generates one batching loader per method and submits a
-//! [`LoaderRegistration`]. The loader is rebuilt per request and seeded into
+//! [`GraphqlLoaderRegistration`]. The loader is rebuilt per request and seeded into
 //! the GraphQL context by [`LoaderExtension`], where a `#[field_resolver]` reads it as
 //! `&DataLoader<…>`. Per-request build makes module import order irrelevant:
 //! the container is fully assembled when the request arrives.
@@ -21,16 +21,16 @@ use nest_rs_core::{Container, ReachableProviders};
 /// [`ReachableProviders`], `container.get::<Self>()` would panic at request
 /// time, so the seed is module-gated by the owner's reachability.
 #[doc(hidden)]
-pub struct LoaderRegistration {
+pub struct GraphqlLoaderRegistration {
     pub owner_type_id: fn() -> TypeId,
     pub seed: fn(&Container, Request) -> Request,
 }
 
-inventory::collect!(LoaderRegistration);
+inventory::collect!(GraphqlLoaderRegistration);
 
-pub type BatchFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+pub type GraphqlBatchFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 
-pub type BatchSpawner = Box<dyn Fn(BatchFuture) + Send + Sync>;
+pub type GraphqlBatchSpawner = Box<dyn Fn(GraphqlBatchFuture) + Send + Sync>;
 
 /// Re-establishes per-request ambient state inside a DataLoader batch.
 /// async-graphql runs every batch on a spawned task, which starts with empty
@@ -40,16 +40,16 @@ pub type BatchSpawner = Box<dyn Fn(BatchFuture) + Send + Sync>;
 /// scope so the implementor can snapshot that state into the returned
 /// spawner.
 ///
-/// Bind with `providers = [MyBridge as dyn BatchContext]`. With none
+/// Bind with `providers = [MyBridge as dyn GraphqlBatchContext]`. With none
 /// registered, batches spawn bare on `tokio::spawn` (correct for an app
 /// without row-level security).
-pub trait BatchContext: Send + Sync + 'static {
-    fn spawner(&self) -> BatchSpawner;
+pub trait GraphqlBatchContext: Send + Sync + 'static {
+    fn spawner(&self) -> GraphqlBatchSpawner;
 }
 
 #[doc(hidden)]
-pub fn batch_spawner(container: &Container) -> BatchSpawner {
-    match container.get_dyn::<dyn BatchContext>() {
+pub fn batch_spawner(container: &Container) -> GraphqlBatchSpawner {
+    match container.get_dyn::<dyn GraphqlBatchContext>() {
         Some(ctx) => ctx.spawner(),
         None => Box::new(|fut| {
             tokio::spawn(fut);
@@ -102,7 +102,7 @@ impl Extension for LoaderExtension {
             );
             return next.run(ctx, request).await;
         };
-        for reg in inventory::iter::<LoaderRegistration>() {
+        for reg in inventory::iter::<GraphqlLoaderRegistration>() {
             if !reachable.0.contains(&(reg.owner_type_id)()) {
                 continue;
             }
@@ -120,7 +120,7 @@ mod tests {
 
     // Falling back to bare `tokio::spawn` is the documented "no row-level
     // security" path. Pin that the spawner actually runs the future end-to-end
-    // when no `BatchContext` provider is registered.
+    // when no `GraphqlBatchContext` provider is registered.
     #[tokio::test]
     async fn batch_spawner_without_a_context_runs_the_future_on_tokio_spawn() {
         let container = Container::builder().build();
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(ran.load(Ordering::SeqCst), 1);
     }
 
-    // A registered `BatchContext` provider must take over from the default
+    // A registered `GraphqlBatchContext` provider must take over from the default
     // spawner. The trait is intentionally minimal so a bridge can install
     // ambient state around the future; verifying the dispatch (not just the
     // shape) is the regression check that matters.
@@ -144,8 +144,8 @@ mod tests {
         count: Arc<AtomicUsize>,
     }
 
-    impl BatchContext for CountingContext {
-        fn spawner(&self) -> BatchSpawner {
+    impl GraphqlBatchContext for CountingContext {
+        fn spawner(&self) -> GraphqlBatchSpawner {
             let count = self.count.clone();
             Box::new(move |fut| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -157,7 +157,7 @@ mod tests {
     #[tokio::test]
     async fn batch_spawner_routes_through_a_registered_batch_context() {
         let count = Arc::new(AtomicUsize::new(0));
-        let ctx: Arc<dyn BatchContext> = Arc::new(CountingContext {
+        let ctx: Arc<dyn GraphqlBatchContext> = Arc::new(CountingContext {
             count: count.clone(),
         });
         let container = Container::builder().provide_dyn(ctx).build();

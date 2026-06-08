@@ -21,12 +21,12 @@ mod config;
 mod error;
 mod executor;
 mod interceptor;
+mod job_context;
 mod module;
 mod page;
 mod repo;
 pub mod retry;
 mod service;
-mod worker;
 
 #[cfg(feature = "http")]
 mod bind;
@@ -47,7 +47,7 @@ pub use module::{DatabaseModule, DatabaseSetup};
 pub use page::{Page, PageParams};
 pub use repo::{Repo, scope_for};
 pub use service::{Access, CreateModel, CrudService, UpdateModel};
-pub use worker::WorkerDbContext;
+pub use job_context::WorkerDbContext;
 
 #[cfg(feature = "http")]
 pub use bind::Bind;

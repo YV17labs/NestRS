@@ -1,5 +1,5 @@
 //! [`SocketContext`] — the per-connection ambient-data seam. WS analog of
-//! GraphQL's `OperationGuard`. The connection loop runs in a task *after* the
+//! GraphQL's `GraphqlOperationGuard`. The connection loop runs in a task *after* the
 //! upgrade unwinds, so request task-locals are gone by the time a handler
 //! runs. `capture` runs once on the post-guard upgrade request; `around`
 //! re-installs that state per message. Bind with

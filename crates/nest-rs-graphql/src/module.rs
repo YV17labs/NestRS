@@ -82,7 +82,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 }
             }
             // Our endpoint instead of `async_graphql_poem::GraphQL` so each
-            // `ContextSeed` forwards per-request poem state into the context.
+            // `GraphqlContextSeed` forwards per-request poem state into the context.
             let mut method = poem::post(crate::context::ContextEndpoint::new(
                 schema,
                 container.clone(),

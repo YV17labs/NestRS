@@ -1,12 +1,12 @@
 //! [`GraphqlAbilityBridge`] — per-operation bridge that authenticates and
 //! installs the ambient [`Ability`], the GraphQL analog of `AbilityGuard` +
-//! `Authorize`. Implements `OperationGuard`; generic over the app's auth guard
+//! `Authorize`. Implements `GraphqlOperationGuard`; generic over the app's auth guard
 //! `A` and ability guard `G` so the policy stays in the app.
 
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
-use nest_rs_graphql::{BoxFuture, OperationGuard};
+use nest_rs_graphql::{BoxFuture, GraphqlOperationGuard};
 use nest_rs_guards::Guard;
 use poem::{Request, Response};
 
@@ -22,7 +22,7 @@ pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
     ability: Arc<G>,
 }
 
-impl<A: Guard, G: Guard> OperationGuard for GraphqlAbilityBridge<A, G> {
+impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             // Best-effort: failed authn leaves no ability, so the resolvers'

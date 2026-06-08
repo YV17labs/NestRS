@@ -3,7 +3,7 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Error, Result};
-use nest_rs_graphql::{ContextSeed, GraphqlModule, ResolverGuard, async_trait, resolver};
+use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, GraphqlResolverGuard, async_trait, resolver};
 use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;
@@ -39,7 +39,7 @@ impl Guard for RoleHeaderGuard {
 struct RequireAdmin;
 
 nest_rs_graphql::inventory::submit! {
-    ContextSeed {
+    GraphqlContextSeed {
         owner_type_id: || Some(std::any::TypeId::of::<RequireAdmin>()),
         seed: |req, _container, gql| match req.extensions().get::<Role>() {
             Some(role) => gql.data(role.clone()),
@@ -61,7 +61,7 @@ impl Guard for RequireAdmin {
 }
 
 #[async_trait]
-impl ResolverGuard for RequireAdmin {
+impl GraphqlResolverGuard for RequireAdmin {
     async fn check(&self, ctx: &Context<'_>) -> Result<()> {
         match ctx.data_opt::<Role>() {
             Some(role) if role.0 == "admin" => Ok(()),

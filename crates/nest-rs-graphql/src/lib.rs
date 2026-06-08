@@ -16,19 +16,19 @@ mod module;
 mod resolver;
 
 pub use config::GraphqlConfig;
-pub use context::ContextSeed;
+pub use context::GraphqlContextSeed;
 /// Per-operation seam the endpoint runs around every request. Implemented by
 /// `nest_rs_authz::graphql`, bound with
-/// `providers = [MyBridge as dyn OperationGuard]`.
-pub use context::{BoxFuture, OperationGuard};
-pub use guard::ResolverGuard;
+/// `providers = [MyBridge as dyn GraphqlOperationGuard]`.
+pub use context::{BoxFuture, GraphqlOperationGuard};
+pub use guard::GraphqlResolverGuard;
 /// Re-establishes per-request ambient state inside a DataLoader batch (the
 /// batch runs on a spawned task where request task-locals are gone).
 /// Implemented by `nest_rs_seaorm::graphql::LoaderScope`.
-pub use loader::{BatchContext, BatchFuture, BatchSpawner};
-pub use loader::{LoaderRegistration, batch_spawner};
+pub use loader::{GraphqlBatchContext, GraphqlBatchFuture, GraphqlBatchSpawner};
+pub use loader::{GraphqlLoaderRegistration, batch_spawner};
 pub use module::{GraphqlModule, GraphqlSetup};
-pub use resolver::{ResolverKind, ResolverObject, ResolverRegistration};
+pub use resolver::{GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration};
 
 pub use async_graphql;
 pub use async_graphql_poem;

@@ -40,7 +40,7 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Each method `async fn name(&self, keys: &[K]) -> HashMap<K, V>` (or
 /// `Result<HashMap<K, V>, E>`) generates a hidden `Loader` named
-/// `<Owner><Name>` and submits a `LoaderRegistration` to the link-time
+/// `<Owner><Name>` and submits a `GraphqlLoaderRegistration` to the link-time
 /// registry — no `#[module(providers = [...])]` entry. The loader is
 /// **request-scoped**: rebuilt per request from the fully assembled container
 /// (so import order is irrelevant) and seeded into the GraphQL context, read

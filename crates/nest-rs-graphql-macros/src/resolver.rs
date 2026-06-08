@@ -356,7 +356,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         };
         // Consume `#[public]` so it isn't emitted as an unknown attribute;
         // GraphQL guards that care can inspect a custom marker the dev
-        // seeds via `ContextSeed` (the framework does not act on the flag).
+        // seeds via `GraphqlContextSeed` (the framework does not act on the flag).
         let _is_public = take_flag_attr(&mut method.attrs, "public");
         all_guard_paths.extend(method_guards.iter().cloned());
         all_guard_paths.extend(force_method_guards.iter().cloned());
@@ -650,13 +650,13 @@ fn root_object(
         }
 
         ::nest_rs_graphql::inventory::submit! {
-            ::nest_rs_graphql::ResolverRegistration {
-                kind: ::nest_rs_graphql::ResolverKind::#kind,
+            ::nest_rs_graphql::GraphqlResolverRegistration {
+                kind: ::nest_rs_graphql::GraphqlResolverKind::#kind,
                 resolver_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 type_info: |__r| __r.create_fake_output_type::<#obj>(),
                 build: |__c| ::std::boxed::Box::new(
                     #obj(::std::sync::Arc::new(<#self_ty>::from_container(__c)))
-                ) as ::std::boxed::Box<dyn ::nest_rs_graphql::ResolverObject>,
+                ) as ::std::boxed::Box<dyn ::nest_rs_graphql::GraphqlResolverObject>,
             }
         }
     }

@@ -1,6 +1,7 @@
-//! [`WorkerDbContext`] — ORM bridge for worker transports' [`JobContext`]
-//! seam, the cron/queue counterpart of [`DbContext`](crate::DbContext).
-//! Auto-bound by [`DatabaseModule`](crate::DatabaseModule).
+//! [`WorkerDbContext`] — ORM bridge for the worker-transport [`JobContext`]
+//! seam (queue + schedule), the cron/queue counterpart of
+//! [`DbContext`](crate::DbContext). Auto-bound by
+//! [`DatabaseModule`](crate::DatabaseModule).
 //!
 //! A job runs on the **pool**, never a transaction (no HTTP method to classify).
 //! No caller ⇒ no ambient ability ⇒ `Repo` reads/writes are unscoped — correct

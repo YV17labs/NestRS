@@ -2,7 +2,7 @@
 //! async-graphql context. Needed because async-graphql-poem does not forward
 //! poem request extensions, and an async-graphql `Extension` never sees the
 //! poem request. [`ContextEndpoint`] folds every link-time-registered
-//! [`ContextSeed`] over the parsed request before executing it.
+//! [`GraphqlContextSeed`] over the parsed request before executing it.
 
 use std::any::TypeId;
 use std::future::Future;
@@ -22,12 +22,12 @@ use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 /// `Some(id)` => fires only when the owner is in `ReachableProviders`, so
 /// two GraphQL apps in one workspace can forward different principal types
 /// without colliding.
-pub struct ContextSeed {
+pub struct GraphqlContextSeed {
     pub owner_type_id: fn() -> Option<TypeId>,
     pub seed: fn(&Request, &Container, GqlRequest) -> GqlRequest,
 }
 
-inventory::collect!(ContextSeed);
+inventory::collect!(GraphqlContextSeed);
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -37,9 +37,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// implements it to authenticate and install the caller's ambient `Ability`
 /// for the operation's duration.
 ///
-/// Bind with `providers = [MyBridge as dyn OperationGuard]`; with none
+/// Bind with `providers = [MyBridge as dyn GraphqlOperationGuard]`; with none
 /// registered the endpoint runs operations unguarded.
-pub trait OperationGuard: Send + Sync + 'static {
+pub trait GraphqlOperationGuard: Send + Sync + 'static {
     /// Attach per-request state to the poem request before seeds forward it.
     /// Best-effort: an unauthenticated request passes through and the
     /// resolvers' own gate refuses it.
@@ -55,18 +55,18 @@ pub trait OperationGuard: Send + Sync + 'static {
 }
 
 /// The `/graphql` endpoint. Mirrors `async_graphql_poem::GraphQL`'s GET / POST
-/// / batch handling but folds every [`ContextSeed`] over the request first.
+/// / batch handling but folds every [`GraphqlContextSeed`] over the request first.
 /// The upstream `accept: multipart/mixed` incremental-delivery path
 /// (`@defer` / `@stream`) is not reproduced.
 pub(crate) struct ContextEndpoint<E> {
     executor: E,
     container: Container,
-    op_guard: Option<Arc<dyn OperationGuard>>,
+    op_guard: Option<Arc<dyn GraphqlOperationGuard>>,
 }
 
 impl<E> ContextEndpoint<E> {
     pub(crate) fn new(executor: E, container: Container) -> Self {
-        let op_guard = container.get_dyn::<dyn OperationGuard>();
+        let op_guard = container.get_dyn::<dyn GraphqlOperationGuard>();
         Self {
             executor,
             container,
@@ -80,7 +80,7 @@ impl<E> ContextEndpoint<E> {
         // gate (hand-rolled container in a test) skips owner-keyed seeds —
         // fail-closed.
         let reachable = self.container.get::<ReachableProviders>();
-        inventory::iter::<ContextSeed>()
+        inventory::iter::<GraphqlContextSeed>()
             .filter(|reg| match (reg.owner_type_id)() {
                 None => true,
                 Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
@@ -134,7 +134,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 macro_rules! forward_principal {
     ($ty:ty, $owner:ty) => {
         $crate::inventory::submit! {
-            $crate::ContextSeed {
+            $crate::GraphqlContextSeed {
                 owner_type_id: || ::core::option::Option::Some(::core::any::TypeId::of::<$owner>()),
                 seed: |__req, _container, __gql| match __req.extensions().get::<$ty>() {
                     ::core::option::Option::Some(__v) => __gql.data(::core::clone::Clone::clone(__v)),

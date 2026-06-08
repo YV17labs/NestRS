@@ -1,5 +1,5 @@
 //! The resolver gate end-to-end: an HTTP guard builds the actor's `Ability`, the
-//! `ContextSeed` forwards it into the GraphQL context, and `authorize` admits or
+//! `GraphqlContextSeed` forwards it into the GraphQL context, and `authorize` admits or
 //! rejects the query by the caller's role — driven through the in-process harness.
 
 use std::sync::Arc;

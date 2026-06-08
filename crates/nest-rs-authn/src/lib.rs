@@ -8,6 +8,13 @@
 //! - [`oauth`] — Authorization Code client + [`OAuth2Module`]
 //! - [`passport`] — [`Strategy`], [`AuthGuard`], [`JwtStrategy`]
 //! - [`password`] — Argon2 helpers (no DI module)
+//!
+//! **Naming convention.** A `*Service` is a singleton DI provider that holds
+//! stateful infrastructure (key material, in-memory caches) — [`JwtService`]
+//! is built once at boot and injected wherever a token is signed or verified.
+//! A `*Client` is a transient builder over an external API surface —
+//! [`OAuth2Client`] is constructed per flow (authorize → exchange → userinfo)
+//! and carries no shared state between callers.
 
 pub mod jwt;
 pub mod oauth;

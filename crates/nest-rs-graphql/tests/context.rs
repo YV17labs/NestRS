@@ -3,7 +3,7 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Context;
-use nest_rs_graphql::{ContextSeed, GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, resolver};
 use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
@@ -30,7 +30,7 @@ impl Guard for TagGuard {
 struct TagResolver;
 
 nest_rs_graphql::inventory::submit! {
-    ContextSeed {
+    GraphqlContextSeed {
         owner_type_id: || Some(std::any::TypeId::of::<TagResolver>()),
         seed: |req, _container, gql| match req.extensions().get::<RequestTag>() {
             Some(tag) => gql.data(tag.clone()),

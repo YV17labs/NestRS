@@ -109,7 +109,7 @@ fn dataloader_for_method(
         }
 
         ::nest_rs_graphql::inventory::submit! {
-            ::nest_rs_graphql::LoaderRegistration {
+            ::nest_rs_graphql::GraphqlLoaderRegistration {
                 owner_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 // Built per request from the assembled container (so the
                 // module's import order is irrelevant).

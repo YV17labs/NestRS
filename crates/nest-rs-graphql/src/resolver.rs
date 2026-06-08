@@ -31,7 +31,7 @@ use nest_rs_core::{Container, ReachableProviders};
 /// Which root a resolver's methods contribute to.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ResolverKind {
+pub enum GraphqlResolverKind {
     Query,
     Mutation,
 }
@@ -41,14 +41,14 @@ pub enum ResolverKind {
 /// roots store members behind this boxed-future shim. Blanket-impl'd for
 /// every `#[Object]` type.
 #[doc(hidden)]
-pub trait ResolverObject: Send + Sync {
+pub trait GraphqlResolverObject: Send + Sync {
     fn resolve_field<'a>(
         &'a self,
         ctx: &'a Context<'a>,
     ) -> Pin<Box<dyn Future<Output = ServerResult<Option<Value>>> + Send + 'a>>;
 }
 
-impl<T: ContainerType + Send + Sync> ResolverObject for T {
+impl<T: ContainerType + Send + Sync> GraphqlResolverObject for T {
     fn resolve_field<'a>(
         &'a self,
         ctx: &'a Context<'a>,
@@ -61,14 +61,14 @@ impl<T: ContainerType + Send + Sync> ResolverObject for T {
 /// `resolver_type_id` keys the entry against [`ReachableProviders`] for
 /// module-gating.
 #[doc(hidden)]
-pub struct ResolverRegistration {
-    pub kind: ResolverKind,
+pub struct GraphqlResolverRegistration {
+    pub kind: GraphqlResolverKind,
     pub resolver_type_id: fn() -> TypeId,
     pub type_info: fn(&mut Registry) -> MetaType,
-    pub build: fn(&Container) -> Box<dyn ResolverObject>,
+    pub build: fn(&Container) -> Box<dyn GraphqlResolverObject>,
 }
 
-inventory::collect!(ResolverRegistration);
+inventory::collect!(GraphqlResolverRegistration);
 
 thread_local! {
     // Reachable provider `TypeId`s installed by [`build_schema`] for the
@@ -77,19 +77,19 @@ thread_local! {
     static REACHABLE: RefCell<Option<Arc<HashSet<TypeId>>>> = const { RefCell::new(None) };
 }
 
-fn is_member_active(reg: &ResolverRegistration) -> bool {
+fn is_member_active(reg: &GraphqlResolverRegistration) -> bool {
     REACHABLE.with(|cell| match &*cell.borrow() {
         Some(set) => set.contains(&(reg.resolver_type_id)()),
         None => true,
     })
 }
 
-fn kind_has_members(kind: ResolverKind) -> bool {
-    inventory::iter::<ResolverRegistration>().any(|reg| reg.kind == kind && is_member_active(reg))
+fn kind_has_members(kind: GraphqlResolverKind) -> bool {
+    inventory::iter::<GraphqlResolverRegistration>().any(|reg| reg.kind == kind && is_member_active(reg))
 }
 
-fn build_members(container: &Container, kind: ResolverKind) -> Vec<Box<dyn ResolverObject>> {
-    inventory::iter::<ResolverRegistration>()
+fn build_members(container: &Container, kind: GraphqlResolverKind) -> Vec<Box<dyn GraphqlResolverObject>> {
+    inventory::iter::<GraphqlResolverRegistration>()
         .filter(|reg| reg.kind == kind && is_member_active(reg))
         .map(|reg| (reg.build)(container))
         .collect()
@@ -101,12 +101,12 @@ fn build_members(container: &Container, kind: ResolverKind) -> Vec<Box<dyn Resol
 /// root remains in the SDL.
 fn merge_type_info<T: OutputType>(
     registry: &mut Registry,
-    kind: ResolverKind,
+    kind: GraphqlResolverKind,
     type_name: &str,
 ) -> String {
     registry.create_output_type::<T, _>(MetaTypeId::Object, |registry| {
         let mut fields = IndexMap::new();
-        for reg in inventory::iter::<ResolverRegistration>() {
+        for reg in inventory::iter::<GraphqlResolverRegistration>() {
             if reg.kind != kind || !is_member_active(reg) {
                 continue;
             }
@@ -142,7 +142,7 @@ fn merge_type_info<T: OutputType>(
 macro_rules! discovered_root {
     ($name:ident, $kind:expr_2021, $type_name:literal) => {
         pub(crate) struct $name {
-            members: Vec<Box<dyn ResolverObject>>,
+            members: Vec<Box<dyn GraphqlResolverObject>>,
         }
 
         impl $name {
@@ -190,8 +190,8 @@ macro_rules! discovered_root {
     };
 }
 
-discovered_root!(DiscoveredQuery, ResolverKind::Query, "Query");
-discovered_root!(DiscoveredMutation, ResolverKind::Mutation, "Mutation");
+discovered_root!(DiscoveredQuery, GraphqlResolverKind::Query, "Query");
+discovered_root!(DiscoveredMutation, GraphqlResolverKind::Mutation, "Mutation");
 
 /// Build the discovered schema. Subscriptions are not yet supported.
 ///

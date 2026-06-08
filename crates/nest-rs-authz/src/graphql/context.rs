@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_graphql::ContextSeed;
+use nest_rs_graphql::GraphqlContextSeed;
 use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 
 use crate::Ability;
@@ -14,7 +14,7 @@ use crate::Ability;
 // provider owns the principal. App-specific principal types use
 // `forward_principal!`, which is module-gated by the app's auth guard.
 nest_rs_graphql::inventory::submit! {
-    ContextSeed {
+    GraphqlContextSeed {
         owner_type_id: || None,
         seed: |req, _container, gql| match req.extensions().get::<Arc<Ability>>() {
             Some(ability) => gql.data(ability.clone()),

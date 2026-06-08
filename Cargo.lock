@@ -2717,7 +2717,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-events-macros",
  "parking_lot",
- "tokio",
  "tracing",
 ]
 

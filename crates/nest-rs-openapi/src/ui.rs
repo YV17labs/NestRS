@@ -3,7 +3,6 @@
 //! (`/api/...`, `/api-json`), matching the mount paths in [`crate::module`].
 
 use poem::endpoint::make_sync;
-use poem::web::Html;
 use poem::{Endpoint, Response, handler};
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
@@ -12,8 +11,10 @@ const SWAGGER_BUNDLE_JS: &[u8] = include_bytes!("../assets/swagger-ui-bundle.js"
 const SWAGGER_PRESET_JS: &[u8] = include_bytes!("../assets/swagger-ui-standalone-preset.js");
 
 #[handler]
-pub fn swagger_index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+pub fn swagger_index() -> Response {
+    Response::builder()
+        .content_type("text/html; charset=utf-8")
+        .body(INDEX_HTML)
 }
 
 #[handler]

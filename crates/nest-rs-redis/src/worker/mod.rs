@@ -3,8 +3,8 @@
 //! a worker app imports to attach the transport. Producer-only apps skip
 //! this module — see [`crate::QueueModule`] for the connection side.
 
+mod consumer;
 mod module;
-mod transport;
 
+pub use consumer::QueueWorker;
 pub use module::QueueWorkerModule;
-pub use transport::QueueWorker;

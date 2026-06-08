@@ -3,7 +3,7 @@ title: Why NestRS
 description: The thesis behind the framework, and the six structural properties that follow from it.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, FileTree } from '@astrojs/starlight/components';
 
 ## The thesis
 
@@ -21,10 +21,18 @@ contributor would otherwise have written by hand — and would, eventually, have
 written slightly differently in two different files.
 
 <Aside>
-  NestRS draws inspiration from NestJS's decorator-driven module system — but it
-  is designed from the ground up around Rust's type system, async runtime and
-  trait coherence, and stands on its own. This is the one place we name that
-  lineage; everywhere else the framework is described on its own terms.
+  If you've used NestJS, the layout will feel familiar — modules,
+  decorators, thin handlers, the same layer vocabulary. That's the
+  lineage we acknowledge here, and only here.
+
+  Underneath, it's a different machine. NestRS is built around Rust's
+  type system, async runtime, and trait rules from day one — not
+  adapted around them. What a managed runtime typically leaves to
+  discipline (forgotten guards, hand-rolled transactions, inconsistent
+  data access) NestRS treats as framework defects: checked at compile
+  time, enforced at boot, carried transparently at runtime.
+
+  Everywhere else in these docs, NestRS speaks for itself.
 </Aside>
 
 ## Why now
@@ -38,10 +46,10 @@ garbage collector and a runtime whose footprint is always resident, whether or
 not a request is in flight. You pay for it idle, and you pay for it again in
 energy per request.
 
-**Native code is no longer the hard path.** Much of what made higher-level
-runtimes attractive — boilerplate, slower scaffolding, a steeper learning
-curve — is far easier to absorb now that LLM-assisted coding carries the rote
-parts. The friction that justified the runtime tax has largely dissolved.
+**Native code is no longer the hard path.** Much of the boilerplate that once
+made higher-level runtimes feel faster to ship — scaffolding, ceremony,
+repetitive wiring — is easier to absorb today. The friction that justified the
+runtime tax has largely dissolved.
 
 NestRS reopens the trade-off between the two: keep the declarative,
 decorator-driven style that makes the managed-runtime model productive, but stand
@@ -49,18 +57,19 @@ it on a native, compiled foundation that doesn't bill you for it in RAM. One
 `cargo` step compiles and type-checks, modules wire up regardless of import
 order, and the result ships as one lean binary.
 
-## The six structural properties
+## How it delivers
 
-Each property below is a consequence of the thesis, not a feature added on
-top. They compose: drop any one and the others weaken.
+Six consequences of the thesis — not a feature list. They compose: drop any one
+and the others weaken. Each section below states the guarantee; the mechanics
+live in [Fundamentals](/fundamentals/), [Security](/security/), and
+[Database](/database/).
 
 ### 1. Declarative wiring
 
-Modules, providers, controllers, resolvers, gateways, processors, cron jobs,
-MCP tools, event handlers — each is a struct decorated with an attribute
-macro. The decorator carries the entire integration contract. There is no
-service locator to call, no registration list to keep in sync, no central
-manifest a contributor has to remember to edit.
+Modules, providers, controllers, resolvers, gateways, processors — each is a
+struct decorated with an attribute macro. The decorator carries the entire
+integration contract. There is no service locator to call, no registration list
+to keep in sync, no central manifest a contributor has to remember to edit.
 
 ```rust
 #[controller(path = "/users")]
@@ -72,26 +81,24 @@ pub struct UsersController {
 
 ### 2. Secure by default
 
-A request runs through three layers — `AuthGuard` attaches the principal,
-`AbilityGuard` builds the caller's authorization context, and a handler-side
-shaper applies it to the response. Once the corresponding modules are
-imported, every read through the data layer is filtered, every mutating write
-is gated, and every response body is masked. A feature does not opt in to
-these; it opts out by not importing them.
+Once the [security modules](/security/) are imported, every read through the
+data layer is filtered, every mutating write is gated, and every response body
+is masked. A feature does not opt in to authn and authz; it opts out by not
+importing them.
 
 Security is **structural**, not vigilant: forgetting a check is a category
 error the framework prevents, not a bug a code reviewer has to catch.
 
 ### 3. Transactional by default
 
-A mutating HTTP request installs a transactional executor in a `task_local`
-before the handler runs. The service queries through `Repo`, which picks up
-that executor automatically. On a `2xx`/`3xx` response the transaction
-commits; otherwise it rolls back. A safe method runs on the pool. Worker
-contexts (jobs, processors) install a pool executor for the same code path.
+A mutating HTTP request installs a transactional [executor](/database/repo-and-executor/)
+before the handler runs. The service reaches the database only through
+[`Repo`](/database/repo-and-executor/), which picks up that executor
+automatically — commit on `2xx`/`3xx`, rollback otherwise. Worker contexts
+install a pool executor for the same code path.
 
 ```rust
-// no @Transactional, no begin/commit — the executor is ambient.
+// Ambient executor — no per-method ceremony.
 impl UsersService {
     pub async fn rename(&self, id: Uuid, name: String) -> Result<User, ServiceError> {
         let user = self.repo.find_by_id(id).await?;
@@ -102,50 +109,45 @@ impl UsersService {
 
 ### 4. Multi-transport, one shape
 
-A feature decomposes into a **port** (the entity, the service, the contract)
-and one **adapter** per transport it exposes (HTTP controller, GraphQL
-resolver, WebSocket gateway, queue processor, MCP tool). The port sits at
-the feature root; each adapter lives in its own sub-folder, with its own
-`module.rs`. The composition rule is symmetric across transports: import
-the feature's `Module` + the matching `Authz<Transport>` module, and the
-wiring is done.
+A feature is a **port** (entity, service, contract) plus one **adapter** per
+transport it exposes. The port sits at the feature root; each adapter lives in
+its own sub-folder with its own `module.rs`. An app picks the edges it serves —
+a worker imports the queue adapter; an API imports HTTP, GraphQL, and WS.
 
-```
-features/users/
-  entity.rs, service.rs, dto.rs, error.rs, module.rs   ← the port
-  http/      ← controller
-  graphql/   ← resolver
-  ws/        ← gateway
-  queue/     ← processor
-  mcp/       ← tool
-```
+<FileTree>
+- features/users/
+  - module.rs, service.rs, entity.rs, dto.rs, error.rs
+  - http/
+  - graphql/
+  - ws/
+  - queue/
+  - mcp/
+</FileTree>
 
-An app picks the edges it serves. A worker imports `UsersModule +
-UsersQueueModule`; an API imports `UsersModule + UsersHttpModule +
-UsersGraphqlModule + UsersWsModule`.
+See [Modules — Port + adapters](/fundamentals/modules/#port--adapters-one-module-per-role)
+for the composition rule and the reference layout.
 
 ### 5. Wiring verified at boot
 
 The dependency-injection graph is not resolved by reflection. Every module
-records its imports and its providers' dependencies into a static registry at
-compile time; at startup, `App::build()` walks the graph and fails with a
-clear `AccessGraphError` if a provider injects something its module neither
-owns, imports transitively, nor receives as global infrastructure.
+records its imports and its providers' dependencies at compile time; at startup,
+`App::build()` walks the graph and fails with a clear error if a provider
+injects something its module cannot reach.
 
 A misconfigured import is a startup error naming the missing dependency, not
-a `Cannot resolve` at first request.
+a `Cannot resolve` at first request. See
+[Providers — The access graph](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot).
 
 ### 6. Lean per-binary
 
 Capabilities ship as separate crates and integrate via discovery gated on
-module reachability. A binary that imports only `UsersQueueModule` does not
-compile the HTTP stack, does not mount the GraphQL resolver, does not register
-the WebSocket gateway — even if those files are linked into the binary
-because they live in a shared crate. The same shared codebase produces an API
-of one shape and a worker of a strictly smaller one.
+module reachability. A binary that imports only the queue adapter does not
+mount HTTP routes or GraphQL resolvers — even when those files live in the
+same shared feature crate. One codebase, multiple deployable shapes.
 
-The headless `worker` example compiles no `hyper` server: ~4 MB idle, low
-single-digit-MB under load.
+On the [introduction page](/#how-fast-exactly), the same Hello World service
+benchmarks at roughly **25×** the throughput and **~20×** less RAM than an
+equivalent Node stack on identical hardware.
 
 ## What this is not
 

@@ -1,0 +1,174 @@
+---
+title: Server-side push
+description: Reach connected clients from outside a handler — inject WsServer in a service, a scheduled job, or an HTTP route.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A `WsClient` exists only inside a `#[subscribe_message]` (or a
+lifecycle hook). Anything that fires *without* a client message — a
+cron job, a queue processor, an HTTP route, a service reacting to a
+domain event — has nothing to call `client.broadcast(...)` on. The
+answer is `WsServer`: the connection registry itself, injected as a
+singleton.
+
+## The registry as a provider
+
+`WsModule` registers `WsServer` in the container. Import the module,
+ask for the registry by injection, and call its push methods directly:
+
+```rust
+use std::sync::Arc;
+
+use nest_rs_core::injectable;
+use nest_rs_ws::WsServer;
+
+#[injectable]
+pub struct NotifyService {
+    #[inject]
+    server: Arc<WsServer>,
+}
+
+impl NotifyService {
+    pub fn announce(&self, text: &str) {
+        let _ = self.server.broadcast("announce", &text);
+    }
+}
+```
+
+```rust title="module.rs"
+#[module(
+    imports = [WsModule],
+    providers = [NotifyService],
+)]
+pub struct NotifyModule;
+```
+
+That's the whole wiring. Any handler that calls
+`NotifyService::announce` reaches every live WebSocket connection, even
+the connections held by an entirely different gateway. The registry
+does not care who recorded the message.
+
+## What the server exposes
+
+`WsServer` and `WsClient` share the same push verbs, named slightly
+differently to reflect the missing per-connection context:
+
+| `WsServer` method | Reaches | `WsClient` analog |
+|---|---|---|
+| `broadcast(event, &data)` | Every live connection. | `client.broadcast(...)` |
+| `emit_to(room, event, &data)` | Connections joined to `room`. | `client.to(room, ...)` |
+| `emit(conn_id, event, &data)` | One specific connection by id. | `client.emit(...)` (this connection) |
+| `connection_count()` | Live connection total. | — |
+
+Each method serializes `data` with `serde`, returns the number of
+outboxes that accepted the frame (`usize`) or whether the target
+connection still existed (`bool`). A serializer failure surfaces as
+`Err(serde_json::Error)`; a closed outbox is silently dropped — the
+writer task already moved on.
+
+## A scheduled push
+
+A scheduled job has no request, no client, no socket — only the
+registry:
+
+```rust
+use std::sync::Arc;
+
+use nest_rs_core::injectable;
+use nest_rs_schedule::{every, scheduled};
+use nest_rs_ws::WsServer;
+
+#[scheduled]
+#[injectable]
+pub struct Heartbeat {
+    #[inject]
+    server: Arc<WsServer>,
+}
+
+#[scheduled]
+impl Heartbeat {
+    #[every("5s")]
+    async fn tick(&self) {
+        let _ = self.server.broadcast("heartbeat", &chrono::Utc::now());
+    }
+}
+```
+
+Every five seconds, every connected client receives
+`{"event":"heartbeat","data":"2026-06-08T10:23:14Z"}`. Same approach
+works from a `#[processor]` consuming a queue, an HTTP route reacting
+to a webhook, a domain event published on an internal bus — anywhere
+DI reaches, the registry reaches.
+
+## Push vs broadcast — which one
+
+The question is "do I have a `WsClient` already?":
+
+- **Inside a `#[subscribe_message]` or lifecycle hook** — use the
+  `WsClient` the handler asks for. It already holds a registry
+  reference and adds `emit(...)` for "this connection only," which
+  `WsServer` cannot offer without a `ConnId` you tracked yourself.
+- **Outside any handler** — inject `WsServer`. There is no client to
+  thread through, and capturing one across an `await` boundary in some
+  external task is exactly the kind of escape hatch this avoids.
+
+A common pattern is to do both in one feature: handlers route messages
+into a service that records state, and the service holds the registry
+and broadcasts the derived event. `apps/chat/src/chat/service.rs`
+shows exactly this:
+
+```rust
+#[injectable]
+pub struct RoomService {
+    #[inject]
+    server: Arc<WsServer>,
+    history: Mutex<Vec<ChatMessage>>,
+}
+
+impl RoomService {
+    pub fn record(&self, msg: SendMessage) -> ChatMessage {
+        let stored = ChatMessage { author: msg.author, text: msg.text };
+        self.history.lock().push(stored.clone());
+        let _ = self.server.broadcast("message", &stored);
+        stored
+    }
+}
+```
+
+The gateway handler is two lines; the service owns the side effect.
+
+## Backpressure
+
+Each connection has a writer task draining an `unbounded_channel` into
+the `Sink`. A slow client backs up its own outbox; the read/dispatch
+loop on every other connection stays unaffected. Frames sent to a
+closed outbox are dropped silently — the registry returns the count of
+outboxes that accepted the frame, so a `broadcast(...)` to `N`
+connections may legitimately report `< N` while you race a slow
+disconnect.
+
+<Aside type="note">
+"Unbounded" here means the in-process channel is unbounded. A wildly
+slow client backed up by gigabytes of pending frames is a real concern
+for any real-time system; the framework leaves that policy to you
+(disconnect on outbox depth, drop on TTL, etc.). Today there is no
+built-in cap — track the channel size yourself if your traffic shape
+needs it.
+</Aside>
+
+## Going further
+
+- [Namespaces](/websockets/namespaces/) — when a gateway needs its own
+  registry separate from the global one.
+- [Rooms](/websockets/rooms/) — the `WsClient` side of the same
+  surface.
+
+### Reference
+
+- [`WsServer`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-ws/src/server.rs) —
+  `broadcast`, `emit_to`, `emit`, `connection_count`.
+- [`apps/chat/src/chat/service.rs`](https://github.com/NestRS/NestRS/blob/main/apps/chat/src/chat/service.rs) —
+  service-side broadcast pattern.

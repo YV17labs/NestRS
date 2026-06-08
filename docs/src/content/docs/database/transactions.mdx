@@ -1,0 +1,192 @@
+---
+title: Transactions
+description: Mutating routes commit on 2xx/3xx, roll back otherwise — and the honest retry primitive for serialization conflicts.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A mutating request runs inside a transaction with no boilerplate. The
+`DbContext` interceptor — auto-installed by `DatabaseModule` — opens it on
+the way in, hands the handler the transactional executor, and decides
+commit or rollback based on the response. The hard cases — serialization
+conflicts, deadlocks — get their own primitive, and the docs are honest
+about what each primitive can and can't do.
+
+The conflict classifier matches against
+[sqlx](https://github.com/launchbadge/sqlx)'s typed `DatabaseError::code()`
+(SQLSTATE) — never a formatted error string — so a digit substring in a
+message can't trigger a false retry. [SeaORM](https://www.sea-ql.org/SeaORM/)
+provides the `TransactionTrait` the programmatic boundary builds on.
+
+## How the auto-commit works
+
+`DbContext` classifies the HTTP method and branches:
+
+```text
+GET / HEAD / OPTIONS / TRACE   → Executor::Pool, no transaction
+POST / PUT / PATCH / DELETE    → Executor::Txn,  commit on 2xx/3xx
+                                                 rollback otherwise
+```
+
+Inside the handler, `Repo::<E>::conn()` returns whichever variant the
+interceptor installed — same code, different mode. The decision matrix:
+
+| Outcome                  | Decision  |
+|--------------------------|-----------|
+| `Ok(2xx)` or `Ok(3xx)`   | commit    |
+| `Ok(4xx)` or `Ok(5xx)`   | rollback  |
+| `Err(_)` from the handler| rollback  |
+| Commit error             | response becomes `500`, rollback is implicit |
+
+A failed mutation never half-persists, even when the failure surfaces as
+a typed 4xx body from a `thiserror`-derived error. See
+[Repo and executor](/database/repo-and-executor/) for the full sequence,
+including the escape-on-spawn case.
+
+## Why the body cannot be retried at the interceptor
+
+A poem `Request` is consumed by `next.run` — the body bytes are gone past
+the handler call. The interceptor cannot replay the same handler on a
+fresh transaction; the `DatabaseTransaction` handle is already aborted by
+the time a conflict surfaces. Two consequences:
+
+1. **The interceptor can retry the commit, not the body.** And a commit
+   that failed with a SQLSTATE conflict has already consumed its handle,
+   so even that retry is bounded.
+2. **A handler-time conflict is the service's job to retry.** The
+   replayable closure has to own the transaction boundary itself.
+
+The framework exposes two pieces, deliberately split:
+
+## The observability flag
+
+```bash frame="terminal"
+NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS=true
+```
+
+```rust
+DatabaseModule::for_root(DatabaseConfig {
+    retry_serialization_conflicts: true,
+    ..Default::default()
+})
+```
+
+With the flag on, the `DbContext` interceptor matches a commit-time
+conflict against the SQLSTATE markers below and logs it at `warn` with
+the conflict tag (target `nest_rs::orm`) so ops sees the failure mode
+distinctly from a generic commit error.
+
+<Aside type="caution">
+**The flag does not actually retry the commit today.** SeaORM's
+`DatabaseTransaction` handle is consumed by the failed commit — the
+interceptor cannot replay it, and the request body is no longer available
+to re-run the handler from scratch. So the response still surfaces as
+`500` after the warn line; the flag is currently an **observability tag**,
+not a retry mechanism. Treat it as "I want to see serialization conflicts
+in my logs", not "I want them invisible".
+</Aside>
+
+## The working retry primitive
+
+For an actually-retried operation, wrap a replayable closure in
+`retry_on_conflict` inside a service method that owns its programmatic
+transaction boundary:
+
+```rust title="src/orders/service.rs"
+use std::sync::Arc;
+use std::time::Duration;
+use nest_rs_seaorm::retry::{
+    retry_on_conflict, DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF,
+};
+use sea_orm::{DatabaseConnection, TransactionTrait};
+
+impl OrdersService {
+    pub async fn settle(&self, id: Uuid) -> Result<Order, OrderError> {
+        let db = self.db.clone();
+        retry_on_conflict(DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF, || {
+            let db = db.clone();
+            async move {
+                let txn = db.begin().await?;
+                // read + update + insert against `txn`
+                txn.commit().await?;
+                Ok::<_, sea_orm::DbErr>(/* updated order */)
+            }
+        })
+        .await
+        .map_err(OrderError::from)
+    }
+}
+```
+
+`retry_on_conflict` runs the closure up to `attempts` times, sleeping
+`initial_backoff << attempt` between tries (5 ms → 10 ms → 20 ms with the
+defaults). A non-retryable error returns immediately; a retryable one is
+logged at `warn` and the closure re-runs from scratch — that's what makes
+the retry honest, the body re-opens a fresh transaction against a fresh
+snapshot.
+
+The defaults are conservative on purpose:
+
+| Constant                  | Value                  |
+|---------------------------|------------------------|
+| `DEFAULT_RETRY_ATTEMPTS`  | 3                      |
+| `DEFAULT_INITIAL_BACKOFF` | 5 ms                   |
+| `MAX_RETRY_ATTEMPTS`      | 32 (hard ceiling)      |
+| Per-sleep cap             | 30 s                   |
+
+The hard ceiling and per-sleep cap exist because `1u32 << attempt`
+overflows at `attempt >= 32` (UB in debug, wraps to `0` in release —
+which would hot-spin). Pass `usize::MAX` and the function still terminates
+in bounded time.
+
+<Aside>
+**This is a service primitive.** It lives in `nest_rs_seaorm::retry` and
+takes an `Arc<DatabaseConnection>` because the closure re-opens the
+transaction from scratch. A handler can't use it against the ambient
+`Executor::Txn` — that handle is already aborted past the first attempt's
+failure.
+</Aside>
+
+## What `is_retryable_conflict` catches
+
+| SQLSTATE | Backend(s)             | What it means                  |
+|----------|------------------------|--------------------------------|
+| `40001`  | Postgres, MySQL        | Serialization failure          |
+| `40P01`  | Postgres               | Deadlock detected              |
+| `1213`   | MySQL                  | Deadlock found                 |
+| `1205`   | SQL Server             | Transaction was deadlock victim |
+
+Anything else — `23505` (unique violation), `RecordNotFound`, a generic
+`Internal` error whose message *contains* "40001" — returns immediately.
+A unique-violation retry would loop forever; a substring match on the
+message would falsely retry a connection log mentioning port `40001`. The
+classifier reads the typed code only, never the display string.
+
+## When retries don't help
+
+Be honest about the failure modes a retry cannot fix:
+
+- **A unique constraint violation.** Retrying inserts the same row again,
+  same failure. The classifier rejects these.
+- **A row that doesn't exist.** `RecordNotFound` is terminal — no amount
+  of retries materialize the row.
+- **Application-side validation.** `ServiceError::Validation` is not a
+  conflict; the closure re-runs from scratch but the input is the same.
+- **A handler-time conflict on the auto-commit transaction.** The
+  interceptor cannot retry the body; the conflict surfaces as a
+  `DbErr` from the service, which gets mapped to the appropriate HTTP
+  status. Use `retry_on_conflict` at the service level instead.
+
+The split is deliberate. The interceptor handles the easy case
+transparently (open / commit / rollback); the service handles the hard case
+explicitly (replay the work against a fresh snapshot). One way to do each.
+
+## Going further
+
+- [Database](/database/) — the slice that imports `DatabaseModule`.
+- [Repo and executor](/database/repo-and-executor/) — what the interceptor
+  installs, the escape-on-spawn fail-closed.
+- [Pagination](/database/pagination/) — the other knob the entity carries.
+- [Configuration](/configuration/) — the full `NESTRS_DATABASE__*` scheme.

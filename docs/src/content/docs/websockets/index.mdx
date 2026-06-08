@@ -1,182 +1,115 @@
 ---
 title: WebSockets
-description: A gateway self-mounted on the HTTP transport, JSON-envelope message handlers, connection lifecycle.
+description: Gateways that self-mount on the HTTP transport, with a JSON envelope and per-event handlers.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 A WebSocket upgrade is an HTTP `GET`, so a gateway **self-mounts** on the
 existing `HttpTransport` — same port, same CORS, same TLS, no second
-server. The wire format is one JSON envelope `{ "event": "...", "data":
-... }`; each `#[subscribe_message("event")]` method handles one event.
+server. Every frame rides one JSON envelope, `{ "event": "...", "data":
+... }`, and each `#[subscribe_message("event")]` method handles one
+event. List the gateway in `#[module(providers = [...])]` and you have
+real-time wired in.
 
-This page covers the WebSocket layer alone. Authentication and per-message
-authorization live in [Security](/security/).
+`nest-rs-ws` is a thin layer over [`poem`'s WebSocket
+support](https://docs.rs/poem/latest/poem/web/websocket/) — the same
+transport `nest-rs-http` already uses. It hides the read/write split,
+the outbox writer task, the connection registry, and the dispatch
+plumbing behind one decorator.
 
-## A complete gateway
+## A one-event gateway
 
-A complete gateway, served on `http://localhost:3000` — the full version lives
-in `apps/chat`:
+The smallest possible gateway: one event, one reply.
 
-```rust title="apps/chat/src/chat/gateway.rs"
-use std::sync::Arc;
-
-use nest_rs_ws::{gateway, messages, WsClient};
-
-use crate::chat::dto::{ChatMessage, SendMessage};
-use crate::chat::service::RoomService;
+```rust title="apps/hello-ws/src/gateway.rs"
+use nest_rs_ws::{gateway, messages};
 
 #[gateway(path = "/ws")]
-pub struct ChatGateway {
-    #[inject]
-    room: Arc<RoomService>,
-}
+#[derive(Default)]
+pub struct HelloGateway;
 
 #[messages]
-impl ChatGateway {
-    #[on_connect]
-    async fn joined(&self, client: &WsClient) {
-        client.join("lobby");
-        self.room.connected();
-    }
-
-    #[on_disconnect]
-    async fn left(&self) {
-        self.room.disconnected();
-    }
-
-    #[subscribe_message("message")]
-    async fn on_message(&self, message: SendMessage) {
-        self.room.record(message);
-    }
-
-    #[subscribe_message("history")]
-    async fn history(&self) -> Vec<ChatMessage> {
-        self.room.history()
-    }
-
-    #[subscribe_message("presence")]
-    async fn presence(&self) -> usize {
-        self.room.present()
-    }
-
-    #[subscribe_message("typing")]
-    async fn typing(&self, message: SendMessage, client: &WsClient) {
-        let _ = client.broadcast("typing", &message);
+impl HelloGateway {
+    #[subscribe_message("ping")]
+    async fn ping(&self) -> &'static str {
+        "pong"
     }
 }
 ```
 
-- **`#[gateway(path = "/ws")]`** mounts the gateway on the HTTP
-  transport. Everything else on the same transport keeps working — there
-  is no second server.
-- **`#[messages]`** orchestrates the connection lifecycle hooks
-  (`#[on_connect]`, `#[on_disconnect]`) and the message handlers
-  (`#[subscribe_message]`) on one impl block.
-- **`#[on_connect] async fn joined(&self, client: &WsClient)`** — the
-  client joins the `"lobby"` room; the service updates a presence
-  counter.
-- **`#[subscribe_message("message")]`** binds to events with that name
-  in the envelope. The argument `message: SendMessage` is the parsed
-  `data` payload — typed by serde, validated by `#[derive(Validate)]` if
-  you add it.
-- **A handler that returns a value sends a reply** with the same event
-  name. `history` returns `Vec<ChatMessage>`; the client receives
-  `{ "event": "history", "data": [...] }`.
-- **`client.broadcast("typing", &message)`** pushes a server→client
-  event to every other socket in the room.
+`#[gateway(path = "/ws")]` mounts on the HTTP transport at `/ws`.
+`#[messages]` turns the impl block into a dispatcher: the read loop
+parses each frame's envelope, matches the event, deserializes `data`,
+calls the handler, and serializes the return into a reply frame on the
+same event name.
+
+Wire it in like any other provider:
+
+```rust title="apps/hello-ws/src/module.rs"
+use nest_rs_core::module;
+use nest_rs_http::HttpModule;
+use nest_rs_ws::WsModule;
+
+use crate::gateway::HelloGateway;
+
+#[module(
+    imports = [HttpModule::for_root(None), WsModule],
+    providers = [HelloGateway],
+)]
+pub struct AppModule;
+```
+
+`HttpModule` for the transport, `WsModule` for the connection registry
+(`WsServer`). The gateway itself is listed in `providers` — no
+`.transport(...)` call, no second port.
 
 ## Run it
 
 ```bash
-just dev chat
+just dev hello-ws
 ```
 
 ```text frame="terminal"
-2026-06-03T10:23:14Z  INFO nest_rs::http: bound 1 gateway on 0.0.0.0:3000
-  GET /ws → ChatGateway (4 messages, 2 lifecycle hooks)
+2026-06-08T10:23:14Z  INFO nest_rs::http: bound 1 gateway on 0.0.0.0:3000
+  GET /ws -> HelloGateway (1 message, 0 lifecycle hooks)
 ```
 
-Drive it from any WebSocket client. Below with [`websocat`](https://github.com/vi/websocat):
+Drive it from any WebSocket client. With
+[`websocat`](https://github.com/vi/websocat):
 
 ```bash frame="terminal"
 $ websocat ws://localhost:3000/ws
-{"event":"history","data":null}
-{"event":"history","data":[]}
-
-{"event":"message","data":{"author":"ada","text":"hi"}}
-
-{"event":"presence","data":null}
-{"event":"presence","data":1}
-
-{"event":"history","data":null}
-{"event":"history","data":[{"author":"ada","text":"hi","at":"..."}]}
+{"event":"ping","data":null}
+{"event":"ping","data":"pong"}
 ```
 
-Each message you send is a JSON envelope; the server's reply arrives in
-the same shape. Lines beginning with `{"event":...,"data":...}` after a
-blank line are server-side pushes (e.g. someone else's `typing` event).
+The envelope you send is `{event, data}`; the server's reply rides the
+same shape on the same event name. From here, every other concern is a
+matter of adding one decorator.
 
-## Joining rooms and broadcasting
+## Where to go next
 
-```rust
-#[subscribe_message("join")]
-async fn join_room(&self, room: String, client: &WsClient) {
-    client.join(&room);
-}
-
-#[subscribe_message("leave")]
-async fn leave_room(&self, room: String, client: &WsClient) {
-    client.leave(&room);
-}
-
-#[subscribe_message("say")]
-async fn say(&self, message: SendMessage, client: &WsClient) {
-    client.broadcast("said", &message); // every other client in every room this client is in
-    client.broadcast_to("lobby", "said", &message); // only "lobby"
-}
-```
-
-`WsClient::join` / `leave` manage room membership. `broadcast` /
-`broadcast_to` push events server-side.
-
-## Server-side push from a service
-
-A service can broadcast without a request triggering it — useful for
-queue processors pushing progress, scheduled jobs sending notifications,
-or any event bus subscriber wanting to reach connected clients:
-
-```rust
-use nest_rs_ws::WsServer;
-
-#[injectable]
-pub struct NotifyService {
-    #[inject]
-    ws: Arc<WsServer>,
-}
-
-impl NotifyService {
-    pub fn announce(&self, text: String) {
-        self.ws.broadcast_to("lobby", "announce", &text);
-    }
-}
-```
-
-`WsServer` is the connection registry — inject it anywhere, push events
-without holding a client handle.
-
-## Going further
-
-- [Security](/security/) — authenticate at the upgrade (`AuthGuard` on
-  the gateway impl), gate per-message (`#[use_guards]` on a
-  `#[subscribe_message]`).
-- Per-gateway namespacing — `WsServer<N>` is generic over a namespace
-  marker, so multiple gateways under different paths get distinct
-  connection pools.
+- [Messages](/websockets/messages/) — the envelope shape, the
+  `Result`/`Err` return contract, payload validation, error frames.
+- [Rooms](/websockets/rooms/) — `WsClient::join` / `leave` /
+  `broadcast` / `to`, the per-connection handle.
+- [Server-side push](/websockets/server-push/) — `WsServer<N>` from
+  outside a handler (queue processors, scheduled jobs, HTTP routes).
+- [Namespaces](/websockets/namespaces/) — multiple gateways with
+  isolated registries via `WsServer<N>` markers.
+- [Guards](/websockets/guards/) — authenticate at the upgrade, gate
+  per-message envelopes, the connection-vs-message scope split.
+- [Security](/security/) — wiring `AuthGuard` and `AuthzGuard` for WS
+  the same way as HTTP and GraphQL.
 
 ### Reference
 
-- `apps/chat/` — the full real-time example.
-- `crates/nest-rs-ws/` — `#[gateway]`, `#[messages]`,
+- [`nest-rs-ws`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-ws) —
+  the macro and runtime: `#[gateway]`, `#[messages]`,
   `#[subscribe_message]`, `#[on_connect]`, `#[on_disconnect]`,
-  `WsClient`, `WsServer`.
+  `WsClient`, `WsServer`, `WsModule`.
+- [`apps/chat`](https://github.com/NestRS/NestRS/tree/main/apps/chat) —
+  end-to-end real-time example used throughout these pages.

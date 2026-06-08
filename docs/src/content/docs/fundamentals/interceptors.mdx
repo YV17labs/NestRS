@@ -105,39 +105,13 @@ second's.
 
 Like every other [`Layer`](/fundamentals/), an `Interceptor` declared
 globally and redeclared on the controller or method runs **exactly
-once** per request. The transport-level `HttpInterceptorMeta` wrap from
-`use_interceptors_global` carries the single execution; the
-controller- and method-scope wraps are skipped at mount time when their
-TypeId is already seeded as Global and log a `warn` for visibility.
+once** per request — the transport-level `HttpInterceptorMeta` wrap
+carries the single execution, the inner wraps are skipped at mount
+time. The full rationale and the cross-transport wiring details live
+on the guards page; the same rules apply here.
 
-```rust
-// In main.rs
-App::builder()
-    .use_interceptors_global([interceptor::<ServerTiming>()])
-    .module::<AppModule>()
-
-// In crates/features/src/users/http/controller.rs
-#[controller(path = "/users")]
-#[use_interceptors(ServerTiming)]   // <- redeclared, skipped, runs once
-pub struct UsersController { /* … */ }
-```
-
-The same defense-in-depth rationale as
-[guards](/fundamentals/guards/#why-redeclare-on-the-controller-then)
-applies: a portable `crates/features` controller that depends on an
-interceptor (a database transaction, an authorization shaper) should
-say so in its own source, not rely on a `main.rs` line an app may
-forget to write. Redeclaring binds the dependency to the code that
-needs it; the dedup keeps the cost at zero.
-
-<Aside type="caution">
-Per-resolver and per-message dispatch for `wrap_graphql` / `wrap_ws` is
-not wired into the GraphQL / WS chains today — those methods exist on
-the trait so an `Interceptor` impl can target all three transports
-without splitting types, but only the HTTP scope dedup currently runs
-them through the Layer System. GraphQL and WS overrides fire from the
-global declaration only.
-</Aside>
+See [Guards / Declare on the provider](/fundamentals/guards/#declare-on-the-provider)
+for the worked example and the defense-in-depth argument.
 
 ## Auto-discovered global interceptors
 

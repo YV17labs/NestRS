@@ -1,0 +1,90 @@
+---
+title: Subscriptions
+description: Not yet supported — the schema mounts EmptySubscription. Here's why, and where realtime lives today.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+GraphQL subscriptions are **not yet supported** in `nest-rs-graphql`.
+The composed schema mounts `async_graphql::EmptySubscription` as the
+subscription root — `build_schema` is hardcoded to that shape and there
+is no `#[subscription]` decorator. A resolver method tagged with one
+would not compile.
+
+This page is short on purpose: it documents the current state honestly
+and points to the realtime path that does work today.
+
+## What's mounted today
+
+```rust title="crates/nest-rs-graphql/src/resolver.rs"
+pub(crate) fn build_schema(
+    container: Container,
+) -> Schema<DiscoveredQuery, DiscoveredMutation, EmptySubscription> {
+    // …
+    Schema::build(
+        DiscoveredQuery::from_registry(&container),
+        DiscoveredMutation::from_registry(&container),
+        EmptySubscription,
+    )
+    // …
+}
+```
+
+Two consequences:
+
+- A client opening a WebSocket against `/graphql` with the
+  `graphql-ws` or `graphql-transport-ws` subprotocol gets nothing
+  back — async-graphql's subscription endpoint is not mounted on the
+  poem route.
+- The SDL has no `type Subscription` block. Tooling that requires
+  one will need to wait until the root is real.
+
+## Use WebSockets for realtime
+
+Today's realtime path goes through `nest-rs-ws`. A `#[gateway]` opens
+a typed channel, `#[on_connect]` / `#[on_disconnect]` handle the
+lifecycle, and `#[subscribe_message]` routes each inbound envelope —
+the same guards, the same `Ability`, the same per-message scope as a
+mutating route.
+
+See the [WebSockets section](/websockets/) for the full story. The
+gateway shape is decoupled from GraphQL by design: a realtime channel
+needs its own contract, not a thin layer on top of an `async fn`
+returning a `Stream`.
+
+## The path to first-class subscriptions
+
+When subscriptions land in `nest-rs-graphql`, the shape will look like
+the rest of the resolver surface:
+
+- A `#[subscription]` orchestrator method on a `#[resolver]` impl
+  block, returning `impl Stream<Item = T>` or
+  `impl Stream<Item = Result<T>>`.
+- The schema builder routed to async-graphql's
+  `GraphQLSubscription` endpoint over the same `/graphql` mount.
+- Guards (`GraphqlResolverGuard` + the operation bridge) running once
+  on connection, plus per-message scope if a subscription multiplexes.
+- A documented transport bridge (probably `graphql-ws` over poem) so
+  the playground works end-to-end.
+
+The framework decisions still apply: the schema composes from a
+registry (no `Subscription` tuple to maintain); the `Ability` is
+seeded into the long-lived context once at connection; the executor
+is the pool (subscriptions don't sit in a transaction). None of that
+is implemented yet.
+
+<Aside type="note">
+If you have a use case that would justify the work — a real
+deployment that needs server-pushed GraphQL specifically, where the
+WS gateway shape would not fit — open an issue with the shape of the
+data and the volume. The decision to add a feature follows a pattern,
+not a roadmap slot.
+</Aside>
+
+## Where to go next
+
+- [WebSockets](/websockets/) — the realtime channel that works today.
+- [Field resolvers](/graphql/field-resolvers/) — the closest
+  one-shot equivalent: a single response computed from many sources.

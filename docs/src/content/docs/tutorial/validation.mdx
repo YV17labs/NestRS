@@ -1,0 +1,161 @@
+---
+title: Validate inputs
+description: Swap Json<Input> for Valid<Json<Input>> — a malformed body becomes a structured 400 before the handler runs.
+sidebar:
+  order: 5
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+You change one type on the handler — `Json<Input>` becomes
+`Valid<Json<Input>>` — and every request body is now validated against
+the `validator` rules you already wrote on the entity. By the end of
+this page, `curl` returns a structured `400` for a malformed body and
+the handler never sees the bad input.
+
+## The one-line change
+
+The `POST /users` handler you wrote on the previous page reads the body
+as `Json<CreateUserInput>`. Wrap it in `Valid<...>` from
+`nest-rs-http`.
+
+The crate driving this page is
+[**`nest-rs-pipes`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-pipes) —
+it provides the transport-agnostic `Pipe` trait and the bundled
+`ValidationPipe<T>`. The HTTP binding lives in `nest-rs-http` as the
+`Valid<E>` extractor.
+
+```rust title="crates/features/src/users/http/controller.rs" {1,11}
+use nest_rs_http::{controller, crud, Valid};
+use poem::Result;
+use poem::web::Json;
+// ...
+
+#[crud(/* ... */)]
+impl UsersController {
+    #[post("/")]
+    async fn create(
+        &self,
+        body: Valid<Json<CreateUserInput>>,
+    ) -> Result<Json<User>> {
+        let bootstrap_org = uuid::Uuid::nil();
+        Ok(Json(self.svc.create_in_org(body.into_inner(), bootstrap_org).await?))
+    }
+}
+```
+
+`Valid<Json<CreateUserInput>>` is the ergonomic form of
+`Piped<ValidationPipe<CreateUserInput>, Json<CreateUserInput>>`: poem
+extracts the JSON body first; the pipe then runs `Validate::validate`
+on it. A failed validation short-circuits with a structured `400`
+before the handler runs — the body of `create` only sees inputs that
+passed.
+
+## Where the rules live
+
+You already wrote the rules — on the entity, page 2:
+
+```rust title="crates/features/src/users/entity.rs"
+#[expose(input(create, update), validate(length(min = 1)))]
+pub name: String,
+
+#[sea_orm(unique)]
+#[expose(input(create, update), validate(email))]
+pub email: String,
+```
+
+`#[expose]` carries the `validate(...)` attribute through to
+`CreateUserInput` and `UpdateUserInput`. No second declaration on the
+DTO; the entity is the single source.
+
+## The bad-body response
+
+A malformed body comes back as a JSON `400` with the structured field
+errors `validator` produces:
+
+```bash frame="terminal"
+$ curl -i -X POST http://localhost:3000/users \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"","email":"not-an-email"}'
+HTTP/1.1 400 Bad Request
+content-type: application/json
+
+{
+  "statusCode": 400,
+  "error": "Bad Request",
+  "message": "validation failed",
+  "details": {
+    "name":  [{ "code": "length", "params": { "min": 1, "value": "" } }],
+    "email": [{ "code": "email",  "params": { "value": "not-an-email" } }]
+  }
+}
+```
+
+Both rules failed in the same request, both surface in `details`. The
+client can render per-field messages from `details.<field>[].code`
+without parsing the human message.
+
+<Aside type="tip">
+The shape is stable: `statusCode`, `error`, `message`, `details`. A
+test against the `details.<field>[0].code` value catches a regression
+to a different validator without locking the message string.
+</Aside>
+
+## The good-body path is unchanged
+
+A well-formed body still reaches the handler exactly as before — the
+pipe is a no-op on successful validation.
+
+```bash frame="terminal"
+$ curl -X POST http://localhost:3000/users \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"Ada","email":"ada@acme.test"}'
+HTTP/1.1 500 Internal Server Error
+```
+
+Still `500` — the DB isn't wired yet — but the body cleared validation
+and the handler ran. Pages 5 and 6 close that gap.
+
+## Two failure modes worth the distinction
+
+| Failure | Status | Trigger |
+|---------|--------|---------|
+| The body isn't valid JSON | `400` | poem rejects before any pipe runs |
+| The body parses but a field is wrong | `400` with `details` | `ValidationPipe` rejects after extraction |
+
+Both are `400`; the second carries the structured details a client
+form binds to. The handler never sees either.
+
+## A custom rule with `#[validate(custom)]`
+
+When `validator`'s built-in rules aren't enough, point at a function:
+
+```rust
+#[derive(Deserialize, Validate)]
+pub struct CreateUserInput {
+    pub name: String,
+    #[validate(email, custom(function = "not_a_banned_domain"))]
+    pub email: String,
+}
+
+fn not_a_banned_domain(email: &str) -> Result<(), validator::ValidationError> {
+    if email.ends_with("@banned.example") {
+        return Err(validator::ValidationError::new("banned_domain"));
+    }
+    Ok(())
+}
+```
+
+The error `code` (`"banned_domain"`) surfaces in `details.email[].code`
+— same shape, same client contract.
+
+## What you have now
+
+- A `POST /users` handler that rejects malformed bodies before they
+  reach the service.
+- A structured `400` body with one entry per failing field, codes
+  stable enough to assert on.
+- A controller signature where the type is the contract: a handler
+  that takes `Valid<Json<E>>` *cannot* be called with an invalid `E`.
+
+[Next: authenticate and authorize the routes →](/tutorial/security/)

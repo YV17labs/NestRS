@@ -1,0 +1,154 @@
+---
+title: Errors
+description: Map handler errors to HTTP responses — ResponseError on a feature error enum, ProblemDetails for one-off RFC 9457 bodies.
+sidebar:
+  order: 5
+---
+
+A handler returning `Err(MyError)` should produce a typed JSON body and
+the right status — never a stack trace, never a generic `500`. The HTTP
+surface gives two paths to get there. A feature with its own error enum
+implements [poem](https://docs.rs/poem)'s `ResponseError` once, and `?`
+carries the rest. A glue route without an enum picks up `ProblemDetails`
+— a small builder that emits an RFC 9457 `application/problem+json`
+body.
+
+For a wider tour of the three error-handling seams (typed catches,
+unconditional mapping, the `ResponseError` default), see
+[Error handling](/fundamentals/exception-filters/).
+
+## Map a feature error with `ResponseError`
+
+The pattern is `thiserror::Error` for the error type,
+[poem](https://docs.rs/poem)'s `ResponseError` for the status:
+
+```rust
+use poem::http::StatusCode;
+use poem::error::ResponseError;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum GreetError {
+    #[error("name must not be empty")]
+    EmptyName,
+    #[error("name reserved")]
+    Reserved,
+}
+
+impl ResponseError for GreetError {
+    fn status(&self) -> StatusCode {
+        match self {
+            GreetError::EmptyName => StatusCode::BAD_REQUEST,
+            GreetError::Reserved => StatusCode::CONFLICT,
+        }
+    }
+}
+
+#[post("/")]
+async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>, GreetError> {
+    if input.name.trim().is_empty() {
+        return Err(GreetError::EmptyName);
+    }
+    Ok(Json(GreetReply { greeting: format!("HELLO, {}", input.name.to_uppercase()) }))
+}
+```
+
+The `?` operator carries the error through any layer of `From`
+conversions; the outermost `ResponseError` impl decides the status and
+the body. Override `fn as_response(&self) -> Response` on the impl when
+the body needs a custom shape (e.g. an error envelope with a `code`
+field).
+
+A feature owns one error type — usually the one it already returns from
+its service. The framework's plumbing errors (`nest_rs_seaorm::ServiceError`,
+`nest_rs_authn::AuthError` …) ship their own `ResponseError` impls, so
+service-layer `?` works without a feature-level conversion.
+
+## Structured bodies with `ProblemDetails`
+
+A glue route that doesn't own a feature error enum can still emit a
+structured error body conforming to
+[RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html):
+
+```rust
+use nest_rs_http::ProblemDetails;
+use poem::Result;
+use poem::web::Json;
+
+#[get("/orders/:id")]
+async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Order>, ProblemDetails> {
+    let order = self.svc.find(id).await
+        .map_err(|e| ProblemDetails::internal().with_detail(e.to_string()))?
+        .ok_or_else(|| {
+            ProblemDetails::not_found()
+                .with_detail(format!("order {id} does not exist"))
+                .with_instance(format!("/orders/{id}"))
+        })?;
+    Ok(Json(order))
+}
+```
+
+Constructors cover the well-known statuses — `bad_request`, `unauthorized`,
+`forbidden`, `not_found`, `conflict`, `unprocessable`, `internal` — each
+preset with a stable `type` URI pointing at the matching RFC 9110
+section. Builders extend the body:
+
+| Builder | Field |
+|---------|-------|
+| `.with_detail("…")` | Free-form human-readable description |
+| `.with_instance("/orders/17")` | URI of the specific occurrence |
+| `.with_type("urn:problem:order-invalid")` | Override the type URI |
+| `.with_title("Order invalid")` | Override the title |
+| `ProblemDetails::from_error(status, title, err)` | Build from any `Display`-impl |
+
+The response carries `Content-Type: application/problem+json`
+automatically; an absent `detail` or `instance` is omitted from the body
+(per RFC 9457). Body shape, when all fields are set:
+
+```json
+{
+  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.404",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "order 9c3d… does not exist",
+  "instance": "/orders/9c3d…"
+}
+```
+
+## When to pick which
+
+| Situation | Use |
+|-----------|-----|
+| The error is a variant of a feature's own enum, used by ≥ 2 routes | `ResponseError` on the enum |
+| A one-off route raises a problem the enum doesn't model (e.g. a glue route checking a precondition) | `ProblemDetails` inline |
+| The service returns a framework error (`ServiceError`, `AuthError`, …) | Nothing — the framework's `ResponseError` impl already maps it |
+| The body shape must match an external spec (CloudEvents, your own envelope) | Override `as_response` on the feature error's `ResponseError` impl |
+
+A feature's own error type is the canonical home. `ProblemDetails` is
+the right tool for the leftovers — never the goal.
+
+## Framework errors carry their own mapping
+
+Three of the framework's error types ship a `ResponseError` impl out of
+the box. They surface on `?` through any handler that calls a service
+without writing a single line of mapping code:
+
+| Error | Source | Common statuses |
+|-------|--------|-----------------|
+| `nest_rs_seaorm::ServiceError` | Repo, CrudService, dataloader | `404` not found, `409` conflict, `500` else |
+| `nest_rs_authn::AuthError` | Strategy authentication | `401` unauthorized |
+| `nest_rs_authz::AbilityError` | Ability denial | `403` forbidden |
+
+A feature only writes its own error enum for genuinely domain-specific
+wire contracts (a custom error code clients key on) or for security-opaque
+variants — anything the framework already speaks should keep using the
+framework's mapping.
+
+## Going further
+
+- [Error handling](/fundamentals/exception-filters/) — the wider story:
+  `ExceptionFilter` for typed catches, `Filter` for unconditional
+  mapping, `ResponseError` as the default.
+- [Responses](/http/responses/) — the success side, and the known
+  limitation when `#[http_code]` sits on a handler that may `Err`.
+- [Controllers & routes](/http/controllers/) — the route table.

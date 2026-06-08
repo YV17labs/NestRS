@@ -1,0 +1,205 @@
+---
+title: Errors
+description: async-graphql Result, extensions, codes — and how a ServiceError lands on the wire as a typed GraphQL error.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A resolver returns `T` or `async_graphql::Result<T>`; an `Err`
+short-circuits with a GraphQL error envelope alongside `data`. The
+message goes on `errors[].message`; structured data goes on
+`errors[].extensions`. The framework owns the mapping for its shared
+error types — `ServiceError` from `nest-rs-seaorm`, `CredentialError`
+and `TokenError` from `nest-rs-authn` — so a feature returns its
+service result and the wire shape just works.
+
+## The smallest error
+
+```rust
+use async_graphql::{Error, Result};
+use nest_rs_graphql::{query, resolver};
+
+#[resolver]
+pub struct ItemsResolver;
+
+#[resolver]
+impl ItemsResolver {
+    #[query]
+    async fn item(&self, id: String) -> Result<String> {
+        if id.is_empty() {
+            return Err(Error::new("id must not be empty"));
+        }
+        Ok(format!("item {id}"))
+    }
+}
+```
+
+On the wire:
+
+```json
+{
+    "data": null,
+    "errors": [
+        {
+            "message": "id must not be empty",
+            "path": ["item"],
+            "locations": [{ "line": 1, "column": 3 }]
+        }
+    ]
+}
+```
+
+## Extensions and codes
+
+`extensions` carry structured data — a stable code clients can branch
+on without parsing the message:
+
+```rust
+use async_graphql::{Error, Result};
+
+#[query]
+async fn item(&self, id: String) -> Result<String> {
+    if id.is_empty() {
+        return Err(Error::new("id must not be empty").extend_with(|_, e| {
+            e.set("code", "INVALID_ARGUMENT");
+        }));
+    }
+    Ok(format!("item {id}"))
+}
+```
+
+```json
+{
+    "errors": [
+        {
+            "message": "id must not be empty",
+            "extensions": { "code": "INVALID_ARGUMENT" },
+            "path": ["item"]
+        }
+    ]
+}
+```
+
+Codes are free-form strings — pick a vocabulary and stick to it. A
+typical set: `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`,
+`INVALID_ARGUMENT`, `INTERNAL`. The Apollo spec calls out these names
+and clients converge on them.
+
+## Mapping `ServiceError`
+
+A `CrudService` method returns `Result<T, ServiceError>` — the shared
+framework error covering the two failure modes every service has:
+
+```rust title="crates/nest-rs-seaorm/src/error.rs"
+pub enum ServiceError {
+    Validation(ValidationErrors),
+    Db(DbErr),
+}
+```
+
+A resolver propagates that into a GraphQL `Result<T>` with `?`:
+
+```rust
+use async_graphql::Result;
+use nest_rs_graphql::{query, resolver};
+
+#[resolver]
+impl ItemsResolver {
+    #[query]
+    async fn item(&self, id: String) -> Result<Item> {
+        Ok(self.svc.find_by_id(&id).await?)
+    }
+}
+```
+
+`ServiceError` already implements `Into<async_graphql::Error>`
+through async-graphql's `From<E: Display>` blanket — the `Display`
+side stays wire-safe (`"database error"` for the `Db` variant) so a
+SQL fragment never leaks. The `Validation` variant forwards through
+`validator`'s structured error.
+
+For a richer envelope, wrap the conversion to attach a code:
+
+```rust
+use async_graphql::{Error, ErrorExtensions, Result};
+use nest_rs_seaorm::ServiceError;
+
+fn graphql_from_service(err: ServiceError) -> Error {
+    let code = match &err {
+        ServiceError::Validation(_) => "INVALID_ARGUMENT",
+        ServiceError::Db(_) => "INTERNAL",
+    };
+    Error::new(err.to_string()).extend_with(|_, e| e.set("code", code))
+}
+
+#[query]
+async fn item(&self, id: String) -> Result<Item> {
+    self.svc.find_by_id(&id).await.map_err(graphql_from_service)
+}
+```
+
+Same shape for `CredentialError` (always `UNAUTHENTICATED`) and
+`TokenError` (`UNAUTHENTICATED` with the RFC 6749 error code in a
+nested field if you need it).
+
+## Authorization denials
+
+The `GraphqlAbilityBridge` from `nest-rs-authz`'s `graphql` feature
+turns an `Ability` refusal into a `FORBIDDEN`-coded error before the
+resolver runs. A `GraphqlAuthGuard` does the same for missing or
+invalid principals (`UNAUTHENTICATED`).
+
+The handler doesn't write the mapping; it just calls
+`authorize::<Action, Entity>(ctx)?`. See [Security](/security/) for
+the full chain.
+
+## `Option<T>` vs error
+
+`Option<T>` is the right return when an absent value is a *normal*
+outcome (looked something up, found nothing). Reserve errors for
+*abnormal* outcomes (validation failed, DB unreachable, principal
+refused). On the wire:
+
+- `Option<T>` returning `None` → `"data": { "item": null }`,
+  no `errors` block.
+- `Result<T>` returning `Err` → `"errors": [...]`, the field's
+  value is `null`.
+
+The bind helper follows this rule: `bind::<UsersService, Read>(ctx,
+&id).await?` returns `Result<Option<User>>` — `None` means absent
+(404 equivalent), `Err` means denied or broken.
+
+```rust
+#[query]
+async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
+    Ok(bind::<UsersService, Read>(ctx, &id)
+        .await?
+        .as_ref()
+        .map(User::from))
+}
+```
+
+## Multiple errors in one response
+
+GraphQL allows several errors per response. A query selecting two
+fields, each failing, gets two `errors[]` entries — async-graphql
+collects them automatically across resolver calls. There is no
+"first error wins" semantic; clients see the full set with `path`
+pointing at each failed field.
+
+This matters most for partial-success shapes (one ok, one denied)
+where the client wants the available data plus a clear refusal on the
+rest. The framework does not need any code for this — return the
+`Result` from each `#[field_resolver]` and async-graphql does the
+gathering.
+
+## Where to go next
+
+- [Queries and mutations](/graphql/queries-mutations/) — the
+  `Result<T>` return shape at the top level.
+- [Security](/security/) — the guard chain that decides
+  `UNAUTHENTICATED` / `FORBIDDEN` before a resolver runs.
+- [Database / CRUD](/database/crud/) — the service contract that
+  emits `ServiceError`.

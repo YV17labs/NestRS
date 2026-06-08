@@ -1,0 +1,206 @@
+---
+title: OAuth2
+description: Authorization-code flow with PKCE — OAuth2Client builds the redirect, validates the callback, and the JWT carries the CSRF state stateless.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`OAuth2Client` runs the authorization-code flow against any provider
+that speaks RFC 6749. The flow uses PKCE end-to-end and keeps the
+CSRF state in a signed cookie — no server-side session, no Redis
+lookup, no in-memory map. The redirect leg returns a URL the browser
+follows; the callback leg validates the `state`, exchanges the code
+for an access token, and hands you the provider's user info.
+
+The implementation wraps the [`oauth2`](https://docs.rs/oauth2) crate,
+configured against the provider via `OAuth2Config`. Profile mapping
+stays in your app's [`Strategy`](/security/authentication/) so the
+client itself never sees your principal type.
+
+## Wiring it up
+
+`OAuth2Module::for_root(None)` registers an `OAuth2Client` as global
+infrastructure, configured via `NESTRS_AUTHN__*` env vars. Pin the
+config in code by passing an `OAuth2Config`.
+
+```rust title="apps/platform-auth/src/module.rs"
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        AuthnModule::for_root(None),
+        OAuth2Module::for_root(None),
+        OAuthHttpModule,
+    ],
+)]
+pub struct PlatformAuthModule;
+```
+
+A controller then exposes the two HTTP legs. The exemplar in
+`crates/features/src/oauth/` ships the full handler:
+
+```rust
+#[controller(path = "/")]
+pub struct OAuthController {
+    #[inject]
+    issuer: Arc<TokenIssuer>,
+}
+
+#[routes]
+impl OAuthController {
+    #[get("/authorize")]
+    #[public]
+    #[use_guards(OAuthGuard)]
+    async fn authorize(&self) {}
+
+    #[get("/callback")]
+    #[public]
+    #[use_guards(OAuthGuard)]
+    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessToken>> {
+        Ok(Json(self.issuer.issue(
+            Some(caller.user_id),
+            caller.org_id,
+            caller.roles.clone(),
+        )?))
+    }
+}
+```
+
+Both routes are `#[public]` — the provider redirect lands without a
+bearer token, so `AuthGuard` would refuse. The `OAuthGuard` is your
+app's `Strategy<Principal = Caller>` running the flow.
+
+## Configuration
+
+`OAuth2Config` is a `validator`-validated struct: every URL field
+must be non-empty (length ≥ 1) or the boot fails loudly. All fields
+follow the dual-path rule.
+
+| Field | Env var | Validation |
+|-------|---------|------------|
+| `client_id` | `NESTRS_AUTHN__CLIENT_ID` | length ≥ 1 |
+| `client_secret` | `NESTRS_AUTHN__CLIENT_SECRET` | length ≥ 1 |
+| `auth_url` | `NESTRS_AUTHN__AUTH_URL` | length ≥ 1 + parses as URL |
+| `token_url` | `NESTRS_AUTHN__TOKEN_URL` | length ≥ 1 + parses as URL |
+| `redirect_url` | `NESTRS_AUTHN__REDIRECT_URL` | absolute URL |
+| `userinfo_url` | `NESTRS_AUTHN__USERINFO_URL` | length ≥ 1 |
+| `scopes` | `NESTRS_AUTHN__SCOPES` | comma-separated list |
+
+`OAuth2Client::new` runs `validate()` first, then constructs the
+underlying `BasicClient`. The HTTP backend refuses redirects during
+the token exchange — following them is an SSRF risk per the `oauth2`
+crate's own guidance.
+
+## The redirect leg
+
+`authorize` produces the URL the browser follows and the signed
+transaction cookie that ties the round-trip together:
+
+```rust
+let auth = self.client.authorize(&self.jwt)?;
+// auth.url        — the provider redirect URL
+// auth.transaction — short-lived JWT cookie: CSRF state + PKCE verifier
+```
+
+The transaction is a JSON Web Token signed by your app's
+`JwtService`, carrying the random CSRF `state`, the PKCE verifier,
+and `exp`. The browser stores it as a cookie; the callback leg
+verifies the signature before trusting any of it.
+
+The framework generates a fresh PKCE pair per flow
+(`PkceCodeChallenge::new_random_sha256`) and a fresh CSRF token
+(`CsrfToken::new_random`) — never reuse across requests.
+
+## The callback leg
+
+The provider redirects to `redirect_url` with `state` and `code`
+query parameters. `exchange` verifies the cookie's signature,
+compares its CSRF state to the query string, and only then trades
+the code for an access token:
+
+```rust
+let access_token = self.client.exchange(
+    &self.jwt,
+    &transaction_cookie,
+    state_from_query,
+    code_from_query,
+).await?;
+```
+
+The CSRF check runs **before** the exchange — never the other way
+around. A mismatched state returns `AuthError::Failed("OAuth state
+mismatch")` and the flow stops.
+
+## User info → principal
+
+`userinfo<T>` fetches the provider's profile endpoint with the access
+token as a bearer and deserializes the body into your app's
+provider-specific shape:
+
+```rust
+#[derive(Debug, Deserialize)]
+struct GoogleUser {
+    sub: String,
+    email: String,
+    name: String,
+}
+
+let profile: GoogleUser = self.client.userinfo(&access_token).await?;
+```
+
+Mapping the provider profile into your principal (looking the user up
+in your DB, creating one if absent, issuing your app's JWT) is the
+`Strategy`'s job — `OAuth2Client` deliberately never sees your
+principal type.
+
+## `Authorization` — the redirect leg's return value
+
+```rust
+pub struct Authorization {
+    pub url: String,
+    pub transaction: String,
+}
+```
+
+- `url` — set `Location: <url>` and return `302`.
+- `transaction` — set as an `HttpOnly`, `Secure`, `SameSite=Lax`
+  cookie scoped to the callback path.
+
+The transaction inherits the `JwtService`'s expiry, so a flow that
+takes longer than your `expires_in` to complete fails the verify
+step. Keep the JWT TTL aligned with how long a user typically takes
+to consent.
+
+## Token endpoint errors
+
+A token-issuing controller that fronts the OAuth flow (or its
+`client_credentials` grant) emits RFC 6749 wire codes via
+`TokenError`:
+
+| Variant | Wire string | Status |
+|---------|-------------|--------|
+| `UnsupportedGrant` | `unsupported_grant_type` | 400 |
+| `InvalidScope` | `invalid_scope` | 400 |
+| `InvalidCredentials` | `invalid_credentials` | 401 |
+| `Sign(inner)` | `server_error` | 500 |
+
+The `Sign` variant collapses any internal signing failure to the
+opaque RFC code on the wire; the inner `anyhow::Error` stays attached
+for `tracing`. A rename of these strings breaks every conforming
+client — they are wire contracts, not display strings.
+
+<Aside>
+Native and SPA apps that cannot keep a `client_secret` should use the
+`code` flow with PKCE and a `client_id`-only setup — drop
+`client_secret` from `oauth2`'s `set_client_secret`. The current
+`OAuth2Client` always sets a secret; SPAs ship a thin proxy.
+</Aside>
+
+## Going further
+
+- [JWT](/security/authentication/jwt/) — the access token your callback issues.
+- [Authentication](/security/authentication/) — the `Strategy` trait
+  the callback runs.
+- [Threat model](/security/threat-model/) — what PKCE + CSRF cookies
+  catch, and what they don't.

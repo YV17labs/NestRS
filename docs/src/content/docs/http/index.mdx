@@ -24,13 +24,24 @@ queries each have their own category.
 - [Configuration](/http/configuration/) — `HttpConfig`, env vars vs
   pinned struct, TLS, CORS, the framework `Server:` header.
 - [Controllers & routes](/http/controllers/) — `#[controller]`,
-  `#[routes]`, extractors, validation, response types, errors, guards,
-  URI versioning.
+  `#[routes]`, path/query/JSON extractors, typed returns.
+- [Responses](/http/responses/) — `Json<T>`, status + body tuples,
+  `#[http_code]`, `#[response_header]`, `#[redirect]`.
+- [Errors](/http/errors/) — `ResponseError` on a feature error enum,
+  RFC 9457 `ProblemDetails` for one-off problem responses.
+- [Extractors](/http/extractors/) — the full extractor surface:
+  `RawBody`, `ClientIp`, `Scoped<T>`, `Ctx<T>`, `Reflector` +
+  `#[meta(...)]`.
+- [Versioning](/http/versioning/) — `#[controller(version = "1")]` and
+  multi-version controllers.
 
 ## Going further
 
 - [OpenAPI](/openapi/) — a self-composing OpenAPI 3.1 spec + Swagger UI
   from the routes.
+- [Guards](/fundamentals/guards/) — the primitive `#[use_guards(...)]`
+  binds on a controller or route; how the layer chain dedups across
+  transports.
 - [Security](/security/) — bind an `AuthGuard` and an `AbilityGuard` to
   attach the principal and gate actions per row.
 - [GraphQL](/graphql/), [WebSockets](/websockets/), [MCP](/mcp/) — each

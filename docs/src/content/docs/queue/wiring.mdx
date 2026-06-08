@@ -1,0 +1,161 @@
+---
+title: Wiring
+description: QueueModule vs QueueWorkerModule — how producer-only and worker apps share a features crate without spawning workers they don't run.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The same `features::audio` crate compiles into the API binary and the
+worker binary. Only the worker drains the queue. That split is two
+module imports, two `main`s, one shared features crate — the framework
+decides which `#[process]` methods actually run by walking the access
+graph from each app's root.
+
+## Two modules, two roles
+
+| Module | Role | Imported by |
+|---|---|---|
+| `QueueModule::for_root(cfg)` | Seeds the shared `QueueConnection` (the producer side). | Every app that talks to the queue. |
+| `QueueWorkerModule` | Contributes the `QueueWorker` transport — drains `#[process]` methods at boot and spawns one worker each. | Worker apps only. |
+
+`QueueModule::for_root(None)` reads `NESTRS_QUEUE__URL` from the
+environment; `QueueModule::for_root(Some(QueueConfig { url, .. }))`
+pins it in code. Every field of `QueueConfig` is settable both ways —
+the framework-wide dual-path config rule. See
+[fundamentals/modules](/fundamentals/modules/) for the four boot
+phases that resolve the connection before any transport attaches.
+
+<Aside>
+The connection is built in the **collect** phase as an async factory.
+By the time `QueueWorker::configure` runs, `Arc<QueueConnection>` is in
+the container regardless of how modules were ordered in `imports = [...]`.
+A worker app with no `QueueConnection` seeded fails fast at boot with
+a clear error.
+</Aside>
+
+## The worker app
+
+The worker imports both modules plus the feature's port + queue
+adapter. That's it.
+
+```rust title="apps/platform-worker/src/module.rs"
+use nest_rs_config::ConfigModule;
+use nest_rs_core::module;
+use nest_rs_redis::{QueueModule, QueueWorkerModule};
+
+use features::audio::{AudioModule, AudioQueueModule};
+
+#[module(imports = [
+    ConfigModule::for_root(),
+    QueueModule::for_root(None),
+    QueueWorkerModule,
+    AudioModule,
+    AudioQueueModule,
+])]
+pub struct PlatformWorkerModule;
+```
+
+At boot:
+
+1. `ConfigModule` reads env, materializes `QueueConfig` from
+   `NESTRS_QUEUE__URL`.
+2. `QueueModule::for_root(None)` registers a factory that calls
+   `QueueConnection::connect(url)`.
+3. `QueueWorkerModule` contributes the `QueueWorker` transport.
+4. `AudioQueueModule` brings `AudioJobs` (the `#[processor]` host) and
+   its `#[process]` methods into the reachable set.
+5. `QueueWorker::configure` drains `inventory::iter::<ProcessMethod>()`,
+   keeps only the methods whose provider is reachable, and logs each
+   one. `serve` builds one apalis worker per method on a shared
+   `Monitor`.
+
+## The producer-only app
+
+A producer-only binary imports `QueueModule::for_root(...)` and skips
+`QueueWorkerModule` entirely. It gets `Arc<QueueConnection>` to push
+with — and no worker spawn, no drained inventory, no apalis monitor.
+
+```rust title="apps/platform-api/src/module.rs"
+use nest_rs_config::ConfigModule;
+use nest_rs_core::module;
+use nest_rs_database::DatabaseModule;
+use nest_rs_http::HttpModule;
+use nest_rs_redis::QueueModule;
+
+use features::audio::{AudioHttpModule, AudioModule, AudioScheduleModule};
+
+#[module(imports = [
+    ConfigModule::for_root(),
+    HttpModule::for_root(None),
+    DatabaseModule::for_root(None),
+    QueueModule::for_root(None),
+    AudioModule,
+    AudioHttpModule,
+    AudioScheduleModule,
+])]
+pub struct PlatformApiModule;
+```
+
+That `apps/platform-api` is exactly this shape: producer-only. Its HTTP
+controller and scheduled timer both call `AudioService::enqueue_transcode`,
+which uses the seeded `QueueConnection` to push onto Redis. No worker
+runs in this process — that's the worker binary's job.
+
+## Module-gating across the shared crate
+
+The worker depends on the shared `features` crate, so `AudioController`
+and `AudioResolver` are **compiled in**. They are not **active**: the
+worker doesn't import `AudioHttpModule` or `AudioGraphqlModule`, so
+the access graph never marks those providers as reachable. Every
+transport — `HttpTransport`, `QueueWorker`, `GraphqlTransport` — filters
+its inventory through the `ReachableProviders` set the access graph
+computes from the running app's root. Linked but unreachable ⇒ inert,
+with a boot `tracing::warn` if the discovery layer expected them to
+appear.
+
+The same property cuts the other way: the API binary's
+`AudioQueueModule` is **not imported**, so its `#[process]` methods
+sit in the binary as dead code. No worker is spawned for `audio` in
+the API. Even if you accidentally imported `QueueWorkerModule` in the
+API, omitting `AudioQueueModule` would keep `AudioJobs::transcode`
+out of the reachable set — `QueueWorker::serve` would idle until
+shutdown.
+
+This is what makes splitting producer and consumer across deploys
+cheap. The features crate is one library, the binaries are
+compositions of it, and module-gating is the line that decides what
+each binary *actually does* at runtime. See
+[fundamentals/modules](/fundamentals/modules/) for the access graph
+that enforces this — boot fails with `AccessGraphError` if a provider
+injects something its module doesn't own or import transitively.
+
+## What the wire looks like at boot
+
+```text frame="terminal"
+$ just dev platform-worker
+2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
+2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
+2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::preview queue=audio.preview concurrency=10 retries=1
+```
+
+One `attached` line per transport, one `registered` line per
+discovered method that survived the reachability filter. The
+producer-only API's boot log has the same `QueueConnection` factory
+line, but no `attached transport=QueueWorker` and no `registered queue
+processor` lines — the worker side never wakes up.
+
+## Reference
+
+- `crates/nest-rs-redis/src/module.rs` — `QueueModule`,
+  `QueueSetup::collect` (factory + config resolution).
+- `crates/nest-rs-redis/src/worker/module.rs` — `QueueWorkerModule`
+  contributing the `QueueWorker` transport.
+- `crates/nest-rs-redis/src/worker/consumer.rs` —
+  `QueueWorker::configure` filtering `ProcessMethod` by
+  `ReachableProviders`.
+- `apps/platform-api/`, `apps/platform-worker/` — producer-only and
+  worker shapes side by side.
+- [fundamentals/modules](/fundamentals/modules/) — boot phases,
+  imports, dynamic modules, the access graph.

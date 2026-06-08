@@ -1,30 +1,23 @@
 ---
 title: Health
-description: Liveness, readiness, and startup probes — three routes mounted by importing one module, extended by registering indicators on any provider.
+description: Liveness, readiness, and startup probes — three routes mounted by importing one module, extended with indicators on any provider.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Health probes answer the questions Kubernetes (or any orchestrator) asks:
-*should you keep this pod running?* *should you route traffic to it?* *has
-it finished booting?* Importing `HealthModule` mounts three routes on the
-HTTP transport — `GET /health/live`, `GET /health/ready`, `GET
-/health/startup` — each returning `200` and a JSON body when every
-indicator passes, `503` and the same shape with `error` populated when any
-indicator fails.
-
-The framework's value here is the **indicator pattern**: each probe runs a
-list of `#[liveness]` / `#[readiness]` / `#[startup]` methods discovered at
-link time, gated by the access graph. Apps don't replace a service — they
-register indicators on whatever providers already own the right
-dependencies (the SeaORM pool, the Redis connection, an upstream HTTP
-client), and the framework aggregates them.
-
-Routing rides on [`poem`](https://crates.io/crates/poem) (the same HTTP
-engine `HttpModule` mounts). Discovery uses the
-[`inventory`](https://crates.io/crates/inventory) crate, module-gated by
-the access graph so an indicator whose provider is not in your `AppModule`
-is silently skipped.
+Health probes answer the questions an orchestrator asks: *should you
+keep this pod running?* *should you route traffic to it?* *has it
+finished booting?* The probes ship as routes on the
+[HTTP transport](/http/). Importing `HealthModule` mounts three —
+`GET /health/live`, `GET /health/ready`, `GET /health/startup` —
+each returning `200` and a JSON body when every indicator passes,
+`503` with the same shape and `error` populated when any indicator
+fails. Routing rides on [`poem`](https://crates.io/crates/poem) (the
+same engine `HttpModule` mounts), and discovery uses
+[`inventory`](https://crates.io/crates/inventory) gated by the access
+graph.
 
 ## Mount it
 
@@ -47,165 +40,49 @@ $ curl -s http://localhost:8080/health/startup
 {"status":"up","info":{},"error":{},"details":{}}
 ```
 
-With no indicators registered every probe reports `up` with empty buckets —
-useful for the first ten minutes; not for production. The next two
-sections wire real checks.
+With no indicators registered every probe reports `up` with empty
+buckets — useful for the first ten minutes; not for production. See
+[Indicators](/health/indicators/) for the framework-shipped ones and
+how to write your own.
 
 ## The three probes
 
-| Probe       | Question Kubernetes asks         | Default with no indicators |
-|-------------|----------------------------------|-----------------------------|
+| Probe       | Question the orchestrator asks         | Default with no indicators |
+|-------------|----------------------------------------|-----------------------------|
 | `live`      | Is the process still alive — should I restart it? | `up` |
 | `ready`     | Should I send traffic to it right now?            | `up` |
 | `startup`   | Has it finished its long boot?                    | `up` |
 
-The split mirrors the orchestrator's: a long-booting app fails `startup`
-until ready (so Kubernetes does not kill it for slow liveness during boot);
-a temporarily overloaded app fails `ready` (so traffic drains away) without
-flagging `live` (the process is fine — do not restart it).
+The split mirrors the orchestrator's: a long-booting app fails
+`startup` until ready (so Kubernetes does not kill it for slow
+liveness during boot); a temporarily overloaded app fails `ready` (so
+traffic drains) without flagging `live` (the process is fine — do not
+restart it).
 
-## Where an indicator lives
+## The JSON shape
 
-An indicator is a method on an `#[injectable]` provider, tagged with one
-of `#[liveness]`, `#[readiness]`, or `#[startup]` inside an `#[indicators]`
-impl block. The method returns `anyhow::Result<()>` — `Ok(())` is `up`,
-`Err(...)` is `down` and the stringified error lands in the JSON body.
-
-The question is which crate owns the file. Three answers, by reusability:
-
-| Scope                                    | Home                                        | Example                                  |
-|------------------------------------------|---------------------------------------------|------------------------------------------|
-| Framework primitive (any nestrs project) | `crates/nestrs-<concern>/` behind a Cargo feature | `DatabaseHealthModule` (next section) |
-| Product feature (any app of this repo)   | `crates/features/<feature>/health/`         | the example below                        |
-| App-specific glue (this binary only)     | `apps/<x>/<feature>/health/` (exception)    | rare — a deployment-quirk check          |
-
-Same rule as every other adapter: a file lives in `crates/features/` the
-moment another app could reuse it; it lives under `apps/<x>/` only when
-exposing it any higher would be dishonest. See [Monorepo
-layout](/fundamentals/modules/) for the full rule.
-
-A loose `health.rs` at the root of `apps/<x>/src/` is never the answer —
-`apps/<x>/` is composition only (`main.rs` + `module.rs`), so the file
-would belong to no `#[module]`.
-
-## Framework-shipped indicators
-
-A framework concern (a pool ping, a queue connection probe) belongs in the
-crate that owns the dependency, behind a Cargo feature — that way an app
-that does not import `HealthModule` does not pay for the indicator. The
-SeaORM pool ping is the first one to ship.
-
-`nest-rs-seaorm` exposes it as `DatabaseHealthModule`, which registers
-`DbHealthIndicator`. The indicator's `#[readiness]` and `#[startup]`
-methods both call `DatabaseConnection::ping` — exactly what most apps need
-and zero code in your app:
-
-```toml title="apps/platform-api/Cargo.toml"
-nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
-```
-
-```rust title="apps/platform-api/src/module.rs"
-use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
-use nest_rs_health::HealthModule;
-
-#[module(
-    imports = [
-        DatabaseModule::for_root(None),
-        HealthModule,
-        DatabaseHealthModule,
-    ],
-)]
-pub struct PlatformApiModule;
-```
-
-An unreachable pool drops readiness and startup to `503` until the
-connection comes back; liveness stays `up` (Kubernetes should not restart
-the pod just because the database blinked).
-
-The `health` feature is opt-in for a reason: a DB-using app that does not
-mount `HealthModule` should not pay for the inventory submission or the
-indirect `nest-rs-health` dependency.
-
-## Register a product-level indicator
-
-A feature owns its indicator the same way it owns its HTTP controller or
-its GraphQL resolver: as one more adapter sub-folder.
-
-```rust title="crates/features/<feature>/health/indicator.rs"
-use std::sync::Arc;
-
-use nest_rs_core::injectable;
-use nest_rs_health::indicators;
-
-use crate::<feature>::core::UpstreamClient;
-
-#[injectable]
-pub struct UpstreamHealthIndicator {
-    #[inject]
-    upstream: Arc<UpstreamClient>,
-}
-
-#[indicators]
-impl UpstreamHealthIndicator {
-    #[readiness]
-    async fn upstream(&self) -> anyhow::Result<()> {
-        self.upstream.ping().await
-    }
-}
-```
-
-```rust title="crates/features/<feature>/health/module.rs"
-use nest_rs_core::module;
-
-use crate::<feature>::health::indicator::UpstreamHealthIndicator;
-
-#[module(providers = [UpstreamHealthIndicator])]
-pub struct <Feature>HealthModule;
-```
-
-```rust title="apps/<your-app>/src/module.rs"
-use features::<feature>::<Feature>HealthModule;
-use nest_rs_health::HealthModule;
-
-#[module(imports = [HealthModule, <Feature>HealthModule])]
-pub struct AppModule;
-```
-
-- **`#[injectable]`** makes the indicator an ordinary DI provider — same
-  `#[inject]` shape as any other service in the feature.
-- **`#[indicators]`** on the impl block orchestrates the per-method
-  attributes and submits one indicator entry per decorated method.
-- **`#[readiness]`** routes the method to `/health/ready`; the method's
-  name (`upstream`) becomes the indicator's key in the JSON body.
-- Multiple decorated methods on the same impl block share the provider's
-  `#[inject]` dependencies — pool an upstream ping, a cache check, and a
-  configuration-loaded check on one service instead of writing a struct
-  per check.
-
-A worker app or an MCP app that imports only `<Feature>Module`
-without `<Feature>HealthModule` ships the feature's data layer with no
-probe surface — the access graph keeps the indicator out of the running
-binary entirely. Apps opt into health the same way they opt into HTTP or
-GraphQL.
-
-The probe response now carries the indicator:
+Every probe returns the same body. `info` holds the up indicators,
+`error` holds the down ones, `details` carries the union so an
+operator can grep one bucket without iterating a list.
 
 ```bash frame="terminal"
 $ curl -s http://localhost:8080/health/ready | jq
 {
   "status": "up",
   "info": {
+    "db":       { "name": "db",       "status": "up" },
     "upstream": { "name": "upstream", "status": "up" }
   },
   "error": {},
   "details": {
+    "db":       { "name": "db",       "status": "up" },
     "upstream": { "name": "upstream", "status": "up" }
   }
 }
 ```
 
-When the upstream is unreachable the same probe drops to `503` and the
-indicator moves from `info` to `error`:
+When one indicator drops, the response moves to `503` and the
+indicator migrates from `info` to `error` with its stringified cause:
 
 ```bash frame="terminal"
 $ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/health/ready
@@ -213,7 +90,7 @@ $ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/health/ready
 $ curl -s http://localhost:8080/health/ready | jq
 {
   "status": "down",
-  "info": {},
+  "info": { "db": { "name": "db", "status": "up" } },
   "error": {
     "upstream": {
       "name": "upstream",
@@ -221,48 +98,26 @@ $ curl -s http://localhost:8080/health/ready | jq
       "error": "connection refused"
     }
   },
-  "details": { "upstream": { /* same as above */ } }
+  "details": { "db": { /* ... */ }, "upstream": { /* ... */ } }
 }
 ```
 
+The overall `status` is `down` if any indicator is `down`. The HTTP
+status maps from that one bit: `200` for `up`, `503` for `down`.
+
 <Aside>
-The JSON shape mirrors NestJS Terminus: `status` for the overall verdict,
-`info` for the up indicators, `error` for the down ones, `details` for the
-union — easy to grep in logs without iterating a list.
+The shape is Terminus-style on purpose — keys you can grep in JSON
+logs without walking a list, and a vocabulary (`status`, `info`,
+`error`, `details`) operators already know.
 </Aside>
-
-## What gets discovered
-
-`#[indicators]` submits each tagged method to a link-time registry. At
-probe time, `HealthService` drains the registry and filters by
-[`ReachableProviders`](/fundamentals/providers/) — the same gating the
-rest of the framework's discovery uses:
-
-- An indicator whose provider lives in a module **imported** by your
-  `AppModule` (directly or transitively) runs.
-- An indicator linked into the binary but in **no reachable module** is
-  silently skipped — useful when `crates/features` ships indicators a
-  worker app does not want to expose.
-
-Stack traces and ambient context follow the indicator's owning provider,
-so an indicator that injects an HTTP client logs under the provider's name
-and inherits its tracing target.
 
 ## Going further
 
-- [HTTP](/http/) — the transport `HealthModule` mounts on; same routing,
-  same `#[controller]` shape under the hood.
-- [Database](/database/) — `DatabaseHealthModule` is the database
-  integration named above; the page covers the rest of the data layer.
-- [OpenTelemetry](/opentelemetry/) — emit a span (target:
-  `nest_rs::health` or your own `app::health`) from an indicator to see
-  probe results in traces.
-
-### Reference
-
-- `crates/nest-rs-health/` — `HealthModule`, `HealthService`,
-  `HealthController`, the `#[indicators]` / `#[liveness]` /
-  `#[readiness]` / `#[startup]` macros, and the `HealthIndicator`
-  inventory entry.
-- `crates/nest-rs-seaorm/src/health.rs` (Cargo feature `health`) —
-  `DatabaseHealthModule` and `DbHealthIndicator`.
+- [Indicators](/health/indicators/) — where they live, the
+  framework-shipped ones, writing a custom one with `#[indicators]`.
+- [Discovery](/health/discovery/) — how module-gating decides which
+  indicators run in a given binary.
+- [Database / Health](/database/health/) — `DatabaseHealthModule`,
+  the first framework-shipped indicator.
+- [HTTP](/http/) — the transport `HealthModule` mounts on; same
+  `#[controller]` shape under the hood.

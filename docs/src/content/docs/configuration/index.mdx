@@ -1,28 +1,22 @@
 ---
 title: Configuration
 description: Typed, namespaced configuration loaded from environment variables — written by hand, validated on the way in.
+sidebar:
+  order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-You write configuration as a typed struct — one file, env-mapped, validated
-on the way in. Each one:
+Configuration in nestrs is a typed struct, one file per concern, mapped
+explicitly to `NESTRS_<NAMESPACE>__<KEY>` environment variables. The crate
+is hand-rolled (no figment at runtime): you write `from_env`, the framework
+loads it once at boot, validates it, and registers `Arc<MyConfig>` into
+the container. Consumers inject it like any other provider.
 
-1. Declares a **namespace** with `#[config(namespace = "…")]` — its
-   fields read from `NESTRS_<NAMESPACE>__<KEY>` environment variables;
-2. Implements **`from_env`** by hand — every variable is mapped
-   explicitly, so the env contract of a feature is one impl block, in
-   one file;
-3. Implements **`Validate`** so a bad value aborts the boot naming the
-   variable.
-
-`ConfigModule` then loads it from the env at boot and registers
-`Arc<MyConfig>` into the container — consumers inject it like any other
-provider.
-
-The whole pipeline reads only **environment variables** + the **`.env`
-cascade** the framework merges before any `from_env` runs. There is no
-TOML loader, no YAML, no remote source.
+The whole pipeline reads from environment variables and a small `.env`
+cascade the framework merges before any `from_env` runs. No TOML loader,
+no YAML, no remote source baked in — but a [`ConfigSource`](/configuration/sources/)
+trait lets you ship one when you need Vault, K8s, or AWS Parameter Store.
 
 ## A typed config — by example
 
@@ -75,37 +69,56 @@ impl Config for IssuerConfig {
 }
 ```
 
-### Reading it line by line
+Three lines do the heavy lifting:
 
 - **`#[config(namespace = "issuer")]`** binds the struct to the
-  `NESTRS_ISSUER__*` environment scheme. The macro also wires the
-  `Namespaced` trait — no manual constant to write.
-- **`impl Config for IssuerConfig { fn from_env(env: &ConfigService) }`**
-  is the **explicit, hand-written contract**: one line per variable. A
-  reviewer reading this file knows exactly which env vars exist, with
-  which defaults, and what happens when one is malformed.
-- **`env.get("CLIENTS")`** reads `NESTRS_ISSUER__CLIENTS` as a `String`
-  (empty values are treated as unset).
-- **`env.parse("DEFAULT_ORG_ID")?`** reads + parses into the field's
-  type. A set-but-unparseable variable returns `Err` naming the
-  variable — boot-fatal, no silent fallback.
-- **`Validate`** is hand-implemented when validation is structural
-  (here: "at least one client"). For per-field rules, derive `Validate`
-  and use `#[validate(...)]` attributes.
+  `NESTRS_ISSUER__*` scheme. The macro wires the `Namespaced` trait — no
+  manual constant to write.
+- **`impl Config { fn from_env(env: &ConfigService) }`** is the
+  hand-written contract: one line per variable. A reviewer reading this
+  file knows exactly which env vars exist, with which defaults, and what
+  happens when one is malformed.
+- **`impl Validate`** runs after the load. A failure aborts boot naming
+  the field. For per-field rules, derive `Validate` and use
+  `#[validate(...)]` attributes instead of implementing it by hand.
 
-### `ConfigService` API
+`env.parse("DEFAULT_ORG_ID")?` reads + parses into the field's type;
+unset returns `None`, set-but-unparseable returns `Err` naming the
+variable — boot-fatal, no silent fallback.
+
+## The dual-path rule
+
+Every field a module's config exposes must be reachable two ways:
+
+1. The pinned struct, passed to `Module::for_root(MyConfig { ... })` —
+   programmatic, type-checked, comes from code.
+2. The `NESTRS_<NS>__<KEY>` environment variable, mapped explicitly in
+   `from_env`.
+
+That is the framework-wide rule for every `nest-rs-*` module. An
+env-only field can't be set from a config file; a code-only field can't
+be overridden in deployment. Both, always.
+
+## `ConfigService` API
+
+The reader handed to `from_env` is a thin wrapper around the namespace
+prefix. Five methods, all sync.
 
 | Method                                      | Reads                                       |
 |---------------------------------------------|---------------------------------------------|
-| `env.get("KEY")` → `Option<String>`         | `NESTRS_<NS>__KEY` as a raw string         |
+| `env.get("KEY")` → `Option<String>`         | `NESTRS_<NS>__KEY` as a raw string          |
 | `env.parse::<T>("KEY")?` → `Option<T>`      | Same, parsed via `FromStr`                  |
-| `env.flag("KEY", default)?` → `bool`        | `1`/`true`/`yes`/`on` + negatives (case-insensitive) |
+| `env.flag("KEY", default)?` → `bool`        | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
 | `env.list("KEY")` → `Vec<String>`           | Comma-separated, trimmed, empties dropped   |
 | `env.var("KEY")` → `String`                 | The full env-var name (for error messages)  |
 
+Empty strings count as unset, so `FOO=` in a `.env` file does not blank
+an in-code default.
+
 ## Wire it into the app
 
-The wiring is two module imports:
+The wiring is two module imports. The feature owns its config; the root
+module imports `ConfigModule::for_root()` once.
 
 ```rust title="crates/features/src/oauth/module.rs"
 use nest_rs_config::ConfigModule;
@@ -124,25 +137,25 @@ use nest_rs_config::ConfigModule;
 
 #[module(
     imports = [
-        ConfigModule::for_root(),       // ← first: merges the .env cascade
-        // ...
-        OAuthHttpModule,                // brings in OAuthModule → loads IssuerConfig
+        ConfigModule::for_root(),
+        OAuthHttpModule,
     ],
 )]
 pub struct PlatformAuthModule;
 ```
 
-- **`ConfigModule::for_root()`** goes **first** in the root module. It
-  merges the `.env` cascade once (real env vars always win) and
-  registers `Arc<Environment>` so every later `Config::load` sees the
-  merged environment.
+- **`ConfigModule::for_root()`** goes first in the root module. It merges
+  the `.env` cascade once (real env vars always win) and registers
+  `Arc<Environment>` so every later `Config::load` sees the merged
+  environment.
 - **`ConfigModule::for_feature::<C>()`** queues a factory in the boot's
-  factory phase. The factory calls `C::load()` (= `from_env` +
-  `validate`); on failure the boot aborts with the variable named.
+  factory phase. The factory calls `C::load()` (= `from_env` + `validate`);
+  on failure the boot aborts with the variable named.
 
 ## Inject it
 
-A consumer injects `Arc<IssuerConfig>` like any provider:
+A consumer injects `Arc<IssuerConfig>` like any provider — the type is
+the token.
 
 ```rust title="crates/features/src/oauth/service.rs"
 #[injectable]
@@ -162,33 +175,11 @@ impl OAuthFlow {
 }
 ```
 
-## The `.env` cascade
-
-The framework merges these files **once** at boot, in this order (later
-overrides earlier):
-
-```
-.env
-.env.<environment>
-.env.local
-.env.<environment>.local
-```
-
-The `<environment>` segment is read from `NESTRS_ENV` (or `RUST_ENV`),
-defaulting to `development`. The convention:
-
-- **Committed**: `.env`, `.env.development`, `.env.production` —
-  non-secret defaults.
-- **Gitignored**: `.env.local`, `.env.*.local` — per-machine secrets.
-
-Real process environment variables always win over any `.env` file.
-
 ## Run it
 
 ```bash frame="terminal"
 $ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","org_id":"...","scopes":["read"]}]' \
   just dev auth
-…
 2026-06-03T10:42:11Z INFO nest_rs::config: loaded issuer (2 fields)
 2026-06-03T10:42:11Z INFO nest_rs::http: bound 5 routes on 0.0.0.0:3000
 ```
@@ -210,93 +201,38 @@ Error: configuration validation failed for 'issuer'
   - clients: at_least_one_client
 ```
 
-## Override in tests
-
-Tests bypass the factory by `.provide()`-ing the pinned value directly:
-
-```rust title="apps/platform-auth/tests/e2e.rs"
-let app = TestApp::<PlatformAuthModule>::builder()
-    .provide(IssuerConfig {
-        clients: vec![RegisteredClient { /* fixture */ }],
-        default_org_id: Uuid::nil(),
-    })
-    .build()
-    .await?;
-```
-
-A seeded value **wins** over the factory — handy for tests that should
-not depend on the environment.
-
 ## Why hand-written `from_env`
 
 Auto-deserializing from env vars sounds convenient, but the contract
 becomes implicit (which vars exist? what are their types?). With
 `from_env` written explicitly:
 
-- The full env contract of a feature is **one impl block, in one file**.
-- A missing variable falls back to a **code default**, not silently to
+- The full env contract of a feature is one impl block, in one file.
+- A missing variable falls back to a code default, not silently to
   `Default::default()`.
-- Unparseable values fail loudly, **naming the variable**.
-- A reviewer reads the contract by reading 10 lines, not by chasing
+- Unparseable values fail loudly, naming the variable.
+- A reviewer reads the contract by reading ten lines, not by chasing
   serde attributes.
-
-## Alternative sources — Vault, K8s, anywhere
-
-`ConfigService` reads its raw values through a **`ConfigSource`** trait;
-the default `EnvSource` returns process env vars (after the `.env`
-cascade has merged). A third-party crate can ship an alternative source —
-HashiCorp Vault, a K8s ConfigMap mount, AWS Parameter Store, an
-in-process map for tests — by implementing the trait and constructing a
-custom reader:
-
-```rust
-use std::collections::HashMap;
-use std::sync::Arc;
-use nest_rs_config::{ConfigService, ConfigSource};
-
-struct VaultSource {
-    snapshot: HashMap<String, String>, // pre-fetched at startup
-}
-
-impl ConfigSource for VaultSource {
-    fn get(&self, var: &str) -> Option<String> {
-        // `var` is the fully-qualified name (e.g. "NESTRS_DATABASE__URL").
-        self.snapshot.get(var).cloned()
-    }
-}
-
-let env = ConfigService::with_source(
-    "database",
-    Arc::new(VaultSource { snapshot: fetched }),
-);
-let cfg = DatabaseConfig::from_env(&env)?;
-```
-
-The trait is **sync on purpose**: `Config::from_env` runs synchronously at
-boot. A remote source pre-fetches its keys into an in-memory map (during a
-factory phase) and serves `get` from that map. Empty strings count as
-unset, same rule as `EnvSource`.
-
-<Aside type="caution">
-**Known limitation — `for_namespace` still touches the global env.**
-`ConfigService::for_namespace(ns)` calls `dotenv::ensure_env_loaded()`
-process-globally before returning the reader. Even when a downstream
-caller swaps in a custom `ConfigSource` later, the `.env` cascade has
-already populated `std::env`, so any subsequent `std::env::var` lookup
-sees it — the source doesn't *isolate* the process environment, it just
-overrides where `ConfigService` itself reads from. A genuinely hermetic
-test wires its source through `ConfigService::with_source` directly and
-never calls `for_namespace`.
-</Aside>
 
 ## Going further
 
-- **Sibling fallbacks** — a config that legitimately needs another
-  feature's variable can call `env_var("NESTRS_<OTHER>__<KEY>")` inside
-  `from_env`. The pattern is *own > borrowed > code default*.
-- **Multiple configs per feature** — a feature can have several
-  `#[config(namespace = "...")]` structs, each loaded by a separate
-  `ConfigModule::for_feature::<C>()` import.
+<CardGrid>
+  <LinkCard
+    title="The .env cascade"
+    href="/configuration/env-cascade/"
+    description="Which files are loaded, in what order, and how Environment selects them."
+  />
+  <LinkCard
+    title="Alternative sources"
+    href="/configuration/sources/"
+    description="Plug Vault, a K8s ConfigMap, or AWS Parameter Store behind ConfigSource."
+  />
+  <LinkCard
+    title="Overriding in tests"
+    href="/configuration/testing/"
+    description="Seed pinned values, isolate the environment, keep tests hermetic."
+  />
+</CardGrid>
 
 ### Reference
 

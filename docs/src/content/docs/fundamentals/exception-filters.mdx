@@ -1,5 +1,5 @@
 ---
-title: Exception filters
+title: Error handling
 description: "Catch typed errors, then map every other error to a response — typed catches via ExceptionFilter, unconditional mapping via Filter, defaults via ResponseError."
 sidebar:
   order: 7
@@ -227,7 +227,7 @@ to one execution.
   only ever sees the success path — net effect, one execution.
 
 The same defense-in-depth rationale as
-[guards](/fundamentals/guards/#why-redeclare-on-the-controller-then)
+[guards](/fundamentals/guards/#declare-on-the-provider)
 applies: a portable controller that needs a domain filter should
 redeclare it, the dedup keeps the cost at zero.
 

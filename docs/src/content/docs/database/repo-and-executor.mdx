@@ -1,0 +1,182 @@
+---
+title: Repo and executor
+description: Repo is the only DB gateway a service uses; the ambient executor is what makes transactions and row-level filtering transparent.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Two pieces carry the data layer's transparency: the ambient `Executor`
+installed per request (or per job), and the `Repo<E>` handle every service
+uses to reach it. They are built on
+[SeaORM](https://www.sea-ql.org/SeaORM/) — `Executor` implements SeaORM's
+`ConnectionTrait`, so any SeaORM query runs through it unchanged — and on
+the seam from [`nest-rs-database`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-database),
+which is what keeps the same seam open to a non-SeaORM driver.
+
+The invariant: **every data access goes through a service, and a service
+reaches the DB only through `Repo`**. That is the single audited choke
+point per entity.
+
+## The ambient executor
+
+`Executor` is a SeaORM connection — the pool or the request's transaction —
+installed in a `tokio::task_local!` for the duration of the handler. Two
+variants:
+
+```rust
+pub enum Executor {
+    Pool(DatabaseConnection),
+    Txn(Arc<DatabaseTransaction>),
+}
+```
+
+`Repo::<E>::conn()` reads the task-local back. Outside the scope it returns
+an error naming the `DbContext` interceptor — a service called with no
+ambient executor is a wiring bug, not a silent miss.
+
+```rust
+let conn = Repo::<Items>::conn()?;
+let row = Items::find().filter(Column::Name.eq(name)).one(&conn).await?;
+```
+
+Three scopes coexist:
+
+| Scope    | Installed by                | What it carries                       |
+|----------|-----------------------------|---------------------------------------|
+| Request  | `DbContext` interceptor     | Pool on safe routes, txn on mutations |
+| Job      | `WorkerDbContext` (workers) | Pool, no transaction                  |
+| Unscoped | nothing                     | `Repo::conn()` errors                 |
+
+`current_executor_scope()` distinguishes Request from Job — `Repo` uses it
+to fail closed when a request runs with no ambient ability, while a worker
+runs unscoped (no caller ⇒ no scope to apply). See
+[Security](/security/) for the ability half.
+
+## Repo's surface
+
+`Repo<E>` is generic over the entity. Every method runs against the ambient
+executor, every read carries the ambient ability filter:
+
+```rust
+Repo::<Items>::conn()?;                    // raw handle for a custom query
+Repo::<Items>::all().await?;               // every readable row
+Repo::<Items>::find_by_id(id).await?;      // None if absent OR out of scope
+Repo::<Items>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
+Repo::<Items>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
+Repo::<Items>::delete(model).await?;       // 0 rows if out of scope
+Repo::<Items>::page(first, after).await?;  // keyset page — see Pagination
+```
+
+A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
+the primary key, so a caller cannot mutate a row outside its scope even
+with a leaked id. The macro-generated `CrudService::access(action, id)`
+loads unscoped so a denied-but-existing row surfaces as `Access::Denied`
+(distinct from `Access::Missing`) — the gateway route-model binding goes
+through.
+
+## The DbContext interceptor
+
+`DbContext` is auto-registered when you import `DatabaseModule`. It wraps
+every HTTP request *outside* the route's guards so guards and handlers
+resolve the same ambient executor through `Repo`:
+
+```text
+HTTP request
+  ↓
+DbContext              ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
+                       ──→ installs Executor::Txn  (POST/PUT/PATCH/DELETE)
+  ↓
+guards (AuthGuard, AbilityGuard, ...)
+  ↓
+handler
+  ↓
+DbContext (response)   ──→ commit on 2xx/3xx, rollback otherwise
+```
+
+A safe method gets the pool, no transaction overhead. A mutating method
+opens a `DatabaseTransaction`, runs the handler against it, and commits
+or rolls back based on the response status:
+
+| Outcome                  | Decision  |
+|--------------------------|-----------|
+| `Ok(2xx)` or `Ok(3xx)`   | commit    |
+| `Ok(4xx)` or `Ok(5xx)`   | rollback  |
+| `Err(_)` from the handler| rollback  |
+
+A failed mutation never half-persists. See
+[Transactions](/database/transactions/) for the conflict-retry knobs and the
+honest caveats around them.
+
+<Aside type="caution">
+**Fail-closed on escape.** If a handler `tokio::spawn`s a task that captures
+the executor, the interceptor's `Arc::try_unwrap` on the transaction handle
+fails — it cannot commit a handle a spawned task still holds. An otherwise
+successful response is rejected as `500` (rolled back) rather than reported
+as committed while the spawned task races a stale snapshot. The lesson:
+don't smuggle the executor across `tokio::spawn`; if you need background
+work after the request, enqueue a job.
+</Aside>
+
+## Workers — same Repo, no transaction
+
+Queue processors and cron jobs run outside any HTTP request — no method
+to classify, no response to inspect. `DatabaseModule` binds a
+`WorkerDbContext` to `dyn JobContext`, which the worker transport
+(`#[scheduled]`, `#[processor]`) runs around every job:
+
+```text
+job
+  ↓
+WorkerDbContext   ──→ installs Executor::Pool, no transaction
+  ↓
+processor body
+```
+
+A job runs on the pool. No caller means no ambient ability, which means
+`Repo` reads and writes are **unscoped** — correct for system work with no
+principal to scope to. A job that needs scoping wraps its body in
+`with_ability(...)` explicitly.
+
+A mutating job that wants atomicity opens its own transaction through
+SeaORM's `TransactionTrait` — same as any programmatic transaction in a
+service — and runs `retry_on_conflict` around it if needed
+(see [Transactions](/database/transactions/)).
+
+## The contextless-path exception
+
+A truly contextless path — a shutdown hook that runs after every transport
+has closed, a one-shot CLI command bootstrapped outside `App::run` — has
+no task-local to read. That is the one documented `Repo` bypass: inject
+an `Arc<DatabaseConnection>` and call SeaORM directly.
+
+```rust
+#[hooks]
+impl UsersService {
+    #[on_application_shutdown]
+    async fn report(&self) -> anyhow::Result<()> {
+        let count = Users::find().count(self.db.as_ref()).await?;
+        tracing::info!(count, "users present at shutdown");
+        Ok(())
+    }
+}
+```
+
+`self.db` is an `Arc<DatabaseConnection>` injected on the service —
+unscoped, no ability filter applies, no transaction. This is the **only**
+documented bypass; if you find yourself reaching for it in a request
+handler, something else is wrong.
+
+## Going further
+
+- [Database](/database/) — the 60-line slice that imports `DatabaseModule`.
+- [Dataloaders](/database/dataloaders/) — `#[dataloader]` methods are
+  Repo-backed too; the `LoaderScope` re-installs the executor around each
+  batch.
+- [Transactions](/database/transactions/) — auto-commit details, conflict
+  retry primitives.
+- [Security](/security/) — `Ability`, `condition_for`, how the row-level
+  filter is built.
+- [Writing a driver](/database/writing-a-driver/) — implement `Executor`
+  for a non-SeaORM store on the same seam.

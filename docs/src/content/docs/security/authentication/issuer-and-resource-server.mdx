@@ -1,0 +1,168 @@
+---
+title: Issuer and resource server
+description: A single signer issues tokens, every API verifies them — split the deployment, keep the keys asymmetric, never RPC across the boundary.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A single app that both issues tokens and serves protected routes is
+fine — the secret stays in one process, the wiring is one
+`AuthnModule`. The pattern fights you when a second deployable joins:
+two binaries can either share the signing secret (and any compromise
+mints valid tokens for both) or one becomes the issuer and the other
+verifies what it produces. nestrs leans hard on the second posture.
+
+`apps/platform-auth` is the exemplar issuer. `apps/platform-api` is
+the exemplar resource server. They share a Postgres database and the
+`crates/features` code; they never RPC each other.
+
+## The split
+
+| Concern | Issuer (`apps/platform-auth`) | Resource server (`apps/platform-api`) |
+|---------|-------------------------------|---------------------------------------|
+| JWT private key | Holds it | **Never sees it** |
+| JWT public key | Holds it | Holds it |
+| Token endpoints | `/token`, `/login`, OAuth callback | None |
+| Protected routes | None | `/users`, `/orgs`, `/graphql`, `/ws`, … |
+| Database | Yes (shared) | Yes (shared) |
+| Cross-app calls | None | None |
+
+The two binaries see the same `Claims` type via the shared
+`crates/features::identity` crate. The verifier deserializes a token
+the issuer signed; both speak the same struct, no schema drift
+possible.
+
+## The keys
+
+Use EdDSA. Generate one key pair, store the private PEM on the issuer
+only, distribute the public PEM to every verifier:
+
+```bash
+openssl genpkey -algorithm ed25519 -out jwt.pem
+openssl pkey -in jwt.pem -pubout -out jwt.pub
+```
+
+Then on the issuer:
+
+```bash
+export NESTRS_AUTHN__PRIVATE_KEY="$(cat jwt.pem)"
+export NESTRS_AUTHN__PUBLIC_KEY="$(cat jwt.pub)"
+```
+
+On every resource server:
+
+```bash
+export NESTRS_AUTHN__PUBLIC_KEY="$(cat jwt.pub)"
+# NESTRS_AUTHN__PRIVATE_KEY is unset — the boot picks `eddsa_verify`
+```
+
+`JwtConfig::into_options` walks the three key env vars and chooses
+verify-only mode when only the public key is set. `JwtService::sign`
+on a verify-only service returns `AuthError::Failed("this JwtService
+is verify-only — no signing key configured")` — even a buggy resource
+server cannot mint a token.
+
+A misconfiguration (`PRIVATE_KEY` set, `PUBLIC_KEY` missing) fails the
+boot loudly with `"NESTRS_AUTHN__PRIVATE_KEY is set without
+NESTRS_AUTHN__PUBLIC_KEY"`.
+
+## Two `main` files, one feature set
+
+```rust title="apps/platform-auth/src/module.rs"
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        DatabaseModule::for_root(None),
+        AuthnModule::for_root(None),
+        OAuth2Module::for_root(None),
+        ThrottlerModule::for_root(None),
+        OAuthHttpModule,
+        HealthModule,
+        OpenTelemetryModule,
+        HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
+    ],
+)]
+pub struct PlatformAuthModule;
+```
+
+The issuer imports the OAuth flow controller (`OAuthHttpModule`) and
+the throttler. It does **not** import `UsersHttpModule` — the issuer
+mints tokens, not users.
+
+```rust title="apps/platform-api/src/module.rs"
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        DatabaseModule::for_root(None),
+        AuthnModule::for_root(None),
+        AuthzHttpModule,
+        AuthzGraphqlModule,
+        UsersHttpModule,
+        OrgsHttpModule,
+        HealthModule,
+        OpenTelemetryModule,
+        HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
+    ],
+)]
+pub struct PlatformApiModule;
+```
+
+The resource server imports the authz transports and every feature
+controller. Same `AuthnModule` — but with only the public key in
+env, it loads as verify-only.
+
+## Why not RPC
+
+The two binaries deliberately do not talk to each other. They share a
+database, and each owns the table it writes to (the issuer owns
+`users` for signin; the resource server reads `users` for queries —
+both go through the same SeaORM model). Cross-app chatter would
+reintroduce the latency, the failure modes, and the protocol drift
+the split was supposed to avoid.
+
+When a resource server needs to validate something the issuer knows
+(say, a refresh token was revoked), put it in the database — the
+issuer writes the revocation row, the resource server reads it via
+the same `Repo`. No HTTP between the two.
+
+<Aside>
+Sharing a database between deployables is itself a coupling. The
+right size of the split — one issuer + one API, or one issuer + many
+APIs — depends on whether the data layer is a bottleneck. The
+framework's only opinion is: **share code through crates, never
+copy-paste; keep coupling loose; never chatty RPC.** Microservices
+sprawl is not the goal.
+</Aside>
+
+## Run them together
+
+```bash
+just dev auth     # issuer on :3001
+just dev api      # resource server on :3000
+```
+
+A round-trip:
+
+```bash
+TOKEN=$(curl -sX POST http://localhost:3001/login \
+    -d 'email=ada@example.com&password=hunter2' \
+    | jq -r .access_token)
+
+curl -s http://localhost:3000/users \
+    -H "Authorization: Bearer $TOKEN" | jq '.[].name'
+```
+
+The bearer is signed by the issuer's private key; the API verifies
+with the public key. The API has no way to mint that token even if it
+wanted to.
+
+## Going further
+
+- [JWT](/security/authentication/jwt/) — `JwtConfig`, `JwtKey`,
+  EdDSA vs HS256.
+- [OAuth2](/security/authentication/oauth2/) — the flow the issuer
+  exposes upstream.
+- [Threat model](/security/threat-model/) — what the asymmetric split
+  buys you, and what it does not.

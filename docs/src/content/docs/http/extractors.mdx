@@ -1,0 +1,316 @@
+---
+title: Extractors
+description: The full HTTP extractor surface — JSON, raw body, client IP, request-scoped providers, guard-attached context, route metadata.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An extractor pulls a typed value out of the request before the handler
+runs. Most of the surface is [poem](https://docs.rs/poem)'s — `Path<T>`,
+`Query<T>`, `Json<T>`, `Form<T>` cover the request line, query string,
+JSON body, and form body. NestRS adds the framework-specific extractors:
+the validated `Valid<E>`, the raw-body reader `RawBody`, the spoofable
+but observation-grade `ClientIp`, the request-scoped DI resolver
+`Scoped<T>`, the guard-attached context reader `Ctx<T>`, and the route
+metadata reader `Reflector` paired with `#[meta(...)]`.
+
+This page is the reference: one extractor, one example, one rule. The
+[Guards](/fundamentals/guards/) for `Ctx<T>` and
+[Providers](/fundamentals/providers/) for `Scoped<T>` — tell the story.
+
+## `Json<T>` — typed JSON in and out
+
+Parses the request body into `T`; rejects malformed JSON with `400`.
+Works as a return type too — serializes `T`, sets
+`Content-Type: application/json`, and feeds the OpenAPI document with
+the same schema:
+
+```rust
+use poem::web::Json;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct NewItem { name: String }
+
+#[derive(Serialize, schemars::JsonSchema)]
+struct Item { id: u64, name: String }
+
+#[post("/items")]
+async fn create(&self, Json(body): Json<NewItem>) -> Json<Item> {
+    Json(self.svc.create(body.name))
+}
+```
+
+For validated bodies, wrap it in `Valid<Json<T>>` (covered next).
+
+## `Valid<E>` and `Piped<P, E>` — validate or transform at the edge
+
+`Valid<E>` runs [validator](https://docs.rs/validator) on whatever the
+inner extractor produced. The `E` is usually `Json<T>`, but `Path<T>`
+and `Query<T>` work the same way — every poem extractor that exposes
+`IntoInner` is composable:
+
+```rust
+use nest_rs_http::{Valid, input};
+use poem::web::Json;
+
+#[input]
+struct CreateUser {
+    #[validate(length(min = 1))]
+    name: String,
+    #[validate(email)]
+    email: String,
+}
+
+#[post("/users")]
+async fn create(&self, Valid(Json(body)): Valid<Json<CreateUser>>) -> Json<User> {
+    Json(self.svc.create(body))
+}
+```
+
+A validation failure returns `400` with a structured field-level error
+list — no manual checks in the handler.
+
+`Valid<E>` is the ergonomic shortcut for the more general `Piped<P, E>`:
+apply any [transport-agnostic pipe](/fundamentals/pipes/) to whatever
+the inner extractor produced. `Valid<Json<T>>` is exactly
+`Piped<ValidationPipe<T>, Json<T>>`:
+
+```rust
+use nest_rs_http::Piped;
+use nest_rs_pipes::ParseUuid;
+use poem::web::Path;
+use uuid::Uuid;
+
+#[get("/orders/:id")]
+async fn show(&self, id: Piped<ParseUuid, Path<String>>) -> Json<Order> {
+    let id: Uuid = id.into_inner();
+    Json(self.svc.find(id))
+}
+```
+
+Reach for `Piped` when a reusable pipe exists for the job; `Valid` when
+the job is `validator::Validate`.
+
+## `RawBody` — exact bytes, with a size cap
+
+Some handlers — webhook signatures (Stripe, GitHub), proxied protobuf
+bodies — need the exact byte string before any parsing. `RawBody` reads
+the whole body into [`Bytes`](https://docs.rs/bytes), capped at
+`RawBody::DEFAULT_LIMIT` (2 MiB). Past the cap the extractor returns
+`413 Payload Too Large` — never silently truncates, never buffers
+unbounded memory.
+
+```rust
+use nest_rs_http::{ClientIp, RawBody};
+use poem::Result;
+
+#[post("/webhooks/stripe")]
+async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
+    verify_stripe_signature(&body, /* ... */)?;
+    self.svc.handle_event(&body).await?;
+    Ok("ok")
+}
+```
+
+For a tighter cap on a specific route, take the body manually:
+
+```rust
+use nest_rs_http::RawBody;
+use poem::{Result, RequestBody};
+
+#[post("/webhooks/small")]
+async fn small(&self, mut body: RequestBody) -> Result<&'static str> {
+    let raw = RawBody::extract_with_limit(&mut body, 16 * 1024).await?;
+    self.svc.handle_small(&raw).await?;
+    Ok("ok")
+}
+```
+
+Anything that can deserialize through `Json<T>` should use that instead —
+`RawBody` is for handlers that genuinely care about the bytes.
+
+## `ClientIp` — best-effort, observation-grade
+
+```rust
+use nest_rs_http::ClientIp;
+
+#[get("/whoami")]
+async fn whoami(&self, ip: ClientIp) -> String {
+    format!("you look like {} (forwarded={})", ip.ip, ip.forwarded)
+}
+```
+
+`ClientIp` resolves in this order, first hit wins:
+
+1. The transport peer reported by [poem](https://docs.rs/poem)
+   (`remote_addr().as_socket_addr()`);
+2. The **leftmost** entry of `X-Forwarded-For` (a bare IP, `IP:port`,
+   bracketed IPv6 `[ip]`, or `[ip]:port` per RFC 7239);
+3. `X-Real-IP`;
+4. `0.0.0.0` as a last-resort default — the extractor never fails.
+
+`ip.forwarded` is `true` when the address came from a header (2 or 3),
+`false` when it came from the transport peer or the default.
+
+<Aside type="caution">
+**`X-Forwarded-For` and `X-Real-IP` are spoofable.** Any client can put
+whatever value it likes in those headers — `ClientIp` does no trusted-proxy
+validation. Treat the result as **observational only** (logging,
+geolocation hints, sampling keys), never as an authn or authz input. If
+your deployment terminates TLS at a load balancer, the LB must strip and
+rewrite those headers so only its own value reaches the app.
+
+Trusted-proxy validation (peer ∈ allow-list before honoring
+`X-Forwarded-For`) lives in the [throttler](/throttler/), not here — the
+throttler is the one place where the spoofable header is consumed for a
+behavioural decision.
+</Aside>
+
+## `Scoped<T>` — resolve a request-scoped provider
+
+A `#[injectable(scope = request)]` provider is built once per request —
+useful for anything that should not outlive the response (a SQL
+transaction handle, a per-request audit batch, a user-specific cache).
+`Scoped<T>` is how a handler reads it back:
+
+```rust
+use nest_rs_core::injectable;
+use nest_rs_http::Scoped;
+
+#[injectable(scope = request)]
+pub struct PerRequestAudit { /* ... */ }
+
+#[get("/items")]
+async fn list(&self, audit: Scoped<PerRequestAudit>) -> Json<Vec<Item>> {
+    audit.note("list_items");
+    Json(self.svc.list())
+}
+```
+
+Two contracts hold:
+
+- `Scoped<T>` falls back to a singleton if no scoped factory exists for
+  `T` — convenient, but a singleton should still be reached via plain
+  `#[inject]` on the controller. Reserve `Scoped<T>` for genuinely
+  request-scoped state.
+- The framework installs the request scope as the outermost HTTP wrap
+  (before guards and interceptors). A missing scope is a transport
+  wiring bug, surfaced as `500` with a diagnostic naming the missing
+  provider.
+
+See [Providers](/fundamentals/providers/) for the scope rules — a
+request-scoped provider may inject singletons, never the reverse, never
+another request-scoped one.
+
+## `Ctx<T>` — read context a guard attached
+
+A guard runs before the handler, can short-circuit with a response, and
+can attach a typed value to the request. `Ctx<T>` is how the handler reads
+that value back:
+
+```rust
+use nest_rs_http::Ctx;
+use crate::Claims;
+
+#[post("/items")]
+async fn create(
+    &self,
+    auth: Ctx<Claims>,
+    body: Valid<Json<NewItem>>,
+) -> Json<Item> {
+    Json(self.svc.create_in_org(body.into_inner(), auth.org_id))
+}
+```
+
+`Ctx<T>` rejects with `500` if `T` is absent — a missing context means
+the guard that should have set it never ran on this route (a wiring bug,
+not a client error). The value is cloned out of the request's
+extensions; store an `Arc<_>` if the value is large.
+
+The canonical use is the authenticated principal: `AuthGuard` runs the
+strategy, then inserts a `Claims` (or whatever the resource server's
+principal is) into the request. Every authenticated handler reads it as
+`auth: Ctx<Claims>`.
+
+See [Guards](/fundamentals/guards/) for how to attach a value, and for
+the design rule (guards gate and attach; handlers read).
+
+## `Reflector` + `#[meta(EXPR)]` — typed route metadata
+
+A route can carry typed metadata a guard reads at decision time —
+the cleanest case is a rate-limit guard reading the route's quota. The
+decorator attaches; the reader picks it up by type.
+
+Attach metadata on the route:
+
+```rust
+use nest_rs_throttler::{Throttle, ThrottlerGuard};
+
+#[post("/login")]
+#[use_guards(ThrottlerGuard)]
+#[meta(Throttle::per_minute(10))]
+async fn login(&self, body: Valid<Json<LoginInput>>) -> Result<Json<AccessToken>> {
+    Ok(Json(self.issuer.grant_password(&body.email, &body.password).await?))
+}
+```
+
+Read it from inside a guard:
+
+```rust
+use nest_rs_http::Reflector;
+use poem::Request;
+
+async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+    let throttle = Reflector::new(req)
+        .get::<Throttle>()
+        .copied()
+        .unwrap_or(self.default_throttle);
+    // ...
+}
+```
+
+Two rules pin the contract:
+
+- The value type must be `Clone + Send + Sync + 'static`. The macro
+  attaches it to the request extensions; the reader resolves by
+  `TypeId`. Wrap multiple values of the same underlying shape in
+  distinct newtypes when they need to coexist.
+- A **route-bound** guard reads metadata via `Reflector`; a **global**
+  guard (`use_guards_global`) runs before routing has resolved a handler,
+  so route metadata is not yet attached. A guard that varies its
+  decision per route must be bound per route.
+
+`Reflector` implements the framework-wide `HandlerMetadata` trait. The
+same guard can read `Reflector` on HTTP, the per-message metadata reader
+on WS, and the per-call reader on MCP — one trait, one shape, three
+transports.
+
+## `#[public]` — the only universal marker
+
+`#[public]` is shorthand for `#[meta(Public)]` — it attaches the
+framework's only universal route marker. Guards read it through
+`HandlerMetadata::is_public()` and decide whether to honor it. The
+framework itself does *not* act on the marker — `AuthGuard`, for
+example, still runs the strategy on a `#[public]` route, but lets an
+anonymous request through instead of returning `401`.
+
+```rust
+#[post("/login")]
+#[public]
+#[use_guards(ThrottlerGuard)]
+async fn login(&self, body: Valid<Json<LoginInput>>) -> Result<Json<AccessToken>> {
+    // ...
+}
+```
+
+## Going further
+
+- [Guards](/fundamentals/guards/) — write a guard that attaches `Ctx<T>`.
+- [Providers](/fundamentals/providers/) — request-scoped providers and
+  the rules `Scoped<T>` reads.
+- [Pipes](/fundamentals/pipes/) — write a pipe and apply it through
+  `Piped<P, E>`.
+- [Responses](/http/responses/) — turn the value back into a response.

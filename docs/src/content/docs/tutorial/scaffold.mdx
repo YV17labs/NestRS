@@ -1,0 +1,150 @@
+---
+title: Scaffold the app
+description: Set up the workspace, create apps/tutorial-api/, write the first AppModule, run the binary, see a 404 on the root route.
+sidebar:
+  order: 2
+---
+
+import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
+
+You start with the bones — a new app under `apps/tutorial-api/`, a
+`module.rs` that activates the HTTP transport, a `main.rs` that builds
+the app and runs it. By the end of this page, `cargo run -p tutorial-api`
+listens on port 3000 and replies `404` to `GET /` (you haven't mounted
+a route yet — that's the next page).
+
+## A new app folder
+
+Inside the workspace, create the app directory.
+
+<FileTree>
+- apps/tutorial-api/
+  - Cargo.toml
+  - src/
+    - main.rs
+    - module.rs
+</FileTree>
+
+```toml title="apps/tutorial-api/Cargo.toml"
+[package]
+name = "tutorial-api"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-http.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
+```
+
+Add the app to the workspace members. Open the root `Cargo.toml` and
+append `apps/tutorial-api` to the `members = [...]` list.
+
+```toml title="Cargo.toml"
+[workspace]
+members = [
+    "apps/hello",
+    "apps/platform-api",
+    "apps/tutorial-api",
+    # ...
+]
+```
+
+<Aside type="note">
+Apps live under `apps/<name>/`. A feature lives under `crates/features/src/`
+once another app could reuse it. The tutorial starts in the app folder
+and moves the feature to `crates/features/src/users/` on the next page
+— exactly where the reference exemplar lives.
+</Aside>
+
+## The root module
+
+The root module is where transports come in. `HttpModule::for_root(None)`
+activates the HTTP transport with default config — host `0.0.0.0`, port
+`3000`, env overrides via `NESTRS_HTTP__HOST` / `NESTRS_HTTP__PORT`.
+
+```rust title="apps/tutorial-api/src/module.rs"
+use nest_rs_core::module;
+use nest_rs_http::HttpModule;
+
+#[module(imports = [HttpModule::for_root(None)])]
+pub struct TutorialApiModule;
+```
+
+`TutorialApiModule` has no `providers = [...]` list. A root module
+usually composes feature modules and lets each own its providers —
+that's why the [reference root](https://github.com/NestRS/NestRS/blob/main/apps/platform-api/src/module.rs)
+carries only `imports`.
+
+## The entry point
+
+```rust title="apps/tutorial-api/src/main.rs"
+use anyhow::Result;
+use nest_rs_core::App;
+
+mod module;
+use module::TutorialApiModule;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    App::builder()
+        .module::<TutorialApiModule>()
+        .build()
+        .await?
+        .run()
+        .await
+}
+```
+
+`App::builder()` runs the four boot phases — seeds, collect, factories,
+register — verifies the access graph, then `.run()` blocks on the
+transports. The same `main` shape works for every binary in the
+workspace.
+
+## Run it
+
+<Steps>
+
+1. From the workspace root, build and run.
+
+   ```bash frame="terminal"
+   $ cargo run -p tutorial-api
+       Compiling tutorial-api v0.1.0
+        Running `target/debug/tutorial-api`
+   INFO nest_rs::http: starting on 0.0.0.0:3000
+   ```
+
+2. In another terminal, hit the root route.
+
+   ```bash frame="terminal"
+   $ curl -i http://localhost:3000/
+   HTTP/1.1 404 Not Found
+   ```
+
+3. Stop the server with `Ctrl-C`.
+
+</Steps>
+
+A `404` is the right answer — the HTTP transport is mounted, the
+process is healthy, and no route table claims `/` yet. That's the gap
+the next page fills.
+
+<Aside type="tip">
+Prefer `just dev tutorial-api` over `cargo run` once the app is in the
+workspace — it runs under `bacon` and restarts on every save.
+</Aside>
+
+## What you have now
+
+- A `tutorial-api` app in the workspace, with `Cargo.toml`, `main.rs`,
+  `module.rs`.
+- A `TutorialApiModule` that activates the HTTP transport.
+- A running binary returning `404` on the root route — proof the
+  framework boots end to end.
+
+[Next: declare the `User` entity →](/tutorial/entity/)

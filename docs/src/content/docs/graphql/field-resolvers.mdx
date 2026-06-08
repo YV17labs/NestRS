@@ -1,0 +1,165 @@
+---
+title: Field resolvers
+description: Custom computed and composed fields on a wire type with #[field_resolver] — and the one ComplexObject rule to know.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A `#[field_resolver]` adds a computed field to an output type. It runs
+on every parent the client requested, gets injected services and
+loaders the same way as `#[query]` / `#[mutation]`, and slots into the
+schema next to the type's own fields with no extra wiring. Reach for
+it when a property isn't a stored column or auto-resolved relation — a
+derived value, a cross-service shape, a non-default cardinality.
+
+## The smallest field resolver
+
+The first non-`self`, non-`ctx` argument is the parent object; the
+return is the field's value.
+
+```rust title="src/users/resolver.rs"
+use async_graphql::SimpleObject;
+use nest_rs_graphql::{field_resolver, query, resolver};
+
+#[derive(SimpleObject, Clone)]
+pub struct User {
+    id: String,
+    name: String,
+}
+
+#[resolver]
+pub struct UsersResolver;
+
+#[resolver]
+impl UsersResolver {
+    #[query]
+    async fn user(&self, id: String) -> User {
+        User { id, name: "Ada".into() }
+    }
+
+    #[field_resolver]
+    async fn display_name(&self, parent: &User) -> String {
+        parent.name.to_uppercase()
+    }
+}
+```
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3000/graphql -d \
+    '{"query":"{ user(id:\"1\") { name displayName } }"}'
+{"data":{"user":{"name":"Ada","displayName":"ADA"}}}
+```
+
+The macro picks up `&User` as the parent type and grafts `displayName`
+onto the `User` GraphQL object. No `MergedObject`, no `ComplexObject`
+written by hand.
+
+## Reading the context, calling a service
+
+Beyond `parent`, a `#[field_resolver]` accepts the same shapes a
+`#[query]` does: `ctx: &Context<'_>`, plain argument types, and
+`#[inject]`ed services on the host resolver.
+
+```rust
+use std::sync::Arc;
+use async_graphql::{Context, Result, SimpleObject};
+use nest_rs_graphql::{field_resolver, query, resolver};
+
+#[derive(SimpleObject, Clone)]
+pub struct User {
+    id: String,
+    name: String,
+}
+
+#[resolver]
+pub struct UsersResolver {
+    #[inject]
+    profiles: Arc<crate::profiles::ProfilesService>,
+}
+
+#[resolver]
+impl UsersResolver {
+    #[query]
+    async fn user(&self, id: String) -> User {
+        User { id, name: "Ada".into() }
+    }
+
+    #[field_resolver]
+    async fn avatar_url(&self, parent: &User) -> Result<Option<String>> {
+        Ok(self.profiles.avatar_for(&parent.id).await?)
+    }
+}
+```
+
+If `avatar_for` does one DB call per parent, you have an N+1 — move
+the lookup behind a `#[dataloader]`. See [Dataloaders](/graphql/dataloader/).
+
+## The single-`ComplexObject` rule
+
+<Aside type="caution">
+**The one caveat to remember.** async-graphql allows at most one
+`#[ComplexObject]` impl per output type. A custom `#[field_resolver]`
+on a resolver, and the `#[ComplexObject]` block the `#[expose]` macro
+emits for an entity's auto-resolved relations, both target the same
+underlying impl — they collide at trait coherence.
+</Aside>
+
+Concretely: an entity exposed with `#[expose(name = "User", service =
+…)]` that has a SeaORM relation field gets an auto-emitted
+`#[ComplexObject]` for `User` carrying the relation's field resolver.
+Writing a `#[field_resolver(parent = User)]` on the resolver impl will
+not compile alongside it.
+
+You have three honest ways out:
+
+1. **Mark the relation `#[expose(skip)]`** and own the full complex
+   object on the resolver. The relation stays declared at the ORM
+   level (the SQL join still works), it just no longer surfaces as a
+   GraphQL field automatically. Write your `#[field_resolver]` for
+   whatever shape you actually want — cursor connection, filtered
+   subset, custom cardinality.
+2. **Move the custom logic to a different wire type.** Keep
+   `User` for the auto-resolved relation surface, and expose a sibling
+   `UserProfile` shape (or `UserConnection`, etc.) carrying the
+   custom fields.
+3. **Leave it to the relation.** If the custom field is structurally
+   identical to what the auto-emitted loader gives you, drop the
+   `#[field_resolver]` and read [Relations](/graphql/relations/)
+   instead.
+
+## Why the macro picks the parent
+
+`#[field_resolver]` infers the parent type from the first non-receiver,
+non-`ctx` argument by reference. Every other argument becomes a
+GraphQL input or, when it's an `#[inject]`ed dependency, comes from
+the container.
+
+```rust
+#[field_resolver]
+async fn display_name(
+    &self,
+    ctx: &Context<'_>,                   // optional
+    parent: &User,                       // ← parent type, inferred
+    upper: bool,                         // GraphQL argument
+) -> String {
+    if upper { parent.name.to_uppercase() } else { parent.name.clone() }
+}
+```
+
+```graphql
+type User {
+    displayName(upper: Boolean!): String!
+}
+```
+
+## Where to go next
+
+- [Relations](/graphql/relations/) — auto-resolved fields for
+  belongs-to / has-many; this is where the `ComplexObject` rule
+  matters most.
+- [Dataloaders](/graphql/dataloader/) — batch the per-parent DB
+  call a `#[field_resolver]` would otherwise do N times.
+- [Errors](/graphql/errors/) — how a `Result<T, ServiceError>` lands
+  on the wire.

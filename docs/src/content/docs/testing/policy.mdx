@@ -5,13 +5,16 @@ sidebar:
   order: 6
 ---
 
-`Ability::mask`, `Ability::condition_for`, and `WireModelDefaults` are
-the policy code of a nestrs app — they decide which fields a caller
-sees and which rows the data layer accepts. A regression there is a
+[`Ability::mask`](/security/authorization/response-masking/),
+[`Ability::condition_for`](/security/authorization/row-level-filtering/),
+and [`WireModelDefaults`](/security/authorization/response-masking/)
+are the policy code of a nestrs app — they decide which fields a
+caller sees and which rows the data layer accepts (through
+[`Repo`](/database/repo-and-executor/)). A regression there is a
 silent data leak; a happy-path e2e does not catch it.
 
-These are perfect unit-test targets: pure functions on policy types,
-no DI, no DB, microsecond runs.
+These are perfect [unit-test](/testing/unit/) targets: pure functions
+on policy types, no DI, no DB, microsecond runs.
 
 ## Masking — every grant scenario
 

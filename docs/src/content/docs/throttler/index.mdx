@@ -6,11 +6,13 @@ description: Per-route rate limiting — a guard, a default limit from env, per-
 import { Aside } from '@astrojs/starlight/components';
 
 The throttler turns a route into "at most N requests per window, per
-client". One `ThrottlerModule` import provides the in-memory counter
-(an [`InMemoryThrottler`] fixed-window store); one `#[use_guards(ThrottlerGuard)]`
-binds it to a route or controller; one `#[meta(Throttle::per_minute(10))]`
-overrides the limit for a single handler. Over the limit, the response is
-`429 Too Many Requests` with a `Retry-After` header.
+client". It ships as a guard on the [HTTP transport](/http/): one
+`ThrottlerModule` import provides the in-memory counter (an
+[`InMemoryThrottler`] fixed-window store); one
+`#[use_guards(ThrottlerGuard)]` binds it to a route or controller; one
+`#[meta(Throttle::per_minute(10))]` overrides the limit for a single
+handler. Over the limit, the response is `429 Too Many Requests` with
+a `Retry-After` header.
 
 `ThrottlerGuard` must be a **per-route** guard, never a global one — a global
 guard runs before routing, so the route's `#[meta(Throttle)]` is not yet

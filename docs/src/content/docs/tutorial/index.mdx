@@ -1,25 +1,104 @@
 ---
-title: Tutorial — build a feature end to end
-description: From an empty folder to a persisted, authorized, multi-transport feature.
+title: Build a users feature end to end
+description: From an empty workspace to a persisted, validated, authorized, multi-transport users feature you can curl, query, and test.
+sidebar:
+  order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-<Aside type="note">
-  This tutorial is being written. It will walk a single feature (`users`)
-  through every layer: entity, service, controller, resolver, gateway,
-  authorization, and tests. Until it lands, the
-  [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
-  reference feature is the canonical exemplar to copy from.
+You spend the next nine pages shipping one feature — a `users` resource —
+from an empty workspace to a running binary that authenticates callers,
+filters reads to their organisation, validates inputs, persists through
+a real Postgres, exposes the same data over GraphQL, and ships an e2e
+test that boots the whole module against a throwaway database. Each
+page leaves you with code that compiles and a command you can run.
+
+## What you end up with
+
+A workspace shaped like the reference one — `apps/tutorial-api/` for the
+binary and a `users/` feature with one port and two transports.
+
+<FileTree>
+- apps/tutorial-api/
+  - Cargo.toml
+  - src/
+    - main.rs
+    - module.rs
+  - tests/
+    - e2e.rs
+- crates/
+  - features/
+    - src/
+      - users/
+        - entity.rs
+        - service.rs
+        - module.rs
+        - mod.rs
+        - http/
+          - controller.rs
+          - module.rs
+          - mod.rs
+        - graphql/
+          - resolver.rs
+          - module.rs
+          - mod.rs
+</FileTree>
+
+Two `curl`s and one GraphQL query against the running binary:
+
+```bash frame="terminal"
+$ curl -s -H 'Authorization: Bearer <token>' http://localhost:3000/users/<id>
+{"id":"018f…","name":"Ada","email":"ada@acme.test"}
+
+$ curl -s -H 'Authorization: Bearer <token>' http://localhost:3000/graphql \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"{ users { id name org { id } } }"}'
+{"data":{"users":[{"id":"018f…","name":"Ada","org":{"id":"018e…"}}]}}
+```
+
+And a passing e2e suite:
+
+```bash frame="terminal"
+$ just test-e2e
+running 1 test
+test users_round_trip_under_a_bearer_token ... ok
+```
+
+## What you should know going in
+
+The tutorial assumes you've already followed
+[Getting started](/getting-started/) and skimmed
+[Fundamentals](/fundamentals/), [Configuration](/configuration/), and
+[HTTP](/http/) — the toolchain is installed, `just dev` runs the bare
+baseline, and you know what a module, a provider, and a controller are.
+`docker` is available for the Postgres step.
+
+Rust 1.75+ is enough. Pages 7 and 9 (database, testing) need a Postgres
+the workspace already provisions with `just db up`; pages 2 to 6 run
+without one.
+
+## The pages, in order
+
+<CardGrid>
+  <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="Workspace, app under apps/tutorial-api/, AppModule, main, run it once." />
+  <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The User entity with SeaORM and #[expose]." />
+  <LinkCard title="3. Expose over HTTP" href="/tutorial/http/" description="UsersController, the service, GET and POST." />
+  <LinkCard title="4. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 422 on a bad body." />
+  <LinkCard title="5. Authenticate and authorize" href="/tutorial/security/" description="AuthGuard, AppAbility, row-level scope, Bind." />
+  <LinkCard title="6. Persist through Postgres" href="/tutorial/database/" description="DatabaseModule, migrations, transactional writes." />
+  <LinkCard title="7. Mirror on GraphQL" href="/tutorial/graphql/" description="UsersResolver, auto-resolved relations, SDL." />
+  <LinkCard title="8. Test it end to end" href="/tutorial/testing/" description="apps/tutorial-api/tests/e2e.rs against an EphemeralDatabase." />
+</CardGrid>
+
+<Aside type="tip">
+At any point, the working reference for the same feature lives in
+[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
+and the running app in
+[`apps/platform-api/`](https://github.com/NestRS/NestRS/tree/main/apps/platform-api).
+Open them side by side when a section feels thin — they always compile.
 </Aside>
 
-## Sections (coming soon)
+## Ready?
 
-1. **Scaffold the feature folder** — port (files at the feature root) and the first adapter.
-2. **Entity and service** — define the data shape and the business logic.
-3. **Expose over HTTP** — controller, pipes, guards.
-4. **Expose over GraphQL** — resolver, fields, dataloaders.
-5. **Expose over WebSockets** — gateway and messages.
-6. **Authorization** — abilities, row-level filtering, response masking.
-7. **Persistence and migrations** — entity wiring, the migrator app.
-8. **Test it end to end** — `nest-rs-testing` and the live baseline.
+[Scaffold the app →](/tutorial/scaffold/)

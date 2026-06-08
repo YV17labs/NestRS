@@ -1,0 +1,137 @@
+---
+title: Observability
+description: Span structure and fields the queue layer emits — what you see at info, debug, and error levels for every job.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every queue event the framework emits targets `nest_rs::queue`. One
+target, every transport-layer log filterable by `RUST_LOG=nest_rs::queue=debug`,
+every span attaching the same structured fields. The service-level
+logs your `#[process]` method emits keep their own target (e.g.
+`features::audio`) — same convention as the rest of the framework.
+
+## Targets and levels
+
+| Target | What | Default level |
+|---|---|---|
+| `nest_rs::queue` | Framework events: discovery, registration, job start/end, retries, fails. | `info` on success, `warn` on retry, `error` on terminal failure. |
+| `nest_rs::transport` | Boot: `attached module-contributed transport transport=QueueWorker`. | `info`. |
+| `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
+
+The level guarantee from the project's posture: hot paths respect
+`RUST_LOG=info`. Per-job framework logs sit at `info` (one line per
+ack), `debug` lines exist for the dispatch path you only want under
+investigation. Failures are `warn`/`error` so they survive aggressive
+filtering.
+
+## Structured fields
+
+Every framework log carries the same field set so a downstream
+processor can group, count, or alert without parsing strings:
+
+| Field | Type | Notes |
+|---|---|---|
+| `processor` | `&'static str` | The processor host name, e.g. `AudioJobs::transcode`. |
+| `queue` | `&'static str` | The Redis queue name. |
+| `concurrency` | `usize` | Fetch buffer (the in-flight ceiling), present on boot lines. |
+| `retries` | `usize` | The configured budget, present on boot lines. |
+| `job_id` | `String` | apalis-assigned id, present on per-job lines. |
+| `attempt` | `u32` | Attempt counter (`1` on first try). |
+| `elapsed_ms` | `u64` | Wall time of the handler call. |
+
+Prefer the structured form (`queue = %name`, `job_id = %id`) over
+formatted strings. The OTLP appender propagates them as span
+attributes.
+
+## What boot looks like
+
+```text frame="terminal"
+2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
+2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
+2026-06-03T10:18:41Z DEBUG nest_rs::queue: skipped #[process] method: provider unreachable from app's module tree processor=ReportJobs::weekly queue=reports
+```
+
+Two lines per active processor (one `attached`, one `registered`) plus
+one `debug` skip for each `#[process]` method that compiled in but
+wasn't imported into this app — useful to confirm a shared `features`
+crate isn't accidentally activating handlers the binary doesn't want.
+
+<Aside>
+The skip line is `debug`, intentional: producing one info-level entry
+per non-reachable method in a large workspace would drown the boot
+log. If a method you expected to run doesn't show up in the
+`registered` lines, drop to `nest_rs::queue=debug` once and the skip
+explains why.
+</Aside>
+
+## What a job's life looks like
+
+A successful job, one info line at start, one at end:
+
+```text frame="terminal"
+2026-06-03T10:18:46Z  INFO nest_rs::queue: job started processor=AudioJobs::transcode queue=audio job_id=01HFEX… attempt=1
+2026-06-03T10:18:46Z  INFO features::audio: transcoded file=track-1717405126521.mp3
+2026-06-03T10:18:46Z  INFO nest_rs::queue: job ok processor=AudioJobs::transcode queue=audio job_id=01HFEX… attempt=1 elapsed_ms=342
+```
+
+A retried job:
+
+```text frame="terminal"
+2026-06-03T10:19:02Z  INFO nest_rs::queue: job started processor=AudioJobs::transcode queue=audio job_id=01HFFA… attempt=1
+2026-06-03T10:19:02Z  WARN nest_rs::queue: job failed; retrying processor=AudioJobs::transcode queue=audio job_id=01HFFA… attempt=1 elapsed_ms=12 error="connection refused"
+2026-06-03T10:19:02Z  INFO nest_rs::queue: job started processor=AudioJobs::transcode queue=audio job_id=01HFFA… attempt=2
+2026-06-03T10:19:02Z  INFO nest_rs::queue: job ok processor=AudioJobs::transcode queue=audio job_id=01HFFA… attempt=2 elapsed_ms=298
+```
+
+A job that exhausts its budget:
+
+```text frame="terminal"
+2026-06-03T10:19:30Z  WARN nest_rs::queue: job failed; retrying processor=AudioJobs::transcode queue=audio job_id=01HFFB… attempt=3 error="…"
+2026-06-03T10:19:30Z ERROR nest_rs::queue: job failed; budget exhausted processor=AudioJobs::transcode queue=audio job_id=01HFFB… attempts=4 error="…"
+```
+
+The `error` line is the one to alert on — the budget is gone, the job
+is now in apalis's failed list, no further attempt is coming on its
+own.
+
+## Span structure
+
+The worker opens one span per job, target `nest_rs::queue`, name
+`job`. The handler runs inside it, so any `tracing::info!` your
+service emits is automatically tagged with the job's `job_id`,
+`processor`, `queue`, `attempt`. The OTLP appender from
+`nest-rs-opentelemetry` exports them as span attributes — the
+[OpenTelemetry / traces](/opentelemetry/traces/) page covers
+attribute mapping. The corresponding log-to-OTLP path is in
+[OpenTelemetry / logs](/opentelemetry/logs/).
+
+## Filtering recipes
+
+```bash
+RUST_LOG=info,nest_rs::queue=debug just dev platform-worker
+```
+
+`info` everywhere, `debug` on the queue path: gives you the
+boot-time skip lines plus the per-job dispatch decisions without
+turning the rest of the framework loud.
+
+```bash
+RUST_LOG=nest_rs::queue=warn just dev platform-worker
+```
+
+Strictly retries and failures — useful for tailing a healthy worker
+where the only thing you care about is "did anything go wrong."
+
+## See also
+
+- [OpenTelemetry](/opentelemetry/) — installing the OTLP appender so
+  these spans and structured logs reach a backend.
+- [OpenTelemetry / traces](/opentelemetry/traces/) — how
+  `nest_rs::queue` spans appear in a trace UI, attribute conventions.
+- [OpenTelemetry / logs](/opentelemetry/logs/) — structured-log
+  export, severity mapping.
+- [Retries and failure](/queue/retries-and-failure/) — the policy
+  behind the `attempt` field and the `failed` outcome.

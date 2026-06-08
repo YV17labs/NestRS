@@ -1,0 +1,153 @@
+---
+title: Configuration
+description: GraphqlConfig — mount path, playground, SDL emission, with production-safe defaults and the env / pinned dual path.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`GraphqlModule::for_root(None)` reads `NESTRS_GRAPHQL__*` from the
+environment; `GraphqlModule::for_root(Some(config))` pins a value
+that wins over env. Every field is settable both ways — pin host
+behaviour in code, leave secrets and per-environment toggles to env.
+Defaults are production-safe: the playground stays off, the SDL emit
+stays off, the mount path is `/graphql`.
+
+## The config struct
+
+```rust title="crates/nest-rs-graphql/src/config.rs"
+#[config(namespace = "graphql")]
+pub struct GraphqlConfig {
+    /// Default `/graphql`.
+    pub path: String,
+    /// Default `false` (production-safe).
+    pub playground: bool,
+    /// Where the committed SDL lives. Default `schema.graphql`.
+    pub schema_path: PathBuf,
+    /// (Re)write `schema_path` from the live schema once at boot.
+    /// Default `false`. A write failure is logged, never fatal.
+    pub emit_sdl: bool,
+}
+```
+
+| Field | Env var | Default | Effect |
+|---|---|---|---|
+| `path` | `NESTRS_GRAPHQL__PATH` | `/graphql` | Mount point for both `POST` (operations) and `GET` (playground, when enabled). |
+| `playground` | `NESTRS_GRAPHQL__PLAYGROUND` | `false` | When `true`, `GET <path>` serves the offline playground HTML. |
+| `schema_path` | `NESTRS_GRAPHQL__SCHEMA_PATH` | `schema.graphql` | Where the SDL gets written. |
+| `emit_sdl` | `NESTRS_GRAPHQL__EMIT_SDL` | `false` | When `true`, the running app writes its live SDL to `schema_path` once at boot. |
+
+<Aside type="caution">
+**`playground = true` in production is a CVE.** It exposes the full
+schema (introspection) to anyone hitting `GET /graphql`. The default
+is `false` for a reason — flip it in `.env.development` and leave it
+off in `.env.production`.
+</Aside>
+
+## The dual path
+
+Every module's config follows this rule (framework-wide):
+
+```rust title="src/module.rs — env-driven"
+use nest_rs_graphql::GraphqlModule;
+
+#[module(imports = [GraphqlModule::for_root(None)])]
+pub struct AppModule;
+```
+
+```bash title=".env.development"
+NESTRS_GRAPHQL__PLAYGROUND=true
+NESTRS_GRAPHQL__EMIT_SDL=true
+NESTRS_GRAPHQL__SCHEMA_PATH=./schema.graphql
+```
+
+```rust title="src/module.rs — pinned at the import site"
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule};
+use std::path::PathBuf;
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        path: "/api/graphql".into(),
+        playground: false,
+        schema_path: PathBuf::from("./schema.graphql"),
+        emit_sdl: false,
+    }),
+])]
+pub struct AppModule;
+```
+
+Mix both freely — pin the mount path in code (the reverse proxy
+depends on it), leave `playground` and `emit_sdl` to env.
+
+## Mount path
+
+`GraphqlModule` mounts on `HttpTransport` at `path`:
+
+- `POST <path>` — GraphQL operations (queries + mutations).
+- `GET <path>` — the playground HTML, when `playground = true`.
+
+The path is a `nest`ed route on the HTTP transport, so the surrounding
+`HttpModule` config (host, port, CORS, TLS) applies as usual.
+[HTTP / Configuration](/http/) covers the transport itself.
+
+## The playground
+
+When `playground = true`, `GET <path>` serves
+`async_graphql::http::playground_source` — the offline HTML, no CDN
+fetch. The page hits the same mount path for its requests, so a
+reverse proxy or a `path = "/api/graphql"` override Just Works.
+
+In dev, the playground is the fastest way to read the schema, run a
+query, and inspect the response with field-level docs. In production,
+keep it off and rely on the committed SDL plus introspection-aware
+clients reading from a sandbox environment.
+
+<Aside type="tip">
+**Introspection** is on whenever the schema is reachable —
+async-graphql ships introspection enabled by default. To turn it off
+in production, disable it via async-graphql's `Schema` configuration
+in a custom build (no `GraphqlConfig` field for it today). The
+playground toggle is independent: turning the playground off does
+**not** turn introspection off.
+</Aside>
+
+## SDL emission
+
+`emit_sdl = true` rewrites `schema_path` from the live schema once at
+boot. The SDL gets sorted (types, fields, arguments, enum values) so
+two builds of the same schema produce byte-identical files — the diff
+in git tells you what changed.
+
+```bash title="dev workflow"
+$ NESTRS_GRAPHQL__EMIT_SDL=true cargo run -p platform-api
+# schema.graphql is rewritten before the app starts serving
+$ git diff schema.graphql                    # see the wire change
+```
+
+Apps commit `schema.graphql` next to `Cargo.toml`. A schema change
+shows up in a code review without a separate generator pass or a CI
+drift-check.
+
+A write failure is logged at `warn` level (`nest_rs::graphql`
+target), never fatal — the app still starts. The path is resolved
+relative to the working directory the app was launched from.
+
+## Production checklist
+
+Before shipping:
+
+- `NESTRS_GRAPHQL__PLAYGROUND` unset or `false`.
+- `NESTRS_GRAPHQL__EMIT_SDL` unset or `false` — production apps don't
+  rewrite their own SDL.
+- `path` matches what your gateway / ingress routes to.
+- The SDL committed in git is the one the production binary serves
+  (the CI build runs with `emit_sdl=true` against a known database and
+  diffs against the committed file).
+
+## Reference
+
+- `crates/nest-rs-graphql/src/config.rs` — the `GraphqlConfig`
+  struct and `Config::from_env` impl.
+- `crates/nest-rs-graphql/src/module.rs` — the `for_root` /
+  `register` glue that turns the config into route mounts.

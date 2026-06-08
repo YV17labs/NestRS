@@ -48,7 +48,7 @@ a restart. Edit a handler, save, hit the endpoint again.
 If you prefer a local toolchain:
 
 ```bash
-# Rust 1.75 or newer
+# Rust 1.95 or newer (workspace targets edition 2024)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Dev tooling
@@ -255,6 +255,11 @@ replacement.
 
 ## Next steps
 
-- [Tutorial](/tutorial/) — build a complete feature with persistence and authz.
-- [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, interceptors, filters.
-- [HTTP](/http/) — controllers, pipes, guards, filters, interceptors in depth.
+Read in this order before the hands-on tutorial:
+
+1. [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, interceptors, filters.
+2. [Configuration](/configuration/) — typed config, `.env` cascade, env var namespaces.
+3. [HTTP](/http/) — controllers, routes, extractors, transport config.
+4. [Database](/database/) and [Security](/security/) — when you move past the hello baseline.
+5. [Testing](/testing/) — boot the real graph in-process before you ship an e2e suite.
+6. [Tutorial](/tutorial/) — build a complete `users` feature end to end (capstone).

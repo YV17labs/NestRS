@@ -1,0 +1,181 @@
+---
+title: Guards
+description: Connection-level guards on the upgrade and per-message guards on each envelope — one Guard trait, two scopes.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A WebSocket connection has two gates a `Guard` can sit on, and they
+answer different questions. The **upgrade** is an HTTP `GET` carrying
+headers, cookies, and a query string — the moment to ask "may this
+peer open a connection at all?" The **dispatch loop** then runs in a
+task on the upgraded socket — the moment to ask "may this connection
+fire *this* event?" One `Guard` trait covers both; the difference is
+where you bind it.
+
+## Two scopes, one trait
+
+`nest_rs_guards::Guard` is the same trait used for HTTP routes and
+GraphQL operations. It exposes three optional methods — `check_http`,
+`check_graphql`, `check_ws_message` — and a guard implements the ones
+it cares about. WebSockets reach both:
+
+| Scope | Decorator location | Trait method run |
+|---|---|---|
+| **Connection** | `#[use_guards(...)]` on the gateway struct | `check_http` (on the upgrade `Request`) |
+| **Message** | `#[use_guards(...)]` next to a `#[subscribe_message]` | `check_ws_message` (on each envelope) |
+
+A guard listed at gateway scope **rejects the upgrade** — the response
+goes back as HTTP, no socket is opened, no `on_connect` fires. A guard
+listed at message scope **rejects the dispatch** — the connection
+stays open, the envelope is replaced with an error frame on the same
+event name, and a `warn!` lands in `nest_rs::ws`.
+
+## Connection-level: the upgrade gate
+
+A connection-level guard runs once per connection, against the upgrade
+request, like any HTTP guard:
+
+```rust
+use nest_rs_ws::{gateway, messages};
+use crate::auth::AuthGuard;
+
+#[gateway(path = "/ws")]
+#[use_guards(AuthGuard)]
+pub struct ChatGateway {
+    #[inject]
+    svc: Arc<RoomService>,
+}
+```
+
+`AuthGuard` reads the `Authorization` header (or a cookie, or a query
+parameter — your strategy decides), verifies the token, and attaches
+the principal to the request. A failed check returns the same
+`Denial` shape an HTTP route would return (`401`, `403`, etc.) — the
+client receives the response, and no socket is ever opened.
+
+Because the `SocketContext` seam runs **after** connection-level
+guards and **captures the post-guard request state**, anything those
+guards attach (the principal, an ambient ability, the database
+executor) is re-installed around every message dispatch on the
+connection. Without that capture, a per-message guard like
+`WsAuthGuard` reading `current_ability()` would see `None` once the
+upgrade request had unwound.
+
+## Per-message: the envelope gate
+
+A per-message guard runs every time the envelope's `event` matches a
+handler the guard is attached to:
+
+```rust
+use nest_rs_ws::{messages, WsClient};
+use nest_rs_ws::serde_json::Value;
+use nest_rs_core::{Layer, injectable};
+use nest_rs_guards::{Denial, Guard};
+use async_trait::async_trait;
+
+#[injectable]
+#[derive(Default)]
+pub struct ModeratedGuard;
+
+impl Layer for ModeratedGuard {}
+
+#[async_trait]
+impl Guard for ModeratedGuard {
+    async fn check_ws_message(
+        &self,
+        _client: &WsClient,
+        _event: &str,
+        data: &Value,
+    ) -> Result<(), Denial> {
+        match data.get("author").and_then(Value::as_str) {
+            Some("banned") => Err(Denial::forbidden("author `banned` is not allowed")),
+            _ => Ok(()),
+        }
+    }
+}
+```
+
+Bind it beside the message it gates:
+
+```rust
+#[messages]
+impl ChatGateway {
+    #[subscribe_message("message")]
+    #[use_guards(ModeratedGuard)]
+    async fn on_message(&self, msg: SendMessage) {
+        self.svc.record(msg);
+    }
+}
+```
+
+A denial surfaces as a wire-shaped error frame on the rejected event:
+
+```text frame="terminal"
+> {"event":"message","data":{"author":"banned","text":"hi"}}
+< {"event":"message","data":{"error":"author `banned` is not allowed"}}
+```
+
+The connection stays open; the client can fire other events.
+
+## Mount-time dedup
+
+The `#[messages]` macro composes each event's guard chain at mount
+time: app-global guards first, then any listed on the gateway, then
+any on the message itself. Duplicates are removed by `TypeId`, so a
+guard listed both as a global and on a specific message runs **once**
+per dispatch — there is no cost to redeclaring on a provider. Per the
+[layers-declare-on-provider](/) rule, do redeclare: a feature crate
+moved to another app may not inherit the same globals.
+
+```text
+ConnUpgrade ── check_http ── on_connect
+                                  │
+                                  ├── Envelope ── check_ws_message (global ∪ gateway ∪ message, dedup) ── dispatch
+                                  └── Envelope ── check_ws_message (...) ── dispatch
+                                  └── on_disconnect ── close
+```
+
+A guard chain that returns `Err(Denial)` short-circuits at the first
+denial — later guards do not run, the handler is skipped, the error
+frame is sent.
+
+<Aside type="note">
+The same `Guard` trait runs across all three transports, so a guard
+that implements `check_http`, `check_graphql`, and `check_ws_message`
+can be wired anywhere without rewriting. A guard that only makes
+sense for one transport (a `MessageGuard`-shaped check) implements
+only `check_ws_message` and leaves the others on the default
+`Ok(())`.
+</Aside>
+
+## Authentication and authorization
+
+Connection-level `AuthGuard` and per-message `AuthzGuard` are the
+nestrs equivalent of the HTTP pair — same strategy, same ability
+machinery. They wire through dedicated WS bridges from
+`nest_rs_authn` and `nest_rs_authz` so the gateway can read the
+ambient principal and ability inside every dispatch.
+
+See [Security](/security/) for the strategy + ability composition; the
+WS-specific bits — `WsDataContext`, `WsAuthGuard`, the `forward_principal!`
+macro — live in the same authn/authz crates as their HTTP and GraphQL
+siblings, behind the matching `ws` feature.
+
+## Going further
+
+- [Security](/security/) — the authn + authz wiring story across HTTP,
+  GraphQL, and WS.
+- [Messages](/websockets/messages/) — the wire shape of a denial reply
+  and the return contract.
+
+### Reference
+
+- [`Guard`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-guards/src/guard.rs) —
+  the `check_http` / `check_graphql` / `check_ws_message` triple.
+- [`EventLayerTable`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-ws/src/guard.rs) —
+  the per-gateway, per-event guard table the dispatcher iterates.
+- [`apps/chat/src/chat/guard.rs`](https://github.com/NestRS/NestRS/blob/main/apps/chat/src/chat/guard.rs) —
+  a per-message guard worked end to end.

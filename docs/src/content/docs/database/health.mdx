@@ -1,0 +1,74 @@
+---
+title: Health
+description: Gate readiness on a real round-trip to the database — one module import wires the indicator.
+sidebar:
+  order: 9
+---
+
+The readiness probe should fail when the database is unreachable. NestRS
+ships a [SeaORM](https://www.sea-ql.org/SeaORM/)-backed indicator that runs
+`DatabaseConnection::ping` and plugs straight into
+[`nest-rs-health`](/health/)'s indicator registry — no glue code, no probe
+handler to write.
+
+## Wire the indicator
+
+Import `DatabaseHealthModule` alongside `HealthModule`:
+
+```rust title="src/module.rs"
+use nest_rs_health::HealthModule;
+use nest_rs_seaorm::DatabaseHealthModule;
+
+#[module(
+    imports = [
+        DatabaseModule::for_root(None),
+        HealthModule,
+        DatabaseHealthModule,
+    ],
+)]
+pub struct AppModule;
+```
+
+That's it. Importing the module registers `DbHealthIndicator` as both a
+**readiness** and a **startup** indicator — `HealthModule` discovers them
+through the inventory seam and mounts the probes automatically.
+
+## What gets probed
+
+Two endpoints exit the box with the database wired in:
+
+| Endpoint           | Indicator runs       | Failure              |
+|--------------------|----------------------|----------------------|
+| `GET /health/ready`   | `DbHealthIndicator::db`       | `503` while unreachable |
+| `GET /health/startup` | `DbHealthIndicator::db_ready` | `503` until first ping succeeds |
+
+The liveness probe (`GET /health/live`) deliberately does not depend on the
+database — a brief DB outage should not kill the pod.
+
+## A passing probe
+
+```bash
+curl -s http://localhost:3000/health/ready
+```
+
+```json
+{
+  "status": "ok",
+  "details": {
+    "db": { "status": "up" }
+  }
+}
+```
+
+A failure response surfaces the typed `DbErr` as the `error` field on the
+failing indicator, and the overall `status` switches to `down` with a
+`503`. The same shape across every indicator means a single dashboard
+template covers them all.
+
+## Going further
+
+- [Database](/database/) — the slice the indicator hangs off.
+- [Repo and executor](/database/repo-and-executor/) — the
+  `DatabaseConnection` the indicator pings.
+- [Health](/health/) — the indicator registry, the probe endpoints,
+  custom indicators for other dependencies.

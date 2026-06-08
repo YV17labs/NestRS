@@ -7,90 +7,68 @@ import { Aside } from '@astrojs/starlight/components';
 
 MCP (Model Context Protocol) is the spec language models use to call tools.
 A NestRS MCP server is a struct with a `#[mcp]` decorator: DI handles its
-dependencies, `#[tool]` defines each tool, the server self-mounts on the
-HTTP transport at the path you choose.
+dependencies, `#[tool]` defines each tool, and the server self-mounts on the
+HTTP transport at the path you choose. Same DI, same access graph, same
+ambient ability — your tools live next to your controllers, not in a sidecar.
 
-Below is a complete MCP server, served on `http://localhost:3000` — the full
-version lives in `apps/mcp`.
+`nest-rs-mcp` builds on [rmcp](https://docs.rs/rmcp) — the framework wraps it
+so a tool server is an `#[injectable]` struct that self-mounts on the HTTP
+transport, with [schemars](https://docs.rs/schemars) deriving the tool input
+schemas the client reads.
 
-## A working MCP server
+## The smallest possible tool
 
-```rust title="apps/mcp/src/weather/tool.rs"
-use std::sync::Arc;
+The fastest way to see the shape: one tool, one string in, one string out.
 
-use nest_rs_mcp::mcp;
+```rust title="apps/mcp/src/hello/tool.rs"
 use nest_rs_mcp::{
-    tool, tool_handler, tool_router, CallToolResult, Content, McpError,
-    Parameters, ServerHandler,
+    mcp, tool, tool_handler, tool_router,
+    CallToolResult, Content, McpError, Parameters, ServerHandler,
 };
-use validator::Validate;
+use schemars::JsonSchema;
+use serde::Deserialize;
 
-use crate::weather::dto::CoordsParams;
-use crate::weather::service::WeatherProvider;
-
-#[mcp(path = "/mcp")]
-#[derive(Clone)]
-pub struct WeatherTool {
-    #[inject]
-    weather: Arc<dyn WeatherProvider>,
+#[derive(Deserialize, JsonSchema)]
+pub struct HelloParams {
+    pub name: String,
 }
 
+#[mcp(path = "/mcp")]
+#[derive(Clone, Default)]
+pub struct HelloTool;
+
 #[tool_router]
-impl WeatherTool {
-    #[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
-    async fn current_weather(
+impl HelloTool {
+    #[tool(description = "Say hello to someone by name.")]
+    async fn hello(
         &self,
-        Parameters(params): Parameters<CoordsParams>,
+        Parameters(params): Parameters<HelloParams>,
     ) -> Result<CallToolResult, McpError> {
-        params
-            .validate()
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-
-        let report = self
-            .weather
-            .current(params.latitude, params.longitude)
-            .await
-            .map_err(internal)?;
-
-        let summary = format!(
-            "{:.1}°C, wind {:.1} km/h @ {:.0}° (code {}, observed {})",
-            report.temperature_c,
-            report.wind_speed_kmh,
-            report.wind_direction_deg,
-            report.weather_code,
-            report.observed_at,
-        );
-
-        Ok(CallToolResult::success(vec![Content::text(summary)]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Hello, {}!", params.name,
+        ))]))
     }
 }
 
 #[tool_handler]
-impl ServerHandler for WeatherTool {}
+impl ServerHandler for HelloTool {}
 ```
 
-```rust title="apps/mcp/src/weather/dto.rs"
-use serde::{Deserialize, Serialize};
-use validator::Validate;
+That's a complete MCP server. List it in a module's `providers` and
+`#[mcp(path = "/mcp")]` mounts it on the existing HTTP transport — same port,
+same CORS, no second server. An MCP client pointed at
+`http://localhost:3000/mcp` sees one tool called `hello` and can invoke it.
 
-#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema, Validate)]
-pub struct CoordsParams {
-    #[validate(range(min = -90.0, max = 90.0))]
-    pub latitude: f64,
-    #[validate(range(min = -180.0, max = 180.0))]
-    pub longitude: f64,
-}
-```
+The three macros split the work:
 
-- **`#[mcp(path = "/mcp")]`** mounts the server on the HTTP transport at
-  `/mcp` (Streamable-HTTP, the standard MCP transport).
-- **`#[inject] weather: Arc<dyn WeatherProvider>`** — the tool injects a
-  trait object; the impl lives module-private with `pub trait` exposed.
-- **`#[tool(description = ...)]`** registers the method as a tool the
-  LLM client can call. The `description` is what the model sees.
-- **`Parameters<CoordsParams>`** — the framework deserializes the JSON
-  arguments to the typed input. `JsonSchema` derives the schema sent to
-  the client; `validator` rejects out-of-range values.
+- **`#[mcp(path = "...")]`** registers the struct as a discoverable provider
+  that mounts a streamable-HTTP endpoint at `path` on the HTTP transport.
+- **`#[tool_router]`** collects every `#[tool(...)]` method on the impl into the
+  router the MCP runtime calls when a client invokes a tool.
+- **`#[tool_handler]`** plugs that router into rmcp's `ServerHandler` trait.
+
+The struct can take `#[inject]` fields like any other provider — `HelloTool` has
+none, real servers usually do.
 
 ## Run it
 
@@ -100,49 +78,227 @@ $ just dev mcp
 
 ```text frame="terminal"
 2026-06-03T10:34:07.882Z  INFO nest_rs::http: bound 1 MCP server on 0.0.0.0:3000
-  POST /mcp → WeatherTool (1 tool)
+  POST /mcp → HelloTool (1 tool)
 ```
 
 Point an MCP-aware client at `http://localhost:3000/mcp`:
 
-```json title="Claude Desktop / Cursor — claude_desktop_config.json"
+```json title="claude_desktop_config.json"
 {
   "mcpServers": {
-    "weather": {
+    "hello": {
       "url": "http://localhost:3000/mcp"
     }
   }
 }
 ```
 
-In your client, the tool `current_weather` becomes callable with
-`{ "latitude": 48.85, "longitude": 2.35 }`:
+## Multiple tools on one server
 
-```text frame="terminal"
-14.2°C, wind 7.3 km/h @ 220° (code 3, observed 2026-06-03T10:34:00)
+Each method under `#[tool_router]` becomes its own callable. Share state
+through `&self` — `#[inject]` once, every tool reuses it.
+
+```rust
+#[mcp(path = "/weather")]
+#[derive(Clone)]
+pub struct WeatherTool {
+    #[inject]
+    svc: Arc<dyn WeatherProvider>,
+}
+
+#[tool_router]
+impl WeatherTool {
+    #[tool(description = "Return the current temperature for a city.")]
+    async fn current_temperature(
+        &self,
+        Parameters(p): Parameters<CityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let t = self.svc.current(&p.city).await.map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text(format!("{t:.1}°C"))]))
+    }
+
+    #[tool(description = "Return the forecast for a city, N days out.")]
+    async fn forecast(
+        &self,
+        Parameters(p): Parameters<ForecastParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let f = self.svc.forecast(&p.city, p.days).await.map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text(f.summary())]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for WeatherTool {}
 ```
+
+The client now sees two tools — `current_temperature` and `forecast` — both
+sharing the injected `WeatherProvider`. The `description` is what the model
+reads to decide when to call each.
+
+## A validated tool
+
+Tool inputs are deserialized to a typed struct, so the schema the client reads
+is already typed. For extra checks beyond shape — ranges, enums, mutual
+exclusion — pair `serde` with `validator`:
+
+```rust title="apps/mcp/src/weather/dto.rs"
+use serde::Deserialize;
+use validator::Validate;
+
+#[derive(Deserialize, schemars::JsonSchema, Validate)]
+pub struct CoordsParams {
+    #[validate(range(min = -90.0, max = 90.0))]
+    pub latitude: f64,
+    #[validate(range(min = -180.0, max = 180.0))]
+    pub longitude: f64,
+}
+```
+
+```rust title="apps/mcp/src/weather/tool.rs"
+#[tool(description = "Return the current weather at the given GPS coordinates.")]
+async fn current_weather(
+    &self,
+    Parameters(params): Parameters<CoordsParams>,
+) -> Result<CallToolResult, McpError> {
+    params
+        .validate()
+        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+    let report = self.weather
+        .current(params.latitude, params.longitude)
+        .await
+        .map_err(internal)?;
+
+    Ok(CallToolResult::success(vec![Content::text(report.summary())]))
+}
+```
+
+`JsonSchema` derives the schema sent to the client; `validator` rejects
+out-of-range values with `McpError::invalid_params` — the model sees a
+structured error and can retry with corrected inputs.
+
+## Multiple servers on one app
+
+A second server is a second `#[mcp]` struct on a different `path`. List both
+in the module's `providers` and each mounts on the HTTP transport independently
+— different tools, different injected dependencies, different authorization
+policy if you want one.
+
+```rust title="apps/mcp/src/module.rs"
+#[module(
+    imports = [HttpModule::for_root(None), AuthzMcpModule],
+    providers = [HelloTool, WeatherTool],
+)]
+pub struct McpAppModule;
+```
+
+There is no per-server namespace primitive (no `WsServer<N>` analogue) —
+clients distinguish servers by URL: `/mcp` for `HelloTool`, `/weather` for
+`WeatherTool`. The MCP spec already namespaces tools per endpoint, so a second
+endpoint **is** the namespace.
+
+## Resources and prompts
+
+MCP defines two primitives beyond tools: **resources** (read-only documents the
+model can fetch) and **prompts** (parameterized templates the user picks).
+Today, `nest-rs-mcp` ships only the tool surface — there is no `#[resource]`
+or `#[prompt]` decorator, and the `#[tool_handler]` macro leaves the
+`list_resources` / `read_resource` / `list_prompts` / `get_prompt` methods
+on rmcp's `ServerHandler` at their default (empty) impls.
+
+If you need resources or prompts now, hand-implement the relevant
+`ServerHandler` methods on your `#[mcp]` struct directly — the
+`#[tool_handler]` macro is additive, not exclusive, and the raw rmcp surface
+is re-exported from `nest_rs_mcp`. When the decorators land they will follow
+the same shape as `#[tool]`: a method on the impl, schemars-derived input
+schema, ambient `Ability` honoured the same way.
+
+<Aside type="caution">
+  Lean on tools first. The MCP spec is tool-centric: anything you can phrase as
+  "the model calls a function and gets a result" goes through `#[tool]`. Reach
+  for resources when the model needs to *list* and *browse* documents whose
+  identifiers the model itself doesn't know; reach for prompts when the **user**
+  picks a template the client substitutes.
+</Aside>
+
+## Authorization
+
+A `#[mcp]` server inherits the HTTP transport's auth chain — bearer JWT,
+ability, the works. Add `AuthzMcpModule` to the app's imports, and the
+[`McpAbilityBridge`](/security/authorization/per-transport-bridges/) re-runs
+your `AuthGuard` chain on every MCP request and seeds the resulting
+`Ability` into the per-call context. Tools then read the ambient ability the
+same way HTTP handlers do — through a service that goes through `Repo`,
+which respects the ability's row-level filter automatically.
+
+```rust title="apps/mcp/src/module.rs"
+#[module(
+    imports = [
+        HttpModule::for_root(None),
+        DatabaseModule::for_root(None),
+        AuthnModule,
+        AuthzMcpModule,
+    ],
+    providers = [HelloTool],
+)]
+pub struct McpAppModule;
+```
+
+A tool that lists users gets only users the caller is allowed to see — same
+policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
+[per-transport bridges](/security/authorization/per-transport-bridges/) page for
+the four-transport story.
+
+## Error handling
+
+`McpError` (re-exported as `nest_rs_mcp::McpError`, alias for rmcp's
+`ErrorData`) gives the model a structured failure with a JSON-RPC error code.
+Six constructors cover the common cases:
+
+| Constructor | When |
+|---|---|
+| `McpError::invalid_params(msg, data)` | The tool input was syntactically valid JSON but semantically wrong — range, missing required field, mutual exclusion |
+| `McpError::invalid_request(msg, data)` | The whole request shape was off |
+| `McpError::parse_error(msg, data)` | The JSON itself couldn't be parsed |
+| `McpError::method_not_found::<MethodName>()` | The client asked for a tool that doesn't exist on this server |
+| `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
+| `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
+
+A typical adapter for a domain error:
+
+```rust
+fn internal<E: std::fmt::Display>(e: E) -> McpError {
+    McpError::internal_error(e.to_string(), None)
+}
+```
+
+The `data` field accepts any JSON value — attach structured diagnostics there
+when the model would benefit from them (e.g. the validator's per-field errors).
+Anything beyond these six codes flows through `internal_error` — there is no
+custom-code constructor.
+
+## Trait-based DI
+
+Injecting `Arc<dyn WeatherProvider>` keeps the concrete provider
+module-private — a test app can swap in a stub by overriding the provider via
+`AppBuilder::override_dyn`. Same hexagonal pattern as the rest of the
+framework: the tool depends on the trait, the impl lives behind the module,
+the access graph rejects accidental coupling at boot.
 
 ## Going further
 
-### Multiple tools on one server
-
-Add more methods under `#[tool_router]` impl — each `#[tool(...)]` becomes
-a separately callable tool. Share state through `&self`.
-
-### Authorization
-
-`McpAbilityBridge` (provided by `nest-rs-authz` with the `mcp` feature
-flag) gates tool calls against an `Ability`. Same policy as HTTP/GraphQL.
-
-### Trait-based DI
-
-Injecting `Arc<dyn WeatherProvider>` keeps the concrete provider
-module-private — a test app can swap in a stub by overriding the
-provider via `AppBuilder::override_dyn`.
+- [Per-transport authz bridges](/security/authorization/per-transport-bridges/)
+  — how `AuthzMcpModule` plugs the ambient `Ability` into your tools.
+- [Database](/database/) — `Repo` honours the same ambient ability inside a
+  tool as inside an HTTP handler.
+- [Security / Authentication](/security/authentication/) — the bearer JWT
+  flow your MCP tools inherit transitively.
 
 ### Reference
 
-- `apps/mcp/` — the full example.
-- `crates/nest-rs-mcp/` — `#[mcp]`, `#[tool_router]`, `#[tool]`,
-  `#[tool_handler]`.
-- `crates/nest-rs-authz/` (with `mcp` feature) — the MCP authz bridge.
+- `apps/mcp/` — the full Weather example.
+- `crates/nest-rs-mcp/` — `#[mcp]`, the streamable-HTTP endpoint factory,
+  and the re-exported rmcp surface (`tool_router`, `tool`, `tool_handler`,
+  `ServerHandler`, `McpError`, `Parameters`, `CallToolResult`, `Content`).
+- `crates/nest-rs-authz/` (with the `mcp` feature) — `McpAbilityBridge`,
+  bound through `AuthzMcpModule`.

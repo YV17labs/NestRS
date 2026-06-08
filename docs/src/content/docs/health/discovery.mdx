@@ -1,0 +1,87 @@
+---
+title: Discovery
+description: How module-gating decides which indicators run in a given binary — and what to check when one goes silently inert.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`#[indicators]` submits each tagged method to a link-time registry.
+At probe time, `HealthService` drains that registry and filters it
+against `ReachableProviders` — the access-graph-derived set of every
+provider reachable from the running app's root module. The same
+module-gating every transport uses for `#[controller]`, `#[resolver]`,
+or `#[processor]` applies here.
+
+## The rule
+
+| Provider state                                                          | Indicator behavior |
+|-------------------------------------------------------------------------|---------------------|
+| Provider lives in a module **imported** by `AppModule` (directly or transitively) | Runs on every matching probe |
+| Provider linked into the binary but in **no reachable module**          | Silently skipped; the skip is logged at `debug` on `nest_rs::health` |
+
+Linking a crate without importing its module keeps every provider in
+that crate inert — present in the binary, not mounted on any
+transport. Health indicators inherit that contract: a worker app
+that imports `UsersModule` but not `UsersHealthModule` does not run
+the users indicator, even though the symbol is in the binary.
+
+## Why this matters
+
+Two reasons.
+
+**Per-app subsets.** `crates/features/` ships every adapter a feature
+can have — HTTP controller, GraphQL resolver, queue processor, health
+indicator. An app picks which ones it serves by importing the
+matching modules. The worker binary stays free of HTTP surface even
+though it links the feature crate. Health is no different: the
+indicator only runs where the app asked for it.
+
+**No surprise checks.** An indicator is a check, and a check on the
+wrong app is worse than no check. A startup probe that pings a
+database an MCP-only worker doesn't even own would drop the worker's
+`/health/startup` to `503` forever. Module-gating keeps the check
+where its provider belongs.
+
+## Checking what runs
+
+When an indicator silently sits out, the framework emits one line
+per skipped check on the `nest_rs::health` target:
+
+```
+DEBUG nest_rs::health: skipped indicator: provider unreachable from
+      app's module tree indicator=upstream kind=Readiness
+```
+
+Run with `RUST_LOG=nest_rs::health=debug` to surface them. The usual
+cause is a missing `<Feature>HealthModule` import in `AppModule` —
+the feature's data module imports the service, not the health adapter.
+
+A second check: the response body. With the indicator's module
+imported, the indicator's name appears under `details` on its probe:
+
+```bash frame="terminal"
+$ curl -s http://localhost:8080/health/ready | jq '.details | keys'
+[ "db", "upstream" ]
+```
+
+Missing key, missing import. Present key with `status: "down"`,
+genuine failure — read the `error` bucket.
+
+<Aside>
+Stack traces and ambient context follow the indicator's owning
+provider. An indicator that injects an HTTP client logs under the
+provider's `tracing` target — usually `nest_rs::health` for
+framework-shipped ones, the feature's own `<app>::health` for
+product-level ones.
+</Aside>
+
+## Going further
+
+- [Indicators](/health/indicators/) — where they live and how to
+  write one.
+- [Providers](/fundamentals/providers/) — the access graph, the
+  reachable set, and what makes a provider reachable.
+- [Modules](/fundamentals/modules/) — `imports = [...]`, idempotent
+  registration, the port + adapters layout.

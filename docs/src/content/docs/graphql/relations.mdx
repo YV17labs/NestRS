@@ -1,0 +1,198 @@
+---
+title: Relations resolve themselves
+description: Declare a SeaORM relation on an exposed entity and the GraphQL field, the loader, and the auth scope appear with it.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Declaring a SeaORM relation on an `#[expose]`d entity is the **whole
+field-resolver story** for entity-to-entity links — no
+`#[field_resolver]`, no `#[dataloader]` to write by hand. Pass
+`service = …` to `#[expose]` and the macro emits the PK loader on the
+service, the trait bridges that let other entities reach it, and a
+`#[ComplexObject]` field resolver on the wire DTO. The ambient
+`Ability` filters every batch under `Repo::scoped(Action::Read)`, so a
+relation cannot leak across orgs.
+
+## The declaration
+
+```rust title="src/users/entity.rs"
+use nest_rs_resource::expose;
+use sea_orm::entity::prelude::*;
+
+#[expose(name = "User", service = super::service::UsersService)]
+#[sea_orm::model]
+#[derive(Clone, Debug, DeriveEntityModel)]
+#[sea_orm(table_name = "user")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+
+    #[sea_orm(belongs_to, from = "org_id", to = "id")]
+    pub org: HasOne<crate::orgs::Entity>,
+}
+```
+
+```rust title="src/orgs/entity.rs"
+#[expose(name = "Org", service = super::service::OrgsService)]
+#[sea_orm::model]
+#[derive(Clone, Debug, DeriveEntityModel)]
+#[sea_orm(table_name = "org")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub name: String,
+
+    #[sea_orm(has_many)]
+    pub users: HasMany<crate::users::Entity>,
+}
+```
+
+That is the whole declaration — both directions now query:
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3000/graphql -d \
+    '{"query":"{ users { id org { id name } } orgs { users { name } } }"}'
+```
+
+## What the macro emits
+
+Per `#[expose(service = …)]`:
+
+- A **PK loader** on the service: `<Service>ById` (e.g.
+  `UsersServiceById`, `OrgsServiceById`). Reads the parent's primary
+  key, returns the wire DTO.
+- For every `belongs_to` relation, an **FK loader** on the
+  *FK-owning* service: `<Service>By<FkCol>` (e.g.
+  `UsersServiceByOrgId`). Reads a slice of foreign keys, returns the
+  child rows grouped by that key.
+- The trait impls (`PkLoadable`, `RelatedTo<Parent>`) that let the
+  inverse side reach the loader without naming the other service
+  directly.
+- A `#[ComplexObject]` field resolver on the wire DTO that calls into
+  the loader and shapes the result.
+
+The schema you get:
+
+```graphql
+type User {
+    id: ID!
+    orgId: ID!
+    name: String!
+    org: Org             # belongs_to side — PK loader on OrgsService
+}
+
+type Org {
+    id: ID!
+    name: String!
+    users: [User!]!      # has_many side — FK loader on UsersService
+}
+```
+
+## The cross-entity rule
+
+The FK loader belongs to the **owner of the FK column** — never the
+consumer. `Users.org_id` lives on the users table, so
+`UsersServiceByOrgId` is on `UsersService`. The orgs resolver reaches
+it through a trait bridge, not by depending on `UsersService` directly.
+
+This is the same hexagonal rule the rest of the framework follows:
+when one service needs to touch another entity, it goes through the
+owner's service — never the ORM. Within a feature's `graphql/`
+adapter, the resolver only injects *its own* service; the auto-emitted
+relation glue handles the rest.
+
+## Auth-scoped batches
+
+Every relation batch runs through `Repo::<Entity>::scoped(Action::Read)`
+against the ambient `Ability`. A user without read access to `Org`
+asking for `user.org { name }` gets `null` for that field, not an
+error — the row simply does not pass the filter. A WS or GraphQL
+request without an `Ability` filter gets unscoped reads, correct for
+system jobs.
+
+This is the killer property: turning a per-row leak into a wire-level
+omission needs no controller code and no manual `if` in the resolver.
+
+## Opt out: skip a single relation
+
+`#[expose(skip)]` on a relation disables auto-emission for that field
+only. The relation stays declared at the ORM level (SeaORM still knows
+about it), and you can write a hand-rolled `#[field_resolver]` if you
+need a custom shape — say a `Connection<User>` with cursor pagination,
+or a filtered subset.
+
+```rust
+#[expose(name = "Org", service = …)]
+#[sea_orm::model]
+pub struct Model {
+    pub id: Uuid,
+    pub name: String,
+
+    #[sea_orm(has_many)]
+    #[expose(skip)]
+    pub users: HasMany<crate::users::Entity>,
+}
+```
+
+<Aside type="caution">
+**Skip is per-field.** Skipping one relation lets a `#[field_resolver]`
+own that field, but every *other* `#[expose]`-emitted relation on the
+same `User` / `Org` type still lives in the auto-emitted
+`#[ComplexObject]`. If you need custom logic on a type that already has
+auto-resolved relations, the single-`ComplexObject` rule applies — see
+[Field resolvers](/graphql/field-resolvers/).
+</Aside>
+
+## A custom shape: the cursor connection
+
+When `skip` opens the slot, write the replacement on the resolver:
+
+```rust title="src/orgs/graphql/resolver.rs"
+use async_graphql::{Context, Result, connection::*};
+use nest_rs_graphql::{field_resolver, resolver};
+
+use crate::orgs::Org;
+use crate::users::User;
+
+#[resolver]
+pub struct OrgsResolver {
+    #[inject]
+    users: Arc<crate::users::UsersService>,
+}
+
+#[resolver]
+impl OrgsResolver {
+    #[field_resolver]
+    async fn users(
+        &self,
+        _ctx: &Context<'_>,
+        parent: &Org,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Connection<String, User>> {
+        let page = self.users.page_in_org(parent.id, first, after.as_deref()).await?;
+        Ok(into_connection(page))
+    }
+}
+```
+
+The connection helper, the page service method, and the `User` wire
+DTO all stay where they belong — the resolver only translates between
+the two.
+
+## Where to go next
+
+- [Dataloaders](/graphql/dataloader/) — write a custom batch loader
+  (`by_name`, `by_tag`, denormalized lookups) when the auto-emitted
+  PK + FK loaders don't fit. Cross-link to
+  [Database / Dataloaders](/database/dataloaders/).
+- [Field resolvers](/graphql/field-resolvers/) — the
+  `#[expose(skip)]` escape hatch, and the single-`ComplexObject` rule
+  in detail.
+- [Database / CRUD](/database/crud/) — the service contract every
+  loader (auto-emitted or hand-rolled) routes through.

@@ -1,0 +1,189 @@
+---
+title: JWT
+description: JwtStrategy verifies a bearer token, JwtService signs and verifies, and the resource server holds only the public key when EdDSA is on.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+JSON Web Tokens are the framework's default bearer credential.
+`JwtStrategy<C>` is generic over the claims type — your app picks the
+shape, the framework verifies the signature, checks expiry, and hands
+the claims to the handler. Signing and verifying both run through
+`JwtService`, configured once via `JwtConfig` and injected wherever a
+token is minted.
+
+The implementation is a thin wrapper over
+[`jsonwebtoken`](https://docs.rs/jsonwebtoken). The crate's
+`Algorithm` enum is re-exported as `nest_rs_authn::Algorithm` so an app
+configures the algorithm without taking a direct dependency.
+
+## The three-line setup
+
+A resource-server app declares a type alias and a tiny module:
+
+```rust title="crates/features/src/authn/mod.rs"
+pub type AppJwtStrategy = JwtStrategy<Claims>;
+pub type AuthGuard = nest_rs_authn::AuthGuard<AppJwtStrategy>;
+
+#[module(
+    imports = [nest_rs_authn::AuthnModule::for_root(None)],
+    providers = [AppJwtStrategy, AuthGuard],
+)]
+pub struct AuthnModule;
+```
+
+`AuthnModule::for_root(None)` reads `JwtConfig` from the environment;
+pass a `JwtConfig` to pin it in code. The factory phase builds
+`JwtService` once and registers it as global infrastructure —
+controllers, login services, OAuth flows all inject the same instance.
+
+## What `JwtStrategy` does
+
+`JwtStrategy<C>` is an `#[injectable]` over an `Arc<JwtService>` and a
+`PhantomData<C>`. On each request it:
+
+1. Pulls `Authorization: Bearer <token>` out of the headers via
+   `bearer_token`.
+2. Calls `JwtService::verify::<C>(token)` to verify the signature,
+   check `exp` / `nbf`, and deserialize the claims.
+3. Returns `Outcome::Authenticated(claims)` on success.
+
+A missing header yields `AuthError::MissingCredentials`; a bad
+signature yields `AuthError::InvalidSignature`; an expired token
+yields `AuthError::Expired`. `AuthGuard` maps every variant to a 401
+with `WWW-Authenticate: Bearer`.
+
+## Configuration
+
+`JwtConfig` follows the framework-wide dual-path rule: every field is
+settable from `NESTRS_AUTHN__*` env vars **or** from a pinned struct
+passed to `AuthnModule::for_root(config)`.
+
+| Field | Env var | Notes |
+|-------|---------|-------|
+| `secret` | `NESTRS_AUTHN__SECRET` | HS256 shared secret |
+| `private_key` | `NESTRS_AUTHN__PRIVATE_KEY` | EdDSA PEM, issuer only |
+| `public_key` | `NESTRS_AUTHN__PUBLIC_KEY` | EdDSA PEM, verifier needs it |
+| `leeway_secs` | `NESTRS_AUTHN__LEEWAY_SECS` | Clock skew, default 30 |
+| `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — unset disables the check |
+
+`JwtConfig::into_options` walks the three key fields and chooses a
+mode:
+
+- `secret` set → HMAC HS256 (both sign and verify).
+- `private_key` + `public_key` → EdDSA (sign and verify).
+- `public_key` alone → EdDSA verify-only — a resource server with no
+  private key cannot mint a token even if it wanted to.
+- nothing → boot fails with `"no JWT key configured"`.
+
+A misconfiguration (`private_key` without `public_key`) fails the boot
+loudly, naming the offending env var.
+
+## HS256 vs EdDSA — pick on deployment shape
+
+**HS256** is fine when one binary both issues and verifies tokens.
+Symmetric — anyone with the secret can mint a token. Convenient for
+local development and single-process apps. Set
+`NESTRS_AUTHN__SECRET`.
+
+**EdDSA** is the production posture for split deployments. The issuer
+holds the private PEM; every resource server holds the public PEM
+only. Even a compromised resource server cannot mint a token. The
+issuer sets both `PRIVATE_KEY` and `PUBLIC_KEY`; verifiers set only
+`PUBLIC_KEY`.
+
+See [Issuer and resource server](/security/authentication/issuer-and-resource-server/)
+for the deployment pattern.
+
+```bash
+# generate an EdDSA key pair
+openssl genpkey -algorithm ed25519 -out jwt.pem
+openssl pkey -in jwt.pem -pubout -out jwt.pub
+```
+
+## Claims — your shape, your business rules
+
+The framework's `JwtStrategy<C>` is generic. `C` is any
+`DeserializeOwned + Clone + Send + Sync + 'static` type — usually a
+struct with the standard `sub`, `exp`, plus whatever your app needs:
+
+```rust title="crates/features/src/identity/claims.rs"
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: Option<Uuid>,
+    pub org_id: Uuid,
+    pub roles: Vec<Role>,
+    pub exp: u64,
+}
+```
+
+The handler reads them back through `Ctx<Claims>`:
+
+```rust
+async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUserInput>>)
+    -> Result<Json<User>>
+{
+    Ok(Json(
+        self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
+    ))
+}
+```
+
+## Signing a token
+
+A login or OAuth callback injects `Arc<JwtService>` and calls `sign`:
+
+```rust
+let claims = Claims {
+    sub: Some(user.id),
+    org_id: user.org_id,
+    roles: user.roles.clone(),
+    exp: self.jwt.expiry(),
+};
+let token = self.jwt.sign(&claims)?;
+```
+
+`sign` is `Result<String, AuthError>` — on a verify-only service
+(EdDSA with no private key), it returns `AuthError::Failed(...)`.
+`expiry()` returns `now + ttl` from `JwtOptions::expires_in`
+(default one hour); `ttl_secs()` exposes the duration directly so the
+issuer can return it alongside the token.
+
+## Verifying outside the guard
+
+Most code reaches the claims through `Ctx<C>`. A path that needs to
+verify a token manually — say, the OAuth transaction cookie, or a
+queue job carrying a signed envelope — injects `Arc<JwtService>` and
+calls `verify`:
+
+```rust
+let claims: Claims = self.jwt.verify(token)?;
+```
+
+The verification path runs `Validation::leeway`, checks `nbf`, and
+matches `aud` only when `JwtConfig::audience` is set — otherwise the
+audience check is disabled. Invalid signatures and expired tokens hit
+`tracing::warn!` under `nest_rs::auth`.
+
+<Aside type="caution">
+A short `ttl` is the first defense against token replay. The
+framework leaves the duration to your app — `JwtOptions::expires_in`
+defaults to one hour. Pair short access tokens with a refresh-token
+endpoint when the UX demands long sessions. See
+[Threat model](/security/threat-model/) for what JWT does and does
+not catch.
+</Aside>
+
+## Going further
+
+- [Issuer and resource server](/security/authentication/issuer-and-resource-server/)
+  — the split-deploy pattern that pairs with EdDSA.
+- [OAuth2](/security/authentication/oauth2/) — the JWT issuer is
+  often the OAuth callback.
+- [Authorization](/security/authorization/) — once the claims land on
+  the request, the authz layer builds an `Ability` from them.

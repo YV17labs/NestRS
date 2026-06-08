@@ -1,0 +1,248 @@
+---
+title: Expose over HTTP
+description: A UsersService that goes through Repo, a UsersController that mounts GET /users/:id and POST /users, the first curl that returns a user.
+sidebar:
+  order: 4
+---
+
+import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
+
+You write the service that owns the entity, the controller that mounts
+two routes, and the HTTP module that ties them together. By the end of
+this page, `curl` returns a fresh user from `POST /users` and the same
+user from `GET /users/:id`.
+
+## The service
+
+A service is the entity's single DB gateway. Every read and write goes
+through `Repo<Users>`; controllers, resolvers, gateways never touch
+SeaORM directly. The HTTP layer in this section drives a service that
+implements `CrudService` — that trait is what the `#[crud(...)]` macro
+on the controller expands against.
+
+The service crate here is
+[**`nest-rs-seaorm`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-seaorm) —
+it provides `CrudService`, `Repo`, `ServiceError`, and the SeaORM
+integration. SeaORM stays the source of truth for the column types and
+the active-model semantics.
+
+```rust title="crates/features/src/users/service.rs"
+use nest_rs_core::injectable;
+use nest_rs_seaorm::{CrudService, Repo, ServiceError};
+use sea_orm::ActiveModelTrait;
+use uuid::Uuid;
+
+use super::entity::{CreateUserInput, Entity as Users, UpdateUserInput, User};
+
+#[injectable]
+#[derive(Default)]
+pub struct UsersService;
+
+impl CrudService for UsersService {
+    type Entity = Users;
+    type Create = CreateUserInput;
+    type Update = UpdateUserInput;
+}
+
+impl UsersService {
+    pub async fn create_in_org(
+        &self,
+        input: CreateUserInput,
+        org_id: Uuid,
+    ) -> Result<User, ServiceError> {
+        let mut active = input.into_active_model();
+        active.org_id = sea_orm::Set(org_id);
+        let user = active.insert(&Repo::<Users>::conn()?).await?;
+        Ok(User::from(&user))
+    }
+}
+```
+
+`#[injectable]` marks the struct as a provider — the container builds
+it once and shares it as `Arc<UsersService>`. The `CrudService` impl
+declares the entity and the inputs the controller needs.
+
+`Repo::<Users>::conn()` reaches the ambient executor — the pool on safe
+routes, the transaction on mutating routes. You don't pass it in; the
+data layer installs it before the handler runs (page 5 makes that
+concrete).
+
+Register the service in the port module:
+
+```rust title="crates/features/src/users/module.rs"
+use nest_rs_core::module;
+
+use super::service::UsersService;
+
+#[module(providers = [UsersService])]
+pub struct UsersModule;
+```
+
+## The controller
+
+A controller is a struct with `#[controller(path = ...)]` and a
+`#[crud(...)]` impl block that declares the entity. Verb methods inside
+the block become HTTP routes; the macro handles the rest.
+
+```rust title="crates/features/src/users/http/controller.rs"
+use std::sync::Arc;
+
+use nest_rs_http::{controller, crud};
+use poem::Result;
+use poem::web::{Json, Path};
+
+use crate::users::{CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService};
+
+#[controller(path = "/users")]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[crud(
+    service = svc,
+    entity = UserEntity,
+    output = User,
+    create = CreateUserInput,
+    update = UpdateUserInput,
+)]
+impl UsersController {
+    #[post("/")]
+    async fn create(&self, body: Json<CreateUserInput>) -> Result<Json<User>> {
+        let bootstrap_org = uuid::Uuid::nil();
+        Ok(Json(self.svc.create_in_org(body.0, bootstrap_org).await?))
+    }
+
+    #[get("/:id")]
+    async fn get(&self, Path(id): Path<uuid::Uuid>) -> Result<Json<User>> {
+        Ok(Json(self.svc.find_by_id(id).await?))
+    }
+}
+```
+
+<Aside type="note">
+`org_id = Uuid::nil()` is a deliberate placeholder. Page 5 pulls it
+from the caller's JWT; for now you're driving the controller without
+authentication.
+</Aside>
+
+`#[crud(...)]` generates the `list` / `page` / `update` / `delete`
+routes off `CrudService` automatically — every CRUD verb you didn't
+write yourself ships from there. The two verbs you *did* write override
+the generated ones.
+
+## The HTTP module
+
+The feature's HTTP adapter is a separate module. It imports the port
+(`UsersModule`) and lists the controller.
+
+```rust title="crates/features/src/users/http/module.rs"
+use nest_rs_core::module;
+
+use super::controller::UsersController;
+use crate::users::UsersModule;
+
+#[module(
+    imports = [UsersModule],
+    providers = [UsersController],
+)]
+pub struct UsersHttpModule;
+```
+
+```rust title="crates/features/src/users/http/mod.rs"
+mod controller;
+mod module;
+
+pub use controller::UsersController;
+pub use module::UsersHttpModule;
+```
+
+Add the adapter to the feature root:
+
+```rust title="crates/features/src/users/mod.rs"
+mod entity;
+mod module;
+mod service;
+
+pub mod http;
+
+pub use entity::*;
+pub use module::UsersModule;
+pub use service::UsersService;
+
+pub use http::{UsersController, UsersHttpModule};
+```
+
+## Wire it into the app
+
+The app root now imports the feature's HTTP adapter — that's the only
+edit `apps/tutorial-api/` needs.
+
+```rust title="apps/tutorial-api/src/module.rs"
+use nest_rs_core::module;
+use nest_rs_http::HttpModule;
+
+use features::users::UsersHttpModule;
+
+#[module(imports = [HttpModule::for_root(None), UsersHttpModule])]
+pub struct TutorialApiModule;
+```
+
+Add `features` to `apps/tutorial-api/Cargo.toml`:
+
+```toml title="apps/tutorial-api/Cargo.toml" {3}
+[dependencies]
+nest-rs-core.workspace = true
+features.workspace = true
+nest-rs-http.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+```
+
+## Run it
+
+<Steps>
+
+1. Boot the binary.
+
+   ```bash frame="terminal"
+   $ cargo run -p tutorial-api
+   INFO nest_rs::http: starting on 0.0.0.0:3000
+   ```
+
+2. The controller and the service compile, but you haven't wired a
+   database yet — `Repo::<Users>::conn()` returns an error. Page 6
+   plugs `DatabaseModule` in. For now, hit a route the macro generated
+   that doesn't reach the DB.
+
+   ```bash frame="terminal"
+   $ curl -i http://localhost:3000/users
+   HTTP/1.1 500 Internal Server Error
+   ```
+
+</Steps>
+
+The route table has the verbs (`GET /users`, `GET /users/:id`,
+`POST /users`, `PATCH /users/:id`, `DELETE /users/:id`); the 500 is
+honest — there's no ambient DB to reach yet. The shape is right.
+
+Confirm the route table from the boot log: the `nest_rs::http` target
+prints every mount on startup.
+
+```text frame="terminal"
+INFO nest_rs::http: mounted GET    /users
+INFO nest_rs::http: mounted POST   /users
+INFO nest_rs::http: mounted GET    /users/:id
+INFO nest_rs::http: mounted PATCH  /users/:id
+INFO nest_rs::http: mounted DELETE /users/:id
+```
+
+## What you have now
+
+- A `UsersService` that owns the entity through `Repo<Users>`.
+- A `UsersController` with `POST /users` and `GET /users/:id`, plus the
+  CRUD verbs `#[crud]` auto-generated.
+- A `UsersHttpModule` mounted in the app — the boot log shows the
+  routes.
+
+[Next: validate inputs at the boundary →](/tutorial/validation/)

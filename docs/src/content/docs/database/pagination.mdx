@@ -1,0 +1,167 @@
+---
+title: Pagination
+description: Keyset pages over the primary key for REST, offset PageArgs for GraphQL — one entity flag, both surfaces wired.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Two paginators ship in the box. **Keyset** (cursor over the primary key) is
+the default — O(1) on the index, stable under concurrent inserts, paired
+naturally with UUID-v7 keys. **Offset** (`page` + `per_page`) is the
+classic shape GraphQL clients still expect. The framework picks per
+surface; you flip one `paginate` flag.
+
+[SeaORM](https://www.sea-ql.org/SeaORM/)'s `Cursor` API drives the keyset
+half; the offset side is plain `LIMIT` + `OFFSET`.
+
+## Turn on pagination
+
+Two places say "paginate" — and they say it for different reasons.
+
+```rust title="src/items/entity.rs"
+#[expose(name = "Item", complex, paginate)]
+```
+
+On the entity, `paginate` emits the `ItemPage` envelope and the shared
+`PageArgs` input type — the wire types the response shapes serialize to.
+
+```rust title="src/items/http/controller.rs"
+#[crud(
+    service = svc,
+    entity = ItemEntity,
+    output = Item,
+    create = CreateItemInput,
+    update = UpdateItemInput,
+    paginate = cursor,
+)]
+impl ItemsController {}
+```
+
+On the controller or resolver, `paginate = cursor` (REST + GraphQL) or
+`paginate = page` (GraphQL-only) wires the route + the GraphQL operation.
+
+## Keyset, the REST shape
+
+`paginate = cursor` mounts `GET /items` returning a plain `Vec<Item>`
+body plus an `x-next-cursor` response header when more rows remain. The
+body stays a flat array so response masking works unchanged.
+
+```bash
+curl -s '/items?first=20'
+# [ { "id": "...", "name": "..." }, ... ]
+# x-next-cursor: 0193f1b2-...
+
+curl -s '/items?first=20&after=0193f1b2-...'
+# next page
+```
+
+The query carries `first` (page size, defaulting to 20, clamped to
+`1..=100`) and `after` (the cursor returned by the previous response). An
+unparseable cursor pages from the start — never an error.
+
+## Offset, the GraphQL shape
+
+`paginate = page` on a resolver mounts `items_page(args: PageArgs)`
+returning the `ItemPage` envelope:
+
+```graphql
+query {
+  itemsPage(args: { page: 1, perPage: 20 }) {
+    items { id name }
+    total
+    page
+    perPage
+    totalPages
+    hasNextPage
+    hasPreviousPage
+  }
+}
+```
+
+`PageArgs` validates `page >= 1` and `1 <= per_page <= 100` at the
+boundary. `paginate = cursor` on a resolver works too — same envelope shape,
+backed by the cursor query.
+
+## What `Page<M>` carries
+
+The keyset shape, before serialization:
+
+```rust
+pub struct Page<M> {
+    pub items: Vec<M>,
+    pub next_cursor: Option<Uuid>,
+    pub has_more: bool,
+}
+```
+
+The keyset implementation fetches `limit + 1` rows, truncates the probe
+row from `items`, and uses its presence to set `has_more` and
+`next_cursor`. The cursor is the last visible row's primary key — present
+only when there is more to fetch.
+
+`CrudService::page(first, after)` returns a `Page<E::Model>` directly;
+callers paginating a custom query reach for `Repo::<E>::page(first,
+after)`.
+
+## A custom paginated query
+
+When the auto-emitted `page` does not match — say you want only items
+above a threshold — call `Repo::scoped` and the same cursor helpers:
+
+```rust
+impl ItemsService {
+    pub async fn page_in_stock(
+        &self,
+        first: u64,
+        after: Option<Uuid>,
+    ) -> Result<Page<Item>, ItemError> {
+        let conn = Repo::<Items>::conn()?;
+        let limit = nest_rs_seaorm::page::clamp_page_size(first);
+
+        let mut cursor = Repo::<Items>::scoped(Action::Read)
+            .filter(entity::Column::Quantity.gt(0))
+            .cursor_by(entity::Column::Id);
+        if let Some(after) = after {
+            cursor.after(after);
+        }
+        cursor.first(limit + 1);
+
+        let rows = cursor.all(&conn).await?;
+        let (rows, has_more) = nest_rs_seaorm::page::split_overfetched(rows, limit);
+        let next_cursor = has_more.then(|| rows.last()?.id);
+
+        Ok(Page {
+            items: rows.iter().map(Item::from).collect(),
+            next_cursor,
+            has_more,
+        })
+    }
+}
+```
+
+`Repo::scoped(Action::Read)` is the entry point — the ability filter
+applies, and a request without one denies every row (fail-closed).
+
+## Picking between the two
+
+| Property                      | Keyset (`cursor`) | Offset (`page`) |
+|-------------------------------|-------------------|-----------------|
+| Stable under concurrent inserts | yes             | no              |
+| O(1) on the PK index          | yes               | no (large offset = scan) |
+| Returns a total count         | no                | yes             |
+| Jump-to-page                  | no                | yes             |
+| REST body shape               | `[T]` + header    | not wired today |
+| GraphQL shape                 | `Page<T>`         | `Page<T>` + counts |
+
+Use keyset by default. Reach for offset when the consumer genuinely needs
+page numbers and a total — typically an admin UI table.
+
+## Going further
+
+- [Database](/database/) — the entity that the `paginate` flag lives on.
+- [CRUD](/database/crud/) — the `paginate` knob on `#[crud(...)]`.
+- [Repo and executor](/database/repo-and-executor/) — `Repo::scoped` and
+  `Repo::conn` behind the cursor query.
+- [GraphQL](/graphql/) — `PageArgs`, the `Page<T>` envelope on resolvers.

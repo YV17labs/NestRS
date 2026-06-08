@@ -118,10 +118,16 @@ the [fundamentals](/fundamentals/), or jump straight to a topic:
 ## How fast, exactly
 
 The same "Hello World" service — a provider, a controller, a module — built
-once in NestRS and once in NestJS 11 on Node.js 20, under identical `wrk` load
+once in NestRS and once in NestJS 11 on Node.js 24, under identical `wrk` load
 (2 cores, `-t2 -c64 -d20s`).
 
 <Bench />
+
+## Status
+
+**Alpha.** The API still shifts, rough edges remain — NestRS is not
+production-ready yet. Stars and early feedback on
+[GitHub](https://github.com/NestRS/NestRS) shape what follows.
 
 ## Why developers pick NestRS
 
@@ -261,9 +267,3 @@ no single “scale the monolith” knob; each deployable gets its own replica co
   </div>
   <p class="scale-aside">A steady service like B usually keeps a small, constant footprint — scale where the load actually moves.</p>
 </div>
-
-## Status
-
-**Alpha.** The API still shifts, rough edges remain — NestRS is not
-production-ready yet. Stars and early feedback on
-[GitHub](https://github.com/NestRS/NestRS) shape what follows.

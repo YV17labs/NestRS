@@ -102,3 +102,6 @@ A type that can only be built by the container, and only exercised
 through a request, is fine — that is what app e2e is for. Use unit
 tests where the assertion lives one return value away from the input,
 and integration tests where it lives behind the crate's public API.
+The same `#[cfg(test)] mod tests` shape carries
+[policy tests](/testing/policy/) — `Ability::mask` and
+`condition_for` are pure functions on policy types and belong here.

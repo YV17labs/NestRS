@@ -29,7 +29,7 @@ This category walks the seven primitives every binary leans on:
 - **Interceptors** — wrap handler execution. The same seam that lets you
   log a request also installs the ambient database transaction and the
   authorization context.
-- **Exception filters** — map errors to responses. Bound with
+- **Error handling** — map errors to responses. Bound with
   `#[use_filters(...)]` on a controller or beside a verb.
 - **Middleware** — NestRS doesn't have a middleware primitive. See [the
   page](/fundamentals/middleware/) for the Guards/Interceptors split if
@@ -91,6 +91,10 @@ use crate::service::HelloService;
 pub struct HelloModule;
 ```
 
+Same shape as step ① on the [Modules](/fundamentals/modules/) page —
+`hello` is the runnable version; `blog` is the fiction that grows from
+there.
+
 ```rust title="apps/hello/src/main.rs"
 use nest_rs_core::App;
 use hello::HelloModule;
@@ -142,7 +146,8 @@ build does not start the HTTP transport when wiring is invalid.
 ## Five ideas to remember
 
 - **Module** — a struct decorated with `#[module]`, listing `providers`
-  it owns and `imports` it depends on. See [Modules](/fundamentals/modules/).
+  it owns and `imports` it depends on. The [Modules](/fundamentals/modules/)
+  page walks a fictional `blog` app from this shape to a composed root.
 - **Provider** — any injectable struct (`#[injectable]`, `#[controller]`,
   `#[resolver]`, `#[gateway]`, `#[processor]`, …). Built once, shared as
   `Arc<T>`. See [Providers](/fundamentals/providers/).
@@ -164,7 +169,7 @@ Fundamentals/
   ├─ Guards
   ├─ Pipes
   ├─ Interceptors
-  ├─ Exception filters
+  ├─ Error handling
   └─ Middleware (equivalence note)
 ```
 

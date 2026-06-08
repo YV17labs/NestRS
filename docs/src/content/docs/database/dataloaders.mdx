@@ -1,0 +1,162 @@
+---
+title: Dataloaders
+description: Batch field fetches without N+1 — auto-emitted PK and FK loaders from #[expose], plus #[dataloader] for custom keys.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Most "resolver looks fine but the query log is on fire" stories end here. A
+dataloader is a batched DB read, request-scoped, shared across one response —
+each parent call gets coalesced into a single query against the keys
+collected during that frame. NestRS builds on
+[async-graphql](https://async-graphql.github.io/async-graphql/) for the
+loader runtime; the framework auto-emits the loaders relations need and lets
+you write your own for custom keys.
+
+## Most relations need no loader code
+
+A `belongs_to` or `has_many` declared on an `#[expose]`'d entity becomes a
+GraphQL field auto-resolved through a dataloader. The macro emits:
+
+- a **PK loader** on the owner's service (`<Service>ById`) for every entity
+  with `#[expose(name = ..., service = ...)]` — used by every inverse side
+  to reach the parent;
+- an **FK loader** (`<Service>By<FkCol>`) per `belongs_to` on the
+  FK-owning side;
+- `PkLoadable` and `RelatedTo<Parent>` impls so the **inverse side** (the
+  parent's `has_many`) reaches the loader **without naming the other
+  service** — no cross-feature wiring;
+- a `#[ComplexObject]` field resolver on the wire DTO that calls the
+  matching loader and returns the related object.
+
+```rust
+#[expose(name = "Item", service = super::service::ItemsService)]
+#[sea_orm(table_name = "item")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::super::orgs::Entity",
+        from = "Column::OrgId",
+        to = "super::super::orgs::Column::Id",
+    )]
+    Org,
+}
+```
+
+From this, the GraphQL `Item.org` field resolves through a per-request
+dataloader. No `#[dataloader]` to write, no wiring on the resolver — and
+every batch runs through `Repo::scoped(Action::Read)`, so the ability filter
+applies row-level on related rows as on any other read.
+
+Opt a single relation out with `#[expose(skip)]` and write a custom
+`#[field_resolver]` if you need a non-default shape (cursor connection,
+extra filter).
+
+<Aside type="caution">
+async-graphql allows at most one `#[ComplexObject]` per wire type, so a
+custom `#[field_resolver]` on the resolver cannot live next to an
+auto-resolved relation on the same entity — pick one source per
+`ComplexObject`.
+</Aside>
+
+## Writing a custom loader
+
+`#[dataloader]` lives in `nest-rs-graphql`. Use it for a key that isn't a
+relation — `by_name`, `by_tag`, a denormalized lookup. The signature is
+fixed by the trait:
+
+```rust title="src/items/service.rs"
+use std::collections::HashMap;
+use nest_rs_authz::Action;
+use nest_rs_graphql::dataloader;
+use nest_rs_seaorm::{Repo, ServiceError};
+
+#[dataloader]
+impl ItemsService {
+    async fn by_name(
+        &self,
+        names: &[String],
+    ) -> Result<HashMap<String, Vec<Item>>, ServiceError> {
+        if names.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = Repo::<Items>::scoped(Action::Read)
+            .filter(entity::Column::Name.is_in(names.iter().cloned()))
+            .all(&Repo::<Items>::conn()?)
+            .await?;
+        Ok(group_by_name(names, rows))
+    }
+}
+```
+
+Three things make this honest:
+
+- **Empty-keys short-circuit.** A frame with no keys returns the empty
+  map without touching the executor — `Repo::conn()` would otherwise
+  error outside scope.
+- **Result, not silent empty.** A DB error returns `Err(_)`. **Never**
+  map a DB error to an empty `HashMap` — that turns a failure into a
+  silent miss, the worst kind.
+- **`Repo::scoped(Read)`, not raw `Items::find()`.** The ability filter
+  applies, so a batch on behalf of one caller never returns another
+  tenant's rows.
+
+A resolver injects the loader and calls `.load_one(key)` per parent — the
+runtime batches every call into a single query:
+
+```rust
+#[field_resolver]
+async fn items_named(
+    &self,
+    ctx: &Context<'_>,
+    name: String,
+) -> Result<Vec<Item>> {
+    let loader = ctx.data_unchecked::<DataLoader<ItemsServiceByName>>();
+    Ok(loader.load_one(name).await?.unwrap_or_default())
+}
+```
+
+## The cross-entity rule
+
+A loader for entity `A` lives on `A`'s service. A service that reaches
+into entity `B` (e.g. `OrdersService` returning items) **injects
+`Arc<ItemsService>` and calls its loader** — it does not write its own
+loader against the `item` table.
+
+The FK loader is part of the **owner's** service, never the consumer's.
+A resolver returning `Item` from an order field uses the auto-emitted
+`ItemsServiceById`; the loader is the property of `ItemsService` and any
+new feature reaches it through the existing one.
+
+## Batches run on a snapshot of the request context
+
+async-graphql runs each batch on a spawned task — fresh task-local
+storage. Without intervention, the ambient executor and ability would be
+gone and the loader would read on the pool, unscoped.
+
+The framework installs a `LoaderScope` (bound to `dyn GraphqlBatchContext`)
+that runs while the per-request loader is built, snapshots the executor and
+ability, and re-installs them around each batch future. You don't write
+this; importing `AuthzGraphqlModule` on the resolver activates it. The
+captured executor is the **pool**, never the request transaction — a batch
+runs off the request task, and a write inside a loader would race the
+auto-commit's `Arc::try_unwrap`. Loaders are reads.
+
+## Going further
+
+- [Database](/database/) — the slice the loader hangs off.
+- [Repo and executor](/database/repo-and-executor/) — what `Repo::conn`
+  reads, what `Repo::scoped` filters.
+- [GraphQL](/graphql/) — `#[resolver]`, `#[field_resolver]`, the
+  schema-discovery seam.
+- [Security](/security/) — the ability that drives `Repo::scoped`'s
+  row-level filter.

@@ -1,0 +1,168 @@
+---
+title: Glossary
+description: One-line definitions for the vocabulary NestRS uses across the docs.
+---
+
+The docs lean on a small set of recurring terms — *shaper*, *bridge*,
+*ambient context*, *masking*. This page collects them in one place
+with a one-line definition and a link to the canonical page that goes
+deep on each.
+
+## Container and wiring
+
+- **[Module](/fundamentals/modules/)** — the composition unit; a struct
+  decorated with `#[module]` that owns a flat list of providers and
+  imports other modules.
+- **[Provider](/fundamentals/providers/)** — anything `#[injectable]`
+  the container builds once and shares as `Arc<T>` (singleton by
+  default, request-scoped on opt-in).
+- **[Container](/fundamentals/providers/)** — the single flat
+  type-id-keyed map the framework builds at boot; reachable through
+  `#[inject]` fields on a provider, never named directly.
+- **[Access graph](/fundamentals/modules/)** — the boot-time check that
+  every `#[inject]` and every guard/interceptor/filter the provider
+  declares is reachable through its module's imports; the boot fails
+  with a clear graph error otherwise.
+- **[Discovery](/fundamentals/modules/)** — the link-time `inventory`
+  sweep each transport runs to find its endpoints; gated by the access
+  graph so only items reachable from the running app's root are
+  mounted.
+- **[Dynamic module](/fundamentals/modules/)** — a module produced by a
+  call like `OpenApiModule::for_root(opts)`; the same `#[module]` shape
+  but parameterised at the import site.
+
+## Request layers
+
+- **[Guard](/fundamentals/guards/)** — a pre-handler gate; returns
+  `Ok(())` to let the request through or a typed `Denial` mapped to
+  401/403/429, and may attach context the handler reads through
+  `Ctx<T>`.
+- **[Pipe](/fundamentals/pipes/)** — a stateless edge transform that
+  parses and validates a single input, never a DI provider; bound to a
+  handler argument through `Valid<E>` or `Piped<P, E>`.
+- **[Interceptor](/fundamentals/interceptors/)** — wraps the handler
+  call from the outside; the seam that installs the ambient executor,
+  records a span, or appends a `Server-Timing` entry.
+- **[Filter](/fundamentals/interceptors/)** — an interceptor that maps
+  a successful response on the way out, the shape `Authorize` uses to
+  apply response masking.
+- **[Exception filter](/fundamentals/exception-filters/)** — catches an
+  error returned from the handler chain and turns it into a typed
+  response; the home for cross-cutting error → wire mapping.
+- **Shaper** — an interceptor the `#[routes]` macro emits per route to
+  wrap the handler with the per-request authz seam; the only seam that
+  runs *after* `AbilityGuard` and still wraps the handler. Documented
+  alongside the [layer order](/fundamentals/guards/).
+- **[Reflector](/http/extractors/)** — the request-time reader that
+  pulls back the values a handler attached with `#[meta(EXPR)]`; how a
+  guard inspects per-route metadata.
+
+## Data
+
+- **[Repo](/database/repo-and-executor/)** — the single audited DB
+  gateway every service uses; runs every query against the ambient
+  executor and folds the ambient ability's `condition_for` into reads
+  and by-id writes.
+- **[CrudService](/database/crud/)** — the entity's API choke point
+  (`list`/`page`/`access`/`create`/`update`/`delete`); controllers,
+  resolvers, and gateways delegate, never touch `Repo` directly.
+- **[Executor](/database/repo-and-executor/)** — the SeaORM connection
+  installed per request in a `task_local!` (pool on safe routes, a
+  transaction on mutations); `Repo` reads it back through
+  `Repo::<E>::conn()`.
+- **[Ambient context](/database/repo-and-executor/)** — the pair of
+  request-scoped `task_local!`s the framework installs (executor +
+  ability) so singletons can read per-request state without an
+  argument on every method.
+- **[Bind (extractor)](/security/authorization/by-id-binding/)** —
+  parses the id from the URL, calls `Service::access(id)` through the
+  ambient ability, returns the loaded + authorized entity (404
+  absent, 403 denied).
+- **[Scope (extractor)](/security/authorization/row-level-filtering/)**
+  — the explicit-condition counterpart to `Bind`; hands a hand-built
+  query a SeaORM `Condition` derived from the ambient ability.
+- **[Wire model](/security/authorization/response-masking/)** — the
+  `#[expose]` output struct (`User`) the wire produces; distinct from
+  the SeaORM `Model` the database returns.
+- **[Wire model defaults](/security/authorization/response-masking/)**
+  — `impl WireModelDefaults for Entity`, emitted by the `#[expose]`
+  macro, that fills `#[expose(skip)]` columns the masker cannot infer
+  from the wire body.
+
+## Security
+
+- **[Strategy](/security/authentication/)** — a plain `#[injectable]`
+  that turns a request into a principal; `AuthGuard<S>` is generic
+  over it.
+- **[Outcome](/security/authentication/)** — what `Strategy::authenticate`
+  returns: `Authenticated(P)` for a bearer token, `Challenge(R)` for
+  an OAuth redirect.
+- **[Principal](/security/authentication/)** — the typed identity a
+  strategy returns (`Claims` for JWT, a session for OAuth); read back
+  in a handler through `Ctx<P>`.
+- **[Ability](/security/authorization/)** — the CASL-style policy
+  object the authz guard installs for the request; answers "may this
+  caller take this action on this subject?" against rules, predicates,
+  and field grants.
+- **[Subject](/security/authorization/policies/)** — the entity an
+  ability rule targets (`users::Entity`); how an action is scoped to a
+  type.
+- **[Action](/security/authorization/policies/)** — the verb a rule
+  governs (`Read`, `Create`, `Update`, `Delete`, custom variants); the
+  same enum `Repo::scoped` keys on.
+- **[Predicate](/security/authorization/policies/)** — the row-level
+  condition a rule attaches to an action (`org_id = $caller_org_id`);
+  what `condition_for` lifts into SQL.
+- **[Field set](/security/authorization/policies/)** — the column list
+  a rule grants on `Read`; what `Ability::mask` keeps, with everything
+  else zeroed.
+- **[Masking](/security/authorization/response-masking/)** — the
+  shaper's post-handler pass that rebuilds a `Model` from the wire
+  body, runs `Ability::mask`, then re-emits only the wire keys.
+- **[Row-level filtering](/security/authorization/row-level-filtering/)**
+  — `Ability::condition_for` joined into the SQL by `Repo::scoped`, so
+  every read returns only rows the ability allows.
+- **[Resource server vs Issuer](/security/authentication/issuer-and-resource-server/)**
+  — the split-deploy pattern: the *issuer* app holds the signing key
+  and mints tokens; the *resource server* holds only the public key
+  and verifies them.
+- **[Bridge (transport bridge)](/security/authorization/per-transport-bridges/)**
+  — the per-transport seam that re-seeds the ambient ability and
+  executor at GraphQL/WS/MCP dispatch points so the data layer stays
+  transparent off the HTTP request path.
+
+## Transports
+
+- **[Controller (HTTP)](/http/controllers/)** — a struct marked with
+  `#[controller(path = "...")]` that owns route methods declared in a
+  `#[routes] impl` block.
+- **[Resolver (GraphQL)](/graphql/queries-mutations/)** — a struct
+  marked with `#[resolver]` whose `#[query]` / `#[mutation]` /
+  `#[field_resolver]` methods compose into the schema at boot.
+- **[Gateway (WS)](/websockets/messages/)** — a struct marked with
+  `#[gateway(path = "/ws")]` whose `#[subscribe_message]` methods
+  handle WS events; self-mounts on `HttpTransport`.
+- **[Processor (queue)](/queue/wiring/)** — a struct marked with
+  `#[processor]` whose `#[process(queue, ...)]` methods consume jobs;
+  activated by importing `QueueWorkerModule`.
+- **[Scheduler](/schedule/)** — the transport that drains
+  `#[scheduled]` orchestrators; each method tagged with exactly one of
+  `#[every]` / `#[cron]` / `#[after]`.
+
+## Observability
+
+- **[Probe vs Indicator](/health/indicators/)** — a *probe* is one of
+  the three HTTP routes (`live` / `ready` / `startup`); an *indicator*
+  is a unit the probe aggregates (a `DatabaseHealthIndicator`, a
+  custom one).
+
+## Other
+
+- **[Marker guard](/security/authorization/per-transport-bridges/)** —
+  a unit guard with no logic that exists so the access graph can
+  prove a transport's authz seam is wired; omitting the authz module
+  fails the boot naming the missing guard.
+- **[Port + adapters](/fundamentals/modules/)** — the per-feature
+  folder shape: the port (`entity.rs`, `service.rs`, `dto.rs`,
+  `error.rs`, `module.rs`) at the root, one sub-folder per transport
+  adapter (`http/`, `graphql/`, `ws/`, `queue/`, `mcp/`).

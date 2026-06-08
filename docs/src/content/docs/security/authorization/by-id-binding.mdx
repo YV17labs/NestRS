@@ -1,0 +1,202 @@
+---
+title: By-id binding
+description: Bind<S, A> turns a path id into the loaded, authorized model — 404 when the row is absent, 403 when it exists but the caller cannot see it.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`Bind<S, A>` is the handler argument that turns `/users/:id` into a
+loaded, authorized model. It runs through the service's `access`
+method, which loads the row **unscoped** and then asks the ambient
+`Ability` whether the caller may perform `A` on it. Three outcomes,
+three HTTP statuses:
+
+- Row not in the database → `404 NOT FOUND`.
+- Row exists but the caller cannot see it → `403 FORBIDDEN`.
+- Row exists and the caller may act on it → the loaded `Model` is
+  handed to the handler.
+
+The 404-vs-403 distinction is a policy decision, not an
+implementation detail. nestrs's posture is **403 leaks existence
+intentionally**: a member trying to read a user in another tenant's
+org learns that the id is real but off-limits, not that "nothing is
+there".
+
+## What it looks like
+
+```rust title="crates/features/src/users/http/controller.rs"
+use nest_rs_authz::Read;
+use nest_rs_seaorm::Bind;
+
+#[get("/:id")]
+async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+    Json(User::from(&*user))
+}
+```
+
+`Bind` derefs to the entity's `Model`, so `&*user` is `&user::Model`.
+Take ownership with `user.into_inner()` when the handler moves it.
+
+`Bind<UsersService, Read>` reads as: "load a user by id, authorize
+the caller for `Read` on it, refuse with 404 or 403 otherwise". The
+type parameters are the **service** (not the entity) and the
+**action marker** — the service is what the framework calls
+`access` on; the entity comes from `S::Entity`.
+
+## The four outcomes
+
+`Bind`'s extractor decides among four early returns before the
+handler ever runs:
+
+| Path id | Ability | Row | Status |
+|--------|---------|-----|--------|
+| Not a UUID v7 | — | — | `400 BAD REQUEST` |
+| Valid | Missing (wiring bug) | — | `500 INTERNAL SERVER ERROR` |
+| Valid | Present | Absent in DB | `404 NOT FOUND` |
+| Valid | Present | Present, denied | `403 FORBIDDEN` |
+| Valid | Present | Present, allowed | Handler runs with `Bind` |
+
+The UUID v7 check is deliberate — the framework's id format is
+ordered, v7 only. A v4 id (or a malformed string) fails fast at the
+edge.
+
+A missing ability is a 500 because it means the controller was not
+mounted with `AbilityGuard` — a wiring bug, never a client error.
+The access graph catches the bad import tree at boot, but a route
+that uses `Bind` and forgets `#[use_guards(AuthGuard, AuthzGuard)]`
+fails at request time with this 500.
+
+## How `access` decides
+
+`Bind<S, A>` calls `S::access(action, id)` from the service. The
+default `CrudService::access` is:
+
+```rust
+async fn access(&self, action: Action, id: Uuid)
+    -> Result<Access<Model>, DbErr>
+{
+    let conn = Repo::<E>::conn()?;
+    let Some(model) = E::find_by_id(id).one(&conn).await? else {
+        return Ok(Access::Missing);
+    };
+    let allowed = current_ability()
+        .map(|ability| ability.can::<E>(action, &model))
+        .unwrap_or(false);
+    if allowed {
+        Ok(Access::Found(model))
+    } else {
+        Ok(Access::Denied)
+    }
+}
+```
+
+Two things to notice:
+
+1. **The load is unscoped.** `find_by_id(id).one(&conn)` reaches
+   every row in the table — no `condition_for` joined. That is what
+   lets the framework distinguish "missing" from "denied". A
+   `Repo::scoped(Read).find_by_id(id)` would return `None` for both,
+   collapsing them to 404 and hiding the policy decision.
+2. **The authorization is in-memory.** `Ability::can` runs the
+   typed `Predicate::matches` against the loaded model — same AST as
+   `condition_for`, so the SQL filter and the in-memory check cannot
+   diverge.
+
+`Ability::can` and `Ability::condition_for` evaluate the same
+predicate tree against the same `Value`s — the row a SQL filter
+accepts and the row the in-memory check accepts are bit-identical.
+
+## The `Access` outcome
+
+```rust
+pub enum Access<M> {
+    Found(M),
+    Denied,
+    Missing,
+}
+```
+
+A handler that does not use `Bind` (a service that authorizes its
+own load, a worker job touching one row) returns `Access<M>` directly
+and maps it to a wire shape:
+
+```rust
+match self.svc.access(Action::Read, id).await? {
+    Access::Found(user) => Ok(Json(User::from(user))),
+    Access::Denied => Err(Forbidden),
+    Access::Missing => Err(NotFound),
+}
+```
+
+`Bind` does this mapping for the HTTP transport. The GraphQL
+analog (`nest_rs_seaorm::graphql::bind`) does the same for resolvers.
+
+## Updates and deletes — the by-id mutation path
+
+For mutating actions, `Bind<S, Update>` (or `Delete`) loads the row
+the caller is about to touch and refuses early if the policy says no:
+
+```rust
+#[delete("/:id")]
+async fn delete(&self, user: Bind<UsersService, Delete>) -> StatusCode {
+    self.svc.delete_by_id(user.id).await?;
+    StatusCode::NO_CONTENT
+}
+```
+
+The combination of the load (`Action::Delete` checked against the
+loaded row) and the `Repo::scoped(Delete)` filter inside
+`delete_by_id` is **defense in depth**:
+
+- The `Bind` refuses the route if the policy denies.
+- Even if the handler were called anyway, `Repo::scoped(Delete)`
+  appends the ability's `condition_for(Delete)` to the `DELETE`
+  statement so a denied row deletes zero rows. The handler gets back
+  `RowsAffected::default()` and the row stands.
+
+Two layers, same predicate, the second catches what the first
+missed.
+
+## 404 leaks existence — sometimes you want that
+
+The framework's default — 403 when the row exists but is off-limits —
+is the right call for first-party APIs where org isolation is a
+business rule, not a secret. The id space is already large; learning
+"id X exists in tenant B" tells an attacker nothing they could not
+guess.
+
+For a public-facing API where existence itself is sensitive (private
+content, draft media), collapse the 403 path into a 404 in your
+handler:
+
+```rust
+#[get("/:id")]
+async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>, Error> {
+    match self.svc.access(Action::Read, id.0).await? {
+        Access::Found(post) => Ok(Json(Post::from(post))),
+        Access::Denied | Access::Missing => Err(Error::from_status(NOT_FOUND)),
+    }
+}
+```
+
+The default `Bind` extractor is opinionated; the underlying `access`
+is not.
+
+<Aside type="caution">
+`Bind` requires `AuthGuard` and `AuthzGuard` bound on the controller.
+The access graph catches the missing-import case at boot, but a
+**handler that uses `Bind` without binding `AbilityGuard`** at the
+route level returns 500 at request time. Pin every by-id route with a
+[negative-path test](/testing/negative-path/) — auth refused, cross-tenant
+denied, malformed id rejected.
+</Aside>
+
+## Going further
+
+- [Row-level filtering](/security/authorization/row-level-filtering/)
+  — the layer underneath `Bind`'s by-id load.
+- [Response masking](/security/authorization/response-masking/) —
+  the layer above, after the handler returns.
+- [Authorization](/security/authorization/) — engine overview.

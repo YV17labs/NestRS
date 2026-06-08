@@ -35,23 +35,37 @@ The three rules that keep the docs honest as the framework moves:
 
 ## Sections
 
-```
-index.mdx              Landing
-why.mdx                The thesis + the six structural properties
-getting-started.mdx    Install + first endpoint
+Sidebar order follows the learning path — concepts before the capstone
+tutorial, observability grouped without a "production" bucket:
 
-tutorial/              Build a complete feature end to end (WIP)
-concepts/              Modules, DI, access graph, ambient data context
-http/                  Controllers, routes, guards, pipes, filters, interceptors
-graphql/               Resolvers, fields, dataloaders, context bridge
-websockets/            Gateways, messages, lifecycle
-data/                  Entities, services, Repo, transactions, dataloaders
-security/              Authn strategies, authz (Ability), masking, row-level
-queue-schedule/        Durable jobs, cron, processors
-mcp/                   Model Context Protocol tools
-observability/         Telemetry, OTLP, Server-Timing, conventions
-configuration/         Typed config from env + TOML, validation
-testing/               nest-rs-testing, overrides, e2e
+```
+Start here
+  index.mdx, why.mdx, getting-started.mdx
+
+Core (read before the tutorial)
+  fundamentals/        Modules, DI, access graph, request layers
+  configuration/       Typed config, .env cascade, ConfigSource
+  http/                Controllers, routes, extractors, transport config
+  database/            Entity, service, Repo, transactions, dataloaders
+  security/            Authn, authz, row-level filtering, masking
+  testing/             Unit, integration, e2e, policy tests
+
+Capstone
+  tutorial/            Build a users feature end to end
+
+More transports
+  graphql/, websockets/, openapi/
+
+Background
+  queue/, schedule/, events/, mcp/
+
+Observability (dev + runtime insight — not a deploy-only chapter)
+  opentelemetry/, server-timing/
+
+Health, throttler       Probes and rate limiting (standalone sections)
+
+Reference
+  decorators.mdx, glossary.mdx
 ```
 
 Each section index follows the same four-tier shape: **Basics**,

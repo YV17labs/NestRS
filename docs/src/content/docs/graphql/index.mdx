@@ -1,18 +1,24 @@
 ---
 title: GraphQL
-description: A self-composing schema, resolvers as structs, queries / mutations / fields on one impl block.
+description: A self-composing schema, resolvers as structs, queries and mutations on one impl block.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 Write a resolver as a struct and decorate it with `#[resolver]`; its
-operations register themselves into the schema at boot — there is no central
-`queries = [...]` list to keep in sync. Root resolvers
-(`#[query]`, `#[mutation]`) and entity-field resolvers (`#[field_resolver]`) live
-on the same impl block.
+operations register themselves into the schema at boot — there is no
+central `queries = [...]` list to keep in sync. Root resolvers
+(`#[query]`, `#[mutation]`) and entity-field resolvers
+(`#[field_resolver]`) live on the same impl block. The schema composes
+itself from a link-time registry, the playground self-mounts in dev,
+and the SDL is committed.
 
-This page covers GraphQL concerns only. Authentication, authorization
-and database-backed loaders are in their own categories.
+`nest-rs-graphql` builds on [async-graphql](https://docs.rs/async-graphql)
+(served through [async-graphql-poem](https://docs.rs/async-graphql-poem))
+— the framework wraps it so resolvers register themselves and inject
+providers like any other struct.
 
 ## The minimal resolver
 
@@ -58,8 +64,8 @@ use super::resolver::GreetingResolver;
 pub struct GreetingModule;
 ```
 
-`GraphqlModule::for_root` mounts `POST /graphql` (the endpoint) and
-`GET /graphql` (the playground) on the HTTP transport.
+`GraphqlModule::for_root` mounts `POST /graphql` (the endpoint) and,
+when the playground is on, `GET /graphql` for the interactive client.
 
 ## Run it
 
@@ -70,8 +76,9 @@ $ curl -sX POST http://localhost:3000/graphql \
 {"data":{"greeting":"Hello, Ada!"}}
 ```
 
-Or open [`http://localhost:3000/graphql`](http://localhost:3000/graphql)
-for the interactive playground.
+In dev (`NESTRS_GRAPHQL__PLAYGROUND=true`), open
+[`http://localhost:3000/graphql`](http://localhost:3000/graphql) for the
+playground.
 
 ## Injecting a service
 
@@ -100,192 +107,33 @@ impl GreetingResolver {
 The container resolves `GreetingService` from the import tree. No
 container handle to thread, no factory to call.
 
-## A mutation
+## Where to go next
 
-```rust
-use async_graphql::{InputObject, SimpleObject};
+The GraphQL surface fans out from here. Each page covers one concern:
 
-#[derive(InputObject)]
-struct GreetingInput {
-    name: String,
-    formal: Option<bool>,
-}
-
-#[derive(SimpleObject)]
-struct GreetingReply {
-    text: String,
-}
-
-#[resolver]
-impl GreetingResolver {
-    #[mutation]
-    async fn say_hello(&self, input: GreetingInput) -> GreetingReply {
-        let prefix = if input.formal.unwrap_or(false) { "Greetings" } else { "Hello" };
-        GreetingReply { text: format!("{prefix}, {}!", input.name) }
-    }
-}
-```
-
-- `InputObject` makes a struct usable as an argument type;
-  `SimpleObject` makes one usable as a return type. Both come from
-  `async-graphql` (re-exported by `nest-rs-graphql`).
-- Add `#[mutation]` on a method to declare it a mutation rather than a
-  query.
-
-```bash frame="terminal"
-$ curl -sX POST http://localhost:3000/graphql \
-    -H 'Content-Type: application/json' \
-    -d '{"query":"mutation { sayHello(input: {name: \"Ada\", formal: true}) { text } }"}'
-{"data":{"sayHello":{"text":"Greetings, Ada!"}}}
-```
-
-## Relation fields resolve themselves
-
-Declaring a SeaORM relation on an `#[expose]`d entity is the **whole
-field-resolver story** — no `#[field_resolver]`, no `#[dataloader]` to write by
-hand. Pass `service = …` to `#[expose]` and the macro emits the PK
-dataloader on the service, the trait bridges that let other entities
-reach it, and a `#[ComplexObject]` field resolver on the wire DTO. The
-ambient `Ability` filters every batch under `Repo::scoped(Action::Read)`,
-so a relation cannot leak across orgs.
-
-```rust title="src/users/entity.rs"
-use nest_rs_resource::expose;
-use sea_orm::entity::prelude::*;
-
-#[expose(name = "User", service = super::service::UsersService)]
-#[sea_orm::model]
-#[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(table_name = "user")]
-pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
-    pub org_id: Uuid,
-    pub name: String,
-
-    #[sea_orm(belongs_to, from = "org_id", to = "id")]
-    pub org: HasOne<crate::orgs::Entity>,
-}
-```
-
-```rust title="src/orgs/entity.rs"
-#[expose(name = "Org", service = super::service::OrgsService)]
-#[sea_orm::model]
-#[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(table_name = "org")]
-pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
-    pub name: String,
-
-    #[sea_orm(has_many)]
-    pub users: HasMany<crate::users::Entity>,
-}
-```
-
-That is the whole declaration. Both directions now query:
-
-```bash frame="terminal"
-$ curl -sX POST http://localhost:3000/graphql -d \
-    '{"query":"{ users { id org { id name } } orgs { users { email } } }"}'
-```
-
-Behind the scenes `#[expose]` emits a `by_id` loader on every service
-(BelongsTo side) and a `by_<fk_col>` loader on the FK-owner's service
-(HasMany inverse), backs each resolver with the right `DataLoader<…>`
-from the request context, and ties the two entities through the
-`PkLoadable` / `RelatedTo<Parent>` traits — the inverse side never
-hard-codes the other service's name.
-
-### Opt out, override
-
-A `#[expose(skip)]` on a relation field disables auto-emission for that
-specific field. The relation stays declared at the ORM level (SeaORM
-still knows about it), and you can write a hand-rolled `#[field_resolver]` if
-you need a custom shape — say a `Connection<User>` with cursor
-pagination, or a filtered subset.
-
-## A custom field resolver
-
-For a property that isn't a stored relation — a computed value, a
-shape that mixes several services, a non-default cardinality — write a
-`#[field_resolver]` on the resolver. The first non-`self`, non-`ctx` argument is
-the parent object; `&Service` parameters are injected from the
-container, `&DataLoader<…>` from the request context.
-
-```rust
-use async_graphql::SimpleObject;
-
-#[derive(SimpleObject, Clone)]
-struct User {
-    id: String,
-    name: String,
-}
-
-#[resolver]
-pub struct UsersResolver;
-
-#[resolver]
-impl UsersResolver {
-    #[query]
-    async fn user(&self, id: String) -> User {
-        User { id, name: "Ada".into() }
-    }
-
-    #[field_resolver]
-    async fn display_name(&self, parent: &User) -> String {
-        parent.name.to_uppercase()
-    }
-}
-```
-
-```bash frame="terminal"
-$ curl -sX POST http://localhost:3000/graphql -d \
-    '{"query":"{ user(id:\"1\") { name displayName } }"}'
-{"data":{"user":{"name":"Ada","displayName":"ADA"}}}
-```
-
-<Aside type="caution">
-async-graphql allows only one `#[ComplexObject]` impl per type. If the
-entity already has at least one auto-resolved relation (the macro
-emits its own block), custom `#[field_resolver]` methods for the same wire
-type cannot also live on the resolver — they collide at trait
-coherence. Either mark the relation `#[expose(skip)]` and own the full
-complex object on the resolver, or move the custom logic to a different
-shape (see [CRUD](/database/crud/)).
-</Aside>
-
-## Errors
-
-A resolver returns `async_graphql::Result<T>` (or your own typed error
-mapped to it). Error messages become the GraphQL error `message`;
-`extensions` carry structured codes:
-
-```rust
-use async_graphql::{Error, Result};
-
-#[query]
-async fn user(&self, id: String) -> Result<User> {
-    if id.is_empty() {
-        return Err(Error::new("id must not be empty").extend_with(|_, e| {
-            e.set("code", "INVALID_ARGUMENT");
-        }));
-    }
-    Ok(User { id, name: "Ada".into() })
-}
-```
-
-## Committed SDL
-
-`apps/platform-api/schema.graphql` is generated on dev runs and committed —
-schema changes show up in diffs without a separate generator pass.
+- [Queries and mutations](/graphql/queries-mutations/) — `#[query]`,
+  `#[mutation]`, inputs, outputs, returning typed entities.
+- [Field resolvers](/graphql/field-resolvers/) — custom computed
+  fields with `#[field_resolver]`, and the one `ComplexObject`
+  caveat to watch for.
+- [Relations resolve themselves](/graphql/relations/) — declare a
+  SeaORM relation, get a typed GraphQL field with a batched loader for
+  free.
+- [Dataloaders](/graphql/dataloader/) — `#[dataloader]` on a service
+  method for custom batched fetches, beyond what relations give you.
+- [Errors](/graphql/errors/) — `async_graphql::Error`, extensions,
+  and mapping `ServiceError` to a GraphQL envelope.
+- [Subscriptions](/graphql/subscriptions/) — currently not supported;
+  the page documents the path forward.
+- [Configuration](/graphql/configuration/) — `GraphqlConfig`, SDL
+  emission, playground toggle, mount path.
 
 ## Going further
 
 - [Security](/security/) — bind a `GraphqlAuthGuard` so resolvers run
   with an authenticated principal and an ambient `Ability`.
-- [Database](/database/) — `#[dataloader]` to batch DB reads across one
-  response, avoiding N+1.
+- [Database](/database/) — the data layer that the relation and
+  dataloader pages build on.
 
 ### Reference
 

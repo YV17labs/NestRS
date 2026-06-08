@@ -1,0 +1,173 @@
+---
+title: Responses
+description: Json<T>, status + body tuples, and the three response-shaping attributes — #[http_code], #[response_header], #[redirect].
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A handler picks a return type, and the framework turns it into the
+response. `String`, `&'static str`, `Json<T>`, a `(StatusCode, Body)`
+tuple — anything that implements [poem](https://docs.rs/poem)'s
+`IntoResponse` is a valid return. When the status, a header, or a
+redirect is the only thing changing, three attribute macros sit beside
+the verb attribute and shape the response without touching the handler
+body.
+
+## Returning typed JSON
+
+`Json<T>` is the everyday case — serializes `T`, sets
+`Content-Type: application/json`, and feeds the OpenAPI document with
+the same `schemars::JsonSchema`:
+
+```rust
+use poem::web::Json;
+use serde::Serialize;
+
+#[derive(Serialize, schemars::JsonSchema)]
+struct GreetReply {
+    greeting: String,
+}
+
+#[get("/me")]
+async fn me(&self) -> Json<GreetReply> {
+    Json(GreetReply { greeting: self.svc.greeting() })
+}
+```
+
+## Status + body tuples
+
+Tuples up to `(StatusCode, Headers, Body)` are valid responses — useful
+when one route returns `202 Accepted` and another stays on the default
+`200`:
+
+```rust
+use poem::http::StatusCode;
+
+#[post("/queue")]
+async fn enqueue(&self) -> (StatusCode, &'static str) {
+    (StatusCode::ACCEPTED, "queued")
+}
+```
+
+For anything richer than a static body, prefer `Json<T>` so the OpenAPI
+document picks up the shape.
+
+## Shape a response declaratively
+
+When the handler body would otherwise return `Ok(value)` and the only
+thing changing is the status, a header, or a redirect, three attribute
+macros sit beside the verb attribute:
+
+```rust
+use nest_rs_http::{http_code, response_header, redirect};
+use poem::web::Json;
+
+#[post("/items")]
+#[http_code(201)]
+#[response_header("x-trace-id", "abc-123")]
+async fn create(&self, body: Valid<Json<NewItem>>) -> Json<Item> {
+    Json(self.svc.create(body.into_inner()))
+}
+
+#[get("/old-path")]
+#[redirect("/new-path", 301)]
+async fn moved(&self) {}
+
+#[post("/sse")]
+#[response_header("cache-control", "no-store")]
+#[response_header("x-accel-buffering", "no")]
+async fn stream(&self) -> EventStream {
+    self.svc.subscribe()
+}
+```
+
+### `#[http_code(N)]`
+
+Overrides the response status. `N` must be in `100..=999` and is
+validated at compile time. Mutually exclusive with `#[redirect]` — the
+two macros cannot both decorate the same handler.
+
+### `#[response_header("name", "value")]`
+
+Appends a header to the response. Repeatable; stack as many as the route
+needs. Two checks run at compile time:
+
+- the header name must be lowercase ASCII (the HTTP/2 / HTTP/3 grammar);
+- the value must be printable ASCII (no CR, LF, or NUL).
+
+A typo (`Cache-Control` instead of `cache-control`, a stray newline in
+the value) is caught by `cargo build`, never at runtime.
+
+### `#[redirect("url"[, status])]`
+
+Discards the handler payload and returns a `Location: <url>` response.
+Status defaults to `307` and must be in `300..=399`. The handler still
+runs (its extractors fire, its side effects happen), but its return value
+is dropped — write the body as `async fn moved(&self) {}` for clarity.
+
+## How shapers compose
+
+Multiple shapers stack on the same handler. They apply in the order they
+appear in the source, but each one targets a different facet of the
+response (status, headers, body), so the order rarely matters in
+practice:
+
+```rust
+#[post("/items")]
+#[http_code(201)]
+#[response_header("x-trace-id", "abc-123")]
+#[response_header("link", "</items>; rel=collection")]
+async fn create(&self, body: Valid<Json<NewItem>>) -> Json<Item> {
+    Json(self.svc.create(body.into_inner()))
+}
+```
+
+The handler returns `Json<Item>`; `#[http_code(201)]` rewrites the status
+from `200` to `201`; the two `#[response_header]` attributes append their
+headers. `#[redirect]` cannot stack with `#[http_code]` — they decide the
+same facet (the response status) two different ways.
+
+<Aside type="caution">
+**Known limitation — handler `Err(...)` is silently rewritten.** The
+shaper wraps the return value through `IntoResponse`, then applies the
+status from `#[http_code]` unconditionally. If the handler returns
+`Err(MyError)`, `MyError`'s `ResponseError` impl decides the error body
+and status, but `#[http_code(N)]` then *overwrites* that status with `N`
+— you'll see a `201` response carrying a `MyError` body. Today the
+workaround is to map errors before the return (so the handler never
+yields an `Err` on a route decorated with `#[http_code]`). The macro
+should reject this combination at compile time; see the open issue
+tracker.
+</Aside>
+
+## When not to reach for a shaper
+
+The three macros are declarative shortcuts for the common cases. When
+the response wiring is genuinely conditional — the status depends on
+whether an entity already existed, the headers depend on the resolved
+user — go back to a plain tuple return and let the handler decide:
+
+```rust
+use poem::http::StatusCode;
+use poem::IntoResponse;
+
+#[post("/items")]
+async fn upsert(&self, body: Valid<Json<NewItem>>) -> Result<impl IntoResponse> {
+    let (item, created) = self.svc.upsert(body.into_inner()).await?;
+    let status = if created { StatusCode::CREATED } else { StatusCode::OK };
+    Ok((status, Json(item)))
+}
+```
+
+The shapers are best when the value is the same on every call — that's
+why they live on the attribute line, not in the handler body.
+
+## Going further
+
+- [Errors](/http/errors/) — when the handler returns `Err(...)`:
+  `ResponseError`, `ProblemDetails`, RFC 9457.
+- [Controllers & routes](/http/controllers/) — back to the route table.
+- [OpenAPI](/openapi/) — `Json<T>` and the response shape feed the
+  generated spec automatically.

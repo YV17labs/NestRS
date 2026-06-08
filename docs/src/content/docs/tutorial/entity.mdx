@@ -1,0 +1,164 @@
+---
+title: Declare the entity
+description: A User entity with SeaORM columns and #[expose] — wire DTO, input types, JSON schema, all from one declaration.
+sidebar:
+  order: 3
+---
+
+import { FileTree, Aside } from '@astrojs/starlight/components';
+
+You declare the shape of a user once — a SeaORM model decorated with
+`#[expose]` — and the macro emits the wire DTO, the create/update
+inputs, the validator wiring, and the JSON schema the HTTP and GraphQL
+transports both reach for. By the end of this page, `cargo check`
+passes on a new `users` feature crate path.
+
+## Move into the features crate
+
+The reference feature lives at `crates/features/src/users/`. Create the
+same folder so the tutorial can extend it in place.
+
+<FileTree>
+- crates/features/src/users/
+  - mod.rs
+  - module.rs
+  - entity.rs
+  - service.rs
+</FileTree>
+
+The `users` module ships under the workspace's `features` crate; make
+sure that crate already lists `nest-rs-resource`, `nest-rs-seaorm`,
+`sea-orm`, `serde`, `uuid`, and `validator` as dependencies (the
+reference one does — copy its `Cargo.toml` if you started from a
+scratch crate).
+
+## The first cut
+
+A user has an id, an org (multi-tenant from day one — every read scopes
+to the caller's org), a name, an email. SeaORM owns the column types;
+`#[expose]` decides which columns cross the wire and which inputs the
+HTTP layer accepts.
+
+The crate this page builds on top of is
+[**`nest-rs-resource`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-resource) —
+it provides the `#[expose]` macro and the `WireModelDefaults` trait the
+masking layer reads. SeaORM itself is the source of truth for entities,
+columns, and migrations.
+
+```rust title="crates/features/src/users/entity.rs"
+use nest_rs_resource::expose;
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[expose(name = "User", service = super::service::UsersService)]
+#[sea_orm::model]
+#[derive(Clone, Debug, DeriveEntityModel)]
+#[sea_orm(
+    table_name = "user",
+    model_attrs(derive(PartialEq, Serialize, Deserialize))
+)]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub org_id: Uuid,
+    #[expose(input(create, update), validate(length(min = 1)))]
+    pub name: String,
+    #[sea_orm(unique)]
+    #[expose(input(create, update), validate(email))]
+    pub email: String,
+}
+
+impl ActiveModelBehavior for ActiveModel {}
+```
+
+## What `#[expose]` decides
+
+The decorator translates one declaration into every wire surface:
+
+| Generated | What it is | Where it surfaces |
+|-----------|-----------|-------------------|
+| `User` | The wire DTO — every `#[expose]`d column, no SeaORM internals | HTTP responses, GraphQL `User` object, OpenAPI schema |
+| `CreateUserInput` | A struct holding fields marked `input(create)` | `POST /users` body |
+| `UpdateUserInput` | A struct holding fields marked `input(update)` | `PATCH /users/:id` body |
+| `UsersServiceById` | A PK dataloader on `UsersService` | GraphQL field resolvers reaching `User` through a `belongs_to` |
+| `WireModelDefaults` impl | A trait the response masker reads to reconstruct the full model from a partial body | Response masking on every `User` payload |
+
+`service = super::service::UsersService` tells the macro which service
+owns the entity's loaders. The path is required as soon as the entity
+declares any non-skip relation or another entity needs the PK loader.
+
+## Read the field-level attributes
+
+Three patterns recur in the reference feature; the table covers all
+three.
+
+| Attribute | Effect |
+|-----------|--------|
+| `#[expose(input(create, update), validate(email))]` | Field appears in `CreateUserInput` and `UpdateUserInput`, with the `validator` rule wired |
+| `#[expose(input(create))]` | Field only appears in `CreateUserInput` — common for fields that can be set but not edited |
+| `#[expose(skip)]` | Field is excluded from `User` and from every input — the masker fills it back in from defaults so `Ability::mask` sees the whole row |
+
+`#[expose(skip)]` is the most security-load-bearing of the three.
+Anything sensitive — a password hash, a role string set server-side —
+is `skip`ped so a client can never set it through an input *and* never
+read it through a response.
+
+<Aside type="caution">
+A `skip`ped column whose type isn't trivial to default (a `Decimal`, a
+custom enum) needs a hand-written `impl WireModelDefaults` so the
+masker can still walk the row. The error message points at the missing
+impl when boot fails.
+</Aside>
+
+## The mod entry
+
+The feature root re-exports what other modules import. Keep it small —
+this is the public surface.
+
+```rust title="crates/features/src/users/mod.rs"
+mod entity;
+mod module;
+
+pub use entity::*;
+pub use module::UsersModule;
+```
+
+`UsersService` doesn't exist yet; that's the next page. For now, keep
+`module.rs` and `service.rs` stubbed so the crate compiles.
+
+```rust title="crates/features/src/users/module.rs"
+use nest_rs_core::module;
+
+#[module]
+pub struct UsersModule;
+```
+
+```rust title="crates/features/src/users/service.rs"
+// Filled in on the next page.
+```
+
+Wire the feature into the parent crate's `lib.rs`:
+
+```rust title="crates/features/src/lib.rs"
+pub mod users;
+```
+
+## Check
+
+```bash frame="terminal"
+$ cargo check -p features
+    Checking features v0.1.0
+    Finished `dev` profile [unoptimized] target(s) in 1.42s
+```
+
+The macro expanded, the entity compiled, and `User` / `CreateUserInput`
+/ `UpdateUserInput` are now usable from the rest of the crate.
+
+## What you have now
+
+- A `User` SeaORM entity with `id`, `org_id`, `name`, `email`.
+- An auto-generated `User` wire DTO and `CreateUserInput` /
+  `UpdateUserInput` input structs.
+- A `UsersModule` shell ready to declare its first provider.
+
+[Next: write the service and expose it over HTTP →](/tutorial/http/)

@@ -1,0 +1,160 @@
+---
+title: Retries and failure
+description: What an Err from a #[process] method means — the apalis retry shape, panic handling, and the dead-letter story.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The contract is small: a `#[process]` method returns `anyhow::Result<()>`,
+`Ok(())` acknowledges the job, `Err(_)` marks it failed. After that the
+backend decides — and Redis (via apalis) gives you a fixed retry budget
+per method, a panic safety net, and a failed-jobs list. Anything richer
+than that is bolted on top.
+
+## The basic shape
+
+```rust
+#[process(queue = "audio", concurrency = 5, retries = 3)]
+async fn transcode(&self, job: TranscodeJob) -> Result<()> {
+    self.svc.transcode(&job.file).await
+}
+```
+
+- `Ok(())` ⇒ the job is removed from the queue. apalis acknowledges
+  it; that's the end of its life.
+- `Err(e)` ⇒ the job goes back for another attempt. apalis tracks the
+  attempt count, and after `retries` failures it's moved to the
+  queue's `failed_jobs` list.
+- A **panic** inside the method is caught by a `CatchPanicLayer` and
+  converted to `Error::Abort`. The job ends up in the failed list, the
+  worker keeps running — one bad job doesn't kill the queue's consumer.
+
+Hot-path layer order: `CatchPanicLayer` sits *inside* `RetryLayer`,
+which sits inside `ErrorHandlingLayer`. `RetryLayer` reacts to `Err`,
+not to panics, so without the panic layer a single `unwrap()` in user
+code would tear down the worker. The order is fixed in
+`nest-rs-redis`'s `build_worker`.
+
+## The retry shape
+
+`retries = N` uses `RetryPolicy::retries(N)` from apalis. That's a
+**fixed retry count, no backoff** — the policy retries up to `N` times
+back-to-back. The number of total attempts a job sees is `N + 1` (the
+first try plus N retries). Default if you omit `retries`: `0` — the
+job is tried once.
+
+<Aside type="caution">
+There's no exponential backoff, no jitter, no per-attempt delay in the
+default policy. A method that fails because Redis itself is briefly
+unreachable retries immediately, three times in a row, and is then
+flagged failed. If the work is sensitive to bursts (downstream HTTP
+calls, third-party rate limits), the service the method delegates to
+holds that policy — retry inside `svc.transcode()` with `tokio::time::sleep`
+between attempts, or use a circuit breaker in the service.
+</Aside>
+
+If you need a different retry curve, today the path is to wrap the
+business call in the service:
+
+```rust
+impl AudioService {
+    pub async fn transcode(&self, file: &str) -> Result<()> {
+        let mut attempt = 0;
+        loop {
+            match self.do_transcode(file).await {
+                Ok(()) => return Ok(()),
+                Err(e) if attempt < 5 => {
+                    let delay = Duration::from_millis(100 * 2u64.pow(attempt));
+                    tracing::warn!(target: "features::audio", %file, attempt, "transcode failed; retrying");
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+```
+
+The `#[process]` budget then acts as the outer safety net — a couple
+of immediate retries after the service-level backoff already gave up,
+useful for transient framework-level issues (the container resolution
+failing under load, a panic in deserialization).
+
+## Where failed jobs go
+
+apalis moves a job whose budget is exhausted (or that aborted via
+`CatchPanicLayer`) to a Redis sorted set named after the queue, with
+`:failed` appended (an apalis-internal naming convention you generally
+read through apalis's CLI or admin tools). The framework does **not**
+ship a dead-letter routing layer of its own — the failed list is the
+storage's failed list, and inspecting / replaying it is an operational
+task you run with apalis tooling or your own admin handler.
+
+If you need richer dead-lettering — alerting, replay, archival to a
+separate queue — write a wrapper service that catches the `Err` from
+the work and republishes the payload to a dedicated queue (e.g.
+`audio.dead`) before returning the error to apalis. A `#[processor]`
+on `audio.dead` then runs your DLQ logic. That's the same pattern any
+non-Redis backend would expose.
+
+```rust
+#[process(queue = "audio", retries = 3)]
+async fn transcode(&self, job: TranscodeJob) -> Result<()> {
+    match self.svc.transcode(&job.file).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            self.svc.report_dead(&job, &e).await?;
+            Err(e)
+        }
+    }
+}
+```
+
+## Panics, deserialization errors, container misses
+
+Three failure modes the framework converts into the same `Err` path,
+so you don't have to think about them separately:
+
+- **Panics in the method body** — caught by `CatchPanicLayer`, surfaced
+  as `Error::Abort`. The job goes to the failed list immediately
+  (regardless of remaining retries), the worker stays up.
+- **Deserialization errors** — the macro-emitted `JobHandler` does the
+  `serde_json::from_value`. A payload that doesn't match the method's
+  job type returns `Err` before your method even runs. Retrying won't
+  help: the payload shape is wrong. `retries` will burn through, then
+  the job ends in the failed list.
+- **Container resolution failures** — `Container::get` of the
+  `#[processor]` host can fail if a dep wasn't seeded. The handler
+  returns `Err` with the resolution error. This usually means a
+  configuration mistake at boot, not a transient — investigate, don't
+  rely on retries.
+
+## Wire-format mismatch
+
+A processor reads only payloads it understands. The wire envelope
+(`{ "v": 1, "payload": ... }`) carries a version; the macro-emitted
+handler validates it. A future release that bumps
+`WIRE_FORMAT_VERSION` to `2` makes a `v: 1` worker refuse to decode
+`v: 2` jobs — fails closed with a clear error rather than
+misinterpreting bytes. During a rolling deploy this means jobs queue
+up; afterward the new worker drains them.
+
+**Unversioned legacy payloads** (a bare job JSON, no `v` key) are
+decoded directly with a `tracing::warn` — so jobs left in Redis from a
+release before envelopes existed don't get stuck. New producers
+always wrap.
+
+## See also
+
+- [Observability](/queue/observability/) — what shows up in spans and
+  logs when a job retries or fails.
+- [OpenTelemetry](/opentelemetry/) — wiring the queue spans into a
+  trace backend.
+- `crates/nest-rs-redis/src/worker/consumer.rs` — `build_worker`: the
+  apalis layer stack, the `CatchPanicLayer` placement, the
+  `RetryLayer` budget.
+- `crates/nest-rs-queue/src/inventory.rs` — `WIRE_FORMAT_VERSION`,
+  the envelope spec.

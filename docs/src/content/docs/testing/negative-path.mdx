@@ -8,8 +8,9 @@ sidebar:
 A 2xx test is half a test. The bugs that ship to production live in
 the failure modes — the request that should have been refused, the
 transaction that should have rolled back, the field that should have
-been masked. `tests/e2e/` is the natural home: same `TestApp`, same
-`EphemeralDatabase`, just asserting on the failure shape.
+been masked. `tests/e2e/` is the natural home: the same `TestApp` and
+`EphemeralDatabase` that drive the [e2e happy paths](/testing/e2e/),
+just asserting on the failure shape.
 
 ## Four shapes worth covering
 

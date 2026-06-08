@@ -1,0 +1,121 @@
+---
+title: Threat model
+description: What each layer catches, what it doesn't, and where the framework defers to your deployment — honest, scoped.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The security layers nestrs ships cover a specific slice. They catch
+the bug classes that ship most often in business apps — forgotten
+filters, leaked fields, missing auth — and they catch them
+structurally, not by review. They do **not** cover everything a real
+production deployment must think about. This page lists what each
+layer covers, what it does not, and where the responsibility falls
+back on you.
+
+## What each layer catches
+
+| Layer | Catches | Does not catch |
+|-------|---------|----------------|
+| [`AuthGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens | Stolen-but-unexpired tokens, replay before expiry, key compromise |
+| [`OAuth2Client`](/security/authentication/oauth2/) | CSRF (state cookie), code-interception (PKCE), SSRF on token exchange (no redirects) | Phishing the provider, malicious provider, callback URL takeover |
+| [`hash_password` + `burn_verify`](/security/authentication/password/) | Timing-based account enumeration via login | Slow GPU farms cracking dumped hashes, weak passwords, password reuse |
+| [`AbilityGuard`](/security/authorization/) | Missing or malformed `Ability` (500), unauthenticated GraphQL/WS (403) | Logic bugs in your `AbilityFactory` itself |
+| [`Repo::scoped`](/security/authorization/row-level-filtering/) | Scope leakage on every read — handler cannot forget the filter | Custom queries that ignore `Scope<E, A>` |
+| [`Bind<S, A>`](/security/authorization/by-id-binding/) | Cross-tenant by-id reads (403) and missing rows (404) | Handlers that fetch by id outside `Bind` and skip `access` |
+| [`Authorize` shaper](/security/authorization/response-masking/) | Leak of `#[expose(skip)]` columns, field-restricted grants | A handler returning a hand-built `serde_json::Value` shape that does not match `Model` (500) |
+| [`ThrottlerGuard`](/throttler/) | Brute-force login, naïve enumeration scrapes | DDoS at network or HTTP layer (use a CDN / edge throttler) |
+
+## What the framework does **not** do
+
+These are out of scope on purpose. They matter, they belong in your
+deployment, and they are not part of the framework's surface.
+
+### Token theft and replay before expiry
+
+A stolen JWT remains valid until `exp`. The framework's mitigation is
+**short access tokens** (default 1 hour, configurable via
+`JwtOptions::expires_in`) paired with a refresh-token endpoint your
+app exposes. Long-lived sessions need rotation; the auth crate has
+no built-in revocation list — if you need server-side revocation,
+write it as a `revoked_tokens` table the `Strategy` consults on
+verify.
+
+### CSRF
+
+The framework's posture is **bearer tokens**, which are immune to
+CSRF by construction (the browser does not auto-attach an
+`Authorization` header). Cookie-based sessions are not supported as
+a first-party credential. If you bridge to one (an SSR layer that
+forwards cookies), add CSRF protection at the bridge — it is not
+the framework's job.
+
+### Key management
+
+EdDSA splits the issuer's private key from every verifier's public
+key — see [Issuer and resource server](/security/authentication/issuer-and-resource-server/).
+Rotation, HSM integration, and secret-store wiring are not the
+framework's job. Treat `NESTRS_AUTHN__PRIVATE_KEY` as you would
+treat any production secret: load it from a real secret store, never
+commit it, rotate on a schedule.
+
+### TLS
+
+The HTTP transport ships TLS configuration via
+[`HttpConfig`](/http/configuration/). Configure it. The framework
+will not refuse to serve over plaintext, so an unconfigured app is
+plaintext by default.
+
+### Network-level DDoS
+
+The throttler is a per-handler guard, not a network defense. A real
+deployment fronts the app with a CDN, WAF, or rate-limiter that
+sheds load before the request reaches the process.
+
+### Cryptographic primitives
+
+The framework wraps [`jsonwebtoken`](https://docs.rs/jsonwebtoken),
+[`argon2`](https://docs.rs/argon2),
+and [`oauth2`](https://docs.rs/oauth2). The
+cryptographic correctness comes from those crates. The framework's
+job is to wire them correctly — call `hash_password` instead of
+storing plaintext, `verify_password` instead of comparing strings,
+`JwtService::verify` instead of decoding manually.
+
+## Defense in depth — what to layer
+
+For a production app:
+
+1. **Bearer tokens with short TTL** + refresh.
+2. **EdDSA split** between issuer and resource servers.
+3. **Authz guards bound on every controller** (negative-path tests
+   catch the missing one).
+4. **`#[expose(skip)]` on every server-only column.** The masker
+   covers a forgotten `#[expose(skip)]` only when the field rule is
+   `.fields([...])`.
+5. **CDN / WAF** in front for DDoS and bot defense.
+6. **Real secret store** for `JWT_PRIVATE_KEY`, OAuth secrets, DB
+   credentials.
+7. **TLS terminated** at the edge or at the app (`HttpConfig`).
+8. **Logging at the right level.** `nest_rs::auth` and `nest_rs::orm`
+   emit `warn`+ on denials and security events — pipe them to your
+   SIEM, do not silence them.
+
+<Aside type="caution">
+The framework's authz engine is **CASL-style** and runs in-process.
+A bug in your `AbilityFactory` (forgot to scope `org_id`, granted
+`Action::Manage` on the wrong subject) is the framework's most
+likely failure mode. Pin the matrix with unit tests against
+`Ability::condition_for` and `Ability::can` — the
+`crates/features/src/authz/ability.rs` exemplar's test module shows
+the pattern.
+</Aside>
+
+## Going further
+
+- [Security overview](/security/) — the concept map.
+- [Negative-path tests](/testing/negative-path/) — auth refused,
+  cross-tenant denied, rollback verified.
+- [Throttler](/throttler/) — per-handler rate limiting.

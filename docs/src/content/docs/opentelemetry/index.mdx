@@ -70,11 +70,12 @@ batch exporters on Drop, so it must live until `main` returns.
 `OpenTelemetryModule` then mounts the per-request HTTP interceptor and exposes
 the meter as a provider.
 
-## Configuration
+## Configure the exporter
 
 Every option of `OpenTelemetryConfig` is settable via env or via the pinned
-struct — the framework-wide config dual path. `OpenTelemetry::init(name)` reads
-env; `OpenTelemetry::init_with(cfg)` takes a pinned `OpenTelemetryConfig`.
+struct — the [framework-wide config dual path](/configuration/).
+`OpenTelemetry::init(name)` reads env; `OpenTelemetry::init_with(cfg)` takes a
+pinned `OpenTelemetryConfig`.
 
 | Env var | Field | Default |
 |---|---|---|

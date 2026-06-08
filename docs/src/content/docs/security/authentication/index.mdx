@@ -1,0 +1,186 @@
+---
+title: Authentication
+description: A Strategy turns a request into a principal — bearer tokens, OAuth redirects, basic credentials. AuthGuard runs it and Ctx<P> reads it back.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Authentication answers one question: *who is calling*. The shape of
+the answer is up to the `Strategy` — a JWT in the `Authorization`
+header, an OAuth provider redirect, a basic-auth `client_id:secret`,
+something app-specific. `AuthGuard<S>` runs the strategy on every
+request its controller covers, returns a `401` (or a redirect) when it
+fails, and attaches the principal to the request so the handler reads
+it back with `Ctx<Principal>`.
+
+The framework ships [`JwtStrategy`](/security/authentication/jwt/)
+(JSON Web Tokens), an
+[OAuth2 client](/security/authentication/oauth2/), and
+[Argon2id password helpers](/security/authentication/password/).
+Anything else is a `Strategy` you write yourself.
+
+## A strategy and a guard
+
+A strategy implements one async method. It returns
+`Outcome::Authenticated(principal)` on success, or `Outcome::Challenge`
+on failure — a 401 body, a 302 redirect, whatever the protocol needs.
+
+```rust
+use async_trait::async_trait;
+use nest_rs_authn::{AuthError, Outcome, Strategy};
+use poem::Request;
+
+#[injectable]
+pub struct ApiKeyStrategy {
+    #[inject]
+    svc: Arc<KeysService>,
+}
+
+#[async_trait]
+impl Strategy for ApiKeyStrategy {
+    type Principal = ApiKey;
+
+    async fn authenticate(&self, req: &mut Request) -> Result<Outcome<ApiKey>, AuthError> {
+        let key = req.headers().get("x-api-key").and_then(|h| h.to_str().ok());
+        match key.and_then(|k| self.svc.lookup(k)) {
+            Some(api_key) => Ok(Outcome::Authenticated(api_key)),
+            None => Err(AuthError::MissingCredentials),
+        }
+    }
+}
+```
+
+`AuthGuard<S>` is generic over the strategy. A resource-server app
+ships a single type alias and a tiny module:
+
+```rust title="crates/features/src/authn/mod.rs"
+pub type AppJwtStrategy = JwtStrategy<Claims>;
+pub type AuthGuard = nest_rs_authn::AuthGuard<AppJwtStrategy>;
+
+#[module(
+    imports = [nest_rs_authn::AuthnModule::for_root(None)],
+    providers = [AppJwtStrategy, AuthGuard],
+)]
+pub struct AuthnModule;
+```
+
+Bind the guard on the controller, and every route under it requires a
+valid principal:
+
+```rust
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct UsersController { /* ... */ }
+```
+
+## Reading the principal back
+
+`AuthGuard` attaches the principal to the request before the handler
+runs. The handler reads it with `Ctx<P>` — same primitive as any
+other guard-attached context.
+
+```rust
+use nest_rs_http::Ctx;
+
+async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
+    Json(self.svc.lookup(auth.sub).await?)
+}
+```
+
+`Ctx<Claims>` is a typed lookup into the request's extensions; missing
+the guard means missing the type, and the framework returns `500` —
+the access graph would already have failed the boot if the controller's
+import tree did not provide `AuthGuard`.
+
+## Outcome — authenticated or challenge
+
+```rust
+pub enum Outcome<P> {
+    Authenticated(P),
+    Challenge(Response),
+}
+```
+
+The two variants cover both styles:
+
+- **Bearer protocols** return `Authenticated(principal)` on a valid
+  token, `AuthError` on a missing or invalid one — the guard turns the
+  error into a 401 with `WWW-Authenticate: Bearer`.
+- **Redirect protocols** (OAuth) return
+  `Challenge(redirect_response)` — the guard short-circuits with that
+  redirect. The browser bounces to the provider, comes back to the
+  callback, and the strategy completes.
+
+The same trait serves both shapes because the framework never asks the
+strategy what kind it is — it just runs `authenticate` and reacts to
+the outcome.
+
+## Public routes opt out
+
+A `#[public]` route still runs `AuthGuard` — but the guard does not
+reject. If a credential is present and valid, the principal is
+attached so a downstream policy guard can see who is calling. If
+nothing is present, or the credential fails, the request continues
+anonymously. Visitor-rule policy belongs in the authorization layer,
+not in `AuthGuard`.
+
+```rust
+#[get("/health")]
+#[public]
+async fn health(&self) -> &'static str { "ok" }
+```
+
+<Aside>
+A controller without `#[use_guards(AuthGuard, ...)]` silently exposes
+its routes. Default-deny is enforced by **convention** — write a
+[negative-path test](/testing/negative-path/) that asserts a missing
+guard returns 401, and a regression cannot ship.
+</Aside>
+
+## Credential extractors
+
+`nest-rs-authn` exposes two header extractors so a `Strategy` does not
+re-parse them:
+
+- `bearer_token(&req) -> Option<&str>` — pulls the token out of
+  `Authorization: Bearer <token>` after trimming.
+- `basic_credentials(&req) -> Option<(String, String)>` — decodes
+  `Authorization: Basic <base64>` and returns `(client_id,
+  client_secret)`, splitting on the first colon (RFC 7617).
+
+Both return `None` rather than erroring on missing/malformed headers
+— the strategy decides whether a missing credential is a `Challenge`
+or an `AuthError`.
+
+## Errors
+
+`AuthError` covers the failure modes a strategy hits:
+`MissingCredentials`, `InvalidToken`, `InvalidSignature`,
+`InvalidAlgorithm`, `NotYetValid`, `Expired`, `Failed(String)`. Each
+maps to a 401 body when returned by a `Strategy`; `Failed` collapses
+to a generic `"authentication failed"` on the wire so the message
+never leaks configuration detail.
+
+A password-login service that wants to refuse without distinguishing
+"wrong email" from "wrong password" returns `CredentialError` instead
+— an opaque `"invalid credentials"` for any miss. See
+[Password](/security/authentication/password/) for the timing-safe
+shape of that path.
+
+## Pick the strategy that matches
+
+- [JWT](/security/authentication/jwt/) — a resource server verifies a
+  signed bearer token. HS256 (shared secret) or EdDSA (asymmetric, the
+  resource server holds only the public key).
+- [OAuth2](/security/authentication/oauth2/) — full
+  authorization-code flow with PKCE, against any provider.
+- [Password](/security/authentication/password/) — Argon2id hashing
+  plus `burn_verify` for timing-safe rejection.
+- [Issuer and resource server](/security/authentication/issuer-and-resource-server/)
+  — the deployment pattern that lets a single token signer feed
+  several verify-only APIs.
+
+Once the principal is on the request, the authorization layer takes
+over — see [Authorization](/security/authorization/).

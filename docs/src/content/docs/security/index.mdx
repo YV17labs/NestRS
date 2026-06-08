@@ -1,214 +1,116 @@
 ---
 title: Security
-description: Authentication strategies, ability-based authorization, row-level filtering, and response masking — all by composition.
+description: Two concerns, two layers — authentication answers who is calling, authorization answers what they may do, and the framework wires both transparently.
+sidebar:
+  order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, FileTree } from '@astrojs/starlight/components';
 
-Two concerns, two layers:
+Security in nestrs splits into two concerns wired by two composable
+layers. Authentication establishes *who* the caller is. Authorization
+declares *what* they may do, then enforces it on every read, every
+by-id write, and every response body before it leaves the process.
+Bind the two guards on the controller and the framework does the rest
+— there is no per-handler checklist.
 
-- **Authentication** — *who* the caller is. A `Strategy` turns a request
-  into a principal (or returns a challenge — a 401 / an OAuth redirect).
-- **Authorization** — *what* they may do. An `Ability` declares the
-  allowed actions on subjects; a guard builds it from the principal; the
-  framework applies it everywhere downstream (queries, by-id loads,
-  response bodies).
+The authn layer leans on [`jsonwebtoken`](https://docs.rs/jsonwebtoken),
+[`argon2`](https://docs.rs/argon2), and the
+[`oauth2`](https://docs.rs/oauth2) crate. The authz layer is the
+framework's own CASL-style engine, with row-level filtering bridged into
+[SeaORM](https://docs.rs/sea-orm).
 
-Once both are mounted, **every read goes through a filtered `Repo`**,
-**every by-id write fails-closed on a denied row**, and **every response
-is masked** before it leaves the process. There is no per-handler
-checklist.
+## Two concerns, two layers
 
-## Two-line wiring per transport
+| Concern | Layer | Who answers it |
+|---------|-------|----------------|
+| Who is calling? | Authentication | A [`Strategy`](/security/authentication/) turns the request into a principal (or returns a 401 / OAuth redirect) |
+| What may they do? | Authorization | An [`Ability`](/security/authorization/) declares allowed actions; the framework applies it to queries, by-id loads, and response bodies |
 
-```rust title="apps/platform-api/src/module.rs"
-#[module(
-    imports = [
-        DatabaseModule::for_root(None),
-        AuthnModule,
-        AuthzHttpModule,           // ← HTTP authz
-        AuthzGraphqlModule,        // ← GraphQL authz
-        UsersHttpModule,
-        UsersGraphqlModule,
-        // ...
-    ],
-)]
-pub struct PlatformApiModule;
-```
+Each layer ships its own guard. Bind them in order — the authn guard
+runs first and attaches the principal; the authz guard reads it and
+installs the ambient `Ability`.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]   // ← bind both layers
+#[use_guards(AuthGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
 }
 ```
 
-That's the whole opt-in surface. From there, the framework does the rest.
+That's the whole opt-in surface for HTTP. GraphQL and WebSockets get
+matching bridges that re-establish the ambient ability at the dispatch
+point — see [Per-transport bridges](/security/authorization/per-transport-bridges/).
 
-## Authentication — JWT in 3 lines
+## What you get once both are mounted
 
-A resource-server app declares a single alias:
+- **Every read is filtered.** The
+  [`Repo`](/database/repo-and-executor/) gateway every service uses
+  joins the ambient ability's
+  [`condition_for`](/security/authorization/row-level-filtering/) into
+  the SQL — a member querying `Users::find()` gets
+  `WHERE org_id = $caller_org_id` appended.
+- **Every by-id write checks access.** `Bind<S, A>` calls
+  `Service::access(id)`; missing rows return `404`, denied rows return
+  `403` — see [By-id binding](/security/authorization/by-id-binding/).
+- **Every response is masked.** The
+  [`Authorize` shaper](/security/authorization/response-masking/) runs
+  after a 2xx handler: fields the caller cannot read become `null`, and
+  `retain_wire_keys` strips back anything outside the wire DTO so an
+  unrestricted grant cannot leak a `#[expose(skip)]` column.
 
-```rust title="crates/features/src/authn/core.rs"
-pub type AuthGuard = nest_rs_authn::AuthGuard<JwtStrategy<Claims>>;
+The wiring sketch for an app that serves all three transports:
+
+```rust title="apps/platform-api/src/module.rs"
+#[module(
+    imports = [
+        DatabaseModule::for_root(None),
+        AuthnModule,
+        AuthzHttpModule,
+        AuthzGraphqlModule,
+        AuthzWsModule,
+        UsersHttpModule,
+        UsersGraphqlModule,
+        UsersWsModule,
+    ],
+)]
+pub struct PlatformApiModule;
 ```
 
-`JwtStrategy<C>` is provided by the framework; it verifies an
-`Authorization: Bearer <token>` against the configured public key and
-puts `Claims` on the request. A 401 is returned automatically on a
-missing or invalid token.
+<Aside>
+A handler opts **out** by not importing the transport's authz module —
+public endpoints do exactly that and lose every layer transitively.
+Visitor-rule policy then lives in your `AbilityFactory`, not in
+`AuthGuard`.
+</Aside>
 
-A handler reads the principal with `Ctx<Claims>`:
+## Where each piece lives
 
-```rust
-async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUserInput>>)
-    -> Result<Json<User>>
-{
-    Ok(Json(
-        self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
-    ))
-}
-```
-
-## Authorization — define the policy once
-
-```rust title="crates/features/src/authz/core.rs"
-impl Ability<Claims> for AppAbility {
-    fn build(claims: &Claims) -> Ability<Self> {
-        let mut a = Ability::new();
-        match claims.role.as_str() {
-            "admin" => {
-                a.can(Action::Manage, Subject::All);
-            }
-            _ => {
-                a.can(Action::Read, Subject::Entity::<UserEntity>())
-                    .when(|claims, row: &UserEntity::Model| row.org_id == claims.org_id);
-                a.can(Action::Update, Subject::Entity::<UserEntity>())
-                    .when(|claims, row: &UserEntity::Model| row.id == claims.sub);
-            }
-        }
-        a
-    }
-}
-```
-
-`AppAbility` is the single source of truth: it covers HTTP, GraphQL, and
-WebSockets through the three transport bridges (`AuthzHttpModule`,
-`AuthzGraphqlModule`, `AuthzWsModule`).
-
-## Three layers of enforcement — for free
-
-### 1. Row-level filtering on every read
-
-`Repo::<Users>::scoped(Action::Read).filter(...).all(&conn)` joins the
-ambient ability's `condition_for(Read)` into the SQL. A user with role
-`user` querying `Users::find()` automatically gets
-`WHERE org_id = $caller_org_id` appended.
-
-The `CrudService::list`, `page`, `access` methods all go through
-`Repo::scoped(...)` — controllers cannot bypass this.
-
-### 2. By-id loads check access
-
-```rust
-#[get("/:id")]
-async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
-    Json(User::from(&*user))
-}
-```
-
-`Bind<S, A>` calls `S::access(id)` which:
-
-- loads through `Repo::<S::Entity>::scoped(A)`;
-- returns `Err(404)` if the row does not exist *within the caller's scope*;
-- returns `Err(403)` if the row exists but is outside scope (denied).
-
-A 404 vs 403 distinction here is a **policy decision**, not an
-implementation detail.
-
-### 3. Response masking before the body leaves
-
-After a successful handler returning `Json<T>`, the `Authorize` shaper:
-
-1. parses the JSON body;
-2. reconstructs the `Model` (filling `#[expose(skip)]` columns from
-   `WireModelDefaults`);
-3. runs `Ability::mask` on the model — fields the caller cannot read
-   become `null`;
-4. **`retain_wire_keys`** strips back any field that was not in the
-   original wire DTO. An unrestricted field grant cannot leak a
-   `#[expose(skip)]` column (like `password_hash`).
-
-If the body cannot be reconciled with `Model`, the shaper fails
-**closed** with a `500` — never unmasked data.
-
-## Run it
-
-```bash
-# Mint a token for Ada (role: user, org: A)
-$ TOKEN=$(curl -sX POST http://localhost:3001/token \
-    -d 'grant_type=password&username=ada@example.com&password=password' \
-    | jq -r .access_token)
-
-# Ada can see her org's users
-$ curl -s http://localhost:3000/users \
-    -H "Authorization: Bearer $TOKEN" | jq '.[].name'
-"Ada Lovelace"
-"Bob Engineer"        # same org
-
-# Ada cannot reach a user in another org
-$ curl -s -o /dev/null -w "%{http_code}\n" \
-    http://localhost:3000/users/0193c1ee-...other-org \
-    -H "Authorization: Bearer $TOKEN"
-403
-
-# password_hash is never in the body — it's #[expose(skip)]
-$ curl -s http://localhost:3000/users -H "Authorization: Bearer $TOKEN" \
-    | jq '.[0] | keys'
-[ "email", "id", "name", "org_id" ]
-```
-
-## Split issuer and resource server
-
-`apps/platform-auth` issues tokens (signs with the **private** EdDSA key);
-`apps/platform-api` verifies them (holds **only** the public key). They share
-the same `Claims` type via the `identity` crate, never RPC each other,
-and the resource server cannot mint a token even if it wanted to.
-
-```bash
-just dev auth     # token issuer on :3001
-just dev api      # resource server on :3000
-```
+<FileTree>
+- security/
+  - **authentication/**
+    - [index.mdx](/security/authentication/) — `Strategy`, `Outcome`, `AuthGuard<S>`, reading the principal back with `Ctx<P>`
+    - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, HS vs EdDSA keys, claims
+    - [oauth2.mdx](/security/authentication/oauth2/) — authorization-code flow with PKCE
+    - [password.mdx](/security/authentication/password/) — Argon2id hashing and `burn_verify`
+    - [issuer-and-resource-server.mdx](/security/authentication/issuer-and-resource-server/) — the split-deploy pattern
+  - **authorization/**
+    - [index.mdx](/security/authorization/) — `Ability`, `AppAbility`, where it runs
+    - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`, predicates, fields
+    - [row-level-filtering.mdx](/security/authorization/row-level-filtering/) — `condition_for`, `Repo::scoped`
+    - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `Bind<S, A>`, the `Access` outcome
+    - [response-masking.mdx](/security/authorization/response-masking/) — `Authorize`, `mask`, `WireModelDefaults`
+    - [per-transport-bridges.mdx](/security/authorization/per-transport-bridges/) — HTTP / GraphQL / WS / MCP
+  - [threat-model.mdx](/security/threat-model/) — what each layer catches, honestly
+</FileTree>
 
 ## Going further
 
-### Per-route guards
-
-When one route needs stricter rules than the controller default:
-
-```rust
-#[delete("/:id")]
-#[use_guards(AdminGuard)]
-async fn delete(&self, ...) { /* ... */ }
-```
-
-### `#[meta]` + Reflector for declarative policies
-
-```rust
-#[get("/admin")]
-#[use_guards(RolesGuard)]
-#[meta(Roles(["admin", "auditor"]))]
-async fn admin(&self) -> &'static str { "ok" }
-```
-
-The guard reads `Reflector::new(req).get::<Roles>()` and decides.
-
-### Reference
-
-- `crates/features/src/authn/` — `Strategy`, `Outcome`, the JWT alias.
-- `crates/features/src/authz/` — `AppAbility`, the three transport modules.
-- `crates/features/src/oauth/` — the OAuth2 authorization-code flow.
-- `crates/nest-rs-authn/` — the trait, the strategies, JWT signing/verifying.
-- `crates/nest-rs-authz/` — `Ability`, `mask`, `condition_for`, the shaper.
+- [Threat model](/security/threat-model/) — what these layers cover and
+  what they don't.
+- [Guards](/fundamentals/guards/) — the primitive every security layer
+  builds on.
+- [Throttler](/throttler/) — rate limiting as a guard, composes with
+  `AuthGuard`.

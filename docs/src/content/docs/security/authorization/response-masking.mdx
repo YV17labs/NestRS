@@ -1,0 +1,217 @@
+---
+title: Response masking
+description: After a 2xx, the Authorize shaper deserializes the body into Model, runs Ability::mask, then retain_wire_keys — an unrestricted grant cannot leak a #[expose(skip)] column.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The third layer of authorization runs after the handler returns. The
+`Authorize<A, S>` shaper parses the successful JSON body,
+reconstructs the SeaORM `Model` (filling `#[expose(skip)]` columns
+from `WireModelDefaults`), runs typed `Ability::mask` to strip the
+fields the caller cannot read, then keeps only the keys the wire DTO
+exposed in the first place. The route never has to call `mask`
+itself.
+
+The shaper fails **closed**: a successful body that cannot be
+reconciled with `Model` yields 500 rather than shipping data
+unmasked. Better a misconfigured route than a leak.
+
+## What runs after a 2xx
+
+```text
+Handler returns Json<UserWire>
+       │
+       ▼
+  body in bytes
+       │
+parse JSON → Value
+       │
+wire_to_model::<S>     ← fill #[expose(skip)] columns via WireModelDefaults
+       │
+ability.mask::<S>      ← typed: filters by row, masks by field
+       │
+retain_wire_keys       ← drop anything not on the wire DTO
+       │
+serialize → response body
+```
+
+Each step has a defined failure mode:
+
+- **Parse fails** (the body was not JSON) → original bytes ship.
+- **`wire_to_model` fails** (object shape does not match `Model`) →
+  500. Fail closed.
+- **`Ability::mask` runs** — any row the caller cannot read drops
+  out (collection responses) or every restricted field becomes
+  `null`.
+- **`retain_wire_keys`** — strips back any field the wire DTO never
+  carried. An unrestricted `Ability` grant cannot leak a
+  `#[expose(skip)]` column (like `password_hash`).
+- **Re-serialize fails** → 500.
+
+Non-2xx, non-JSON, and scalar responses pass through untouched.
+
+## Where it binds
+
+`Authorize<A, S>` is the handler-level extractor that triggers the
+shaper. Declare it as a parameter; the `#[routes]` orchestrator
+detects it by type name and installs the shaper:
+
+```rust
+use nest_rs_authz::{Read, http::Authorize};
+use sea_orm::EntityTrait;
+
+#[get("/")]
+async fn list(
+    &self,
+    _authz: Authorize<Read, user::Entity>,
+) -> Result<Json<Vec<User>>> {
+    Ok(Json(self.svc.list().await?.into_iter().map(User::from).collect()))
+}
+```
+
+`Authorize<Read, user::Entity>` does two things:
+
+1. **Class-level gate.** On extraction, refuses with 403 unless the
+   ability's `can_class(Read, TypeId::of::<user::Entity>())` is
+   true.
+2. **Shaper trigger.** The `RouteResponseShaper` impl wraps the
+   handler in `with_ability(ability, inner)` (so `Repo::scoped`
+   reads the right ability) and runs `mask_response::<user::Entity>`
+   on the way out.
+
+<Aside type="caution">
+`#[routes]` reads the `Authorize` parameter **by type name** to
+install the shaper. Importing it under an alias (`use ... as Foo`)
+keeps the gate working but silently disables response masking — the
+shaper never binds. Keep `Authorize` unaliased.
+</Aside>
+
+## `Ability::mask` — what it strips
+
+```rust
+pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
+```
+
+Serializes the model, then keeps only the fields permitted by the
+matching grants. The rule shape (`.fields([cols])`) decides; the
+union across matching grants wins.
+
+```rust
+pub fn mask_many<'m, E>(
+    &self,
+    action: Action,
+    models: impl IntoIterator<Item = &'m E::Model>,
+) -> Vec<serde_json::Value>
+```
+
+For a collection: drops the models the caller cannot see
+(`Ability::can` returns false), masks the rest. The
+`retain_wire_keys` step runs per item afterwards.
+
+A grant with no `.fields` returns `FieldSet::All` — every column is
+permitted. A grant with `.fields([Id, Name])` returns
+`FieldSet::Only({"id", "name"})`. The masker unions:
+`FieldSet::Only(union_of_grants)` unless any matching grant is
+`FieldSet::All`, which clears the restriction.
+
+## `retain_wire_keys` — the defense in depth
+
+After `Ability::mask` produces a `serde_json::Value`, the shaper
+drops keys absent from the original wire body:
+
+```rust
+fn retain_wire_keys(masked: &mut Value, wire: &Value) {
+    let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
+        return;
+    };
+    masked_obj.retain(|key, _| wire_obj.contains_key(key));
+}
+```
+
+Why this step exists: an `Ability` grant with no `.fields` permits
+every column on the `Model`. If the `Model` carries a
+`password_hash` field (server-only, `#[expose(skip)]` in the wire
+DTO), an unrestricted grant would have it pass `Ability::mask`
+untouched. `retain_wire_keys` then drops it because it was never on
+the wire DTO to begin with.
+
+Two layers:
+
+- The DTO decides what may ever ship (column-level allowlist).
+- The `Ability` decides what may ship to this caller (row-level
+  policy).
+
+Both apply. A column on neither list never leaves.
+
+## `WireModelDefaults` — filling the gaps
+
+To run `Ability::mask` the shaper needs a typed `S::Model`. The wire
+body, by design, omits `#[expose(skip)]` columns. `WireModelDefaults`
+fills them with placeholder values so deserialization succeeds:
+
+```rust
+pub trait WireModelDefaults: EntityTrait {
+    fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
+}
+```
+
+The `#[expose]` macro emits an impl per entity that fills every
+skipped scalar column with a JSON default (`""`, `0`, `null`). The
+defaults are discarded again by `retain_wire_keys` before the body
+ships — they never reach the wire.
+
+A few column types the macro cannot default automatically:
+
+- `Decimal` (no canonical zero in JSON).
+- Custom Rust enums with no `Default` impl.
+- Columns whose `Default` is meaningful business state.
+
+Hand-write a `WireModelDefaults` impl for those entities:
+
+```rust
+impl WireModelDefaults for invoice::Entity {
+    fn fill_wire_defaults(map: &mut Map<String, Value>) {
+        map.entry("amount").or_insert(serde_json::json!("0"));
+        map.entry("currency").or_insert(serde_json::json!("USD"));
+    }
+}
+```
+
+A handler returning a body that does not deserialize even with
+defaults yields 500 with `"response masking failed: body did not
+match the authorized subject type"`. The test bench is the right
+home for noticing this — a unit test that runs the shaper against
+the handler's `Json<T>` shape pins it.
+
+## Fail-closed — what that buys you
+
+The shaper's posture is asymmetric: every uncertain path collapses
+to 500.
+
+- JSON parse failure → original bytes ship (the body was not JSON to
+  begin with).
+- `wire_to_model` failure on an array element → 500 for the whole
+  response.
+- `wire_to_model` failure on an object → 500.
+- Re-serialize failure → 500.
+
+The principle: a route configured to mask must mask. If the framework
+cannot prove the body was masked, it does not ship the body. The
+operational cost is that a misconfigured route surfaces as 500 in
+prod; the alternative — shipping unmasked data — is worse.
+
+Pair every masked route with a
+[negative-path test](/testing/negative-path/) that pins the masked
+body shape. A regression that breaks the `WireModelDefaults` impl
+surfaces immediately, not after an audit.
+
+## Going further
+
+- [Policies](/security/authorization/policies/) — `.fields([...])`,
+  which feeds `Ability::mask`.
+- [Row-level filtering](/security/authorization/row-level-filtering/)
+  — the layer that filters rows, complementing the field mask.
+- [Authorization](/security/authorization/) — engine overview.

@@ -1,0 +1,196 @@
+---
+title: Row-level filtering
+description: Every read goes through Repo::scoped, which joins the ambient ability's condition_for into the SQL — no hand-written WHERE clause, no forgotten filter.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The first layer of authorization runs at the query. `Repo::scoped(action)`
+reads the ambient `Ability` and joins its `condition_for::<E>(action)`
+into the `WHERE` clause of every query. A member who calls
+`UsersService::list()` never sees a row outside their org because the
+SQL itself excludes it — the framework never has to remember to add
+`WHERE org_id = $caller_org_id`. The handler cannot bypass the filter
+even if it wanted to: `CrudService` reaches the DB exclusively through
+`Repo`.
+
+This is the layer that turns "did I remember to filter?" from a
+review checklist into a structural property.
+
+## What it looks like
+
+A service method that lists rows:
+
+```rust
+async fn list(&self) -> Result<Vec<entity::Model>, DbErr> {
+    Repo::<entity::Entity>::all().await
+}
+```
+
+`Repo::all()` calls `scoped(Action::Read)` under the hood. With an
+ambient `Ability` granting `Read` on `entity::Entity` when
+`org_id = $caller_org_id`, the emitted SQL is:
+
+```sql
+-- Before: a naive list query
+SELECT * FROM users;
+
+-- After: with Repo::scoped(Read) and the member's ability
+SELECT * FROM users
+WHERE org_id = '0193c1ee-...-caller-org-id';
+```
+
+No `WHERE` was written. The ability's `condition_for::<E>(Read)` was
+joined onto the query at build time.
+
+## How the condition is built
+
+`Ability::condition_for::<E>(action)` walks the rules keyed under
+`(action, TypeId::of::<E>())` plus those keyed under
+`(Action::Manage, TypeId::of::<E>())` (the action wildcard) and folds
+them into one `sea_orm::Condition`:
+
+```text
+(grant_1 OR grant_2 OR ...) AND NOT (deny_1 OR deny_2 OR ...)
+```
+
+- **No grants for this (action, entity)** ⇒ the condition is
+  `1 = 0` — the query returns nothing. Default-deny.
+- **One unconstrained grant** ⇒ `Predicate::Always` lowers to
+  `Condition::all()` (SQL `TRUE`) — the filter imposes nothing.
+- **Conditional grants** ⇒ each `.when(|p| ...)` lowers via
+  `Predicate::to_condition()` and is `OR`-ed in.
+- **Denials** ⇒ the union is `NOT`-ed onto the outer `AND`.
+
+The same `Predicate` AST also drives the in-memory check
+(`Ability::can`) — they cannot drift apart.
+
+## What `Repo` does
+
+`Repo<E>` is the single audited choke point for data access. Every
+`CrudService` method reaches the DB through it:
+
+- `Repo::all()` / `Repo::list()` — `scoped(Read)` + `find().all()`
+- `Repo::page(first, after)` — `scoped(Read)` + keyset pagination
+- `Repo::find_by_id(id)` — `scoped(Read)` + `find_by_id`
+- `Repo::scoped(Update).update_by_id(id, fn)` — by-id update with the
+  filter joined, so a denied-but-existing row updates **zero** rows.
+
+The handler never writes `WHERE org_id = …`. The pipeline writes it
+once, the service goes through `Repo`, the controller calls the
+service.
+
+## The ambient ability
+
+`Repo::scoped(...)` reads the ability via
+`nest_rs_authz::current_ability()` — a `tokio::task_local!` set by
+the transport's authz guard. Three install depths cooperate:
+
+- **HTTP** — the `Authorize` shaper installs `with_ability(ability,
+  handler)` after the `AbilityGuard` attached the ability to the
+  request. The handler sees it.
+- **GraphQL** — `GraphqlAbilityBridge::around` installs it for the
+  duration of the operation. Resolvers and dataloaders see it.
+- **WebSockets** — `WsDataContext` installs it per message. The
+  message handler sees it.
+
+Outside any request (worker job, cron tick, shutdown hook),
+`current_ability()` returns `None` — the query runs **unscoped**.
+That is correct for system work: a cron deleting expired sessions
+should not be filtered by a caller's ability because there is no
+caller. See [Threat model](/security/threat-model/) for what that
+buys you and what it does not.
+
+## No ambient ability = unscoped, not denied
+
+```rust
+pub fn condition_for<E: EntityTrait>(&self, action: Action) -> Condition { /* ... */ }
+```
+
+is called by `Repo::scoped(...)` only when the ability is present.
+Without an ability, the query runs as a plain `find()` against the
+pool — no `WHERE` is added. Two paths reach that state:
+
+- Worker jobs and cron ticks — system work, no caller, no filter.
+  Correct.
+- An HTTP handler whose controller imported neither `AuthzHttpModule`
+  nor a transport-specific authz module — the request runs without
+  an ability, and `Repo::scoped(...)` returns every row. **Incorrect**
+  — match every new controller with its authz module, and write a
+  [negative-path test](/testing/negative-path/) that pins the 403.
+
+A public route uses `AbilityGuard` too: it builds an empty `Ability`
+for the visitor, so `Repo::scoped(Read)` returns nothing by default
+— visitor-rule policy belongs in `AbilityFactory`, not in the
+filter.
+
+## SQL injection — not the threat
+
+Row-level filtering does not protect against SQL injection. That
+mitigation happens at the query layer: SeaORM uses parameterized
+queries throughout, and a handler that builds raw SQL is the bug.
+
+The threat row-level filtering protects against is **scope leakage**
+— a logic bug in a controller (forgot the `org_id` filter, wrong
+join, copy-paste from another endpoint) that exposes rows the caller
+should not see. With the filter joined at the `Repo` layer, that
+class of bug stops compiling: the handler does not write the
+predicate, so it cannot get it wrong.
+
+```rust
+// What this prevents — a hand-written list query that forgets the org filter.
+let everyone = user::Entity::find().all(&conn).await?;
+//                              ^^^^ leaks every row across every tenant
+```
+
+The framework's posture: handlers do not write SQL. They call
+services. Services go through `Repo`. `Repo::scoped(...)` adds the
+filter. The path of "leak rows" never opens.
+
+## When you really do need a custom query
+
+Sometimes a handler builds a query the `CrudService` cannot express
+(complex joins, aggregate, a special index). Pull the ability's
+condition as a handler parameter via `Scope<E, A>` and join it
+yourself:
+
+```rust
+use nest_rs_authz::{Read, http::Scope};
+
+#[get("/users/search")]
+async fn search(
+    &self,
+    scope: Scope<user::Entity, Read>,
+    Query(q): Query<String>,
+) -> Result<Json<Vec<User>>> {
+    let conn = current_executor().expect("ambient executor");
+    let rows = user::Entity::find()
+        .filter(scope.into_inner())
+        .filter(user::Column::Name.contains(&q))
+        .all(&conn)
+        .await?;
+    Ok(Json(rows.into_iter().map(User::from).collect()))
+}
+```
+
+`Scope<E, A>` deref-targets to `&Condition` so you can compose it
+with other filters. Routes that use `Scope` still need
+`AbilityGuard` bound — the access graph enforces it.
+
+<Aside>
+Prefer extending the service. A custom query in a handler is a
+maintenance liability: the next reviewer must reconfirm that
+`scope.into_inner()` was joined. Adding the query to the
+`CrudService` puts it back behind `Repo::scoped(...)` and the audit
+disappears.
+</Aside>
+
+## Going further
+
+- [Policies](/security/authorization/policies/) — the predicates that
+  feed `condition_for`.
+- [By-id binding](/security/authorization/by-id-binding/) — the
+  unscoped load that distinguishes 404 from 403.
+- [Authorization](/security/authorization/) — engine overview.

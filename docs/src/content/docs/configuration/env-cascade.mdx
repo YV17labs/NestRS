@@ -1,0 +1,169 @@
+---
+title: The .env cascade
+description: Which .env files are loaded, in what order, and how the active Environment selects them.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The framework loads a small cascade of `.env` files once at boot, before
+any `Config::from_env` runs. The cascade follows dotenv-flow conventions:
+most specific wins, real process env wins over every file, and tests stay
+hermetic.
+
+A single call merges them into `std::env` exactly once per process,
+guarded by a `Once`. After that, every [`ConfigService`](/configuration/#configservice-api)
+reader sees the same merged environment.
+
+## The order
+
+```
+real env  >  .env.<environment>.local  >  .env.local  >  .env.<environment>  >  .env
+```
+
+Read left-to-right as decreasing precedence: a key set in the real
+process environment overrides every file; among files, `.env.<env>.local`
+wins, `.env` loses. Set-if-absent semantics make the first writer win, so
+loading "most specific first" implements the documented order without a
+second pass.
+
+| Layer | Committed? | Purpose |
+|-------|------------|---------|
+| Real process env | n/a | Deployment overrides, secrets injected by the orchestrator |
+| `.env.<env>.local` | gitignored | Per-machine secrets for one environment (e.g. local prod creds) |
+| `.env.local` | gitignored | Per-machine secrets shared across environments |
+| `.env.<env>` | committed | Non-secret defaults for one environment |
+| `.env` | committed | Non-secret defaults shared across environments |
+
+The convention: anything ending in `.local` is gitignored, everything
+else is committed.
+
+## The active environment
+
+The `<environment>` segment is the variant of `Environment`, read from
+the reserved `NESTRS_ENV` variable. This is the one framework variable
+**outside** the `NESTRS_<DOMAIN>__<KEY>` scheme — it selects which `.env`
+files to load, so it must come from the real process environment, not a
+`.env` file.
+
+```rust
+pub enum Environment {
+    Development,
+    Test,
+    Staging,
+    Production,
+}
+```
+
+| `NESTRS_ENV` | Variant |
+|--------------|---------|
+| unset, anything unrecognized | `Development` |
+| `test` | `Test` |
+| `staging` / `stage` | `Staging` |
+| `production` / `prod` | `Production` |
+
+The default is `Development`. Tests default to `Test` (the test harness
+sets it before any builder runs).
+
+### Test mode is hermetic
+
+Under `Environment::Test`, the cascade **skips `.env.local`**. A
+developer's personal secrets (database URLs, OAuth client IDs, API
+tokens) cannot leak into a test run. The committed `.env.test` still
+loads — that's where shared test defaults belong.
+
+```text
+.env.test.local   ← loaded (per-machine test overrides)
+.env.local        ← skipped under Test
+.env.test         ← loaded
+.env              ← loaded
+```
+
+If a test sets `NESTRS_ENV` to something else explicitly (CI asserting
+prod behavior, for instance), the cascade follows that.
+
+## When the merge happens
+
+Exactly once per process, on the first call that needs it:
+
+- **`ConfigModule::for_root()`** triggers it during the collect phase,
+  before any factory runs. This is the expected path.
+- **`Environment::init()`** triggers it. Call this at the top of `main`
+  if something reads the env outside the DI graph (e.g. an OpenTelemetry
+  initializer that runs before `App::builder()`).
+- **The default `EnvSource`** triggers it on its first `get`. A
+  [custom `ConfigSource`](/configuration/sources/) never triggers it —
+  the process env stays untouched.
+
+The guard is process-wide, so multiple calls are safe. The cascade is
+best-effort: missing files are silently skipped.
+
+## Variable naming
+
+Inside the cascade and in real env vars, every configurable field
+follows the same scheme:
+
+```
+NESTRS_<NAMESPACE>__<KEY>
+```
+
+- `NESTRS_` — fixed prefix.
+- `<NAMESPACE>` — the namespace from `#[config(namespace = "…")]`,
+  uppercased.
+- `__` — a double underscore separator (single underscores are reserved
+  for word boundaries inside keys).
+- `<KEY>` — the field name, uppercased. The macro doesn't enforce a
+  specific casing — `from_env` calls `env.get("…")` with whatever string
+  you write.
+
+Examples:
+
+```text
+NESTRS_DATABASE__URL
+NESTRS_DATABASE__MAX_CONNECTIONS
+NESTRS_ISSUER__CLIENTS
+NESTRS_HTTP__PORT
+```
+
+A feature reads only **its own** namespace from `from_env`. To borrow a
+sibling variable (rare — see *own > borrowed > code default* on the
+[index](/configuration/)), call `env_var("NESTRS_<OTHER>__<KEY>")`
+directly.
+
+## Quoting rules inside `.env` files
+
+The minimal parser handles three forms:
+
+```sh title=".env"
+# Unquoted: as-is, no escaping
+URL=postgres://localhost/app
+
+# Double-quoted: expands \n \t \r \\ \"
+JWT_PUBLIC_KEY="-----BEGIN-----\nMIIB...\n-----END-----"
+
+# Single-quoted: literal, no escape expansion
+RAW='a\nb'   # value is the four characters: a, backslash, n, b
+```
+
+Lines starting with `#` are comments. Empty lines are skipped. An
+`export ` prefix is tolerated for shell compatibility. Empty keys and
+lines without `=` are silently dropped.
+
+The double-quoted escape set exists for one reason: PEM keys fit on a
+single line with `\n` instead of literal newlines.
+
+<Aside type="note">
+The `.env` cascade is a developer convenience for local runs, not a
+production secret store. In production, prefer injected env vars (from a
+secrets manager) or a [custom `ConfigSource`](/configuration/sources/)
+that pulls from Vault, K8s, or AWS Parameter Store.
+</Aside>
+
+## Going further
+
+- [Configuration overview](/configuration/) — the typed-struct contract.
+- [Alternative sources](/configuration/sources/) — replace `EnvSource`
+  with Vault or a K8s ConfigMap.
+- [Overriding in tests](/configuration/testing/) — seed pinned values,
+  use `figment::Jail` for environment isolation.

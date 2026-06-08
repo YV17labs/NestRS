@@ -1,0 +1,187 @@
+---
+title: Indicators
+description: Where indicators live, the framework-shipped ones, and how to write a custom check with #[indicators] and per-method probe attributes.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An indicator is one check a probe runs: a method on an `#[injectable]`
+provider, tagged with `#[liveness]`, `#[readiness]`, or `#[startup]`
+inside an `#[indicators]` impl block. It returns
+`anyhow::Result<()>` — `Ok(())` reports `up`, `Err(_)` reports
+`down` and the stringified error lands in the probe's JSON body. The
+method's name becomes the indicator's key.
+
+## A first indicator
+
+```rust title="crates/features/upstream/health/indicator.rs"
+use std::sync::Arc;
+
+use nest_rs_core::injectable;
+use nest_rs_health::indicators;
+
+use crate::upstream::UpstreamClient;
+
+#[injectable]
+pub struct UpstreamHealthIndicator {
+    #[inject]
+    svc: Arc<UpstreamClient>,
+}
+
+#[indicators]
+impl UpstreamHealthIndicator {
+    #[readiness]
+    async fn upstream(&self) -> anyhow::Result<()> {
+        self.svc.ping().await
+    }
+}
+```
+
+```rust title="crates/features/upstream/health/module.rs"
+use nest_rs_core::module;
+
+use crate::upstream::health::indicator::UpstreamHealthIndicator;
+
+#[module(providers = [UpstreamHealthIndicator])]
+pub struct UpstreamHealthModule;
+```
+
+```rust title="apps/platform-api/src/module.rs"
+use features::upstream::UpstreamHealthModule;
+use nest_rs_health::HealthModule;
+
+#[module(imports = [HealthModule, UpstreamHealthModule])]
+pub struct PlatformApiModule;
+```
+
+The indicator's key on the wire is `upstream` (the method name); it
+runs only on `/health/ready`.
+
+## Where an indicator lives
+
+The dividing rule matches every other adapter: a file lives in
+`crates/features/` the moment another app could reuse it, and under
+`apps/<x>/` only when exposing it any higher would be dishonest.
+
+| Scope                                    | Home                                              | Example                              |
+|------------------------------------------|---------------------------------------------------|--------------------------------------|
+| Framework primitive (any nestrs project) | `crates/nest-rs-<concern>/` behind a Cargo feature | `DatabaseHealthModule` (next section) |
+| Product feature (any app of this repo)   | `crates/features/<feature>/health/`               | `UpstreamHealthIndicator` above       |
+| App-specific glue (this binary only)     | `apps/<x>/<feature>/health/` (exception)          | a deployment-quirk check              |
+
+A loose `health.rs` at the root of `apps/<x>/src/` is never the answer:
+`apps/<x>/` is composition only (`main.rs` + `module.rs`), so the file
+would belong to no `#[module]`. See [Monorepo
+layout](/fundamentals/modules/#port--adapters-one-module-per-role) for
+the full rule.
+
+## Framework-shipped: `DatabaseHealthModule`
+
+A framework concern — a pool ping, a queue connection probe — belongs
+in the crate that owns the dependency, behind a Cargo feature so an
+app that does not import `HealthModule` does not pay for the
+indicator. The SeaORM pool ping is the first one to ship.
+
+`nest-rs-seaorm` exposes it as `DatabaseHealthModule`, which registers
+`DbHealthIndicator`. The indicator runs `DatabaseConnection::ping` on
+both `#[readiness]` and `#[startup]` — exactly what most apps want and
+zero code in the app:
+
+```toml title="apps/platform-api/Cargo.toml"
+nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
+```
+
+```rust title="apps/platform-api/src/module.rs"
+use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
+use nest_rs_health::HealthModule;
+
+#[module(
+    imports = [
+        DatabaseModule::for_root(None),
+        HealthModule,
+        DatabaseHealthModule,
+    ],
+)]
+pub struct PlatformApiModule;
+```
+
+An unreachable pool drops readiness and startup to `503` until the
+connection comes back; liveness stays `up` (the orchestrator should
+not restart the pod just because the database blinked). See
+[Database / Health](/database/health/) for the full integration.
+
+## What `#[indicators]` does
+
+The orchestrator decorator walks the impl block, finds each method
+tagged with exactly one probe attribute, strips the attribute, and
+submits one `HealthIndicator` entry per method to the link-time
+inventory `HealthService` drains at probe time. The method stays on
+the impl block unchanged — still a regular `async fn` you can call
+from anywhere.
+
+- **`#[injectable]`** makes the indicator an ordinary DI provider —
+  same `#[inject]` shape as any other service.
+- **`#[indicators]`** on the impl block orchestrates the per-method
+  attributes; it takes no arguments.
+- **`#[liveness]` / `#[readiness]` / `#[startup]`** route the method
+  to its probe. Exactly one per method — the macro rejects two at
+  compile time.
+- Methods must be `async fn` returning `anyhow::Result<()>` (or any
+  `Result<(), E: Into<anyhow::Error>>`). A bare `async fn` with no
+  return is treated as infallible — always `up`.
+
+Multiple decorated methods on the same impl block share the
+provider's `#[inject]` dependencies — pool a DB ping, a Redis ping,
+and a migration check on one `AppHealth` rather than writing a struct
+per check:
+
+```rust title="apps/platform-api/src/app_health.rs"
+#[injectable]
+pub struct AppHealth {
+    #[inject]
+    db: Arc<DatabaseConnection>,
+    #[inject]
+    redis: Arc<RedisPool>,
+}
+
+#[indicators]
+impl AppHealth {
+    #[readiness]
+    async fn db(&self) -> Result<(), sea_orm::DbErr> {
+        self.db.ping().await
+    }
+
+    #[readiness]
+    async fn redis(&self) -> anyhow::Result<()> {
+        self.redis.ping().await
+    }
+
+    #[startup]
+    async fn migrations(&self) -> anyhow::Result<()> {
+        migration::Migrator::status(&self.db).await?;
+        Ok(())
+    }
+}
+```
+
+A worker app or an MCP app that imports the feature's data layer
+without its `HealthModule` ships no probe surface for that feature —
+the access graph keeps the indicator out of the running binary. Apps
+opt into health the same way they opt into HTTP or GraphQL.
+
+<Aside>
+A `Discoverable` impl is **not** emitted by `#[indicators]` — the
+provider's `#[injectable]` owns it. Inventory is the same seam
+`#[hooks]`, `#[scheduled]`, and `#[processor]` use.
+</Aside>
+
+## Going further
+
+- [Discovery](/health/discovery/) — how module-gating decides which
+  indicators fire.
+- [Database / Health](/database/health/) — `DatabaseHealthModule` end
+  to end.
+- [Providers](/fundamentals/providers/) — `#[injectable]`, the access
+  graph, and what makes a provider reachable.

@@ -1,0 +1,179 @@
+---
+title: Authorization
+description: AppAbility compiles your policy into an Ability per request — the framework reads it from the query filter, the by-id binding, and the response mask.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Authorization answers *what the caller may do*. You write one
+`AbilityFactory` per app that compiles the caller's principal into an
+`Ability` — the per-request capability set. The framework reads that
+ability from three places: the query pre-filter on every read, the
+by-id binding when a route loads a row, and the response mask after
+the handler returns. None of them are opt-in per route — they apply
+to every handler whose controller imports the transport's authz
+module.
+
+The engine is CASL-style — grants, conditional rules, fields — but
+backed by one shared `Predicate` AST so the SQL filter and the
+in-memory check can never disagree row by row.
+
+## One factory, one ability per request
+
+`AbilityFactory` is a tiny trait you implement once. The framework
+calls `define` per request, after the authn guard attached the
+principal. The resulting `Ability` lives in request extensions and as
+a `task_local!` for the data layer.
+
+```rust title="crates/features/src/authz/ability.rs"
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
+
+#[injectable]
+#[derive(Default)]
+pub struct AppAbility;
+
+impl AbilityFactory for AppAbility {
+    type Actor = Claims;
+
+    fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
+        if actor.is_admin() {
+            ab.can(Action::Manage, user::Entity)
+                .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+            ab.can(Action::Manage, org::Entity);
+        } else {
+            ab.can(Action::Read, user::Entity)
+                .when(|p| p.eq(user::Column::OrgId, actor.org_id))
+                .fields([user::Column::Id, user::Column::Name]);
+            ab.can(Action::Create, user::Entity)
+                .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+            ab.can(Action::Read, org::Entity)
+                .when(|p| p.eq(org::Column::Id, actor.org_id));
+        }
+    }
+}
+```
+
+A `RuleSpec` commits on drop — `ab.can(...).when(...).fields(...)` is
+one statement, no terminal `.add()` call. See
+[Policies](/security/authorization/policies/) for the full builder API.
+
+## Mount it on the controller
+
+The `AuthzHttpModule` provides `AuthzGuard` (the type alias for
+`AbilityGuard<AppAbility>`). Bind it after `AuthGuard`:
+
+```rust title="crates/features/src/users/http/controller.rs"
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+```
+
+Order matters: `AuthGuard` attaches the principal; `AuthzGuard` reads
+it and builds the `Ability`. Every handler downstream sees an ambient
+`Ability` it does not have to thread.
+
+## Three places the framework reads it
+
+1. **`Repo::scoped(Action)` — the query pre-filter.**
+   `condition_for::<E>(action)` lowers the grants matching this
+   action+entity into a `sea_orm::Condition`, joined into every query.
+   No matching grant ⇒ `1 = 0` ⇒ the query returns nothing. See
+   [Row-level filtering](/security/authorization/row-level-filtering/).
+2. **`Bind<S, A>` — the by-id loader.**
+   `Service::access(id)` loads the row **unscoped**, then calls
+   `Ability::can(action, &model)`. Missing row ⇒ 404, present but
+   denied ⇒ 403. See [By-id binding](/security/authorization/by-id-binding/).
+3. **`Authorize<A, S>` — the response shaper.** After a 2xx, the
+   shaper deserializes the body into `S::Model`, runs `Ability::mask`,
+   then `retain_wire_keys` to strip back anything outside the wire
+   DTO. See [Response masking](/security/authorization/response-masking/).
+
+## Reading the ambient ability
+
+A handler that builds its own query (rare — prefer letting `Repo`
+scope itself) reads the `Condition` via `Scope<E, A>`:
+
+```rust
+use nest_rs_authz::{Read, http::Scope};
+
+#[get("/users/search")]
+async fn search(
+    &self,
+    scope: Scope<user::Entity, Read>,
+    q: Query<String>,
+) -> Result<Json<Vec<User>>> {
+    let rows = user::Entity::find()
+        .filter(scope.into_inner())
+        .filter(user::Column::Name.contains(&q.0))
+        .all(&conn)
+        .await?;
+    Ok(Json(rows.into_iter().map(User::from).collect()))
+}
+```
+
+A service method or any code running under the request's task-local
+reads the ability directly:
+
+```rust
+use nest_rs_authz::current_ability;
+
+if let Some(ab) = current_ability() {
+    if !ab.can::<user::Entity>(Action::Update, &model) {
+        return Err(ServiceError::Forbidden);
+    }
+}
+```
+
+`current_ability()` returns `None` outside a request (worker job,
+shutdown hook). Worker jobs run **unscoped** by design — system work
+should not be filtered by a caller's ability. See
+[Threat model](/security/threat-model/) for what that buys and what
+it does not.
+
+## What an `Ability` exposes
+
+```rust
+ability.can_class(Action::Read, TypeId::of::<user::Entity>())
+ability.condition_for::<user::Entity>(Action::Read)
+ability.can::<user::Entity>(Action::Update, &model)
+ability.mask::<user::Entity>(Action::Read, &model)
+ability.mask_many::<user::Entity>(Action::Read, models.iter())
+ability.permitted_fields::<user::Entity>(Action::Read, &model)
+```
+
+Each method targets one layer of enforcement — the framework picks
+which one to call where, but the surface is documented because your
+own services may reach for `can` directly when they cannot fit through
+`Repo` or `Bind`.
+
+`Action::Manage` is the wildcard: a grant on `Manage` matches every
+other action. A grant on `Action::Read` does not imply `Update`.
+
+<Aside type="caution">
+A handler **without** the authz module imported loses the request
+`Ability` entirely — `Bind` returns 500, `Authorize` is a noop. The
+access graph will catch a controller's missing import at boot, but a
+**newly added controller** in an app that did not import the authz
+module of its transport boots silently exposed. Match every new
+controller with the transport's authz module, and write a
+[negative-path test](/testing/negative-path/) that pins the 403.
+</Aside>
+
+## Where each piece lives
+
+- [Policies](/security/authorization/policies/) — the
+  `Subject`/`Action`/`RuleSpec`/`Predicate` surface and a real
+  match-on-role example.
+- [Row-level filtering](/security/authorization/row-level-filtering/)
+  — what `Repo::scoped` does, with before/after SQL.
+- [By-id binding](/security/authorization/by-id-binding/) —
+  `Bind<S, A>` and the 404/403 distinction.
+- [Response masking](/security/authorization/response-masking/) —
+  `Authorize`, `mask`, `retain_wire_keys`, `WireModelDefaults`.
+- [Per-transport bridges](/security/authorization/per-transport-bridges/)
+  — how GraphQL, WS, and MCP re-establish the ambient ability.

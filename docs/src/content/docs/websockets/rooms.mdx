@@ -1,0 +1,176 @@
+---
+title: Rooms
+description: The WsClient handle — join, leave, broadcast, scoped emit_to — and the room semantics behind them.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A room is a label attached to a connection. Connections that share a
+label receive the same broadcast. There is no per-room object, no
+configuration, no lifecycle — joining a room means appending a string
+to a `HashSet<String>` on your `Conn`; leaving means removing it.
+Broadcasting to a room walks the connection registry and filters by
+membership. That's the whole model.
+
+The handle you reach rooms through is `WsClient`: a per-connection
+struct a handler asks for by adding `&WsClient` to the signature.
+
+## Asking for a client
+
+Any `#[subscribe_message]`, `#[on_connect]`, or `#[on_disconnect]`
+handler can take `&WsClient` in any non-receiver position. The macro
+spots the reference (distinct from an owned payload) and passes the
+current connection's handle:
+
+```rust
+use nest_rs_ws::{gateway, messages, WsClient};
+
+#[gateway(path = "/ws")]
+#[derive(Default)]
+pub struct ChatGateway;
+
+#[messages]
+impl ChatGateway {
+    #[on_connect]
+    async fn joined(&self, client: &WsClient) {
+        client.join("lobby");
+    }
+
+    #[subscribe_message("join")]
+    async fn join_room(&self, room: String, client: &WsClient) {
+        client.join(&room);
+    }
+
+    #[subscribe_message("leave")]
+    async fn leave_room(&self, room: String, client: &WsClient) {
+        client.leave(&room);
+    }
+}
+```
+
+A connection can sit in any number of rooms at once; a room "exists"
+exactly as long as one connection holds it. Disconnect drops the
+membership atomically — no stale rows, no cleanup hook to write.
+
+## Four ways to push
+
+`WsClient` exposes four send methods, each scoping a different way:
+
+| Method | Reaches |
+|---|---|
+| `client.emit(event, &data)` | This connection only. |
+| `client.to(room, event, &data)` | Every connection in `room`. |
+| `client.broadcast(event, &data)` | Every live connection, including this one. |
+| `client.registry()` | The underlying [`WsServer`](/websockets/server-push/) — for advanced cases. |
+
+Every method serializes `data` with `serde` and returns either a
+boolean (one connection) or a count of outboxes that accepted the
+frame. A closed outbox returns `false` / `0` silently — the writer
+task drops the channel on disconnect, so the dispatch loop never blocks
+on a slow client.
+
+```rust
+#[subscribe_message("say")]
+async fn say(&self, msg: SendMessage, client: &WsClient) {
+    let _ = client.broadcast("said", &msg);
+    let _ = client.to("lobby", "said", &msg);
+}
+```
+
+`broadcast` reaches the whole gateway; `to` scopes by room.
+`client.to(room, ...)` does **not** require the sender to be in
+`room` — a user can post into any room they know the name of, which is
+why authorization belongs in a [guard](/websockets/guards/) and not in
+the membership table.
+
+<Aside type="note">
+A reply from a handler return value is independent of these calls.
+Returning `T` sends one frame on the request's event to the sender.
+Calling `client.broadcast(...)` sends frames on a different event to
+the room. A handler often does both in one call.
+</Aside>
+
+## A worked example
+
+The `apps/chat` gateway uses all four scopes — joining at connect,
+moving rooms by event, broadcasting peer-visible events, replying with
+a payload:
+
+```rust title="apps/chat/src/chat/gateway.rs"
+#[gateway(path = "/ws")]
+pub struct ChatGateway {
+    #[inject]
+    svc: Arc<RoomService>,
+}
+
+#[messages]
+impl ChatGateway {
+    #[on_connect]
+    async fn joined(&self, client: &WsClient) {
+        client.join("lobby");
+        self.svc.connected();
+    }
+
+    #[on_disconnect]
+    async fn left(&self) {
+        self.svc.disconnected();
+    }
+
+    #[subscribe_message("message")]
+    async fn on_message(&self, msg: SendMessage) {
+        self.svc.record(msg);
+    }
+
+    #[subscribe_message("history")]
+    async fn history(&self) -> Vec<ChatMessage> {
+        self.svc.history()
+    }
+
+    #[subscribe_message("typing")]
+    async fn typing(&self, msg: SendMessage, client: &WsClient) {
+        let _ = client.broadcast("typing", &msg);
+    }
+}
+```
+
+Drive it from two terminals at once and the picture comes through:
+
+```text frame="terminal"
+$ websocat ws://localhost:3000/ws       # tab A
+{"event":"message","data":{"author":"ada","text":"hi"}}
+{"event":"typing","data":{"author":"bob","text":"..."}}
+
+$ websocat ws://localhost:3000/ws       # tab B
+{"event":"typing","data":{"author":"bob","text":"..."}}
+{"event":"message","data":{"author":"ada","text":"hi"}}
+```
+
+`message` is recorded by the service, which calls
+`WsServer::broadcast("message", ...)` from outside the handler — see
+[Server-side push](/websockets/server-push/). `typing` broadcasts
+through the client handle directly because there is no state to
+record.
+
+## When `&WsClient` is not enough
+
+`WsClient` is great when a handler reacts to a single message. The
+moment something *outside* a handler needs to reach connected clients
+— a scheduled task, an HTTP route, a queue processor — there is no
+client to thread through. Inject `WsServer` instead and push without
+the per-connection handle.
+
+That's the next page.
+
+## Going further
+
+- [Server-side push](/websockets/server-push/) — `WsServer` from
+  outside a handler.
+- [Namespaces](/websockets/namespaces/) — when one registry isn't
+  enough.
+
+### Reference
+
+- [`WsClient`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-ws/src/server.rs) —
+  `join`, `leave`, `emit`, `to`, `broadcast`, `id`, `registry`.

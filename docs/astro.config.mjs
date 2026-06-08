@@ -1,6 +1,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
+import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 import rehypeExternalLinks from 'rehype-external-links';
 
@@ -31,6 +32,7 @@ export default defineConfig({
     ],
   },
   integrations: [
+    mermaid(),
     starlight({
       title: 'NestRS',
       description: defaultDescription,
@@ -116,26 +118,47 @@ export default defineConfig({
             { label: 'Introduction', slug: 'index' },
             { label: 'Why NestRS', slug: 'why' },
             { label: 'Getting started', slug: 'getting-started' },
-            { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
           ],
         },
         { label: 'Fundamentals', items: [{ autogenerate: { directory: 'fundamentals' } }] },
+        { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
         { label: 'HTTP', items: [{ autogenerate: { directory: 'http' } }] },
-        { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
+        { label: 'Database', items: [{ autogenerate: { directory: 'database' } }] },
+        {
+          label: 'Security',
+          items: [
+            { label: 'Overview', slug: 'security' },
+            { label: 'Threat model', slug: 'security/threat-model' },
+            {
+              label: 'Authentication',
+              items: [{ autogenerate: { directory: 'security/authentication' } }],
+            },
+            {
+              label: 'Authorization',
+              items: [{ autogenerate: { directory: 'security/authorization' } }],
+            },
+          ],
+        },
+        { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
+        { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
         { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },
         { label: 'WebSockets', items: [{ autogenerate: { directory: 'websockets' } }] },
-        { label: 'Database', items: [{ autogenerate: { directory: 'database' } }] },
-        { label: 'Security', items: [{ autogenerate: { directory: 'security' } }] },
-        { label: 'Schedule', items: [{ autogenerate: { directory: 'schedule' } }] },
+        { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
         { label: 'Queue', items: [{ autogenerate: { directory: 'queue' } }] },
+        { label: 'Schedule', items: [{ autogenerate: { directory: 'schedule' } }] },
         { label: 'Events', items: [{ autogenerate: { directory: 'events' } }] },
         { label: 'MCP', items: [{ autogenerate: { directory: 'mcp' } }] },
+        {
+          label: 'Observability',
+          items: [
+            { label: 'OpenTelemetry', items: [{ autogenerate: { directory: 'opentelemetry' } }] },
+            { label: 'Server-Timing', slug: 'server-timing' },
+          ],
+        },
         { label: 'Health', items: [{ autogenerate: { directory: 'health' } }] },
         { label: 'Throttler', items: [{ autogenerate: { directory: 'throttler' } }] },
-        { label: 'Server-Timing', items: [{ autogenerate: { directory: 'server-timing' } }] },
-        { label: 'OpenTelemetry', items: [{ autogenerate: { directory: 'opentelemetry' } }] },
-        { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
-        { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
+        { label: 'Decorators', slug: 'decorators' },
+        { label: 'Glossary', slug: 'glossary' },
       ],
     }),
   ],

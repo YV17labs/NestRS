@@ -1,0 +1,175 @@
+---
+title: Alternative sources
+description: Plug Vault, a K8s ConfigMap, or AWS Parameter Store behind ConfigSource — the trait ConfigService reads through.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`ConfigService` reads its raw values through a small trait:
+`ConfigSource`. The default `EnvSource` returns process env vars after
+the `.env` cascade has merged. Swap it for anything that can answer
+"what's the value of `NESTRS_DATABASE__URL`?" and the same `Config`
+struct loads from there — HashiCorp Vault, a K8s ConfigMap, AWS Parameter
+Store, an in-process map for tests.
+
+## The trait
+
+```rust
+pub trait ConfigSource: Send + Sync + 'static {
+    fn get(&self, var: &str) -> Option<String>;
+}
+```
+
+One method. `var` is the fully-qualified name (e.g.
+`"NESTRS_DATABASE__URL"`) — namespacing happens in `ConfigService`, the
+source just answers lookups. Empty strings count as unset, same rule as
+`EnvSource`.
+
+The trait is **sync on purpose**: `Config::from_env` runs synchronously
+at boot. A remote source pre-fetches its keys into an in-memory map
+during a factory phase, then serves `get` from that map.
+
+## A custom source — by example
+
+A Vault source that hits the API once at startup and caches the result:
+
+```rust title="apps/platform-api/src/vault.rs"
+use std::collections::HashMap;
+use std::sync::Arc;
+use nest_rs_config::{ConfigService, ConfigSource};
+
+pub struct VaultSource {
+    snapshot: HashMap<String, String>,
+}
+
+impl VaultSource {
+    pub async fn fetch(client: &VaultClient, path: &str) -> anyhow::Result<Self> {
+        let response = client.read(path).await?;
+        let snapshot = response
+            .data
+            .into_iter()
+            .map(|(k, v)| (format!("NESTRS_{}", k.to_ascii_uppercase()), v))
+            .collect();
+        Ok(Self { snapshot })
+    }
+}
+
+impl ConfigSource for VaultSource {
+    fn get(&self, var: &str) -> Option<String> {
+        self.snapshot.get(var).cloned()
+    }
+}
+```
+
+Wire it in by building the `ConfigService` directly and calling
+`Config::from_env` yourself — bypassing `ConfigModule::for_feature`:
+
+```rust title="apps/platform-api/src/main.rs"
+use nest_rs_config::ConfigService;
+
+let vault = Arc::new(
+    VaultSource::fetch(&vault_client, "secret/platform-api").await?,
+);
+let env = ConfigService::with_source("database", vault);
+let db_config = DatabaseConfig::from_env(&env)?;
+
+App::builder()
+    .module::<AppModule>()
+    .provide(db_config)
+    .build()
+    .await?;
+```
+
+A seeded config wins over `ConfigModule::for_feature::<DatabaseConfig>()`,
+so the rest of the app sees the Vault-loaded value without changing any
+downstream code. The pattern matches [`Repo::scoped`](/database/repo-and-executor/):
+build the seam where the source lives, hand the result to the framework.
+
+## When `EnvSource` is fine
+
+The default source is the right answer for most apps:
+
+- Local dev reads from the `.env` cascade.
+- Production reads from real env vars set by the orchestrator.
+- A secrets manager (Vault, AWS Secrets Manager, GCP Secret Manager)
+  typically already injects env vars into the running container.
+
+Reach for a custom `ConfigSource` only when:
+
+- The secrets manager **cannot** inject env vars (a sidecar pattern that
+  serves values over HTTP).
+- A K8s ConfigMap mounts as a file tree rather than env vars.
+- A test needs a programmatic source decoupled from `std::env`.
+
+## Caveat — `for_namespace` and the `.env` cascade
+
+`ConfigService::for_namespace(ns)` is shorthand for `with_source(ns,
+Arc::new(EnvSource))`. The `EnvSource` triggers the `.env` cascade merge
+on its first `get`, which writes into `std::env` process-globally and is
+guarded by a `Once` — so it happens at most once per process, but it
+**does** happen the moment any default-source reader runs.
+
+What this means in practice:
+
+- A custom-source reader built via `with_source(ns, my_source)` **does
+  not** trigger the merge. The process env stays untouched if nothing
+  else has triggered it.
+- A genuinely hermetic test should wire its source through `with_source`
+  and avoid any `for_namespace` / `ConfigModule::for_root()` call —
+  otherwise the cascade has already populated `std::env` and any
+  `std::env::var` lookup elsewhere will see it.
+- Mixing both is fine in production: the framework expects `for_root`
+  to run, the cascade to merge, and custom sources to override specific
+  namespaces on top.
+
+<Aside type="caution">
+The cascade is process-global. Once any code path triggers it, every
+later `std::env::var` lookup in the same process sees the merged values
+— including code outside the `ConfigService` reader (a `dotenv`-aware
+library, your own `env::var` call, an observability initializer). A
+custom `ConfigSource` overrides where `ConfigService` reads from; it
+doesn't isolate the process environment.
+</Aside>
+
+## What the source sees
+
+`var` is always the fully-qualified `NESTRS_<NS>__<KEY>` string. A few
+implications:
+
+- The source receives the **uppercased** namespace + key — the casing
+  conversion happens in `ConfigService::var` before the lookup.
+- The source has no idea which `Config` struct is being loaded. It's a
+  flat key-value store. If you need per-namespace routing (e.g.
+  `database` from Vault, `http` from env), wrap a couple of sources in a
+  dispatching one.
+- Empty strings are **unset**. A Vault entry with an empty value will
+  not blank an in-code default — return `None` instead.
+
+A dispatching source for two backends:
+
+```rust
+pub struct Dispatch {
+    vault: VaultSource,
+    env: EnvSource,
+}
+
+impl ConfigSource for Dispatch {
+    fn get(&self, var: &str) -> Option<String> {
+        if var.starts_with("NESTRS_DATABASE__") || var.starts_with("NESTRS_ISSUER__") {
+            self.vault.get(var)
+        } else {
+            self.env.get(var)
+        }
+    }
+}
+```
+
+## Going further
+
+- [Configuration overview](/configuration/) — the typed-struct contract.
+- [The .env cascade](/configuration/env-cascade/) — load order,
+  hermeticity, file naming.
+- [Overriding in tests](/configuration/testing/) — the
+  `figment::Jail`-isolated path for unit tests, `.provide()` for e2e.

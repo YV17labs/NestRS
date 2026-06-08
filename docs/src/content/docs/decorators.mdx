@@ -1,0 +1,122 @@
+---
+title: Decorators
+description: Every decorator NestRS ships, grouped by concern, with a one-line summary and a link to the page where it lives.
+---
+
+This page is the index of every decorator the framework ships, grouped
+by concern. Skim the table for the one you need, click through to the
+page that explains it in context. Each row says where the decorator
+goes (struct, impl block, method, field) so you can confirm the
+position without leaving the page.
+
+## DI and lifecycle
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[module]` | struct | Composes a binary: lists `providers` it owns and `imports` it depends on | [Modules](/fundamentals/modules/) |
+| `#[injectable]` | struct | Marks a provider built from the container, with optional `scope = request \| transient` | [Providers](/fundamentals/providers/) |
+| `#[inject]` | field | Resolves the field from the container at construction | [Providers](/fundamentals/providers/) |
+| `#[hooks]` | impl block | Orchestrates lifecycle methods on a provider | [Modules](/fundamentals/modules/) |
+| `#[on_module_init]` | method | Runs once after wiring, before serving | [Modules](/fundamentals/modules/) |
+| `#[on_application_bootstrap]` | method | Runs once after every module init, before serving | [Modules](/fundamentals/modules/) |
+| `#[on_module_destroy]` | method | Runs on shutdown after transports stop | [Modules](/fundamentals/modules/) |
+| `#[before_application_shutdown]` | method | Runs before the application begins shutting down | [Modules](/fundamentals/modules/) |
+| `#[on_application_shutdown]` | method | Runs last during shutdown, best-effort | [Modules](/fundamentals/modules/) |
+
+## HTTP
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[controller]` | struct | Mounts the struct as a controller with a base path and optional `version` | [Controllers](/http/controllers/) |
+| `#[routes]` | impl block | Wires methods to HTTP routes and emits the route table | [Controllers](/http/controllers/) |
+| `#[get]` `#[post]` `#[put]` `#[patch]` `#[delete]` | method | Binds the method to an HTTP verb at the given path | [Controllers](/http/controllers/) |
+| `#[http_code]` | method | Overrides the default response status code | [Responses](/http/responses/) |
+| `#[response_header]` | method | Appends a response header (repeatable) | [Responses](/http/responses/) |
+| `#[redirect]` | method | Issues a redirect and discards the handler payload | [Responses](/http/responses/) |
+| `#[use_guards]` | struct or method | Binds container-resolved Guards, first listed outermost | [Guards](/fundamentals/guards/) |
+| `#[use_interceptors]` | struct or method | Binds container-resolved Interceptors | [Interceptors](/fundamentals/interceptors/) |
+| `#[use_filters]` | struct or method | Binds exception Filters, wrapping outside the guards | [Exception filters](/fundamentals/exception-filters/) |
+| `#[meta]` | method | Attaches typed metadata read back via `Reflector` (repeatable) | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
+| `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
+| `#[interceptor]` | struct | Marks a struct as a global HTTP interceptor | [Interceptors](/fundamentals/interceptors/) |
+| `#[input]` | struct | Shorthand for input DTOs (`Deserialize` + `Validate` + `deny_unknown_fields`) | [Extractors](/http/extractors/) |
+
+## GraphQL
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[resolver]` | struct + impl block | Marks a resolver provider and orchestrates its operations | [GraphQL](/graphql/) |
+| `#[query]` | method | Root query operation | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[mutation]` | method | Root mutation operation | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[field_resolver]` | method | Custom field resolver on a wire type | [Field resolvers](/graphql/field-resolvers/) |
+| `#[dataloader]` | impl block on service | Batches a method into a request-scoped DataLoader | [Dataloader](/graphql/dataloader/) |
+
+## WebSockets
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[gateway]` | struct | Mounts a WebSocket gateway at a path on the HTTP transport | [WebSockets](/websockets/) |
+| `#[messages]` | impl block | Binds gateway message handlers and lifecycle hooks | [Messages](/websockets/messages/) |
+| `#[subscribe_message]` | method | Handles one event in the `{ event, data }` envelope | [Messages](/websockets/messages/) |
+| `#[on_connect]` | method | Runs after the socket upgrades | [Messages](/websockets/messages/) |
+| `#[on_disconnect]` | method | Runs after the socket closes | [Messages](/websockets/messages/) |
+
+## Queue
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[processor]` | impl block | Orchestrates queue consumers on a provider | [Queue](/queue/) |
+| `#[process]` | method | Binds the method to a queue with optional `concurrency` and `retries` | [Queue](/queue/) |
+
+## Schedule
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[scheduled]` | impl block | Orchestrates scheduled methods on a provider | [Schedule](/schedule/) |
+| `#[every]` | method | Fires the method on a fixed interval | [Schedule](/schedule/) |
+| `#[cron]` | method | Fires the method on a cron expression, optional `tz` | [Schedule](/schedule/) |
+| `#[after]` | method | Fires the method once, after a delay from boot | [Schedule](/schedule/) |
+
+## Events
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[listeners]` | impl block | Orchestrates event listeners on a provider | [Events](/events/) |
+| `#[on_event]` | method | Subscribes the method to its second-parameter event type | [Events](/events/) |
+
+## MCP
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[mcp]` | struct | Mounts an MCP handler over HTTP at a path | [MCP](/mcp/) |
+| `#[tool_router]` | impl block | Re-exported from rmcp: collects `#[tool]` methods into a router | [MCP](/mcp/) |
+| `#[tool_handler]` | impl block | Re-exported from rmcp: implements `ServerHandler` from the router | [MCP](/mcp/) |
+| `#[tool]` | method | Re-exported from rmcp: exposes the method as an MCP tool | [MCP](/mcp/) |
+
+## Health
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[indicators]` | impl block | Orchestrates health checks on a provider | [Indicators](/health/indicators/) |
+| `#[liveness]` | method | Binds the method to the liveness probe | [Indicators](/health/indicators/) |
+| `#[readiness]` | method | Binds the method to the readiness probe | [Indicators](/health/indicators/) |
+| `#[startup]` | method | Binds the method to the startup probe | [Indicators](/health/indicators/) |
+
+## Config
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[config]` | struct | Marks a struct as a namespaced configuration loaded from env and files | [Configuration](/configuration/) |
+
+## Resource
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[expose]` | struct + field | Exposes a SeaORM entity to GraphQL and OpenAPI from one declaration | [Database](/database/) |
+| `#[crud]` | impl block | Generates standard CRUD operations on a controller or resolver | [CRUD](/database/crud/) |
+
+## OpenAPI
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[api]` | method | Enriches the OpenAPI operation with summary, description, and tags | [OpenAPI](/openapi/) |

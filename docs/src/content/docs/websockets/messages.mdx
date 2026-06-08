@@ -1,0 +1,209 @@
+---
+title: Messages
+description: The JSON envelope, the #[subscribe_message] signature, and the Result/Err return contract that ships error frames.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every frame in and out of a gateway rides one shape:
+
+```json
+{ "event": "history", "data": [{ "author": "ada", "text": "hi" }] }
+```
+
+`event` is a string, `data` is whatever JSON the handler asks for.
+That's it — no separate ack channel, no second protocol for errors,
+no per-event wire format to negotiate. One envelope handles
+fire-and-forget, request/response, server pushes, and error replies.
+
+## A handler signature
+
+`#[subscribe_message("event")]` binds a method to that event name in the
+envelope:
+
+```rust
+#[messages]
+impl ChatGateway {
+    #[subscribe_message("message")]
+    async fn on_message(&self, msg: SendMessage) -> ChatMessage {
+        self.room.record(msg)
+    }
+}
+```
+
+The macro reads three things from the signature:
+
+- **The event name** — the literal in `#[subscribe_message(...)]`.
+- **The payload type** — the first non-receiver, non-`&WsClient`
+  argument. Deserialized from `envelope.data` with `serde`.
+- **The return type** — drives the reply, per the contract below.
+
+A `&WsClient` parameter is the [per-connection handle](/websockets/rooms/);
+it can appear in any position alongside the payload.
+
+## The payload
+
+Whatever you put in `data` arrives in your handler typed. The macro
+calls `serde_json::from_value` under the hood:
+
+```rust
+#[derive(serde::Deserialize)]
+struct SendMessage {
+    author: String,
+    text: String,
+}
+
+#[subscribe_message("message")]
+async fn on_message(&self, msg: SendMessage) { /* ... */ }
+```
+
+A malformed payload (wrong shape, missing fields) is treated as a
+dispatch error: the connection stays open, the client receives an error
+frame on the same event name (see below). Validate richer shapes with
+`#[derive(validator::Validate)]` and reject explicitly via the
+`Result`-returning form.
+
+A handler that takes no payload accepts `null` or a missing `data` key
+— the envelope defaults `data` to `null` on deserialize:
+
+```rust
+#[subscribe_message("history")]
+async fn history(&self) -> Vec<ChatMessage> {
+    self.room.history()
+}
+```
+
+```text frame="terminal"
+> {"event":"history","data":null}
+< {"event":"history","data":[{"author":"ada","text":"hi"}]}
+```
+
+## The return contract
+
+The macro inspects the handler's return type at parse time and picks
+the reply behavior:
+
+| Return type | Wire effect |
+|---|---|
+| `()` | No reply frame. Fire-and-forget. |
+| `T` | One frame: `{"event":"<event>","data":<T serialized>}`. |
+| `Result<(), E>` | `Ok(())` → silent. `Err(e)` → error frame (see below). |
+| `Result<T, E>` | `Ok(t)` → reply with `t`. `Err(e)` → error frame. |
+
+The error frame is shaped like any other envelope:
+
+```json
+{ "event": "message", "data": { "error": "author `banned` is not allowed to post" } }
+```
+
+The string comes from `e.to_string()` — i.e. the `Display` impl of your
+error type. A `warn!` lands in the `nest_rs::ws` target alongside the
+frame, so a denied dispatch shows up in logs without extra
+instrumentation.
+
+<Aside type="caution">
+The return-type detection is **syntactic** on the last path segment
+being `Result`. A type alias over `Result` (e.g. `pub type
+ServiceResult<T> = Result<T, MyError>`) is **not** recognized and would
+serialize the `Err` variant straight into the reply data — leaking it
+on the wire. Always return `Result` (or `std::result::Result`)
+literally. And keep `Display` for the error variant wire-safe: avoid
+`#[error(transparent)]` over an ORM or `sqlx` error whose message can
+echo a query.
+</Aside>
+
+## Three handler patterns
+
+**Fire-and-forget** — record state, broadcast a derived event later,
+no reply to the sender:
+
+```rust
+#[subscribe_message("typing")]
+async fn typing(&self, msg: SendMessage, client: &WsClient) {
+    let _ = client.broadcast("typing", &msg);
+}
+```
+
+The handler returns `()`, so no envelope flows back to the sender on
+this event. The `client.broadcast(...)` call pushes a server→client
+event on a different event name — see [Rooms](/websockets/rooms/).
+
+**Request/response** — the client asks, the server answers on the same
+event:
+
+```rust
+#[subscribe_message("presence")]
+async fn presence(&self) -> usize {
+    self.room.present()
+}
+```
+
+```text frame="terminal"
+> {"event":"presence","data":null}
+< {"event":"presence","data":1}
+```
+
+The return value is serialized straight into `data`. Clients
+correlate by event name; if you need multiple in-flight requests of the
+same kind, include an `id` field in the payload and echo it in the
+response.
+
+**Explicit failure** — the operation can fail and the client needs to
+see why:
+
+```rust
+#[derive(thiserror::Error, Debug)]
+enum SendError {
+    #[error("text must not be empty")]
+    Empty,
+    #[error("rate limited")]
+    RateLimit,
+}
+
+#[subscribe_message("send")]
+async fn send(&self, msg: SendMessage) -> Result<ChatMessage, SendError> {
+    if msg.text.is_empty() {
+        return Err(SendError::Empty);
+    }
+    Ok(self.room.record(msg))
+}
+```
+
+```text frame="terminal"
+> {"event":"send","data":{"author":"ada","text":""}}
+< {"event":"send","data":{"error":"text must not be empty"}}
+```
+
+The wire shape stays the same envelope — clients branch on the
+presence of `data.error`.
+
+## The envelope itself
+
+If you ever need to build or parse a frame by hand (a custom adapter,
+a test harness), `nest_rs_ws::WsEnvelope` is the canonical shape:
+
+```rust
+use nest_rs_ws::WsEnvelope;
+
+let frame = WsEnvelope::encode("ping", &"pong")?;
+let parsed: WsEnvelope = serde_json::from_str(&frame)?;
+assert_eq!(parsed.event, "ping");
+```
+
+A missing `data` key decodes to `serde_json::Value::Null`, so older
+clients sending bare `{"event":"ping"}` still hit handlers that take no
+payload.
+
+## Going further
+
+- [Rooms](/websockets/rooms/) — server→client pushes via `WsClient`.
+- [Server-side push](/websockets/server-push/) — emit without holding a
+  client.
+- [Guards](/websockets/guards/) — reject envelopes before dispatch.
+
+### Reference
+
+- [`WsEnvelope` / `WsReply`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-ws/src/envelope.rs) —
+  the wire shape and the dispatch outcome enum.

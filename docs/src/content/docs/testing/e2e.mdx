@@ -9,6 +9,10 @@ An end-to-end test boots the **real** top-level module in process,
 against a throwaway Postgres database, and drives the HTTP surface
 through the same [`poem`](https://crates.io/crates/poem) runtime
 production uses. Every app ships one, at `apps/<app>/tests/e2e.rs`.
+The happy path covered here pairs with
+[negative-path tests](/testing/negative-path/) — auth refused,
+cross-tenant denied, rollback verified — for the bugs a 2xx round-trip
+never trips.
 
 ## A round-trip e2e test
 

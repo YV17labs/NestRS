@@ -129,7 +129,7 @@ implemented once in NestRS and once in NestJS, under an identical `wrk` load
 (`GET /`, plaintext, keep-alive). On the same CPU budget NestRS served **~25×
 more requests** while using **~20× less memory**.
 
-| Metric — `GET /` plaintext      | NestRS (Rust)  | NestJS (Node 20) | Ratio  |
+| Metric — `GET /` plaintext      | NestRS (Rust)  | NestJS (Node 24) | Ratio  |
 | ------------------------------- | -------------- | ---------------- | ------ |
 | Throughput (2 cores, defaults)  | ~463k req/s    | ~18k req/s       | ~25×   |
 | Throughput (1 core, per-core)   | ~231k req/s    | ~17k req/s       | ~13×   |

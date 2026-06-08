@@ -11,6 +11,11 @@ at `GET /api` — composed from the route table and your `Json<T>` types. There 
 no spec to hand-write, and it **cannot drift** from the code: change a handler,
 the document changes with it.
 
+`nest-rs-openapi` builds on [schemars](https://docs.rs/schemars) for the JSON
+Schema derivation and bundles [Swagger UI](https://swagger.io/tools/swagger-ui/)
+as the offline browser asset — the framework wires both behind the route table
+so the spec composes itself.
+
 ## Wire it in
 
 Add `OpenApiModule::for_root` to the app root, alongside the controllers it
@@ -23,14 +28,16 @@ use nest_rs_openapi::OpenApiModule;
     imports = [
         UsersHttpModule,
         // ... the rest of your HTTP modules ...
-        OpenApiModule::for_root(None),   // None → reads NESTRS_OPENAPI__* / defaults
+        OpenApiModule::for_root(None),
     ],
 )]
 pub struct PlatformApiModule;
 ```
 
 That's the whole opt-in. The module self-mounts both endpoints on the existing
-`HttpTransport` — same port, same CORS, no second server.
+`HttpTransport` — same port, same CORS, no second server. `None` reads
+`NESTRS_OPENAPI__*` from the [`.env` cascade](/configuration/); pass an
+`OpenApiConfig` to pin it in code instead.
 
 ## What you get
 
@@ -55,7 +62,7 @@ That's the whole opt-in. The module self-mounts both endpoints on the existing
 
 ```bash frame="terminal"
 $ curl -s http://localhost:3000/api-json | jq '.openapi, .info.title, (.paths | keys)'
-"3.1.0"
+"3.1.2"
 "nestrs API"
 [
   "/users",
@@ -89,14 +96,45 @@ async fn create(
 }
 ```
 
-`summary` and `description` show on the operation; `tags(...)` group operations
-in the UI. Everything else — path, method, parameters, request and response
-schemas, status codes — is inferred from the handler signature.
+`#[api]` accepts three keys today — **`summary`**, **`description`**, and
+**`tags(...)`** — and nothing else. Everything else on the operation
+(path, method, parameters, request and response schemas, `200` status) is
+inferred from the handler signature; the macro rejects unknown keys at compile
+time.
+
+## Tags — group operations in the UI
+
+Tags group operations in the Swagger UI's sidebar. Every route inherits a
+default tag equal to its **controller struct name**, so out of the box your
+routes group sensibly with no annotation. Override per-operation with
+`tags(...)`:
+
+```rust
+#[get("/")]
+#[api(tags("User", "Public"))]
+async fn list_public(&self) -> Result<Json<Vec<User>>> { /* ... */ }
+```
+
+The strings flow through to `components` and Swagger UI groups by them.
+
+## Schemas from `#[expose]`
+
+An entity decorated with `#[expose]` produces a wire DTO whose `JsonSchema`
+ends up in `components.schemas` the moment a handler returns `Json<User>`.
+The schema generator is **shared across every route**: payloads referenced from
+multiple handlers de-duplicate, and a `User` returned from `GET /users/:id` is
+the same `$ref` as the one returned from the `List` endpoint.
+
+The same type powers the GraphQL output type, the wire DTO the handler returns,
+and the JSON Schema in `/api-json` — change one column on the entity, all three
+move together. No hand-written schema, no annotation, nothing to drift.
 
 ## Configure the document
 
-The `info` block (title, version, description) comes from `NESTRS_OPENAPI__*` in
-the [`.env` cascade](/configuration/), with sensible defaults:
+The `info` block — title, version, description — is the only header the
+framework writes today, and every field is settable from the
+[`.env` cascade](/configuration/) **and** the pinned struct (the framework-wide
+dual-path rule):
 
 ```bash frame="terminal"
 $ NESTRS_OPENAPI__TITLE="Acme API" \
@@ -118,12 +156,46 @@ OpenApiModule::for_root(OpenApiConfig {
 })
 ```
 
+The pinned struct wins over the environment when both are present.
+
+## Not yet in the document
+
+Be honest about what the framework writes and what it doesn't. The current
+composer emits the `info` block, every operation under `paths`, and a shared
+`components.schemas`. It does **not** yet emit:
+
+- **`components.securitySchemes`** — no `bearerAuth` block, no `securitySchemes`
+  entry, and no per-operation `security: [...]`. Protected routes still appear
+  in the spec, but Swagger UI's "Authorize" button has nothing to bind to. For
+  now, document the bearer requirement in the operation's `description`.
+- **Multi-response codes.** Every operation declares one `200` response with
+  the handler's `Json<T>` schema; a route that actually returns `404` / `422` /
+  `409` is not reflected. The handler's `Result` type carries the error
+  variants; the doc doesn't yet read them.
+- **`example` / `examples` on inputs and responses.** schemars derives the
+  shape; supplying concrete sample payloads is on the roadmap and not part of
+  `#[api]` today.
+- **Header parameters** — only path parameters are emitted; a `Header<T>`
+  extractor does not yet contribute a `parameters` entry.
+- **`contact` / `license` / `servers` / `externalDocs`** on the document
+  header — only `title`, `version`, and `description` are configurable.
+
+These are framework gaps, not your gaps. When you hit one, file an issue rather
+than hand-patching the spec — the whole point of the module is that the spec
+composes from the code, and an out-of-band patch breaks that invariant.
+
+<Aside type="caution">
+  Need a security scheme today? Don't post-process the document client-side.
+  The spec is regenerated every request, so a manual patch is lost on the next
+  call. Open an issue against `nest-rs-openapi`; the missing surface is small.
+</Aside>
+
 ## Going further
 
 - [HTTP](/http/) — the controllers, routes and `Json<T>` types this document is
   built from.
-- [Database](/database/) — `#[expose]` turns one entity into a wire DTO, a GraphQL type
-  **and** a JSON Schema at once.
+- [Database](/database/) — `#[expose]` turns one entity into a wire DTO, a
+  GraphQL type **and** a JSON Schema at once.
 - [Security](/security/) — bind `AuthGuard` / `AbilityGuard`; protected routes
   still appear in the spec.
 

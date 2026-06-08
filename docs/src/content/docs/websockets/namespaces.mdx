@@ -1,0 +1,152 @@
+---
+title: Namespaces
+description: WsServer<N> markers — multiple gateways with isolated connection registries on the same HTTP transport.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+By default, every gateway in an app shares the same connection
+registry: one `WsServer`, one pool of `ConnId`s, one set of rooms.
+That's the right answer most of the time — a chat gateway and an
+admin-only gateway sitting on the same transport rarely need each
+other's `broadcast`. When they do need to be isolated — different
+audiences, different room namespaces, different push surfaces — switch
+the gateway to a private registry by giving it a **namespace marker**.
+
+## The marker pattern
+
+`WsServer` is generic over a zero-sized type:
+
+```rust
+pub struct WsServer<N: 'static = Global> { /* ... */ }
+```
+
+`Global` is the default. The container keys providers by type, so
+`WsServer<Global>` and `WsServer<MyNs>` are wholly separate singletons:
+distinct connection maps, distinct room sets, distinct push surfaces.
+A marker is just a unit struct — no traits, no methods, no runtime
+data:
+
+```rust
+pub struct NotifyNs;
+```
+
+Attach it to a gateway with `#[gateway(namespace = NotifyNs)]`, and
+the macro self-provides `WsServer<NotifyNs>` for that gateway:
+
+```rust title="apps/chat/src/notify/gateway.rs"
+use nest_rs_ws::{gateway, messages, WsClient};
+
+pub struct NotifyNs;
+
+#[gateway(path = "/notify", namespace = NotifyNs)]
+#[derive(Default)]
+pub struct NotifyGateway;
+
+#[messages]
+impl NotifyGateway {
+    #[subscribe_message("ping")]
+    async fn ping(&self, client: &WsClient) {
+        let _ = client.broadcast("pong", &"hi");
+    }
+}
+```
+
+That gateway's `WsClient` holds an `Arc<WsServer<NotifyNs>>` behind a
+type-erased `Registry` trait. Calls to `client.broadcast(...)` reach
+only `NotifyGateway` connections; the `ChatGateway` next to it on the
+same HTTP transport stays untouched.
+
+## Reaching the namespaced registry
+
+A service that wants to push to one namespace injects the typed
+registry directly:
+
+```rust
+use std::sync::Arc;
+
+use nest_rs_core::injectable;
+use nest_rs_ws::WsServer;
+
+use crate::notify::NotifyNs;
+
+#[injectable]
+pub struct AdminNotifier {
+    #[inject]
+    server: Arc<WsServer<NotifyNs>>,
+}
+
+impl AdminNotifier {
+    pub fn shout(&self, text: &str) {
+        let _ = self.server.broadcast("alert", &text);
+    }
+}
+```
+
+`Arc<WsServer<Global>>` (the default `WsModule` provides) and
+`Arc<WsServer<NotifyNs>>` are distinct injected types — the access
+graph verifies each one is reachable on its own. A service can inject
+both at once if it needs to fan out to both audiences.
+
+## Why namespaces exist
+
+Picture a real-time app with two concerns living side by side:
+
+- A **chat** gateway at `/ws` where users post messages and broadcasts
+  shape the conversation. The handler stack uses rooms heavily.
+- A **notification** gateway at `/notify` where the only purpose is
+  server→client pushes for moderator alerts. Every connected client
+  receives every notification; rooms would be noise.
+
+On one shared `WsServer`, a `server.broadcast("alert", ...)` from a
+notify handler would also reach every chat user — the notification
+arrives in the wrong client's frame loop. Two namespaces solve it
+structurally: distinct registries mean a broadcast on one is invisible
+to the other, and no handler can leak a frame across by accident.
+
+A `ConnId` is allocated from the namespace's own counter, so the same
+integer can identify two different connections across two registries.
+This is exactly why `WsClient` holds the registry as a type-erased
+`dyn Registry` — the `N` never surfaces on the handler API, but the
+runtime always dispatches to the right pool.
+
+<Aside type="note">
+Don't reach for namespaces to model rooms. A room is a string label on
+a connection in one registry; a namespace is a separate registry
+entirely. If two paths broadcast to the same audience, leave them on
+`Global` and split by rooms. If their broadcasts must not see each
+other, give each its own marker.
+</Aside>
+
+## The mount itself
+
+A namespaced gateway still self-mounts on the HTTP transport — same
+port, same CORS, same TLS. The only thing that changes is which
+registry the macro wires:
+
+```text frame="terminal"
+2026-06-08T10:23:14Z  INFO nest_rs::http: bound 2 gateways on 0.0.0.0:3004
+  GET /ws     -> ChatGateway   (4 messages, 2 lifecycle hooks)
+  GET /notify -> NotifyGateway (1 message,  0 lifecycle hooks)
+```
+
+Listing both gateways' modules in `AppModule` is enough — the macro
+emits `WsServer<NotifyNs>` as a self-provided singleton, so a
+namespaced gateway works even without `WsModule` in the dynamic chain
+(the marker carries its own registry; `WsModule` only provides
+`WsServer<Global>`).
+
+## Going further
+
+- [Server-side push](/websockets/server-push/) — once you have the
+  typed registry, push it from anywhere DI reaches.
+- [Rooms](/websockets/rooms/) — most of the time, the right answer to
+  "I need a separate channel" is a room, not a namespace.
+
+### Reference
+
+- [`WsServer<N>`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-ws/src/server.rs) —
+  the generic, the `Global` default, the `Registry` trait that erases
+  `N` on the client side.

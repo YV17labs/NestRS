@@ -7,24 +7,27 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-A queue handler is **a method** on any `#[injectable]` provider, tagged with
+Background work shares the rest of the framework's shape. A queue
+handler is a method on any `#[injectable]` provider, tagged
 `#[process(queue = "...", concurrency, retries)]` inside a `#[processor]`
-impl block. Importing `QueueWorkerModule` in the worker app's `AppModule`
-attaches the worker runtime at boot.
+impl block. Importing `QueueWorkerModule` in the worker app activates
+the runtime at boot, drains the discovered methods, and spawns one
+worker per method. A producer-only app skips that import and only gets
+the connection — same crate, same types, one less module.
 
 The abstractions — `Job`, `Processor`, `ProcessMethod`, the `#[processor]`
 macro — ship in **`nest-rs-queue`**. The first-class storage, **Redis**,
-ships in **`nest-rs-redis`** (built on [`apalis`](https://docs.rs/apalis)):
-the `QueueConnection` producer, the `QueueWorker` transport, and the
-`QueueModule` / `QueueWorkerModule` activation seams. An app depends on
-both: `nest-rs-queue` for the macro + abstractions, `nest-rs-redis` for the
-Redis-bound types.
+ships in **`nest-rs-redis`** (built on
+[`apalis`](https://docs.rs/apalis)): the `QueueConnection` producer,
+the `QueueWorker` transport, and the `QueueModule` / `QueueWorkerModule`
+activation seams. An app depends on both: `nest-rs-queue` for the macro
+and abstractions, `nest-rs-redis` for the Redis-bound types.
 
 ## A first queue handler
 
 A regular `#[injectable]` service with one decorated method. The
-`#[processor]` attribute marks the impl block; `#[process]` marks the method
-as a queue consumer.
+`#[processor]` attribute marks the impl block; `#[process]` marks the
+method as a queue consumer.
 
 ```rust title="crates/features/src/audio/queue/processor.rs"
 use std::sync::Arc;
@@ -50,26 +53,25 @@ impl AudioJobs {
 }
 ```
 
-The processor is **thin**: it owns no business logic of its own — it
-hands `job.file` to `AudioService::transcode` and propagates the result.
-The same `AudioService` is what the HTTP producer below calls to
-enqueue, so a single audited choke point describes everything the
-feature can do. Adapters carry transport mechanics; the service carries
-intent.
+The processor is thin: it owns no business logic of its own — it hands
+`job.file` to `AudioService::transcode` and propagates the result. The
+same `AudioService` is what an HTTP producer calls to enqueue, so a
+single audited choke point describes everything the feature can do.
+Adapters carry transport mechanics; the service carries intent.
 
 - **`#[injectable]`** makes `AudioJobs` a regular DI provider.
 - **`#[processor]`** on the impl block orchestrates the per-method
   `#[process]` attributes and submits one queue consumer per decorated
   method.
 - **`#[process(queue, concurrency, retries)]`** binds the method to a
-  Redis queue name (stringly-typed, the known cost), bounds the in-flight
-  jobs, and gives an apalis retry budget. The job type is read from the
-  method's second parameter.
+  Redis queue name (stringly-typed, the known cost), bounds the
+  in-flight jobs, and gives an apalis retry budget. The job type is
+  read from the method's second parameter.
 
 ## Several methods on the same provider
 
-The pattern the framework is built for: one `#[injectable]` declares the
-deps once, multiple decorated methods share them. Different queues,
+The pattern the framework is built for: one `#[injectable]` declares
+the deps once, multiple decorated methods share them. Different queues,
 different concurrencies, same service:
 
 ```rust title="crates/features/src/audio/queue/processor.rs"
@@ -108,118 +110,21 @@ method still delegates: the processor is a router, never a place where
 business logic accumulates.
 
 <Aside>
-A single `#[processor]` impl block per struct (multiple would conflict at
-the discovery layer). Put every queue handler of a service in the same
-block — same convention as `#[routes]` and `#[scheduled]`.
+A single `#[processor]` impl block per struct (multiple would conflict
+at the discovery layer). Put every queue handler of a service in the
+same block — same convention as `#[routes]` and `#[scheduled]`.
 </Aside>
-
-## The payload
-
-```rust title="crates/features/src/audio/dto.rs"
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-pub const AUDIO_QUEUE: &str = "audio";
-
-// JsonSchema too: the same payload is the producer endpoint's HTTP body.
-#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
-pub struct TranscodeJob {
-    pub file: String,
-}
-```
-
-A job is **any** `Serialize + DeserializeOwned + Send + 'static` type — no
-special trait. The convention is to keep payloads small (just a reference
-to the work, not the work itself).
-
-## A producer
-
-A producer is any code that asks the **service** to enqueue. The HTTP
-controller is a thin transport adapter: it accepts the body, calls the
-service, returns the wire response. It does **not** hold
-`Arc<QueueConnection>` and does **not** know the queue name — those are
-internal to `AudioService`.
-
-```rust title="crates/features/src/audio/service.rs"
-use std::sync::Arc;
-
-use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_redis::QueueConnection;
-
-use super::dto::{AUDIO_QUEUE, TranscodeJob};
-
-#[injectable]
-pub struct AudioService {
-    #[inject]
-    queue: Arc<QueueConnection>,
-}
-
-impl AudioService {
-    pub async fn enqueue_transcode(&self, file: String) -> Result<()> {
-        self.queue
-            .of::<TranscodeJob>(AUDIO_QUEUE)
-            .push(TranscodeJob { file: file.clone() })
-            .await?;
-        tracing::info!(target: "features::audio", %file, "enqueued transcode job");
-        Ok(())
-    }
-
-    pub async fn transcode(&self, file: &str) -> Result<()> {
-        // … the consumer-side work
-        Ok(())
-    }
-}
-```
-
-```rust title="crates/features/src/audio/http/controller.rs"
-use std::sync::Arc;
-
-use nest_rs_http::{controller, routes};
-use poem::http::StatusCode;
-use poem::web::Json;
-use poem::{Error, Result};
-
-use crate::audio::{AudioService, TranscodeJob};
-
-#[controller(path = "/audio")]
-#[use_guards(AuthGuard, AuthzGuard)]
-pub struct AudioController {
-    #[inject]
-    svc: Arc<AudioService>,
-}
-
-#[routes]
-impl AudioController {
-    #[post("/transcode")]
-    async fn transcode(&self, body: Json<TranscodeJob>) -> Result<Json<TranscodeJob>> {
-        let job = body.0;
-        self.svc
-            .enqueue_transcode(job.file.clone())
-            .await
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
-        Ok(Json(job))
-    }
-}
-```
-
-`queue.of::<T>(name)` returns a typed publisher bound to the queue name
-— and it lives **inside the service**, the single place that knows
-`AUDIO_QUEUE`. The producer and consumer share the payload type by
-importing it from the same crate; the queue name is the only
-stringly-typed coupling, and it stays private to `AudioService`.
 
 ## Wire it in
 
 Two modules, two roles:
 
-- **`QueueModule::for_root(None)`** — provides the shared `QueueConnection`.
-  Every app (producer *and* consumer) needs it.
-- **`QueueWorkerModule`** — activates the consumer runtime: at boot the
-  framework drains the discovered `#[process]` methods, spawns one apalis
-  worker per method, and shuts them down with the app. A producer-only
-  app does NOT import this — keeping its binary free of a worker it
-  doesn't run.
+- **`QueueModule::for_root(None)`** — provides the shared
+  `QueueConnection`. Every app (producer *and* consumer) needs it.
+- **`QueueWorkerModule`** — activates the consumer runtime. At boot the
+  framework drains the discovered `#[process]` methods, spawns one
+  apalis worker per method, and shuts them down with the app. A
+  producer-only app does NOT import this.
 
 ```rust title="apps/platform-worker/src/module.rs"
 use nest_rs_core::module;
@@ -237,7 +142,7 @@ use features::audio::{AudioModule, AudioQueueModule};
 pub struct PlatformWorkerModule;
 ```
 
-And `main` is the universal skeleton:
+`main` is the universal skeleton:
 
 ```rust title="apps/platform-worker/src/main.rs"
 use anyhow::Result;
@@ -256,11 +161,6 @@ async fn main() -> Result<()> {
 }
 ```
 
-That is exactly what `apps/platform-api` is: a producer-only binary. It
-imports `QueueModule::for_root` (plus the audio feature's `http` and
-`schedule` edges) to gain `QueueConnection` and **push**, but **never
-imports `QueueWorkerModule`** — it runs no processors.
-
 ## Run it
 
 ```bash
@@ -274,60 +174,23 @@ $ just dev platform-worker
 2026-06-03T10:18:46Z  INFO nest_rs::queue: job ok queue=audio elapsed=342ms
 ```
 
-Here producer and consumer are **split across deploys**: `apps/platform-api`
-produces (an HTTP handler plus a `#[scheduled]` provider, activated by
-importing `ScheduleModule`), and `apps/platform-worker` consumes (importing
-`QueueWorkerModule`). The Redis queue and the shared `features::audio`
-contract are all they share — no RPC. They could just as well run in one
-binary; the queue doesn't care.
-
-## Retries and failure
-
-```rust
-#[process(queue = "audio", concurrency = 5, retries = 3)]
-```
-
-A method that returns `Err` is **retried** by apalis with backoff up to
-`retries` times. After exhaustion, the job is moved to the queue's failed
-list (apalis-specific). A panic in the method is treated as a failure.
-
-## The ambient data context
-
-Like a scheduled method, a `#[process]` handler runs as **system work**:
-
-- A **pool executor** is installed (importing `DatabaseModule` is
-  enough); `Repo` reads go through the pool.
-- **No ability** is installed; `Repo` reads are **unscoped** — correct
-  for system work.
-
-## Module-gated, even when the crate is shared
-
-The worker depends on the shared `features` crate, so the audio
-controller's code is *compiled in* — but **module-gating** keeps every
-provider the worker doesn't import inert. Importing only
-`AudioModule + AudioQueueModule`, the HTTP controller, the OpenAPI
-doc, and the GraphQL schema never mount: present in the binary, dead at
-runtime.
-
 ## Going further
 
-- [Schedule](/schedule/) — `#[scheduled]` providers whose methods push
-  onto a queue on a timer.
-- [OpenTelemetry](/opentelemetry/) — every queue span targets
-  `nest_rs::queue` with structured `queue`, `job_id`, `elapsed_ms`,
-  `attempt` fields.
+- [Producing jobs](/queue/producing-jobs/) — typing payloads, the
+  publisher handle, and the rule that keeps `queue.of()` behind a
+  service.
+- [Wiring](/queue/wiring/) — `QueueModule` vs `QueueWorkerModule`,
+  producer-only deploys, and module-gating across shared features.
+- [Retries and failure](/queue/retries-and-failure/) — what an `Err`
+  means, the apalis retry shape, panics, dead-lettering.
+- [Observability](/queue/observability/) — span structure, fields, and
+  expected logs.
+- [Writing a queue driver](/queue/writing-a-driver/) — the scaffold for
+  a non-Redis backend.
 
 ### Reference
 
-- `crates/features/src/audio/service.rs` — the single service both
-  sides delegate to (`enqueue_transcode`, `transcode`).
-- `crates/features/src/audio/queue/processor.rs` — the consumer
-  (worker), delegating to `AudioService::transcode`.
-- `crates/features/src/audio/http/controller.rs` — the HTTP producer
-  (api), delegating to `AudioService::enqueue_transcode`.
-- `crates/features/src/audio/schedule/producer.rs` — the scheduled
-  producer (api), delegating to `AudioService::enqueue_transcode`.
-- `crates/nest-rs-queue/` — the abstractions: `#[processor]`, `#[process]`,
-  `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
+- `crates/nest-rs-queue/` — the abstractions: `#[processor]`,
+  `#[process]`, `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
 - `crates/nest-rs-redis/` — the Redis storage: `QueueConnection`,
   `QueueWorker`, `QueueModule`, `QueueWorkerModule`.

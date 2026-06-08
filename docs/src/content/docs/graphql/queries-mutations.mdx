@@ -1,0 +1,252 @@
+---
+title: Queries and mutations
+description: Top-level operations as plain async methods — typed arguments, typed returns, the wire shape that follows.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every top-level operation is an async method on a `#[resolver]` impl
+block, tagged with `#[query]` or `#[mutation]`. The method signature
+is the wire contract: parameters become GraphQL arguments, the return
+type becomes the response shape, and an error short-circuits with a
+GraphQL error envelope. There is no separate "schema definition" step —
+the registry composes one root `Query` and one root `Mutation` from
+every decorated method in the running app.
+
+## A simple query
+
+```rust title="src/products/resolver.rs"
+use nest_rs_graphql::{query, resolver};
+
+#[resolver]
+pub struct ProductsResolver;
+
+#[resolver]
+impl ProductsResolver {
+    #[query]
+    async fn product_count(&self) -> i32 {
+        42
+    }
+}
+```
+
+On the wire this reads as:
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3000/graphql \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"{ productCount }"}'
+{"data":{"productCount":42}}
+```
+
+The method name is camelCased; primitive returns map to their GraphQL
+scalar (`i32` → `Int`, `String` → `String`, `bool` → `Boolean`).
+
+## Arguments
+
+Add typed parameters and they become required GraphQL arguments;
+`Option<T>` makes one nullable.
+
+```rust
+#[resolver]
+impl ProductsResolver {
+    #[query]
+    async fn product(&self, id: String, locale: Option<String>) -> String {
+        let locale = locale.as_deref().unwrap_or("en");
+        format!("product {id} in {locale}")
+    }
+}
+```
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3000/graphql -d \
+    '{"query":"{ product(id: \"42\", locale: \"fr\") }"}'
+{"data":{"product":"product 42 in fr"}}
+```
+
+Validation happens at deserialization: a missing required arg returns
+a parse error, a wrong scalar returns a coercion error. Both come back
+with no resolver call.
+
+## Returning a typed entity
+
+For anything beyond a scalar, define a `SimpleObject` (output) and
+optionally an `InputObject` (input):
+
+```rust
+use async_graphql::SimpleObject;
+use nest_rs_graphql::{query, resolver};
+
+#[derive(SimpleObject)]
+pub struct Product {
+    id: String,
+    name: String,
+    price_cents: i32,
+}
+
+#[resolver]
+pub struct ProductsResolver;
+
+#[resolver]
+impl ProductsResolver {
+    #[query]
+    async fn product(&self, id: String) -> Product {
+        Product { id, name: "Widget".into(), price_cents: 1999 }
+    }
+}
+```
+
+Every field of `Product` is queryable independently:
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3000/graphql -d \
+    '{"query":"{ product(id:\"1\") { name priceCents } }"}'
+{"data":{"product":{"name":"Widget","priceCents":1999}}}
+```
+
+When you `#[expose]` an entity, the wire DTO is generated for you and
+plugs into this slot directly — no second `SimpleObject` to maintain
+([Relations](/graphql/relations/)).
+
+## A mutation
+
+`#[mutation]` is the same shape as `#[query]`; the marker swaps the
+operation root.
+
+```rust
+use async_graphql::{InputObject, SimpleObject};
+use nest_rs_graphql::{mutation, resolver};
+
+#[derive(InputObject)]
+pub struct CreateProductInput {
+    name: String,
+    price_cents: i32,
+}
+
+#[derive(SimpleObject)]
+pub struct Product {
+    id: String,
+    name: String,
+    price_cents: i32,
+}
+
+#[resolver]
+pub struct ProductsResolver;
+
+#[resolver]
+impl ProductsResolver {
+    #[mutation]
+    async fn create_product(&self, input: CreateProductInput) -> Product {
+        Product {
+            id: "p-001".into(),
+            name: input.name,
+            price_cents: input.price_cents,
+        }
+    }
+}
+```
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3000/graphql -d \
+    '{"query":"mutation { createProduct(input: {name: \"Gadget\", priceCents: 999}) { id name } }"}'
+{"data":{"createProduct":{"id":"p-001","name":"Gadget"}}}
+```
+
+`InputObject` makes a struct usable as an argument type; `SimpleObject`
+makes one usable as a return type. Both come from `async-graphql`
+(re-exported by `nest-rs-graphql`).
+
+## Reading the request context
+
+A resolver method takes an optional `ctx: &Context<'_>` first
+non-receiver argument. The context exposes per-request data the auth
+chain seeded (a principal, the assembled `Ability`) and is the entry
+point to typed batch loaders.
+
+```rust
+use async_graphql::{Context, Result};
+use nest_rs_graphql::{query, resolver};
+
+#[resolver]
+pub struct ProfileResolver;
+
+#[resolver]
+impl ProfileResolver {
+    #[query]
+    async fn me(&self, ctx: &Context<'_>) -> Result<String> {
+        let claims = ctx.data::<crate::Claims>()?;
+        Ok(format!("you are {}", claims.subject))
+    }
+}
+```
+
+The principal type lands in `ctx` through `forward_principal!` —
+declared once per app, see [Security](/security/). On a public query
+the call simply returns an error; bind a `GraphqlAuthGuard` to refuse
+anonymous traffic before the method runs.
+
+## Returning a `Result`
+
+A resolver method may return `T` or `async_graphql::Result<T>` — both
+work, but a `Result` lets you short-circuit with a typed GraphQL
+error:
+
+```rust
+use async_graphql::{Error, Result};
+
+#[query]
+async fn product(&self, id: String) -> Result<Product> {
+    if id.is_empty() {
+        return Err(Error::new("id must not be empty"));
+    }
+    Ok(Product { id, name: "Widget".into(), price_cents: 1999 })
+}
+```
+
+The full error story (extensions, codes, mapping `ServiceError`) is
+on its own page: [Errors](/graphql/errors/).
+
+## Injecting a service
+
+Reach the service through the resolver struct, then call into it —
+this is the same shape every adapter uses:
+
+```rust
+use std::sync::Arc;
+use async_graphql::Result;
+use nest_rs_graphql::{mutation, query, resolver};
+
+#[resolver]
+pub struct ProductsResolver {
+    #[inject]
+    svc: Arc<crate::products::ProductsService>,
+}
+
+#[resolver]
+impl ProductsResolver {
+    #[query]
+    async fn product(&self, id: String) -> Result<Option<Product>> {
+        Ok(self.svc.find_by_id(&id).await?)
+    }
+
+    #[mutation]
+    async fn create_product(&self, input: CreateProductInput) -> Result<Product> {
+        Ok(self.svc.create(input).await?)
+    }
+}
+```
+
+The service stays the single audited choke point to the database. The
+resolver only translates between the wire shape and the service. See
+[Database / CRUD](/database/crud/) for the service contract.
+
+## Where to go next
+
+- [Field resolvers](/graphql/field-resolvers/) — add computed or
+  composed fields to an output type.
+- [Relations](/graphql/relations/) — let `#[expose]` write the
+  entity-to-entity wire shape for you.
+- [Errors](/graphql/errors/) — the full mapping from service errors
+  to a GraphQL envelope.

@@ -1,0 +1,173 @@
+---
+title: Dataloaders
+description: Batch every per-parent DB read into one query — the framework wires the loader, you write the SQL.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A `#[dataloader]` turns a per-parent DB read into a per-request batch.
+A `#[field_resolver]` asks the loader for one value per parent, the
+loader collects every key the request needs, the framework fires one
+query at the end. The user writes one method on a service; the loader
+struct, the registration in the async-graphql request context, the
+batch spawner that re-installs the request's ambient executor and
+`Ability` around each batch — all of that lands from the macro.
+
+`#[expose(service = …)]` already emits the **PK loader** (`<Service>ById`)
+and **FK loaders** (`<Service>By<Col>` per `belongs_to`)
+[for free](/graphql/relations/). Write `#[dataloader]` by hand only
+for a custom key — a `by_name`, a `by_tag`, a denormalized lookup not
+driven by an ORM relation.
+
+## The N+1 problem in one diagram
+
+A naïve resolver loop does this:
+
+```text
+GET /graphql { orgs { name users { name } } }
+  └─ select * from org                                       # 1
+  └─ for each org → select * from "user" where org_id = ?    # N
+```
+
+A `#[dataloader]` collapses the `N` to `1`:
+
+```text
+GET /graphql { orgs { name users { name } } }
+  └─ select * from org                                       # 1
+  └─ select * from "user" where org_id in ($1, $2, … $n)     # 1
+```
+
+The behaviour is the same for the client; the query plan is one round
+trip per relation across the whole response.
+
+## A custom loader by name
+
+```rust title="src/items/service.rs"
+use std::collections::HashMap;
+
+use nest_rs_authz::{Action, Read};
+use nest_rs_graphql::dataloader;
+use nest_rs_seaorm::{Repo, ServiceError};
+
+use super::entity::{self, Entity as Items, Item};
+
+#[dataloader]
+impl ItemsService {
+    async fn by_name(
+        &self,
+        names: &[String],
+    ) -> Result<HashMap<String, Vec<Item>>, ServiceError> {
+        if names.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = Repo::<Items>::scoped(Action::Read)
+            .filter(entity::Column::Name.is_in(names.iter().cloned()))
+            .all(&Repo::<Items>::conn()?)
+            .await?;
+        Ok(group_items_by_name(names, rows))
+    }
+}
+```
+
+The macro reads the method's signature and generates:
+
+- A loader struct **`ItemsServiceByName`** wrapping `Arc<ItemsService>`.
+- An `async_graphql::dataloader::Loader<String>` impl whose `load`
+  forwards to `by_name`.
+- A `GraphqlLoaderRegistration` submitted to `inventory` — picked up at
+  request time, seeded into the context, no boot-time wiring.
+
+A `#[field_resolver]` reaches it through the context:
+
+```rust title="src/items/graphql/resolver.rs"
+use async_graphql::{Context, Result};
+use async_graphql::dataloader::DataLoader;
+use nest_rs_graphql::{field_resolver, resolver};
+
+use crate::items::{Item, service::ItemsServiceByName};
+
+#[resolver]
+pub struct ItemsResolver;
+
+#[resolver]
+impl ItemsResolver {
+    #[field_resolver]
+    async fn items_with_name(
+        &self,
+        ctx: &Context<'_>,
+        parent: &crate::tags::Tag,
+    ) -> Result<Vec<Item>> {
+        let loader = ctx.data::<DataLoader<ItemsServiceByName>>()?;
+        Ok(loader.load_one(parent.label.clone()).await?.unwrap_or_default())
+    }
+}
+```
+
+Every `Tag` in the response asks the same loader for its label; the
+batch fires once, populated with every label the request needs.
+
+## The signature contract
+
+`#[dataloader]` rejects anything that does not look like a batch:
+
+| Element | Rule |
+|---|---|
+| Receiver | `&self` — the loader holds an `Arc<Self>` |
+| Keys parameter | `&[K]` — a slice; any `K: Eq + Hash` works |
+| Return | `HashMap<K, V>` or `Result<HashMap<K, V>, E>` |
+| Async | Optional — sync `fn` is allowed for in-memory lookups |
+
+A method returning bare `HashMap<K, V>` is treated as infallible
+(error type `Infallible`). Use the `Result` form whenever the loader
+touches I/O — a DB error must propagate, never be swallowed into an
+empty map. The CLAUDE.md rule:
+
+> **Forbidden** — batch/loader methods return `Result`. Silent failure
+> violates Rust-first.
+
+## Per-request scope, ambient `Ability`
+
+The macro seeds **one loader instance per GraphQL request** into the
+async-graphql context. Two calls within the same response share the
+same batch; two calls across two requests get independent loaders.
+
+The batch itself runs on a spawned task — so async-graphql can collect
+keys across concurrent resolvers. That spawned task starts with empty
+task-locals, which would normally lose the request's executor and
+`Ability`. `nest-rs-seaorm`'s `LoaderScope` bridge snapshots both
+before the spawn and re-installs them inside, so `Repo::scoped(…)` in
+the loader body sees exactly what the request saw. Importing
+`DatabaseModule` + `AuthzGraphqlModule` activates this — no per-loader
+wiring.
+
+## Composes with field resolvers
+
+A `#[field_resolver]` and a `#[dataloader]` are two halves of the same
+pattern: the resolver names the field on the wire, the loader does
+the batched DB call.
+
+- **Plain query → just a service call.** No loader needed; one query
+  total.
+- **Per-parent lookup in `#[field_resolver]` → loader.** Otherwise
+  N+1, full stop.
+- **Relation between two `#[expose]`d entities → no code at all.** The
+  loader and the field resolver are both auto-emitted; see
+  [Relations](/graphql/relations/).
+
+<Aside type="tip">
+A `#[dataloader]` method is **also a normal method on the service** —
+the macro keeps the original `impl` block intact. Call it as
+`self.items_svc.by_name(&names).await` from anywhere a service call
+makes sense, not only from a resolver.
+</Aside>
+
+## Where to go next
+
+- [Relations](/graphql/relations/) — the auto-emitted loaders for
+  ORM relations.
+- [Field resolvers](/graphql/field-resolvers/) — what consumes a
+  loader from inside a resolver.
+- [Database / Dataloaders](/database/dataloaders/) — the data-layer
+  view, including the `Repo::scoped` contract every batch follows.

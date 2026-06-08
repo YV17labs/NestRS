@@ -1,39 +1,25 @@
 ---
 title: Database
-description: Entities, services as the single DB gateway, the Repo handle, dataloaders for batching.
+description: Entity + service + module — a CRUD-ready slice in under 60 lines, with row-level security and transactions transparent.
 sidebar:
   order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-NestRS's data layer is built on [SeaORM](https://www.sea-ql.org/SeaORM/) —
-entities, queries and migrations are SeaORM's. NestRS wraps it so every access
-goes through a service and a request-scoped `Repo`, never the ORM directly.
+A new entity becomes a fully wired CRUD slice — REST and GraphQL, paginated,
+scoped by the caller's ability, masked on the way out — in **under 60 lines
+across three files**. The data layer is built on
+[SeaORM](https://www.sea-ql.org/SeaORM/) (entities, queries, migrations) and
+[sea-query](https://www.sea-ql.org/SeaQuery/) (the conflict / filter
+DSL); NestRS wraps both so every access flows through a service and a
+request-scoped `Repo`, never the ORM directly.
 
-The data layer ships as two crates. `nest-rs-database` defines the executor
-abstractions and task-local seam — a **store-agnostic** contract that fits
-SQL, NoSQL, or anything carrying a connection. `nest-rs-seaorm` is the
-first-class SeaORM implementation that lives on top of that seam: `Repo`,
-`CrudService`, the transparent transactional interceptor, response
-masking. Apps depend on both. To plug a different store — MongoDB, sqlx
-raw, ClickHouse — see [Writing a driver](/database/writing-a-driver/).
+This page walks the three files end to end. The deeper concepts — the ambient
+executor, dataloaders, pagination, transactions, health — live on their own
+pages, linked at the bottom.
 
-A service is the entity's single DB gateway. Every read and write flows
-through `Repo`, which:
-
-1. Runs against the **ambient executor** — a pool on safe routes, a
-   transaction on mutating routes — installed automatically by importing
-   `DatabaseModule`;
-2. Emits an instrumentation span (`target: nest_rs::orm`) per query.
-
-The invariant: **every data access goes through a service, and a service
-reaches the DB only through `Repo`**.
-
-This page covers the data layer alone. Row-level filtering and response
-masking are tied to abilities and live in [Security](/security/).
-
-## Declare an entity
+## The entity
 
 ```rust title="src/items/entity.rs"
 use nest_rs_resource::expose;
@@ -62,41 +48,26 @@ pub struct Model {
 impl ActiveModelBehavior for ActiveModel {}
 ```
 
-From this one declaration, `#[expose]` generates:
-
-- the **`Item`** wire DTO returned by handlers (the type without sea_orm
-  internals);
-- **`CreateItemInput`** and **`UpdateItemInput`** — filtered by
-  `input(create)` / `input(update)`, with `validator` derives wired;
-- a GraphQL **`SimpleObject`** + an OpenAPI / **JSON Schema** for `Item`,
-  both with the same field set;
-- a **PK dataloader** (`ItemsServiceById`) on `ItemsService`, so any
-  other entity holding a `belongs_to` to `Item` resolves through it
-  without an N+1;
-- `From<&Model>` for `Item` and `IntoActiveModel` for the inputs.
+From this one declaration, `#[expose]` generates the wire DTO returned by
+handlers (`Item`), the `CreateItemInput` and `UpdateItemInput` filtered by
+`input(create)` / `input(update)`, the GraphQL `SimpleObject`, the OpenAPI
+schema, the PK dataloader (`ItemsServiceById`) for relations, and the
+`From<&Model>` / `IntoActiveModel` plumbing every handler needs.
 
 `service = …` is required as soon as the entity declares any non-skip
-relation — the macro emits the PK loader on it. `#[expose(skip)]` on a
-column **excludes it from every wire surface** — useful for private
-fields you do not want on the JSON / GraphQL body.
+relation — the macro emits the PK loader on it. Use `#[expose(skip)]` on a
+column to keep it out of every wire surface.
 
-### Relations resolve themselves
+Relations declared with `#[sea_orm(belongs_to, …)]` or `#[sea_orm(has_many)]`
+auto-resolve through dataloaders — see [Dataloaders](/database/dataloaders/).
 
-A SeaORM `belongs_to` / `has_many` field declared on the entity
-becomes a **GraphQL field auto-resolved through a dataloader** — see
-[GraphQL → Relation fields resolve themselves](/graphql/#relation-fields-resolve-themselves)
-for the full pattern. Opt a single relation out with `#[expose(skip)]`
-and write a hand-rolled `#[field_resolver]` if you need a custom shape.
-
-## Write the service
+## The service
 
 ```rust title="src/items/service.rs"
 use std::sync::Arc;
 use nest_rs_core::injectable;
 use nest_rs_seaorm::{CrudService, Repo};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
-use uuid::Uuid;
-use validator::Validate;
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
 
 use super::entity::{self, CreateItemInput, Entity as Items, Item, UpdateItemInput};
 use super::error::ItemError;
@@ -111,13 +82,6 @@ impl CrudService for ItemsService {
 }
 
 impl ItemsService {
-    pub async fn create(&self, input: CreateItemInput) -> Result<Item, ItemError> {
-        input.validate()?;
-        let active = input.into_active_model();
-        let row = active.insert(&Repo::<Items>::conn()?).await?;
-        Ok(Item::from(&row))
-    }
-
     pub async fn find_by_name(&self, name: &str) -> Result<Option<Item>, ItemError> {
         let row = Items::find()
             .filter(entity::Column::Name.eq(name.to_owned()))
@@ -128,20 +92,13 @@ impl ItemsService {
 }
 ```
 
-- **`#[injectable]`** registers the service with the container — others
-  inject `Arc<ItemsService>`.
-- **`impl CrudService for ItemsService`** declares the entity + the
-  input shapes the controller `#[crud(...)]` macro will wire into
-  routes. From this, the controller automatically gets `list`, `page`,
-  `access`, `create`, `update`, `delete` — each going through `Repo`.
-- **`Repo::<Items>::conn()`** returns the **ambient executor**: a pool
-  handle on safe routes (GET, HEAD, OPTIONS) and worker jobs, a
-  transaction handle on mutating routes (POST, PUT, PATCH, DELETE).
-  Same code path, different mode.
-- The handler returns `Result<T, E>` — a `DbErr` is **never silently
-  mapped** to an empty result.
+`impl CrudService` is enough to inherit `list`, `page`, `access`, `create`,
+`update`, `delete` — every method routed through `Repo`, every call
+filtered by the caller's [`Ability`](/security/). Custom queries (here:
+`find_by_name`) sit beside the inherited ones and reach the DB through the
+same `Repo::<Items>::conn()` handle.
 
-## Hook it up
+## The module
 
 ```rust title="src/items/module.rs"
 use nest_rs_core::module;
@@ -151,15 +108,14 @@ use super::service::ItemsService;
 pub struct ItemsModule;
 ```
 
-The HTTP-adapter module imports it:
+The HTTP adapter sits in its own folder and imports the port:
 
 ```rust title="src/items/http/module.rs"
 #[module(imports = [ItemsModule], providers = [ItemsController])]
 pub struct ItemsHttpModule;
 ```
 
-The app root imports `DatabaseModule::for_root` (this is what installs the
-pool + the ambient executor interceptor):
+The app root activates the database and lists the slice:
 
 ```rust title="src/module.rs"
 #[module(
@@ -169,202 +125,41 @@ pool + the ambient executor interceptor):
         ItemsHttpModule,
     ],
 )]
-pub struct ItemsModule;
+pub struct AppModule;
 ```
 
-`DatabaseModule::for_root(None)` reads `NESTRS_DATABASE__URL` from the
-environment; pass `Some(custom)` to override.
+`DatabaseModule::for_root(None)` reads `NESTRS_DATABASE__URL` (and the other
+`NESTRS_DATABASE__*` keys) from the environment; pass a `DatabaseConfig` to
+pin values in code — the framework-wide dual path applies.
 
-## Dataloaders — batch field fetches
+## What the data layer hands you for free
 
-A `#[dataloader]` is a batched DB read. Resolvers inject a
-`DataLoader<S>` (request-scoped, shared across one response) and call
-`.load_one(key)` per parent — the framework batches every call into a
-single query.
+Importing `DatabaseModule` activates four invariants every handler in the
+slice inherits, without writing any of them:
 
-The **PK loader** (`<Service>ById`) and **FK loaders**
-(`<Service>By<Col>` for every `belongs_to`) are emitted automatically
-by `#[expose]`. Write `#[dataloader]` by hand only for a custom key —
-a `by_name`, a `by_tag`, a denormalized lookup not driven by an ORM
-relation.
-
-```rust title="src/items/service.rs"
-use std::collections::HashMap;
-use nest_rs_graphql::dataloader;
-
-#[dataloader]
-impl ItemsService {
-    async fn by_name(
-        &self,
-        names: &[String],
-    ) -> Result<HashMap<String, Vec<Item>>, ItemError> {
-        if names.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let rows = Items::find()
-            .filter(entity::Column::Name.is_in(names.iter().cloned()))
-            .all(&Repo::<Items>::conn()?)
-            .await?;
-        let mut buckets: HashMap<String, Vec<Item>> =
-            names.iter().map(|n| (n.clone(), Vec::new())).collect();
-        for row in rows {
-            if let Some(bucket) = buckets.get_mut(&row.name) {
-                bucket.push(Item::from(&row));
-            }
-        }
-        Ok(buckets)
-    }
-}
-```
-
-A `#[field_resolver]` resolver injects it as `&DataLoader<ItemsServiceByName>` —
-no N+1.
-
-## Pagination
-
-```rust
-#[expose(name = "Item", complex, paginate)]
-```
-
-Adds an **`ItemPage`** envelope (`{ items, total, page, per_page,
-total_pages, has_next_page, has_previous_page }`) and a `PageArgs` input.
-The `#[crud(...)]` macros wire the paginated route + the GraphQL
-`items_page(args: PageArgs)` operation automatically.
-
-## Schema and demo data
-
-Schema lives in the **`migrations`** crate; demo data in the **`seed`** crate
-— both product crates under `crates/`, not apps. Neither the API nor the
-worker run migrations on startup; `just db` drives them:
-
-```bash
-just db up       # apply pending migrations
-just db status   # applied vs. pending
-just db seed     # load demo data (idempotent)
-just db reset    # fresh + seed
-```
-
-See [Migrations](/database/migrations/) for writing and running schema
-changes, and [Seeding](/database/seeding/) for demo data.
-
-## What happens on a mutating route
-
-A `POST /items` request runs like this — the framework handles the data
-context for you:
-
-1. The HTTP transport routes the request to `ItemsController::create`.
-2. The `DbContext` interceptor (auto-bound by `DatabaseModule`) begins a
-   transaction and installs the executor in a `task_local`.
-3. The handler calls `self.svc.create(...)`.
-4. Inside the service, `Repo::<Items>::conn()` reads the `task_local`
-   — that's the transaction.
-5. The handler returns `Ok(...)`. The interceptor commits.
-6. On a `4xx` / `5xx`, the interceptor rolls back.
-
-A safe `GET` runs the same way with a pool executor and no transaction.
-A worker job (queue processor, cron job) also gets a pool executor.
-
-## Retrying transient transaction conflicts
-
-Postgres' serializable isolation surfaces a conflicting transaction as
-SQLSTATE `40001` (`serialization_failure`); a deadlock as `40P01`. MySQL
-surfaces a deadlock as `1213`; SQL Server as `1205`. The conventional
-answer is "retry the whole transaction" — and the framework exposes two
-pieces, on purpose split, that behave honestly about what each can do.
-
-### The observability flag
-
-```bash frame="terminal"
-NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS=true
-```
-
-```rust
-DatabaseModule::for_root(DatabaseConfig {
-    retry_serialization_conflicts: true,
-    ..Default::default()
-})
-```
-
-When this flag is on, the `DbContext` interceptor matches a conflict at the
-commit boundary against the SQLSTATE markers above and **logs it at `warn`
-with the conflict tag** (target `nest_rs::orm`) so ops sees the failure
-mode distinctly from a generic commit error.
-
-<Aside type="caution">
-**The flag does not actually retry the commit today.** SeaORM's
-`DatabaseTransaction` handle is **consumed** by the failed commit — the
-interceptor cannot replay the same handle, and the request body is no
-longer available to re-run the handler from scratch. So the response
-still surfaces as `500` after the warn line; the flag is currently an
-**observability tag**, not a retry mechanism. Treat it as "I want to see
-serialization conflicts in my logs", not "I want them invisible".
-</Aside>
-
-### The working retry primitive
-
-For an actually-retried operation, wrap a replayable closure in
-`nest_rs_seaorm::retry::retry_on_conflict` inside a service method that
-owns its programmatic transaction boundary:
-
-```rust title="src/orders/service.rs"
-use std::time::Duration;
-use nest_rs_seaorm::retry::{
-    retry_on_conflict, DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF,
-};
-use sea_orm::TransactionTrait;
-
-impl OrdersService {
-    pub async fn settle(&self, id: Uuid) -> Result<Order, OrderError> {
-        let db = self.db.clone();
-        retry_on_conflict(DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF, || {
-            let db = db.clone();
-            async move {
-                let txn = db.begin().await?;
-                // ... read + update + insert against `txn` ...
-                txn.commit().await?;
-                Ok::<_, sea_orm::DbErr>(/* updated order */)
-            }
-        })
-        .await
-        .map_err(OrderError::from)
-    }
-}
-```
-
-`retry_on_conflict` runs the closure up to `attempts` times, sleeping
-`initial_backoff << attempt` between tries (5 ms → 10 ms → 20 ms with the
-defaults). Non-retryable errors short-circuit immediately; `DbErr`s
-matching the SQLSTATE markers (or the textual "serialization" / "deadlock"
-phrasing) trigger a retry. The closure is `FnMut` because it re-runs from
-scratch each attempt — that's what makes the retry honest, the body
-re-opens a fresh transaction against a fresh snapshot.
-
-This is the primitive any service can use; the interceptor cannot, because
-the request body is upstream of where it sits.
+- **Row-level filtering.** Every `Repo` read runs with the caller's
+  `Ability::condition_for` ANDed in. A row outside scope is invisible.
+- **Transparent transactions.** Mutating routes run inside a transaction
+  committed on 2xx/3xx, rolled back otherwise.
+- **Same code path for safe routes and workers.** Pool executor under the
+  hood, no method change.
+- **Audited choke point.** Controllers, resolvers, dataloader code call
+  the service; the service touches the DB only through `Repo`.
 
 ## Going further
 
-- [CRUD](/database/crud/) — `#[crud(...)]` on a controller or resolver:
-  list, get, create, update, delete generated, scoped and masked, all
-  going through `CrudService`.
-- [Migrations](/database/migrations/) — schema changes in the `migrations`
-  crate.
-- [Seeding](/database/seeding/) — idempotent demo data in the `seed` crate.
-- [Security](/security/) — `Ability` filters reads, gates by-id loads,
-  masks response bodies. Wires through the same `Repo` calls.
-- [GraphQL](/graphql/) — `#[field_resolver]` resolvers with a
-  `DataLoader<ItemsServiceByName>` to avoid N+1 on relations.
-- [Configuration](/configuration/) — the `NESTRS_DATABASE__URL` scheme.
-
-### Reference
-
-- `crates/features/src/users/` — a feature with relations,
-  dataloaders and credentials helpers.
-- `crates/nest-rs-database/` — the executor trait and task-local seam
-  (ORM-agnostic).
-- `crates/nest-rs-worker/` — the `JobContext` seam scheduler/queue
-  transports use to install ambient state per job.
-- `crates/nest-rs-seaorm/` — the [SeaORM](https://www.sea-ql.org/SeaORM/)
-  integration: `Repo`, `CrudService`, the ambient executor.
-- `crates/nest-rs-resource/` — `#[expose]`, the GraphQL+OpenAPI
-  generation, pagination envelopes.
+- [Repo and executor](/database/repo-and-executor/) — the ambient executor,
+  the `DbContext` interceptor, the contextless-path escape hatch.
+- [Dataloaders](/database/dataloaders/) — `#[dataloader]` batches, the
+  auto-emitted PK and FK loaders, the relations that resolve themselves.
+- [Pagination](/database/pagination/) — keyset `Page<M>` and `PageArgs`,
+  REST vs GraphQL.
+- [Transactions](/database/transactions/) — auto-commit, the
+  `retry_serialization_conflicts` flag, the `retry_on_conflict` primitive.
+- [Health](/database/health/) — `DatabaseHealthModule` and the readiness
+  probe.
+- [CRUD](/database/crud/) — `#[crud(...)]` on a controller or resolver.
+- [Migrations](/database/migrations/) and [Seeding](/database/seeding/) —
+  schema and demo data.
+- [Writing a driver](/database/writing-a-driver/) — plugging a non-SeaORM
+  store into the same seams.

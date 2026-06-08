@@ -1,0 +1,209 @@
+---
+title: Overriding in tests
+description: Seed pinned config values in e2e tests, isolate the environment in unit tests with figment::Jail, keep both hermetic.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Tests bypass the environment in two ways depending on the layer. End-to-end
+tests use `TestApp` and seed pinned config values directly — the seed
+wins over `ConfigModule::for_feature::<C>()`. Unit tests for a `Config`
+impl run inside a `figment::Jail` that scopes `std::env` mutations to
+the test, so neighboring tests stay hermetic.
+
+Both rely on a single guarantee: under `NESTRS_ENV=test`, the
+[`.env.local`](/configuration/env-cascade/#test-mode-is-hermetic) file is
+skipped, so a developer's personal secrets cannot leak in.
+
+## Seeding a pinned value (e2e)
+
+`TestApp::builder()` exposes `.provide(value)` — when the value's type
+matches a config registered via `ConfigModule::for_feature::<C>()`, the
+seed wins and the factory never runs.
+
+```rust title="apps/platform-auth/tests/e2e.rs"
+use nest_rs_testing::TestApp;
+use uuid::Uuid;
+
+#[tokio::test]
+async fn issues_a_token_for_a_registered_client() {
+    let app = TestApp::<PlatformAuthModule>::builder()
+        .provide(IssuerConfig {
+            clients: vec![RegisteredClient {
+                client_id: "test-client".into(),
+                client_secret: "secret".into(),
+                org_id: Uuid::nil(),
+                scopes: vec!["read".into()],
+            }],
+            default_org_id: Uuid::nil(),
+        })
+        .build()
+        .await
+        .unwrap();
+
+    let response = app.http().post("/oauth/token")
+        .body(r#"{"client_id":"test-client","client_secret":"secret"}"#)
+        .send()
+        .await;
+    response.assert_status_is_ok();
+}
+```
+
+The test never sets a `NESTRS_ISSUER__*` variable, doesn't depend on a
+committed `.env.test`, and produces the same result on any machine.
+
+## Seeding through `for_root`
+
+Every configurable module's `for_root` accepts a `pinned: Option<C>`:
+`None` loads from the environment, `Some(cfg)` registers the value
+directly. This is the same pattern as `.provide()`, expressed at the
+module-import layer.
+
+```rust title="apps/platform-api/tests/e2e.rs"
+use nest_rs_http::{HttpConfig, HttpModule};
+
+let app = TestApp::<PlatformApiModule>::builder()
+    // ...
+    .build()
+    .await?;
+```
+
+```rust title="apps/platform-api/src/module.rs"
+#[module(
+    imports = [
+        HttpModule::for_root(Some(HttpConfig {
+            host: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        })),
+    ],
+)]
+pub struct PlatformApiModule;
+```
+
+`HttpModule::for_root(opts)` routes its `Option<HttpConfig>` through
+`ConfigModule::provide_feature`: the `Some` arm seeds the value, the
+`None` arm queues the factory. Use this when the test module **owns**
+the binding (it composes the app); use `.provide()` when the test wants
+to override a config a feature already pulled in.
+
+## A test-specific source
+
+`ConfigModule::for_root()` always uses the default `EnvSource`. To
+isolate config loading from `std::env` entirely, build the
+`ConfigService` yourself with a [custom source](/configuration/sources/)
+and seed the loaded `Config`:
+
+```rust title="tests/config_from_map.rs"
+use std::collections::HashMap;
+use std::sync::Arc;
+use nest_rs_config::{Config, ConfigService, ConfigSource};
+
+struct Map(HashMap<&'static str, &'static str>);
+
+impl ConfigSource for Map {
+    fn get(&self, var: &str) -> Option<String> {
+        self.0.get(var).map(|s| (*s).to_owned())
+    }
+}
+
+let source = Arc::new(Map(HashMap::from([
+    ("NESTRS_DATABASE__URL", "postgres://test/app"),
+    ("NESTRS_DATABASE__MAX_CONNECTIONS", "5"),
+])));
+let env = ConfigService::with_source("database", source);
+let cfg = DatabaseConfig::from_env(&env).unwrap();
+
+let app = TestApp::<AppModule>::builder()
+    .provide(cfg)
+    .build()
+    .await?;
+```
+
+The custom-source path **does not** trigger the `.env` cascade merge, so
+`std::env` stays untouched and the test cannot pick up a stray
+`NESTRS_*` from a neighboring run.
+
+## Unit-testing a `Config` impl
+
+When the unit under test is the `from_env` mapping itself, drive it
+through `figment::Jail`. The jail is a `dev-dependency` borrowed from
+the `figment` crate; it scopes every `set_env` / `create_file` call to
+the test closure and restores `std::env` on drop.
+
+```rust title="crates/features/src/oauth/config.rs"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn loads_clients_from_env() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(
+                "NESTRS_ISSUER__CLIENTS",
+                r#"[{"client_id":"web","client_secret":"s","org_id":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]"#,
+            );
+            let cfg = IssuerConfig::load().expect("loads with clients");
+            assert_eq!(cfg.clients.len(), 1);
+            assert_eq!(cfg.clients[0].client_id, "web");
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn fails_validation_when_no_clients() {
+        figment::Jail::expect_with(|_| {
+            let err = IssuerConfig::load().expect_err("empty clients must fail");
+            assert!(matches!(err, ConfigError::Validation(_)));
+            Ok(())
+        });
+    }
+}
+```
+
+This is the exact pattern `nest-rs-config`'s own tests use — see
+`crates/nest-rs-config/src/config.rs` and `service.rs`. The
+`#[allow(clippy::result_large_err)]` is for `Jail`'s fixed closure
+signature.
+
+## Default `NESTRS_ENV` in tests
+
+`TestApp::builder()` sets `NESTRS_ENV=test` if nothing else has set it.
+Two consequences:
+
+- The `.env` cascade skips `.env.local` (per-machine secrets stay out of
+  the test).
+- Env-aware framework defaults stay off: the GraphQL playground doesn't
+  mount, SDL emission doesn't fire, dev-only middleware unloads.
+
+A test that wants to assert prod behavior overrides this explicitly
+before building the app — `unsafe { std::env::set_var("NESTRS_ENV",
+"production") }`. Set it before `TestApp::builder()` so the cascade
+loads the right files.
+
+## What not to do
+
+- **Don't mutate `std::env` directly from a `#[tokio::test]`.** Tokio
+  runs tests in parallel; one test's `set_var` races against another's
+  read. `figment::Jail` serializes mutations behind a process-wide
+  mutex, which is why it exists.
+- **Don't pin config in a `setup` shared between tests.** Each test
+  should declare its inputs explicitly — that's what makes a failure
+  reproducible from the test code alone.
+- **Don't ship `.env.test` with secrets.** The file is committed by
+  convention; treat it as documentation of test defaults, not as a
+  vault.
+
+## Going further
+
+- [Testing](/testing/) — the broader test strategy: unit, integration,
+  e2e.
+- [Configuration overview](/configuration/) — the typed-struct contract.
+- [The .env cascade](/configuration/env-cascade/) — file load order and
+  `Test`-mode hermeticity.
+- [Alternative sources](/configuration/sources/) — custom `ConfigSource`
+  for hermetic test config without touching `std::env`.

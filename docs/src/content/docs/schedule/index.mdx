@@ -14,6 +14,10 @@ Triggers are validated **at compile time** (string literals) or **at boot**
 (`CronExpression` presets, IANA timezones); a bad value fails the boot
 naming the offending job.
 
+`nest-rs-schedule` builds on [croner](https://docs.rs/croner) — the framework
+wraps it for cron expression parsing (5/6/7-field), with `chrono` /
+[`chrono-tz`](https://docs.rs/chrono-tz) for the optional IANA timezone.
+
 ## A first scheduled method
 
 A regular `#[injectable]` service with one decorated method. The `#[scheduled]`

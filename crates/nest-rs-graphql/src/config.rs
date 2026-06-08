@@ -27,6 +27,11 @@ pub struct GraphqlConfig {
     /// pinning the field. A sensible production value is in the 10-20 range:
     /// caps recursive bombs (`{ a { a { a { … } } } }`) without rejecting
     /// legitimate nested queries. Cheap to enforce (one AST walk).
+    ///
+    /// `Some(0)` is rejected at boot: async-graphql checks `depth > limit`
+    /// strictly and every field has depth ≥ 1, so `0` would brick every
+    /// query. Use `None` to disable.
+    #[validate(range(min = 1))]
     pub max_depth: Option<usize>,
     /// Maximum complexity score of an incoming query AST. `None` (the default)
     /// disables the check — opt in by setting `NESTRS_GRAPHQL__MAX_COMPLEXITY`
@@ -34,6 +39,9 @@ pub struct GraphqlConfig {
     /// by `#[expose]` on list relations (multiplier on the unbounded fanout).
     /// A sensible production value sits in the 1000-5000 range and should be
     /// tuned from observed legitimate queries.
+    ///
+    /// `Some(0)` is rejected at boot for the same reason as `max_depth`.
+    #[validate(range(min = 1))]
     pub max_complexity: Option<usize>,
 }
 
@@ -132,6 +140,34 @@ mod tests {
                 assert_eq!(cfg.max_complexity, d.max_complexity);
             },
         );
+    }
+
+    #[test]
+    fn validate_rejects_zero_limits_so_some_zero_does_not_brick_the_endpoint() {
+        // async-graphql's depth/complexity check is strict `>`, and every
+        // non-empty selection has depth ≥ 1, so `Some(0)` would reject every
+        // query at boot — a footgun the validator must catch.
+        let zero_depth = GraphqlConfig {
+            max_depth: Some(0),
+            ..GraphqlConfig::default()
+        };
+        assert!(
+            zero_depth.validate().is_err(),
+            "Some(0) must fail validation — none of the documented `disable` opts is `0`"
+        );
+        let zero_complexity = GraphqlConfig {
+            max_complexity: Some(0),
+            ..GraphqlConfig::default()
+        };
+        assert!(zero_complexity.validate().is_err());
+        // Sanity: Some(1) is meaningfully tight but legal; defaults are fine.
+        let tight = GraphqlConfig {
+            max_depth: Some(1),
+            max_complexity: Some(1),
+            ..GraphqlConfig::default()
+        };
+        assert!(tight.validate().is_ok());
+        assert!(GraphqlConfig::default().validate().is_ok());
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! rejected during async-graphql's validation pass, before any resolver runs.
 
 use async_graphql::SimpleObject;
-use nest_rs_core::module;
+use nest_rs_core::{Module, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, resolver};
 use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
@@ -57,106 +57,82 @@ struct AppComplexityLimited;
 ])]
 struct AppGenerousLimits;
 
-#[tokio::test]
-async fn depth_limit_rejects_too_deep_query() {
-    let app = TestApp::builder()
-        .module::<AppDepthLimited>()
+/// Boot the three test apps through the same code path so a future change to
+/// the boot recipe lands in one place instead of three.
+async fn boot<M: Module + 'static>(context: &str) -> TestApp {
+    TestApp::builder()
+        .module::<M>()
         .http(HttpTransport::new())
         .build()
         .await
-        .expect("schema boots with max_depth = 1");
+        .unwrap_or_else(|e| panic!("schema boots ({context}): {e:?}"))
+}
 
-    // depth 2 (`root` → `label`) exceeds max_depth = 1.
+/// POST `query` and pull the GraphQL `errors[]` count + the rejection's data
+/// shape. Asserts `data` is `null` on rejection so the test pins behaviour
+/// (rejection happens before resolver execution) instead of the exact
+/// async-graphql error wording — that wording is not a stable contract.
+async fn submit(app: &TestApp, query: &str) -> serde_json::Value {
     let resp = app
         .http()
         .post("/graphql")
-        .body_json(&serde_json::json!({ "query": "{ root { label } }" }))
+        .body_json(&serde_json::json!({ "query": query }))
         .send()
         .await;
     // async-graphql returns validation failures as 200 with `errors[]`.
     resp.assert_status_is_ok();
-    let json = resp.json().await;
-    let errors = json.value().object().get("errors").array();
+    resp.json().await.value().deserialize::<serde_json::Value>()
+}
+
+fn errors(body: &serde_json::Value) -> &[serde_json::Value] {
+    body.get("errors")
+        .and_then(|v| v.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+}
+
+#[tokio::test]
+async fn depth_limit_rejects_too_deep_query() {
+    let app = boot::<AppDepthLimited>("max_depth = 1").await;
+    // depth 2 (`root` → `label`) exceeds max_depth = 1.
+    let body = submit(&app, "{ root { label } }").await;
     assert!(
-        !errors.is_empty(),
-        "expected at least one validation error for over-depth query"
+        !errors(&body).is_empty(),
+        "expected at least one validation error for over-depth query, body = {body}",
     );
-    let msg = errors
-        .iter()
-        .next()
-        .expect("at least one error")
-        .object()
-        .get("message")
-        .string()
-        .to_lowercase();
     assert!(
-        msg.contains("deep") || msg.contains("depth"),
-        "depth-limit error should mention depth, got: {msg}"
+        body.get("data").is_some_and(serde_json::Value::is_null),
+        "data must be null when validation rejects (rejection runs before resolution)",
     );
 }
 
 #[tokio::test]
 async fn complexity_limit_rejects_too_complex_query() {
-    let app = TestApp::builder()
-        .module::<AppComplexityLimited>()
-        .http(HttpTransport::new())
-        .build()
-        .await
-        .expect("schema boots with max_complexity = 1");
-
-    // complexity 2 (`root` + `label`, default 1 per field) exceeds 1.
-    let resp = app
-        .http()
-        .post("/graphql")
-        .body_json(&serde_json::json!({ "query": "{ root { label } }" }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    let json = resp.json().await;
-    let errors = json.value().object().get("errors").array();
+    let app = boot::<AppComplexityLimited>("max_complexity = 1").await;
+    // Complexity 2 (`root` + `label`, default 1 per field) exceeds 1.
+    let body = submit(&app, "{ root { label } }").await;
     assert!(
-        !errors.is_empty(),
-        "expected at least one validation error for over-complex query"
+        !errors(&body).is_empty(),
+        "expected at least one validation error for over-complex query, body = {body}",
     );
-    let msg = errors
-        .iter()
-        .next()
-        .expect("at least one error")
-        .object()
-        .get("message")
-        .string()
-        .to_lowercase();
     assert!(
-        msg.contains("complex"),
-        "complexity-limit error should mention complexity, got: {msg}"
+        body.get("data").is_some_and(serde_json::Value::is_null),
+        "data must be null when validation rejects",
     );
 }
 
 #[tokio::test]
 async fn within_limits_still_resolves() {
-    let app = TestApp::builder()
-        .module::<AppGenerousLimits>()
-        .http(HttpTransport::new())
-        .build()
-        .await
-        .expect("schema boots with generous limits");
-
-    let resp = app
-        .http()
-        .post("/graphql")
-        .body_json(&serde_json::json!({ "query": "{ root { label } }" }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    let json = resp.json().await;
-    let label = json
-        .value()
-        .object()
-        .get("data")
-        .object()
-        .get("root")
-        .object()
-        .get("label")
-        .string();
+    let app = boot::<AppGenerousLimits>("generous limits").await;
+    let body = submit(&app, "{ root { label } }").await;
+    assert!(
+        errors(&body).is_empty(),
+        "generous limits should not reject, got errors = {:?}",
+        errors(&body),
+    );
+    let label = body
+        .pointer("/data/root/label")
+        .and_then(|v| v.as_str())
+        .expect("data.root.label present");
     assert_eq!(label, "root");
 }

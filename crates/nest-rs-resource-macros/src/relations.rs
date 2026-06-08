@@ -19,22 +19,26 @@
 use nest_rs_codegen::pascal_case;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Expr, Ident, Type, parse_quote};
+use syn::{Ident, Type};
 
-use crate::attr::{RelationKind, ResourceField, ResourceModel, is_uuid};
+use crate::attr::{RelationKind, ResourceField, ResourceModel, complexity_attr, is_uuid};
 
-/// Default complexity for an auto-emitted `HasMany` field resolver. The list
-/// is unbounded (the loader returns every child of the parent row), so each
-/// step of fanout multiplies the cost of selected sub-fields by `10` — a
-/// conservative ceiling on the typical fan-out factor. A 3-deep chain of
-/// HasMany relations (`users { posts { comments { id } } }`) reaches a
-/// score of `10^3 = 1000`, which is exactly the configured `max_complexity`
-/// ceiling production apps should pin. Users override per relation with
-/// `#[expose(complexity = "…")]` (e.g. a paginated relation taking a `first`
-/// arg might use `"first * child_complexity"`).
-fn default_has_many_complexity() -> Expr {
-    parse_quote!("10 * child_complexity")
-}
+/// Default complexity expression for an auto-emitted `HasMany` field resolver.
+/// The list is unbounded (the loader returns every child of the parent row), so
+/// each step of fanout multiplies the cost of selected sub-fields by `10`. A
+/// 3-deep chain `{ users { posts { comments { id } } } }` scores
+/// `10 + 10*10 + 10*100 = 1000` (only the outermost level enters the document
+/// total, so the result is exactly `10^3`). async-graphql checks
+/// `complexity > limit` strictly, so a `max_complexity = 1000` admits this
+/// canonical chain — pin `999` to reject it, or accept it as the chosen
+/// upper bound. The factor is hard-wired across the framework; override per
+/// relation with `#[expose(complexity = "…")]` when the realistic fanout
+/// differs. The override expression may reference `child_complexity` and
+/// pure literals only — it lands on a method with no GraphQL arguments, so
+/// names like `first` would resolve as unbound identifiers in the generated
+/// closure. Paginated relations need `#[expose(skip)]` + a hand-rolled
+/// `#[field_resolver]` carrying its own `#[graphql(complexity = …)]`.
+pub(crate) const DEFAULT_HAS_MANY_COMPLEXITY: &str = "10 * child_complexity";
 
 pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     let Some(service) = model.service.clone() else {
@@ -278,9 +282,12 @@ fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Resul
 }
 
 /// One BelongsTo field resolver: load the parent's FK column via the target
-/// entity's PK loader, returning its wire DTO. Default complexity (async-graphql's
-/// `1 + child_complexity`) already matches the runtime cost — one parent row
-/// loaded — so we emit no override unless the user pinned one.
+/// entity's PK loader, returning its wire DTO. Default complexity
+/// (async-graphql's `1 + child_complexity`) tracks the upper bound — one
+/// parent row loaded plus the cost of the selected sub-fields. A row denied
+/// by the ambient `Ability` resolves to `None` for free, so the actual mean
+/// cost is `0..=1` rows; we keep the default rather than over-penalising
+/// ability-heavy schemas.
 fn emit_belongs_to_method(
     model: &ResourceModel,
     field: &ResourceField,
@@ -299,10 +306,7 @@ fn emit_belongs_to_method(
     })?;
 
     let key_expr = wire_key_expr(&fk_field.ty, fk);
-    let complexity = match &field.complexity {
-        Some(expr) => quote! { #[graphql(complexity = #expr)] },
-        None => quote! {},
-    };
+    let complexity = complexity_attr(&field.complexity, None);
 
     Ok(quote! {
         #complexity
@@ -328,11 +332,15 @@ fn emit_belongs_to_method(
 /// is responsible for declaring the `RelatedTo` impl from its own `belongs_to`.
 ///
 /// The auto-emitted loader returns *every* child of the parent — unbounded
-/// fanout. We penalize that with [`default_has_many_complexity`] so a multi-
-/// level has_many query reaches the configured `max_complexity` ceiling before
-/// async-graphql resolves it. `#[expose(complexity = "…")]` on the field wins
-/// over the default — set it when the relation is paginated by hand or a
-/// realistic ceiling differs from the default fanout factor.
+/// fanout. We **always** emit a `#[graphql(complexity = …)]` override so the
+/// score scales multiplicatively (`factor * child_complexity`) instead of
+/// additively (`1 + child_complexity`, async-graphql's default for bare
+/// fields). That asymmetry is the whole point: BelongsTo loads one row,
+/// HasMany loads N. Override with `#[expose(complexity = …)]` for a tighter
+/// or looser factor — but only `child_complexity` and pure literals; the
+/// resolver method takes no GraphQL args, so referencing `first` or any
+/// other argument name from the override produces a confusing
+/// "cannot find value `first`" error in the generated closure.
 fn emit_has_many_method(
     field: &ResourceField,
     target: &syn::Path,
@@ -340,13 +348,10 @@ fn emit_has_many_method(
 ) -> syn::Result<TokenStream2> {
     let name = &field.ident;
     let key_expr = wire_key_expr(&pk.ty, &pk.ident);
-    let complexity_expr = field
-        .complexity
-        .clone()
-        .unwrap_or_else(default_has_many_complexity);
+    let complexity = complexity_attr(&field.complexity, Some(DEFAULT_HAS_MANY_COMPLEXITY));
 
     Ok(quote! {
-        #[graphql(complexity = #complexity_expr)]
+        #complexity
         async fn #name(
             &self,
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>,

@@ -78,8 +78,21 @@ anti-DoS mechanism. The `#[expose]` macro applies one
 automatically — see below.
 
 Typical production value: **1000 to 5000**, tuned from observed
-legitimate queries. Log denials at `warn` and watch a few hundred
-samples before locking the ceiling in.
+legitimate queries. The check is **strict `>`** — `max_complexity =
+1000` admits a query scoring exactly 1000; pin 999 to reject it. Set
+`GraphqlConfig.max_depth = Some(0)` or `max_complexity = Some(0)`
+**fails at boot** with a config error: both values would block every
+query, and `None` is the documented way to disable the check.
+
+<Aside type="caution">
+**Introspection has a cost.** Apollo's full `IntrospectionQuery`
+traverses `__schema { types { fields { type { ofType { … } } } } }`
+seven levels deep and selects ~100 fields. On a non-trivial schema
+its score regularly clears 1000. If `graphql-codegen`, Apollo Studio,
+GraphiQL, or any other client tool starts failing to fetch the
+schema after you raise complexity limits, measure introspection
+against your real schema before tightening further.
+</Aside>
 
 ## The auto-emitted `HasMany` factor
 
@@ -96,12 +109,18 @@ async fn users(&self, …) -> Vec<User> { … }
 ```
 
 The 10× factor models a typical fan-out — three levels of `HasMany`
-(`organizations → teams → members`) score `10^3 = 1000`, which lines
-up with a sensible `max_complexity` ceiling. Tune the ceiling, not the
-factor — the same scoring applies app-wide.
+(`organizations → teams → members`) score `10 × 10 × 10 = 1000`. With
+the strict `>` check, `max_complexity = 1000` lets that query through
+(exactly at the ceiling); pin `999` if you want to reject the canonical
+3-deep chain. Tune the ceiling, not the factor — the factor is
+hard-wired across the framework so the calibration story stays the same
+app-wide.
 
-`BelongsTo` resolvers keep the default `1 + child_complexity`:
-they load at most one parent row, so no fanout penalty is needed.
+`BelongsTo` resolvers keep async-graphql's default `1 +
+child_complexity` — they load at most one parent row, and an ability
+denial drops that to zero, so no fanout penalty is needed. That means
+`HasMany` and `BelongsTo` use **asymmetric base scoring** by default
+(multiplicative vs additive); the asymmetry is the point.
 
 ## Override on the field
 
@@ -123,13 +142,15 @@ pub struct Model {
 Two shapes:
 
 - **Literal** — `#[expose(complexity = 5)]` pins a fixed score.
-- **Expression** — `#[expose(complexity = "first * child_complexity")]`
-  uses async-graphql's expression grammar over field arguments
-  (`first`, `count`, …) and the reserved `child_complexity` variable.
-  Useful when a custom `#[field_resolver]` paginates the relation:
-  the score scales with the requested page size.
+- **Expression** — `#[expose(complexity = "10 * child_complexity")]`
+  uses async-graphql's expression grammar with the reserved
+  `child_complexity` variable. Pure arithmetic on `child_complexity`
+  and literals only — the auto-emitted relation resolver takes
+  **no GraphQL arguments**, so a name like `first` in the expression
+  is treated as an unbound identifier and the macro expansion fails
+  to compile.
 
-The override applies to **any** non-skip field, scalar or relation:
+The override applies to any non-skip field, scalar or relation:
 
 ```rust title="cost an expensive computed scalar"
 #[expose(name = "Report", service = …)]
@@ -141,10 +162,37 @@ pub struct Model {
 }
 ```
 
-`#[expose(skip)]` plus a hand-written `#[field_resolver]` lets you
-combine a custom shape (cursor connection, filter args) with a
-manually crafted `#[graphql(complexity = "…")]` — the same async-graphql
-attribute, no `#[expose]` indirection.
+<Aside type="caution">
+**`skip` and `complexity` are mutually exclusive.** A skipped field
+has no wire-DTO column AND no auto-emitted resolver — nowhere for
+`#[graphql(complexity = …)]` to land. The macro rejects the
+combination at compile time. To attach a cost to a hand-rolled
+field resolver, drop the `#[expose(complexity = …)]` and put
+`#[graphql(complexity = …)]` directly on the
+`#[field_resolver]` method instead.
+</Aside>
+
+### Argument-aware expressions: the `#[field_resolver]` path
+
+`first * child_complexity` and similar expressions that read a
+GraphQL argument only resolve when the field resolver **declares
+that argument**. The auto-emitted relation does not. For a
+paginated relation taking `first` (or `limit`, or `per_page`), drop
+the auto-emission with `#[expose(skip)]` and write the resolver by
+hand with a regular `#[graphql(complexity = …)]`:
+
+```rust
+#[sea_orm(has_many)]
+#[expose(skip)]
+pub posts: HasMany<crate::posts::Entity>,
+
+// in the resolver file:
+#[ComplexObject]
+impl User {
+    #[graphql(complexity = "first * child_complexity")]
+    async fn posts(&self, first: i32) -> Vec<Post> { … }
+}
+```
 
 ## On the wire
 

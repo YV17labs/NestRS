@@ -121,17 +121,20 @@ omission needs no controller code and no manual `if` in the resolver.
 ## Fanout-aware complexity
 
 The auto-emitted `HasMany` resolver loads every child of the parent —
-unbounded fanout. Without a hint, async-graphql scores that field at
-`1`, so a three-level chain like
-`organizations { teams { members { id } } }` reads as cost 3 even when
-it resolves thousands of rows. The macro adds
-`#[graphql(complexity = "10 * child_complexity")]` for you, so the
-same chain scores around `10^3 = 1000` — within reach of a sane
+unbounded fanout. With async-graphql's default `1 + child_complexity`
+formula, that field would barely move the score even when the loader
+resolves thousands of rows. The macro adds
+`#[graphql(complexity = "10 * child_complexity")]` for you, so a
+three-level chain like `organizations { teams { members { id } } }`
+scores `10 × 10 × 10 = 1000` — within reach of a sane
 [`max_complexity`](/graphql/query-limits/#complexity) ceiling.
 
-`BelongsTo` keeps the default (one parent row, no penalty). Override
-the factor per field with `#[expose(complexity = …)]` when the
-realistic fanout differs — full details in
+`BelongsTo` keeps the additive default (one parent row, dropping to
+zero when the ambient `Ability` denies it). The two relation kinds
+therefore use **asymmetric base scoring** — multiplicative for
+`HasMany`, additive for `BelongsTo` — which is the point: lists are
+the cost driver. Override per field with `#[expose(complexity = …)]`
+when the realistic fanout differs — full details in
 [Query limits](/graphql/query-limits/#override-on-the-field).
 
 ## Opt out: skip a single relation

@@ -2,7 +2,7 @@
 //! annotations so the ORM macros see a clean entity.
 
 use proc_macro2::TokenStream as TokenStream2;
-use quote::format_ident;
+use quote::{format_ident, quote};
 use syn::parse::Parse;
 use syn::{
     Expr, Fields, GenericArgument, Ident, ItemStruct, LitStr, Path, PathArguments, Token, Type,
@@ -68,6 +68,23 @@ impl ResourceField {
     pub fn in_output_struct(&self) -> bool {
         !self.skip && self.relation.is_none()
     }
+}
+
+/// Emit `#[graphql(complexity = …)]` for a field, with an optional fallback
+/// string expression when the user did not pin one. Shared by `dto::emit`
+/// (scalar wire fields), `relations::emit_belongs_to_method` (no fallback —
+/// async-graphql's `1 + child_complexity` already matches the runtime cost),
+/// and `relations::emit_has_many_method` (the unbounded-fanout penalty default).
+/// Centralising the attribute path here keeps a future rename localised.
+pub(crate) fn complexity_attr(user: &Option<Expr>, default: Option<&str>) -> TokenStream2 {
+    if let Some(expr) = user {
+        return quote! { #[graphql(complexity = #expr)] };
+    }
+    if let Some(s) = default {
+        let lit = LitStr::new(s, proc_macro2::Span::call_site());
+        return quote! { #[graphql(complexity = #lit)] };
+    }
+    TokenStream2::new()
 }
 
 pub(crate) struct ResourceModel {
@@ -224,6 +241,17 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             return Err(syn::Error::new_spanned(
                 &field.ident,
                 "a `skip` field cannot also be an `input`",
+            ));
+        }
+
+        if skip && complexity.is_some() {
+            // A skipped field has no wire-DTO column AND no auto-emitted
+            // resolver — the only two places `#[graphql(complexity = …)]`
+            // would land. Silently dropping the override hides the bug; the
+            // user's intent is unrecoverable so fail loudly.
+            return Err(syn::Error::new_spanned(
+                &field.ident,
+                "`skip` and `complexity` are mutually exclusive — a skipped field has no resolver or wire column to attach a cost to (a hand-rolled `#[field_resolver]` declares its own `#[graphql(complexity = …)]`)",
             ));
         }
 

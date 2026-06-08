@@ -5,7 +5,7 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-use crate::attr::{ResourceModel, is_uuid};
+use crate::attr::{ResourceModel, complexity_attr, is_uuid};
 
 pub fn emit(model: &ResourceModel) -> TokenStream2 {
     let output = &model.output_ident;
@@ -16,13 +16,14 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
     for field in model.fields.iter().filter(|f| f.in_output_struct()) {
         let name = &field.ident;
         // `#[expose(complexity = …)]` on a scalar wire field maps straight
-        // through to the SimpleObject derive — async-graphql's depth/complexity
-        // visitor honors `#[graphql(complexity = …)]` on SimpleObject fields
-        // just as it does on `#[ComplexObject]` resolvers.
-        let complexity = match &field.complexity {
-            Some(expr) => quote! { #[graphql(complexity = #expr)] },
-            None => quote! {},
-        };
+        // through to the SimpleObject derive — async-graphql's visitor honors
+        // `#[graphql(complexity = …)]` on SimpleObject fields just as it does
+        // on `#[ComplexObject]` resolvers, but SimpleObject discards the
+        // expression's argument-variables (a closure with no `let arg = …`
+        // binding), so only `child_complexity` and pure literals are safe on a
+        // scalar; argument-referencing expressions belong on a hand-rolled
+        // `#[field_resolver]` instead.
+        let complexity = complexity_attr(&field.complexity, None);
         if is_uuid(&field.ty) {
             decls.push(quote! { #complexity pub #name: ::std::string::String });
             inits.push(quote! { #name: ::std::string::ToString::to_string(&model.#name) });

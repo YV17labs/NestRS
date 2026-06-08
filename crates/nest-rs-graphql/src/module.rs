@@ -62,7 +62,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
         log_path,
         "graphql",
         move |container, route: Route| {
-            let schema = build_schema(container.clone());
+            let schema = build_schema(container.clone(), &options);
             // SDL emit lives here — this is the only place we hold the
             // assembled container; rendered from the serving schema to avoid
             // building it twice.

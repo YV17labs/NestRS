@@ -28,6 +28,8 @@ use async_graphql::{
 };
 use nest_rs_core::{Container, ReachableProviders};
 
+use crate::config::GraphqlConfig;
+
 /// Which root a resolver's methods contribute to.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,21 +201,33 @@ discovered_root!(DiscoveredMutation, GraphqlResolverKind::Mutation, "Mutation");
 /// `Schema::build`. The drop guard restores the previous value even on panic —
 /// a leak would otherwise carry one test's reachable set into another's
 /// build on the same thread.
+///
+/// `config.max_depth` and `config.max_complexity`, when set, become validation
+/// limits on every incoming query. Both default to unset to keep the change
+/// opt-in; production apps should pin them via `NESTRS_GRAPHQL__MAX_DEPTH` /
+/// `__MAX_COMPLEXITY` or the pinned `GraphqlConfig`.
 pub(crate) fn build_schema(
     container: Container,
+    config: &GraphqlConfig,
 ) -> Schema<DiscoveredQuery, DiscoveredMutation, EmptySubscription> {
     let reachable = container
         .get::<ReachableProviders>()
         .map(|p| Arc::new(p.0.clone()));
     let _reset = ReachableResetGuard::set(reachable);
-    Schema::build(
+    let mut builder = Schema::build(
         DiscoveredQuery::from_registry(&container),
         DiscoveredMutation::from_registry(&container),
         EmptySubscription,
     )
     .data(container.clone())
-    .extension(crate::loader::LoaderExtensionFactory::new(container))
-    .finish()
+    .extension(crate::loader::LoaderExtensionFactory::new(container));
+    if let Some(d) = config.max_depth {
+        builder = builder.limit_depth(d);
+    }
+    if let Some(c) = config.max_complexity {
+        builder = builder.limit_complexity(c);
+    }
+    builder.finish()
 }
 
 /// RAII swap on [`REACHABLE`]: install on construction, restore (not clear) on

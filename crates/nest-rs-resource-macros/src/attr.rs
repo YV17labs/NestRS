@@ -12,14 +12,14 @@ use syn::{
 /// `HasMany<T>` ⇔ `has_many`. Kept typed (not stringly) so a rename or typo
 /// on either side fails at compile rather than as a silent scalar fallback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cardinality {
+pub(crate) enum Cardinality {
     One,
     Many,
 }
 
 /// What kind of SeaORM association the field declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RelationKind {
+pub(crate) enum RelationKind {
     /// Owner of the foreign key — `#[sea_orm(belongs_to, from = …, to = …)]`
     /// paired with `HasOne<T>`. Resolves to one target via its PK loader.
     BelongsTo {
@@ -37,7 +37,7 @@ pub enum RelationKind {
     },
 }
 
-pub struct ResourceField {
+pub(crate) struct ResourceField {
     pub ident: Ident,
     pub ty: Type,
     /// Excluded from the GraphQL output type AND, when this is a relation,
@@ -64,7 +64,7 @@ impl ResourceField {
     }
 }
 
-pub struct ResourceModel {
+pub(crate) struct ResourceModel {
     pub source_ident: Ident,
     pub output_ident: Ident,
     pub create_input_ident: Ident,
@@ -88,7 +88,7 @@ impl ResourceModel {
     }
 }
 
-pub fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceModel> {
+pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<ResourceModel> {
     let mut name: Option<String> = None;
     let mut service: Option<Path> = None;
     let mut complex = false;
@@ -301,6 +301,6 @@ fn relation_cardinality(ty: &Type) -> Option<(Cardinality, Path)> {
 /// `true` when the type's last path segment is `Uuid` (rendered as `String` in
 /// the GraphQL output). Purely syntactic: `Option<Uuid>` and aliases pass
 /// through with their native type.
-pub fn is_uuid(ty: &Type) -> bool {
+pub(crate) fn is_uuid(ty: &Type) -> bool {
     matches!(ty, Type::Path(tp) if tp.path.segments.last().is_some_and(|s| s.ident == "Uuid"))
 }

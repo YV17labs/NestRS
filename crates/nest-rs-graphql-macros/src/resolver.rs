@@ -16,7 +16,7 @@ use nest_rs_codegen::{
     injected_method_with_layers, layer_inject_keys,
 };
 
-pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     if !args.is_empty() {
         return syn::Error::new_spanned(

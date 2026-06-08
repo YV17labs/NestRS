@@ -9,11 +9,11 @@
 mod config;
 mod guard;
 mod module;
+mod rate;
 mod store;
-mod throttle;
 
 pub use config::ThrottlerConfig;
 pub use guard::ThrottlerGuard;
 pub use module::{DEFAULT_THROTTLE, ThrottlerModule, ThrottlerSetup};
+pub use rate::Throttle;
 pub use store::{Decision, InMemoryThrottler, ThrottlerStore};
-pub use throttle::Throttle;

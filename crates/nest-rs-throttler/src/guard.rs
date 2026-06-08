@@ -9,7 +9,7 @@ use nest_rs_http::{Reflector, async_trait};
 use poem::Request;
 
 use crate::store::InMemoryThrottler;
-use crate::throttle::Throttle;
+use crate::rate::Throttle;
 
 /// Bind per route with `#[use_guards(ThrottlerGuard)]`. Reads the route's
 /// `#[meta(Throttle::...)]` via the [`Reflector`], falling back to the module

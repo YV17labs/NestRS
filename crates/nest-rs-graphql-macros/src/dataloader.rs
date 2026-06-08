@@ -10,7 +10,7 @@ use syn::{
 
 use nest_rs_codegen::{impl_self_ident, pascal_case};
 
-pub fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     if !args.is_empty() {
         return syn::Error::new_spanned(&args, "#[dataloader] takes no arguments")

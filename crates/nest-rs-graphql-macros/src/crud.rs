@@ -12,7 +12,7 @@ use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
 use nest_rs_codegen::{parse_crud_args, singular_of};
 
-pub fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
     match crud(TokenStream2::from(args), item) {
         Ok(tokens) => tokens.into(),

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use crate::throttle::Throttle;
+use crate::rate::Throttle;
 
 pub struct Decision {
     pub allowed: bool,

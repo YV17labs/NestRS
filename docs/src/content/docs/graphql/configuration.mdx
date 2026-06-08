@@ -28,6 +28,12 @@ pub struct GraphqlConfig {
     /// (Re)write `schema_path` from the live schema once at boot.
     /// Default `false`. A write failure is logged, never fatal.
     pub emit_sdl: bool,
+    /// Reject queries nesting deeper than this. Default `None` —
+    /// opt in for any production app. See Query limits.
+    pub max_depth: Option<usize>,
+    /// Reject queries whose complexity score exceeds this. Default
+    /// `None` — opt in for any production app. See Query limits.
+    pub max_complexity: Option<usize>,
 }
 ```
 
@@ -37,6 +43,8 @@ pub struct GraphqlConfig {
 | `playground` | `NESTRS_GRAPHQL__PLAYGROUND` | `false` | When `true`, `GET <path>` serves the offline playground HTML. |
 | `schema_path` | `NESTRS_GRAPHQL__SCHEMA_PATH` | `schema.graphql` | Where the SDL gets written. |
 | `emit_sdl` | `NESTRS_GRAPHQL__EMIT_SDL` | `false` | When `true`, the running app writes its live SDL to `schema_path` once at boot. |
+| `max_depth` | `NESTRS_GRAPHQL__MAX_DEPTH` | unset | Bound on AST nesting depth. See [Query limits](/graphql/query-limits/). |
+| `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` | unset | Bound on query complexity score. See [Query limits](/graphql/query-limits/). |
 
 <Aside type="caution">
 **`playground = true` in production is a CVE.** It exposes the full
@@ -140,6 +148,9 @@ Before shipping:
 - `NESTRS_GRAPHQL__PLAYGROUND` unset or `false`.
 - `NESTRS_GRAPHQL__EMIT_SDL` unset or `false` — production apps don't
   rewrite their own SDL.
+- `NESTRS_GRAPHQL__MAX_DEPTH` set (a value of 15 fits most apps).
+- `NESTRS_GRAPHQL__MAX_COMPLEXITY` set after calibrating against
+  observed legitimate traffic. See [Query limits](/graphql/query-limits/).
 - `path` matches what your gateway / ingress routes to.
 - The SDL committed in git is the one the production binary serves
   (the CI build runs with `emit_sdl=true` against a known database and

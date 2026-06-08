@@ -214,10 +214,10 @@ Both `Filter` and `ExceptionFilter` are
 layer kind: a global declaration and a per-scope redeclaration collapse
 to one execution.
 
-- **`ExceptionFilter`** rides the unified per-route chain
-  (`LayersRouteInterceptor` resolves the global + controller + method
-  scopes through `compose_chain`), so the dedup covers every pair of
-  scopes — including controller + method without a global in play.
+- **`ExceptionFilter`** rides the `RouteShaper` chain (global +
+  controller + method scopes resolved through `compose_chain`), so the
+  dedup covers every pair of scopes — including controller + method
+  without a global in play.
 - **`Filter`** dedups against the global chain at mount time: a
   controller- or method-scope wrap is skipped when its TypeId is
   already seeded as Global, and the transport-level
@@ -242,16 +242,35 @@ declaration only.
 
 ## Where filters sit in the chain
 
-Per route, inner → outer:
+`Filter` and `ExceptionFilter` are not the same slot — see
+[Guards / Ordering inside a route](/fundamentals/guards/#ordering-inside-a-route)
+for the full nesting diagram.
+
+**`Filter`** (`#[use_filters]`) wraps the handler endpoint. On the
+**success path** it is transparent — it delegates straight inward. On the
+**error path** it maps `poem::Error` to a `Response`. Per-route,
+inner → outer:
 
 ```
-shaper → interceptors → guards → filters → meta
+handler → ability shaper → per-route interceptors → per-route filters → RouteShaper → meta
 ```
 
-A filter wraps *outside* guards and interceptors, so it sees errors
-from any of them — a `403` from a guard, a `500` from a handler, an
-error from an interceptor's `next.run(req)`. The successful path passes
-through unchanged.
+So per-route `Filter` sits *inside* the `RouteShaper` guards. A guard
+denial never reaches it — guards short-circuit with a typed `Denial`
+before `next.run`.
+
+**Global** `Filter` (`use_filters_global`) wraps outside global guards
+and therefore sees errors from the whole inner tree — handler, guards,
+interceptors.
+
+**`ExceptionFilter`** does not use that endpoint wrap. It runs inside
+`RouteShaper` *after* `next.run` returns `Err`, attempting typed
+downcasts before the error bubbles to outer `Filter` wraps.
+
+**Error path (inner → outer):** handler `Err` → ability shaper →
+per-route interceptors → per-route `Filter` → `RouteShaper` exception
+filters → global `Filter` → global interceptors (post-handler, e.g.
+transaction commit).
 
 ## Choosing between the three seams
 

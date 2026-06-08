@@ -148,33 +148,38 @@ on any controller.
 
 ## The request-layer ordering
 
-Per route, inner → outer:
+Interceptors participate at two levels. The full picture — per-route
+nesting, global priority bands, `RouteShaper`, and where
+`#[use_filters]` vs `#[use_exception_filters]` sit — is on
+[Guards / Ordering inside a route](/fundamentals/guards/#ordering-inside-a-route).
 
-```
-shaper → interceptors → guards → filters → meta
-```
+**Global interceptors** (including auto-mounted `DbContext`) wrap
+*outside* global guards. That's how the executor is visible when guards
+run:
 
-So an interceptor wraps the *guards*, not the other way around. That's
-how `DbContext` works:
-
-1. **`DbContext`** runs (global interceptor) — opens a transaction for
-   `POST`/`PUT`/`PATCH`/`DELETE`, installs the executor in a
-   `task_local!`, then calls `next.run(req)`.
+1. **`DbContext`** runs — opens a transaction for mutating verbs,
+   installs the executor in a `task_local!`, then calls `next.run(req)`.
 2. **Guards run inside it** — `AuthGuard` attaches `Claims`,
-   `AbilityGuard` builds `Ability` and installs it as the second
-   ambient. Both see the same executor.
-3. **Handler runs** — `Repo::scoped(...)` reads both ambients without
-   threading anything explicitly.
-4. **Response returns** — `DbContext` commits on a 2xx/3xx, rolls back
+   `AuthzGuard` builds `Ability`. Both see the same executor.
+3. **Handler runs** — `Repo::scoped(...)` reads both ambients.
+4. **Response returns** — `DbContext` commits on 2xx/3xx, rolls back
    otherwise.
 
-<Aside type="caution">
-**Global** interceptors wrap *outside* global guards (the data context
-must install the executor around the guards too). Controller- and
-handler-bound interceptors wrap *inside* the controller's guards — a
-guard that short-circuits returns the response before the interceptor's
-pre-handler work runs.
-</Aside>
+**Per-route interceptors** (`#[use_interceptors]` on the controller or
+beside a verb) nest *inside* the `RouteShaper` guard chain — closer to
+the handler than the guards. A guard denial returns before those
+interceptors' pre-handler work runs.
+
+Per-route, inner → outer (from the `#[routes]` macro):
+
+```
+handler
+→ ability shaper
+→ per-route interceptors
+→ per-route filters (error path only)
+→ RouteShaper (guards + pipes)
+→ `#[meta]` / `#[public]` (route data)
+```
 
 ## Common things an interceptor does
 

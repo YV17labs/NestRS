@@ -33,8 +33,9 @@ This category walks the seven primitives every binary leans on:
 - **Interceptors** — wrap handler execution. The same seam that lets you
   log a request also installs the ambient database transaction and the
   authorization context.
-- **Error handling** — map errors to responses. Bound with
-  `#[use_filters(...)]` on a controller or beside a verb.
+- **Error handling** — map errors to responses. `#[use_filters(...)]`
+  for route-shaped mapping; `#[use_exception_filters(...)]` for typed
+  catches. See [Error handling](/fundamentals/exception-filters/).
 - **Middleware** — NestRS doesn't have a middleware primitive. See [the
   page](/fundamentals/middleware/) for the Guards/Interceptors split if
   you're looking for one.

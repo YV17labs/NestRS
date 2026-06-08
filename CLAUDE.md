@@ -215,10 +215,14 @@ A `Guard` borrows the request **mutably** — gates access (returns
 `nest_rs_http::Ctx<T>`. Bind three ways: **global** (imperative),
 **controller** (on the struct), **handler** (beside the verb) —
 container-resolved, no import; first listed = outermost. Per-route
-order, inner→outer: **shaper → interceptors → guards → filters → meta**.
-Per-handler metadata via `#[meta(EXPR)]` + `nest_rs_http::Reflector`.
-Asymmetry: **global** interceptors wrap *outside* global guards (so
-data context installs the executor/transaction around the guards too).
+inner→outer (from `#[routes]` macro): **handler → ability shaper →
+per-route interceptors → per-route filters (error path) → RouteShaper
+(guards + pipes + exception filters on error) → `#[meta]`/`#[public]`
+(route data)**. Global wraps (priority bands): **routes → global guards
+→ global filters (error path) → global interceptors**. Per-handler
+metadata via `#[meta(EXPR)]` + `nest_rs_http::Reflector`. Asymmetry:
+**global** interceptors wrap *outside* global guards; **per-route**
+interceptors nest *inside* RouteShaper guards.
 
 URI versioning: `#[controller(version = "1")]` mounts under `/v1`
 (`version_path` is the single source of truth).

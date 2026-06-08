@@ -72,8 +72,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // exposed via an inherent fn `#[routes]` calls. Each layer is boxed to a
     // single `BoxEndpoint` so the result type stays stable regardless of count;
     // wrap sits outside every per-route layer (first listed outermost within its
-    // layer). Applied inner→outer as interceptors → guards → filters, matching
-    // the per-route order. Guards stay as a controller-level wrap **only** so
+    // layer). Per-route nesting (inner→outer) is built by `#[routes]`:
+    // handler → ability shaper → interceptors → filters → RouteShaper → meta.
+    // Guards stay as a controller-level wrap **only** so
     // the controller's `#[use_guards]` participates in the per-route Layer
     // System dedup via `__nestrs_controller_guard_specs()`; the wrap below
     // simply boxes the endpoint without adding a guard, so we'd otherwise drop

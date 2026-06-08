@@ -236,31 +236,85 @@ flowchart TB
 
 ## Ordering inside a route
 
-Per-route, inner → outer:
+Two levels stack: **per-route** nesting from `#[routes]`, then **global**
+wraps around the whole HTTP tree at transport configure time. Lists
+below read **inner → outer** (closest to the handler first). On an
+**inbound** request the outer side runs first.
+
+### Per-route nesting
+
+The `#[routes]` macro builds each handler inside-out:
 
 ```
-shaper → interceptors → guards → filters → meta
+handler
+→ ability shaper (`Authorize`, when declared)
+→ per-route interceptors (`#[use_interceptors]`)
+→ per-route filters (`#[use_filters]` — error path only)
+→ RouteShaper (guards + body pipes; exception filters on error)
+→ `#[meta]` / `#[public]` (route data — read by `Reflector`, not executed)
 ```
 
-- **Interceptors** wrap the shaper and install ambient state *before*
-  guards run (`DbContext` sets the SeaORM executor so `AuthzGuard` can
-  read from it).
-- **Guards** run after interceptors, in declaration order.
-- **Meta** is read by guards via `Reflector`.
+Inside `RouteShaper`, guards run on the way in (declaration order),
+then JSON body pipes, then `next.run` delegates inward. If the handler
+returns `Err`, **exception filters** (`#[use_exception_filters]`) run
+there — typed downcasts, separate from `#[use_filters]`.
+
+**Inbound (per-route, outer → inner):** RouteShaper guards/pipes →
+per-route filters\* → per-route interceptors → ability shaper → handler
+
+\*`Filter` passes through on success; it only maps on the error path.
+
+### Global wraps
+
+The HTTP transport folds three priority bands around the assembled route
+tree:
+
+```
+(assembled routes)
+→ global guards (`use_guards_global`)
+→ global filters (`use_filters_global` — error path only)
+→ global interceptors (`use_interceptors_global`, `DbContext`, …)
+```
+
+**Inbound (global, outer → inner):** global interceptors → global guards
+→ route tree.
+
+Global **filters** sit outside global **guards** (they see errors from
+the whole inner tree). Per-route **guards** in `RouteShaper` sit
+*outside* per-route **filters** — a guard denial returns before the
+inner chain runs.
+
+### Why `DbContext` wraps the guards
+
+1. **`DbContext`** (global interceptor) installs the executor, then calls
+   `next.run(req)`.
+2. **Guards run inside it** — `AuthGuard` attaches `Claims`, `AuthzGuard`
+   builds the ambient `Ability`. Both see the same executor.
+3. **Handler runs** — `Repo` reads both ambients.
+4. **Response returns** — `DbContext` commits on 2xx/3xx, rolls back
+   otherwise.
 
 <Aside>
-**Global** interceptors wrap *outside* global guards — the data context
-must install the executor around the guards too. Controller- and
-handler-bound interceptors wrap *inside* the controller's guards.
+**Controller- and handler-bound interceptors** sit *inside* the
+`RouteShaper` guards, not outside them. A guard denial short-circuits
+before those interceptors' pre-handler work runs.
 </Aside>
 
 ```mermaid
-flowchart LR
-  S[shaper] --> I[interceptors]
-  I --> G[guards]
-  G --> F[filters]
-  F --> M[meta]
-  M --> H[handler]
+flowchart TB
+  subgraph global["Global (outer → inner on request)"]
+    GI[interceptors]
+    GF["filters (error path)"]
+    GG[guards]
+  end
+  subgraph route["Per-route"]
+    RS["RouteShaper<br/>guards · pipes · exception filters"]
+    PF["filters (error path)"]
+    PI[interceptors]
+    AS[ability shaper]
+    H[handler]
+  end
+  GI --> GG --> RS --> PF --> PI --> AS --> H
 ```
 
 ## Attach context and route metadata
@@ -412,8 +466,8 @@ for the full HTTP / GraphQL / WS wiring, and
   per-handler is additive.
 - **Declare on the provider** — `#[use_guards(...)]` on `PostController`
   binds security to the feature; global + controller dedup to one run.
-- **Order matters** — `AuthGuard` before `AuthzGuard`; interceptors
-  before guards so ambient state is installed first.
+- **Order matters** — `AuthGuard` before `AuthzGuard`; global
+  interceptors outside global guards (`DbContext` before `AuthzGuard`).
 </Aside>
 
 ## Going further

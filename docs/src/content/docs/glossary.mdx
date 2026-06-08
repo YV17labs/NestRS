@@ -43,16 +43,21 @@ deep on each.
 - **[Interceptor](/fundamentals/interceptors/)** — wraps the handler
   call from the outside; the seam that installs the ambient executor,
   records a span, or appends a `Server-Timing` entry.
-- **[Filter](/fundamentals/interceptors/)** — an interceptor that maps
-  a successful response on the way out, the shape `Authorize` uses to
-  apply response masking.
-- **[Exception filter](/fundamentals/exception-filters/)** — catches an
-  error returned from the handler chain and turns it into a typed
-  response; the home for cross-cutting error → wire mapping.
-- **Shaper** — an interceptor the `#[routes]` macro emits per route to
-  wrap the handler with the per-request authz seam; the only seam that
-  runs *after* `AbilityGuard` and still wraps the handler. Documented
-  alongside the [layer order](/fundamentals/guards/).
+- **[Filter](/fundamentals/exception-filters/#route-bound-filters-via-use_filters)** —
+  error-path mapper from `nest-rs-filters`; sees any `poem::Error` the
+  inner chain raises. Bound with `#[use_filters(...)]`. Transparent on
+  the success path.
+- **[Exception filter](/fundamentals/exception-filters/#typed-catches-via-exceptionfilter)** —
+  typed catch via downcast inside `RouteShaper`; bound with
+  `#[use_exception_filters(...)]`. Only fires when the error matches
+  `Self::Exception`.
+- **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
+  macro emits when that type appears in a handler signature; runs
+  response masking after a 2xx. Innermost per-route layer, just outside
+  the handler. [Layer order](/fundamentals/guards/#ordering-inside-a-route).
+- **RouteShaper** — the per-route orchestrator inside `nest-rs-guards`;
+  runs guards and body pipes on the way in, exception filters when the
+  handler returns `Err`. Documented on [Guards](/fundamentals/guards/).
 - **[Reflector](/http/extractors/)** — the request-time reader that
   pulls back the values a handler attached with `#[meta(EXPR)]`; how a
   guard inspects per-route metadata.

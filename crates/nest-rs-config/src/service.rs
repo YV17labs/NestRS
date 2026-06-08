@@ -5,58 +5,14 @@
 //! maps **its own** domain; sibling vars may only be borrowed via an
 //! **explicit fallback** in a `from_env` (own > borrowed > code default), since
 //! the `.env` cascade is merged once before any `from_env` runs.
-//!
-//! The reader's backing store is a [`ConfigSource`] — [`EnvSource`] is the
-//! default (process env + `.env` cascade). A third-party crate can ship an
-//! alternative source (Vault, K8s ConfigMap, AWS Parameter Store, …) by
-//! implementing [`ConfigSource`] and constructing
-//! [`ConfigService::with_source`].
 
-use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::dotenv;
 use crate::error::ConfigError;
+use crate::source::{ConfigSource, EnvSource};
 
 const PREFIX: &str = "NESTRS_";
-
-/// Empty strings count as unset, so `FOO=` in a `.env` does not blank an
-/// in-code default.
-pub fn env_var(name: &str) -> Option<String> {
-    match env::var(name) {
-        Ok(v) if !v.is_empty() => Some(v),
-        _ => None,
-    }
-}
-
-/// Where a [`ConfigService`] reads raw values from. The default is
-/// [`EnvSource`] (process env + `.env` cascade); a third-party crate can ship
-/// an alternative (Vault, K8s ConfigMap, AWS Parameter Store) by implementing
-/// this trait and passing an instance to [`ConfigService::with_source`].
-///
-/// Sync on purpose: `Config::from_env` runs sync at boot. A remote source
-/// pre-fetches into an in-memory map and serves `get` from that map.
-pub trait ConfigSource: Send + Sync + 'static {
-    /// Return the raw value for the fully-qualified variable name (e.g.
-    /// `"NESTRS_DATABASE__URL"`). Empty strings should be treated as unset.
-    fn get(&self, var: &str) -> Option<String>;
-}
-
-/// Default [`ConfigSource`] — reads from the process environment after the
-/// `.env` cascade has been merged. The merge runs on the **first** call to
-/// [`EnvSource::get`] (guarded by a `Once`), so a [`ConfigService`] built on a
-/// custom [`ConfigSource`] never triggers it and the process env stays
-/// untouched.
-#[derive(Default)]
-pub struct EnvSource;
-
-impl ConfigSource for EnvSource {
-    fn get(&self, var: &str) -> Option<String> {
-        dotenv::ensure_env_loaded();
-        env_var(var)
-    }
-}
 
 /// Typed reader bound to one namespace; resolves `NESTRS_<NAMESPACE>__<KEY>`.
 pub struct ConfigService {

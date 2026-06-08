@@ -1,7 +1,7 @@
 //! Active runtime [`Environment`] — selects the `.env` cascade and branches
 //! code paths.
 
-use crate::loader::env_var;
+use crate::source::env_var;
 
 /// Read from the reserved `NESTRS_ENV`. This is the one framework variable
 /// **outside** the `NESTRS_<DOMAIN>__<KEY>` scheme — it selects which `.env`

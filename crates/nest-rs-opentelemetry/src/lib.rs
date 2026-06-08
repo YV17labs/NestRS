@@ -8,6 +8,8 @@
 //! per-request span, status recording, `X-Trace-Id` response header, and one
 //! access event per request (gated by `NESTRS_HTTP__ACCESS_LOG`).
 
+#[cfg(feature = "http")]
+mod access_log;
 mod config;
 mod error;
 mod init;

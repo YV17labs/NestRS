@@ -7,20 +7,19 @@ use poem::{Request, Response, Result};
 
 #[cfg(feature = "otlp")]
 use {
-    bytes::Bytes,
-    futures_core::Stream,
     opentelemetry::global,
     opentelemetry::trace::TraceContextExt,
     opentelemetry_http::HeaderExtractor,
     poem::Body,
     poem::http::{HeaderName, HeaderValue},
-    std::io::Error as IoError,
-    std::pin::Pin,
-    std::task::{Context, Poll},
     std::time::Instant,
     tracing::Instrument,
     tracing_opentelemetry::OpenTelemetrySpanExt,
 };
+
+#[cfg(feature = "otlp")]
+use crate::access_log::{AccessLog, AccessLogBody};
+use crate::access_log::parse_access_log_flag;
 
 /// Per-request HTTP observation.
 ///
@@ -32,8 +31,7 @@ use {
 /// One visible access event per request (`tracing::info!` on target
 /// `nest_rs::access`) emitted at **end-of-body**, so `bytes` and `duration_ms`
 /// are exact — poem stamps `Content-Length` past this interceptor, so the
-/// body is wrapped in a byte-counting stream. A client disconnect still emits
-/// via `Drop`.
+/// body is wrapped in a byte-counting stream (see [`crate::access_log`]).
 ///
 /// Toggle via `NESTRS_HTTP__ACCESS_LOG` (default `true`); the OTel span is
 /// always created so propagation and OTLP export keep working.
@@ -48,20 +46,6 @@ impl Default for OpenTelemetryHttp {
         Self {
             access_log: parse_access_log_flag(env_var("NESTRS_HTTP__ACCESS_LOG").as_deref()),
         }
-    }
-}
-
-/// Parse the access-log toggle. Default ON; only literal falsy values
-/// (`0`/`false`/`off`/`no`, case-insensitive) turn it off — every other
-/// value (including `"1"`, `"yes"`, garbage) stays on, so a typo cannot
-/// silently disable observability.
-fn parse_access_log_flag(raw: Option<&str>) -> bool {
-    match raw {
-        None => true,
-        Some(raw) => !matches!(
-            raw.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "off" | "no"
-        ),
     }
 }
 
@@ -145,84 +129,6 @@ impl Interceptor for OpenTelemetryHttp {
 }
 
 #[cfg(feature = "otlp")]
-struct AccessLog {
-    method: poem::http::Method,
-    path: String,
-    status: u16,
-    client_ip: String,
-    user_agent: String,
-    trace_id: String,
-    start: Instant,
-    span: tracing::Span,
-    access_log: bool,
-}
-
-#[cfg(feature = "otlp")]
-impl AccessLog {
-    fn emit(self, bytes: u64) {
-        self.span.record("http.response.body.size", bytes);
-        if self.access_log {
-            let duration_ms = self.start.elapsed().as_secs_f64() * 1e3;
-            tracing::info!(
-                target: "nest_rs::access",
-                method = %self.method,
-                path = %self.path,
-                status = self.status,
-                bytes = bytes,
-                duration_ms = duration_ms,
-                client_ip = %self.client_ip,
-                user_agent = %self.user_agent,
-                trace_id = %self.trace_id,
-            );
-        }
-    }
-}
-
-#[cfg(feature = "otlp")]
-struct AccessLogBody {
-    inner: Pin<Box<dyn Stream<Item = Result<Bytes, IoError>> + Send>>,
-    counted: u64,
-    log: Option<AccessLog>,
-}
-
-#[cfg(feature = "otlp")]
-impl AccessLogBody {
-    /// At most once — covers both stream-end and drop-on-disconnect.
-    fn emit_once(&mut self) {
-        if let Some(log) = self.log.take() {
-            log.emit(self.counted);
-        }
-    }
-}
-
-#[cfg(feature = "otlp")]
-impl Stream for AccessLogBody {
-    type Item = Result<Bytes, IoError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.as_mut().get_mut();
-        match this.inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(chunk))) => {
-                this.counted += chunk.len() as u64;
-                Poll::Ready(Some(Ok(chunk)))
-            }
-            terminal @ Poll::Ready(_) => {
-                this.emit_once();
-                terminal
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-#[cfg(feature = "otlp")]
-impl Drop for AccessLogBody {
-    fn drop(&mut self) {
-        self.emit_once();
-    }
-}
-
-#[cfg(feature = "otlp")]
 fn current_trace_id(span: &tracing::Span) -> Option<String> {
     let otel_ctx = span.context();
     let span_ctx = otel_ctx.span().span_context().clone();
@@ -248,45 +154,6 @@ fn user_agent(req: &Request) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    // The access-log flag is the on/off switch for every request's
-    // `nest_rs::access` line. A regression here turns prod blind, so the
-    // parsing rules are pinned exhaustively.
-    #[test]
-    fn unset_env_keeps_access_log_on() {
-        assert!(parse_access_log_flag(None));
-    }
-
-    #[test]
-    fn canonical_falsy_values_turn_access_log_off() {
-        for raw in ["0", "false", "off", "no"] {
-            assert!(
-                !parse_access_log_flag(Some(raw)),
-                "expected off for {raw:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn falsy_values_are_case_and_whitespace_tolerant() {
-        for raw in ["  FALSE  ", "Off", "NO", "0\n"] {
-            assert!(
-                !parse_access_log_flag(Some(raw)),
-                "expected off for {raw:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn truthy_and_unknown_values_keep_access_log_on() {
-        // `"1"`, `"yes"`, garbage, an empty string — all preserve the default.
-        // Typos must not silently disable observability.
-        for raw in ["", "1", "true", "yes", "on", "garbage", "FaLsy"] {
-            assert!(parse_access_log_flag(Some(raw)), "expected on for {raw:?}");
-        }
-    }
-
     #[cfg(feature = "otlp")]
     mod otlp {
         use nest_rs_interceptors::InterceptorExt;

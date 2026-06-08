@@ -8,7 +8,7 @@
 use validator::Validate;
 
 use crate::Result;
-use crate::loader::ConfigService;
+use crate::service::ConfigService;
 
 /// The `<DOMAIN>` in `NESTRS_<DOMAIN>__<KEY>`. Supplied by the [`config`](crate::config)
 /// macro from `#[config(namespace = "…")]`.

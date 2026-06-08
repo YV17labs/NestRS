@@ -15,9 +15,9 @@ app — **`blog`** — through four steps:
 3. **Wire imports** — static vs dynamic framework modules.
 4. **Compose** — the root lists imports only; adapters own the handlers.
 
-The snippets are illustrative. If you ran the [Fundamentals](/fundamentals/)
-tour with `hello`, step 1 is the same shape — `BlogModule` here is the
-teaching fiction that keeps going.
+The snippets are illustrative. Step ① matches the
+[Fundamentals](/fundamentals/) tour — the same `BlogModule` grows on the
+rest of this page.
 
 ```mermaid
 flowchart LR
@@ -92,10 +92,6 @@ the app-root `Blog*` prefix anymore.
     - module.rs (PostHttpModule — imports PostModule)
     - controller.rs (PostController)
 </FileTree>
-
-Same layout in the repo under
-[`users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users/)
-— `UsersModule` as port, `UsersHttpModule` as HTTP adapter.
 
 One feature, several modules — never one umbrella import. The port
 (`PostModule`) holds the data layer — `PostService`, entity, repo wiring.
@@ -239,11 +235,6 @@ reachable only through `PostHttpModule` — that is the point.
 - **Opt-in per binary** — import only the modules your deploy serves; everything else stays inert.
 </Aside>
 
-The workspace ships the same layout for real: see
-[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users/)
-(`UsersModule` + `UsersHttpModule`, …). Copy that tree when you extract
-your first feature — `post/` here is the teaching shorthand.
-
 ## Boot sequence
 
 `App::builder().build().await` runs four phases, in order:
@@ -290,9 +281,7 @@ flowchart TB
 
 ## Going further
 
-- [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users/)
-  — reference feature in the repo (`UsersModule`, `UsersHttpModule`, …).
-- [Fundamentals](/fundamentals/) — runnable `hello` app, boot-time access
+- [Fundamentals](/fundamentals/) — minimal `BlogModule`, boot-time access
   graph, breaking wiring on purpose.
 - [Providers](/fundamentals/providers/) — injectable types, scopes, the
   access graph in detail.

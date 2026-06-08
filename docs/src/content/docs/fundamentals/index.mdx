@@ -13,13 +13,17 @@ dependency-injection graph is built at compile time and verified at boot —
 a missing wire fails startup with a clear error, never with a deep
 `Cannot resolve` at first request.
 
+This category follows one fictional app — **`blog`** — from a single root
+module to a composed API with a `post/` feature. The snippets are
+illustrative; the same names appear on [Modules](/fundamentals/modules/)
+and [Providers](/fundamentals/providers/).
+
 This category walks the seven primitives every binary leans on:
 
 - **Modules** — the composition unit. `#[module]` declares what a module
   owns and what it depends on.
 - **Providers** — the things modules own. Anything `#[injectable]`
-  (services, controllers, resolvers, gateways, processors, …) is built
-  once and shared as `Arc<T>`.
+  (services, controllers, …) is built once and shared as `Arc<T>`.
 - **Guards** — decide *who* gets through. `Guard::check(&mut Request)`
   short-circuits the chain with a `Response` or attaches request-scoped
   context the handler reads back via `Ctx<T>`.
@@ -37,16 +41,18 @@ This category walks the seven primitives every binary leans on:
 
 ## A minimal app, end to end
 
-```rust title="apps/hello/src/service.rs"
+Step ① of the `blog` story — handlers inline in the app root:
+
+```rust title="apps/blog/src/service.rs"
 use nest_rs_core::injectable;
 
 #[injectable]
 #[derive(Default)]
-pub struct HelloService;
+pub struct BlogService;
 
-impl HelloService {
-    pub fn greeting(&self) -> String {
-        "Hello World".to_string()
+impl BlogService {
+    pub fn tagline(&self) -> &'static str {
+        "A minimal blog API"
     }
 }
 ```
@@ -54,55 +60,50 @@ impl HelloService {
 A service is an injectable struct. Anything decorated with `#[injectable]`
 is registered with the container and shared as `Arc<T>`.
 
-```rust title="apps/hello/src/controller.rs"
+```rust title="apps/blog/src/controller.rs"
 use std::sync::Arc;
 use nest_rs_http::{controller, routes};
-use crate::service::HelloService;
+use crate::service::BlogService;
 
 #[controller(path = "/")]
-pub struct HelloController {
+pub struct BlogController {
     #[inject]
-    svc: Arc<HelloService>,
+    svc: Arc<BlogService>,
 }
 
 #[routes]
-impl HelloController {
+impl BlogController {
     #[get("/")]
-    async fn hello(&self) -> String {
-        self.svc.greeting()
+    async fn root(&self) -> &'static str {
+        self.svc.tagline()
     }
 }
 ```
 
-A controller is also injectable. `#[inject]` fields are resolved by type
+A controller is also a provider. `#[inject]` fields are resolved by type
 from the container; `#[routes]` mounts the verb methods on the
 controller's path.
 
-```rust title="apps/hello/src/module.rs"
+```rust title="apps/blog/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_http::HttpModule;
-use crate::controller::HelloController;
-use crate::service::HelloService;
+use crate::controller::BlogController;
+use crate::service::BlogService;
 
 #[module(
     imports = [HttpModule::for_root(None)],
-    providers = [HelloService, HelloController],
+    providers = [BlogService, BlogController],
 )]
-pub struct HelloModule;
+pub struct BlogModule;
 ```
 
-Same shape as step ① on the [Modules](/fundamentals/modules/) page —
-`hello` is the runnable version; `blog` is the fiction that grows from
-there.
-
-```rust title="apps/hello/src/main.rs"
+```rust title="apps/blog/src/main.rs"
 use nest_rs_core::App;
-use hello::HelloModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::builder()
-        .module::<HelloModule>()
+        .module::<BlogModule>()
         .build()
         .await?
         .run()
@@ -111,33 +112,33 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 ```bash frame="terminal"
-$ just dev hello
-2026-06-03T10:14:22Z  INFO nest_rs::http: bound 1 route on 0.0.0.0:3000
-  GET / → HelloController::hello
-
-$ curl http://localhost:3000
-Hello World
+$ curl http://localhost:3000/
+A minimal blog API
 ```
+
+Later pages move the domain into `post/` (`PostService`, `PostController`,
+`PostModule`, …) and grow `BlogModule` into a composed root — see
+[Modules](/fundamentals/modules/).
 
 ## What the framework did
 
-1. **Collected** every provider in the import tree — `HelloService`,
-   `HelloController` — into a link-time registry.
-2. **Built** the access graph from `HelloModule`. `HelloController`
-   declares it injects `HelloService`; `HelloModule` owns it; reachable. ✓
-3. **Constructed** each provider once. `HelloService::default()` produced
-   one `Arc<HelloService>`, injected into `HelloController::svc`.
-4. **Mounted** `HelloController` on the HTTP transport from the route
+1. **Collected** every provider in the import tree — `BlogService`,
+   `BlogController` — into a link-time registry.
+2. **Built** the access graph from `BlogModule`. `BlogController`
+   declares it injects `BlogService`; `BlogModule` owns both; reachable. ✓
+3. **Constructed** each provider once. `BlogService::default()` produced
+   one `Arc<BlogService>`, injected into `BlogController::svc`.
+4. **Mounted** `BlogController` on the HTTP transport from the route
    table `#[routes]` generated.
 
 ## Try breaking it
 
-Comment the line that lists `HelloService` in `HelloModule`'s providers,
-then `cargo run`:
+Comment the line that lists `BlogService` in `BlogModule`'s providers,
+then build:
 
-```text frame="terminal" "(needs HelloService)"
+```text frame="terminal" "(needs BlogService)"
 Error: cannot register provider(s) — unreachable in graph:
-  - HelloController (needs HelloService)
+  - BlogController (needs BlogService)
 ```
 
 The error names *what* is missing and *why* it cannot be resolved. The
@@ -146,11 +147,11 @@ build does not start the HTTP transport when wiring is invalid.
 ## Five ideas to remember
 
 - **Module** — a struct decorated with `#[module]`, listing `providers`
-  it owns and `imports` it depends on. The [Modules](/fundamentals/modules/)
-  page walks a fictional `blog` app from this shape to a composed root.
+  it owns and `imports` it depends on. [Modules](/fundamentals/modules/)
+  walks `blog` from here to a composed root.
 - **Provider** — any injectable struct (`#[injectable]`, `#[controller]`,
-  `#[resolver]`, `#[gateway]`, `#[processor]`, …). Built once, shared as
-  `Arc<T>`. See [Providers](/fundamentals/providers/).
+  …). Built once, shared as `Arc<T>`. [Providers](/fundamentals/providers/)
+  follows the same `post/` split.
 - **`#[inject]` field** — declares "I need this type from the container."
 - **Access graph** — boot-time check that proves every `#[inject]`
   resolves to a provider the module can reach.

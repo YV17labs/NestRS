@@ -2,11 +2,9 @@
 # the workspace under the `nest-rs-*` prefix. Apps and product crates carry
 # `publish = false` in their Cargo.toml so they're skipped automatically.
 #
-# Trigger: push a tag matching `v*.*.*` (e.g. `v0.1.0`). The job verifies the
-# tag matches the workspace `version` in `Cargo.toml` and runs
-# `cargo publish --workspace`, which Cargo (≥ 1.91) orders topologically:
-# `nest-rs-codegen` and the proc-macro crates first, then the libs that
-# depend on them, the umbrella last.
+# Trigger: push a tag matching `v*.*.*` (e.g. `v0.1.1`). The job verifies the
+# tag matches the workspace `version` in `Cargo.toml`, runs `cargo check`, then
+# `cargo publish --workspace` (topological order, skips `publish = false`).
 #
 # Required repo secret: `CRATES_IO_TOKEN` (Settings → Secrets → Actions).
 # Generate the token at https://crates.io/me with scope `publish-new` +
@@ -29,7 +27,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v6

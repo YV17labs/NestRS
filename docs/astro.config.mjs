@@ -112,6 +112,7 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       components: {
         PageFrame: './src/components/PageFrame.astro',
+        Hero: './src/components/Hero.astro',
       },
       editLink: {
         baseUrl: 'https://github.com/NestRS/NestRS/edit/main/docs/',

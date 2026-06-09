@@ -3,8 +3,10 @@
 :root {
   --nestrs-coral: #ff4d5f;
   --nestrs-orange: #ff7a59;
+  --nestrs-teal: #45c4b0;
   --nestrs-gradient: linear-gradient(135deg, #ff4d5f 0%, #ff7a59 100%);
   --nestrs-gradient-soft: linear-gradient(135deg, rgba(255, 77, 95, 0.16) 0%, rgba(255, 122, 89, 0.16) 100%);
+  --nestrs-shared-soft: linear-gradient(135deg, rgba(69, 196, 176, 0.14) 0%, rgba(69, 196, 176, 0.08) 100%);
 
   --sl-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -55,74 +57,125 @@
 
 /* ---------------------------------------------------------------------------
    Hero — brand wordmark, layered glow, punchy copy
+   Splash pages have no sidebar → Starlight sets --sl-content-width: 67.5rem.
+   Fill that column (same as other pages); don't clamp narrower in custom CSS.
    --------------------------------------------------------------------------- */
 
 .hero {
   position: relative;
   isolation: isolate;
+  width: 100%;
+  max-width: none;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 0 !important;
+  padding-block: clamp(1.5rem, calc(0.5rem + 4vmin), 3rem) clamp(2rem, 4vw, 3rem) !important;
+  padding-inline: 0;
 }
 
-/*
- * Logo + copy as one block (social-preview proportions): mark hugs the wordmark,
- * whole hero capped so the row does not stretch across the full viewport.
- */
+/* Logo + wordmark — one visual unit; keep emblem → NestRS tight. */
+.hero-lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.125rem;
+  width: 100%;
+  margin-bottom: clamp(1.5rem, 3vw, 2.25rem);
+}
+
+.hero-lockup > img,
+.hero-lockup > .hero-html {
+  object-fit: contain;
+  width: clamp(11rem, 22vw, 15.5rem) !important;
+  height: auto;
+  max-height: min(32vh, 15.5rem);
+  margin: 0;
+  filter: drop-shadow(0 24px 70px rgba(255, 77, 95, 0.12));
+}
+
+.hero-lockup h1 {
+  margin: 0;
+  padding: 0;
+}
+
+/* Starlight caps every .copy child at 50ch — too narrow for our tagline. */
+:root[data-has-hero] .hero .copy > * {
+  max-width: none;
+}
+
 @media (min-width: 50rem) {
-  .hero {
-    box-sizing: border-box;
-    width: min(100%, 58rem);
-    max-width: 58rem;
-    margin-inline: auto;
-    grid-template-columns: auto minmax(0, 1fr) !important;
-    column-gap: clamp(1rem, 2vw, 1.75rem) !important;
-    row-gap: 1.5rem !important;
-    padding-block: clamp(2.5rem, calc(1rem + 8vmin), 5rem) !important;
-    padding-inline: clamp(0.5rem, 2vw, 1.5rem);
-    align-items: center !important;
-  }
-
-  .hero > img,
-  .hero > .hero-html {
-    order: 0 !important;
-    justify-self: end;
-    align-self: center;
-    margin-inline: 0 !important;
-    width: clamp(9.5rem, 16vw, 13.5rem) !important;
-    max-height: min(42vh, 13.5rem);
-  }
-
   .hero .stack {
     min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: start;
+    gap: clamp(1.5rem, 2.5vw, 2rem);
   }
-}
 
-@media (min-width: 72rem) {
-  .hero {
-    width: min(100%, 62rem);
-    max-width: 62rem;
+  .hero .copy {
+    width: 100%;
+    gap: clamp(1rem, 1.8vw, 1.35rem);
+  }
+
+  .hero .tagline {
+    align-items: flex-start;
+    width: 100%;
+    max-width: none;
+  }
+
+  .hero .hero-sub {
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
+  }
+
+  .hero .hero-stack {
+    flex-wrap: nowrap;
+  }
+
+  .hero .actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.65rem;
+    width: 100%;
   }
 }
 
 @media (max-width: 49.99rem) {
-  .hero {
-    gap: 1.25rem !important;
-    padding-bottom: 0.5rem !important;
+  .hero-lockup > img,
+  .hero-lockup > .hero-html {
+    width: min(54%, 12.5rem) !important;
   }
 
-  .hero > img,
-  .hero > .hero-html {
-    width: min(62%, 11rem) !important;
+  .hero .stack {
+    align-items: center;
+  }
+
+  .hero .tagline {
+    align-items: center;
+  }
+
+  .hero .hero-sub {
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
   }
 }
 
-/* Ambient glow — one wash behind the logo + copy cluster */
+/* Ambient glow — centered behind the stacked logo + copy */
 .hero::before {
   content: '';
   position: absolute;
   inset: -25% -10% -35% -10%;
   z-index: -1;
   background:
-    radial-gradient(55% 70% at 38% 45%, rgba(255, 77, 95, 0.13) 0%, transparent 70%),
-    radial-gradient(50% 60% at 58% 40%, rgba(255, 122, 89, 0.07) 0%, transparent 72%);
+    radial-gradient(55% 70% at 50% 38%, rgba(255, 77, 95, 0.13) 0%, transparent 70%),
+    radial-gradient(50% 60% at 50% 32%, rgba(255, 122, 89, 0.07) 0%, transparent 72%);
   filter: blur(20px);
   pointer-events: none;
   animation: hero-drift 3s ease-in-out infinite alternate;
@@ -145,7 +198,10 @@
   font-weight: 700;
   font-size: clamp(2.75rem, calc(1rem + 5.5vw), 4.75rem);
   line-height: 1;
+  width: 100%;
+  text-align: center;
 }
+
 .hero .wordmark {
   display: inline-block;
 }
@@ -157,19 +213,23 @@
   -webkit-text-fill-color: var(--nestrs-orange);
 }
 
-/* Tagline — the actual pitch, split into a lead line, support, and tech pills. */
+/* Tagline — lead line, support copy, transport/auth tags. */
 .hero .tagline {
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
+  gap: clamp(1.15rem, 2vw, 1.5rem);
+  width: 100%;
+  max-width: none;
   color: var(--sl-color-gray-2);
 }
 .hero .hero-lead {
   font-size: clamp(1.35rem, calc(0.9rem + 1.6vw), 2rem);
-  line-height: 1.18;
+  line-height: 1.22;
   font-weight: 650;
   letter-spacing: -0.015em;
   color: var(--sl-color-white);
+  width: 100%;
+  max-width: none;
 }
 .hero .hero-lead .lead-accent {
   background: var(--nestrs-gradient);
@@ -180,60 +240,30 @@
 }
 .hero .hero-sub {
   font-size: clamp(1rem, calc(0.85rem + 0.5vw), 1.2rem);
-  line-height: 1.55;
-  max-width: 48ch;
+  line-height: 1.6;
+  width: 100%;
+  max-width: none;
 }
 .hero .hero-sub strong {
   color: var(--sl-color-text-accent);
   font-weight: 700;
 }
-/* Capability chips — traits on one row, transport stack on the next. */
-.hero .hero-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.6rem;
-  margin-top: 0.35rem;
-}
-.hero .hero-traits,
 .hero .hero-stack {
   display: flex;
+  flex-direction: row;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 0.4rem;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: clamp(0.35rem, 0.8vw, 0.65rem);
+  padding-top: clamp(0.5rem, 1vw, 0.85rem);
+  border-top: 1px solid color-mix(in srgb, var(--nestrs-card-border) 65%, transparent);
+  width: 100%;
 }
-.hero .hero-stack {
-  flex-direction: column;
-  flex-wrap: nowrap;
-  gap: 0.35rem;
-}
-.hero .hero-stack-row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.4rem;
-}
-.hero .hero-pill {
+.hero .hero-stack > span {
   display: inline-flex;
   align-items: center;
-  padding: 0.3rem 0.75rem;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  border: 1px solid var(--nestrs-card-border);
-  background: var(--nestrs-surface);
-  color: var(--sl-color-gray-2);
-}
-.hero .hero-pill--accent {
-  border-color: color-mix(in srgb, var(--nestrs-coral) 35%, transparent);
-  background: color-mix(in srgb, var(--nestrs-coral) 10%, var(--nestrs-surface));
-  color: var(--sl-color-text-accent);
-}
-.hero .hero-stack-row > span {
-  display: inline-flex;
-  align-items: center;
+  flex: 0 0 auto;
   padding: 0.22rem 0.55rem;
   border-radius: 6px;
   font-size: 0.72rem;
@@ -250,31 +280,21 @@
   color: var(--sl-color-text-accent);
   font-weight: 600;
 }
-.hero .hero-stack-row--security {
-  margin-top: 0.1rem;
-}
-
-@media (min-width: 50rem) {
-  .hero .hero-meta {
-    align-items: flex-start;
-  }
-
-  .hero .hero-traits,
-  .hero .hero-stack-row {
-    justify-content: flex-start;
-  }
-}
-
-/* Hero mark — let the hexagon breathe with a faint glow. */
-.hero > img {
-  filter: drop-shadow(0 24px 70px rgba(255, 77, 95, 0.09));
-}
 
 /* ---------------------------------------------------------------------------
    Buttons — primary gets the gradient + glow; minimal gets a subtle border
    --------------------------------------------------------------------------- */
 
-/* Hero action buttons — give the pills more body. */
+/* Hero action buttons — centered row, full content width above. */
+.hero .actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.65rem 1.25rem;
+  width: 100%;
+  margin-top: clamp(0.25rem, 0.6vw, 0.5rem);
+}
+
 .hero .actions .sl-link-button {
   padding-block: 0.85rem;
   padding-inline: 1.6rem;
@@ -704,6 +724,10 @@
   background: var(--nestrs-surface);
 }
 
+.mono-tier--private .mono-tier-label {
+  color: var(--sl-color-gray-2);
+}
+
 .mono-tier-head {
   flex: none;
   width: 6.5rem;
@@ -732,8 +756,7 @@
   color: var(--sl-color-gray-3);
 }
 
-/* Shared-features layer — horizontal band between the tiers; public above
-   and non-public below both build on it */
+/* Shared-features layer — teal band between public (coral) and private tiers */
 .mono-shared-mid {
   display: flex;
   flex-direction: column;
@@ -742,20 +765,20 @@
   text-align: center;
   padding: 0.7rem 1rem;
   border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--nestrs-coral) 30%, var(--nestrs-card-border));
-  background: var(--nestrs-gradient-soft);
+  border: 1px solid color-mix(in srgb, var(--nestrs-teal) 42%, var(--nestrs-card-border));
+  background: var(--nestrs-shared-soft);
 }
 
 .mono-shared-mid-label {
   font-family: var(--sl-font-mono);
   font-weight: 600;
   font-size: 0.82rem;
-  color: var(--sl-color-text-accent);
+  color: var(--nestrs-teal);
 }
 
 .mono-shared-mid-sub {
   font-size: 0.74rem;
-  color: var(--sl-color-gray-3);
+  color: color-mix(in srgb, var(--nestrs-teal) 55%, var(--sl-color-gray-3));
 }
 
 .mono-apps {
@@ -817,6 +840,14 @@
   color: var(--sl-color-white);
 }
 
+.mono-app-port {
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--sl-color-text-accent);
+  letter-spacing: 0.02em;
+}
+
 .mono-app-role {
   display: block;
   max-width: 100%;
@@ -826,9 +857,9 @@
 }
 
 .mono-note {
-  margin: 1.1rem auto 0;
-  max-width: 44rem;
-  text-align: center;
+  margin: 1.1rem 0 0;
+  max-width: none;
+  text-align: start;
   font-size: 0.85rem;
   color: var(--sl-color-gray-3);
 }
@@ -874,6 +905,10 @@
   gap: 0.75rem;
 }
 
+.scale-lanes--four {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .scale-lane {
   display: flex;
   flex-direction: column;
@@ -888,8 +923,16 @@
   border-color: color-mix(in srgb, var(--nestrs-coral) 24%, var(--nestrs-card-border));
 }
 
+.scale-lane--api.scale-lane--steady {
+  border-color: color-mix(in srgb, var(--nestrs-coral) 14%, var(--nestrs-card-border));
+}
+
 .scale-lane--worker {
   border-style: dashed;
+}
+
+.scale-lane--worker.scale-lane--light {
+  opacity: 0.92;
 }
 
 .scale-lane-top {
@@ -901,6 +944,20 @@
   text-align: center;
 }
 
+.scale-app {
+  font-family: var(--sl-font-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--sl-color-white);
+}
+
+.scale-port {
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--sl-color-text-accent);
+}
+
 .scale-signal {
   font-size: 0.76rem;
   font-weight: 600;
@@ -910,6 +967,13 @@
 .scale-arrow {
   font-family: var(--sl-font-mono);
   font-size: 0.85rem;
+  color: var(--sl-color-text-accent);
+}
+
+.scale-replicas {
+  font-family: var(--sl-font-mono);
+  font-size: 0.88rem;
+  font-weight: 700;
   color: var(--sl-color-text-accent);
 }
 
@@ -942,12 +1006,20 @@
   background: color-mix(in srgb, var(--nestrs-coral) 10%, var(--nestrs-card-bg));
 }
 
+.scale-lane--steady .scale-pills > span:not(.scale-pill-more) {
+  opacity: 0.85;
+}
+
 .scale-pills--worker > span:not(.scale-pill-more) {
   border-style: dashed;
 }
 
 .scale-pills--worker > span:not(.scale-pill-more):nth-child(n + 4) {
   opacity: 0.75;
+}
+
+.scale-lane--light .scale-pills--worker > span:not(.scale-pill-more) {
+  opacity: 0.7;
 }
 
 .scale-pill-more {
@@ -960,7 +1032,7 @@
 
 .scale-aside {
   margin: 0.85rem 0 0;
-  text-align: center;
+  text-align: start;
   font-size: 0.8rem;
   color: var(--sl-color-gray-3);
 }
@@ -1147,6 +1219,12 @@
 
 .t-prompt {
   color: var(--t-prompt);
+}
+
+.t-omit {
+  color: var(--t-dim);
+  letter-spacing: 0.12em;
+  user-select: none;
 }
 
 .t-cmd {

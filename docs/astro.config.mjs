@@ -118,6 +118,7 @@ export default defineConfig({
             { label: 'Introduction', slug: 'index' },
             { label: 'Why NestRS', slug: 'why' },
             { label: 'Getting started', slug: 'getting-started' },
+            { label: 'CLI', slug: 'cli' },
           ],
         },
         { label: 'Fundamentals', items: [{ autogenerate: { directory: 'fundamentals' } }] },

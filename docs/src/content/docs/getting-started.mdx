@@ -8,11 +8,51 @@ import { Aside, Steps, Tabs, TabItem, FileTree } from '@astrojs/starlight/compon
 <Aside type="caution">
   NestRS is in **alpha**: the API still shifts and it is not production-ready yet.
   Framework crates ship on [crates.io](https://crates.io/crates/nest-rs) as
-  `nest-rs-*` (`version = "0"` pins the latest `0.x`). Clone the repository to
-  run the example apps or contribute to the framework.
+  `nest-rs-*` (`version = "0"` pins the latest `0.x`). Install the
+  [**`nestrs` CLI**](/cli/) to scaffold a greenfield app, or clone the
+  repository to run the example apps or contribute to the framework.
 </Aside>
 
-## In a dev container (recommended)
+## Create a new project (CLI)
+
+The fastest path for a **new application outside the monorepo**:
+
+<Steps>
+
+1. Install Rust **1.95+** and the CLI.
+
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+   # From crates.io (when published):
+   cargo install --locked nest-rs-cli
+
+   # Or from a clone of this repository:
+   cargo install --locked --path crates/nest-rs-cli
+   ```
+
+2. Verify the toolchain.
+
+   ```bash
+   nestrs doctor
+   ```
+
+3. Scaffold and run.
+
+   ```bash
+   nestrs new my-api
+   cd my-api
+   cargo run
+   curl http://localhost:3000/
+   # → Hello World
+   ```
+
+</Steps>
+
+See the full [CLI reference](/cli/) for workspace mode (`--in-workspace`),
+feature generators (`nestrs g feature`), and templates.
+
+## In a dev container (recommended for contributors)
 
 The repository ships a dev container that provisions Rust, Postgres, Redis and
 the dev tooling in one step. It is the fastest path to a working setup.

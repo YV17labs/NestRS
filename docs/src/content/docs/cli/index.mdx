@@ -1,0 +1,197 @@
+---
+title: CLI
+description: Install the nestrs binary, scaffold projects, generate features, and verify your toolchain.
+sidebar:
+  order: 4
+---
+
+import { Aside, Steps, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The **`nestrs`** CLI scaffolds applications and features from the same
+reference layouts the docs teach — `apps/hello/` for a minimal HTTP app,
+`crates/features/src/users/` for a port + adapter feature. Generated code
+uses the same decorators your hand-written code uses; the CLI does not
+introduce a second pattern.
+
+<Aside type="caution">
+  The CLI ships with the framework workspace and will be published to
+  crates.io as **`nest-rs-cli`** (binary name **`nestrs`**) alongside the
+  other `nest-rs-*` crates. During alpha, you can also build it from the
+  monorepo clone.
+</Aside>
+
+## Install
+
+<Tabs syncKey="cli-install">
+<TabItem label="crates.io">
+
+When `nest-rs-cli` is published (same lockstep version as the framework):
+
+```bash
+cargo install --locked nest-rs-cli
+nestrs version
+```
+
+Requires **Rust 1.95+** (edition 2024).
+
+</TabItem>
+<TabItem label="From the monorepo">
+
+If you cloned [NestRS/NestRS](https://github.com/NestRS/NestRS) to
+contribute or run the example apps:
+
+```bash
+cargo install --locked --path crates/nest-rs-cli
+nestrs version
+```
+
+</TabItem>
+</Tabs>
+
+Run **`nestrs doctor`** after install — it checks the Rust toolchain and
+lists optional `NESTRS_*` environment variables.
+
+## Create a project
+
+### Standalone app (greenfield)
+
+Creates a new Cargo project with `nest-rs-*` dependencies from crates.io —
+no monorepo clone required:
+
+```bash
+nestrs new my-api
+cd my-api
+cargo run
+curl http://localhost:3000/
+# → Hello World
+```
+
+<FileTree>
+- my-api/
+  - Cargo.toml
+  - src/
+    - main.rs
+    - module.rs
+    - service.rs
+    - controller.rs
+</FileTree>
+
+Templates:
+
+| Flag | Result |
+|------|--------|
+| `--template hello` (default) | Working `GET /` — matches `apps/hello` |
+| `--template empty` | HTTP transport only, no routes — matches the [tutorial scaffold](/tutorial/scaffold/) |
+
+Optional: **`--check`** runs `cargo check` after generation (standalone only).
+
+### App inside the monorepo
+
+From the nestrs workspace root (contributors):
+
+```bash
+nestrs new tutorial-api --in-workspace --template empty
+just dev tutorial-api
+curl -i http://localhost:3000/
+# → 404 (transport mounted, no routes yet)
+```
+
+The app lands in `apps/tutorial-api/`. Workspace membership is automatic
+(`members = ["crates/*", "apps/*"]`).
+
+## Generate a feature
+
+Monorepo only — scaffolds under `crates/features/src/<name>/` and registers
+`pub mod …` in `crates/features/src/lib.rs`:
+
+```bash
+# Port only (service + UsersModule-shaped module)
+nestrs g feature posts
+
+# Port + public HTTP adapter (UsersHttpModule pattern, no authz yet)
+nestrs g feature posts --http
+```
+
+Wire the generated edge module into your app root `module.rs`:
+
+```rust
+use features::posts::PostsHttpModule;
+
+#[module(imports = [
+    // …
+    PostsHttpModule,
+])]
+pub struct PlatformApiModule;
+```
+
+For auth-protected resources, copy the guard wiring from
+[`users/http/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users/http)
+and import the matching `AuthzHttpModule`.
+
+<Aside type="tip">
+  Before inventing a second layout, open
+  [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
+  side by side with what the generator emitted.
+</Aside>
+
+## Doctor
+
+```bash
+nestrs doctor
+```
+
+Checks:
+
+- `rustc` ≥ 1.95 and `cargo` on `PATH`
+- whether the current directory sits inside a nestrs workspace
+- optional env vars (`NESTRS_DATABASE__URL`, `NESTRS_QUEUE__URL`, …)
+
+Use it after install and before running DB- or Redis-backed apps.
+
+## Version, about, and update
+
+```bash
+nestrs version
+# → NestRS 0.1.0
+
+nestrs about
+# → version, tagline, docs, repository, license, author
+
+nestrs update
+# → cargo install --force nest-rs-cli (latest on crates.io)
+```
+
+Contributors inside the monorepo clone:
+
+```bash
+nestrs update --from-path
+# → cargo install --locked --path crates/nest-rs-cli --force
+```
+
+## Command reference
+
+| Command | Description |
+|---------|-------------|
+| `nestrs new <name>` | Standalone app in `./<name>/` |
+| `nestrs new <name> --in-workspace` | App under `apps/<name>/` |
+| `nestrs new <name> --template empty` | HTTP-only shell (tutorial shape) |
+| `nestrs new <name> --check` | Standalone + `cargo check` |
+| `nestrs doctor` | Toolchain and env sanity check |
+| `nestrs version` | Print the CLI version |
+| `nestrs about` | Print project metadata |
+| `nestrs update` | Reinstall latest CLI from crates.io |
+| `nestrs update --from-path` | Reinstall from monorepo `crates/nest-rs-cli` |
+| `nestrs g feature <name>` | Port feature in `crates/features/src/` |
+| `nestrs g feature <name> --http` | Port + HTTP adapter |
+
+Aliases: **`nestrs g`** = **`nestrs generate`**.
+
+## What's next
+
+Planned generators (see [Roadmap](https://github.com/NestRS/NestRS/blob/main/ROADMAP.md)):
+`resolver`, `entity`, full `resource`, migration scaffold, and
+`nestrs info` (route/module scan).
+
+- [Getting started](/getting-started/) — first run after `nestrs new`
+- [Tutorial](/tutorial/) — build `users` end to end
+- [Fundamentals / Modules](/fundamentals/modules/) — how root modules compose features

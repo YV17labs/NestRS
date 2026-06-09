@@ -13,7 +13,23 @@ the app and runs it. By the end of this page, `cargo run -p tutorial-api`
 listens on port 3000 and replies `404` to `GET /` (you haven't mounted
 a route yet — that's the next page).
 
-## A new app folder
+## Quick path — the CLI
+
+If you have the [`nestrs` CLI](/cli/) installed (from crates.io or
+`cargo install --path crates/nest-rs-cli` in the monorepo):
+
+```bash
+# From the nestrs workspace root
+nestrs new tutorial-api --in-workspace --template empty
+just dev tutorial-api
+curl -i http://localhost:3000/
+# → 404 Not Found
+```
+
+Skip to [Run it](#run-it) below, or read on for the manual layout the
+generator copies.
+
+## A new app folder (manual)
 
 Inside the workspace, create the app directory.
 
@@ -42,24 +58,13 @@ tokio.workspace = true
 workspace = true
 ```
 
-Add the app to the workspace members. Open the root `Cargo.toml` and
-append `apps/tutorial-api` to the `members = [...]` list.
-
-```toml title="Cargo.toml"
-[workspace]
-members = [
-    "apps/hello",
-    "apps/platform-api",
-    "apps/tutorial-api",
-    # ...
-]
-```
-
 <Aside type="note">
-Apps live under `apps/<name>/`. A feature lives under `crates/features/src/`
-once another app could reuse it. The tutorial starts in the app folder
-and moves the feature to `crates/features/src/users/` on the next page
-— exactly where the reference exemplar lives.
+Apps live under `apps/<name>/`. The workspace already includes every folder
+under `apps/*` — you do **not** need to edit the root `Cargo.toml` members
+list. A feature lives under `crates/features/src/` once another app could
+reuse it. The tutorial starts in the app folder and moves the feature to
+`crates/features/src/users/` on the next page — exactly where the reference
+exemplar lives.
 </Aside>
 
 ## The root module

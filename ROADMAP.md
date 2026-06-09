@@ -121,10 +121,10 @@ companion, and an example app, which a repo-per-crate split would make impossibl
   `fmt --check`, `clippy -D warnings`, `build`, and `test --workspace`. The e2e
   tests exercise live Postgres and Redis, so CI provisions both as service
   containers. It publishes nothing — its only artifact is a green/red signal.
-- **A scaffolding CLI** — `nestrs new <app>` generates a working starter, and
-  generators (`nestrs g controller`, `... entity`, `... resource`) emit the
-  declarative boilerplate from the same macros apps use. It ships as another
-  workspace crate.
+- **Scaffolding CLI** — **`nest-rs-cli`** / binary **`nestrs`**: `nestrs new`
+  (standalone + `--in-workspace`), `nestrs g feature` (port + optional `--http`),
+  `nestrs doctor`. Shipped in the workspace; crates.io with the next lockstep
+  release. Next: `resolver`, `entity`, `resource`, migrations, `nestrs info`.
 
 ## Later — deferred
 

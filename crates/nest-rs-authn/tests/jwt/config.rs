@@ -4,15 +4,30 @@ use std::time::Duration;
 
 use nest_rs_authn::{AuthError, JwtConfig, JwtKey, JwtService};
 
+// HS256 secrets must clear the 32-byte (256-bit) floor.
+const STRONG_SECRET: &str = "this-is-a-32-byte-test-secret!!!";
+
 #[test]
 fn into_options_selects_hmac_from_secret() {
     let options = JwtConfig {
-        secret: Some("s".into()),
+        secret: Some(STRONG_SECRET.into()),
         ..Default::default()
     }
     .into_options()
     .expect("options");
     assert!(matches!(options.key, JwtKey::Hmac(_)));
+}
+
+#[test]
+fn into_options_rejects_a_short_hmac_secret() {
+    assert!(matches!(
+        JwtConfig {
+            secret: Some("too-short".into()),
+            ..Default::default()
+        }
+        .into_options(),
+        Err(AuthError::Failed(_))
+    ));
 }
 
 #[test]
@@ -68,7 +83,7 @@ fn into_options_without_any_key_fails() {
 #[test]
 fn leeway_and_audience_are_applied_from_config() {
     let options = JwtConfig {
-        secret: Some("leeway".into()),
+        secret: Some(STRONG_SECRET.into()),
         leeway_secs: Some(45),
         audience: Some("api".into()),
         ..Default::default()

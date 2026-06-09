@@ -8,6 +8,11 @@ use validator::Validate;
 use crate::error::AuthError;
 use crate::jwt::JwtOptions;
 
+/// Minimum HS256 secret length, in bytes. 256 bits matches the HMAC-SHA256
+/// output size — anything shorter weakens the signature below the algorithm's
+/// own security level.
+const HS256_MIN_SECRET_BYTES: usize = 32;
+
 // No `Debug`: secrets must not leak through a derived format.
 #[config(namespace = "authn")]
 #[derive(Clone, Default, Validate)]
@@ -60,6 +65,14 @@ impl JwtConfig {
                 return Err(AuthError::Failed(
                     "NESTRS_AUTHN__SECRET must not be empty".into(),
                 ));
+            }
+            // HS256 derives its security from the secret's entropy. A short
+            // secret is brute-forceable, so refuse anything under 256 bits
+            // (32 bytes) at boot rather than minting forgeable tokens.
+            (Some(secret), _, _) if secret.len() < HS256_MIN_SECRET_BYTES => {
+                return Err(AuthError::Failed(format!(
+                    "NESTRS_AUTHN__SECRET must be at least {HS256_MIN_SECRET_BYTES} bytes for HS256"
+                )));
             }
             (Some(secret), _, _) => JwtOptions::new(secret.clone()),
             (None, Some(private), Some(public)) => JwtOptions::eddsa(private.clone(), public.clone()),

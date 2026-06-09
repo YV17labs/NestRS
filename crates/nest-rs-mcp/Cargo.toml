@@ -19,4 +19,5 @@ schemars.workspace = true
 [dev-dependencies]
 nest-rs-core.workspace = true
 nest-rs-http.workspace = true
+poem = { workspace = true, features = ["test"] }
 tokio.workspace = true

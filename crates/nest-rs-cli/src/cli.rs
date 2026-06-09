@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use crate::commands::{self, NewTemplate};
 use crate::error::CliResult;
-use crate::naming::Names;
+use crate::naming::{Names, Transport};
 
 const PROJECT_TAGLINE: &str = "Scalable Rust backend apps with native performance.";
 
@@ -35,7 +35,7 @@ pub fn print_about() {
     name = "nestrs",
     about = PROJECT_TAGLINE,
     long_about = "Scalable Rust backend apps with native performance.\n\n\
-                  Scaffolds NestRS projects, features, and toolchain checks.",
+                  Scaffolds NestRS projects, features, transport adapters, and toolchain checks.",
     disable_version_flag = true,
     after_help = AFTER_HELP,
 )]
@@ -46,26 +46,35 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Create a new nestrs application.
+    /// Create a new NestRS project or workspace app.
+    ///
+    /// Layout is inferred from the directory tree:
+    ///   new monorepo       nestrs new acme        → ./acme/ (template: hello)
+    ///   new workspace app  nestrs new billing     → apps/billing/ (next free port)
+    ///   single crate       nestrs new my-api --standalone
     New {
-        /// Application name (kebab-case recommended, e.g. `my-api`).
+        /// Project name (kebab-case recommended, e.g. `my-api` or `acme`).
         name: String,
 
-        /// Write into `apps/<name>/` inside the nestrs monorepo.
+        /// Single-crate layout (logic in `src/`) instead of the default monorepo.
         #[arg(long)]
-        in_workspace: bool,
+        standalone: bool,
 
-        /// Output directory for standalone projects (default: current directory).
+        /// Parent directory (default: current directory).
         #[arg(long, short = 'o', default_value = ".")]
         output: PathBuf,
 
-        /// Starter template.
-        #[arg(long, value_enum, default_value_t = NewTemplate::Hello)]
-        template: NewTemplate,
+        /// Override the starter template (`hello` or `empty`).
+        #[arg(long, value_enum)]
+        template: Option<NewTemplate>,
 
-        /// Run `cargo check` after scaffolding (standalone projects only).
+        /// Run `cargo check` after scaffolding.
         #[arg(long)]
         check: bool,
+
+        /// Print what would be written without touching the filesystem.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Verify toolchain and optional NestRS environment variables.
@@ -92,49 +101,67 @@ pub enum Command {
         workspace: Option<PathBuf>,
     },
 
-    /// Generate code from the reference exemplars.
+    /// Generate features, resources, and transport adapters (workspace only).
     #[command(subcommand, visible_aliases = ["g"])]
     Generate(GenerateCommand),
 }
 
+/// Shared positional + flags for every generator.
+#[derive(Args, Debug)]
+pub struct GenTarget {
+    /// Name (e.g. `posts`).
+    pub name: String,
+
+    /// Workspace root or working directory (default: auto-discover from cwd).
+    #[arg(long, short = 'p')]
+    pub path: Option<PathBuf>,
+
+    /// Print what would be written without touching the filesystem.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum GenerateCommand {
-    /// Scaffold a port feature under `crates/features/src/` (monorepo only).
-    Feature {
-        /// Feature name (e.g. `posts`).
-        name: String,
-
-        /// Also emit the HTTP adapter (`http/controller.rs`, `UsersHttpModule` pattern).
-        #[arg(long)]
-        http: bool,
-
-        /// Workspace root (default: auto-discover from current directory).
-        #[arg(long, short = 'p')]
-        path: Option<PathBuf>,
-    },
+    /// A transport-agnostic port (mod + module + service).
+    Feature(GenTarget),
+    /// A DB-backed CRUD slice (entity + CrudService + HTTP adapter).
+    Resource(GenTarget),
+    /// Add an HTTP controller adapter to an existing feature.
+    Http(GenTarget),
+    /// Add a GraphQL resolver adapter to an existing feature.
+    Graphql(GenTarget),
+    /// Add a WebSocket gateway adapter to an existing feature.
+    Ws(GenTarget),
+    /// Add a queue processor adapter to an existing feature.
+    Queue(GenTarget),
+    /// Add a scheduled-tasks adapter to an existing feature.
+    Schedule(GenTarget),
+    /// Add an MCP tool adapter to an existing feature.
+    Mcp(GenTarget),
 }
 
 pub fn run(cli: Cli) -> CliResult<()> {
     match cli.command {
         Command::New {
             name,
-            in_workspace,
+            standalone,
             output,
             template,
             check,
+            dry_run,
         } => {
             let names = Names::parse(&name);
-            commands::run_new(commands::NewOptions {
+            let opts = commands::NewOptions {
                 name,
                 output: output.clone(),
                 template,
-                in_workspace,
-            })?;
-
-            if check && !in_workspace {
-                let project = output.join(&names.kebab);
-                commands::run_cargo_check(&project)?;
-                println!("cargo check passed.");
+                standalone,
+                dry_run,
+            };
+            commands::run_new(opts.clone())?;
+            if check && !dry_run {
+                run_check(&opts, &names, standalone, &output)?;
             }
             Ok(())
         }
@@ -150,18 +177,75 @@ pub fn run(cli: Cli) -> CliResult<()> {
             print_about();
             Ok(())
         }
-        Command::Update { from_path, workspace } => commands::run_update(commands::UpdateOptions {
+        Command::Update {
+            from_path,
+            workspace,
+        } => commands::run_update(commands::UpdateOptions {
             from_path,
             path: workspace,
         }),
-        Command::Generate(GenerateCommand::Feature { name, http, path }) => {
-            commands::run_feature(commands::FeatureOptions {
-                name,
-                http,
-                path,
-            })
-        }
+        Command::Generate(cmd) => run_generate(cmd),
     }
+}
+
+fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
+    use GenerateCommand::*;
+    match cmd {
+        Feature(t) => commands::run_feature(commands::FeatureOptions {
+            name: t.name,
+            path: t.path,
+            dry_run: t.dry_run,
+        }),
+        Resource(t) => commands::run_resource(commands::ResourceOptions {
+            name: t.name,
+            path: t.path,
+            dry_run: t.dry_run,
+        }),
+        Http(t) => adapter(Transport::Http, t),
+        Graphql(t) => adapter(Transport::Graphql, t),
+        Ws(t) => adapter(Transport::Ws, t),
+        Queue(t) => adapter(Transport::Queue, t),
+        Schedule(t) => adapter(Transport::Schedule, t),
+        Mcp(t) => adapter(Transport::Mcp, t),
+    }
+}
+
+fn adapter(transport: Transport, t: GenTarget) -> CliResult<()> {
+    commands::run_adapter(
+        transport,
+        commands::AdapterOptions {
+            name: t.name,
+            path: t.path,
+            dry_run: t.dry_run,
+        },
+    )
+}
+
+fn run_check(
+    opts: &commands::NewOptions,
+    names: &Names,
+    standalone: bool,
+    output: &std::path::Path,
+) -> CliResult<()> {
+    let project = commands::project_dir_for_check(opts, names)?;
+    let ws_root = crate::context::NestrsWorkspace::discover(output)?;
+    if let Some(ws) = ws_root.filter(|_| !standalone) {
+        let status = std::process::Command::new("cargo")
+            .args(["check", "-p", &names.kebab])
+            .current_dir(&ws.root)
+            .status()
+            .map_err(crate::error::CliError::Io)?;
+        if !status.success() {
+            return Err(crate::error::CliError::Anyhow(anyhow::anyhow!(
+                "cargo check -p {} failed",
+                names.kebab
+            )));
+        }
+    } else {
+        commands::run_cargo_check(&project)?;
+    }
+    println!("cargo check passed.");
+    Ok(())
 }
 
 #[cfg(test)]

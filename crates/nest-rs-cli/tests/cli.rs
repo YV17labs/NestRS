@@ -21,13 +21,33 @@ version = "0.1.0"
         "pub mod users;\n\npub use users::UsersModule;\n",
     )
     .unwrap();
+    fs::write(
+        root.join("crates/features/Cargo.toml"),
+        "[package]\nname = \"features\"\n\n[dependencies]\nnest-rs-core.workspace = true\n",
+    )
+    .unwrap();
+}
+
+/// Run `nestrs <args...>` with cwd at `dir`, asserting success.
+fn run_ok(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "args {args:?} stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 #[test]
 fn new_standalone_hello_template() {
     let dir = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
-        .args(["new", "demo-api", "--template", "hello"])
+        .args(["new", "demo-api", "--standalone"])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -40,24 +60,160 @@ fn new_standalone_hello_template() {
 
     let app = dir.path().join("demo-api");
     assert!(app.join("src/main.rs").is_file());
+    assert!(app.join("src/lib.rs").is_file());
     assert!(app.join("src/controller.rs").is_file());
+    assert!(app.join("tests/e2e.rs").is_file());
     assert!(app.join("Cargo.toml").is_file());
+    assert!(app.join("Dockerfile").is_file());
+    assert!(app.join(".dockerignore").is_file());
+    assert!(app.join("rust-toolchain.toml").is_file());
+    assert!(app.join(".env").is_file());
+    assert!(app.join(".env.development").is_file());
+    let dev_env = fs::read_to_string(app.join(".env.development")).unwrap();
+    assert!(dev_env.contains("NESTRS_OPENTELEMETRY__LOG_LEVEL=debug"));
+    assert!(app.join(".env.example").is_file());
+
+    let main_rs = fs::read_to_string(app.join("src/main.rs")).unwrap();
+    assert!(main_rs.contains("OpenTelemetry::init"));
+    assert!(main_rs.contains("Environment::init"));
+
+    let module_rs = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(module_rs.contains("OpenTelemetryModule"));
+
+    let cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
+    assert!(cargo.contains("[workspace]"));
+    assert!(cargo.contains("nest-rs-guards"));
+    assert!(cargo.contains("nest-rs-interceptors"));
+    assert!(cargo.contains("nest-rs-opentelemetry"));
+    assert!(app.join(".gitignore").is_file());
+    assert!(app.join("Justfile").is_file());
+    let justfile = fs::read_to_string(app.join("Justfile")).unwrap();
+    assert!(justfile.contains("build:"));
+    assert!(justfile.contains("cargo build --release"));
 }
 
 #[test]
-fn new_workspace_empty_template() {
+fn new_workspace_greenfield() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["new", "acme"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let root = dir.path().join("acme");
+    assert!(root.join("Cargo.toml").is_file());
+    assert!(
+        root.join("crates/features/src/hello/http/controller.rs")
+            .is_file()
+    );
+    // The default app and demo feature are both named `hello`.
+    assert!(root.join("apps/hello/src/module.rs").is_file());
+    assert!(!root.join("apps/hello/src/controller.rs").exists());
+    assert!(root.join("apps/hello/tests/e2e.rs").is_file());
+    assert!(root.join("Justfile").is_file());
+    let justfile = fs::read_to_string(root.join("Justfile")).unwrap();
+    assert!(justfile.contains("dev app=\"hello\""));
+    assert!(justfile.contains("build-all:"));
+    assert!(justfile.contains("cargo build --workspace --release"));
+
+    let module = fs::read_to_string(root.join("apps/hello/src/module.rs")).unwrap();
+    assert!(module.contains("HelloHttpModule"));
+    assert!(module.contains("features::hello"));
+    assert!(module.contains("port: 3000"));
+
+    let env = fs::read_to_string(root.join(".env")).unwrap();
+    assert!(!env.contains("NESTRS_HTTP__PORT"));
+
+    let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(cargo.contains("members = [\"crates/*\", \"apps/*\"]"));
+}
+
+#[test]
+fn new_app_inside_nestrs_workspace() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
 
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
-        .args([
-            "new",
-            "tutorial-api",
-            "--in-workspace",
-            "--template",
-            "empty",
-            "-o",
-        ])
+        .args(["new", "demo-api"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let app = dir.path().join("apps/demo-api");
+    assert!(app.join("src/module.rs").is_file());
+    assert!(app.join("src/main.rs").is_file());
+    assert!(!app.join("src/controller.rs").exists());
+
+    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(module.contains("HttpConfig { port: 3000"));
+    assert!(!module.contains("for_root(None)"));
+}
+
+#[test]
+fn new_app_picks_next_http_port() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    fs::create_dir_all(dir.path().join("apps/auth/src")).unwrap();
+    fs::write(
+        dir.path().join("apps/auth/src/module.rs"),
+        "HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() })",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["new", "billing"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let module = fs::read_to_string(dir.path().join("apps/billing/src/module.rs")).unwrap();
+    assert!(module.contains("HttpConfig { port: 3002"));
+}
+
+#[test]
+fn new_app_inside_workspace_already_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    fs::create_dir_all(dir.path().join("apps/billing")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["new", "billing"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("already exists"));
+    assert!(stderr.contains("billing"));
+}
+
+#[test]
+fn new_workspace_app_scaffold() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["new", "tutorial-api", "-o"])
         .arg(dir.path())
         .output()
         .unwrap();
@@ -70,31 +226,159 @@ fn new_workspace_empty_template() {
 
     let app = dir.path().join("apps/tutorial-api");
     assert!(app.join("src/module.rs").is_file());
+    assert!(app.join("src/lib.rs").is_file());
     assert!(!app.join("src/controller.rs").exists());
+    assert!(dir.path().join(".env").is_file());
+    assert!(dir.path().join(".env.development").is_file());
+    assert!(dir.path().join("Justfile").is_file());
+    assert!(dir.path().join(".gitignore").is_file());
+
+    let env = fs::read_to_string(dir.path().join(".env")).unwrap();
+    assert!(!env.contains("NESTRS_HTTP__PORT"));
+    assert!(!env.contains("NESTRS_DATABASE__URL"));
+
+    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(module.contains("HttpConfig { port: 3000"));
+    assert!(module.contains("OpenTelemetryModule"));
 }
 
 #[test]
-fn generate_feature_with_http() {
+fn generate_feature_creates_port_and_wires_lib() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+
+    run_ok(
+        dir.path(),
+        &["g", "feature", "posts", "-p", dir.path().to_str().unwrap()],
+    );
+
+    let feature = dir.path().join("crates/features/src/posts");
+    assert!(feature.join("mod.rs").is_file());
+    assert!(feature.join("module.rs").is_file());
+    assert!(feature.join("service.rs").is_file());
+    // no transport yet
+    assert!(!feature.join("http").exists());
+
+    let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
+    assert!(lib.contains("pub mod posts;"));
+}
+
+#[test]
+fn generate_resource_creates_crud_slice_and_deps() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+
+    run_ok(
+        dir.path(),
+        &["g", "resource", "posts", "-p", dir.path().to_str().unwrap()],
+    );
+
+    let feature = dir.path().join("crates/features/src/posts");
+    assert!(feature.join("entity.rs").is_file());
+    assert!(feature.join("service.rs").is_file());
+    assert!(feature.join("http/controller.rs").is_file());
+
+    let entity = fs::read_to_string(feature.join("entity.rs")).unwrap();
+    assert!(entity.contains("#[expose(name = \"Post\""));
+    assert!(entity.contains("table_name = \"post\""));
+
+    // dependencies spliced into both manifests
+    let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(root_cargo.contains("nest-rs-seaorm"));
+    let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    assert!(features_cargo.contains("nest-rs-seaorm"));
+
+    let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
+    assert!(lib.contains("pub mod posts;"));
+}
+
+#[test]
+fn generate_http_adapter_wires_feature_mod() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
+
+    let feature = dir.path().join("crates/features/src/posts");
+    assert!(feature.join("http/controller.rs").is_file());
+    assert!(feature.join("http/module.rs").is_file());
+
+    let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
+    assert!(mod_rs.contains("pub mod http;"));
+    assert!(mod_rs.contains("PostsController"));
+    assert!(mod_rs.contains("PostsHttpModule"));
+}
+
+#[test]
+fn generate_ws_adapter_ensures_dep_and_wires() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
+
+    assert!(
+        dir.path()
+            .join("crates/features/src/posts/ws/gateway.rs")
+            .is_file()
+    );
+    let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    assert!(features_cargo.contains("nest-rs-ws"));
+}
+
+#[test]
+fn generate_adapter_is_rejected_on_rerun() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["g", "http", "posts", "-p", path])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+}
+
+#[test]
+fn generate_adapter_requires_existing_feature() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
 
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
-        .args(["g", "feature", "posts", "--http", "-p"])
-        .arg(dir.path())
+        .args(["g", "ws", "ghost", "-p", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not found"));
+}
 
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+#[test]
+fn generate_dry_run_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+
+    run_ok(
+        dir.path(),
+        &[
+            "g",
+            "feature",
+            "posts",
+            "--dry-run",
+            "-p",
+            dir.path().to_str().unwrap(),
+        ],
     );
 
-    let feature = dir.path().join("crates/features/src/posts");
-    assert!(feature.join("http/controller.rs").is_file());
-
+    assert!(!dir.path().join("crates/features/src/posts").exists());
     let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
-    assert!(lib.contains("pub mod posts;"));
+    assert!(!lib.contains("pub mod posts;"));
 }
 
 #[test]

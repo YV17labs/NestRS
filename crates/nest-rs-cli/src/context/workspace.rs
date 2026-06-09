@@ -1,3 +1,9 @@
+//! Discovery of the nestrs workspace root.
+//!
+//! A nestrs monorepo is identified purely by its root `Cargo.toml`
+//! (`members = ["crates/*", "apps/*"]`) — no dedicated config file. Optional
+//! overrides live in `[workspace.metadata.nestrs]`, read by [`Metadata`].
+
 use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item};
@@ -6,11 +12,29 @@ use crate::error::{CliError, CliResult};
 
 const NESTRS_WORKSPACE_MARKERS: &[&str] = &["crates/*", "apps/*"];
 
+/// Default HTTP port handed to the first app in a fresh workspace.
+pub const DEFAULT_PORT_BASE: u16 = 3000;
+
 #[derive(Debug, Clone)]
 pub struct NestrsWorkspace {
     pub root: PathBuf,
-    #[allow(dead_code)]
-    pub version: String,
+    pub metadata: Metadata,
+}
+
+/// Opt-in `[workspace.metadata.nestrs]` overrides. Every field has a default,
+/// so the table is never required.
+#[derive(Debug, Clone)]
+pub struct Metadata {
+    /// Base port for app port allocation.
+    pub port_base: u16,
+}
+
+impl Default for Metadata {
+    fn default() -> Self {
+        Self {
+            port_base: DEFAULT_PORT_BASE,
+        }
+    }
 }
 
 impl NestrsWorkspace {
@@ -27,8 +51,7 @@ impl NestrsWorkspace {
     }
 
     pub fn require(start: &Path) -> CliResult<Self> {
-        Self::discover(start)?
-            .ok_or(CliError::NotNestrsWorkspace)
+        Self::discover(start)?.ok_or(CliError::NotNestrsWorkspace)
     }
 
     pub fn features_root(&self) -> PathBuf {
@@ -39,8 +62,20 @@ impl NestrsWorkspace {
         self.root.join("crates/features/src/lib.rs")
     }
 
+    pub fn features_cargo(&self) -> PathBuf {
+        self.root.join("crates/features/Cargo.toml")
+    }
+
     pub fn apps_root(&self) -> PathBuf {
         self.root.join("apps")
+    }
+
+    pub fn feature_root(&self, snake: &str) -> PathBuf {
+        self.features_root().join(snake)
+    }
+
+    pub fn feature_exists(&self, snake: &str) -> bool {
+        self.feature_root(snake).is_dir()
     }
 }
 
@@ -76,16 +111,29 @@ fn read_workspace(dir: &Path) -> CliResult<Option<NestrsWorkspace>> {
         return Ok(None);
     }
 
-    let version = workspace
-        .get("package")
-        .and_then(Item::as_table)
-        .and_then(|pkg| pkg.get("version"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("0.1.0")
-        .to_owned();
+    let metadata = read_metadata(workspace);
 
     Ok(Some(NestrsWorkspace {
         root: dir.to_path_buf(),
-        version,
+        metadata,
     }))
+}
+
+fn read_metadata(workspace: &toml_edit::Table) -> Metadata {
+    let mut meta = Metadata::default();
+    let Some(table) = workspace
+        .get("metadata")
+        .and_then(Item::as_table)
+        .and_then(|m| m.get("nestrs"))
+        .and_then(Item::as_table)
+    else {
+        return meta;
+    };
+
+    if let Some(port) = table.get("port-base").and_then(|v| v.as_integer())
+        && let Ok(port) = u16::try_from(port)
+    {
+        meta.port_base = port;
+    }
+    meta
 }

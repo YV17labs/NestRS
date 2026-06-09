@@ -2,8 +2,9 @@ mod cli;
 mod commands;
 mod context;
 mod error;
-mod fs;
 mod naming;
+mod port;
+mod scaffold;
 mod templates;
 
 use clap::Parser;

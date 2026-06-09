@@ -26,8 +26,10 @@ pub fn run(opts: UpdateOptions) -> CliResult<()> {
     if opts.from_path {
         let ws = match opts.path {
             Some(root) => NestrsWorkspace::require(&root)?,
-            None => NestrsWorkspace::discover(std::env::current_dir().map_err(CliError::Io)?.as_path())?
-                .ok_or(CliError::NotNestrsWorkspace)?,
+            None => {
+                NestrsWorkspace::discover(std::env::current_dir().map_err(CliError::Io)?.as_path())?
+                    .ok_or(CliError::NotNestrsWorkspace)?
+            }
         };
         let crate_path = ws.root.join("crates/nest-rs-cli");
         if !crate_path.join("Cargo.toml").is_file() {
@@ -36,10 +38,7 @@ pub fn run(opts: UpdateOptions) -> CliResult<()> {
                 crate_path.display()
             )));
         }
-        println!(
-            "Updating nestrs from {} …",
-            crate_path.display()
-        );
+        println!("Updating nestrs from {} …", crate_path.display());
         cmd.arg("--locked").arg("--path").arg(&crate_path);
     } else {
         cmd.arg(CRATE_NAME);

@@ -1,113 +1,63 @@
+//! `nestrs g feature <name>` — a transport-agnostic port under
+//! `crates/features/src/<name>/` (mod + module + service). Add transports
+//! afterwards with `g http|graphql|ws|queue|schedule|mcp <name>`.
+
 use std::path::PathBuf;
 
-use crate::context::NestrsWorkspace;
+use super::{finish, resolve_start};
+use crate::context::Context;
 use crate::error::{CliError, CliResult};
-use crate::fs::{append_feature_mod, render, render_with_extra, write_file};
 use crate::naming::Names;
+use crate::scaffold::{Renderer, Scaffold, ensure_decl};
 use crate::templates::feature;
 
 pub struct FeatureOptions {
     pub name: String,
     pub path: Option<PathBuf>,
-    pub http: bool,
+    pub dry_run: bool,
 }
 
 pub fn run(opts: FeatureOptions) -> CliResult<()> {
-    let start = opts
-        .path
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
+    let ctx = Context::detect(&resolve_start(opts.path))?;
+    let ws = ctx.workspace.ok_or(CliError::NotNestrsWorkspace)?;
 
-    let ws = NestrsWorkspace::require(&start)?;
     let names = Names::parse(&opts.name);
-    let feature_root = ws.features_root().join(&names.snake);
-
-    if feature_root.exists() {
+    let root = ws.feature_root(&names.snake);
+    if root.exists() {
         return Err(CliError::FeatureExists {
             name: names.snake.clone(),
-            path: feature_root,
+            path: root,
         });
     }
 
-    let http_mod_line = if opts.http {
-        "pub mod http;"
-    } else {
-        ""
-    };
-    let http_pub_line = if opts.http {
-        format!(
-            "pub use http::{{{controller}, {http_module}}};",
-            controller = names.controller(),
-            http_module = names.http_module(),
-        )
-    } else {
-        String::new()
-    };
-
-    write_file(
-        &feature_root.join("mod.rs"),
-        &render_with_extra(
-            feature::FEATURE_MOD,
-            &names,
-            &[
-                ("http_mod_line", http_mod_line),
-                ("http_pub_line", &http_pub_line),
-            ],
-        ),
-    )?;
-    write_file(
-        &feature_root.join("module.rs"),
-        &render(feature::FEATURE_MODULE, &names),
-    )?;
-    write_file(
-        &feature_root.join("service.rs"),
-        &render(feature::FEATURE_SERVICE, &names),
-    )?;
-
-    if opts.http {
-        write_file(
-            &feature_root.join("http/mod.rs"),
-            &render(feature::FEATURE_HTTP_MOD, &names),
-        )?;
-        write_file(
-            &feature_root.join("http/module.rs"),
-            &render(feature::FEATURE_HTTP_MODULE, &names),
-        )?;
-        write_file(
-            &feature_root.join("http/controller.rs"),
-            &render(feature::FEATURE_HTTP_CONTROLLER, &names),
-        )?;
-    }
-
-    append_feature_mod(&ws.features_lib(), &names.snake)?;
-
-    println!(
-        "Created feature `{}` at {}",
-        names.snake,
-        feature_root.display()
+    let r = Renderer::new(&names);
+    let mut s = Scaffold::new();
+    s.create(root.join("mod.rs"), r.render(feature::MOD));
+    s.create(root.join("module.rs"), r.render(feature::MODULE));
+    s.create(root.join("service.rs"), r.render(feature::SERVICE));
+    s.edit(
+        ws.features_lib(),
+        ensure_decl(&format!("pub mod {};", names.snake)),
     );
-    print_next_steps(&names, opts.http);
+
+    finish(
+        s,
+        opts.dry_run,
+        &ws.root,
+        &format!("Created feature `{}`", names.snake),
+    )?;
+    print_next_steps(&names);
     Ok(())
 }
 
-fn print_next_steps(names: &Names, http: bool) {
+fn print_next_steps(names: &Names) {
     println!();
     println!("Next steps:");
-    if http {
-        println!(
-            "  1. Import `features::{}::{}` in your app root `module.rs`",
-            names.snake, names.http_module()
-        );
-        println!("  2. cargo check -p <your-app>");
-    } else {
-        println!(
-            "  1. Add an adapter: nestrs g feature {} --http",
-            names.kebab
-        );
-        println!("     (or copy `users/http/` from the reference feature)");
-    }
+    println!("  Add a transport:  nestrs g http {}", names.kebab);
     println!(
-        "  Reference: crates/features/src/users/ — copy before inventing a second pattern."
+        "                    nestrs g graphql|ws|queue|schedule|mcp {}",
+        names.kebab
     );
+    println!("  DB-backed CRUD?   nestrs g resource {}", names.kebab);
+    println!("  Reference:        crates/features/src/users/");
 }

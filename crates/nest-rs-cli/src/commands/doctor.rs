@@ -61,12 +61,13 @@ fn print_report(report: &DoctorReport) {
     status_line(
         "Rust toolchain",
         report.rustc_ok,
-        report
-            .rustc_version
-            .as_deref()
-            .unwrap_or("rustc not found"),
+        report.rustc_version.as_deref().unwrap_or("rustc not found"),
     );
-    status_line("cargo", report.cargo_ok, if report.cargo_ok { "ok" } else { "not found" });
+    status_line(
+        "cargo",
+        report.cargo_ok,
+        if report.cargo_ok { "ok" } else { "not found" },
+    );
 
     if report.in_nestrs_workspace {
         println!("  nestrs workspace: yes");

@@ -763,27 +763,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chat"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures-util",
- "nest-rs-core",
- "nest-rs-guards",
- "nest-rs-health",
- "nest-rs-http",
- "nest-rs-opentelemetry",
- "nest-rs-testing",
- "nest-rs-ws",
- "parking_lot",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "tracing",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1215,12 +1194,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deunicode"
-version = "1.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1387,17 +1360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fake"
-version = "5.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea6be833b323a56361118a747470a45a1bcd5c52a2ec9b1e40c83dafe687e453"
-dependencies = [
- "deunicode",
- "either",
- "rand 0.10.1",
-]
-
-[[package]]
 name = "fast_chemail"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1428,6 +1390,7 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-opentelemetry",
  "nest-rs-queue",
  "nest-rs-redis",
  "nest-rs-resource",
@@ -1860,20 +1823,6 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
-
-[[package]]
-name = "hello"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "nest-rs-core",
- "nest-rs-guards",
- "nest-rs-http",
- "nest-rs-interceptors",
- "nest-rs-testing",
- "poem",
- "tokio",
-]
 
 [[package]]
 name = "hermit-abi"
@@ -2489,31 +2438,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
-]
-
-[[package]]
-name = "mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-health",
- "nest-rs-http",
- "nest-rs-mcp",
- "nest-rs-opentelemetry",
- "nest-rs-server-timing",
- "nest-rs-testing",
- "poem",
- "reqwest 0.13.4",
- "rmcp",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "validator",
 ]
 
 [[package]]
@@ -3711,89 +3635,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
-name = "platform-api"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-graphql",
- "features",
- "migrations",
- "nest-rs-authn",
- "nest-rs-authz",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-graphql",
- "nest-rs-guards",
- "nest-rs-health",
- "nest-rs-http",
- "nest-rs-openapi",
- "nest-rs-opentelemetry",
- "nest-rs-queue",
- "nest-rs-redis",
- "nest-rs-resource",
- "nest-rs-schedule",
- "nest-rs-seaorm",
- "nest-rs-server-timing",
- "nest-rs-testing",
- "poem",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "validator",
-]
-
-[[package]]
-name = "platform-auth"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "features",
- "migrations",
- "nest-rs-authn",
- "nest-rs-authz",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-health",
- "nest-rs-http",
- "nest-rs-opentelemetry",
- "nest-rs-seaorm",
- "nest-rs-testing",
- "nest-rs-throttler",
- "poem",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
- "validator",
-]
-
-[[package]]
-name = "platform-worker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "features",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-opentelemetry",
- "nest-rs-queue",
- "nest-rs-redis",
- "nest-rs-testing",
- "nest-rs-worker",
- "serde",
- "tokio",
-]
-
-[[package]]
 name = "pluralizer"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4013,6 +3854,135 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "publish-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-graphql",
+ "features",
+ "migrations",
+ "nest-rs-authn",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-guards",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-openapi",
+ "nest-rs-opentelemetry",
+ "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-resource",
+ "nest-rs-schedule",
+ "nest-rs-seaorm",
+ "nest-rs-server-timing",
+ "nest-rs-testing",
+ "poem",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "validator",
+]
+
+[[package]]
+name = "publish-assistant"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-mcp",
+ "nest-rs-opentelemetry",
+ "nest-rs-server-timing",
+ "nest-rs-testing",
+ "poem",
+ "reqwest 0.13.4",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "validator",
+]
+
+[[package]]
+name = "publish-auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "features",
+ "migrations",
+ "nest-rs-authn",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-opentelemetry",
+ "nest-rs-seaorm",
+ "nest-rs-testing",
+ "nest-rs-throttler",
+ "poem",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "validator",
+]
+
+[[package]]
+name = "publish-live"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "nest-rs-core",
+ "nest-rs-guards",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-opentelemetry",
+ "nest-rs-testing",
+ "nest-rs-ws",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
+name = "publish-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "features",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-opentelemetry",
+ "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-testing",
+ "nest-rs-worker",
+ "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -4887,7 +4857,6 @@ name = "seed"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "fake",
  "migrations",
  "nest-rs-testing",
  "sea-orm",

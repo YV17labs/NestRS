@@ -8,7 +8,7 @@ sidebar:
 import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
 You add one module to the app root and one migration to the workspace,
-and the data layer comes alive. By the end of this page, `POST /users`
+and the data layer comes alive. By the end of this page, `POST /posts`
 persists into Postgres inside a transaction, a failing handler rolls
 back automatically, and the e2e baseline you're about to add (next
 page) has a real database to point at.
@@ -27,63 +27,49 @@ The data layer crates are
 [**`nest-rs-seaorm`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-seaorm)
 (the SeaORM implementation, on top of [SeaORM](https://www.sea-ql.org/SeaORM/)).
 
-```rust title="apps/tutorial-api/src/module.rs" {7, 14}
+```rust title="apps/blog/src/module.rs" {6, 11}
 use nest_rs_core::module;
-use nest_rs_http::HttpModule;
+use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_opentelemetry::OpenTelemetryModule;
 use nest_rs_seaorm::DatabaseModule;
 
-use features::authn::AuthnModule;
-use features::authz::AuthzHttpModule;
-use features::users::UsersHttpModule;
+use features::posts::PostsHttpModule;
 
-#[module(
-    imports = [
-        HttpModule::for_root(None),
-        DatabaseModule::for_root(None),
-        AuthnModule,
-        AuthzHttpModule,
-        UsersHttpModule,
-    ],
-)]
-pub struct TutorialApiModule;
+#[module(imports = [
+    OpenTelemetryModule,
+    DatabaseModule::for_root(None),
+    HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+    PostsHttpModule,
+])]
+pub struct BlogModule;
 ```
 
 Add the crate to the app's `Cargo.toml`:
 
-```toml title="apps/tutorial-api/Cargo.toml"
+```toml title="apps/blog/Cargo.toml"
 nest-rs-seaorm = { workspace = true, features = ["http"] }
 ```
 
-The `http` feature flag turns on the `Bind<S, A>` extractor and the
-response masking interceptor — exactly what the controller from page 5
-needs.
+The `http` feature flag turns on the ORM hooks the HTTP data layer
+needs when a controller reaches the DB through `Repo`.
 
-## A migration for the users table
+## A migration for the post table
 
 The workspace ships a single `migrations` crate that holds every
-SeaORM migration. Add the `user` table.
+SeaORM migration. Add the `post` table.
 
 <FileTree>
 - crates/migrations/
   - src/
     - lib.rs
-    - m20260601_000010_create_user.rs
+    - m20260609_000000_create_post.rs
 </FileTree>
 
-```rust title="crates/migrations/src/m20260601_000010_create_user.rs"
+```rust title="crates/migrations/src/m20260609_000000_create_post.rs"
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
-
-#[derive(DeriveIden)]
-enum User {
-    Table,
-    Id,
-    OrgId,
-    Name,
-    Email,
-}
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
@@ -91,26 +77,36 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(User::Table)
-                    .col(ColumnDef::new(User::Id).uuid().primary_key())
-                    .col(ColumnDef::new(User::OrgId).uuid().not_null())
-                    .col(ColumnDef::new(User::Name).string().not_null())
-                    .col(ColumnDef::new(User::Email).string().not_null().unique_key())
+                    .table(Post::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(Post::Id).uuid().not_null().primary_key())
+                    .col(ColumnDef::new(Post::Title).string().not_null())
+                    .col(ColumnDef::new(Post::Body).text().not_null())
                     .to_owned(),
             )
             .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(User::Table).to_owned()).await
+        manager
+            .drop_table(Table::drop().table(Post::Table).to_owned())
+            .await
     }
+}
+
+#[derive(DeriveIden)]
+enum Post {
+    Table,
+    Id,
+    Title,
+    Body,
 }
 ```
 
 Register it in the migrator:
 
 ```rust title="crates/migrations/src/lib.rs"
-mod m20260601_000010_create_user;
+mod m20260609_000000_create_post;
 
 pub use sea_orm_migration::prelude::*;
 
@@ -119,14 +115,14 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20260601_000010_create_user::Migration)]
+        vec![Box::new(m20260609_000000_create_post::Migration)]
     }
 }
 ```
 
-The reference workspace adds an `org` table for the `belongs_to` from
-page 2 — for the tutorial, the `org_id` column stays unconstrained
-(every JWT carries an org id that just goes into the column).
+The reference workspace lists other migrations (`org`, `user`, …) for
+`publish-api`. Your tutorial migrator only needs `post` until you
+extend the workspace.
 
 ## Run Postgres
 
@@ -138,7 +134,7 @@ $ just db up
 postgres ready on 127.0.0.1:5432
 
 $ just db migrate
-applied: m20260601_000010_create_user
+applied: m20260609_000000_create_post
 ```
 
 `just db migrate` runs `Migrator::up` against
@@ -161,58 +157,52 @@ in the service.
 ## Run the binary
 
 ```bash frame="terminal"
-$ NESTRS_DATABASE__URL=postgres://nestrs:nestrs@127.0.0.1:5432/nestrs \
-    cargo run -p tutorial-api
-INFO nest_rs::http: starting on 0.0.0.0:3000
+$ just dev blog
+INFO nest_rs_http::transport: http transport listening addr=0.0.0.0:3005
 INFO nest_rs::orm: connected to postgres
 ```
 
-Hit the route with a token from the auth helper (the reference
-`apps/platform-auth` issues one; for the tutorial, page 8 uses a
-hand-signed test token from `nest-rs-testing`):
+No bearer token — `blog` is public for the tutorial:
 
 ```bash frame="terminal"
-$ curl -s -H "Authorization: Bearer $TOKEN" \
+$ curl -s -X POST http://localhost:3005/posts \
     -H 'Content-Type: application/json' \
-    -d '{"name":"Ada","email":"ada@acme.test"}' \
-    http://localhost:3000/users
-{"id":"018f…","name":"Ada","email":"ada@acme.test"}
+    -d '{"title":"Hello","body":"World"}'
+{"id":"018f…","title":"Hello","body":"World"}
 
-$ curl -s -H "Authorization: Bearer $TOKEN" \
-    http://localhost:3000/users
-[{"id":"018f…","name":"Ada","email":"ada@acme.test"}]
+$ curl -s http://localhost:3005/posts/018f…
+{"id":"018f…","title":"Hello","body":"World"}
+
+$ curl -s http://localhost:3005/posts
+[{"id":"018f…","title":"Hello","body":"World"}]
 ```
 
-Now a failure path. A unique-violation on `email` returns `500`, and
-nothing persists:
-
-```bash frame="terminal"
-$ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-    -H 'Content-Type: application/json' \
-    -d '{"name":"Ada","email":"ada@acme.test"}' \
-    http://localhost:3000/users
-HTTP/1.1 500 Internal Server Error
-
-$ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:3000/users
-[{"id":"018f…","name":"Ada","email":"ada@acme.test"}]
-```
-
-One row, not two. The transaction unwound on the duplicate.
+Create a second post with the same title — there is no unique constraint
+on `title`, so both rows persist. Transaction rollback on a `5xx` is
+what page 8 locks down in e2e when you add richer failure paths; for
+now, trust the interceptor contract above.
 
 <Aside type="tip">
 Set `RUST_LOG=nest_rs::orm=trace` to watch the `BEGIN` / `COMMIT` /
-`ROLLBACK` pairs scroll past. The same `request_id` tags the
-interceptor span and the SQL spans.
+`ROLLBACK` pairs scroll past on mutating routes. The same `request_id`
+tags the interceptor span and the SQL spans.
 </Aside>
 
 ## What you have now
 
 - A `DatabaseModule::for_root(None)` import in the app — the data
   layer is on.
-- A migration adding the `user` table, applied through
+- A migration adding the `post` table, applied through
   `just db migrate`.
-- `POST /users` persists into Postgres inside an automatic transaction;
-  a failing handler rolls back; the SQL is filtered by the caller's
-  ability.
+- `POST /posts` persisting into Postgres inside an automatic
+  transaction — no auth filter, no row-level policy, just business
+  logic through `Repo`.
 
-[Next: mirror the feature on GraphQL →](/tutorial/graphql/)
+<Aside type="note">
+Auth, row-level filtering, and response masking live in
+[`publish-api`](/tutorial/security/) — not in `blog`. Follow those
+pages when you extend the Publish workspace; skip them while you
+finish the minimal tutorial.
+</Aside>
+
+[Next: lock it down with an e2e test →](/tutorial/testing/)

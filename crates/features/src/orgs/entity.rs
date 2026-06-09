@@ -16,6 +16,8 @@ pub struct Model {
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
     #[sea_orm(has_many)]
+    pub posts: HasMany<crate::posts::Entity>,
+    #[sea_orm(has_many)]
     pub users: HasMany<crate::users::Entity>,
 }
 

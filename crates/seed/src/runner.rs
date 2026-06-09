@@ -7,5 +7,6 @@ pub async fn run(db: &DatabaseConnection) -> Result<u64> {
     let mut inserted = 0;
     inserted += factories::org::seed(db).await?;
     inserted += factories::user::seed(db).await?;
+    inserted += factories::post::seed(db).await?;
     Ok(inserted)
 }

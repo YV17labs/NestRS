@@ -243,7 +243,7 @@ writes `type AuthGuard = AuthGuard<JwtStrategy<Claims>>` once.
 **`JwtService`** is global infra (factory phase); symmetric secret or
 EdDSA key pair — a resource server holds **only the public key**
 (can't mint tokens). So **token issuance is its own app**
-(`apps/platform-auth` signs; `apps/platform-api` only verifies). They
+(`apps/publish-auth` signs; `apps/publish-api` only verifies). They
 share `crates/features` and the DB, never RPC each other.
 
 ### Authz follows port + adapters
@@ -362,8 +362,11 @@ allows at most one `#[ComplexObject]` per wire type, so a custom
 `#[field_resolver]` on the resolver cannot live next to an auto-resolved
 relation on the same entity — pick one source per `ComplexObject`.
 
-Exemplar apps: `apps/platform-api` (REST + GraphQL + WS + DB +
-authz); `apps/chat` (pure real-time).
+Exemplar apps: **Publish** workspace — `apps/publish-api` (REST + GraphQL +
+DB + authz), `apps/publish-live` (WebSockets), `apps/publish-auth` (issuer),
+`apps/publish-assistant` (MCP), `apps/publish-worker` (queue). Simple
+hello/blog layouts are CLI-scaffolded only — see docs, not hosted in this repo.
+Tutorial feature exemplar: `crates/features/src/posts/`.
 
 ## Surface crates — decisions, not mechanics
 
@@ -552,7 +555,7 @@ This file plus the **code** are the source of truth.
 1. **This file** — durable rules.
 2. **`crates/features/src/users/`** — reference feature; copy before
    inventing.
-3. **`apps/platform-api/`** — reference app (REST + GraphQL + WS + DB
+3. **`apps/publish-api/`** — reference app (REST + GraphQL + DB
    + authz); `module.rs` is canonical composition.
 4. **`crates/nestrs-<concern>/`** for whatever you touch.
 

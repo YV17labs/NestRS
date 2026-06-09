@@ -1,0 +1,44 @@
+[package]
+name = "publish-api"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-authn.workspace = true
+nest-rs-config.workspace = true
+nest-rs-authz = { workspace = true, features = ["http", "graphql"] }
+nest-rs-graphql.workspace = true
+nest-rs-guards.workspace = true
+nest-rs-health.workspace = true
+nest-rs-http.workspace = true
+nest-rs-openapi.workspace = true
+nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
+nest-rs-resource.workspace = true
+nest-rs-queue.workspace = true
+nest-rs-redis.workspace = true
+nest-rs-schedule.workspace = true
+nest-rs-server-timing.workspace = true
+nest-rs-opentelemetry = { workspace = true, features = ["http"] }
+features.workspace = true
+poem.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde.workspace = true
+schemars.workspace = true
+async-graphql.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+validator.workspace = true
+uuid.workspace = true
+sea-orm.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+poem = { workspace = true, features = ["test"] }
+nest-rs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
+migrations = { workspace = true }
+
+[lints]
+workspace = true

@@ -44,7 +44,7 @@ No wiring file. No config. No boilerplate. A provider, a controller, and a
 dependency graph is built and **verified at boot**, and each app under `apps/`
 compiles to its own native binary.
 
-```rust title="apps/hello/src/service.rs"
+```rust title="crates/features/src/hello/service.rs"
 use nest_rs_core::injectable;
 
 #[injectable]
@@ -52,14 +52,17 @@ use nest_rs_core::injectable;
 pub struct HelloService;
 
 impl HelloService {
-    pub fn greeting(&self) -> &'static str { "Hello World" }
+    pub fn greeting(&self) -> String {
+        "Hello World".to_string()
+    }
 }
 ```
 
-```rust title="apps/hello/src/controller.rs"
+```rust title="crates/features/src/hello/http/controller.rs"
 use std::sync::Arc;
 use nest_rs_http::{controller, routes};
-use crate::service::HelloService;
+
+use crate::hello::HelloService;
 
 #[controller(path = "/")]
 pub struct HelloController {
@@ -70,7 +73,7 @@ pub struct HelloController {
 #[routes]
 impl HelloController {
     #[get("/")]
-    async fn hello(&self) -> &'static str {
+    async fn hello(&self) -> String {
         self.svc.greeting()
     }
 }
@@ -78,30 +81,47 @@ impl HelloController {
 
 ```rust title="apps/hello/src/module.rs"
 use nest_rs_core::module;
-use nest_rs_http::HttpModule;
-use crate::{controller::HelloController, service::HelloService};
+use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_opentelemetry::OpenTelemetryModule;
+
+use features::hello::HelloHttpModule;
 
 #[module(
-    imports = [HttpModule::for_root(None)],
-    providers = [HelloService, HelloController],
+    imports = [
+        OpenTelemetryModule,
+        HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
+        HelloHttpModule,
+    ],
 )]
 pub struct HelloModule;
 ```
 
 ```rust title="apps/hello/src/main.rs"
+use anyhow::Result;
+use nest_rs_config::Environment;
 use nest_rs_core::App;
+use nest_rs_opentelemetry::OpenTelemetry;
+
 use hello::HelloModule;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    App::builder().module::<HelloModule>().build().await?.run().await
+async fn main() -> Result<()> {
+    let _environment = Environment::init();
+    let _telemetry = OpenTelemetry::init("hello")?;
+
+    App::builder()
+        .module::<HelloModule>()
+        .build()
+        .await?
+        .run()
+        .await
 }
 ```
 
 <TerminalSession
   lines={[
     { kind: 'input', text: 'just dev' },
-    { kind: 'output', text: 'cargo run --bin hello' },
+    { kind: 'output', text: 'bacon run-long -- --bin hello' },
     { kind: 'output', text: '    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s' },
     { kind: 'output', text: '     Running `target/debug/hello`' },
     { kind: 'output', text: '2026-04-29T12:00:00.798397Z  INFO nest_rs_opentelemetry::init: OpenTelemetry initialised service=hello endpoint="<none>" sample_ratio=1.0 log_format=Text otlp_export=false' },
@@ -122,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
 
 The same inject-and-decorate model carries every surface — HTTP, GraphQL,
 WebSockets, queues, scheduled jobs, MCP. [Get started](/getting-started/), read
-the [fundamentals](/fundamentals/), or jump straight to a topic:
+the [Publish workspace](/publish/), the [fundamentals](/fundamentals/), or jump straight to a topic:
 [HTTP](/http/), [OpenAPI](/openapi/), [GraphQL](/graphql/),
 [WebSockets](/websockets/), [OpenTelemetry](/opentelemetry/),
 [Database](/database/), [Security](/security/).

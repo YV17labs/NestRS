@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-import { FileTree } from '@astrojs/starlight/components';
+import { Aside, FileTree } from '@astrojs/starlight/components';
 
 A NestRS app is a tree of **modules**. Each module groups **providers**
 (injectable structs) and optionally imports other modules. The
@@ -13,10 +13,21 @@ dependency-injection graph is built at compile time and verified at boot —
 a missing wire fails startup with a clear error, never with a deep
 `Cannot resolve` at first request.
 
-This category follows one fictional app — **`blog`** — from a single root
-module to a composed API with a `post/` feature. The snippets are
-illustrative; the same names appear on [Modules](/fundamentals/modules/)
-and [Providers](/fundamentals/providers/).
+<Aside type="note">
+This category and the [tutorial](/tutorial/) follow the **same** app —
+**`blog`** — at different stages. Here you see **step ①**: inline
+`BlogService` / `BlogController` in `apps/blog/` (no database, handlers
+in the app root). The tutorial ships the **finished** binary: a composed
+`BlogModule` that imports `PostsHttpModule` from
+`crates/features/src/posts/`. The repo matches the tutorial, not the
+inline layout — read Fundamentals for vocabulary, then build forward in
+the tutorial.
+</Aside>
+
+This category walks **`blog`** through the [**Publish**](/publish/) story
+from that inline root to a composed API with a `post/` feature. The
+snippets are illustrative; the same names appear on
+[Modules](/fundamentals/modules/) and [Providers](/fundamentals/providers/).
 
 This category walks the seven primitives every binary leans on:
 
@@ -87,12 +98,12 @@ controller's path.
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs_core::module;
-use nest_rs_http::HttpModule;
+use nest_rs_http::{HttpConfig, HttpModule};
 use crate::controller::BlogController;
 use crate::service::BlogService;
 
 #[module(
-    imports = [HttpModule::for_root(None)],
+    imports = [HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() })],
     providers = [BlogService, BlogController],
 )]
 pub struct BlogModule;
@@ -113,13 +124,15 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 ```bash frame="terminal"
-$ curl http://localhost:3000/
+$ curl http://localhost:3005/
 A minimal blog API
 ```
 
 Later pages move the domain into `post/` (`PostService`, `PostController`,
 `PostModule`, …) and grow `BlogModule` into a composed root — see
-[Modules](/fundamentals/modules/).
+[Modules](/fundamentals/modules/). The [tutorial](/tutorial/) names the
+feature `posts/` and is where you implement that composed root in the
+repo.
 
 ## What the framework did
 

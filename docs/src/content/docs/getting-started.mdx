@@ -38,8 +38,8 @@ per app under `apps/`) or a **standalone** crate (everything in `src/`).
 1. Scaffold.
 
    ```bash
-   nestrs new acme
-   cd acme
+   nestrs new hello
+   cd hello
    ```
 
 2. Start the default app.
@@ -49,7 +49,7 @@ per app under `apps/`) or a **standalone** crate (everything in `src/`).
    ```
 
    Open **http://localhost:3000/** — `Hello World`, served from
-   `crates/features/hello/`. `apps/hello/` only wires modules.
+   `crates/features/src/hello/`. `apps/hello/` only wires modules.
 
 </Steps>
 
@@ -61,8 +61,8 @@ per app under `apps/`) or a **standalone** crate (everything in `src/`).
 1. Scaffold.
 
    ```bash
-   nestrs new acme --standalone
-   cd acme
+   nestrs new hello --standalone
+   cd hello
    ```
 
 2. Start it.
@@ -78,14 +78,9 @@ per app under `apps/`) or a **standalone** crate (everything in `src/`).
 </TabItem>
 </Tabs>
 
-That's the loop: scaffold, `just dev`, open the browser. Grow the project with
-`nestrs g feature|resource|<transport>` — see the [CLI reference](/cli/).
-
 ## Next steps
 
+- [The Publish workspace](/publish/) — the fictional product every example app tells.
 - [CLI](/cli/) — scaffold apps, features, and transport adapters.
 - [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, interceptors, filters.
-- [HTTP](/http/) — controllers, routes, extractors, transport config.
-- [Database](/database/) and [Security](/security/) — past the hello baseline.
-- [Testing](/testing/) — boot the real graph in-process before an e2e suite.
-- [Tutorial](/tutorial/) — build a complete `users` feature end to end.
+- [Tutorials](/tutorial/) — add `apps/blog/` with `nestrs new blog` and build posts over HTTP.

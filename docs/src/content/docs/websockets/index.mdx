@@ -20,19 +20,22 @@ transport `nest-rs-http` already uses. It hides the read/write split,
 the outbox writer task, the connection registry, and the dispatch
 plumbing behind one decorator.
 
+In the [**Publish**](/publish/) workspace, live comments and notifications
+run in [`publish-live`](/publish/) on port **3004**.
+
 ## A one-event gateway
 
 The smallest possible gateway: one event, one reply.
 
-```rust title="apps/hello-ws/src/gateway.rs"
+```rust title="apps/publish-live/src/chat/gateway.rs"
 use nest_rs_ws::{gateway, messages};
 
 #[gateway(path = "/ws")]
 #[derive(Default)]
-pub struct HelloGateway;
+pub struct PingGateway;
 
 #[messages]
-impl HelloGateway {
+impl PingGateway {
     #[subscribe_message("ping")]
     async fn ping(&self) -> &'static str {
         "pong"
@@ -48,18 +51,21 @@ same event name.
 
 Wire it in like any other provider:
 
-```rust title="apps/hello-ws/src/module.rs"
+```rust title="apps/publish-live/src/module.rs"
 use nest_rs_core::module;
-use nest_rs_http::HttpModule;
+use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_ws::WsModule;
 
-use crate::gateway::HelloGateway;
+use crate::chat::gateway::PingGateway;
 
 #[module(
-    imports = [HttpModule::for_root(None), WsModule],
-    providers = [HelloGateway],
+    imports = [
+        HttpModule::for_root(HttpConfig { port: 3004, ..Default::default() }),
+        WsModule,
+    ],
+    providers = [PingGateway],
 )]
-pub struct AppModule;
+pub struct PublishLiveModule;
 ```
 
 `HttpModule` for the transport, `WsModule` for the connection registry
@@ -69,19 +75,19 @@ pub struct AppModule;
 ## Run it
 
 ```bash
-just dev hello-ws
+just dev publish-live
 ```
 
 ```text frame="terminal"
-2026-06-08T10:23:14Z  INFO nest_rs::http: bound 1 gateway on 0.0.0.0:3000
-  GET /ws -> HelloGateway (1 message, 0 lifecycle hooks)
+2026-06-08T10:23:14Z  INFO nest_rs::http: bound 1 gateway on 0.0.0.0:3004
+  GET /ws -> PingGateway (1 message, 0 lifecycle hooks)
 ```
 
 Drive it from any WebSocket client. With
 [`websocat`](https://github.com/vi/websocat):
 
 ```bash frame="terminal"
-$ websocat ws://localhost:3000/ws
+$ websocat ws://localhost:3004/ws
 {"event":"ping","data":null}
 {"event":"ping","data":"pong"}
 ```
@@ -111,5 +117,6 @@ matter of adding one decorator.
   the macro and runtime: `#[gateway]`, `#[messages]`,
   `#[subscribe_message]`, `#[on_connect]`, `#[on_disconnect]`,
   `WsClient`, `WsServer`, `WsModule`.
-- [`apps/chat`](https://github.com/NestRS/NestRS/tree/main/apps/chat) —
-  end-to-end real-time example used throughout these pages.
+- [`apps/publish-live`](https://github.com/NestRS/NestRS/tree/main/apps/publish-live) —
+  end-to-end real-time example (`ChatGateway`, `NotifyGateway`) used
+  throughout these pages.

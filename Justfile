@@ -1,16 +1,16 @@
 _default:
     @just --list
 
-# Run an app in watch mode (default: hello). Usage: just dev mcp
-dev app="hello":
+# Run an app in watch mode (default: publish-api). Usage: just dev publish-live
+dev app="publish-api":
     bacon run-long -- --bin {{app}}
 
-# Run an app in release mode (default: hello). Usage: just run mcp
-run app="hello":
+# Run an app in release mode (default: publish-api). Usage: just run publish-live
+run app="publish-api":
     cargo run --release --bin {{app}}
 
-# Build one app in release (default: hello). Usage: just build mcp
-build app="hello":
+# Build one app in release (default: publish-api). Usage: just build publish-live
+build app="publish-api":
     cargo build --release -p {{app}}
 
 # Build release binaries for every app in the workspace.

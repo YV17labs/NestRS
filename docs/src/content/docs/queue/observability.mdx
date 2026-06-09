@@ -111,7 +111,7 @@ attribute mapping. The corresponding log-to-OTLP path is in
 ## Filtering recipes
 
 ```bash
-RUST_LOG=info,nest_rs::queue=debug just dev platform-worker
+RUST_LOG=info,nest_rs::queue=debug just dev publish-worker
 ```
 
 `info` everywhere, `debug` on the queue path: gives you the
@@ -119,7 +119,7 @@ boot-time skip lines plus the per-job dispatch decisions without
 turning the rest of the framework loud.
 
 ```bash
-RUST_LOG=nest_rs::queue=warn just dev platform-worker
+RUST_LOG=nest_rs::queue=warn just dev publish-worker
 ```
 
 Strictly retries and failures — useful for tailing a healthy worker

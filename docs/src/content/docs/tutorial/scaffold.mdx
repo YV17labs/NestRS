@@ -1,78 +1,105 @@
 ---
 title: Scaffold the app
-description: Set up the workspace, create apps/tutorial-api/, write the first AppModule, run the binary, see a 404 on the root route.
+description: Create apps/blog/ with nestrs new blog, start it with just dev blog, see a 404 on / — then read what the CLI generated.
 sidebar:
   order: 2
 ---
 
 import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
-You start with the bones — a new app under `apps/tutorial-api/`, a
-`module.rs` that activates the HTTP transport, a `main.rs` that builds
-the app and runs it. By the end of this page, `cargo run -p tutorial-api`
-listens on port 3000 and replies `404` to `GET /` (you haven't mounted
-a route yet — that's the next page).
+You add the **`blog`** app to your workspace with the [`nestrs` CLI](/cli/) —
+the same tool from [Getting started](/getting-started/). By the end of this
+page, `just dev blog` listens on the port pinned in `module.rs` and replies
+`404` to `GET /` (no routes mounted yet — that's the next page).
 
-## Quick path — the CLI
+<Aside type="note">
+The tutorial is **workspace-only**: shared features under `crates/features/`,
+thin apps under `apps/*`. Run every command from **your** workspace root
+(the monorepo you scaffolded in [Getting started](/getting-started/), or a
+fresh one). This repository hosts **Publish** only — use
+[`nestrs new blog`](/cli/#add-an-app-to-an-existing-workspace) to create
+`apps/blog/`; compare your tree with the tutorial feature exemplar in
+[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/posts).
+</Aside>
 
-If you have the [`nestrs` CLI](/cli/) installed:
+## Create the app
 
-```bash
-# From the nestrs workspace root
-nestrs new tutorial-api
-just dev tutorial-api
-curl -i http://localhost:3005/
-# → 404 Not Found (port from apps/tutorial-api/src/module.rs — next free in the workspace)
-```
+From the workspace root:
 
-Skip to [Run it](#run-it) below, or read on for the manual layout the
-generator copies.
+<Steps>
 
-## A new app folder (manual)
+1. Scaffold a thin app — composition only, no routes yet.
 
-Inside the workspace, create the app directory.
+   ```bash
+   nestrs new blog
+   ```
+
+   Inside an existing workspace this writes `apps/blog/` and picks the
+   **next free HTTP port** in `module.rs` (see
+   [`nestrs new blog`](/cli/#add-an-app-to-an-existing-workspace) in the CLI
+   docs). The command refuses to overwrite if the folder already exists.
+
+2. Start it under `bacon` (restarts on save).
+
+   ```bash
+   just dev blog
+   ```
+
+3. Hit the root route — use the port from `apps/blog/src/module.rs`.
+
+   ```bash
+   curl -i http://localhost:<port>/
+   # → 404 Not Found
+   ```
+
+</Steps>
+
+Need the full CLI surface — layout detection, `--check`, generators?
+See the [CLI reference](/cli/).
+
+## What the CLI created
+
+`nestrs new blog` does not ask you to hand-edit the root `Cargo.toml`
+members list — workspace apps are discovered from `apps/*`. It writes a
+**thin** app: `main.rs` boots the framework, `module.rs` composes
+transports, no `controller.rs` or `service.rs` in the app crate (those
+land in `crates/features/` from page 2 onward).
 
 <FileTree>
-- apps/tutorial-api/
+- apps/blog/
   - Cargo.toml
   - src/
+    - lib.rs
     - main.rs
     - module.rs
+  - tests/
+    - e2e.rs
 </FileTree>
 
-```toml title="apps/tutorial-api/Cargo.toml"
+```toml title="apps/blog/Cargo.toml"
 [package]
-name = "tutorial-api"
+name = "blog"
 version.workspace = true
 edition.workspace = true
 publish = false
 
 [dependencies]
+features.workspace = true
 nest-rs-core.workspace = true
+nest-rs-config.workspace = true
 nest-rs-http.workspace = true
-anyhow.workspace = true
+nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 tokio.workspace = true
+anyhow.workspace = true
 
-[lints]
-workspace = true
+[dev-dependencies]
+nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
 ```
 
-<Aside type="note">
-Apps live under `apps/<name>/`. The workspace already includes every folder
-under `apps/*` — you do **not** need to edit the root `Cargo.toml` members
-list. A feature lives under `crates/features/src/` once another app could
-reuse it. The tutorial starts in the app folder and moves the feature to
-`crates/features/src/users/` on the next page — exactly where the reference
-exemplar lives.
-</Aside>
+The root module is where transports come in. `HttpModule::for_root` pins
+the listen port in code — not in `.env`:
 
-## The root module
-
-The root module is where transports come in. `HttpModule::for_root` pins the
-listen port in code — the CLI picks the next free port when it scaffolds the
-app (same pattern as `platform-api`, `platform-auth`, … in this repo):
-
-```rust title="apps/tutorial-api/src/module.rs"
+```rust title="apps/blog/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_opentelemetry::OpenTelemetryModule;
@@ -81,30 +108,33 @@ use nest_rs_opentelemetry::OpenTelemetryModule;
     OpenTelemetryModule,
     HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
 ])]
-pub struct TutorialApiModule;
+pub struct BlogModule;
 ```
 
-`HttpModule::for_root(None)` would default to port 3000 — workspace apps never
-rely on that; each binary owns its port in `module.rs`, not in `.env`.
+The reference workspace pins `3005` for `blog`. When you scaffold with
+`nestrs new blog`, the CLI picks the next free port — yours may differ
+if other apps already exist in the workspace.
 
-`TutorialApiModule` has no `providers = [...]` list. A root module
-usually composes feature modules and lets each own its providers —
-that's why the [reference root](https://github.com/NestRS/NestRS/blob/main/apps/platform-api/src/module.rs)
+`BlogModule` has no `providers = [...]` list. A root module composes
+feature modules and lets each own its providers — the
+[reference root](https://github.com/NestRS/NestRS/blob/main/apps/publish-api/src/module.rs)
 carries only `imports`.
 
-## The entry point
-
-```rust title="apps/tutorial-api/src/main.rs"
+```rust title="apps/blog/src/main.rs"
 use anyhow::Result;
+use nest_rs_config::Environment;
 use nest_rs_core::App;
+use nest_rs_opentelemetry::OpenTelemetry;
 
-mod module;
-use module::TutorialApiModule;
+use blog::BlogModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let _environment = Environment::init();
+    let _telemetry = OpenTelemetry::init("blog")?;
+
     App::builder()
-        .module::<TutorialApiModule>()
+        .module::<BlogModule>()
         .build()
         .await?
         .run()
@@ -114,26 +144,28 @@ async fn main() -> Result<()> {
 
 `App::builder()` runs the four boot phases — seeds, collect, factories,
 register — verifies the access graph, then `.run()` blocks on the
-transports. The same `main` shape works for every binary in the
-workspace.
+transports. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
+for the e2e test on page 8) and a stub `tests/e2e.rs`.
 
-## Run it
+## Run it again
 
 <Steps>
 
-1. From the workspace root, build and run.
+1. From the workspace root:
 
    ```bash frame="terminal"
-   $ cargo run -p tutorial-api
-       Compiling tutorial-api v0.1.0
-        Running `target/debug/tutorial-api`
-   INFO nest_rs::http: starting on 0.0.0.0:3000
+   $ just dev blog
+       Compiling blog v0.1.0
+        Running `target/debug/blog`
+   INFO nest_rs::http: starting on 0.0.0.0:3001
    ```
 
-2. In another terminal, hit the root route.
+   The log line shows the port from your `module.rs`.
+
+2. In another terminal:
 
    ```bash frame="terminal"
-   $ curl -i http://localhost:3000/
+   $ curl -i http://localhost:3001/
    HTTP/1.1 404 Not Found
    ```
 
@@ -141,21 +173,19 @@ workspace.
 
 </Steps>
 
-A `404` is the right answer — the HTTP transport is mounted, the
-process is healthy, and no route table claims `/` yet. That's the gap
-the next page fills.
+A `404` is the right answer — the HTTP transport is mounted, the process
+is healthy, and no route table claims `/` yet. That's the gap the next
+page fills.
 
 <Aside type="tip">
-Prefer `just dev tutorial-api` over `cargo run` once the app is in the
-workspace — it runs under `bacon` and restarts on every save.
+`just dev blog` runs under `bacon` and restarts on every save.
 </Aside>
 
 ## What you have now
 
-- A `tutorial-api` app in the workspace, with `Cargo.toml`, `main.rs`,
-  `module.rs`.
-- A `TutorialApiModule` that activates the HTTP transport.
-- A running binary returning `404` on the root route — proof the
-  framework boots end to end.
+- A `blog` app under `apps/blog/`, scaffolded by `nestrs new blog`.
+- A `BlogModule` that activates the HTTP transport.
+- A running binary returning `404` on the root route — proof the framework
+  boots end to end.
 
 [Next: declare the `User` entity →](/tutorial/entity/)

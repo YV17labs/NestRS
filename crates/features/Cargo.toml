@@ -43,7 +43,12 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-nest-rs-testing = { workspace = true, features = ["orm"] }
+nest-rs-http.workspace = true
+nest-rs-opentelemetry = { workspace = true, features = ["http"] }
+nest-rs-testing = { workspace = true, features = ["orm", "opentelemetry"] }
+nest-rs-authn.workspace = true
+poem = { workspace = true, features = ["test"] }
+serde_json.workspace = true
 nest-rs-authz.workspace = true
 nest-rs-seaorm.workspace = true
 async-graphql.workspace = true

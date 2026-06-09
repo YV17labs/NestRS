@@ -7,6 +7,11 @@ sidebar:
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
+<Aside type="caution">
+This page applies to **`publish-api`**, not **`blog`**. The tutorial app
+mounts HTTP only; GraphQL ships on the full Publish API.
+</Aside>
+
 You add a GraphQL adapter to the same feature — a single resolver
 struct, two operations, zero changes to the service. By the end of this
 page, `POST /graphql` answers `{ users { id name } }` against the same
@@ -134,29 +139,9 @@ pub use http::{UsersController, UsersHttpModule};
 The app root imports `GraphqlModule::for_root(None)` to mount the HTTP
 endpoint, and the feature's GraphQL adapter for the operations.
 
-```rust title="apps/tutorial-api/src/module.rs" {3-4, 14-15}
-use nest_rs_core::module;
-use nest_rs_graphql::GraphqlModule;
-use nest_rs_http::HttpModule;
-use nest_rs_seaorm::DatabaseModule;
-
-use features::authn::AuthnModule;
-use features::authz::{AuthzGraphqlModule, AuthzHttpModule};
-use features::users::{UsersGraphqlModule, UsersHttpModule};
-
-#[module(
-    imports = [
-        HttpModule::for_root(None),
-        DatabaseModule::for_root(None),
-        AuthnModule,
-        AuthzHttpModule,
-        AuthzGraphqlModule,
-        UsersHttpModule,
+```rust title="apps/publish-api/src/module.rs" {14-15}
         UsersGraphqlModule,
         GraphqlModule::for_root(None),
-    ],
-)]
-pub struct TutorialApiModule;
 ```
 
 `GraphqlModule::for_root(...)` mounts `POST /graphql` (the endpoint)
@@ -170,7 +155,7 @@ no central `queries = [...]` list to keep in sync.
 $ curl -s -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"query":"{ users { id name email } }"}' \
-    http://localhost:3000/graphql
+    http://localhost:3002/graphql
 {"data":{"users":[{"id":"018f…","name":"Ada","email":"ada@acme.test"}]}}
 ```
 
@@ -205,7 +190,7 @@ query per parent:
 $ curl -s -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"query":"{ users { id name org { id } } }"}' \
-    http://localhost:3000/graphql
+    http://localhost:3002/graphql
 {"data":{"users":[
   {"id":"018f…","name":"Ada","org":{"id":"018e…"}}
 ]}}
@@ -231,10 +216,10 @@ framework writes one as a side effect of the dev run when
 builds, commit it for dev:
 
 ```bash frame="terminal"
-$ NESTRS_GRAPHQL__EMIT_SDL=1 cargo run -p tutorial-api
-INFO nest_rs::graphql: wrote schema to apps/tutorial-api/schema.graphql
+$ NESTRS_GRAPHQL__EMIT_SDL=1 just dev publish-api
+INFO nest_rs::graphql: wrote schema to apps/publish-api/schema.graphql
 
-$ head -5 apps/tutorial-api/schema.graphql
+$ head -5 apps/publish-api/schema.graphql
 type Query {
   user(id: String!): User
   users(first: Int, after: String): [User!]!

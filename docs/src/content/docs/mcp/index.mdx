@@ -6,6 +6,9 @@ description: Expose services to language models via the Model Context Protocol �
 import { Aside } from '@astrojs/starlight/components';
 
 MCP (Model Context Protocol) is the spec language models use to call tools.
+In the [**Publish**](/publish/) workspace, the assistant lives in
+[`publish-assistant`](/publish/) on port **3003**.
+
 A NestRS MCP server is a struct with a `#[mcp]` decorator: DI handles its
 dependencies, `#[tool]` defines each tool, and the server self-mounts on the
 HTTP transport at the path you choose. Same DI, same access graph, same
@@ -20,7 +23,7 @@ schemas the client reads.
 
 The fastest way to see the shape: one tool, one string in, one string out.
 
-```rust title="apps/mcp/src/hello/tool.rs"
+```rust title="apps/publish-assistant/src/hello/tool.rs"
 use nest_rs_mcp::{
     mcp, tool, tool_handler, tool_router,
     CallToolResult, Content, McpError, Parameters, ServerHandler,
@@ -73,7 +76,7 @@ none, real servers usually do.
 ## Run it
 
 ```bash
-$ just dev mcp
+$ just dev publish-assistant
 ```
 
 ```text frame="terminal"
@@ -141,7 +144,7 @@ Tool inputs are deserialized to a typed struct, so the schema the client reads
 is already typed. For extra checks beyond shape — ranges, enums, mutual
 exclusion — pair `serde` with `validator`:
 
-```rust title="apps/mcp/src/weather/dto.rs"
+```rust title="apps/publish-assistant/src/weather/dto.rs"
 use serde::Deserialize;
 use validator::Validate;
 
@@ -154,7 +157,7 @@ pub struct CoordsParams {
 }
 ```
 
-```rust title="apps/mcp/src/weather/tool.rs"
+```rust title="apps/publish-assistant/src/weather/tool.rs"
 #[tool(description = "Return the current weather at the given GPS coordinates.")]
 async fn current_weather(
     &self,
@@ -184,12 +187,12 @@ in the module's `providers` and each mounts on the HTTP transport independently
 — different tools, different injected dependencies, different authorization
 policy if you want one.
 
-```rust title="apps/mcp/src/module.rs"
+```rust title="apps/publish-assistant/src/module.rs"
 #[module(
     imports = [HttpModule::for_root(None), AuthzMcpModule],
     providers = [HelloTool, WeatherTool],
 )]
-pub struct McpAppModule;
+pub struct PublishAssistantModule;
 ```
 
 There is no per-server namespace primitive (no `WsServer<N>` analogue) —
@@ -231,7 +234,7 @@ your `AuthGuard` chain on every MCP request and seeds the resulting
 same way HTTP handlers do — through a service that goes through `Repo`,
 which respects the ability's row-level filter automatically.
 
-```rust title="apps/mcp/src/module.rs"
+```rust title="apps/publish-assistant/src/module.rs"
 #[module(
     imports = [
         HttpModule::for_root(None),
@@ -241,7 +244,7 @@ which respects the ability's row-level filter automatically.
     ],
     providers = [HelloTool],
 )]
-pub struct McpAppModule;
+pub struct PublishAssistantModule;
 ```
 
 A tool that lists users gets only users the caller is allowed to see — same
@@ -296,7 +299,7 @@ the access graph rejects accidental coupling at boot.
 
 ### Reference
 
-- `apps/mcp/` — the full Weather example.
+- `apps/publish-assistant/` — the full Weather example.
 - `crates/nest-rs-mcp/` — `#[mcp]`, the streamable-HTTP endpoint factory,
   and the re-exported rmcp surface (`tool_router`, `tool`, `tool_handler`,
   `ServerHandler`, `McpError`, `Parameters`, `CallToolResult`, `Content`).

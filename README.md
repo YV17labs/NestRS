@@ -171,7 +171,7 @@ brings up Rust, Postgres and Redis in one step.
    [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
    extension.
 2. Open the repo in VS Code and accept **Reopen in Container**.
-3. `just dev` — the bare `hello` baseline on `http://localhost:3000`.
+3. `just dev publish-api` — the main Publish API on `http://localhost:3002` (run `just db up` first).
 
 The container provisions the Rust toolchain and dev tooling (`just`, `bacon`,
 `cargo-nextest`, …), and brings up **Postgres** and **Redis** beside it with
@@ -186,15 +186,14 @@ A Cargo workspace with three kinds of member.
 
 ```
 nestrs/
-├─ apps/               applications — one runnable binary each
-│  ├─ chat/            real-time WebSocket gateway
-│  ├─ hello/           minimal HTTP baseline
-│  ├─ mcp/             Model Context Protocol server
-│  ├─ platform-api/    REST + GraphQL + OpenAPI, persisted & authorized
-│  ├─ platform-auth/   OAuth2 / JWT token issuer
-│  └─ platform-worker/ background jobs & scheduling (headless)
+├─ apps/               applications — one runnable binary each (the Publish workspace)
+│  ├─ publish-auth/   OAuth2 / JWT token issuer
+│  ├─ publish-api/    REST + GraphQL + OpenAPI, persisted & authorized
+│  ├─ publish-assistant/  Model Context Protocol server
+│  ├─ publish-live/   real-time WebSocket gateway
+│  └─ publish-worker/ background jobs & scheduling (headless)
 ├─ crates/
-│  ├─ features/        product features — port + adapters (users, authn, authz, …)
+│  ├─ features/        product features — port + adapters (users, posts, authn, …)
 │  ├─ migrations/      shared-database SeaORM migrations (CLI)
 │  ├─ seed/            shared-database demo data (CLI)
 │  ├─ nest-rs-core/     IoC container, modules, DI, bootstrap
@@ -202,6 +201,8 @@ nestrs/
 │  └─ …                one framework crate per capability
 └─ docs/               the nestrs.dev site (Astro Starlight)
 ```
+
+Simple **hello** and **blog** layouts are CLI-scaffolded only — see [Getting started](https://nestrs.dev/getting-started/) and the [tutorial](https://nestrs.dev/tutorial/). They are not checked into this repo.
 
 - **`apps/<name>/`** — `main.rs` + `module.rs` listing the edge modules the binary serves. One repository, several independently shippable services.
 - **`crates/nestrs-*/`** — the framework: generic, product-agnostic building blocks.
@@ -215,9 +216,9 @@ Run `just` with no arguments to list every recipe.
 
 | Command | What it does |
 |---------|--------------|
-| `just dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `just dev platform-api` |
-| `just run <app>` | Run an app in release mode, e.g. `just run platform-api` |
-| `just build <app>` | Build one app in release (default `hello`), e.g. `just build platform-api` |
+| `just dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `just dev publish-api` |
+| `just run <app>` | Run an app in release mode, e.g. `just run publish-api` |
+| `just build <app>` | Build one app in release (default `publish-api`), e.g. `just build publish-live` |
 | `just build-all` | Build release binaries for every app in the workspace |
 | `just test` | Run unit + integration tests (no DB) |
 | `just test-e2e` | Run e2e tests (Postgres required) |
@@ -228,31 +229,28 @@ Run `just` with no arguments to list every recipe.
 | `just db <verb>` | Manage the shared database: `up`, `down`, `fresh`, `status`, `seed`, `reset` |
 
 `build-all`, `test`, `test-cov`, `lint`, `fmt` and `check` operate on the
-whole workspace; `dev`, `run`, and `build` take an app name (default `hello`);
+whole workspace; `dev`, `run`, and `build` take an app name (default `publish-api`);
 `just db` (run bare to list the verbs) manages the shared Postgres schema and seed data.
 
-### Example apps
+### The Publish workspace
 
-Each app is a different *kind* of binary, there to show that several can share
-one workspace and the same building blocks. `platform-auth` and `platform-api`
-together demonstrate the split-by-responsibility pattern — a dedicated token
-issuer and a pure resource server that trust the same self-contained JWT and
-share the `features` crate (`identity` module), never calling each other.
+This repo ships **Publish** — a fictional multi-tenant publishing platform
+told through six apps that share `crates/features/` and never RPC each other.
+Full map: [nestrs.dev/publish](https://nestrs.dev/publish/).
 
 | App | Kind | Port |
 |-----|------|------|
-| `hello` | Minimal HTTP baseline | 3000 |
-| `platform-auth` | OAuth2 / JWT token issuer | 3001 |
-| `platform-api` | REST + GraphQL + OpenAPI, persisted & authorized | 3002 |
-| `mcp` | Model Context Protocol server | 3003 |
-| `chat` | Real-time WebSocket gateway | 3004 |
-| `platform-worker` | Background jobs & scheduling (headless) | — |
+| `publish-auth` | OAuth2 / JWT token issuer | 3001 |
+| `publish-api` | REST + GraphQL + OpenAPI, persisted & authorized | 3002 |
+| `publish-assistant` | Model Context Protocol server | 3003 |
+| `publish-live` | Real-time WebSocket gateway | 3004 |
+| `publish-worker` | Background jobs & scheduling (headless) | — |
 
-`platform-api` and `platform-auth` need Postgres; `platform-worker` needs Redis
-— run `just db up` once first (or `just db reset` to also load demo users). The
-bare `hello`, `mcp` and `chat` examples need neither.
+`publish-api` and `publish-auth` need Postgres; `publish-worker` needs Redis
+— run `just db up` once first (or `just db reset` to also load demo users).
+`publish-assistant` and `publish-live` need neither.
 
-The richest reference is `platform-api`. Read it before inventing a second
+The richest reference is `publish-api`. Read it before inventing a second
 pattern — copy it to start a new feature; see [`CLAUDE.md`](CLAUDE.md) for the
 rules a contributor (human or LLM) is expected to follow.
 
@@ -264,8 +262,8 @@ workspace binary** into a single image. Which one runs is chosen at
 
 ```bash
 docker build -t nestrs .
-docker run --rm -p 3000:3000 nestrs                              # default `hello`
-docker run --rm -p 3002:3002 nestrs /usr/local/bin/platform-api  # any other binary
+docker run --rm -p 3002:3002 nestrs                              # default `publish-api`
+docker run --rm -p 3001:3001 nestrs /usr/local/bin/publish-auth  # any other binary
 docker run --rm nestrs /usr/local/bin/migrate up                 # apply migrations
 ```
 

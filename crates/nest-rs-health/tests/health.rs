@@ -2,7 +2,7 @@
 //!
 //! Documented gaps (no test file required): `src/lib.rs` re-exports only;
 //! `src/controller.rs` is exercised end-to-end by every app importing
-//! `HealthModule` (see `apps/platform-api/tests/e2e.rs::health_probe_*`);
+//! `HealthModule` (see `apps/publish-api/tests/e2e.rs::health_probe_*`);
 //! `src/indicator.rs` is data + an `inventory::collect!` site, exercised
 //! through `service` below.
 mod module;

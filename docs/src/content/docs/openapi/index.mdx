@@ -21,7 +21,7 @@ so the spec composes itself.
 Add `OpenApiModule::for_root` to the app root, alongside the controllers it
 should document:
 
-```rust title="apps/platform-api/src/module.rs"
+```rust title="apps/publish-api/src/module.rs"
 use nest_rs_openapi::OpenApiModule;
 
 #[module(
@@ -31,7 +31,7 @@ use nest_rs_openapi::OpenApiModule;
         OpenApiModule::for_root(None),
     ],
 )]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 That's the whole opt-in. The module self-mounts both endpoints on the existing
@@ -140,7 +140,7 @@ dual-path rule):
 $ NESTRS_OPENAPI__TITLE="Acme API" \
   NESTRS_OPENAPI__VERSION="2.1.0" \
   NESTRS_OPENAPI__DESCRIPTION="Public REST surface" \
-  just dev api
+  just dev publish-api
 ```
 
 Or pass an `OpenApiConfig` at the import site instead of reading the
@@ -201,7 +201,7 @@ composes from the code, and an out-of-band patch breaks that invariant.
 
 ### Reference
 
-- `apps/platform-api/` — mounts `OpenApiModule::for_root(None)` next to REST + GraphQL.
+- `apps/publish-api/` — mounts `OpenApiModule::for_root(None)` next to REST + GraphQL.
 - `crates/features/src/users/http/controller.rs` — real `#[api(...)]` usage.
 - `crates/nest-rs-openapi/` — `OpenApiModule`, `OpenApiConfig`, the document
   composer, the bundled Swagger UI.

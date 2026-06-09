@@ -49,11 +49,11 @@ pub enum Command {
     /// Create a new NestRS project or workspace app.
     ///
     /// Layout is inferred from the directory tree:
-    ///   new monorepo       nestrs new acme        → ./acme/ (template: hello)
-    ///   new workspace app  nestrs new billing     → apps/billing/ (next free port)
-    ///   single crate       nestrs new my-api --standalone
+    ///   new monorepo       nestrs new hello       → ./hello/ (template: hello)
+    ///   new workspace app  nestrs new blog        → apps/blog/ (next free port)
+    ///   single crate       nestrs new hello --standalone
     New {
-        /// Project name (kebab-case recommended, e.g. `my-api` or `acme`).
+        /// Project name (kebab-case recommended, e.g. `hello` or `blog`).
         name: String,
 
         /// Single-crate layout (logic in `src/`) instead of the default monorepo.
@@ -90,7 +90,7 @@ pub enum Command {
     /// Print project metadata (tagline, docs, license, author).
     About,
 
-    /// Reinstall the latest nestrs CLI from crates.io.
+    /// Install the latest nestrs CLI from crates.io when a newer version exists.
     Update {
         /// Reinstall from `crates/nest-rs-cli` in the nestrs monorepo instead of crates.io.
         #[arg(long)]
@@ -99,6 +99,10 @@ pub enum Command {
         /// Monorepo root when using `--from-path` (default: auto-discover).
         #[arg(long, requires = "from_path")]
         workspace: Option<PathBuf>,
+
+        /// Reinstall even when already on the latest version (`cargo install --force`).
+        #[arg(long, short = 'f')]
+        force: bool,
     },
 
     /// Generate features, resources, and transport adapters (workspace only).
@@ -180,9 +184,11 @@ pub fn run(cli: Cli) -> CliResult<()> {
         Command::Update {
             from_path,
             workspace,
+            force,
         } => commands::run_update(commands::UpdateOptions {
             from_path,
             path: workspace,
+            force,
         }),
         Command::Generate(cmd) => run_generate(cmd),
     }

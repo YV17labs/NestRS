@@ -7,6 +7,12 @@ sidebar:
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
+<Aside type="caution">
+This page applies to **`publish-api`**, not the tutorial **`blog`** app.
+`blog` stays public HTTP CRUD on `posts` — auth and row-level policy are
+demonstrated here for the full Publish workspace.
+</Aside>
+
 You add two guards to the controller — one for *who* the caller is, one
 for *what they may do* — and the framework filters every read by their
 organisation, gates every by-id load against their ability, and masks
@@ -172,7 +178,7 @@ than running silently unprotected.
 
 The app root imports `AuthnModule` once:
 
-```rust title="apps/tutorial-api/src/module.rs"
+```rust title="apps/blog/src/module.rs"
 use features::authn::AuthnModule;
 
 #[module(
@@ -182,7 +188,7 @@ use features::authn::AuthnModule;
         UsersHttpModule,
     ],
 )]
-pub struct TutorialApiModule;
+pub struct BlogModule;
 ```
 
 ## What changed at runtime
@@ -227,11 +233,11 @@ A short check from the reference e2e:
 
 ```bash frame="terminal"
 $ curl -i -H 'Authorization: Bearer <plain-user-token-for-org-A>' \
-    http://localhost:3000/users/<user-in-org-B>
+    http://localhost:3002/users/<user-in-org-B>
 HTTP/1.1 403 Forbidden
 
 $ curl -s -H 'Authorization: Bearer <plain-user-token>' \
-    http://localhost:3000/users
+    http://localhost:3002/users
 [{"id":"018f…","name":"Bob"}]
 ```
 
@@ -247,4 +253,4 @@ never had to know.
 - `Bind<UsersService, Read>` on the by-id route — `403` on a denied
   row, `404` on a missing one, both without manual checks.
 
-[Next: persist through Postgres →](/tutorial/database/)
+[Next: mirror the feature on GraphQL →](/tutorial/graphql/)

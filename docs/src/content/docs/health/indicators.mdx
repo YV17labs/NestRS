@@ -48,12 +48,12 @@ use crate::upstream::health::indicator::UpstreamHealthIndicator;
 pub struct UpstreamHealthModule;
 ```
 
-```rust title="apps/platform-api/src/module.rs"
+```rust title="apps/publish-api/src/module.rs"
 use features::upstream::UpstreamHealthModule;
 use nest_rs_health::HealthModule;
 
 #[module(imports = [HealthModule, UpstreamHealthModule])]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 The indicator's key on the wire is `upstream` (the method name); it
@@ -89,11 +89,11 @@ indicator. The SeaORM pool ping is the first one to ship.
 both `#[readiness]` and `#[startup]` — exactly what most apps want and
 zero code in the app:
 
-```toml title="apps/platform-api/Cargo.toml"
+```toml title="apps/publish-api/Cargo.toml"
 nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
 ```
 
-```rust title="apps/platform-api/src/module.rs"
+```rust title="apps/publish-api/src/module.rs"
 use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
 use nest_rs_health::HealthModule;
 
@@ -104,7 +104,7 @@ use nest_rs_health::HealthModule;
         DatabaseHealthModule,
     ],
 )]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 An unreachable pool drops readiness and startup to `503` until the
@@ -137,7 +137,7 @@ provider's `#[inject]` dependencies — pool a DB ping, a Redis ping,
 and a migration check on one `AppHealth` rather than writing a struct
 per check:
 
-```rust title="apps/platform-api/src/app_health.rs"
+```rust title="apps/publish-api/src/app_health.rs"
 #[injectable]
 pub struct AppHealth {
     #[inject]

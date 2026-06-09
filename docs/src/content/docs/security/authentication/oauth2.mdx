@@ -25,7 +25,7 @@ client itself never sees your principal type.
 infrastructure, configured via `NESTRS_AUTHN__*` env vars. Pin the
 config in code by passing an `OAuth2Config`.
 
-```rust title="apps/platform-auth/src/module.rs"
+```rust title="apps/publish-auth/src/module.rs"
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -34,7 +34,7 @@ config in code by passing an `OAuth2Config`.
         OAuthHttpModule,
     ],
 )]
-pub struct PlatformAuthModule;
+pub struct PublishAuthModule;
 ```
 
 A controller then exposes the two HTTP legs. The exemplar in

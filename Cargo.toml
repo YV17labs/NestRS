@@ -207,6 +207,7 @@ nest-rs-testing = { version = "0.1.0", path = "crates/nest-rs-testing" }
 nest-rs-worker = { version = "0.1.0", path = "crates/nest-rs-worker" }
 nest-rs-ws = { version = "0.1.0", path = "crates/nest-rs-ws" }
 nest-rs-ws-macros = { version = "0.1.0", path = "crates/nest-rs-ws-macros" }
+nest-rs-cli = { version = "0.1.0", path = "crates/nest-rs-cli" }
 
 # Lints opted into by the apps (via `[lints] workspace = true`). Config literals
 # always close with `..Default::default()` — the house convention that keeps an

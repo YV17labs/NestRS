@@ -2657,6 +2657,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nest-rs-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml_edit 0.22.27",
+]
+
+[[package]]
 name = "nest-rs-codegen"
 version = "0.1.0"
 dependencies = [

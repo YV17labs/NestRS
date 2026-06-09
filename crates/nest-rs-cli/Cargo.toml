@@ -1,0 +1,23 @@
+[package]
+name = "nest-rs-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Scaffolding CLI for nestrs — new projects, feature generators, and project health checks."
+readme = "README.md"
+
+[[bin]]
+name = "nestrs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+thiserror.workspace = true
+toml_edit = "0.22"
+
+[dev-dependencies]
+tempfile = "3"

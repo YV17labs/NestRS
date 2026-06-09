@@ -202,6 +202,17 @@
   justify-content: center;
   gap: 0.4rem;
 }
+.hero .hero-stack {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+}
+.hero .hero-stack-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+}
 .hero .hero-pill {
   display: inline-flex;
   align-items: center;
@@ -220,7 +231,7 @@
   background: color-mix(in srgb, var(--nestrs-coral) 10%, var(--nestrs-surface));
   color: var(--sl-color-text-accent);
 }
-.hero .hero-stack > span {
+.hero .hero-stack-row > span {
   display: inline-flex;
   align-items: center;
   padding: 0.22rem 0.55rem;
@@ -233,6 +244,15 @@
   background: color-mix(in srgb, var(--sl-color-gray-6) 35%, transparent);
   color: var(--sl-color-gray-3);
 }
+.hero .hero-stack-accent {
+  border-color: color-mix(in srgb, var(--nestrs-coral) 35%, transparent);
+  background: color-mix(in srgb, var(--nestrs-coral) 10%, var(--nestrs-surface));
+  color: var(--sl-color-text-accent);
+  font-weight: 600;
+}
+.hero .hero-stack-row--security {
+  margin-top: 0.1rem;
+}
 
 @media (min-width: 50rem) {
   .hero .hero-meta {
@@ -240,7 +260,7 @@
   }
 
   .hero .hero-traits,
-  .hero .hero-stack {
+  .hero .hero-stack-row {
     justify-content: flex-start;
   }
 }

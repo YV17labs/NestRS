@@ -124,6 +124,7 @@ export default defineConfig({
             { label: 'Introduction', slug: 'index' },
             { label: 'Why NestRS', slug: 'why' },
             { label: 'Getting started', slug: 'getting-started' },
+            { label: 'Packages', slug: 'packages' },
             { label: 'The Publish workspace', slug: 'publish' },
             { label: 'CLI', slug: 'cli' },
           ],

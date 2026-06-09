@@ -17,9 +17,19 @@ hero:
       <span class="hero-traits">
         <span class="hero-pill hero-pill--accent">Declarative</span>
         <span class="hero-pill">Type-safe</span>
+        <span class="hero-pill hero-pill--accent">Composable</span>
+        <span class="hero-pill">Boot-verified</span>
       </span>
       <span class="hero-stack">
-        <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>OpenTelemetry</span>
+        <span class="hero-stack-row">
+          <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
+        </span>
+        <span class="hero-stack-row">
+          <span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
+        </span>
+        <span class="hero-stack-row hero-stack-row--security">
+          <span class="hero-stack-accent">Authentication</span><span class="hero-stack-accent">OAuth2</span><span class="hero-stack-accent">Authorization</span>
+        </span>
       </span>
     </span>
   image:
@@ -93,11 +103,13 @@ to a native binary.
 </div>
 
 The same inject-and-decorate model carries every surface — HTTP, GraphQL,
-WebSockets, queues, scheduled jobs, MCP. [Get started](/getting-started/), read
-the [Publish workspace](/publish/), the [fundamentals](/fundamentals/), or jump straight to a topic:
-[HTTP](/http/), [OpenAPI](/openapi/), [GraphQL](/graphql/),
-[WebSockets](/websockets/), [OpenTelemetry](/opentelemetry/),
-[Database](/database/), [Security](/security/).
+WebSockets, queues, scheduled jobs, MCP. [Get started](/getting-started/), browse
+the [packages](/packages/) the framework ships, read the
+[Publish workspace](/publish/), the [fundamentals](/fundamentals/), or jump
+straight to a topic: [HTTP](/http/), [OpenAPI](/openapi/),
+[GraphQL](/graphql/), [WebSockets](/websockets/),
+[OpenTelemetry](/opentelemetry/), [Database](/database/),
+[Security](/security/).
 
 </div>
 
@@ -159,7 +171,7 @@ production-ready yet. Stars and early feedback on
     HTTP, GraphQL, OpenAPI, WebSockets, Redis-backed queues, scheduling,
     an event bus, MCP, CASL-style authorization, health probes,
     OpenTelemetry — each an opt-in crate, so a worker compiles no HTTP
-    stack at all.
+    stack at all. See the full list on [Packages](/packages/).
   </Card>
 </CardGrid>
 

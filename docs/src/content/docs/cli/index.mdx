@@ -12,7 +12,7 @@ The **`nestrs`** CLI scaffolds projects in **two layouts** — [standalone](#lay
 `crates/features/` + `apps/*`). **`nestrs new` picks the layout automatically**
 from the directory tree — no mode flags, no config file. Generated code follows
 the same decorators as the framework repo (`users/` for features,
-`platform-api/` for composition apps).
+`publish-api/` for composition apps).
 
 <Aside type="caution">
   The CLI ships on crates.io as **`nest-rs-cli`** (binary name **`nestrs`**),
@@ -38,11 +38,11 @@ current directory (or `-o` path) and reads that manifest.
 
 | Where you run | Command | Result |
 |---|---|---|
-| Outside a nestrs workspace | `nestrs new acme` | Monorepo at `./acme/` + `apps/hello/` on port **3000** |
-| Inside a nestrs workspace | `nestrs new billing` | Thin app at `apps/billing/` — **next free port** in `module.rs` |
-| Anywhere (explicit) | `nestrs new my-api --standalone` | Single crate at `./my-api/` |
+| Outside a nestrs workspace | `nestrs new hello` | Monorepo at `./hello/` + `apps/hello/` on port **3000** |
+| Inside a nestrs workspace | `nestrs new blog` | Thin app at `apps/blog/` — **next free port** in `module.rs` |
+| Anywhere (explicit) | `nestrs new hello --standalone` | Single crate at `./hello/` |
 
-If `apps/billing/` already exists, the CLI stops with **`app billing already
+If `apps/blog/` already exists, the CLI stops with **`app blog already
 exists`** — it does not overwrite.
 
 <Aside type="note">
@@ -68,8 +68,8 @@ exists`** — it does not overwrite.
 <TabItem label="Workspace">
 
 ```bash
-nestrs new acme
-cd acme
+nestrs new hello
+cd hello
 just dev hello
 ```
 
@@ -77,7 +77,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
 `crates/features/src/hello/`; `apps/hello/` composes modules only.
 
 <FileTree>
-- acme/
+- hello/
   - Cargo.toml
   - Justfile
   - README.md
@@ -100,7 +100,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
 **Grow the workspace** (from the workspace root or any sub-folder):
 
 ```bash
-nestrs new billing
+nestrs new blog
 nestrs g resource posts
 ```
 
@@ -108,8 +108,8 @@ nestrs g resource posts
 <TabItem label="Standalone">
 
 ```bash
-nestrs new my-api --standalone
-cd my-api
+nestrs new hello --standalone
+cd hello
 just dev
 ```
 
@@ -117,7 +117,7 @@ Open **http://localhost:3000/** — `Hello World`. Service and controller live
 in `src/` (no `features` crate).
 
 <FileTree>
-- my-api/
+- hello/
   - Cargo.toml
   - Dockerfile
   - Justfile
@@ -138,7 +138,7 @@ Optional **`Dockerfile`** ships in **standalone** mode only.
 Templates — `--template` applies to **new monorepos** and **standalone** crates only.
 Every **workspace app** uses the same thin shell; the CLI scans existing
 `apps/*/src/module.rs` files and pins the next HTTP port in code (same pattern
-as `platform-auth` → 3001, `platform-api` → 3002, …).
+as `publish-auth` → 3001, `publish-api` → 3002, …).
 
 | What | Default | Override |
 |------|---------|----------|
@@ -160,11 +160,11 @@ Optional: **`--check`** runs `cargo check` after generation.
 From the workspace root (or `apps/`, `crates/features/`, …):
 
 ```bash
-nestrs new billing
-just dev billing
+nestrs new blog
+just dev blog
 ```
 
-Creates a **thin** app under `apps/billing/` (composition root only — no
+Creates a **thin** app under `apps/blog/` (composition root only — no
 `service.rs` / `controller.rs` in the app crate).
 
 ## Build
@@ -178,7 +178,7 @@ starts the server; use **`just build`** when you only need the artifact
 
 ```bash
 just build              # default app (hello)
-just build billing      # after nestrs new billing
+just build blog         # after nestrs new blog
 just build-all          # every app in the workspace
 just run hello          # build + run in release
 ```
@@ -187,7 +187,7 @@ just run hello          # build + run in release
 <TabItem label="Standalone">
 
 ```bash
-just build    # target/release/my-api
+just build    # target/release/hello
 just run      # build + run in release
 ```
 
@@ -241,7 +241,7 @@ use features::posts::PostsHttpModule;
     // …
     PostsHttpModule,
 ])]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 `g resource` emits a self-contained, unauthenticated slice so it compiles in any
@@ -280,7 +280,10 @@ nestrs about
 # → version, tagline, docs, repository, license, author
 
 nestrs update
-# → cargo install --force nest-rs-cli (latest on crates.io)
+# → checks crates.io; skips when already on the latest version
+
+nestrs update --force
+# → cargo install --force nest-rs-cli (reinstall even at the same version)
 ```
 
 Contributors inside the monorepo clone:
@@ -302,7 +305,8 @@ nestrs update --from-path
 | `nestrs doctor` | Toolchain and env sanity check |
 | `nestrs version` | Print the CLI version |
 | `nestrs about` | Print project metadata |
-| `nestrs update` | Reinstall latest CLI from crates.io |
+| `nestrs update` | Install latest CLI from crates.io when a newer version exists |
+| `nestrs update --force` | Reinstall from crates.io even when already on the latest version |
 | `nestrs update --from-path` | Reinstall from monorepo `crates/nest-rs-cli` |
 | `nestrs g feature <name>` | Transport-agnostic port in `crates/features/src/` |
 | `nestrs g resource <name>` | DB-backed CRUD port + HTTP adapter (deps auto-added) |
@@ -317,5 +321,5 @@ Planned generators (see [Roadmap](https://github.com/NestRS/NestRS/blob/main/ROA
 migration scaffold and `nestrs info` (route/module scan).
 
 - [Getting started](/getting-started/) — first run after `nestrs new`
-- [Tutorial](/tutorial/) — build `users` end to end
+- [Tutorial](/tutorial/) — build `posts` in `apps/blog/` (HTTP only)
 - [Fundamentals / Modules](/fundamentals/modules/) — how root modules compose features

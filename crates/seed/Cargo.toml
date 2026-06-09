@@ -8,7 +8,6 @@ publish = false
 anyhow.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
-fake.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

@@ -6,8 +6,8 @@
 # the runtime image. Which one runs is chosen at `docker run` time by
 # overriding the entrypoint:
 #
-#   docker run --rm -p 3000:3000 nestrs                # runs the default (app)
-#   docker run --rm -p 3000:3000 nestrs /usr/local/bin/<other-app>
+#   docker run --rm -p 3002:3002 nestrs                # runs publish-api (default)
+#   docker run --rm -p 3001:3001 nestrs /usr/local/bin/publish-auth
 #
 # Stages:
 #   1. chef    — rust toolchain + cargo-chef, shared by planner & builder
@@ -61,7 +61,7 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 COPY --from=builder --chown=nonroot:nonroot /out/ /usr/local/bin/
 
-EXPOSE 3000
+EXPOSE 3002
 USER nonroot:nonroot
 # Default app — override at runtime: `docker run ... /usr/local/bin/<app>`
-ENTRYPOINT ["/usr/local/bin/app"]
+ENTRYPOINT ["/usr/local/bin/publish-api"]

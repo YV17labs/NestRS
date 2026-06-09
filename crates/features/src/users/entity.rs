@@ -24,6 +24,8 @@ pub struct Model {
     pub password_hash: Option<String>,
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
     pub org: HasOne<crate::orgs::Entity>,
+    #[sea_orm(has_many)]
+    pub posts: HasMany<crate::posts::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

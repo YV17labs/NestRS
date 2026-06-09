@@ -20,10 +20,11 @@ versioning ([versioning](/http/versioning/)) each have their own page.
 
 ## The minimal controller
 
-```rust title="apps/hello/src/controller.rs"
+```rust title="crates/features/src/hello/http/controller.rs"
 use std::sync::Arc;
 use nest_rs_http::{controller, routes};
-use crate::service::HelloService;
+
+use crate::hello::HelloService;
 
 #[controller(path = "/")]
 pub struct HelloController {

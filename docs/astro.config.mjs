@@ -21,12 +21,13 @@ const ogImageAlt =
 export default defineConfig({
   site,
   base,
-  // GFM tables/strikethrough/task-lists are not applied to .mdx by default in
-  // Astro 6 — wire remark-gfm explicitly so every docs table renders.
+  // GFM tables/strikethrough/task-lists must be enabled for .mdx — Astro 6.4+
+  // only wires remark-gfm when `gfm: true` (Starlight still uses @astrojs/mdx@5).
   markdown: {
+    // Top-level flag — @astrojs/mdx@5 reads this for .mdx; `processor.gfm` alone is not enough.
+    gfm: true,
     processor: unified({
-      // remark-gfm is wired explicitly below; disable the built-in GFM toggle.
-      gfm: false,
+      gfm: true,
       remarkPlugins: [remarkGfm],
       // External links open in a new tab (with rel="noopener noreferrer") so a
       // reader following e.g. the SeaORM link keeps the docs open. Internal links
@@ -123,6 +124,7 @@ export default defineConfig({
             { label: 'Introduction', slug: 'index' },
             { label: 'Why NestRS', slug: 'why' },
             { label: 'Getting started', slug: 'getting-started' },
+            { label: 'The Publish workspace', slug: 'publish' },
             { label: 'CLI', slug: 'cli' },
           ],
         },

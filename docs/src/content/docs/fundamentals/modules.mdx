@@ -7,8 +7,9 @@ sidebar:
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
-Every NestRS binary is a tree of modules. This page walks one fictional
-app — **`blog`** — through four steps:
+Every NestRS binary is a tree of modules. This page walks **`blog`**
+through four steps — step ① inline, then the composed root the
+[tutorial](/tutorial/) implements:
 
 1. **One root module** — handlers inline, one transport.
 2. **Extract a feature** — domain code moves to `post/` with its own prefix.
@@ -37,12 +38,12 @@ At the smallest scale, handlers live in the app itself:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs_core::module;
-use nest_rs_http::HttpModule;
+use nest_rs_http::{HttpConfig, HttpModule};
 use crate::controller::BlogController;
 use crate::service::BlogService;
 
 #[module(
-    imports = [HttpModule::for_root(None)],
+    imports = [HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() })],
     providers = [BlogService, BlogController],
 )]
 pub struct BlogModule;
@@ -72,7 +73,10 @@ is flat. The access graph (see [Providers](/fundamentals/providers/))
 ensures every `#[inject]` resolves through `imports`.
 
 List order does not affect registration. We still list imports in a
-readable order: **config → infrastructure → transport → features**.
+readable order: **config → infrastructure → transports → auth wiring →
+feature adapters**. The app root imports **`PostHttpModule`**, not
+`PostModule` — the port rides along inside the adapter's own `imports`.
+Business modules sit at the bottom of the list.
 
 ## Extract a feature
 
@@ -115,7 +119,7 @@ Splitting keeps transport **opt-in per binary**:
 
 `BlogModule` lists `PostHttpModule`, not `PostModule`. The adapter
 already imports the port; listing both would be redundant. A
-`platform-worker` binary would import `PostModule` (or a queue adapter)
+`publish-worker` binary would import `PostModule` (or a queue adapter)
 without ever pulling in HTTP.
 
 ```mermaid
@@ -190,10 +194,10 @@ providers — it only composes imports:
 ```rust title="apps/blog/src/module.rs"
 #[module(
     imports = [
-        ConfigModule::for_root(),       // typed config + .env cascade
-        DatabaseModule::for_root(None), // pool from NESTRS_DATABASE__*
-        HttpModule::for_root(None),     // HTTP server — not your routes
-        PostHttpModule,                 // post routes; imports PostModule
+        ConfigModule::for_root(),
+        DatabaseModule::for_root(None),
+        HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+        PostHttpModule,
     ],
 )]
 pub struct BlogModule;

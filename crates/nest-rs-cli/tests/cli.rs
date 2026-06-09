@@ -174,7 +174,7 @@ fn new_app_picks_next_http_port() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
-        .args(["new", "billing"])
+        .args(["new", "blog"])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -185,7 +185,7 @@ fn new_app_picks_next_http_port() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let module = fs::read_to_string(dir.path().join("apps/billing/src/module.rs")).unwrap();
+    let module = fs::read_to_string(dir.path().join("apps/blog/src/module.rs")).unwrap();
     assert!(module.contains("HttpConfig { port: 3002"));
 }
 
@@ -193,10 +193,10 @@ fn new_app_picks_next_http_port() {
 fn new_app_inside_workspace_already_exists() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
-    fs::create_dir_all(dir.path().join("apps/billing")).unwrap();
+    fs::create_dir_all(dir.path().join("apps/blog")).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
-        .args(["new", "billing"])
+        .args(["new", "blog"])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -204,7 +204,7 @@ fn new_app_inside_workspace_already_exists() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("already exists"));
-    assert!(stderr.contains("billing"));
+    assert!(stderr.contains("blog"));
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn new_workspace_app_scaffold() {
     write_fake_workspace(dir.path());
 
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
-        .args(["new", "tutorial-api", "-o"])
+        .args(["new", "blog", "-o"])
         .arg(dir.path())
         .output()
         .unwrap();
@@ -224,7 +224,7 @@ fn new_workspace_app_scaffold() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let app = dir.path().join("apps/tutorial-api");
+    let app = dir.path().join("apps/blog");
     assert!(app.join("src/module.rs").is_file());
     assert!(app.join("src/lib.rs").is_file());
     assert!(!app.join("src/controller.rs").exists());

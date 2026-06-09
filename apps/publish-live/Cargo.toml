@@ -1,0 +1,24 @@
+[package]
+name = "publish-live"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-guards.workspace = true
+nest-rs-http.workspace = true
+nest-rs-ws.workspace = true
+nest-rs-health.workspace = true
+nest-rs-opentelemetry = { workspace = true, features = ["http"] }
+serde.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
+futures-util.workspace = true
+tokio-tungstenite = "0.27"
+serde_json.workspace = true

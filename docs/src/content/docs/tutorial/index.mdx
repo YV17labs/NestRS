@@ -1,26 +1,25 @@
 ---
-title: Build a users feature end to end
-description: From an empty workspace to a persisted, validated, authorized, multi-transport users feature you can curl, query, and test.
+title: Build a posts feature end to end
+description: From hello to a running apps/blog binary — HTTP CRUD, validation, Postgres, e2e — pure business logic, no auth and no GraphQL.
 sidebar:
   order: 1
 ---
 
 import { Aside, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-You spend the next nine pages shipping one feature — a `users` resource —
-from an empty workspace to a running binary that authenticates callers,
-filters reads to their organisation, validates inputs, persists through
-a real Postgres, exposes the same data over GraphQL, and ships an e2e
-test that boots the whole module against a throwaway database. Each
-page leaves you with code that compiles and a command you can run.
+You ship one feature — **`posts`** — into the [**Publish**](/publish/) story's
+**`blog`** app: entity, service, `PostsController`, validation, Postgres, and
+an e2e test. No JWT, no GraphQL — that complexity lives in
+[`publish-api`](/publish/) and [`publish-auth`](/publish/). Each page leaves
+you with code that compiles and a command you can run.
 
 ## What you end up with
 
-A workspace shaped like the reference one — `apps/tutorial-api/` for the
-binary and a `users/` feature with one port and two transports.
+`hello` for the quick-start binary, `apps/blog/` for the tutorial app, and a
+`posts/` feature with HTTP only.
 
 <FileTree>
-- apps/tutorial-api/
+- apps/blog/
   - Cargo.toml
   - src/
     - main.rs
@@ -30,7 +29,7 @@ binary and a `users/` feature with one port and two transports.
 - crates/
   - features/
     - src/
-      - users/
+      - posts/
         - entity.rs
         - service.rs
         - module.rs
@@ -39,64 +38,68 @@ binary and a `users/` feature with one port and two transports.
           - controller.rs
           - module.rs
           - mod.rs
-        - graphql/
-          - resolver.rs
-          - module.rs
-          - mod.rs
 </FileTree>
 
-Two `curl`s and one GraphQL query against the running binary:
+Two `curl`s against the running binary — no token:
 
 ```bash frame="terminal"
-$ curl -s -H 'Authorization: Bearer <token>' http://localhost:3000/users/<id>
-{"id":"018f…","name":"Ada","email":"ada@acme.test"}
-
-$ curl -s -H 'Authorization: Bearer <token>' http://localhost:3000/graphql \
+$ curl -s -X POST http://localhost:3005/posts \
     -H 'Content-Type: application/json' \
-    -d '{"query":"{ users { id name org { id } } }"}'
-{"data":{"users":[{"id":"018f…","name":"Ada","org":{"id":"018e…"}}]}}
+    -d '{"title":"Hello","body":"World"}'
+{"id":"018f…","title":"Hello","body":"World"}
+
+$ curl -s http://localhost:3005/posts/018f…
+{"id":"018f…","title":"Hello","body":"World"}
 ```
 
 And a passing e2e suite:
 
 ```bash frame="terminal"
 $ just test-e2e
-running 1 test
-test users_round_trip_under_a_bearer_token ... ok
+         PASS [   …] features::e2e posts_round_trip
 ```
 
 ## What you should know going in
 
 The tutorial assumes you've already followed
-[Getting started](/getting-started/) and skimmed
+[Getting started](/getting-started/) — a **workspace** you scaffolded with
+[`nestrs new hello`](/getting-started/), the [`nestrs` CLI](/cli/)
+installed, and `just dev hello` serving `Hello World` from
+`crates/features/src/hello/`. Page 1 adds `apps/blog/` with
+`nestrs new blog`; everything after that happens in `blog`, not `hello`.
+If you cloned **this** repository to explore Publish, scaffold hello and
+blog in a separate workspace — they are not hosted here. Skim
 [Fundamentals](/fundamentals/), [Configuration](/configuration/), and
-[HTTP](/http/) — the toolchain is installed, `just dev` runs the bare
-baseline, and you know what a module, a provider, and a controller are.
+[HTTP](/http/) so module, provider, and controller are familiar terms.
 `docker` is available for the Postgres step.
 
-Rust 1.75+ is enough. Pages 7 and 9 (database, testing) need a Postgres
-the workspace already provisions with `just db up`; pages 2 to 6 run
-without one.
+Rust 1.75+ is enough. The database and testing pages need Postgres
+(`just db up`); earlier pages run without one.
 
 ## The pages, in order
 
 <CardGrid>
-  <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="Workspace, app under apps/tutorial-api/, AppModule, main, run it once." />
-  <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The User entity with SeaORM and #[expose]." />
-  <LinkCard title="3. Expose over HTTP" href="/tutorial/http/" description="UsersController, the service, GET and POST." />
-  <LinkCard title="4. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 422 on a bad body." />
-  <LinkCard title="5. Authenticate and authorize" href="/tutorial/security/" description="AuthGuard, AppAbility, row-level scope, Bind." />
-  <LinkCard title="6. Persist through Postgres" href="/tutorial/database/" description="DatabaseModule, migrations, transactional writes." />
-  <LinkCard title="7. Mirror on GraphQL" href="/tutorial/graphql/" description="UsersResolver, auto-resolved relations, SDL." />
-  <LinkCard title="8. Test it end to end" href="/tutorial/testing/" description="apps/tutorial-api/tests/e2e.rs against an EphemeralDatabase." />
+  <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="nestrs new blog, just dev blog, 404 on / — then read what the CLI wrote." />
+  <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The Post entity with SeaORM and #[expose]." />
+  <LinkCard title="3. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts." />
+  <LinkCard title="4. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />
+  <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="DatabaseModule, migrations, transactional writes." />
+  <LinkCard title="6. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e.rs against an EphemeralDatabase." />
 </CardGrid>
 
+<Aside type="note">
+Pages on [security](/tutorial/security/) and [GraphQL](/tutorial/graphql/)
+document patterns for **`publish-api`** (auth, multi-transport) — not
+`apps/blog/`. Follow them when you extend the Publish workspace; skip them
+while building the minimal blog.
+</Aside>
+
 <Aside type="tip">
-At any point, the working reference for the same feature lives in
-[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
-and the running app in
-[`apps/platform-api/`](https://github.com/NestRS/NestRS/tree/main/apps/platform-api).
-Open them side by side when a section feels thin — they always compile.
+The tutorial feature exemplar in this repo is
+[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/posts)
+— compare your scaffolded `apps/blog/` as you go. The complex reference is
+[`apps/publish-api/`](https://github.com/NestRS/NestRS/tree/main/apps/publish-api)
+(auth, GraphQL, orgs, queue, and the rest).
 </Aside>
 
 ## Ready?

@@ -40,7 +40,7 @@ a clear error.
 The worker imports both modules plus the feature's port + queue
 adapter. That's it.
 
-```rust title="apps/platform-worker/src/module.rs"
+```rust title="apps/publish-worker/src/module.rs"
 use nest_rs_config::ConfigModule;
 use nest_rs_core::module;
 use nest_rs_redis::{QueueModule, QueueWorkerModule};
@@ -54,7 +54,7 @@ use features::audio::{AudioModule, AudioQueueModule};
     AudioModule,
     AudioQueueModule,
 ])]
-pub struct PlatformWorkerModule;
+pub struct PublishWorkerModule;
 ```
 
 At boot:
@@ -77,7 +77,7 @@ A producer-only binary imports `QueueModule::for_root(...)` and skips
 `QueueWorkerModule` entirely. It gets `Arc<QueueConnection>` to push
 with — and no worker spawn, no drained inventory, no apalis monitor.
 
-```rust title="apps/platform-api/src/module.rs"
+```rust title="apps/publish-api/src/module.rs"
 use nest_rs_config::ConfigModule;
 use nest_rs_core::module;
 use nest_rs_database::DatabaseModule;
@@ -95,10 +95,10 @@ use features::audio::{AudioHttpModule, AudioModule, AudioScheduleModule};
     AudioHttpModule,
     AudioScheduleModule,
 ])]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
-That `apps/platform-api` is exactly this shape: producer-only. Its HTTP
+That `apps/publish-api` is exactly this shape: producer-only. Its HTTP
 controller and scheduled timer both call `AudioService::enqueue_transcode`,
 which uses the seeded `QueueConnection` to push onto Redis. No worker
 runs in this process — that's the worker binary's job.
@@ -134,7 +134,7 @@ injects something its module doesn't own or import transitively.
 ## What the wire looks like at boot
 
 ```text frame="terminal"
-$ just dev platform-worker
+$ just dev publish-worker
 2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
 2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
 2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::preview queue=audio.preview concurrency=10 retries=1
@@ -155,7 +155,7 @@ processor` lines — the worker side never wakes up.
 - `crates/nest-rs-redis/src/worker/consumer.rs` —
   `QueueWorker::configure` filtering `ProcessMethod` by
   `ReachableProviders`.
-- `apps/platform-api/`, `apps/platform-worker/` — producer-only and
+- `apps/publish-api/`, `apps/publish-worker/` — producer-only and
   worker shapes side by side.
 - [fundamentals/modules](/fundamentals/modules/) — boot phases,
   imports, dynamic modules, the access graph.

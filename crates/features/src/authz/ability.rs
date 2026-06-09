@@ -3,6 +3,7 @@ use nest_rs_core::injectable;
 
 use crate::Claims;
 use crate::orgs as org;
+use crate::posts as post;
 use crate::users as user;
 
 #[injectable]
@@ -19,6 +20,10 @@ impl AbilityFactory for AppAbility {
             ab.can(Action::Manage, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Manage, org::Entity);
+            ab.can(Action::Read, post::Entity)
+                .when(|p| p.eq(post::Column::OrgId, actor.org_id));
+            ab.can(Action::Manage, post::Entity)
+                .when(|p| p.eq(post::Column::OrgId, actor.org_id));
         } else {
             ab.can(Action::Read, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id))
@@ -27,6 +32,10 @@ impl AbilityFactory for AppAbility {
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Read, org::Entity)
                 .when(|p| p.eq(org::Column::Id, actor.org_id));
+            ab.can(Action::Read, post::Entity)
+                .when(|p| p.eq(post::Column::OrgId, actor.org_id));
+            ab.can(Action::Create, post::Entity)
+                .when(|p| p.eq(post::Column::OrgId, actor.org_id));
         }
     }
 }
@@ -77,6 +86,16 @@ mod tests {
         org::Model {
             id,
             name: "Acme".into(),
+        }
+    }
+
+    fn post_model(id: Uuid, org_id: Uuid, author_id: Uuid) -> post::Model {
+        post::Model {
+            id,
+            org_id,
+            author_id,
+            title: "Hello".into(),
+            body: "World".into(),
         }
     }
 
@@ -168,6 +187,41 @@ mod tests {
         assert!(obj.contains_key("id"));
         assert!(obj.contains_key("name"));
         assert!(!obj.contains_key("email"), "members must not see email");
+    }
+
+    #[test]
+    fn member_can_create_posts_in_own_org() {
+        let org = Uuid::now_v7();
+        let ab = member(org);
+        assert!(ab.can_class(Action::Create, TypeId::of::<post::Entity>()));
+        assert!(
+            ab.can::<post::Entity>(
+                Action::Create,
+                &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
+            )
+        );
+        assert!(
+            !ab.can::<post::Entity>(
+                Action::Create,
+                &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
+            )
+        );
+    }
+
+    #[test]
+    fn admin_manage_posts_scopes_to_caller_org() {
+        let org = Uuid::now_v7();
+        let ab = admin(org);
+        assert!(ab.can::<post::Entity>(
+            Action::Delete,
+            &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
+        ));
+        assert!(
+            !ab.can::<post::Entity>(
+                Action::Delete,
+                &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
+            )
+        );
     }
 
     #[test]

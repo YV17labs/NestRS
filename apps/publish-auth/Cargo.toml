@@ -1,0 +1,36 @@
+[package]
+name = "publish-auth"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-authn.workspace = true
+nest-rs-authz.workspace = true
+nest-rs-config.workspace = true
+nest-rs-seaorm.workspace = true
+nest-rs-health.workspace = true
+nest-rs-http.workspace = true
+nest-rs-opentelemetry = { workspace = true, features = ["http"] }
+nest-rs-throttler.workspace = true
+features.workspace = true
+poem.workspace = true
+sea-orm.workspace = true
+tokio.workspace = true
+serde.workspace = true
+schemars.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
+validator.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+poem = { workspace = true, features = ["test"] }
+nest-rs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
+migrations = { workspace = true }
+base64.workspace = true
+
+[lints]
+workspace = true

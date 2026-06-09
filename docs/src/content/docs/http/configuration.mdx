@@ -12,19 +12,29 @@ HTTP transport at boot. Pass `None` to read every option from the
 environment, or pin `HttpConfig` in code:
 
 ```rust title="apps/hello/src/module.rs"
-use nest_rs_http::HttpModule;
+use nest_rs_core::module;
+use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_opentelemetry::OpenTelemetryModule;
 
-#[module(imports = [HttpModule::for_root(None)])]
+use features::hello::HelloHttpModule;
+
+#[module(
+    imports = [
+        OpenTelemetryModule,
+        HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
+        HelloHttpModule,
+    ],
+)]
 pub struct HelloModule;
 ```
 
-```rust title="apps/platform-api/src/module.rs"
+```rust title="apps/publish-api/src/module.rs"
 use nest_rs_http::{HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
 ])]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
@@ -62,12 +72,12 @@ fall back to plaintext.
 # Inline (suits k8s secrets, systemd EnvironmentFile, …)
 NESTRS_HTTP__TLS_CERT="$(cat fullchain.pem)" \
 NESTRS_HTTP__TLS_KEY="$(cat privkey.pem)" \
-just dev platform-api
+just dev publish-api
 
 # Or by path (the transport reads the file at boot)
 NESTRS_HTTP__TLS_CERT_FILE=/etc/letsencrypt/.../fullchain.pem \
 NESTRS_HTTP__TLS_KEY_FILE=/etc/letsencrypt/.../privkey.pem \
-just dev platform-api
+just dev publish-api
 ```
 
 Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
@@ -86,7 +96,7 @@ let key  = std::fs::read("privkey.pem")?;
         ..Default::default()
     }),
 ])]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 ## CORS
@@ -106,7 +116,7 @@ NESTRS_HTTP__CORS_CREDENTIALS=true
 NESTRS_HTTP__CORS_MAX_AGE=3600
 ```
 
-```rust title="apps/platform-api/src/module.rs"
+```rust title="apps/publish-api/src/module.rs"
 use std::time::Duration;
 use nest_rs_http::{CorsConfig, HttpConfig, HttpModule};
 
@@ -124,7 +134,7 @@ use nest_rs_http::{CorsConfig, HttpConfig, HttpModule};
         ..Default::default()
     }),
 ])]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 `origins: vec!["*".into()]` is allowed for fully open APIs (the wildcard
@@ -136,15 +146,15 @@ Behind a reverse proxy that hands off a sub-path (`/api/*`), every
 controller can be mounted under one prefix without touching `path = "…"`
 on each:
 
-```rust title="apps/platform-api/src/main.rs"
+```rust title="apps/publish-api/src/main.rs"
 use nest_rs_core::App;
 use nest_rs_http::HttpTransport;
-use platform_api::PlatformApiModule;
+use publish_api::PublishApiModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::builder()
-        .module::<PlatformApiModule>()
+        .module::<PublishApiModule>()
         .transport(HttpTransport::new().global_prefix("/api"))
         .build()
         .await?

@@ -23,13 +23,13 @@ skipped, so a developer's personal secrets cannot leak in.
 matches a config registered via `ConfigModule::for_feature::<C>()`, the
 seed wins and the factory never runs.
 
-```rust title="apps/platform-auth/tests/e2e.rs"
+```rust title="apps/publish-auth/tests/e2e.rs"
 use nest_rs_testing::TestApp;
 use uuid::Uuid;
 
 #[tokio::test]
 async fn issues_a_token_for_a_registered_client() {
-    let app = TestApp::<PlatformAuthModule>::builder()
+    let app = TestApp::<PublishAuthModule>::builder()
         .provide(IssuerConfig {
             clients: vec![RegisteredClient {
                 client_id: "test-client".into(),
@@ -61,16 +61,16 @@ Every configurable module's `for_root` accepts a `pinned: Option<C>`:
 directly. This is the same pattern as `.provide()`, expressed at the
 module-import layer.
 
-```rust title="apps/platform-api/tests/e2e.rs"
+```rust title="apps/publish-api/tests/e2e.rs"
 use nest_rs_http::{HttpConfig, HttpModule};
 
-let app = TestApp::<PlatformApiModule>::builder()
+let app = TestApp::<PublishApiModule>::builder()
     // ...
     .build()
     .await?;
 ```
 
-```rust title="apps/platform-api/src/module.rs"
+```rust title="apps/publish-api/src/module.rs"
 #[module(
     imports = [
         HttpModule::for_root(Some(HttpConfig {
@@ -80,7 +80,7 @@ let app = TestApp::<PlatformApiModule>::builder()
         })),
     ],
 )]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 `HttpModule::for_root(opts)` routes its `Option<HttpConfig>` through

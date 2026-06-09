@@ -38,17 +38,39 @@ pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
 }
 ```
 
-Rows that depend on others reach for those constants. The user factory hangs
-its demo accounts off `org::ACME` / `org::GLOBEX`, mints a `Uuid::now_v7()` id,
-fakes a name, derives a deterministic email, and conflicts on the unique
-`email`:
+Rows that depend on others reach for those constants. Demo users also use
+fixed ids — `user::ACME_AUTHOR` is the author of Acme posts — and conflict on
+the unique `email`:
 
 ```rust title="crates/seed/src/factories/user.rs"
-const DEMO: [(Uuid, &str, usize); 2] = [(org::ACME, "acme", 3), (org::GLOBEX, "globex", 2)];
+pub const ACME_AUTHOR: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac01);
 
-// build a UserRow { id: Uuid::now_v7(), org_id, name: Name().fake(),
-//                   email: format!("{slug}-user-{n}@example.test") }
-// then INSERT ... ON CONFLICT (email) DO NOTHING.
+const DEMO: [(Uuid, Uuid, &str, &str); 5] = [
+    (ACME_AUTHOR, org::ACME, "Acme Author", "acme-user-1@example.test"),
+    // ...
+];
+
+// INSERT ... ON CONFLICT (email) DO NOTHING.
+```
+
+Posts hang off the org and author constants. `post::WELCOME` is a stable id
+for the first Acme article:
+
+```rust title="crates/seed/src/factories/post.rs"
+pub const WELCOME: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_b001);
+
+const DEMO: [(Uuid, Uuid, Uuid, &str, &str); 3] = [
+    (
+        WELCOME,
+        org::ACME,
+        user::ACME_AUTHOR,
+        "Welcome to Publish",
+        "Getting started with nestrs and the Publish demo app.",
+    ),
+    // ...
+];
+
+// INSERT ... ON CONFLICT (id) DO NOTHING.
 ```
 
 ## The runner
@@ -61,6 +83,7 @@ pub async fn run(db: &DatabaseConnection) -> Result<u64> {
     let mut inserted = 0;
     inserted += factories::org::seed(db).await?;
     inserted += factories::user::seed(db).await?;
+    inserted += factories::post::seed(db).await?;
     Ok(inserted)
 }
 ```
@@ -72,8 +95,8 @@ just db seed     # load demo data (idempotent)
 just db reset    # fresh migrate, then seed
 ```
 
-`just db seed` runs the crate's `seed` binary (`cargo run -p seed --bin seed`),
-which reads `NESTRS_DATABASE__URL`, runs `seed::run`, and prints how many rows
+`just db seed` runs the crate's `seed` binary, which reads
+`NESTRS_DATABASE__URL`, runs `seed::run`, and prints how many rows
 it inserted.
 
 Because `run` is a plain function, tests call it directly. The crate's e2e

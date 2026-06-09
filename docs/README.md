@@ -40,7 +40,7 @@ tutorial, observability grouped without a "production" bucket:
 
 ```
 Start here
-  index.mdx, why.mdx, getting-started.mdx
+  index.mdx, why.mdx, getting-started.mdx, publish/index.mdx
 
 Core (read before the tutorial)
   fundamentals/        Modules, DI, access graph, request layers

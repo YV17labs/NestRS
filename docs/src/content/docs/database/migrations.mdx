@@ -105,8 +105,7 @@ just db status   # show applied vs. pending
 just db fresh    # drop every table, then re-apply from scratch
 ```
 
-Each verb shells out to the crate's `migrate` binary
-(`cargo run -p migrations --bin migrate -- <verb>`), which reads
+Each verb shells out to the crate's `migrate` binary, which reads
 `NESTRS_DATABASE__URL` — the same variable the apps connect with.
 
 ## Going further

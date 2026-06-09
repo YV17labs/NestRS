@@ -21,12 +21,12 @@ graph.
 
 ## Mount it
 
-```rust title="apps/platform-api/src/module.rs"
+```rust title="apps/publish-api/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_health::HealthModule;
 
 #[module(imports = [HealthModule])]
-pub struct PlatformApiModule;
+pub struct PublishApiModule;
 ```
 
 Three routes appear at boot:

@@ -1,17 +1,17 @@
 ---
 title: Test it end to end
-description: A single tests/e2e.rs boots the real TutorialApiModule against a throwaway database; just test-e2e runs it; happy path and failure modes both asserted.
+description: A single tests/e2e.rs boots the real BlogModule against a throwaway database; just test-e2e runs it; happy path and failure modes both asserted.
 sidebar:
   order: 9
 ---
 
 import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
-You ship one e2e test that boots the *real* `TutorialApiModule`
+You ship one e2e test that boots the *real* `BlogModule`
 against a throwaway Postgres, drives it through the same poem runtime
 production uses, and asserts on the round-trip you've been verifying
 by hand. By the end of this page, `just test-e2e` runs it green, a
-wiring regression in any of the previous seven steps fails this test,
+wiring regression in any of the previous six steps fails this test,
 and the feature is locked down.
 
 ## One test file per app
@@ -26,90 +26,64 @@ it provides `TestApp` (the in-process boot harness) and
 [testcontainers](https://docs.rs/testcontainers)).
 
 <FileTree>
-- apps/tutorial-api/
+- apps/blog/
   - tests/
     - e2e.rs
 </FileTree>
 
 Add the dev-dependencies the test needs:
 
-```toml title="apps/tutorial-api/Cargo.toml"
+```toml title="apps/blog/Cargo.toml"
 [dev-dependencies]
-nest-rs-testing = { workspace = true, features = ["orm"] }
+nest-rs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
 migrations = { workspace = true }
 poem = { workspace = true, features = ["test"] }
 serde_json.workspace = true
-uuid.workspace = true
 ```
 
 ## The boot harness
 
 `TestApp::builder()` runs the same four-phase boot as `main`,
 including the access-graph check. The harness seeds the connection so
-the module never reaches a real network.
+the module never reaches a real network — no JWT seeding, because
+`blog` has no auth layer.
 
-```rust title="apps/tutorial-api/tests/e2e.rs"
-use features::{Claims, Role};
-use nest_rs_authn::{JwtConfig, JwtOptions, JwtService};
+```rust title="apps/blog/tests/e2e.rs"
 use nest_rs_testing::{EphemeralDatabase, TestApp};
-use poem::http::{StatusCode, header};
+use poem::http::StatusCode;
 use serde_json::json;
-use uuid::Uuid;
 
-use tutorial_api::TutorialApiModule;
-
-const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
-const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
+use blog::BlogModule;
 
 async fn boot() -> (EphemeralDatabase, TestApp) {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
-        .module::<TutorialApiModule>()
+        .module::<BlogModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            ..Default::default()
-        })
         .build()
         .await
-        .expect("TutorialApiModule boots against the throwaway database");
+        .expect("BlogModule boots against the throwaway database");
     (db, app)
 }
-
-fn admin_token() -> String {
-    let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
-        .expect("the dev keypair parses");
-    jwt.sign(&Claims {
-        sub: None,
-        org_id: Uuid::now_v7(),
-        roles: vec![Role::Admin],
-        exp: jwt.expiry(),
-    })
-    .expect("sign the test token")
-}
 ```
 
-The dev keypair is committed in the test file on purpose — a public
-keypair with no value outside the test binary, no secret to leak.
-Production reads the keys from `NESTRS_AUTHN__JWT__*` env vars.
-
-You need a `tutorial-api` library target to import `TutorialApiModule`
+You need a `blog` library target to import `BlogModule`
 from the test binary. Add the lib alongside `main.rs`:
 
-```rust title="apps/tutorial-api/src/lib.rs"
+```rust title="apps/blog/src/lib.rs"
 mod module;
-pub use module::TutorialApiModule;
+pub use module::BlogModule;
 ```
 
-```toml title="apps/tutorial-api/Cargo.toml"
+```toml title="apps/blog/Cargo.toml"
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
-name = "tutorial-api"
+name = "blog"
 path = "src/main.rs"
 ```
 
@@ -117,170 +91,59 @@ path = "src/main.rs"
 
 The shape of an e2e test: build the app, hit the route, read the
 response. Two requests, three assertions — enough to cover the entire
-wiring chain.
+wiring chain for a bare CRUD feature.
 
-```rust title="apps/tutorial-api/tests/e2e.rs"
+```rust title="apps/blog/tests/e2e.rs"
 #[tokio::test]
-async fn users_round_trip_under_a_bearer_token() {
+async fn posts_round_trip() {
     let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", admin_token());
 
     let created = app
         .http()
-        .post("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
+        .post("/posts")
+        .body_json(&json!({ "title": "Hello", "body": "World" }))
         .send()
         .await;
     created.assert_status_is_ok();
     let body = created.json().await;
     let id = body.value().object().get("id").string().to_owned();
+    assert_eq!(body.value().object().get("title").string(), "Hello");
 
-    let listed = app
-        .http()
-        .get("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .send()
-        .await;
-    listed.assert_status_is_ok();
-    let names: Vec<String> = listed
-        .json()
-        .await
-        .value()
-        .array()
-        .iter()
-        .map(|u| u.object().get("name").string().to_owned())
-        .collect();
-    assert_eq!(names, vec!["Ada".to_string()]);
-
-    let got = app
-        .http()
-        .get(format!("/users/{id}"))
-        .header(header::AUTHORIZATION, &bearer)
-        .send()
-        .await;
+    let got = app.http().get(format!("/posts/{id}")).send().await;
     got.assert_status_is_ok();
-    assert_eq!(got.json().await.value().object().get("name").string(), "Ada");
+    assert_eq!(got.json().await.value().object().get("body").string(), "World");
 }
 ```
 
-The three assertions cover the entire chain: the `POST` walks
-validation, authn, authz, the transaction interceptor, and the
-service; the `GET /users` walks the row-level filter and the response
-masker; the `GET /users/:id` walks `Bind`'s service load.
+The assertions cover the entire chain: the `POST` walks validation, the
+transaction interceptor, and the service; the `GET /posts/:id` walks
+`CrudService::find_by_id` through `Repo`.
 
-## The four failure modes
+## The validation failure
 
-A happy-path test is half a test. The bugs that ship live in the
-failures. Add four short ones — exactly the matrix the
-[negative-path testing page](/testing/negative-path/) recommends.
+A happy-path test is half a test. Add one negative path — the same
+`400` you verified by hand on page 5.
 
-```rust title="apps/tutorial-api/tests/e2e.rs"
+```rust title="apps/blog/tests/e2e.rs"
 #[tokio::test]
-async fn create_without_a_token_returns_401() {
+async fn create_with_empty_title_returns_400() {
     let (_db, app) = boot().await;
     app.http()
-        .post("/users")
-        .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
+        .post("/posts")
+        .body_json(&json!({ "title": "", "body": "World" }))
         .send()
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn create_with_invalid_email_returns_400() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", admin_token());
-    let resp = app
-        .http()
-        .post("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "name": "Ada", "email": "not-an-email" }))
-        .send()
-        .await;
-    resp.assert_status(StatusCode::BAD_REQUEST);
-    let body = resp.json().await;
-    assert!(body.value().object().get("details").object().get_opt("email").is_some());
-}
-
-#[tokio::test]
-async fn cross_tenant_get_returns_403() {
-    let (_db, app) = boot().await;
-    let bearer_a = format!("Bearer {}", admin_token());
-    let bearer_b = format!("Bearer {}", admin_token());
-
-    let id = app
-        .http()
-        .post("/users")
-        .header(header::AUTHORIZATION, &bearer_a)
-        .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
-        .send()
-        .await
-        .json()
-        .await
-        .value()
-        .object()
-        .get("id")
-        .string()
-        .to_owned();
-
-    app.http()
-        .get(format!("/users/{id}"))
-        .header(header::AUTHORIZATION, &bearer_b)
-        .send()
-        .await
-        .assert_status(StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn duplicate_email_does_not_persist() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", admin_token());
-
-    app.http()
-        .post("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "name": "Ada", "email": "dup@acme.test" }))
-        .send()
-        .await
-        .assert_status_is_ok();
-
-    app.http()
-        .post("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "name": "Grace", "email": "dup@acme.test" }))
-        .send()
-        .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-
-    let listed = app
-        .http()
-        .get("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .send()
-        .await;
-    let names: Vec<String> = listed
-        .json()
-        .await
-        .value()
-        .array()
-        .iter()
-        .map(|u| u.object().get("name").string().to_owned())
-        .collect();
-    assert_eq!(names, vec!["Ada".to_string()], "the failed insert rolled back");
+        .assert_status(StatusCode::BAD_REQUEST);
 }
 ```
-
-The duplicate-email test is the most load-bearing of the four: it
-proves the transaction interceptor unwinds on a 5xx response. A
-regression that drops the transaction wrapper would let the second
-insert commit; the assertion catches it.
 
 <Aside type="tip">
-Each `admin_token()` call generates a fresh org id — a cross-tenant
-test gets two distinct orgs for free. When the same caller needs the
-same org across two tokens, factor out an `Uuid::now_v7()` and pass it
-into both.
+The full negative-path matrix — `401` without a token, `403` across
+tenants, transaction rollback on a `5xx` — lives in
+[`publish-api`](/testing/negative-path/) once auth and row-level policy
+are in play. Copy those patterns when you wire
+[`users`](/tutorial/security/); the tutorial stops at validation
+because `blog` stays public.
 </Aside>
 
 ## Run it
@@ -302,12 +165,9 @@ filter for the e2e file.
    ```bash frame="terminal"
    $ just test-e2e
    ────────────
-        Starting 5 tests across 1 binary
-         PASS [   1.4s] tutorial-api::e2e users_round_trip_under_a_bearer_token
-         PASS [   0.8s] tutorial-api::e2e create_without_a_token_returns_401
-         PASS [   0.8s] tutorial-api::e2e create_with_invalid_email_returns_400
-         PASS [   1.1s] tutorial-api::e2e cross_tenant_get_returns_403
-         PASS [   1.0s] tutorial-api::e2e duplicate_email_does_not_persist
+        Starting 2 tests across 1 binary
+         PASS [   1.4s] features::e2e posts_round_trip
+         PASS [   0.8s] features::e2e create_with_empty_title_returns_400
    ```
 
 3. Run the rest of the workspace too — unit and integration tests
@@ -325,21 +185,21 @@ third, `just test-cov`, exists for coverage runs. None of them use
 
 ## What you have now
 
-- A `tests/e2e.rs` booting the real `TutorialApiModule` against a
+- A `tests/e2e.rs` booting the real `BlogModule` against a
   throwaway Postgres provisioned by testcontainers.
-- A happy-path test and four negative-path tests covering authn,
-  validation, cross-tenant access, and transaction rollback.
-- A `just test-e2e` recipe running them green — a wiring regression
-  in any of the previous seven pages fails here, in this binary.
+- A happy-path test and a validation failure — enough to catch a
+  wiring regression in any of the previous six pages.
+- A `just test-e2e` recipe running them green.
 
 ## Where you are now
 
-You've built `users` end to end: an entity declared once, a service
-that gates every DB call, an HTTP controller and a GraphQL resolver
-sharing the same policy, a transactional Postgres, an e2e suite that
-locks the shape down. The feature lives in `crates/features/src/users/`;
-copying it is the way to add the next one.
+You've built `posts` end to end: an entity declared once, a service
+that gates every DB call, an HTTP controller mounted in `blog`, a
+transactional Postgres, an e2e suite that locks the shape down. The
+feature lives in `crates/features/src/posts/`; copying it is the way
+to add the next bare feature.
 
-The reference workspace's `users` (and `orgs`, `audio`, `oauth`) live
-in the same shape — open them when a question about a corner case
-beats reading more docs.
+When you need auth, GraphQL, org scoping, and the full negative-path
+matrix, open [`publish-api`](/publish/) and
+[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
+— same port-and-adapter layout, more layers on top.

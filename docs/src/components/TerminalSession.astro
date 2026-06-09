@@ -5,9 +5,13 @@ interface Props {
     | { kind: 'output'; text: string }
     | { kind: 'response'; text: string }
   >;
+  /** Shorter chrome for scaffold snippets above code demos. */
+  variant?: 'default' | 'compact';
+  /** Optional label in the title bar (e.g. "Scaffold"). */
+  label?: string;
 }
 
-const { lines } = Astro.props;
+const { lines, variant = 'default', label } = Astro.props;
 
 function escapeHtml(text: string): string {
   return text
@@ -73,11 +77,12 @@ function renderLine(line: Props['lines'][number]): string {
 const body = lines.map(renderLine).join('\n');
 ---
 
-<div class="nestrs-terminal not-content">
+<div class:list={['nestrs-terminal', 'not-content', { 'nestrs-terminal--compact': variant === 'compact' }]}>
   <div class="nestrs-terminal__titlebar" aria-hidden="true">
     <span class="nestrs-terminal__dot"></span>
     <span class="nestrs-terminal__dot"></span>
     <span class="nestrs-terminal__dot"></span>
+    {label ? <span class="nestrs-terminal__label">{label}</span> : null}
   </div>
   <pre class="nestrs-terminal__body"><code set:html={body}></code></pre>
 </div>

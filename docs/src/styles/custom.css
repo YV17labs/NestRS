@@ -980,6 +980,45 @@
   background: color-mix(in srgb, var(--sl-color-gray-4) 70%, transparent);
 }
 
+.nestrs-terminal__label {
+  margin-left: auto;
+  font-family: var(--sl-font);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+
+.nestrs-terminal--compact {
+  margin-block: 0;
+  box-shadow: 0 10px 28px -14px rgba(0, 0, 0, 0.45);
+}
+
+.nestrs-terminal--compact .nestrs-terminal__body {
+  padding: 0.65rem 0.85rem;
+  font-size: 0.78125rem;
+}
+
+/* Home hello demo — scaffold → source → run */
+.nestrs-hello-demo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-block: 1.25rem;
+}
+
+.nestrs-reveal .nestrs-hello-demo {
+  margin-block: 1.25rem;
+  width: 100%;
+  align-self: stretch;
+}
+
+.nestrs-hello-demo .nestrs-code-tabs,
+.nestrs-hello-demo .nestrs-terminal {
+  margin-block: 0;
+}
+
 .nestrs-terminal__body {
   margin: 0;
   padding: 0.85rem 1rem;
@@ -1072,6 +1111,141 @@
 .t-res {
   color: var(--t-res);
   font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+   Hello demo — tabbed source (Controller → Service → Module → Main)
+   --------------------------------------------------------------------------- */
+
+.nestrs-code-tabs {
+  margin-block: 1.25rem;
+  width: 100%;
+  border: 1px solid var(--nestrs-card-border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.55);
+  background: var(--nestrs-code-bg);
+  text-align: left;
+}
+
+.nestrs-reveal .nestrs-code-tabs {
+  margin-block: 1.25rem;
+  width: 100%;
+  align-self: stretch;
+}
+
+.nestrs-reveal .nestrs-code-tabs:first-child {
+  margin-block-start: 0;
+}
+
+.nestrs-code-tabs__chrome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  padding: 0.55rem 0.85rem;
+  background: var(--nestrs-code-tabbar);
+  border-bottom: 1px solid var(--nestrs-card-border);
+}
+
+.nestrs-code-tabs__dots {
+  display: flex;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.nestrs-code-tabs__dots span {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sl-color-gray-4) 70%, transparent);
+}
+
+.nestrs-code-tabs__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nestrs-code-tabs__tab {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0.28rem 0.65rem;
+  font-family: var(--sl-font);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sl-color-gray-2);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.nestrs-code-tabs__tab:hover {
+  color: var(--sl-color-white);
+  background: color-mix(in srgb, var(--sl-color-gray-5) 55%, transparent);
+}
+
+.nestrs-code-tabs__tab.is-active {
+  color: var(--sl-color-white);
+  background: var(--nestrs-code-bg);
+  border-color: var(--nestrs-card-border);
+  box-shadow: inset 0 -2px 0 var(--nestrs-orange);
+}
+
+:root[data-theme='light'] .nestrs-code-tabs__tab {
+  color: var(--sl-color-gray-3);
+}
+
+:root[data-theme='light'] .nestrs-code-tabs__tab:hover,
+:root[data-theme='light'] .nestrs-code-tabs__tab.is-active {
+  color: var(--sl-color-black);
+}
+
+.nestrs-code-tabs__path {
+  font-family: var(--sl-font-mono);
+  font-size: 0.75rem;
+  color: var(--sl-color-gray-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.nestrs-code-tabs__label {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--sl-font);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+
+.nestrs-code-tabs__body {
+  background: var(--nestrs-code-bg);
+}
+
+.nestrs-code-tabs__panel .expressive-code {
+  margin: 0 !important;
+}
+
+.nestrs-code-tabs__panel .expressive-code .frame {
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.nestrs-code-tabs__panel .expressive-code pre {
+  margin: 0;
+  border-radius: 0;
 }
 
 /* ---------------------------------------------------------------------------

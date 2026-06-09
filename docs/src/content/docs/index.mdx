@@ -33,102 +33,44 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 import Bench from '../../components/Bench.astro';
+import HelloCodeTabs from '../../components/HelloCodeTabs.astro';
 import TerminalSession from '../../components/TerminalSession.astro';
 
-## A complete service, in three small files
+## A complete service, one app
 
 <div class="nestrs-reveal not-content">
 
-No wiring file. No config. No boilerplate. A provider, a controller, and a
-`#[module]` that lists them — that's a real, type-checked HTTP service. The
-dependency graph is built and **verified at boot**, and each app under `apps/`
-compiles to its own native binary.
+No wiring file. No config. No boilerplate. Scaffold a **standalone** crate with
+the CLI, then follow the tabs from **Controller** (your HTTP surface) through
+**Service**, **Module**, and **Main** — that's a real, type-checked service.
+The dependency graph is built and **verified at boot**, and the crate compiles
+to a native binary.
 
-```rust title="crates/features/src/hello/service.rs"
-use nest_rs_core::injectable;
-
-#[injectable]
-#[derive(Default)]
-pub struct HelloService;
-
-impl HelloService {
-    pub fn greeting(&self) -> String {
-        "Hello World".to_string()
-    }
-}
-```
-
-```rust title="crates/features/src/hello/http/controller.rs"
-use std::sync::Arc;
-use nest_rs_http::{controller, routes};
-
-use crate::hello::HelloService;
-
-#[controller(path = "/")]
-pub struct HelloController {
-    #[inject]
-    svc: Arc<HelloService>,
-}
-
-#[routes]
-impl HelloController {
-    #[get("/")]
-    async fn hello(&self) -> String {
-        self.svc.greeting()
-    }
-}
-```
-
-```rust title="apps/hello/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_opentelemetry::OpenTelemetryModule;
-
-use features::hello::HelloHttpModule;
-
-#[module(
-    imports = [
-        OpenTelemetryModule,
-        HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
-        HelloHttpModule,
-    ],
-)]
-pub struct HelloModule;
-```
-
-```rust title="apps/hello/src/main.rs"
-use anyhow::Result;
-use nest_rs_config::Environment;
-use nest_rs_core::App;
-use nest_rs_opentelemetry::OpenTelemetry;
-
-use hello::HelloModule;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let _environment = Environment::init();
-    let _telemetry = OpenTelemetry::init("hello")?;
-
-    App::builder()
-        .module::<HelloModule>()
-        .build()
-        .await?
-        .run()
-        .await
-}
-```
+<div class="nestrs-hello-demo">
 
 <TerminalSession
+  variant="compact"
+  label="Scaffold"
+  lines={[
+    { kind: 'input', text: 'nestrs new hello --standalone' },
+    { kind: 'output', text: 'Created standalone nestrs app at ./hello' },
+    { kind: 'output', text: 'Template: hello — Hello World on GET /' },
+    { kind: 'output', text: 'Mode: standalone (one crate, logic in src/)' },
+    { kind: 'input', text: 'cd hello' },
+  ]}
+/>
+
+<HelloCodeTabs />
+
+<TerminalSession
+  label="Run"
   lines={[
     { kind: 'input', text: 'just dev' },
-    { kind: 'output', text: 'bacon run-long -- --bin hello' },
     { kind: 'output', text: '    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s' },
     { kind: 'output', text: '     Running `target/debug/hello`' },
     { kind: 'output', text: '2026-04-29T12:00:00.798397Z  INFO nest_rs_opentelemetry::init: OpenTelemetry initialised service=hello endpoint="<none>" sample_ratio=1.0 log_format=Text otlp_export=false' },
     { kind: 'output', text: '2026-04-29T12:00:00.799345Z DEBUG opentelemetry: name="NoopMeterProvider.MeterCreation" meter_name="nestrs" Meter was obtained from a NoopMeterProvider. No metrics will be recorded. If global::meter_with_scope()/meter() was used, ensure that a valid MeterProvider is set globally before creating Meter.' },
     { kind: 'output', text: '2026-04-29T12:00:00.799422Z  INFO nest_rs::module: module dependencies initialized module="HelloModule"' },
-    { kind: 'output', text: '2026-04-29T12:00:00.799439Z  INFO nest_rs::module: module dependencies initialized module="HelloHttpModule"' },
-    { kind: 'output', text: '2026-04-29T12:00:00.799451Z  INFO nest_rs::module: module dependencies initialized module="HelloModule"' },
     { kind: 'output', text: '2026-04-29T12:00:00.799631Z  INFO nest_rs::transport: attached module-contributed transport transport="HttpTransport"' },
     { kind: 'output', text: '2026-04-29T12:00:00.799862Z  INFO nest_rs::routes: GET    /  (hello)' },
     { kind: 'output', text: '2026-04-29T12:00:00.802245Z  INFO nest_rs_http::transport: http transport listening addr=0.0.0.0:3000' },
@@ -139,6 +81,8 @@ async fn main() -> Result<()> {
     { kind: 'output', text: '2026-04-29T12:00:01.995630Z  INFO nest_rs::access: method=GET path=/ status=200 bytes=11 duration_ms=0.143542 client_ip=127.0.0.1 user_agent=curl/8.20.0 trace_id=4894160908a67f7e60b51c9ebdc40977' },
   ]}
 />
+
+</div>
 
 The same inject-and-decorate model carries every surface — HTTP, GraphQL,
 WebSockets, queues, scheduled jobs, MCP. [Get started](/getting-started/), read

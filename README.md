@@ -13,152 +13,20 @@
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 </p>
 
-<p align="center">
-  <a href="https://nestrs.dev"><strong>nestrs.dev</strong></a> — full documentation, tutorials and API reference.
-</p>
-
 > [!NOTE]
 > **Alpha — under active development.** The API still shifts and rough edges
 > remain, so it is not production-ready yet. Stars and early feedback are very
 > welcome.
 
-## Why NestRS
-
-- ⚡ **Rust-native speed.** ~25× the throughput of an equivalent Node service on
-  the same CPU budget (~13× per core), with a sub-millisecond p99 — built on the
-  same hyper/tokio core as the fastest Rust web frameworks, with no GC pauses and
-  tail latencies that stay flat under load. [See the benchmark.](#benchmark)
-- 🪶 **An order of magnitude less memory.** ~4 MB idle and ~6 MB under load, versus
-  ~80–120 MB for the same Node service — roughly 18–20× lighter, for smaller
-  instances, higher density, and a lighter cloud bill.
-- 🚀 **Boots in milliseconds.** A single static native binary with no runtime to
-  warm up — friendly to autoscaling and cold starts.
-- 🧩 **Declarative by design.** `#[module]`, `#[controller]`, `#[injectable]`,
-  `#[resolver]`, `#[processor]` — features are wired with attribute macros, not
-  hand-written boilerplate.
-- 🛡️ **Verified before it serves.** The DI graph is wired by macros and checked at
-  boot — a module can inject only what its imports reach (a compile-time
-  encapsulation boundary a runtime `exports` list can't enforce), with no
-  reflection and no runtime surprises.
-- 🔐 **Security & transactions, transparent.** A service queries through `Repo`
-  against an ambient, request-scoped data context — so every read is filtered to
-  the caller's permissions and a mutating request runs in a transaction, with no
-  hand-written authorization filter or transaction code.
-- 📦 **Batteries included.** HTTP, GraphQL, OpenAPI, MCP, Redis-backed queues,
-  scheduling, an event bus, CASL-style authorization, health probes,
-  OpenTelemetry and an in-process test harness — each an opt-in crate, so you
-  compile only what you import.
-
-## Hello world
-
-The umbrella `nestrs` crate re-exports the surface behind Cargo features; one
-`use nest_rs::prelude::*;` brings in the everyday decorators and types.
-
-```toml
-# Cargo.toml
-nest-rs = { version = "0", features = ["http"] }
-```
-
-(The published name is `nest-rs` on crates.io; in code, `use nest_rs::prelude::*;` still
-works — the library exports under the `nestrs` name.)
-
-```rust
-// src/main.rs
-use nest_rs::prelude::*;
-
-// --- src/hello/service.rs ---
-#[injectable]
-#[derive(Default)]
-struct HelloService;
-
-impl HelloService {
-    fn greeting(&self) -> &'static str { "Hello World" }
-}
-
-// --- src/hello/controller.rs ---
-#[controller(path = "/")]
-struct HelloController { #[inject] svc: std::sync::Arc<HelloService> }
-
-#[routes]
-impl HelloController {
-    #[get("/")]
-    async fn hello(&self) -> &'static str { self.svc.greeting() }
-}
-
-// --- src/hello/module.rs ---
-#[module(imports = [HttpModule::for_root(None)], providers = [HelloService, HelloController])]
-struct AppModule;
-
-// --- src/main.rs ---
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    App::builder().module::<AppModule>().build().await?.run().await
-}
-```
-
-For this minimal quickstart everything fits in a single `main.rs`; the
-file headers above show where each piece lives once the app grows beyond
-"Hello World" — one folder per feature, one file per role.
-
-Prefer per-crate imports (`use nest_rs_http::controller;`) when you want to
-see exactly which surface you reach for — both spellings resolve to the same
-items.
-
-## Pluggable layers
-
-Every concern in NestRS is split into an **abstractions crate** (the trait
-the framework calls) and a **first-party integration** (the default
-implementation). Swap any layer by writing a sibling crate against the
-public trait — no fork required.
-
-| Abstraction | First-party implementation |
-| ----------- | -------------------------- |
-| `nest-rs-database` (`Executor`, `Repo`) | `nest-rs-seaorm` (SeaORM) |
-| `nest-rs-queue` (`QueueBackend`) | `nest-rs-redis` (Redis via apalis) |
-| `nest-rs-throttler` (`ThrottlerStore`) | bundled in-memory store |
-| `nest-rs-config` (`ConfigSource`) | bundled env-based source |
-| `nest-rs-authn` (`Strategy`) | JWT + OAuth2 strategies |
-
-Each crate's `README.md` under [`crates/`](crates/) is the source of truth
-for the contract its extension point exposes.
-
-## Benchmark
-
-The same "Hello World" HTTP service — a provider, a controller, a module —
-implemented once in NestRS and once in NestJS, under an identical `wrk` load
-(`GET /`, plaintext, keep-alive). On the same CPU budget NestRS served **~25×
-more requests** while using **~20× less memory**.
-
-| Metric — `GET /` plaintext      | NestRS (Rust)  | NestJS (Node 24) | Ratio  |
-| ------------------------------- | -------------- | ---------------- | ------ |
-| Throughput (2 cores, defaults)  | ~463k req/s    | ~18k req/s       | ~25×   |
-| Throughput (1 core, per-core)   | ~231k req/s    | ~17k req/s       | ~13×   |
-| Latency, p50                    | 0.13 ms        | 3.2 ms           | ~24×   |
-| Latency, p99                    | 0.57 ms        | 6.4 ms           | ~11×   |
-| Memory, idle                    | 4 MB           | 80 MB            | ~20×   |
-| Memory, under load              | 6 MB           | 118 MB           | ~18×   |
-
-<sub><b>Machine:</b> a single dev container with <b>4 cores and 8 GiB RAM</b>
-(aarch64, Debian 13) — both the total memory and the core count are the
-container's, not the host's. <b>Method:</b> server pinned to half the cores, the
-<code>wrk</code> client (<code>-t2 -c64 -d20s</code>) to the other half; median of
-3 runs over loopback. NestRS is a release build on its default multi-threaded
-tokio runtime; NestJS 11 runs on Express, <code>NODE_ENV=production</code>, logging
-off, as a single process — the Node default, which is why it cannot use the second
-core (the per-core row is the apples-to-apples figure). Loopback on a shared host
-favours absolute numbers over a public leaderboard; treat these as order-of-
-magnitude, and reproduce them with the <code>hello</code> example.</sub>
-
 ## Documentation
 
-Everything user-facing lives at **[nestrs.dev](https://nestrs.dev)**:
+**Using NestRS?** Head to **[nestrs.dev](https://nestrs.dev)** — getting started,
+tutorial, [why NestRS](https://nestrs.dev/why/), benchmarks, and one section per
+capability crate.
 
-- **[Getting started](https://nestrs.dev/getting-started/)** — install the toolchain and run your first endpoint.
-- **[Tutorial](https://nestrs.dev/tutorial/)** — build a feature end-to-end.
-- **[Fundamentals](https://nestrs.dev/fundamentals/)** — modules, providers, the DI graph, lifecycle.
-- **HTTP, GraphQL, WebSockets, Database, Security, Queue, Schedule, Events, MCP, Health, Throttler, Server-Timing, OpenTelemetry, Configuration, Testing** — one section per capability crate.
-
-This README is the contributor's entry point. For day-to-day usage, follow the docs.
+**Contributing to the framework?** This README is your entry point. For design
+rules and conventions, read [`CLAUDE.md`](CLAUDE.md) and
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Contributing
 

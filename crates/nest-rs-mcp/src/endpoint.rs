@@ -17,7 +17,7 @@ where
     F: Fn() -> H + Send + Sync + 'static,
     H: ServerHandler + Send + 'static,
 {
-    endpoint_with_guard(Some(Arc::new(DenyAllMcpGuard)), factory)
+    endpoint_with_guard(None, factory)
 }
 
 pub fn endpoint_with_guard<F, H>(
@@ -34,10 +34,12 @@ where
         StreamableHttpServerConfig::default(),
     );
     let inner = service.compat();
-    match guard {
-        Some(guard) => Route::new().at("/", GuardedEndpoint { guard, inner }),
-        None => Route::new().at("/", inner),
-    }
+    // Fail closed: an MCP endpoint mounted without an explicit
+    // `McpOperationGuard` denies every request rather than serving the tool
+    // surface unauthenticated. Both `endpoint` and the `#[mcp]` macro funnel
+    // through here, so a missing guard can never silently open `/mcp`.
+    let guard = guard.unwrap_or_else(|| Arc::new(DenyAllMcpGuard));
+    Route::new().at("/", GuardedEndpoint { guard, inner })
 }
 
 struct GuardedEndpoint<E> {

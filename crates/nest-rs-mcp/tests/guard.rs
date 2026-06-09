@@ -46,3 +46,13 @@ async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
     let resp = TestClient::new(open).post("/").send().await;
     assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
 }
+
+// The `#[mcp]` macro resolves its guard via `get_dyn` and forwards the
+// `Option` straight to `endpoint_with_guard` — so `None` (no guard wired in
+// the container) MUST fail closed, not serve the tool surface open.
+#[tokio::test]
+async fn endpoint_with_guard_none_falls_back_to_deny_all() {
+    let unwired = endpoint_with_guard(None, || DummyHandler);
+    let resp = TestClient::new(unwired).post("/").send().await;
+    assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
+}

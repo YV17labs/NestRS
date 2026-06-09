@@ -217,7 +217,8 @@ Run `just` with no arguments to list every recipe.
 |---------|--------------|
 | `just dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `just dev platform-api` |
 | `just run <app>` | Run an app in release mode, e.g. `just run platform-api` |
-| `just build` | Build release binaries for every app in the workspace |
+| `just build <app>` | Build one app in release (default `hello`), e.g. `just build platform-api` |
+| `just build-all` | Build release binaries for every app in the workspace |
 | `just test` | Run unit + integration tests (no DB) |
 | `just test-e2e` | Run e2e tests (Postgres required) |
 | `just test-cov` | Run coverage on the full suite |
@@ -226,9 +227,9 @@ Run `just` with no arguments to list every recipe.
 | `just check` | Fast type-check (no codegen) |
 | `just db <verb>` | Manage the shared database: `up`, `down`, `fresh`, `status`, `seed`, `reset` |
 
-`build`, `test`, `test-cov`, `lint`, `fmt` and `check` always operate on the
-whole workspace; `dev` and `run` take an app name (default `hello`); `just db`
-(run bare to list the verbs) manages the shared Postgres schema and seed data.
+`build-all`, `test`, `test-cov`, `lint`, `fmt` and `check` operate on the
+whole workspace; `dev`, `run`, and `build` take an app name (default `hello`);
+`just db` (run bare to list the verbs) manages the shared Postgres schema and seed data.
 
 ### Example apps
 

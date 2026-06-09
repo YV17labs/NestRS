@@ -9,8 +9,12 @@ dev app="hello":
 run app="hello":
     cargo run --release --bin {{app}}
 
-# Build release binaries for every app in the workspace
-build:
+# Build one app in release (default: hello). Usage: just build mcp
+build app="hello":
+    cargo build --release -p {{app}}
+
+# Build release binaries for every app in the workspace.
+build-all:
     cargo build --workspace --release
 
 # Database lifecycle — migrations + seeding. Usage: just db up|down|fresh|status|seed|reset

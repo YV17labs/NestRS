@@ -1,4 +1,5 @@
 import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import mermaid from 'astro-mermaid';
@@ -23,13 +24,17 @@ export default defineConfig({
   // GFM tables/strikethrough/task-lists are not applied to .mdx by default in
   // Astro 6 — wire remark-gfm explicitly so every docs table renders.
   markdown: {
-    remarkPlugins: [remarkGfm],
-    // External links open in a new tab (with rel="noopener noreferrer") so a
-    // reader following e.g. the SeaORM link keeps the docs open. Internal links
-    // are left untouched.
-    rehypePlugins: [
-      [rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }],
-    ],
+    processor: unified({
+      // remark-gfm is wired explicitly below; disable the built-in GFM toggle.
+      gfm: false,
+      remarkPlugins: [remarkGfm],
+      // External links open in a new tab (with rel="noopener noreferrer") so a
+      // reader following e.g. the SeaORM link keeps the docs open. Internal links
+      // are left untouched.
+      rehypePlugins: [
+        [rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }],
+      ],
+    }),
   },
   integrations: [
     mermaid(),

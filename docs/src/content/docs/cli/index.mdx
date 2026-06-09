@@ -7,112 +7,232 @@ sidebar:
 
 import { Aside, Steps, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
 
-The **`nestrs`** CLI scaffolds applications and features from the same
-reference layouts the docs teach — `apps/hello/` for a minimal HTTP app,
-`crates/features/src/users/` for a port + adapter feature. Generated code
-uses the same decorators your hand-written code uses; the CLI does not
-introduce a second pattern.
+The **`nestrs`** CLI scaffolds projects in **two layouts** — [standalone](#layout-detection)
+(one crate) or [workspace](#layout-detection) (monorepo with
+`crates/features/` + `apps/*`). **`nestrs new` picks the layout automatically**
+from the directory tree — no mode flags, no config file. Generated code follows
+the same decorators as the framework repo (`users/` for features,
+`platform-api/` for composition apps).
 
 <Aside type="caution">
-  The CLI ships with the framework workspace and will be published to
-  crates.io as **`nest-rs-cli`** (binary name **`nestrs`**) alongside the
-  other `nest-rs-*` crates. During alpha, you can also build it from the
-  monorepo clone.
+  The CLI ships on crates.io as **`nest-rs-cli`** (binary name **`nestrs`**),
+  lockstep with the other `nest-rs-*` crates.
 </Aside>
 
 ## Install
 
-<Tabs syncKey="cli-install">
-<TabItem label="crates.io">
-
-When `nest-rs-cli` is published (same lockstep version as the framework):
-
 ```bash
-cargo install --locked nest-rs-cli
+cargo install --locked nest-rs-cli just
 nestrs version
 ```
 
-Requires **Rust 1.95+** (edition 2024).
+Requires **Rust 1.95+** (edition 2024). Run **`nestrs doctor`** after install — it
+checks the Rust toolchain and lists optional `NESTRS_*` environment variables.
 
-</TabItem>
-<TabItem label="From the monorepo">
+## Layout detection
 
-If you cloned [NestRS/NestRS](https://github.com/NestRS/NestRS) to
-contribute or run the example apps:
+`nestrs new` infers where you are and what to create. There is **no**
+`nestrs-cli.yaml` — the workspace shape is already declared in the root
+`Cargo.toml` (`members = ["crates/*", "apps/*"]`). The CLI walks up from the
+current directory (or `-o` path) and reads that manifest.
 
-```bash
-cargo install --locked --path crates/nest-rs-cli
-nestrs version
-```
+| Where you run | Command | Result |
+|---|---|---|
+| Outside a nestrs workspace | `nestrs new acme` | Monorepo at `./acme/` + `apps/hello/` on port **3000** |
+| Inside a nestrs workspace | `nestrs new billing` | Thin app at `apps/billing/` — **next free port** in `module.rs` |
+| Anywhere (explicit) | `nestrs new my-api --standalone` | Single crate at `./my-api/` |
 
-</TabItem>
-</Tabs>
+If `apps/billing/` already exists, the CLI stops with **`app billing already
+exists`** — it does not overwrite.
 
-Run **`nestrs doctor`** after install — it checks the Rust toolchain and
-lists optional `NESTRS_*` environment variables.
+<Aside type="note">
+  No extra config file to maintain. Cargo's workspace manifest is the single
+  source of truth; the generators use the same discovery as `nestrs new`. If you
+  ever need to tune defaults, an **optional** `[workspace.metadata.nestrs]` table
+  in the root `Cargo.toml` accepts `port-base` — never required, every key has a
+  default.
+</Aside>
+
+### Standalone vs workspace
+
+| | **Standalone** (`--standalone`) | **Workspace** (default) |
+|---|---|---|
+| **Layout** | One crate — logic in `src/` | Monorepo — `crates/features/` + `apps/*` |
+| **Deps** | `nest-rs-*` from crates.io | Same, via `[workspace.dependencies]` |
+| **Grow** | Copy patterns by hand | `nestrs g feature` / `g resource` / `g <transport>`, `nestrs new <app>` |
+| **When** | One binary, no shared product crate | Several apps sharing features |
 
 ## Create a project
 
-### Standalone app (greenfield)
-
-Creates a new Cargo project with `nest-rs-*` dependencies from crates.io —
-no monorepo clone required:
+<Tabs syncKey="project-kind">
+<TabItem label="Workspace">
 
 ```bash
-nestrs new my-api
-cd my-api
-cargo run
-curl http://localhost:3000/
-# → Hello World
+nestrs new acme
+cd acme
+just dev hello
 ```
+
+Open **http://localhost:3000/** — `Hello World`. Logic in
+`crates/features/src/hello/`; `apps/hello/` composes modules only.
+
+<FileTree>
+- acme/
+  - Cargo.toml
+  - Justfile
+  - README.md
+  - crates/
+    - features/
+      - src/
+        - hello/
+          - http/…
+          - service.rs
+        - lib.rs
+  - apps/
+    - hello/
+      - src/
+        - lib.rs
+        - main.rs
+        - module.rs
+      - tests/e2e.rs
+</FileTree>
+
+**Grow the workspace** (from the workspace root or any sub-folder):
+
+```bash
+nestrs new billing
+nestrs g resource posts
+```
+
+</TabItem>
+<TabItem label="Standalone">
+
+```bash
+nestrs new my-api --standalone
+cd my-api
+just dev
+```
+
+Open **http://localhost:3000/** — `Hello World`. Service and controller live
+in `src/` (no `features` crate).
 
 <FileTree>
 - my-api/
   - Cargo.toml
+  - Dockerfile
+  - Justfile
   - src/
-    - main.rs
-    - module.rs
-    - service.rs
     - controller.rs
+    - service.rs
+    - module.rs
+    - main.rs
+  - tests/e2e.rs
 </FileTree>
 
-Templates:
+</TabItem>
+</Tabs>
 
-| Flag | Result |
-|------|--------|
-| `--template hello` (default) | Working `GET /` — matches `apps/hello` |
-| `--template empty` | HTTP transport only, no routes — matches the [tutorial scaffold](/tutorial/scaffold/) |
+Optional **`Dockerfile`** ships in **standalone** mode only.
+**`rust-toolchain.toml`** pins Rust 1.95 in both modes.
 
-Optional: **`--check`** runs `cargo check` after generation (standalone only).
+Templates — `--template` applies to **new monorepos** and **standalone** crates only.
+Every **workspace app** uses the same thin shell; the CLI scans existing
+`apps/*/src/module.rs` files and pins the next HTTP port in code (same pattern
+as `platform-auth` → 3001, `platform-api` → 3002, …).
 
-### App inside the monorepo
+| What | Default | Override |
+|------|---------|----------|
+| New monorepo | `hello` — feature + `apps/hello/` on port 3000 | `--template empty` |
+| New workspace app | thin shell + auto port in `HttpConfig` | _(no template flag)_ |
+| Standalone crate | `hello` | `--template empty` |
 
-From the nestrs workspace root (contributors):
+Workspace `.env` files do **not** set `NESTRS_HTTP__PORT` — ports live in each
+app's `module.rs`:
 
-```bash
-nestrs new tutorial-api --in-workspace --template empty
-just dev tutorial-api
-curl -i http://localhost:3000/
-# → 404 (transport mounted, no routes yet)
+```rust
+HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
 ```
 
-The app lands in `apps/tutorial-api/`. Workspace membership is automatic
-(`members = ["crates/*", "apps/*"]`).
+Optional: **`--check`** runs `cargo check` after generation.
 
-## Generate a feature
+### Add an app to an existing workspace
 
-Monorepo only — scaffolds under `crates/features/src/<name>/` and registers
-`pub mod …` in `crates/features/src/lib.rs`:
+From the workspace root (or `apps/`, `crates/features/`, …):
 
 ```bash
-# Port only (service + UsersModule-shaped module)
+nestrs new billing
+just dev billing
+```
+
+Creates a **thin** app under `apps/billing/` (composition root only — no
+`service.rs` / `controller.rs` in the app crate).
+
+## Build
+
+Release binaries land in `target/release/`. **`just run`** compiles and
+starts the server; use **`just build`** when you only need the artifact
+(Docker, CI, or copying the binary elsewhere).
+
+<Tabs syncKey="project-kind">
+<TabItem label="Workspace">
+
+```bash
+just build              # default app (hello)
+just build billing      # after nestrs new billing
+just build-all          # every app in the workspace
+just run hello          # build + run in release
+```
+
+</TabItem>
+<TabItem label="Standalone">
+
+```bash
+just build    # target/release/my-api
+just run      # build + run in release
+```
+
+The standalone **`Dockerfile`** runs `cargo build --release` in a
+multi-stage image — same output path as `just build`.
+
+</TabItem>
+</Tabs>
+
+## Generate features and adapters
+
+Monorepo only. Generators scaffold under `crates/features/src/<name>/`, register
+`pub mod …` in `crates/features/src/lib.rs`, and — when you run them from inside
+an app — wire the edge module into that app's `module.rs`. Every command takes
+**`--dry-run`** (print what would change, write nothing) and a **`-p`** path
+override (default: auto-discover from the current directory). Re-running a
+generator is safe: it refuses to overwrite an existing feature or adapter, and
+the wiring edits are idempotent.
+
+A **port** is the transport-agnostic core (service + module). An **adapter**
+bolts one transport onto a port. A **resource** is a DB-backed CRUD port plus its
+HTTP adapter in one shot.
+
+```bash
+# Port only (service + module, no transport)
 nestrs g feature posts
 
-# Port + public HTTP adapter (UsersHttpModule pattern, no authz yet)
-nestrs g feature posts --http
+# DB-backed CRUD: #[expose] entity + CrudService + HTTP adapter, deps auto-added
+nestrs g resource posts
+
+# Bolt a transport onto an existing port
+nestrs g http posts        # controller
+nestrs g graphql posts     # resolver
+nestrs g ws posts          # gateway
+nestrs g queue posts       # processor
+nestrs g schedule posts    # scheduled tasks
+nestrs g mcp posts         # MCP tool
 ```
 
-Wire the generated edge module into your app root `module.rs`:
+Each adapter delegates to the port's service, so a freshly-generated port plus
+any adapter compiles immediately — the handler is the seam you fill in. The
+generator prints the import line and the app-level module each transport needs
+(`HttpModule`, `GraphqlModule`, `ScheduleModule`, …).
+
+When the cursor isn't inside an app, wire the edge module by hand:
 
 ```rust
 use features::posts::PostsHttpModule;
@@ -124,9 +244,11 @@ use features::posts::PostsHttpModule;
 pub struct PlatformApiModule;
 ```
 
-For auth-protected resources, copy the guard wiring from
-[`users/http/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users/http)
-and import the matching `AuthzHttpModule`.
+`g resource` emits a self-contained, unauthenticated slice so it compiles in any
+workspace. For auth-protected CRUD, copy the `#[crud]` + guard wiring from
+[`orgs/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/orgs)
+or [`users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
+and import the matching `Authz<Transport>Module`.
 
 <Aside type="tip">
   Before inventing a second layout, open
@@ -172,25 +294,27 @@ nestrs update --from-path
 
 | Command | Description |
 |---------|-------------|
-| `nestrs new <name>` | Standalone app in `./<name>/` |
-| `nestrs new <name> --in-workspace` | App under `apps/<name>/` |
-| `nestrs new <name> --template empty` | HTTP-only shell (tutorial shape) |
-| `nestrs new <name> --check` | Standalone + `cargo check` |
+| `nestrs new <name>` | Monorepo at `./<name>/`, or app at `apps/<name>/` when already inside one |
+| `nestrs new <name> --standalone` | Single crate in `./<name>/` |
+| `nestrs new <name> --template hello` | Force Hello World scaffold |
+| `nestrs new <name> --template empty` | Force HTTP-only shell (no routes) |
+| `nestrs new <name> --check` | Run `cargo check` after scaffolding |
 | `nestrs doctor` | Toolchain and env sanity check |
 | `nestrs version` | Print the CLI version |
 | `nestrs about` | Print project metadata |
 | `nestrs update` | Reinstall latest CLI from crates.io |
 | `nestrs update --from-path` | Reinstall from monorepo `crates/nest-rs-cli` |
-| `nestrs g feature <name>` | Port feature in `crates/features/src/` |
-| `nestrs g feature <name> --http` | Port + HTTP adapter |
+| `nestrs g feature <name>` | Transport-agnostic port in `crates/features/src/` |
+| `nestrs g resource <name>` | DB-backed CRUD port + HTTP adapter (deps auto-added) |
+| `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp <name>` | Add one transport adapter to a port |
 
+Every generator accepts **`--dry-run`** and **`-p <path>`**.
 Aliases: **`nestrs g`** = **`nestrs generate`**.
 
 ## What's next
 
 Planned generators (see [Roadmap](https://github.com/NestRS/NestRS/blob/main/ROADMAP.md)):
-`resolver`, `entity`, full `resource`, migration scaffold, and
-`nestrs info` (route/module scan).
+migration scaffold and `nestrs info` (route/module scan).
 
 - [Getting started](/getting-started/) — first run after `nestrs new`
 - [Tutorial](/tutorial/) — build `users` end to end

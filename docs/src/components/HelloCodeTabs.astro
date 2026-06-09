@@ -13,7 +13,7 @@ const tabs: Tab[] = [
   {
     id: 'controller',
     label: 'Controller',
-    file: 'apps/hello/src/controller.rs',
+    file: 'hello/src/controller.rs',
     code: `use std::sync::Arc;
 use nest_rs_http::{controller, routes};
 
@@ -36,7 +36,7 @@ impl HelloController {
   {
     id: 'service',
     label: 'Service',
-    file: 'apps/hello/src/service.rs',
+    file: 'hello/src/service.rs',
     code: `use nest_rs_core::injectable;
 
 #[injectable]
@@ -52,7 +52,7 @@ impl HelloService {
   {
     id: 'module',
     label: 'Module',
-    file: 'apps/hello/src/module.rs',
+    file: 'hello/src/module.rs',
     code: `use nest_rs_core::module;
 use nest_rs_http::HttpModule;
 use nest_rs_opentelemetry::OpenTelemetryModule;
@@ -72,7 +72,7 @@ pub struct HelloModule;`,
   {
     id: 'main',
     label: 'Main',
-    file: 'apps/hello/src/main.rs',
+    file: 'hello/src/main.rs',
     code: `use anyhow::Result;
 use nest_rs_config::Environment;
 use nest_rs_core::App;

@@ -105,20 +105,34 @@
   max-width: none;
 }
 
+/* Stack + copy — column everywhere; desktop only shifts alignment left. */
+.hero .stack {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: clamp(1.25rem, 4vw, 1.75rem);
+}
+
+.hero .copy {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(1rem, 1.8vw, 1.35rem);
+}
+
 @media (min-width: 50rem) {
   .hero .stack {
-    min-width: 0;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
     align-items: flex-start;
     text-align: start;
     gap: clamp(1.5rem, 2.5vw, 2rem);
   }
 
   .hero .copy {
-    width: 100%;
-    gap: clamp(1rem, 1.8vw, 1.35rem);
+    align-items: flex-start;
   }
 
   .hero .tagline {
@@ -147,23 +161,98 @@
 }
 
 @media (max-width: 49.99rem) {
-  .hero-lockup > img,
-  .hero-lockup > .hero-html {
-    width: min(54%, 12.5rem) !important;
+  .hero {
+    padding-block: clamp(1rem, 3vw, 1.75rem) clamp(1.75rem, 5vw, 2.5rem) !important;
   }
 
-  .hero .stack {
-    align-items: center;
+  .hero-lockup {
+    margin-bottom: clamp(1.25rem, 4vw, 1.75rem);
+  }
+
+  .hero-lockup > img,
+  .hero-lockup > .hero-html {
+    width: min(52%, 10.5rem) !important;
+  }
+
+  .hero h1 {
+    font-size: clamp(2.25rem, calc(0.75rem + 8vw), 3.25rem);
   }
 
   .hero .tagline {
     align-items: center;
+    gap: clamp(1rem, 3.5vw, 1.25rem);
+  }
+
+  .hero .hero-lead {
+    font-size: clamp(1.12rem, calc(0.85rem + 1.1vw), 1.42rem);
+    line-height: 1.28;
+    text-align: center;
   }
 
   .hero .hero-sub {
     width: 100%;
     max-width: none;
     margin-inline: 0;
+    font-size: 0.9375rem;
+    line-height: 1.62;
+    text-align: center;
+  }
+
+  .hero .hero-stack {
+    justify-content: center;
+    gap: 0.35rem 0.32rem;
+    margin-top: 0.15rem;
+    padding-top: 0.85rem;
+  }
+
+  .hero .hero-stack > span {
+    font-size: 0.675rem;
+    padding: 0.2rem 0.48rem;
+  }
+
+  .hero .stack {
+    gap: clamp(1.35rem, 4.5vw, 1.75rem);
+  }
+
+  .hero .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
+    margin-top: 0;
+  }
+
+  .hero .actions .sl-link-button {
+    justify-content: center;
+    min-width: 0;
+    padding-block: 0.82rem;
+    padding-inline: 0.85rem;
+    font-size: 0.9rem;
+  }
+
+  .hero .actions .sl-link-button:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .hero .actions .sl-link-button.minimal {
+    padding-inline: 0.65rem;
+    font-size: 0.8rem;
+  }
+
+  :root[data-has-hero] .sl-markdown-content > :first-child {
+    margin-top: 0.25rem;
+  }
+}
+
+@media (max-width: 22.49rem) {
+  .hero .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .hero .actions .sl-link-button:first-child {
+    grid-column: auto;
   }
 }
 
@@ -300,34 +389,6 @@
   padding-inline: 1.6rem;
   font-size: 1.02rem;
   border-radius: 999px;
-}
-
-/* Mobile — primary full width; secondary pair share one row. */
-@media (max-width: 49.99rem) {
-  .hero .actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.55rem;
-    width: 100%;
-    max-width: 20rem;
-    margin-inline: auto;
-  }
-
-  .hero .actions .sl-link-button {
-    justify-content: center;
-    padding-block: 0.8rem;
-    padding-inline: 1rem;
-    font-size: 0.92rem;
-  }
-
-  .hero .actions .sl-link-button:first-child {
-    grid-column: 1 / -1;
-  }
-
-  .hero .actions .sl-link-button.minimal {
-    padding-inline: 0.75rem;
-    font-size: 0.84rem;
-  }
 }
 
 .sl-link-button.primary {

@@ -187,33 +187,62 @@
   color: var(--sl-color-text-accent);
   font-weight: 700;
 }
-/* Capability line — a light row of keywords, no chips: muted text split by
-   faint hairlines. Far calmer in the hero than filled pills. */
+/* Capability chips — traits on one row, transport stack on the next. */
 .hero .hero-meta {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
-  gap: 0.4rem 0.95rem;
+  gap: 0.6rem;
   margin-top: 0.35rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--sl-color-gray-3);
 }
-.hero .hero-meta > span {
+.hero .hero-traits,
+.hero .hero-stack {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+}
+.hero .hero-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.95rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   white-space: nowrap;
+  border: 1px solid var(--nestrs-card-border);
+  background: var(--nestrs-surface);
+  color: var(--sl-color-gray-2);
 }
-.hero .hero-meta > span:not(:last-child)::after {
-  content: '';
-  width: 1px;
-  height: 0.85em;
-  background: var(--nestrs-card-border);
-}
-.hero .hero-meta > span:first-child {
+.hero .hero-pill--accent {
+  border-color: color-mix(in srgb, var(--nestrs-coral) 35%, transparent);
+  background: color-mix(in srgb, var(--nestrs-coral) 10%, var(--nestrs-surface));
   color: var(--sl-color-text-accent);
+}
+.hero .hero-stack > span {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.22rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  border: 1px solid var(--nestrs-card-border);
+  background: color-mix(in srgb, var(--sl-color-gray-6) 35%, transparent);
+  color: var(--sl-color-gray-3);
+}
+
+@media (min-width: 50rem) {
+  .hero .hero-meta {
+    align-items: flex-start;
+  }
+
+  .hero .hero-traits,
+  .hero .hero-stack {
+    justify-content: flex-start;
+  }
 }
 
 /* Hero mark — let the hexagon breathe with a faint glow. */
@@ -231,6 +260,34 @@
   padding-inline: 1.6rem;
   font-size: 1.02rem;
   border-radius: 999px;
+}
+
+/* Mobile — primary full width; secondary pair share one row. */
+@media (max-width: 49.99rem) {
+  .hero .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+    width: 100%;
+    max-width: 20rem;
+    margin-inline: auto;
+  }
+
+  .hero .actions .sl-link-button {
+    justify-content: center;
+    padding-block: 0.8rem;
+    padding-inline: 1rem;
+    font-size: 0.92rem;
+  }
+
+  .hero .actions .sl-link-button:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .hero .actions .sl-link-button.minimal {
+    padding-inline: 0.75rem;
+    font-size: 0.84rem;
+  }
 }
 
 .sl-link-button.primary {

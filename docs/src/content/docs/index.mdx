@@ -33,6 +33,7 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 import Bench from '../../components/Bench.astro';
+import TerminalSession from '../../components/TerminalSession.astro';
 
 ## A complete service, in three small files
 
@@ -97,14 +98,27 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-```bash frame="terminal"
-$ just dev hello
-…
-2026-06-03T10:14:22.183Z  INFO nest_rs::http: bound 1 route on 0.0.0.0:3000
-
-$ curl http://localhost:3000
-Hello World
-```
+<TerminalSession
+  lines={[
+    { kind: 'input', text: 'just dev' },
+    { kind: 'output', text: 'cargo run --bin hello' },
+    { kind: 'output', text: '    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s' },
+    { kind: 'output', text: '     Running `target/debug/hello`' },
+    { kind: 'output', text: '2026-04-29T12:00:00.798397Z  INFO nest_rs_opentelemetry::init: OpenTelemetry initialised service=hello endpoint="<none>" sample_ratio=1.0 log_format=Text otlp_export=false' },
+    { kind: 'output', text: '2026-04-29T12:00:00.799345Z DEBUG opentelemetry: name="NoopMeterProvider.MeterCreation" meter_name="nestrs" Meter was obtained from a NoopMeterProvider. No metrics will be recorded. If global::meter_with_scope()/meter() was used, ensure that a valid MeterProvider is set globally before creating Meter.' },
+    { kind: 'output', text: '2026-04-29T12:00:00.799422Z  INFO nest_rs::module: module dependencies initialized module="HelloModule"' },
+    { kind: 'output', text: '2026-04-29T12:00:00.799439Z  INFO nest_rs::module: module dependencies initialized module="HelloHttpModule"' },
+    { kind: 'output', text: '2026-04-29T12:00:00.799451Z  INFO nest_rs::module: module dependencies initialized module="HelloModule"' },
+    { kind: 'output', text: '2026-04-29T12:00:00.799631Z  INFO nest_rs::transport: attached module-contributed transport transport="HttpTransport"' },
+    { kind: 'output', text: '2026-04-29T12:00:00.799862Z  INFO nest_rs::routes: GET    /  (hello)' },
+    { kind: 'output', text: '2026-04-29T12:00:00.802245Z  INFO nest_rs_http::transport: http transport listening addr=0.0.0.0:3000' },
+    { kind: 'output', text: '2026-04-29T12:00:00.802476Z  INFO poem::server: listening addr=socket://0.0.0.0:3000' },
+    { kind: 'output', text: '2026-04-29T12:00:00.802552Z  INFO poem::server: server started' },
+    { kind: 'input', text: 'curl http://localhost:3000' },
+    { kind: 'response', text: 'Hello World' },
+    { kind: 'output', text: '2026-04-29T12:00:01.995630Z  INFO nest_rs::access: method=GET path=/ status=200 bytes=11 duration_ms=0.143542 client_ip=127.0.0.1 user_agent=curl/8.20.0 trace_id=4894160908a67f7e60b51c9ebdc40977' },
+  ]}
+/>
 
 The same inject-and-decorate model carries every surface — HTTP, GraphQL,
 WebSockets, queues, scheduled jobs, MCP. [Get started](/getting-started/), read

@@ -1,0 +1,83 @@
+---
+interface Props {
+  lines: Array<
+    | { kind: 'input'; text: string }
+    | { kind: 'output'; text: string }
+    | { kind: 'response'; text: string }
+  >;
+}
+
+const { lines } = Astro.props;
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+const LOG =
+  /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+(INFO|DEBUG|WARN|ERROR)\s+((?:\w+(?:::\w+)*)):\s+(.*)$/;
+
+const LEVEL_CLASS: Record<string, string> = {
+  INFO: 't-lvl-info',
+  DEBUG: 't-lvl-debug',
+  WARN: 't-lvl-warn',
+  ERROR: 't-lvl-error',
+};
+
+function highlightMsg(msg: string): string {
+  return escapeHtml(msg).replace(
+    /(\w+=)("(?:[^"\\]|\\.)*"|\S+)/g,
+    '$1<span class="t-val">$2</span>',
+  );
+}
+
+function highlightCargo(line: string): string {
+  return escapeHtml(line).replace(
+    /\b(Finished|Running|Compiling)\b/g,
+    '<span class="t-cargo-ok">$1</span>',
+  );
+}
+
+function highlightLog(line: string): string | null {
+  const m = line.match(LOG);
+  if (!m) return null;
+  const [, ts, level, module, msg] = m;
+  return `<span class="t-ts">${escapeHtml(ts)}</span> <span class="${LEVEL_CLASS[level]}">${level}</span> <span class="t-mod">${escapeHtml(module)}:</span> ${highlightMsg(msg)}`;
+}
+
+function renderOutput(text: string): string {
+  const log = highlightLog(text);
+  if (log) return log;
+  if (/\b(Finished|Running|Compiling)\b/.test(text)) {
+    return highlightCargo(text);
+  }
+  return escapeHtml(text);
+}
+
+let inputCount = 0;
+
+function renderLine(line: Props['lines'][number]): string {
+  if (line.kind === 'input') {
+    const lead = inputCount > 0 ? '\n' : '';
+    inputCount += 1;
+    return `${lead}<span class="t-prompt">❯</span> <span class="t-cmd">${escapeHtml(line.text)}</span>`;
+  }
+  if (line.kind === 'response') {
+    return `<span class="t-res">${escapeHtml(line.text)}</span>`;
+  }
+  return renderOutput(line.text);
+}
+
+const body = lines.map(renderLine).join('\n');
+---
+
+<div class="nestrs-terminal not-content">
+  <div class="nestrs-terminal__titlebar" aria-hidden="true">
+    <span class="nestrs-terminal__dot"></span>
+    <span class="nestrs-terminal__dot"></span>
+    <span class="nestrs-terminal__dot"></span>
+  </div>
+  <pre class="nestrs-terminal__body"><code set:html={body}></code></pre>
+</div>

@@ -937,6 +937,144 @@
 }
 
 /* ---------------------------------------------------------------------------
+   Terminal session — command vs output on the splash hello demo
+   --------------------------------------------------------------------------- */
+
+.nestrs-terminal {
+  margin-block: 1.25rem;
+  width: 100%;
+  border: 1px solid var(--nestrs-card-border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.55);
+  background: var(--nestrs-code-bg);
+  font-family: var(--sl-font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.nestrs-reveal .nestrs-terminal {
+  margin-block: 1.25rem;
+  width: 100%;
+  align-self: stretch;
+}
+
+.sl-markdown-content .nestrs-terminal pre {
+  margin: 0;
+  text-align: left;
+}
+
+.nestrs-terminal__titlebar {
+  display: flex;
+  gap: 0.45rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--nestrs-code-tabbar);
+  border-bottom: 1px solid var(--nestrs-card-border);
+}
+
+.nestrs-terminal__dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sl-color-gray-4) 70%, transparent);
+}
+
+.nestrs-terminal__body {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  text-align: left;
+  white-space: pre;
+  tab-size: 2;
+  background: transparent;
+  border: none;
+}
+
+.nestrs-terminal__body code {
+  display: block;
+  background: none;
+  padding: 0;
+  border: none;
+  font-size: inherit;
+  font-family: inherit;
+  line-height: inherit;
+  color: var(--t-fg);
+  text-align: left;
+  white-space: inherit;
+}
+
+/* Cargo / tracing palette — aligned with one-dark-pro terminal output */
+.nestrs-terminal {
+  --t-fg: #abb2bf;
+  --t-dim: #5c6370;
+  --t-prompt: #e06c75;
+  --t-cmd: #56b6c2;
+  --t-green: #98c379;
+  --t-blue: #61afef;
+  --t-yellow: #e5c07b;
+  --t-red: #e06c75;
+  --t-res: #d7dae0;
+}
+
+:root[data-theme='light'] .nestrs-terminal {
+  --t-fg: #383a42;
+  --t-dim: #696c77;
+  --t-prompt: #e45649;
+  --t-cmd: #007fa8;
+  --t-green: #50a14f;
+  --t-blue: #4078f2;
+  --t-yellow: #c18401;
+  --t-red: #e45649;
+  --t-res: #24292e;
+}
+
+.t-prompt {
+  color: var(--t-prompt);
+}
+
+.t-cmd {
+  color: var(--t-cmd);
+  font-weight: 600;
+}
+
+.t-cargo-ok {
+  color: var(--t-green);
+  font-weight: 700;
+}
+
+.t-ts,
+.t-mod {
+  color: var(--t-dim);
+}
+
+.t-lvl-info {
+  color: var(--t-green);
+}
+
+.t-lvl-debug {
+  color: var(--t-blue);
+}
+
+.t-lvl-warn {
+  color: var(--t-yellow);
+}
+
+.t-lvl-error {
+  color: var(--t-red);
+}
+
+.t-val {
+  font-style: italic;
+  color: var(--t-fg);
+}
+
+.t-res {
+  color: var(--t-res);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
    Brand background — faint rotating full logos (experimental; easy to remove)
    --------------------------------------------------------------------------- */
 

@@ -54,7 +54,7 @@ Deliberate departures. Don't "fix" them back.
 | Listing every controller/provider | Inventory-based discovery | Module list = decorated things |
 | Class-based DI with reflection | Type-id DI with `#[inject]` fields | Rust has no reflection |
 | Implicit runtime access check | Compile-time + boot-time access graph | Boot fails with a clear graph error |
-| `nest generate` scaffolding | None — copy the reference feature | Copying forces reading the pattern |
+| `nest generate` scaffolding | `nestrs g feature/resource/<transport>` scaffolds + auto-wires (`nest-rs-cli`); still copy `users/`/`orgs/` to harden with `#[crud]` + authz | Generators kill the mechanical boilerplate; the exemplar stays the source for CRUD/authz depth |
 
 ## North Star — what "good" looks like
 

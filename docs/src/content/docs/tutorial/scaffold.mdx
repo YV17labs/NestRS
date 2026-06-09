@@ -15,15 +15,14 @@ a route yet — that's the next page).
 
 ## Quick path — the CLI
 
-If you have the [`nestrs` CLI](/cli/) installed (from crates.io or
-`cargo install --path crates/nest-rs-cli` in the monorepo):
+If you have the [`nestrs` CLI](/cli/) installed:
 
 ```bash
 # From the nestrs workspace root
-nestrs new tutorial-api --in-workspace --template empty
+nestrs new tutorial-api
 just dev tutorial-api
-curl -i http://localhost:3000/
-# → 404 Not Found
+curl -i http://localhost:3005/
+# → 404 Not Found (port from apps/tutorial-api/src/module.rs — next free in the workspace)
 ```
 
 Skip to [Run it](#run-it) below, or read on for the manual layout the
@@ -69,17 +68,24 @@ exemplar lives.
 
 ## The root module
 
-The root module is where transports come in. `HttpModule::for_root(None)`
-activates the HTTP transport with default config — host `0.0.0.0`, port
-`3000`, env overrides via `NESTRS_HTTP__HOST` / `NESTRS_HTTP__PORT`.
+The root module is where transports come in. `HttpModule::for_root` pins the
+listen port in code — the CLI picks the next free port when it scaffolds the
+app (same pattern as `platform-api`, `platform-auth`, … in this repo):
 
 ```rust title="apps/tutorial-api/src/module.rs"
 use nest_rs_core::module;
-use nest_rs_http::HttpModule;
+use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_opentelemetry::OpenTelemetryModule;
 
-#[module(imports = [HttpModule::for_root(None)])]
+#[module(imports = [
+    OpenTelemetryModule,
+    HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+])]
 pub struct TutorialApiModule;
 ```
+
+`HttpModule::for_root(None)` would default to port 3000 — workspace apps never
+rely on that; each binary owns its port in `module.rs`, not in `.env`.
 
 `TutorialApiModule` has no `providers = [...]` list. A root module
 usually composes feature modules and lets each own its providers —

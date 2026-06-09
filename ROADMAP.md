@@ -105,8 +105,9 @@ Landed with the first `0.1.0` crates.io release and the alpha docs push:
 - **Reference apps** — six example binaries under `apps/` (`hello`, `platform-auth`,
   `platform-api`, `platform-worker`, `mcp`, `chat`), plus a multi-binary Docker
   image and a dev container with Postgres and Redis.
-- **Crate-level READMEs** — every framework crate ships a `README.md` with its
-  extension-point contract.
+- **Crate-level READMEs** — every framework crate ships a minimal `README.md`
+  (description + links to [nestrs.dev](https://nestrs.dev) and GitHub);
+  extension-point contracts live in the docs site.
 
 ## Next — project & release infrastructure
 

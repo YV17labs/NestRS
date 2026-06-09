@@ -93,8 +93,11 @@ regenerate the committed SDL by running the dev server (see CLAUDE.md).
    as the reference). Prefer that over ad-hoc `tests/<behaviour>.rs` names.
    Use `#[cfg(test)]` in `src/` only when tests must see private code; otherwise
    add `Type::new(...)` so integration tests can construct providers without boot.
-4. **Update the docs.** If you change behaviour, update the README, the crate
-   docs, and — if you made a design decision — CLAUDE.md.
+4. **Update the docs.** If you change behaviour, update the crate README, the
+   docs site, and — if you made a design decision — CLAUDE.md. Crate READMEs
+   stay minimal (description from `Cargo.toml`, link to the matching
+   [nestrs.dev](https://nestrs.dev) page, link to the GitHub repo) — put
+   everything else on the docs site.
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 

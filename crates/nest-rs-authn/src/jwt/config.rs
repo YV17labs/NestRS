@@ -19,6 +19,10 @@ pub struct JwtConfig {
     pub leeway_secs: Option<u64>,
     /// Expected `aud` claim (`NESTRS_AUTHN__AUDIENCE`). Omitted ⇒ no audience check.
     pub audience: Option<String>,
+    /// Expected `iss` claim (`NESTRS_AUTHN__ISSUER`). Omitted ⇒ no issuer check.
+    pub issuer: Option<String>,
+    /// Token lifetime in seconds (`NESTRS_AUTHN__EXPIRES_IN_SECS`, default 3600).
+    pub expires_in_secs: Option<u64>,
 }
 
 impl Config for JwtConfig {
@@ -29,6 +33,8 @@ impl Config for JwtConfig {
             public_key: env.get("PUBLIC_KEY"),
             leeway_secs: env.parse("LEEWAY_SECS")?,
             audience: env.get("AUDIENCE"),
+            issuer: env.get("ISSUER"),
+            expires_in_secs: env.parse("EXPIRES_IN_SECS")?,
         })
     }
 }
@@ -38,10 +44,26 @@ impl JwtConfig {
     pub fn into_options(self) -> Result<JwtOptions, AuthError> {
         let leeway = Duration::from_secs(self.leeway_secs.unwrap_or(30));
         let audience = self.audience;
-        let mut options = match (self.secret, self.private_key, self.public_key) {
-            (Some(secret), _, _) => JwtOptions::new(secret),
-            (None, Some(private), Some(public)) => JwtOptions::eddsa(private, public),
-            (None, None, Some(public)) => JwtOptions::eddsa_verify(public),
+        let mut options = match (
+            self.secret.as_ref(),
+            self.private_key.as_ref(),
+            self.public_key.as_ref(),
+        ) {
+            (Some(secret), Some(private), Some(public)) if !secret.trim().is_empty() => {
+                tracing::warn!(
+                    target: "nest_rs::auth",
+                    "NESTRS_AUTHN__SECRET is set alongside EdDSA keys — ignoring SECRET and using EdDSA"
+                );
+                JwtOptions::eddsa(private.clone(), public.clone())
+            }
+            (Some(secret), _, _) if secret.trim().is_empty() => {
+                return Err(AuthError::Failed(
+                    "NESTRS_AUTHN__SECRET must not be empty".into(),
+                ));
+            }
+            (Some(secret), _, _) => JwtOptions::new(secret.clone()),
+            (None, Some(private), Some(public)) => JwtOptions::eddsa(private.clone(), public.clone()),
+            (None, None, Some(public)) => JwtOptions::eddsa_verify(public.clone()),
             (None, Some(_), None) => {
                 return Err(AuthError::Failed(
                     "NESTRS_AUTHN__PRIVATE_KEY is set without NESTRS_AUTHN__PUBLIC_KEY".into(),
@@ -57,6 +79,10 @@ impl JwtConfig {
         };
         options.leeway = leeway;
         options.audience = audience;
+        options.issuer = self.issuer;
+        if let Some(secs) = self.expires_in_secs {
+            options.expires_in = Duration::from_secs(secs);
+        }
         Ok(options)
     }
 }

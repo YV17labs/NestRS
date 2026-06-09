@@ -9,7 +9,7 @@ use sea_orm::ConnectOptions;
 use validator::Validate;
 
 #[config(namespace = "database")]
-#[derive(Clone, Debug, Default, Validate)]
+#[derive(Clone, Default, Validate)]
 pub struct DatabaseConfig {
     /// e.g. `postgres://user:pass@host/db`. Empty aborts the build.
     pub url: String,
@@ -39,6 +39,22 @@ impl Config for DatabaseConfig {
             sqlx_logging: env.flag("SQLX_LOGGING", false)?, //         NESTRS_DATABASE__SQLX_LOGGING (else false)
             retry_serialization_conflicts: env.flag("RETRY_SERIALIZATION_CONFLICTS", false)?, //     NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS
         })
+    }
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseConfig")
+            .field("url", &"<redacted>")
+            .field("max_connections", &self.max_connections)
+            .field("min_connections", &self.min_connections)
+            .field("connect_timeout_secs", &self.connect_timeout_secs)
+            .field("sqlx_logging", &self.sqlx_logging)
+            .field(
+                "retry_serialization_conflicts",
+                &self.retry_serialization_conflicts,
+            )
+            .finish()
     }
 }
 

@@ -8,6 +8,7 @@ use rmcp::ServerHandler;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
+use crate::deny_guard::DenyAllMcpGuard;
 use crate::guard::McpOperationGuard;
 
 /// `factory` runs on every new MCP session, so per-session state stays fresh.
@@ -16,7 +17,7 @@ where
     F: Fn() -> H + Send + Sync + 'static,
     H: ServerHandler + Send + 'static,
 {
-    endpoint_with_guard(None, factory)
+    endpoint_with_guard(Some(Arc::new(DenyAllMcpGuard)), factory)
 }
 
 pub fn endpoint_with_guard<F, H>(

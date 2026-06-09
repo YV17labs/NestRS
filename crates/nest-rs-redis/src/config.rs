@@ -4,9 +4,17 @@ use validator::Validate;
 const DEFAULT_URL: &str = "redis://127.0.0.1/";
 
 #[config(namespace = "queue")]
-#[derive(Clone, Debug, Validate)]
+#[derive(Clone, Validate)]
 pub struct QueueConfig {
     pub url: String,
+}
+
+impl std::fmt::Debug for QueueConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueueConfig")
+            .field("url", &"<redacted>")
+            .finish()
+    }
 }
 
 impl Default for QueueConfig {

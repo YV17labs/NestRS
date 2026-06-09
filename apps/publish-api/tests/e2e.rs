@@ -395,6 +395,63 @@ async fn writes_are_scoped_to_the_callers_ability() {
 }
 
 #[tokio::test]
+async fn a_plain_user_get_by_id_masks_the_email() {
+    let (_db, app) = boot().await;
+    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org = create_org(&app, &bootstrap, "Initech").await;
+
+    app.http()
+        .post("/users")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", token_for(&org, "admin").await),
+        )
+        .body_json(&json!({ "name": "Bob", "email": "bob@initech.test" }))
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    let listed = app
+        .http()
+        .get("/users")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", token_for(&org, "admin").await),
+        )
+        .send()
+        .await;
+    listed.assert_status_is_ok();
+    let user_id = listed
+        .json()
+        .await
+        .value()
+        .array()
+        .iter()
+        .next()
+        .expect("one user")
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+
+    let user = format!("Bearer {}", token_for(&org, "user").await);
+    let got = app
+        .http()
+        .get(format!("/users/{user_id}"))
+        .header(header::AUTHORIZATION, &user)
+        .send()
+        .await;
+    got.assert_status_is_ok();
+    let json = got.json().await;
+    let body = json.value().object();
+    assert_eq!(body.get("name").string(), "Bob");
+    assert!(
+        body.get_opt("email").is_none(),
+        "a plain user's GET by id masks the email field",
+    );
+}
+
+#[tokio::test]
 async fn a_plain_user_listing_masks_the_email() {
     let (_db, app) = boot().await;
     let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);

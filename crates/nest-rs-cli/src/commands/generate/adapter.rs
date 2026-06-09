@@ -23,6 +23,7 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
 
+    crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
     if !ws.feature_exists(&names.snake) {
         return Err(CliError::FeatureNotFound {
@@ -146,6 +147,13 @@ fn print_next_steps(
             names.snake,
             tmodule,
             host_module(transport)
+        );
+    }
+    if matches!(transport, Transport::Mcp) {
+        println!(
+            "  Security: the MCP endpoint denies all requests until you bind an \
+             McpOperationGuard. Wire `McpAbilityBridge` (features::authz::mcp) so \
+             callers are authenticated and the ambient Ability is installed."
         );
     }
 }

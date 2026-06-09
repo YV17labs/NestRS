@@ -60,7 +60,7 @@ impl<S: Strategy> Guard for AuthGuard<S> {
             }
             Err(error) => {
                 tracing::warn!(target: "nest_rs::auth", strategy, error = %error, "authentication failed");
-                Err(Denial::unauthorized(error.to_string()))
+                Err(Denial::unauthorized(error.client_message()))
             }
         }
     }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nest_rs_authn::{AuthError, Outcome, Strategy};
+use nest_rs_authn::{AuthError, OAuth2Client, Outcome, Strategy};
 use nest_rs_core::injectable;
 use poem::http::{StatusCode, header};
 use poem::{Request, Response};
@@ -34,14 +34,16 @@ impl Strategy for OAuthStrategy {
 
         let Some(code) = query.code else {
             let authorization = self.flow.authorize()?;
+            let secure = cookie_secure(req);
             let redirect = Response::builder()
                 .status(StatusCode::FOUND)
                 .header(header::LOCATION, authorization.url)
                 .header(
                     header::SET_COOKIE,
                     format!(
-                        "{TRANSACTION_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600",
-                        authorization.transaction
+                        "{TRANSACTION_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}{secure}",
+                        authorization.transaction,
+                        OAuth2Client::TRANSACTION_TTL_SECS,
                     ),
                 )
                 .finish();
@@ -59,6 +61,16 @@ impl Strategy for OAuthStrategy {
             .await?;
         Ok(Outcome::Authenticated(caller))
     }
+}
+
+fn cookie_secure(req: &Request) -> &'static str {
+    let https = req.uri().scheme_str() == Some("https")
+        || req
+            .headers()
+            .get("X-Forwarded-Proto")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("https"));
+    if https { "; Secure" } else { "" }
 }
 
 fn transaction_cookie(req: &Request) -> Option<String> {

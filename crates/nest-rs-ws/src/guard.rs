@@ -125,7 +125,7 @@ mod tests {
 
     fn client() -> WsClient {
         let server = Arc::new(WsServer::<Global>::default());
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let id = server.connect(tx);
         WsClient::new(id, server)
     }

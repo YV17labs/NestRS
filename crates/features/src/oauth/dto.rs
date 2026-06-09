@@ -6,7 +6,11 @@ use validator::Validate;
 pub struct LoginInput {
     #[validate(email)]
     pub email: String,
-    #[validate(length(min = 8, message = "password must be at least 8 characters"))]
+    #[validate(length(
+        min = 8,
+        max = 1024,
+        message = "password must be between 8 and 1024 characters"
+    ))]
     pub password: String,
 }
 

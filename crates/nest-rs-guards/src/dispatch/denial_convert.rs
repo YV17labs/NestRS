@@ -22,7 +22,11 @@ pub fn denial_to_http_response(denial: Denial) -> Response {
     {
         builder = builder.header("Retry-After", retry_after_secs.to_string());
     }
-    builder.body(Body::from_string(denial.message().to_owned()))
+    let message = match &denial {
+        Denial::Internal(_) => "internal server error".to_owned(),
+        _ => denial.message().to_owned(),
+    };
+    builder.body(Body::from_string(message))
 }
 
 /// Convert a [`Denial`] to an async-graphql error frame.
@@ -33,5 +37,9 @@ pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
         429 => "RATE_LIMITED",
         _ => "INTERNAL",
     };
-    GraphqlError::new(denial.message().to_owned()).extend_with(|_, e| e.set("code", code))
+    let message = match &denial {
+        Denial::Internal(_) => "internal server error".to_owned(),
+        _ => denial.message().to_owned(),
+    };
+    GraphqlError::new(message).extend_with(|_, e| e.set("code", code))
 }

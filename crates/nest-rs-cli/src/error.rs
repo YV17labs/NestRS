@@ -21,6 +21,9 @@ pub enum CliError {
     #[error("feature `{name}` not found — create it first with `nestrs g feature {name}`")]
     FeatureNotFound { name: String },
 
+    #[error("{0}")]
+    InvalidFeatureName(String),
+
     #[error("{transport} adapter for `{name}` already exists at {path}")]
     AdapterExists {
         transport: &'static str,

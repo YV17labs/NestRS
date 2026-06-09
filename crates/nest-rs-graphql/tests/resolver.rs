@@ -2,7 +2,7 @@
 //! resolver in no reachable module is silently skipped.
 
 use nest_rs_core::module;
-use nest_rs_graphql::{GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, resolver};
 use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
@@ -25,7 +25,10 @@ struct AppWithLoose;
 
 // The resolver is linked (the inventory is shared with the other test in
 // this binary) but unreachable here — module-gating must skip it.
-#[module(imports = [GraphqlModule::for_root(None)])]
+#[module(imports = [GraphqlModule::for_root(Some(GraphqlConfig {
+    disable_introspection: false,
+    ..GraphqlConfig::default()
+}))])]
 struct AppWithoutLoose;
 
 #[tokio::test]

@@ -50,9 +50,12 @@ pub mod priority {
     /// Middle band — filters map errors bubbling up from the inner
     /// chain, so they sit outside guards and inside interceptors.
     pub const FILTERS: i32 = 50;
-    /// Outermost band — interceptors install ambient state (transaction
-    /// scope, request tracing) every other layer needs to observe.
+    /// Outermost band — interceptors install ambient state (request tracing)
+    /// every other layer needs to observe.
     pub const INTERCEPTORS: i32 = 100;
+    /// Inner band — installs the DB executor *after* global guards so
+    /// unauthenticated mutating requests do not open a transaction.
+    pub const DATA_CONTEXT: i32 = -10;
 }
 
 /// Discovery metadata attached at boot. The HTTP transport collects every

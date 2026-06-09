@@ -47,6 +47,7 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
             ::core::fmt::Debug,
             ::core::clone::Clone,
             ::serde::Serialize,
+            ::serde::Deserialize,
             ::nest_rs_graphql::async_graphql::SimpleObject,
             ::schemars::JsonSchema,
         )]
@@ -78,6 +79,7 @@ fn emit_page(model: &ResourceModel) -> TokenStream2 {
             ::core::fmt::Debug,
             ::core::clone::Clone,
             ::serde::Serialize,
+            ::serde::Deserialize,
             ::nest_rs_graphql::async_graphql::SimpleObject,
             ::schemars::JsonSchema,
         )]

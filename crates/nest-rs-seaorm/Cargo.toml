@@ -14,7 +14,7 @@ default = []
 # HTTP transport extractor: `Bind<S, A>` (poem extractor that loads + authorizes
 # through `CrudService::access`). Poem is already in the base deps; `uuid` is
 # pulled here because `Bind` validates UUID v7 path ids.
-http = ["dep:uuid"]
+http = ["dep:uuid", "dep:nest-rs-resource"]
 # GraphQL transport extractors: the `bind` resolver helper and `LoaderScope`
 # (the `BatchContext` that re-installs the request executor + ability around
 # each `#[dataloader]` batch).
@@ -65,6 +65,7 @@ tokio.workspace = true
 
 # Optional deps for transport-binding features.
 uuid = { workspace = true, optional = true }
+nest-rs-resource = { workspace = true, optional = true }
 async-graphql = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }

@@ -238,13 +238,20 @@ pub(crate) fn authenticate_against_registry(
     client_id: &str,
     client_secret: &str,
 ) -> Result<AuthenticatedClient, AuthError> {
-    let client = clients
-        .iter()
-        .find(|client| {
-            constant_time_eq(client.client_id.as_bytes(), client_id.as_bytes())
-                && constant_time_eq(client.client_secret.as_bytes(), client_secret.as_bytes())
-        })
-        .ok_or_else(|| AuthError::Failed("invalid client credentials".into()))?;
+    // Walk the whole registry, comparing *both* fields for every entry with a
+    // bitwise `&` (no `&&` short-circuit). A non-matching `client_id` therefore
+    // costs the same as a matching one, so timing does not leak which client
+    // ids are registered. First match wins, mirroring the previous `.find`.
+    let mut matched: Option<&super::config::RegisteredClient> = None;
+    for client in clients {
+        let id_ok = constant_time_eq(client.client_id.as_bytes(), client_id.as_bytes());
+        let secret_ok =
+            constant_time_eq(client.client_secret.as_bytes(), client_secret.as_bytes());
+        if (id_ok & secret_ok) && matched.is_none() {
+            matched = Some(client);
+        }
+    }
+    let client = matched.ok_or_else(|| AuthError::Failed("invalid client credentials".into()))?;
     Ok(AuthenticatedClient {
         org_id: client.org_id,
         scopes: client.scopes.clone(),

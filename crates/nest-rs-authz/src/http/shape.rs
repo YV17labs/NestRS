@@ -47,7 +47,7 @@ where
         match captured {
             Some(ability) => {
                 let resp = with_ability(ability.clone(), inner).await?;
-                Ok(mask_response::<S>(&ability, A::ACTION, resp).await)
+                Ok(mask_entity_response::<S>(&ability, A::ACTION, resp).await)
             }
             None => inner.await,
         }
@@ -58,7 +58,7 @@ where
 /// masking, and re-serialize. A non-success or non-JSON response, or a scalar
 /// body, passes through; a JSON object/array that does not match `S::Model`
 /// fails closed (see module docs).
-async fn mask_response<S>(ability: &Ability, action: Action, mut resp: Response) -> Response
+pub async fn mask_entity_response<S>(ability: &Ability, action: Action, mut resp: Response) -> Response
 where
     S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned + Serialize,
@@ -83,8 +83,9 @@ where
     let wire: Value = match serde_json::from_slice(bytes.as_ref()) {
         Ok(wire) => wire,
         Err(_) => {
-            resp.set_body(bytes);
-            return resp;
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("response masking failed: body was not valid JSON");
         }
     };
 

@@ -6,6 +6,9 @@ use poem::web::websocket::{Message, WebSocket};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
 use crate::WsReply;
+
+/// Maximum UTF-8 bytes accepted for a single inbound text frame.
+const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 use crate::context::{BoxFuture, Captured, SocketContext};
 use crate::envelope::WsEnvelope;
 use crate::guard::EventLayerTable;
@@ -93,7 +96,8 @@ async fn serve_connection<G: Gateway, N: 'static>(
     socket: poem::web::websocket::WebSocketStream,
 ) {
     let (mut sink, mut stream) = socket.split();
-    let (outbox, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (outbox, mut rx) =
+        tokio::sync::mpsc::channel::<String>(crate::server::OUTBOX_CAPACITY);
 
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
@@ -113,12 +117,21 @@ async fn serve_connection<G: Gateway, N: 'static>(
     while let Some(message) = stream.next().await {
         match message {
             Ok(Message::Text(text)) => {
+                if text.len() > MAX_MESSAGE_BYTES {
+                    let frame = error_frame("error", "message too large");
+                    if outbox.try_send(frame).is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 if let Some(reply) =
                     handle_text(&*gateway, &guards, ambient.as_ref(), &client, &text).await
                 {
                     // Replies ride the same outbox as pushes so ordering with
-                    // broadcasts the handler triggered is preserved.
-                    if outbox.send(reply).is_err() {
+                    // broadcasts the handler triggered is preserved. A full
+                    // outbox means the peer is not draining — disconnect it
+                    // rather than buffer without bound.
+                    if outbox.try_send(reply).is_err() {
                         break;
                     }
                 }
@@ -153,7 +166,7 @@ async fn handle_text<G: Gateway>(
 ) -> Option<String> {
     let envelope: WsEnvelope = match serde_json::from_str(text) {
         Ok(envelope) => envelope,
-        Err(err) => return Some(error_frame("error", &format!("invalid envelope: {err}"))),
+        Err(_) => return Some(error_frame("error", "invalid envelope")),
     };
     let WsEnvelope { event, data } = envelope;
     // Bundle guard + dispatch so `around` wraps both — a guard reading

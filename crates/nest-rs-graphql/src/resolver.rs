@@ -227,6 +227,9 @@ pub(crate) fn build_schema(
     if let Some(c) = config.max_complexity {
         builder = builder.limit_complexity(c);
     }
+    if config.disable_introspection {
+        builder = builder.disable_introspection();
+    }
     builder.finish()
 }
 

@@ -83,9 +83,16 @@ impl OAuth2Client {
             ))
     }
 
+    /// Lifetime of the signed transaction token and the cookie carrying it.
+    /// Short by design: an OAuth handshake completes in seconds, so the
+    /// CSRF/PKCE binding must not inherit the full access-token TTL. The
+    /// cookie's `Max-Age` and this token `exp` are driven from the same value
+    /// so they cannot drift.
+    pub const TRANSACTION_TTL_SECS: u64 = 600;
+
     /// Begin the flow: produce the provider redirect URL and the signed
-    /// transaction token to set as a cookie. The transaction inherits the
-    /// `JwtService`'s expiry.
+    /// transaction token to set as a cookie. The transaction lives for
+    /// [`Self::TRANSACTION_TTL_SECS`], not the full `JwtService` TTL.
     pub fn authorize(&self, jwt: &JwtService) -> Result<Authorization, AuthError> {
         let client = Self::basic_client(&self.config)?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
@@ -97,7 +104,7 @@ impl OAuth2Client {
         let transaction = jwt.sign(&Transaction {
             csrf: csrf.secret().clone(),
             pkce: verifier.secret().clone(),
-            exp: jwt.expiry(),
+            exp: jwt.expiry_in(Self::TRANSACTION_TTL_SECS),
         })?;
         Ok(Authorization {
             url: url.to_string(),

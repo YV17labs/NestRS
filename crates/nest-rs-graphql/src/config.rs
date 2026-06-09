@@ -43,6 +43,12 @@ pub struct GraphqlConfig {
     /// `Some(0)` is rejected at boot for the same reason as `max_depth`.
     #[validate(range(min = 1))]
     pub max_complexity: Option<usize>,
+    /// Disable GraphQL introspection. Default `true` (production-safe).
+    pub disable_introspection: bool,
+    /// Maximum number of operations in a single HTTP batch request.
+    /// Default `10`.
+    #[validate(range(min = 1))]
+    pub max_batch_size: usize,
 }
 
 impl Default for GraphqlConfig {
@@ -52,8 +58,10 @@ impl Default for GraphqlConfig {
             playground: false,
             schema_path: "schema.graphql".into(),
             emit_sdl: false,
-            max_depth: None,
-            max_complexity: None,
+            max_depth: Some(15),
+            max_complexity: Some(2000),
+            disable_introspection: true,
+            max_batch_size: 10,
         }
     }
 }
@@ -69,8 +77,10 @@ impl Config for GraphqlConfig {
                 .map(PathBuf::from)
                 .unwrap_or(d.schema_path),
             emit_sdl: env.flag("EMIT_SDL", d.emit_sdl)?,
-            max_depth: env.parse("MAX_DEPTH")?,
-            max_complexity: env.parse("MAX_COMPLEXITY")?,
+            max_depth: env.parse("MAX_DEPTH")?.or(d.max_depth),
+            max_complexity: env.parse("MAX_COMPLEXITY")?.or(d.max_complexity),
+            disable_introspection: env.flag("DISABLE_INTROSPECTION", d.disable_introspection)?,
+            max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
         })
     }
 }
@@ -86,11 +96,10 @@ mod tests {
         assert!(!d.playground, "playground exposed in prod is a CVE");
         assert!(!d.emit_sdl, "writing SDL from prod is unwanted side effect");
         assert_eq!(d.schema_path, PathBuf::from("schema.graphql"));
-        assert!(
-            d.max_depth.is_none(),
-            "max_depth defaults None — opt-in keeps the change backward-compatible",
-        );
-        assert!(d.max_complexity.is_none());
+        assert_eq!(d.max_depth, Some(15));
+        assert_eq!(d.max_complexity, Some(2000));
+        assert!(d.disable_introspection);
+        assert_eq!(d.max_batch_size, 10);
     }
 
     #[test]
@@ -127,6 +136,8 @@ mod tests {
                 ("NESTRS_GRAPHQL__EMIT_SDL", None),
                 ("NESTRS_GRAPHQL__MAX_DEPTH", None),
                 ("NESTRS_GRAPHQL__MAX_COMPLEXITY", None),
+                ("NESTRS_GRAPHQL__DISABLE_INTROSPECTION", None),
+                ("NESTRS_GRAPHQL__MAX_BATCH_SIZE", None),
             ],
             || {
                 let cfg =
@@ -138,6 +149,8 @@ mod tests {
                 assert_eq!(cfg.emit_sdl, d.emit_sdl);
                 assert_eq!(cfg.max_depth, d.max_depth);
                 assert_eq!(cfg.max_complexity, d.max_complexity);
+                assert_eq!(cfg.disable_introspection, d.disable_introspection);
+                assert_eq!(cfg.max_batch_size, d.max_batch_size);
             },
         );
     }

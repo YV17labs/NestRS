@@ -5,6 +5,9 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+features.workspace = true
+nest-rs-authn.workspace = true
+nest-rs-config.workspace = true
 nest-rs-core.workspace = true
 nest-rs-guards.workspace = true
 nest-rs-http.workspace = true
@@ -18,7 +21,10 @@ tracing.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
+nest-rs-authn.workspace = true
 nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
+features.workspace = true
+uuid.workspace = true
 futures-util.workspace = true
 tokio-tungstenite = "0.27"
 serde_json.workspace = true

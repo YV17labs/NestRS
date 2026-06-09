@@ -12,7 +12,8 @@ use std::sync::Arc;
 use async_graphql::{BatchRequest, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
 use nest_rs_core::{Container, ReachableProviders};
-use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
+use poem::http::StatusCode;
+use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, Response, Result};
 
 /// A per-request forwarder, submitted via `inventory`. `seed` reads from the
 /// poem request (and the container) and attaches values to the GraphQL
@@ -41,9 +42,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// registered the endpoint runs operations unguarded.
 pub trait GraphqlOperationGuard: Send + Sync + 'static {
     /// Attach per-request state to the poem request before seeds forward it.
-    /// Best-effort: an unauthenticated request passes through and the
-    /// resolvers' own gate refuses it.
-    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, ()>;
+    /// Return `Err(Response)` to reject the operation before parsing.
+    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>>;
 
     /// Wrap the operation's execution to install ambient state for its
     /// duration (e.g. the caller's `Ability`).
@@ -62,15 +62,17 @@ pub(crate) struct ContextEndpoint<E> {
     executor: E,
     container: Container,
     op_guard: Option<Arc<dyn GraphqlOperationGuard>>,
+    max_batch_size: usize,
 }
 
 impl<E> ContextEndpoint<E> {
-    pub(crate) fn new(executor: E, container: Container) -> Self {
+    pub(crate) fn new(executor: E, container: Container, max_batch_size: usize) -> Self {
         let op_guard = container.get_dyn::<dyn GraphqlOperationGuard>();
         Self {
             executor,
             container,
             op_guard,
+            max_batch_size,
         }
     }
 
@@ -97,12 +99,17 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
         // Guard runs *before* parsing/seeding so attached state is on the
         // request when seeds forward it.
         if let Some(guard) = &self.op_guard {
-            guard.before(&mut req).await;
+            if let Err(resp) = guard.before(&mut req).await {
+                return Ok(resp);
+            }
         }
         let batch = GraphQLBatchRequest::from_request(&req, &mut body).await?.0;
         let batch = match batch {
             BatchRequest::Single(r) => BatchRequest::Single(self.seed(&req, r)),
             BatchRequest::Batch(rs) => {
+                if rs.len() > self.max_batch_size {
+                    return Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
+                }
                 BatchRequest::Batch(rs.into_iter().map(|r| self.seed(&req, r)).collect())
             }
         };

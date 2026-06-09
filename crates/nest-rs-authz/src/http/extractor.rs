@@ -15,9 +15,8 @@ use crate::{Ability, ActionMarker, Subject};
 /// client error). Class-level only — the per-row filter and response mask
 /// enforce conditions.
 ///
-/// `#[routes]` reads this parameter **by type name** to install the response
-/// shaper: importing it under an alias (`use ... as Foo`) keeps the gate
-/// working but silently disables response masking.
+/// `#[routes]` installs the response shaper when any path segment is named
+/// `Authorize` or `Bind` (aliases on the type name are fine).
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>

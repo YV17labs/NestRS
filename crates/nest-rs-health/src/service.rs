@@ -58,15 +58,15 @@ impl HealthService {
             let (status, error) = match (entry.run)(container).await {
                 Ok(()) => (IndicatorStatus::Up, None),
                 Err(err) => {
-                    let message = format!("{err:#}");
+                    let detail = format!("{err:#}");
                     tracing::warn!(
                         target: "nest_rs::health",
                         indicator = entry.name,
                         ?kind,
-                        error = %message,
+                        error = %detail,
                         "health indicator failed",
                     );
-                    (IndicatorStatus::Down, Some(message))
+                    (IndicatorStatus::Down, Some("check failed".into()))
                 }
             };
             reports.push(IndicatorReport {
@@ -148,12 +148,10 @@ mod tests {
             .get("down_host")
             .expect("down_host in error bucket");
         assert_eq!(down.status, IndicatorStatus::Down);
-        assert!(
-            down.error
-                .as_deref()
-                .is_some_and(|e| e.contains("simulated outage")),
-            "error string should carry the indicator's message, got: {:?}",
-            down.error,
+        assert_eq!(
+            down.error.as_deref(),
+            Some("check failed"),
+            "public probe responses must not leak indicator internals",
         );
         assert_eq!(report.details.len(), 2);
     }

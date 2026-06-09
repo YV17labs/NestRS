@@ -49,6 +49,13 @@ impl CorsConfig {
     /// Translate to poem's middleware. `origins: ["*"]` becomes the
     /// wildcard; explicit origins map one-to-one.
     pub fn into_middleware(self) -> Result<Cors> {
+        if self.credentials
+            && self.origins.iter().any(|origin| origin == "*")
+        {
+            anyhow::bail!(
+                "invalid CORS config: wildcard origin with credentials is not permitted"
+            );
+        }
         let mut cors = Cors::new();
         for origin in &self.origins {
             cors = cors.allow_origin(origin);

@@ -18,3 +18,4 @@ mod shape;
 pub use extractor::Authorize;
 pub use guard::AbilityGuard;
 pub use scope::Scope;
+pub use shape::mask_entity_response;

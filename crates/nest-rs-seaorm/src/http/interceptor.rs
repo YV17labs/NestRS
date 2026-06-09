@@ -1,8 +1,9 @@
 //! [`DbContext`] — request boundary that installs the ambient executor.
 //!
 //! Auto-installed by [`DatabaseModule`](crate::DatabaseModule), it wraps every
-//! request *outside* the route's guards, so guards and handlers resolve the same
-//! ambient [`Executor`](crate::Executor) via [`Repo`](crate::Repo). Safe methods
+//! request *inside* global guards so unauthenticated mutating requests do not
+//! open a transaction. Guards and handlers resolve the same ambient
+//! [`Executor`](crate::Executor) via [`Repo`](crate::Repo). Safe methods
 //! (GET/HEAD/OPTIONS/TRACE) run on the pool; mutating methods run in a
 //! transaction committed on 2xx/3xx and rolled back otherwise — a failed
 //! mutation never half-persists.
@@ -33,7 +34,7 @@ use crate::config::DatabaseConfig;
 use crate::executor::{Executor, with_request_executor};
 use crate::retry::{DEFAULT_INITIAL_BACKOFF, DEFAULT_RETRY_ATTEMPTS, is_retryable_conflict};
 
-#[interceptor]
+#[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
     db: Arc<DatabaseConnection>,

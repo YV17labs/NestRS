@@ -6,7 +6,11 @@ use poem::{Request, http::header};
 /// Pull a token out of `Authorization: Bearer <token>`, if non-empty.
 pub fn bearer_token(req: &Request) -> Option<&str> {
     let value = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
-    let token = value.strip_prefix("Bearer ")?.trim();
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let token = token.trim();
     (!token.is_empty()).then_some(token)
 }
 

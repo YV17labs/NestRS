@@ -32,6 +32,8 @@ pub struct JwtOptions {
     pub leeway: Duration,
     /// When set, tokens must carry a matching `aud` claim.
     pub audience: Option<String>,
+    /// When set, tokens must carry a matching `iss` claim.
+    pub issuer: Option<String>,
 }
 
 impl JwtOptions {
@@ -44,6 +46,7 @@ impl JwtOptions {
             expires_in: Duration::from_secs(3600),
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
+            issuer: None,
         }
     }
 
@@ -57,6 +60,7 @@ impl JwtOptions {
             expires_in: Duration::from_secs(3600),
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
+            issuer: None,
         }
     }
 
@@ -70,6 +74,7 @@ impl JwtOptions {
             expires_in: Duration::from_secs(3600),
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
+            issuer: None,
         }
     }
 }
@@ -117,6 +122,9 @@ impl JwtService {
             Some(aud) => validation.set_audience(&[aud.as_str()]),
             None => validation.validate_aud = false,
         }
+        if let Some(iss) = &options.issuer {
+            validation.set_issuer(&[iss.as_str()]);
+        }
 
         Ok(Self {
             encoding,
@@ -142,6 +150,13 @@ impl JwtService {
 
     pub fn expiry(&self) -> u64 {
         get_current_timestamp() + self.expires_in.as_secs()
+    }
+
+    /// Absolute `exp` for a token that should live exactly `secs` seconds —
+    /// used for short-lived handshake tokens (e.g. the OAuth transaction) that
+    /// must not inherit the full access-token TTL.
+    pub fn expiry_in(&self, secs: u64) -> u64 {
+        get_current_timestamp() + secs
     }
 
     pub fn ttl_secs(&self) -> u64 {

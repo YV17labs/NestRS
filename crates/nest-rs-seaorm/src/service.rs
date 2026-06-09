@@ -107,13 +107,28 @@ where
     }
 
     /// Insert a row from a create-input DTO, in the request transaction.
+    ///
+    /// Defense in depth beyond the route's `Authorize<Create, _>` gate: when an
+    /// [`Ability`](nest_rs_authz::Ability) is ambient (any authenticated request
+    /// path), the freshly built row is checked against `condition_for(Create)`
+    /// and a row outside the caller's scope is rolled back via
+    /// [`DbErr::RecordNotInserted`] — a caller cannot create a row it could not
+    /// then read or update. With no ambient ability (system/worker path) the
+    /// insert stays unscoped, mirroring the read default on a pool executor.
     async fn create(
         &self,
         input: Self::Create,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
+        let entity = Self::entity_name();
         let conn = Repo::<Self::Entity>::conn()?;
         let model = input.into_active_model().insert(&conn).await?;
-        tracing::info!(target: "nest_rs::orm", entity = Self::entity_name(), "row created");
+        if let Some(ability) = current_ability() {
+            if !ability.can::<Self::Entity>(Action::Create, &model) {
+                tracing::warn!(target: "nest_rs::orm", entity, "create denied — row outside the caller's scope");
+                return Err(DbErr::RecordNotInserted);
+            }
+        }
+        tracing::info!(target: "nest_rs::orm", entity, "row created");
         Ok(model)
     }
 

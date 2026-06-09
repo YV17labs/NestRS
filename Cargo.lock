@@ -2578,6 +2578,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3010,6 +3011,7 @@ dependencies = [
  "nest-rs-health",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-resource",
  "nest-rs-worker",
  "nest-rs-ws",
  "poem",
@@ -3952,7 +3954,10 @@ name = "publish-live"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "features",
  "futures-util",
+ "nest-rs-authn",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-health",
@@ -3966,6 +3971,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

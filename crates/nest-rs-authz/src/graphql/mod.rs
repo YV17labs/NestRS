@@ -22,7 +22,9 @@
 mod authorize;
 mod bridge;
 mod context;
+mod mask;
 
 pub use authorize::authorize;
 pub use bridge::GraphqlAbilityBridge;
 pub use context::ability;
+pub use mask::{masked_output, masked_output_for};

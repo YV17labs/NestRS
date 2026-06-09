@@ -35,10 +35,11 @@ pub enum AuthError {
 
 impl AuthError {
     /// Message safe to return in an HTTP 401 body (no strategy/configuration detail).
-    fn client_message(&self) -> String {
+    pub fn client_message(&self) -> String {
         match self {
             Self::Failed(_) => "authentication failed".into(),
-            _ => self.to_string(),
+            Self::MissingCredentials => "missing credentials".into(),
+            _ => "invalid token".into(),
         }
     }
 }

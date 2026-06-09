@@ -128,8 +128,8 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 Ok(paths) => paths,
                 Err(err) => return err.to_compile_error().into(),
             };
-        // `#[public]` opts out of `Auth` + `Authorization` global layers on
-        // this route; `Validation`, `Observability`, `RateLimit` keep running.
+        // `#[public]` marks the route as publicly reachable; global guards still
+        // run and decide whether to admit anonymous callers.
         let is_public = take_flag_attr(&mut method.attrs, "public");
         // `#[no_pipes]` opts out of every global pipe for this route.
         let no_pipes = take_flag_attr(&mut method.attrs, "no_pipes");
@@ -364,23 +364,31 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// The `Authorize<A, S>` parameter type, found by the last path segment being
-/// `Authorize` with angle-bracketed arguments — no compile dep on the authz
-/// crate. Aliased imports are not detected and shaping is silently skipped.
+/// Response shaper type: `Authorize<A, S>` or `Bind<S, A>` anywhere in the
+/// handler parameter list (any path segment, so aliases still shape).
 fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
     inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };
         let Type::Path(tp) = pt.ty.as_ref() else {
             return None;
         };
-        let last = tp.path.segments.last()?;
-        match last.ident == "Authorize"
-            && matches!(last.arguments, syn::PathArguments::AngleBracketed(_))
-        {
-            true => Some((*pt.ty).clone()),
-            false => None,
-        }
+        shaper_param_type(tp).then_some((*pt.ty).clone())
     })
+}
+
+fn shaper_param_type(tp: &syn::TypePath) -> bool {
+    let angled = tp
+        .path
+        .segments
+        .last()
+        .is_some_and(|s| matches!(s.arguments, syn::PathArguments::AngleBracketed(_)));
+    if !angled {
+        return false;
+    }
+    tp.path
+        .segments
+        .iter()
+        .any(|s| s.ident == "Authorize" || s.ident == "Bind")
 }
 
 /// Build one routed handler. Layout, inner → outer:

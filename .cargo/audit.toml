@@ -1,0 +1,21 @@
+# cargo-audit configuration.
+#
+# Each ignore below is a transitive advisory with no upstream fix that is not
+# reachable on a path nestrs exercises. Revisit on every dependency bump.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin Attack (timing side-channel in RSA PKCS#1 v1.5
+    # *decryption*). Pulled in transitively by `jsonwebtoken` (rust_crypto
+    # backend) → `rsa`. nestrs signs/verifies JWTs with HS256 and EdDSA only —
+    # never RS*, and JWT verification never performs RSA decryption — so the
+    # vulnerable code path is never invoked. No fixed `rsa` release exists yet.
+    "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0173 — `proc-macro-error2` unmaintained. Build-time only
+    # (proc-macro dependency), no runtime exposure. No maintained drop-in.
+    "RUSTSEC-2026-0173",
+    # RUSTSEC-2025-0134 — `rustls-pemfile` unmaintained. Transitive via the TLS
+    # stack; functionality folded into `rustls-pki-types` upstream. Build-time
+    # PEM parsing only, no attacker-controlled input at runtime.
+    "RUSTSEC-2025-0134",
+]

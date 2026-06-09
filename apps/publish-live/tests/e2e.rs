@@ -1,19 +1,44 @@
-use publish_live::PublishLiveModule;
+use features::{Claims, Role};
 use futures_util::{SinkExt, StreamExt};
+use nest_rs_authn::{JwtConfig, JwtOptions, JwtService};
 use nest_rs_http::HttpTransport;
-use nest_rs_http::poem::http::StatusCode;
+use nest_rs_http::poem::http::{StatusCode, header};
 use nest_rs_testing::TestApp;
+use publish_live::PublishLiveModule;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use uuid::Uuid;
+
+const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
+const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
+const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
+
+async fn test_token() -> String {
+    let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
+        .expect("the dev keypair parses");
+    jwt.sign(&Claims {
+        sub: None,
+        org_id: Uuid::parse_str(ORG_ID).expect("valid org uuid"),
+        roles: vec![Role::User],
+        exp: jwt.expiry(),
+    })
+    .expect("sign the test token")
+}
+
+fn boot_builder() -> nest_rs_testing::TestAppBuilder {
+    TestApp::builder()
+        .module::<PublishLiveModule>()
+        .with_test_telemetry()
+        .provide(JwtConfig {
+            public_key: Some(DEV_PUBLIC_KEY.into()),
+            ..Default::default()
+        })
+}
 
 #[tokio::test]
 async fn gateway_endpoint_is_mounted() {
-    let app = TestApp::builder()
-        .module::<PublishLiveModule>()
-        .with_test_telemetry()
-        .build()
-        .await
-        .expect("PublishLiveModule boots and self-mounts the gateway");
+    let app = boot_builder().build().await.expect("PublishLiveModule boots");
 
     let resp = app.http().get("/ws").send().await;
     resp.assert_status(StatusCode::BAD_REQUEST);
@@ -23,9 +48,7 @@ async fn gateway_endpoint_is_mounted() {
 async fn gateway_echoes_messages_over_a_real_socket() {
     let bind = "127.0.0.1:13344";
 
-    let app = TestApp::builder()
-        .module::<PublishLiveModule>()
-        .with_test_telemetry()
+    let app = boot_builder()
         .build_headless()
         .await
         .expect("PublishLiveModule boots headless");
@@ -33,8 +56,9 @@ async fn gateway_echoes_messages_over_a_real_socket() {
         .spawn_transport(HttpTransport::new().bind(bind))
         .await
         .expect("HTTP transport serves");
+    let token = test_token().await;
 
-    let mut socket = connect_with_retry(&format!("ws://{bind}/ws")).await;
+    let mut socket = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
 
     socket
         .send(Message::Text(
@@ -80,9 +104,7 @@ async fn gateway_echoes_messages_over_a_real_socket() {
 async fn a_message_is_broadcast_to_every_connected_client() {
     let bind = "127.0.0.1:13345";
 
-    let app = TestApp::builder()
-        .module::<PublishLiveModule>()
-        .with_test_telemetry()
+    let app = boot_builder()
         .build_headless()
         .await
         .expect("PublishLiveModule boots headless");
@@ -90,9 +112,10 @@ async fn a_message_is_broadcast_to_every_connected_client() {
         .spawn_transport(HttpTransport::new().bind(bind))
         .await
         .expect("HTTP transport serves");
+    let token = test_token().await;
 
-    let mut alice = connect_with_retry(&format!("ws://{bind}/ws")).await;
-    let mut bob = connect_with_retry(&format!("ws://{bind}/ws")).await;
+    let mut alice = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
+    let mut bob = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
 
     alice
         .send(Message::Text(
@@ -120,9 +143,7 @@ async fn a_message_is_broadcast_to_every_connected_client() {
 async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned_author() {
     let bind = "127.0.0.1:13346";
 
-    let app = TestApp::builder()
-        .module::<PublishLiveModule>()
-        .with_test_telemetry()
+    let app = boot_builder()
         .build_headless()
         .await
         .expect("PublishLiveModule boots headless");
@@ -130,10 +151,11 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
         .spawn_transport(HttpTransport::new().bind(bind))
         .await
         .expect("HTTP transport serves");
+    let token = test_token().await;
 
-    let mut alice = connect_with_retry(&format!("ws://{bind}/ws")).await;
+    let mut alice = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
     wait_for_presence(&mut alice, 1).await;
-    let mut bob = connect_with_retry(&format!("ws://{bind}/ws")).await;
+    let mut bob = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
     wait_for_presence(&mut alice, 2).await;
 
     bob.send(Message::Text(
@@ -163,9 +185,7 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
 async fn namespaced_gateways_isolate_their_broadcasts() {
     let bind = "127.0.0.1:13347";
 
-    let app = TestApp::builder()
-        .module::<PublishLiveModule>()
-        .with_test_telemetry()
+    let app = boot_builder()
         .build_headless()
         .await
         .expect("PublishLiveModule boots headless");
@@ -173,9 +193,10 @@ async fn namespaced_gateways_isolate_their_broadcasts() {
         .spawn_transport(HttpTransport::new().bind(bind))
         .await
         .expect("HTTP transport serves");
+    let token = test_token().await;
 
-    let mut chat = connect_with_retry(&format!("ws://{bind}/ws")).await;
-    let mut notify = connect_with_retry(&format!("ws://{bind}/notify")).await;
+    let mut chat = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
+    let mut notify = connect_with_retry(&format!("ws://{bind}/notify"), &token).await;
 
     chat.send(Message::Text(
         json!({ "event": "message", "data": { "author": "ada", "text": "hi" } })
@@ -227,9 +248,16 @@ async fn wait_for_presence(socket: &mut Socket, want: u64) {
     panic!("presence never reached {want}");
 }
 
-async fn connect_with_retry(url: &str) -> Socket {
+async fn connect_with_retry(url: &str, token: &str) -> Socket {
     for _ in 0..50 {
-        match tokio_tungstenite::connect_async(url).await {
+        let mut request = url
+            .into_client_request()
+            .expect("valid websocket url");
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().expect("valid bearer header"),
+        );
+        match tokio_tungstenite::connect_async(request).await {
             Ok((socket, _)) => return socket,
             Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
         }

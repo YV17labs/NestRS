@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use nest_rs_core::injectable;
 use parking_lot::Mutex;
 use serde::Serialize;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 use crate::envelope::WsEnvelope;
 
@@ -28,11 +28,16 @@ use crate::envelope::WsEnvelope;
 /// never reused within a process run.
 pub type ConnId = u64;
 
+/// Bounded per-connection outbox capacity. A slow consumer that cannot drain
+/// this many queued frames sheds further pushes (`try_send` fails) instead of
+/// growing memory without bound — backpressure over a memory-DoS vector.
+pub(crate) const OUTBOX_CAPACITY: usize = 256;
+
 /// Default namespace marker for [`WsServer`].
 pub struct Global;
 
 struct Conn {
-    outbox: UnboundedSender<String>,
+    outbox: Sender<String>,
     rooms: HashSet<String>,
 }
 
@@ -62,7 +67,7 @@ impl<N: 'static> Default for WsServer<N> {
 }
 
 impl<N: 'static> WsServer<N> {
-    pub(crate) fn connect(&self, outbox: UnboundedSender<String>) -> ConnId {
+    pub(crate) fn connect(&self, outbox: Sender<String>) -> ConnId {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.conns.lock().insert(
             id,
@@ -145,7 +150,7 @@ impl<N: 'static> Registry for WsServer<N> {
         let conns = self.conns.lock();
         conns
             .values()
-            .filter(|conn| conn.outbox.send(frame.clone()).is_ok())
+            .filter(|conn| conn.outbox.try_send(frame.clone()).is_ok())
             .count()
     }
 
@@ -157,7 +162,7 @@ impl<N: 'static> Registry for WsServer<N> {
         conns
             .values()
             .filter(|conn| conn.rooms.contains(room))
-            .filter(|conn| conn.outbox.send(frame.clone()).is_ok())
+            .filter(|conn| conn.outbox.try_send(frame.clone()).is_ok())
             .count()
     }
 
@@ -168,7 +173,7 @@ impl<N: 'static> Registry for WsServer<N> {
         let conns = self.conns.lock();
         conns
             .get(&id)
-            .is_some_and(|conn| conn.outbox.send(frame).is_ok())
+            .is_some_and(|conn| conn.outbox.try_send(frame).is_ok())
     }
 }
 
@@ -192,7 +197,7 @@ impl WsClient {
     /// build the client manually with a kept `Receiver`.
     pub fn for_test() -> Self {
         let server: Arc<WsServer> = Arc::new(WsServer::default());
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let id = server.connect(tx);
         let registry: Arc<dyn Registry> = server;
         Self { id, registry }
@@ -248,9 +253,14 @@ impl WsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::sync::mpsc::Receiver;
 
-    fn recv_all(rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>) -> Vec<String> {
+    /// Test outbox: matches the production bounded channel.
+    fn unbounded_channel() -> (Sender<String>, Receiver<String>) {
+        tokio::sync::mpsc::channel(OUTBOX_CAPACITY)
+    }
+
+    fn recv_all(rx: &mut Receiver<String>) -> Vec<String> {
         let mut out = Vec::new();
         while let Ok(frame) = rx.try_recv() {
             out.push(frame);

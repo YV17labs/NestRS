@@ -40,6 +40,7 @@ impl UsersService {
         email: &str,
         password: &str,
     ) -> Result<entity::Model, CredentialError> {
+        burn_verify(password);
         let conn = Repo::<Users>::conn().map_err(|_| CredentialError)?;
         let user = Users::find()
             .filter(entity::Column::Email.eq(email.to_owned()))

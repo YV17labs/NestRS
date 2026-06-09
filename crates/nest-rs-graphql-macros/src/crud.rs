@@ -75,7 +75,16 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
                     .await
                     .map_err(#gql_err)?;
-                ::core::result::Result::Ok(__rows.iter().map(#output::from).collect())
+                __rows
+                    .iter()
+                    .map(|__row| {
+                        ::nest_rs_authz::graphql::masked_output_for::<
+                            ::nest_rs_authz::Read,
+                            #entity,
+                            #output,
+                        >(__ctx, __row)
+                    })
+                    .collect::<::core::result::Result<::std::vec::Vec<_>, _>>()
             }
         });
     }
@@ -88,7 +97,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 __ctx: &::nest_rs_graphql::async_graphql::Context<'_>,
                 id: ::std::string::String,
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
-                let _ = __ctx;
                 #parse_id
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
@@ -99,7 +107,12 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 .map_err(#gql_err)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::core::result::Result::Ok(::core::option::Option::Some(#output::from(&__m)))
+                        let __out = ::nest_rs_authz::graphql::masked_output_for::<
+                            ::nest_rs_authz::Read,
+                            #entity,
+                            #output,
+                        >(__ctx, &__m)?;
+                        ::core::result::Result::Ok(::core::option::Option::Some(__out))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
                     ::nest_rs_seaorm::Access::Missing => {
@@ -125,7 +138,11 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     let __row = ::nest_rs_seaorm::CrudService::create(&*self.#service, input)
                         .await
                         .map_err(#gql_err)?;
-                    ::core::result::Result::Ok(#output::from(&__row))
+                    ::nest_rs_authz::graphql::masked_output_for::<
+                        ::nest_rs_authz::Create,
+                        #entity,
+                        #output,
+                    >(__ctx, &__row)
                 }
             });
         }
@@ -159,7 +176,12 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                 )
                                 .await
                                 .map_err(#gql_err)?;
-                                ::core::result::Result::Ok(::core::option::Option::Some(#output::from(&__row)))
+                                let __out = ::nest_rs_authz::graphql::masked_output_for::<
+                                    ::nest_rs_authz::Update,
+                                    #entity,
+                                    #output,
+                                >(__ctx, &__row)?;
+                                ::core::result::Result::Ok(::core::option::Option::Some(__out))
                             }
                             ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
                             ::nest_rs_seaorm::Access::Missing => {

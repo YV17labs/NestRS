@@ -34,6 +34,7 @@ graphql = [
     "dep:nest-rs-core",
     "dep:nest-rs-graphql",
     "dep:nest-rs-guards",
+    "dep:nest-rs-resource",
     "dep:poem",
 ]
 # MCP surface: HTTP operation guard (`McpAbilityBridge`) + `with_request_ability`.
@@ -57,6 +58,7 @@ serde.workspace = true
 serde_json.workspace = true
 # The ambient request `Ability` is carried in a `tokio::task_local!`.
 tokio.workspace = true
+tracing.workspace = true
 
 # Optional dependencies — pulled in by the feature flags above.
 nest-rs-core = { workspace = true, optional = true }

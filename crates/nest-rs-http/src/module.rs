@@ -8,6 +8,7 @@ use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule, TransportContribution};
 
 use crate::config::HttpConfig;
+use crate::raw_body::RawBody;
 use crate::transport::HttpTransport;
 
 pub struct HttpModule;
@@ -50,14 +51,12 @@ impl DynamicModule for HttpSetup {
                 if let Some(prefix) = cfg.global_prefix.clone() {
                     http = http.global_prefix(prefix);
                 }
-                if let Some(limit) = cfg.max_body_bytes {
-                    // Install the per-request cap as a request-data entry
-                    // — the `RawBody` extractor reads it back from the
-                    // extensions. Using `EndpointExt::data` directly here
-                    // (rather than a custom `Interceptor` impl) keeps this
-                    // crate free of the cross-transport `Interceptor`
-                    // trait that would otherwise close a dep cycle.
-                    http = http.max_body_bytes(limit);
+                // Install the per-request cap as a request-data entry — the
+                // `RawBody` extractor reads it back from the extensions.
+                let limit = cfg.max_body_bytes.unwrap_or(RawBody::DEFAULT_LIMIT);
+                http = http.max_body_bytes(limit);
+                if let Some(secs) = cfg.request_timeout_secs {
+                    http = http.request_timeout(std::time::Duration::from_secs(secs));
                 }
                 Ok(Box::new(http))
             },

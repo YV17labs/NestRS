@@ -7,6 +7,7 @@
 //! by listing the `#[mcp]`-decorated provider — no `<Transport>Module`
 //! activation seam to import.
 
+mod deny_guard;
 mod endpoint;
 mod guard;
 

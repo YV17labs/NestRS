@@ -14,6 +14,9 @@ use parking_lot::Mutex;
 
 use crate::rate::Throttle;
 
+/// Cap distinct throttle keys to resist unbounded memory growth.
+const MAX_KEYS: usize = 10_000;
+
 pub struct Decision {
     pub allowed: bool,
     /// When denied, time until the window resets (for the `Retry-After` header).
@@ -84,6 +87,16 @@ impl InMemoryThrottler {
     pub fn hit(&self, key: &str, limit: Throttle) -> Decision {
         let now = Instant::now();
         let mut windows = self.windows.lock();
+        windows.retain(|_, window| now.duration_since(window.start) < limit.window);
+        if !windows.contains_key(key) && windows.len() >= MAX_KEYS {
+            if let Some(oldest) = windows
+                .iter()
+                .min_by_key(|(_, window)| window.start)
+                .map(|(k, _)| k.clone())
+            {
+                windows.remove(&oldest);
+            }
+        }
         let window = windows.entry(key.to_owned()).or_insert(Window {
             start: now,
             count: 0,

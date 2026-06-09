@@ -58,6 +58,7 @@ pub struct HttpTransport {
     server_header: Option<&'static str>,
     global_prefix: Option<String>,
     max_body_bytes: Option<usize>,
+    request_timeout: Option<std::time::Duration>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -88,6 +89,7 @@ impl HttpTransport {
             server_header: None,
             global_prefix: None,
             max_body_bytes: None,
+            request_timeout: None,
             endpoint: None,
         }
     }
@@ -119,6 +121,14 @@ impl HttpTransport {
     /// [`RawBodyLimit`](crate::RawBodyLimit) request extension.
     pub fn max_body_bytes(mut self, limit: usize) -> Self {
         self.max_body_bytes = Some(limit);
+        self
+    }
+
+    /// Abort any request that runs longer than `timeout`, answering the client
+    /// with `504 Gateway Timeout`. Bounds connection hold time against slow or
+    /// stuck handlers. Without this call no timeout is enforced.
+    pub fn request_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.request_timeout = Some(timeout);
         self
     }
 
@@ -218,6 +228,26 @@ impl Transport for HttpTransport {
         metas.sort_by_key(|m| m.priority());
         for meta in metas {
             endpoint = meta.wrap(container, endpoint);
+        }
+        // Wrap the whole Layer System in a wall-clock budget: a handler that
+        // overruns is aborted and the client gets `504`. Outside the globals
+        // so guards/interceptors are themselves bounded; inside body-limit /
+        // header / CORS so a preflight is still answered without the timer.
+        if let Some(timeout) = self.request_timeout.take() {
+            endpoint = endpoint
+                .around(move |ep, req| async move {
+                    match tokio::time::timeout(timeout, ep.call(req)).await {
+                        Ok(res) => res,
+                        Err(_) => {
+                            tracing::warn!(target: "nest_rs::http", ?timeout, "request timed out");
+                            Ok(Response::builder()
+                                .status(poem::http::StatusCode::GATEWAY_TIMEOUT)
+                                .finish())
+                        }
+                    }
+                })
+                .map_to_response()
+                .boxed();
         }
         // Apply the body-byte cap, if any, as a request-data entry the
         // `RawBody` extractor reads back. Installed OUTSIDE the Layer

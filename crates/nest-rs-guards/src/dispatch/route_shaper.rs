@@ -266,9 +266,19 @@ async fn apply_body_pipes(
     if !content_type.contains("json") {
         return Ok(());
     }
+    let limit = req
+        .extensions()
+        .get::<nest_rs_http::RawBodyLimit>()
+        .map(|l| l.0)
+        .unwrap_or(nest_rs_http::RawBody::DEFAULT_LIMIT);
     let body = req.take_body();
-    let bytes = match body.into_bytes().await {
+    let bytes = match body.into_bytes_limit(limit).await {
         Ok(b) => b,
+        Err(nest_rs_http::poem::error::ReadBodyError::PayloadTooLarge) => {
+            return Err(nest_rs_http::poem::Error::from_status(
+                nest_rs_http::poem::http::StatusCode::PAYLOAD_TOO_LARGE,
+            ));
+        }
         Err(err) => {
             tracing::warn!(target: "nest_rs::layers", error = %err, "global pipe: failed to read body");
             return Ok(());

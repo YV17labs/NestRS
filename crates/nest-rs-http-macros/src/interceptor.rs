@@ -7,15 +7,46 @@
 //! and list it in `#[use_interceptors(...)]`.
 
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{ItemStruct, parse_macro_input};
+use syn::spanned::Spanned;
+use syn::{ItemStruct, Meta, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, injected_method, optional_dependencies_method,
 };
 
-pub(crate) fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream {
+fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
+    if args.is_empty() {
+        return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
+    }
+    let meta = syn::parse::<Meta>(args)?;
+    let Meta::NameValue(nv) = meta else {
+        return Err(syn::Error::new(
+            meta.span(),
+            "expected `priority = <integer>`",
+        ));
+    };
+    if !nv.path.is_ident("priority") {
+        return Err(syn::Error::new(nv.path.span(), "unknown attribute"));
+    }
+    let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Int(lit),
+        ..
+    }) = nv.value
+    else {
+        return Err(syn::Error::new(nv.value.span(), "priority must be an integer"));
+    };
+    let priority: i32 = lit.base10_parse()?;
+    Ok(quote! { #priority })
+}
+
+pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
+    let priority = match parse_priority(args) {
+        Ok(p) => p,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let mut item = parse_macro_input!(input as ItemStruct);
 
     let InjectableBody {
@@ -57,14 +88,17 @@ pub(crate) fn interceptor(_args: TokenStream, input: TokenStream) -> TokenStream
                 let __arc: ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor> =
                     ::std::sync::Arc::new(__value);
                 builder.attach_meta::<Self, ::nest_rs_http::HttpEndpointWrap>(
-                    ::nest_rs_http::HttpEndpointWrap::new(move |_container, __endpoint| {
+                    ::nest_rs_http::HttpEndpointWrap::with_priority(
+                        #priority,
+                        move |_container, __endpoint| {
                         ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
                             ::nest_rs_interceptors::InterceptorExt::interceptor(
                                 __endpoint,
                                 ::std::sync::Arc::clone(&__arc),
                             ),
                         ))
-                    }),
+                    },
+                    ),
                 )
             }
         }

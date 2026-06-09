@@ -86,6 +86,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             let mut method = poem::post(crate::context::ContextEndpoint::new(
                 schema,
                 container.clone(),
+                options.max_batch_size,
             ));
             if options.playground {
                 let html = async_graphql::http::playground_source(

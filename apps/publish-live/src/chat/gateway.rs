@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use nest_rs_ws::{WsClient, gateway, messages};
 
+use features::authn::AuthGuard;
 use crate::chat::dto::{ChatMessage, SendMessage};
 use crate::chat::guard::ModeratedGuard;
 use crate::chat::service::RoomService;
 
 #[gateway(path = "/ws")]
+#[use_guards(AuthGuard)]
 pub struct ChatGateway {
     #[inject]
     room: Arc<RoomService>,

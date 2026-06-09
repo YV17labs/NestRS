@@ -21,6 +21,7 @@ pub fn run(opts: FeatureOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.ok_or(CliError::NotNestrsWorkspace)?;
 
+    crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
     let root = ws.feature_root(&names.snake);
     if root.exists() {

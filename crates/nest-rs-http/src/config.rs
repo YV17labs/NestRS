@@ -2,6 +2,7 @@ use nest_rs_config::{Config, ConfigService, Result, config};
 use validator::Validate;
 
 use crate::cors::CorsConfig;
+use crate::raw_body::RawBody;
 use crate::tls::TlsConfig;
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -35,6 +36,11 @@ pub struct HttpConfig {
     /// (2 MiB). Read from `NESTRS_HTTP__MAX_BODY_BYTES`. Per-route overrides
     /// keep using [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit).
     pub max_body_bytes: Option<usize>,
+    /// Wall-clock budget for a single request. A handler exceeding it is
+    /// aborted and the client gets `504 Gateway Timeout`, bounding how long a
+    /// slow/stuck request ties up a connection. `None` ⇒ no timeout. Read from
+    /// `NESTRS_HTTP__REQUEST_TIMEOUT_SECS`. Default `30`.
+    pub request_timeout_secs: Option<u64>,
 }
 
 impl Default for HttpConfig {
@@ -46,7 +52,8 @@ impl Default for HttpConfig {
             cors: None,
             server_header: false,
             global_prefix: None,
-            max_body_bytes: None,
+            max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
+            request_timeout_secs: Some(30),
         }
     }
 }
@@ -92,7 +99,10 @@ impl Config for HttpConfig {
             })?,
             server_header: env.flag("SERVER_HEADER", false)?,
             global_prefix,
-            max_body_bytes: env.parse("MAX_BODY_BYTES")?,
+            max_body_bytes: env
+                .parse("MAX_BODY_BYTES")?
+                .or(Some(RawBody::DEFAULT_LIMIT)),
+            request_timeout_secs: env.parse("REQUEST_TIMEOUT_SECS")?.or(Some(30)),
         })
     }
 }
@@ -115,10 +125,7 @@ mod tests {
             "Server header opt-out by default — no framework fingerprint in prod",
         );
         assert!(d.global_prefix.is_none(), "no global prefix by default");
-        assert!(
-            d.max_body_bytes.is_none(),
-            "no body cap override — RawBody::DEFAULT_LIMIT applies",
-        );
+        assert_eq!(d.max_body_bytes, Some(RawBody::DEFAULT_LIMIT));
     }
 
     #[test]

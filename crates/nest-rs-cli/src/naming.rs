@@ -71,6 +71,21 @@ pub struct Names {
     pub singular: String,
 }
 
+/// Reject path segments that would escape the features workspace.
+pub fn validate_feature_name(raw: &str) -> Result<(), String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("feature name must not be empty".into());
+    }
+    if trimmed.contains("..") || trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("feature name must not contain path separators".into());
+    }
+    if trimmed.starts_with('.') {
+        return Err("feature name must not start with '.'".into());
+    }
+    Ok(())
+}
+
 impl Names {
     pub fn parse(raw: &str) -> Self {
         let kebab = to_kebab(raw);
@@ -234,6 +249,13 @@ fn singularize(pascal: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_path_traversal_feature_names() {
+        assert!(validate_feature_name("/tmp/pwn").is_err());
+        assert!(validate_feature_name("../escape").is_err());
+        assert!(validate_feature_name("valid_name").is_ok());
+    }
 
     #[test]
     fn parses_kebab_names() {

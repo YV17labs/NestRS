@@ -41,8 +41,8 @@ async fn endpoint_with_guard_rejects_before_the_handler_runs() {
 }
 
 #[tokio::test]
-async fn endpoint_without_a_guard_accepts_requests() {
-    let open = endpoint_with_guard(None, || DummyHandler);
+async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
+    let open = nest_rs_mcp::endpoint(|| DummyHandler);
     let resp = TestClient::new(open).post("/").send().await;
-    assert_ne!(resp.0.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
 }

@@ -12,25 +12,11 @@ hero:
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
     <span class="hero-lead">Scalable Rust backend apps with <span class="lead-accent">native performance.</span></span>
-    <span class="hero-sub">Write a controller, a service, a module. The decorators carry the rest — security, transactions, validation, wiring. The same app runs at <strong>~25×</strong> the throughput and <strong>~20×</strong> less RAM than an equivalent Node service, on the same hardware.</span>
-    <span class="hero-meta">
-      <span class="hero-traits">
-        <span class="hero-pill hero-pill--accent">Declarative</span>
-        <span class="hero-pill">Type-safe</span>
-        <span class="hero-pill hero-pill--accent">Composable</span>
-        <span class="hero-pill">Boot-verified</span>
-      </span>
-      <span class="hero-stack">
-        <span class="hero-stack-row">
-          <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
-        </span>
-        <span class="hero-stack-row">
-          <span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
-        </span>
-        <span class="hero-stack-row hero-stack-row--security">
-          <span class="hero-stack-accent">Authentication</span><span class="hero-stack-accent">OAuth2</span><span class="hero-stack-accent">Authorization</span>
-        </span>
-      </span>
+    <span class="hero-sub">For teams shipping structured Rust backends — especially if NestJS shaped how you think about modules. Write a controller, a service, a module; the decorators carry the rest — security, transactions, validation, wiring. The same app runs at <strong>~25×</strong> the throughput and <strong>~20×</strong> less RAM than an equivalent Node service, on the same hardware.</span>
+    <span class="hero-stack">
+      <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
+      <span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
+      <span class="hero-stack-accent">Authentication</span><span class="hero-stack-accent">OAuth2</span><span class="hero-stack-accent">Authorization</span>
     </span>
   image:
     alt: NestRS logo
@@ -62,7 +48,8 @@ No wiring file. No config. No boilerplate. Scaffold a **standalone** crate with
 the CLI, then follow the tabs from **Controller** (your HTTP surface) through
 **Service**, **Module**, and **Main** — that's a real, type-checked service.
 The dependency graph is built and **verified at boot**, and the crate compiles
-to a native binary.
+to a native binary. Start here; grow into a **workspace** when you add more apps
+— same decorators, shared `crates/features/`.
 
 <div class="nestrs-hello-demo">
 
@@ -76,17 +63,7 @@ to a native binary.
     { kind: 'output', text: '  + hello/Cargo.toml' },
     { kind: 'output', text: '  + hello/rust-toolchain.toml' },
     { kind: 'output', text: '  + hello/.gitignore' },
-    { kind: 'output', text: '  + hello/.dockerignore' },
-    { kind: 'output', text: '  + hello/Justfile' },
-    { kind: 'output', text: '  + hello/README.md' },
-    { kind: 'output', text: '  + hello/Dockerfile' },
-    { kind: 'output', text: '  + hello/.env' },
-    { kind: 'output', text: '  + hello/.env.development' },
-    { kind: 'output', text: '  + hello/.env.example' },
-    { kind: 'output', text: '  + hello/src/lib.rs' },
-    { kind: 'output', text: '  + hello/src/main.rs' },
-    { kind: 'output', text: '  + hello/src/module.rs' },
-    { kind: 'output', text: '  + hello/src/service.rs' },
+    { kind: 'omit' },
     { kind: 'output', text: '  + hello/src/controller.rs' },
     { kind: 'output', text: '  + hello/tests/e2e.rs' },
     { kind: 'output', text: '' },
@@ -107,30 +84,20 @@ to a native binary.
     { kind: 'input', text: 'just dev' },
     { kind: 'output', text: '    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s' },
     { kind: 'output', text: '     Running `target/debug/hello`' },
-    { kind: 'output', text: '2026-04-29T12:00:00.798397Z  INFO nest_rs_opentelemetry::init: OpenTelemetry initialised service=hello endpoint="<none>" sample_ratio=1.0 log_format=Text otlp_export=false' },
-    { kind: 'output', text: '2026-04-29T12:00:00.799345Z DEBUG opentelemetry: name="NoopMeterProvider.MeterCreation" meter_name="nestrs" Meter was obtained from a NoopMeterProvider. No metrics will be recorded. If global::meter_with_scope()/meter() was used, ensure that a valid MeterProvider is set globally before creating Meter.' },
     { kind: 'output', text: '2026-04-29T12:00:00.799422Z  INFO nest_rs::module: module dependencies initialized module="HelloModule"' },
-    { kind: 'output', text: '2026-04-29T12:00:00.799631Z  INFO nest_rs::transport: attached module-contributed transport transport="HttpTransport"' },
     { kind: 'output', text: '2026-04-29T12:00:00.799862Z  INFO nest_rs::routes: GET    /  (hello)' },
-    { kind: 'output', text: '2026-04-29T12:00:00.802245Z DEBUG nest_rs_http::transport: http transport listening addr=0.0.0.0:3000' },
-    { kind: 'output', text: '2026-04-29T12:00:00.802476Z  INFO poem::server: listening addr=socket://0.0.0.0:3000' },
+    { kind: 'omit' },
     { kind: 'output', text: '2026-04-29T12:00:00.802552Z  INFO poem::server: server started' },
     { kind: 'input', text: 'curl http://localhost:3000' },
     { kind: 'response', text: 'Hello World' },
-    { kind: 'output', text: '2026-04-29T12:00:01.995630Z  INFO nest_rs::access: method=GET path=/ status=200 bytes=11 duration_ms=0.143542 client_ip=127.0.0.1 user_agent=curl/8.20.0 trace_id=4894160908a67f7e60b51c9ebdc40977' },
   ]}
 />
 
 </div>
 
 The same inject-and-decorate model carries every surface — HTTP, GraphQL,
-WebSockets, queues, scheduled jobs, MCP. [Get started](/getting-started/), browse
-the [packages](/packages/) the framework ships, read the
-[Publish workspace](/publish/), the [fundamentals](/fundamentals/), or jump
-straight to a topic: [HTTP](/http/), [OpenAPI](/openapi/),
-[GraphQL](/graphql/), [WebSockets](/websockets/),
-[OpenTelemetry](/opentelemetry/), [Database](/database/),
-[Security](/security/).
+WebSockets, queues, scheduled jobs, MCP.
+**[Get started →](/getting-started/)** · **[Why NestRS →](/why/)**
 
 </div>
 
@@ -138,15 +105,10 @@ straight to a topic: [HTTP](/http/), [OpenAPI](/openapi/),
 
 The same "Hello World" service — a provider, a controller, a module — built
 once in NestRS and once in NestJS 11 on Node.js 24, under identical `wrk` load
-(2 cores, `-t2 -c64 -d20s`).
+(2 cores, `-t2 -c64 -d20s`). Synthetic baseline: same handler shape and
+hardware — illustrates framework overhead, not a domain-heavy API.
 
 <Bench />
-
-## Status
-
-**Alpha.** The API still shifts, rough edges remain — NestRS is not
-production-ready yet. Stars and early feedback on
-[GitHub](https://github.com/NestRS/NestRS) shape what follows.
 
 ## Why developers pick NestRS
 
@@ -198,32 +160,56 @@ production-ready yet. Stars and early feedback on
 
 </div>
 
-## One domain, several focused binaries
+## One domain, several workloads
 
-NestRS is built for **microservice-shaped backends without the old ceremony** —
-several deployables, **one shared feature library**, and no obligation to split
-into many repositories while the team is still small.
+A **workload** is one deployable binary with one operational job — HTTP API,
+WebSocket gateway, queue worker, MCP server, and so on. NestRS supports
+**several workloads for the same product** in either layout:
 
-**Entities, services, and policy are written once.** Each runnable has a **clear
-responsibility** — some sit on a **public edge** (surfaces clients and partners
-call), others stay **non-public** (background work, off the request path). Processes
-stay lean; your own services stay **loosely coupled** (shared contracts and data,
-not chatty RPC, no platform team or mesh required to get started).
+- **One monorepo** — `nestrs new` scaffolds a workspace: shared logic in
+  `crates/features/`, thin composition roots under `apps/*`. Add another
+  workload with `nestrs new <name>` from the same tree.
+- **Several repositories** — each workload can live in its own crate or repo;
+  domain code stays in a shared `features` library both sides depend on. No
+  chatty RPC required — self-contained tokens and a shared database are enough.
+
+The standalone demo above is one workload in one crate. As the product grows,
+**splitting by workload** is how you keep that model without rewriting business
+logic:
+
+- **Lean binaries** — import only the transports an app serves; a worker never
+  pulls in HTTP or GraphQL it will not run.
+- **Independent scaling** — scale the request path on traffic, background work
+  on queue depth; no single “scale everything” knob.
+- **Operational boundaries** — who runs where is a composition choice in each
+  app's `module.rs`, not a fork of entities and services.
+
+**Entities, services, and policy are written once** in features. Each workload
+has a **clear responsibility** — some are **public** (surfaces clients
+and partners call), others stay **private** — non-public workloads, off the request
+path. Your workloads stay **loosely coupled**: shared contracts and data, not
+a platform team or service mesh to get started.
+
+See [Getting started](/getting-started/) and the [CLI](/cli/) to scaffold a
+workspace. In that layout, each workload is an **app** under `apps/<name>/` —
+schematically:
 
 <div class="mono nestrs-reveal not-content">
   <div class="mono-deploy">
     <div class="mono-tier mono-tier--public">
       <header class="mono-tier-head">
-        <span class="mono-tier-label">Public edge</span>
+        <span class="mono-tier-label">Public</span>
         <span class="mono-tier-hint">exposed to clients and partners</span>
       </header>
       <ul class="mono-apps mono-apps--pair">
         <li class="mono-app">
-          <span class="mono-app-name">Service A</span>
+          <span class="mono-app-name">App A</span>
+          <span class="mono-app-port">:3000</span>
           <span class="mono-app-role">a public surface</span>
         </li>
         <li class="mono-app">
-          <span class="mono-app-name">Service B</span>
+          <span class="mono-app-name">App B</span>
+          <span class="mono-app-port">:3001</span>
           <span class="mono-app-role">another public surface</span>
         </li>
       </ul>
@@ -231,58 +217,91 @@ not chatty RPC, no platform team or mesh required to get started).
 
     <div class="mono-shared-mid">
       <span class="mono-shared-mid-label">shared features</span>
-      <span class="mono-shared-mid-sub">one model — every service above and below builds on it</span>
+      <span class="mono-shared-mid-sub">one model — every app above and below builds on it</span>
     </div>
 
     <div class="mono-tier mono-tier--private">
       <header class="mono-tier-head">
-        <span class="mono-tier-label">Non-public</span>
-        <span class="mono-tier-hint">not on the client request path</span>
+        <span class="mono-tier-label">Private</span>
+        <span class="mono-tier-hint">non-public · off the client request path</span>
       </header>
       <ul class="mono-apps mono-apps--pair">
         <li class="mono-app">
-          <span class="mono-app-name">Service C</span>
-          <span class="mono-app-role">a background service</span>
+          <span class="mono-app-name">App C</span>
+          <span class="mono-app-role">background work</span>
         </li>
         <li class="mono-app">
-          <span class="mono-app-name">Service D</span>
-          <span class="mono-app-role">another background service</span>
+          <span class="mono-app-name">App D</span>
+          <span class="mono-app-role">more background work</span>
         </li>
       </ul>
     </div>
   </div>
-  <p class="mono-note">One monorepo, one feature library — who runs where; operational boundaries, not a rewrite of business logic.</p>
+  <p class="mono-note">Same domain, shared features — one monorepo or several; which app runs where is an operational choice, not a rewrite of business logic.</p>
 </div>
 
-## Scale each role on its own signal
+## Scale each workload on its own signal
 
 Splitting by responsibility is only the first step. In production you **scale
-horizontally per role** — the same binary, more replicas when the pressure moves:
-a request-facing service follows **demand**, a background one follows **queue depth**. There is
-no single “scale the monolith” knob; each deployable gets its own replica count.
+horizontally per app** — the same binary, more replicas when *its* signal moves.
+A hot public surface follows **demand**; a steady one keeps a small footprint;
+background apps follow **queue depth**. There is no single “scale the monolith”
+knob — each app under `apps/*` gets its own replica count.
 
 <div class="scale nestrs-reveal not-content">
-  <div class="scale-lanes">
+  <div class="scale-lanes scale-lanes--four">
     <article class="scale-lane scale-lane--api">
       <div class="scale-lane-top">
-        <span class="scale-signal">demand · traffic</span>
+        <span class="scale-app">App A</span>
+        <span class="scale-port">:3000</span>
+        <span class="scale-signal">demand · high traffic</span>
         <span class="scale-arrow" aria-hidden="true">→</span>
-        <span class="scale-target">Service A replicas</span>
+        <span class="scale-replicas">×5</span>
       </div>
       <div class="scale-pills" aria-hidden="true">
-        <span></span><span></span><span></span><span class="scale-pill-more">+</span>
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+    </article>
+    <article class="scale-lane scale-lane--api scale-lane--steady">
+      <div class="scale-lane-top">
+        <span class="scale-app">App B</span>
+        <span class="scale-port">:3001</span>
+        <span class="scale-signal">demand · steady</span>
+        <span class="scale-arrow" aria-hidden="true">→</span>
+        <span class="scale-replicas">×2</span>
+      </div>
+      <div class="scale-pills scale-pills--compact" aria-hidden="true">
+        <span></span><span></span>
       </div>
     </article>
     <article class="scale-lane scale-lane--worker">
       <div class="scale-lane-top">
+        <span class="scale-app">App C</span>
         <span class="scale-signal">queue · backlog</span>
         <span class="scale-arrow" aria-hidden="true">→</span>
-        <span class="scale-target">Service C replicas</span>
+        <span class="scale-replicas">×4</span>
       </div>
       <div class="scale-pills scale-pills--worker" aria-hidden="true">
-        <span></span><span></span><span></span><span></span><span class="scale-pill-more">+</span>
+        <span></span><span></span><span></span><span></span>
+      </div>
+    </article>
+    <article class="scale-lane scale-lane--worker scale-lane--light">
+      <div class="scale-lane-top">
+        <span class="scale-app">App D</span>
+        <span class="scale-signal">queue · light</span>
+        <span class="scale-arrow" aria-hidden="true">→</span>
+        <span class="scale-replicas">×2</span>
+      </div>
+      <div class="scale-pills scale-pills--worker scale-pills--compact" aria-hidden="true">
+        <span></span><span></span>
       </div>
     </article>
   </div>
-  <p class="scale-aside">A steady service like B usually keeps a small, constant footprint — scale where the load actually moves.</p>
+  <p class="scale-aside">One product, four apps — A scales on traffic spikes, B stays lean, C follows backlog, D only when needed.</p>
 </div>
+
+## Status
+
+**Alpha.** The API still shifts, rough edges remain — NestRS is not
+production-ready yet. Stars and early feedback on
+[GitHub](https://github.com/NestRS/NestRS) shape what follows.

@@ -4,6 +4,7 @@ interface Props {
     | { kind: 'input'; text: string }
     | { kind: 'output'; text: string }
     | { kind: 'response'; text: string }
+    | { kind: 'omit'; text?: string }
   >;
   /** Shorter chrome for scaffold snippets above code demos. */
   variant?: 'default' | 'compact';
@@ -70,6 +71,9 @@ function renderLine(line: Props['lines'][number]): string {
   }
   if (line.kind === 'response') {
     return `<span class="t-res">${escapeHtml(line.text)}</span>`;
+  }
+  if (line.kind === 'omit') {
+    return `<span class="t-omit">${escapeHtml(line.text ?? '  ..')}</span>`;
   }
   return renderOutput(line.text);
 }

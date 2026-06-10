@@ -9,12 +9,8 @@ pub enum Role {
     User,
 }
 
-/// JWT payload signed by the `auth` app and verified by every resource server.
-/// Also used as the runtime principal — keep stable, it is the cross-app
-/// contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// Omitted for machine-only grants (`client_credentials`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub: Option<Uuid>,
     pub org_id: Uuid,
@@ -63,8 +59,6 @@ mod tests {
 
     #[test]
     fn machine_grant_omits_sub_from_the_wire() {
-        // `sub` must be `skip_serializing_if = "Option::is_none"` so a
-        // client_credentials token doesn't carry a stray `"sub": null`.
         let machine = Claims {
             sub: None,
             org_id: Uuid::nil(),

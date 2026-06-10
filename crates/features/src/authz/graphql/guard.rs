@@ -6,8 +6,6 @@ use nest_rs_core::injectable;
 use nest_rs_graphql::GraphqlResolverGuard;
 use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 
-/// Access-graph marker + fail-closed read of the seeded `Ability` — anonymous
-/// GraphQL is denied by default, mirroring the HTTP `AuthzGuard` posture.
 #[injectable]
 #[derive(Default)]
 pub struct GraphqlAuthGuard;

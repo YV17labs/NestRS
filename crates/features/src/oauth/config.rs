@@ -83,8 +83,6 @@ mod tests {
 
     #[test]
     fn default_org_constant_does_not_drift() {
-        // Pins the dev-default org id used when `NESTRS_ISSUER__DEFAULT_ORG_ID`
-        // is unset — changing it silently retargets every new user.
         assert_eq!(
             DEFAULT_ORG,
             Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e),

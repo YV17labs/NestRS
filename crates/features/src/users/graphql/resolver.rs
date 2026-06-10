@@ -31,9 +31,6 @@ impl UsersResolver {
         authorize::<Create, UserEntity>(ctx)?;
         let actor = ctx.data::<Claims>()?;
         let user = self.svc.create_in_org(input, actor.org_id).await?;
-        // Mask through the ambient ability, exactly like the `#[crud]`-generated
-        // operations — a hand-written resolver must not leak fields the caller
-        // is not granted by returning the wire type unfiltered.
         masked_output_for::<Create, UserEntity, User>(ctx, &user)
     }
 

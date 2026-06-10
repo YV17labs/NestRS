@@ -1,4 +1,3 @@
-//! HTTP round-trip for the Publish-ready `posts` feature (org + author FKs, auth).
 
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};

@@ -24,9 +24,6 @@ pub struct AuthenticatedClient {
     pub scopes: Vec<String>,
 }
 
-/// `id` is the only field providers always return; the rest falls back to
-/// derived values so a missing email or display name does not block account
-/// creation.
 #[derive(Debug, Clone, Deserialize)]
 struct OAuthProfile {
     id: i64,
@@ -66,9 +63,6 @@ pub struct AccessToken {
     pub expires_in: u64,
 }
 
-/// The OAuth2 token authority for this app: authenticates a principal
-/// (provider redirect, client registry, or password) and issues the access
-/// token. One responsibility — the app's OAuth2 protocol — so one service.
 #[injectable]
 pub struct OAuthService {
     #[inject]
@@ -96,8 +90,6 @@ impl OAuthService {
         }
     }
 
-    /// `sub` is set for human principals; machine grants
-    /// (`client_credentials`) omit it.
     pub fn issue(
         &self,
         sub: Option<Uuid>,
@@ -161,7 +153,6 @@ impl OAuthService {
         })
     }
 
-    /// Constant-time comparison against the configured client registry.
     pub fn authenticate_client(
         &self,
         client_id: &str,
@@ -171,9 +162,6 @@ impl OAuthService {
     }
 }
 
-/// Build + sign the access token without going through the injected
-/// `OAuthService`. Extracted so the sign + envelope step is testable with a
-/// real `JwtService` and no `UsersService`. Pure of `self`.
 pub(crate) fn issue_with_jwt(
     jwt_svc: &JwtService,
     sub: Option<Uuid>,
@@ -202,11 +190,6 @@ pub(crate) fn issue_with_jwt(
     })
 }
 
-/// Pure decision tree for `grant_client_credentials`: reject unknown grant
-/// type, compute roles from the requested scope against what the
-/// authenticated client is granted, and call back into the JWT issuer.
-/// Extracted so the wire-error mapping for `unsupported_grant_type` /
-/// `invalid_scope` is testable with no `UsersService`.
 pub(crate) fn grant_client_credentials_with_jwt(
     jwt_svc: &JwtService,
     grant_type: &str,
@@ -220,19 +203,11 @@ pub(crate) fn grant_client_credentials_with_jwt(
     issue_with_jwt(jwt_svc, None, client.org_id, roles)
 }
 
-/// Constant-time lookup against a registry, extracted so the credential
-/// match can be unit-tested without standing up an `OAuth2Client` /
-/// `UsersService`. Pure function; the only side-channel that matters here
-/// (timing) is preserved by [`constant_time_eq`].
 pub(crate) fn authenticate_against_registry(
     clients: &[super::config::RegisteredClient],
     client_id: &str,
     client_secret: &str,
 ) -> Result<AuthenticatedClient, AuthError> {
-    // Walk the whole registry, comparing *both* fields for every entry with a
-    // bitwise `&` (no `&&` short-circuit). A non-matching `client_id` therefore
-    // costs the same as a matching one, so timing does not leak which client
-    // ids are registered. First match wins, mirroring the previous `.find`.
     let mut matched: Option<&super::config::RegisteredClient> = None;
     for client in clients {
         let id_ok = constant_time_eq(client.client_id.as_bytes(), client_id.as_bytes());
@@ -314,8 +289,6 @@ mod tests {
 
     #[test]
     fn constant_time_eq_rejects_different_lengths_immediately() {
-        // Length mismatch short-circuits — the timing of this branch is OK
-        // because length is not the secret.
         assert!(!constant_time_eq(b"secret", b"secrets"));
         assert!(!constant_time_eq(b"", b"x"));
     }
@@ -348,8 +321,6 @@ mod tests {
         let registry = [client("ci", "s3cret", &["user"])];
         let err = authenticate_against_registry(&registry, "ci", "wrong")
             .expect_err("wrong secret rejected");
-        // The error message must NOT name the right secret or even hint at
-        // which step failed — opaque "invalid client credentials" only.
         assert!(matches!(err, AuthError::Failed(_)));
         assert!(
             err.to_string().contains("invalid client credentials"),
@@ -365,9 +336,6 @@ mod tests {
 
     #[test]
     fn authenticate_against_registry_picks_the_first_matching_client() {
-        // Two registrations for `ci` — first match wins. Pin the behaviour so
-        // a future refactor that swaps to a HashMap doesn't silently change
-        // it.
         let a = RegisteredClient {
             scopes: vec!["a".into()],
             ..client("ci", "s3cret", &["a"])
@@ -389,8 +357,6 @@ mod tests {
 
     #[test]
     fn authenticate_against_registry_distinguishes_clients_with_a_shared_prefix() {
-        // `constant_time_eq` short-circuits on length mismatch (length isn't
-        // secret), and on equal-length inputs walks the whole buffer.
         let registry = [
             client("ci", "s3cret-a", &["a"]),
             client("ci-prod", "s3cret-b", &["b"]),
@@ -398,11 +364,6 @@ mod tests {
         let auth = authenticate_against_registry(&registry, "ci-prod", "s3cret-b").unwrap();
         assert_eq!(auth.scopes, vec!["b".to_string()]);
     }
-
-    // `issue_with_jwt` is the sign + envelope step the issuer (and every
-    // grant) reduces to. Pin the wire-format invariants here: `"Bearer"`
-    // token_type, `expires_in == jwt.ttl_secs()`, and `sub` round-trips
-    // exactly as supplied (machine grants must omit `sub`, see Claims tests).
 
     use nest_rs_authn::{JwtOptions, JwtService};
     use std::time::Duration;
@@ -449,8 +410,6 @@ mod tests {
 
     #[test]
     fn issue_machine_grant_signs_with_no_subject() {
-        // `client_credentials` callers must get a token whose verified claims
-        // carry `sub == None` — a non-None here is a privilege bug.
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let org = Uuid::now_v7();
         let token = issue_with_jwt(&jwt_svc, None, org, vec![Role::User]).expect("issue");
@@ -461,10 +420,6 @@ mod tests {
 
     #[test]
     fn issue_surfaces_signing_failure_as_server_error() {
-        // A verify-only `JwtService` has no signing key — `sign` returns
-        // `AuthError::Failed`, which the issuer must map to
-        // `TokenError::Sign(_)`. The wire string is the opaque RFC 6749
-        // `server_error`, never the internal cause.
         let verify_only_svc = JwtService::new(JwtOptions::eddsa_verify(test_ed25519_public_pem()))
             .expect("verify-only jwt");
         let err = issue_with_jwt(
@@ -478,17 +433,11 @@ mod tests {
         assert_eq!(err.to_string(), "server_error");
     }
 
-    // A throwaway ED25519 public key in PEM form, just enough to build a
-    // verify-only `JwtService`. The body is random and never trusted — the
-    // verify-only `sign` path errors *before* it touches the key.
     fn test_ed25519_public_pem() -> &'static str {
         "-----BEGIN PUBLIC KEY-----\n\
          MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n\
          -----END PUBLIC KEY-----\n"
     }
-
-    // `grant_client_credentials_with_jwt` carries the RFC 6749 grant-type +
-    // scope branching every public `POST /oauth/token` request flows through.
 
     fn auth_client(scopes: &[&str]) -> AuthenticatedClient {
         AuthenticatedClient {
@@ -509,8 +458,6 @@ mod tests {
 
     #[test]
     fn grant_client_credentials_rejects_scope_outside_the_client_grant() {
-        // Requesting a scope the client wasn't granted maps to
-        // `invalid_scope` — a registry change must not silently widen scope.
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let err = grant_client_credentials_with_jwt(
             &jwt_svc,
@@ -542,12 +489,6 @@ mod tests {
         );
         assert_eq!(claims.org_id, org);
     }
-
-    // Drive the methods on the injected `OAuthService` directly so the thin
-    // wiring sites are covered alongside the extracted helpers.
-    // `UsersService` is constructed with a `Disconnected` connection — none
-    // of the test paths reach it (every test stays out of `grant_password`
-    // and `resolve_caller`).
 
     use nest_rs_authn::{OAuth2Client, OAuth2Config};
     use sea_orm::DatabaseConnection;
@@ -596,8 +537,6 @@ mod tests {
 
     #[test]
     fn oauth_service_issue_method_delegates_to_the_helper() {
-        // Round-trips claims through the configured JWT — pins the
-        // `&self.jwt_svc` plumbing the method wraps around `issue_with_jwt`.
         let svc = oauth_service(Duration::from_secs(120));
         let sub = Uuid::now_v7();
         let org = Uuid::now_v7();
@@ -627,9 +566,6 @@ mod tests {
 
     #[test]
     fn oauth_service_authorize_builds_a_redirect_to_the_provider() {
-        // Smoke-test the constructor: the four `#[inject]` fields land in
-        // the struct and `authorize` can compute a fresh redirect URL +
-        // signed transaction without I/O.
         let svc = oauth_service(Duration::from_secs(60));
         let auth = svc.authorize().expect("authorize");
         assert!(
@@ -660,9 +596,6 @@ mod tests {
 
     #[test]
     fn grant_client_credentials_falls_back_to_the_full_grant_when_scope_blank() {
-        // Empty `scope` (or absent) grants the client's entire allowed set —
-        // pin the behaviour because the controller relies on it to support
-        // "scope omitted ⇒ everything I'm registered for".
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["admin"]);
         let token =

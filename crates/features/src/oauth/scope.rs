@@ -7,8 +7,6 @@ pub fn role_from_db(role: &str) -> Role {
     }
 }
 
-/// Empty/absent `requested` grants the client's full `allowed` set; an unknown
-/// scope yields `None` (rejected upstream as `invalid_scope`).
 pub fn roles_for_scope(requested: Option<&str>, allowed: &[String]) -> Option<Vec<Role>> {
     let granted: Vec<&str> = match requested {
         Some(raw) if !raw.trim().is_empty() => {
@@ -54,7 +52,6 @@ mod tests {
 
     #[test]
     fn role_from_db_falls_back_to_user_for_unknown() {
-        // Defence in depth: an unrecognised role string never gets escalated to admin.
         assert!(matches!(role_from_db("superuser"), Role::User));
         assert!(matches!(role_from_db(""), Role::User));
     }

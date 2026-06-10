@@ -34,6 +34,15 @@ Three categories, Rust's standard model plus the app e2e:
 | `crates/nest-rs-testing/tests/*.rs` | Cross-crate framework wiring | tailored |
 | `apps/<app>/tests/e2e.rs` | The app's real top-level module | ✓ real |
 
+## Install
+
+```bash frame="terminal"
+cargo add --dev nest-rs-testing
+```
+
+A dev-dependency — the harness only compiles under `cargo test`, never into
+your release binary.
+
 ## Picking the right tool
 
 The three categories are the *where*. The *which* depends on the risk

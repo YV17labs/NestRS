@@ -18,6 +18,12 @@ naming the offending job.
 wraps it for cron expression parsing (5/6/7-field), with `chrono` /
 [`chrono-tz`](https://docs.rs/chrono-tz) for the optional IANA timezone.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs-schedule
+```
+
 ## A first scheduled method
 
 A regular `#[injectable]` service with one decorated method. The `#[scheduled]`

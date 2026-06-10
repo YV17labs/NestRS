@@ -18,6 +18,12 @@ a `Retry-After` header.
 guard runs before routing, so the route's `#[meta(Throttle)]` is not yet
 attached.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs-throttler
+```
+
 ## Mount the throttler
 
 ```rust title="apps/api/src/module.rs"

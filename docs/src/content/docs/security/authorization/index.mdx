@@ -20,6 +20,12 @@ The engine is CASL-style — grants, conditional rules, fields — but
 backed by one shared `Predicate` AST so the SQL filter and the
 in-memory check can never disagree row by row.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs-authz
+```
+
 ## One factory, one ability per request
 
 `AbilityFactory` is a tiny trait you implement once. The framework

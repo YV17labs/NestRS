@@ -23,6 +23,12 @@ the `QueueWorker` transport, and the `QueueModule` / `QueueWorkerModule`
 activation seams. An app depends on both: `nest-rs-queue` for the macro
 and abstractions, `nest-rs-redis` for the Redis-bound types.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs-queue nest-rs-redis
+```
+
 ## A first queue handler
 
 A regular `#[injectable]` service with one decorated method. The

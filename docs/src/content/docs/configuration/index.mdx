@@ -18,6 +18,12 @@ cascade the framework merges before any `from_env` runs. No TOML loader,
 no YAML, no remote source baked in — but a [`ConfigSource`](/configuration/sources/)
 trait lets you ship one when you need Vault, K8s, or AWS Parameter Store.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs-config
+```
+
 ## A typed config — by example
 
 This is the real `IssuerConfig` from `features/oauth` (signs the OAuth

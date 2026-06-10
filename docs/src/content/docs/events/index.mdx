@@ -16,6 +16,12 @@ on that type, runs them in registration order, and returns once they all
 complete. There is no broker, no retries — for cross-process or durable
 work, push a job on the [Queue](/queue/) instead.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs-events
+```
+
 ## A first listener
 
 A regular `#[injectable]` service with one decorated method. The

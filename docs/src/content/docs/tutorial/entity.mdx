@@ -26,11 +26,19 @@ same folder so the tutorial can extend it in place.
   - service.rs
 </FileTree>
 
-The `posts` module ships under the workspace's `features` crate; make
-sure that crate already lists `nest-rs-resource`, `nest-rs-seaorm`,
-`sea-orm`, `serde`, `uuid`, and `validator` as dependencies (the
-reference one does — copy its `Cargo.toml` if you started from a
-scratch crate).
+The `posts` module ships under the workspace's `features` crate. Add the
+dependencies the entity reaches for to `crates/features/Cargo.toml` —
+each rides the version pinned in the workspace root:
+
+```toml title="crates/features/Cargo.toml"
+[dependencies]
+nest-rs-resource.workspace = true
+nest-rs-seaorm.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+uuid.workspace = true
+validator.workspace = true
+```
 
 ## The first cut
 

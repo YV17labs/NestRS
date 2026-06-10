@@ -1,0 +1,161 @@
+---
+title: Lifecycle
+description: Hook into the moments an app comes alive and winds down — #[hooks] tags async methods for the init and shutdown phases the framework drains in order.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A binary has a beginning and an end. Between the container being built
+and the first request served, providers may need to warm a cache, open
+a long-lived connection, or check a migration ran. When the process
+receives a signal, those same providers want a chance to flush, drain,
+or report before the runtime tears down. The lifecycle hooks are where
+that work hangs.
+
+A provider opts in by tagging methods on an `impl` block with
+`#[hooks]`. Each tagged method names exactly one phase. The framework
+collects every hook at link time and drains them phase by phase — init
+phases after wiring and before serving, shutdown phases after the
+transports stop.
+
+```rust
+use nest_rs_core::{hooks, injectable};
+
+#[injectable]
+#[derive(Default)]
+pub struct BlogService;
+
+#[hooks]
+impl BlogService {
+    #[on_application_bootstrap]
+    async fn warm(&self) -> anyhow::Result<()> {
+        tracing::info!(target: "blog", "cache warmed");
+        Ok(())
+    }
+
+    #[on_application_shutdown]
+    async fn flush(&self) {
+        tracing::info!(target: "blog", "buffers flushed");
+    }
+}
+```
+
+The `#[hooks]` block is separate from the one `#[injectable]` decorates
+— a provider keeps its primary `impl` for methods, and adds a second,
+hook-only `impl` the macro scans. The phase attributes
+(`#[on_application_bootstrap]`, …) need no import; `#[hooks]` consumes
+them.
+
+## The five phases
+
+Two run on the way up, three on the way down. They drain in this fixed
+order:
+
+| Phase | Attribute | When |
+|-------|-----------|------|
+| **Module init** | `#[on_module_init]` | After the container is built and transports configured, before serving. |
+| **Application bootstrap** | `#[on_application_bootstrap]` | After every module-init hook has run, still before serving. |
+| **Module destroy** | `#[on_module_destroy]` | After the transports stop. |
+| **Before shutdown** | `#[before_application_shutdown]` | After every module-destroy hook has run. |
+| **Application shutdown** | `#[on_application_shutdown]` | Last — after every before-shutdown hook has run. |
+
+The container is flat, so the init pair isn't about per-module
+resolution order the way a tree-shaped framework would split them —
+both run against the assembled container. The two names exist so you
+can express "everyone's `on_module_init` finishes before anyone's
+`on_application_bootstrap` starts": late hooks see the side effects of
+early ones. The three shutdown phases give the same staged unwind in
+reverse-intent order.
+
+## Method shape
+
+A hook method is **`async fn`** and takes `&self`. Its return is either:
+
+- **nothing** — the hook is infallible (`async fn flush(&self)`), or
+- **`Result<(), E>`** where `E: Into<anyhow::Error>` — the hook can
+  fail, and the framework folds the error into the phase outcome.
+
+```rust
+#[on_module_init]
+async fn check(&self) -> Result<(), MyError> { /* ... */ Ok(()) }   // fallible
+
+#[on_module_destroy]
+async fn drain(&self) { /* ... */ }                                  // infallible
+```
+
+A hook that needs another provider **injects it** — there is no
+attribute to declare "run after `OtherService`'s hook." Cross-provider
+init dependencies are expressed through the DI graph, not the lifecycle
+registry.
+
+## Ordering and failure
+
+Within a phase, hooks run **sequentially** in `(provider, method)` name
+order — stable across builds, never parallel. The two halves of the
+lifecycle treat failure differently, and deliberately:
+
+- **Init is strict.** `on_module_init` then `on_application_bootstrap`
+  run one hook at a time; the **first error aborts boot** with a
+  message naming the provider, method, and phase. Nothing is listening
+  yet, so a failed warm-up never leaves a half-started server accepting
+  traffic.
+- **Shutdown is best-effort.** The three teardown phases run every hook
+  even if one fails — a failure is logged at `error` on the
+  `nest_rs::lifecycle` target and the next hook still runs, so one
+  provider's botched cleanup can't skip another's.
+
+```text frame="terminal"
+Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migrations
+```
+
+## Where it sits in the run
+
+`App::run` walks a fixed sequence. The hooks bracket the serving window:
+
+```
+build container
+→ attach + configure transports
+→ on_module_init            ┐ strict — first error aborts boot
+→ on_application_bootstrap  ┘
+→ serve (until SIGINT / SIGTERM, or a transport errors)
+→ on_module_destroy            ┐
+→ before_application_shutdown  │ best-effort — every hook runs, errors logged
+→ on_application_shutdown      ┘
+```
+
+Shutdown is triggered by `SIGINT` / `SIGTERM` (a shared cancellation
+token cancels every transport), or by the first transport that errors —
+which cancels the rest, then runs the teardown phases.
+
+<Aside type="tip">
+A test harness can drive the init phases without serving: `App::init()`
+runs `on_module_init` then `on_application_bootstrap` against the built
+container, so an e2e test exercises the same startup the server
+performs.
+</Aside>
+
+## Common things a hook does
+
+- **Init** — warm a cache, verify migrations applied, register with a
+  service discovery backend, prime a connection pool, assert an
+  external dependency is reachable (fail boot if not).
+- **Shutdown** — flush a buffer, drain in-flight work, deregister from
+  discovery, emit a final metric or report.
+
+The `UsersService` in the Publish workspace uses
+`#[on_application_shutdown]` to log how many users exist at teardown —
+a one-method `#[hooks]` block beside the service's main `impl`.
+
+## Going further
+
+- [Providers](/fundamentals/providers/) — the things that own hooks;
+  built once, shared as `Arc<T>`.
+- [Modules](/fundamentals/modules/) — the composition tree the hooks
+  drain across.
+- [Interceptors](/fundamentals/interceptors/) — per-request wrapping, the
+  other side of "code that runs around your handler" (lifecycle is
+  per-process, interceptors are per-request).
+- [Testing / e2e](/testing/e2e/) — booting the real `AppModule`, where
+  `App::init()` drives the init phases.

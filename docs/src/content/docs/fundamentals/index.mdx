@@ -29,12 +29,15 @@ from that inline root to a composed API with a `post/` feature. The
 snippets are illustrative; the same names appear on
 [Modules](/fundamentals/modules/) and [Providers](/fundamentals/providers/).
 
-This category walks the seven primitives every binary leans on:
+This category walks the primitives every binary leans on:
 
 - **Modules** — the composition unit. `#[module]` declares what a module
   owns and what it depends on.
 - **Providers** — the things modules own. Anything `#[injectable]`
   (services, controllers, …) is built once and shared as `Arc<T>`.
+- **Lifecycle** — the moments an app comes alive and winds down.
+  `#[hooks]` tags async methods for the init and shutdown phases the
+  framework drains in order. See [Lifecycle](/fundamentals/lifecycle/).
 - **Guards** — decide *who* gets through. `Guard::check(&mut Request)`
   short-circuits the chain with a `Response` or attaches request-scoped
   context the handler reads back via `Ctx<T>`.
@@ -181,6 +184,7 @@ and a tested example.
 Fundamentals/
   ├─ Modules
   ├─ Providers
+  ├─ Lifecycle
   ├─ Guards
   ├─ Pipes
   ├─ Interceptors

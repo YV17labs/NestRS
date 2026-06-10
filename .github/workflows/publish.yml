@@ -15,9 +15,11 @@
 # didn't match"). Dev-deps are never published, so dropping the version is free.
 # See rust-lang/cargo#4242 / #16450.
 #
-# Required repo secret: `CRATES_IO_TOKEN` (Settings → Secrets → Actions).
-# Generate the token at https://crates.io/me with scope `publish-new` +
-# `publish-update`, scoped to the `nest-rs-*` package prefix.
+# Required secret: `CARGO_REGISTRY_TOKEN`, stored on the `crates-io`
+# environment (Settings → Environments → crates-io → Environment secrets).
+# The job declares `environment: crates-io` so the secret is in scope. Generate
+# the token at https://crates.io/me with scope `publish-new` + `publish-update`,
+# scoped to the `nest-rs-*` package prefix.
 
 name: Publish — crates.io
 
@@ -37,6 +39,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    environment: crates-io
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -77,5 +80,5 @@ jobs:
 
       - name: cargo publish --workspace
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --workspace

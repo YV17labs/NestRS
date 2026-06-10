@@ -147,6 +147,8 @@ fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names) {
     let r = Renderer::new(names);
     queue_env_files(s, base, names, "nestrs workspace", shared::ENV_WORKSPACE);
     s.create_if_missing(base.join("Justfile"), r.render(workspace::JUSTFILE));
+    s.create_if_missing(base.join("test.just"), r.render(workspace::TEST_JUSTFILE));
+    s.create_if_missing(base.join("db.just"), r.render(shared::DB_JUSTFILE));
     s.create_if_missing(base.join(".gitignore"), r.render(shared::GITIGNORE));
     s.create_if_missing(base.join(".dockerignore"), r.render(shared::DOCKERIGNORE));
 }
@@ -157,7 +159,7 @@ fn print_root_next_steps(root: &Path) {
     println!();
     println!("Next steps:");
     println!("  cd {}", root.display());
-    println!("  just dev hello");
+    println!("  nestrs run dev hello");
     println!("  Open http://localhost:3000/ in your browser");
     println!();
     println!("Add another app:  nestrs new <name>");
@@ -169,6 +171,6 @@ fn print_app_next_steps(ws: &NestrsWorkspace, names: &Names, port: u16) {
     println!();
     println!("Next steps:");
     println!("  cd {}", ws.root.display());
-    println!("  just dev {}", names.kebab);
+    println!("  nestrs run dev {}", names.kebab);
     println!("  Open http://localhost:{port}/ in your browser");
 }

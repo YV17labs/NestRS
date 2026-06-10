@@ -29,6 +29,8 @@ pub fn scaffold(
     s.create(root.join(".gitignore"), r.render(shared::GITIGNORE));
     s.create(root.join(".dockerignore"), r.render(shared::DOCKERIGNORE));
     s.create(root.join("Justfile"), r.render(standalone::JUSTFILE));
+    s.create(root.join("test.just"), r.render(standalone::TEST_JUSTFILE));
+    s.create(root.join("db.just"), r.render(shared::DB_JUSTFILE));
     s.create(root.join("README.md"), r.render(standalone::README));
     s.create(root.join("Dockerfile"), r.render(standalone::DOCKERFILE));
     queue_env_files(&mut s, &root, names, &names.kebab, shared::ENV);
@@ -77,7 +79,7 @@ fn print_next_steps(root: &Path) {
     println!();
     println!("Next steps:");
     println!("  cd {}", root.display());
-    println!("  just dev");
+    println!("  nestrs run dev");
     println!("  Open http://localhost:3000/ in your browser");
     println!();
 }

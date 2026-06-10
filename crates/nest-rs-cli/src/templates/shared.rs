@@ -4,6 +4,41 @@ pub const RUST_TOOLCHAIN: &str = r#"[toolchain]
 channel = "1.95"
 "#;
 
+/// `db.just` — shipped in every project so the database verbs are present from
+/// day one, whether or not the project has a database yet. Recipes follow the
+/// nestrs convention: a `migrations` crate (the `migrate` bin) and a `seed` crate.
+/// They start working once you add those — see the database docs.
+pub const DB_JUSTFILE: &str = r#"# Database lifecycle, exposed as `nestrs run db <verb>` (see `mod db` in the
+# Justfile). Recipes assume the nestrs `migrations` + `seed` crates.
+
+# Bare `nestrs run db` lists these instead of running the first recipe.
+_default:
+    @just --list db
+
+# Apply all pending migrations.
+up:
+    cargo run -p migrations --bin migrate -- up
+
+# Roll back the last applied migration.
+down:
+    cargo run -p migrations --bin migrate -- down
+
+# Drop every table and re-apply all migrations from scratch.
+fresh:
+    cargo run -p migrations --bin migrate -- fresh
+
+# Show which migrations are applied vs. pending.
+status:
+    cargo run -p migrations --bin migrate -- status
+
+# Seed demo data (idempotent).
+seed:
+    cargo run -p seed --bin seed
+
+# Clean slate: drop, re-migrate, then reseed.
+reset: fresh seed
+"#;
+
 pub const GITIGNORE: &str = r#"/target
 **/*.rs.bk
 

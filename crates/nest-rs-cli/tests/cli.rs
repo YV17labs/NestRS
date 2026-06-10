@@ -90,6 +90,18 @@ fn new_standalone_hello_template() {
     let justfile = fs::read_to_string(app.join("Justfile")).unwrap();
     assert!(justfile.contains("build:"));
     assert!(justfile.contains("cargo build --release"));
+    assert!(justfile.contains("mod test"));
+    assert!(justfile.contains("mod db"));
+    assert!(app.join("test.just").is_file());
+    let test_just = fs::read_to_string(app.join("test.just")).unwrap();
+    assert!(test_just.contains("unit:"));
+    assert!(test_just.contains("e2e:"));
+    assert!(test_just.contains("doc:"));
+    assert!(test_just.contains("cargo test --doc"));
+    assert!(app.join("db.just").is_file());
+    let db_just = fs::read_to_string(app.join("db.just")).unwrap();
+    assert!(db_just.contains("up:"));
+    assert!(db_just.contains("reset: fresh seed"));
 }
 
 #[test]
@@ -120,8 +132,19 @@ fn new_workspace_greenfield() {
     assert!(root.join("Justfile").is_file());
     let justfile = fs::read_to_string(root.join("Justfile")).unwrap();
     assert!(justfile.contains("dev app=\"hello\""));
-    assert!(justfile.contains("build-all:"));
-    assert!(justfile.contains("cargo build --workspace --release"));
+    // `build --all` is a conditional on the single `build` recipe, not a separate recipe.
+    assert!(!justfile.contains("build-all"));
+    assert!(justfile.contains(r#"if app == "--all""#));
+    assert!(justfile.contains("mod test"));
+    assert!(justfile.contains("mod db"));
+
+    let test_just = fs::read_to_string(root.join("test.just")).unwrap();
+    assert!(test_just.contains("unit:"));
+    assert!(test_just.contains("e2e:"));
+    assert!(test_just.contains("cargo test --workspace --doc"));
+    let db_just = fs::read_to_string(root.join("db.just")).unwrap();
+    assert!(db_just.contains("up:"));
+    assert!(db_just.contains("reset: fresh seed"));
 
     let module = fs::read_to_string(root.join("apps/hello/src/module.rs")).unwrap();
     assert!(module.contains("HelloHttpModule"));
@@ -407,6 +430,36 @@ fn about_prints_metadata_block() {
     assert!(stdout.contains("Version:"));
     assert!(stdout.contains("Tagline:"));
     assert!(stdout.contains("Yoann Vanitou"));
+}
+
+#[test]
+fn run_subcommand_is_listed_in_help() {
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .arg("--help")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("run"));
+}
+
+#[test]
+fn run_without_toolchain_and_no_bootstrap_errors_clearly() {
+    // Hide just/bacon/cargo from the child so the toolchain probe finds nothing,
+    // then assert the bootstrap-disabled path reports a manual-install hint
+    // instead of silently installing or panicking.
+    let empty = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["run", "--no-bootstrap", "dev"])
+        .env("PATH", empty.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("just"), "stderr: {stderr}");
+    assert!(stderr.contains("cargo install"), "stderr: {stderr}");
 }
 
 #[test]

@@ -1,7 +1,7 @@
-# Database lifecycle recipes, exposed as `just db <verb>` (see `mod db` in the
-# root Justfile). Verbs mirror SeaORM's migrate subcommands; all read DATABASE_URL.
+# Database lifecycle recipes, exposed as `nestrs run db <verb>` (see `mod db` in
+# the root Justfile). Verbs mirror SeaORM's migrate subcommands; all read DATABASE_URL.
 
-# Bare `just db` lists these instead of running the first recipe.
+# Bare `nestrs run db` lists these instead of running the first recipe.
 _default:
     @just --list db
 

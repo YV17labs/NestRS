@@ -193,10 +193,7 @@ mod tests {
             "nest-rs-cli = \"0.1.0\"    # Scaffolding CLI for nestrs.\n",
             "note: to learn more about a package, run `cargo info <name>`\n"
         );
-        assert_eq!(
-            parse_cargo_search_version(stdout).as_deref(),
-            Some("0.1.0")
-        );
+        assert_eq!(parse_cargo_search_version(stdout).as_deref(), Some("0.1.0"));
     }
 
     #[test]

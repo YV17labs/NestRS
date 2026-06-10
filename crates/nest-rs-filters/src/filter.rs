@@ -43,8 +43,9 @@ pub trait Filter: Layer {
     /// without implementing this would silently let errors through.
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
 
-    /// GraphQL entry. Called once per error a resolver raises; the
-    /// returned [`GraphqlError`] replaces the original. Default returns
+    /// GraphQL per-resolver entry — a reserved seam, **not wired** today
+    /// (no macro or dispatcher calls it; a global filter still covers the
+    /// `/graphql` POST as a whole via its HTTP entry). Default returns
     /// `error` unchanged (no-op).
     async fn filter_graphql<'a>(
         &self,
@@ -54,9 +55,9 @@ pub trait Filter: Layer {
         error
     }
 
-    /// WS entry. Called once per error a message handler raises; the
-    /// returned message replaces the original error frame body. Default
-    /// returns `error` unchanged (no-op).
+    /// WS per-message entry — a reserved seam, **not wired** today (no
+    /// macro or dispatcher calls it). Default returns `error` unchanged
+    /// (no-op).
     async fn filter_ws(&self, _client: &WsClient, _event: &str, error: String) -> String {
         error
     }
@@ -104,7 +105,14 @@ where
         let snapshot = RequestSnapshot::from_req(&req);
         match self.inner.call(req).await {
             Ok(out) => Ok(out.into_response()),
-            Err(err) => Ok(self.filter.filter(&snapshot, err).await),
+            Err(err) => {
+                let mut resp = self.filter.filter(&snapshot, err).await;
+                // The handler failed; this response only shapes the client
+                // answer. Tag it so the ambient transaction rolls back even
+                // when the mapped status reads as success.
+                resp.extensions_mut().insert(nest_rs_core::MappedError);
+                Ok(resp)
+            }
         }
     }
 }

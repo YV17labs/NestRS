@@ -22,6 +22,12 @@ pub enum ServiceError {
     Validation(#[from] ValidationErrors),
     #[error("database error")]
     Db(#[from] DbErr),
+    /// Response masking could not reconcile a loaded row into its wire DTO.
+    /// Fail closed (500) rather than leak an unmasked row — the detail stays
+    /// for `tracing`, never the wire. Carries a `String` (not the source
+    /// `serde_json::Error`) so the enum stays `Clone` for dataloader plumbing.
+    #[error("response masking failed")]
+    Masking(String),
 }
 
 #[cfg(feature = "http")]
@@ -35,7 +41,7 @@ mod http {
         fn status(&self) -> StatusCode {
             match self {
                 ServiceError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
-                ServiceError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ServiceError::Db(_) | ServiceError::Masking(_) => StatusCode::INTERNAL_SERVER_ERROR,
             }
         }
     }

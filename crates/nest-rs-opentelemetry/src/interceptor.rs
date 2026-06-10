@@ -17,9 +17,9 @@ use {
     tracing_opentelemetry::OpenTelemetrySpanExt,
 };
 
+use crate::access_log::parse_access_log_flag;
 #[cfg(feature = "otlp")]
 use crate::access_log::{AccessLog, AccessLogBody};
-use crate::access_log::parse_access_log_flag;
 
 /// Per-request HTTP observation.
 ///

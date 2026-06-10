@@ -79,8 +79,8 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // System dedup via `__nestrs_controller_guard_specs()`; the wrap below
     // simply boxes the endpoint without adding a guard, so we'd otherwise drop
     // the helper entirely. We keep the box for type stability across handlers.
-    let interceptor_layers = controller_interceptor_layers(&interceptors);
-    let filter_layers = controller_filter_layers(&filters);
+    let interceptor_specs = controller_interceptor_specs(&interceptors);
+    let filter_specs = controller_filter_specs(&filters);
     let guard_specs = controller_guard_specs(&guards);
     let pipe_specs = controller_pipe_specs(&pipes);
     let exception_filter_specs = controller_exception_filter_specs(&exception_filters);
@@ -99,18 +99,24 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
                 #injected_keys
             }
 
+            /// Controller-level `#[use_interceptors(...)]`, exposed for the
+            /// `#[routes]` macro to compose into each route's interceptor pool
+            /// (`wrap_route_interceptors`). Empty when none are declared.
             #[doc(hidden)]
-            pub fn __nestrs_controller_layers<__E>(
-                __container: &::nest_rs_core::Container,
-                __ep: __E,
-            ) -> ::poem::endpoint::BoxEndpoint<'static, ::poem::Response>
-            where
-                __E: ::poem::Endpoint + 'static,
+            pub fn __nestrs_controller_interceptor_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedInterceptorSpec>
             {
-                let __ep = ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(__ep));
-                #(#interceptor_layers)*
-                #(#filter_layers)*
-                __ep
+                #interceptor_specs
+            }
+
+            /// Controller-level `#[use_filters(...)]`, exposed for the
+            /// `#[routes]` macro to compose into each route's filter pool
+            /// (`wrap_route_filters`). Empty when none are declared.
+            #[doc(hidden)]
+            pub fn __nestrs_controller_filter_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedFilterSpec>
+            {
+                #filter_specs
             }
 
             /// Controller-level `#[use_guards(...)]`, exposed for the
@@ -176,88 +182,43 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitS
     Ok((path, version))
 }
 
-/// Controller-level `#[use_interceptors(...)]` wrap statements. Each layer
-/// is boxed to `BoxEndpoint`; reversed so the first-listed entry ends up
-/// outermost. The wrap is skipped when the same interceptor is also
-/// declared globally — the transport-level wrap from
-/// `use_interceptors_global` already runs it, and the per-route shaper
-/// matches the dedup semantics of guards / pipes / exception filters.
-fn controller_interceptor_layers(paths: &[Path]) -> Vec<TokenStream2> {
-    paths
-        .iter()
-        .rev()
-        .map(|p| {
-            quote! {
-                let __ep = {
-                    let __type_id = ::core::any::TypeId::of::<#p>();
-                    let __is_global = ::nest_rs_core::Container::get::<
-                        ::nest_rs_interceptors::InterceptorSpecs,
-                    >(__container)
-                        .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
-                    if __is_global {
-                        ::tracing::warn!(
-                            target: "nest_rs::layers",
-                            layer = ::core::any::type_name::<#p>(),
-                            scope = "controller",
-                            "interceptor declared at multiple scopes — broadest (global) wins, this scope skipped",
-                        );
-                        __ep
-                    } else {
-                        ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
-                            ::nest_rs_interceptors::InterceptorExt::interceptor(
-                                __ep,
-                                ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
-                                    "#[use_interceptors] controller layer `",
-                                    stringify!(#p),
-                                    "` is not registered — add it to a module's providers"
-                                )),
-                            ),
-                        ))
-                    }
-                };
+/// Controller-level `#[use_interceptors(...)]` → `Vec<ScopedInterceptorSpec>`
+/// so `#[routes]` composes each interceptor into the per-route pool
+/// (`wrap_route_interceptors`), deduped by `TypeId` against global + method.
+fn controller_interceptor_specs(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec::Vec::new() };
+    }
+    let entries = paths.iter().map(|p| {
+        quote! {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor>),
             }
-        })
-        .collect()
+        }
+    });
+    quote! { ::std::vec![#(#entries),*] }
 }
 
-/// Controller-level `#[use_filters(...)]` wrap statements. Same dedup
-/// pattern against `FilterSpecs` (Global) as `controller_interceptor_layers`.
-fn controller_filter_layers(paths: &[Path]) -> Vec<TokenStream2> {
-    paths
-        .iter()
-        .rev()
-        .map(|p| {
-            quote! {
-                let __ep = {
-                    let __type_id = ::core::any::TypeId::of::<#p>();
-                    let __is_global = ::nest_rs_core::Container::get::<
-                        ::nest_rs_filters::FilterSpecs,
-                    >(__container)
-                        .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
-                    if __is_global {
-                        ::tracing::warn!(
-                            target: "nest_rs::layers",
-                            layer = ::core::any::type_name::<#p>(),
-                            scope = "controller",
-                            "filter declared at multiple scopes — broadest (global) wins, this scope skipped",
-                        );
-                        __ep
-                    } else {
-                        ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
-                            ::nest_rs_filters::FilterExt::filter(
-                                __ep,
-                                ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
-                                    "#[use_filters] controller layer `",
-                                    stringify!(#p),
-                                    "` is not registered — add it to a module's providers"
-                                )),
-                            ),
-                        ))
-                    }
-                };
+/// Controller-level `#[use_filters(...)]` → `Vec<ScopedFilterSpec>`. Same
+/// dedup path as `controller_interceptor_specs`.
+fn controller_filter_specs(paths: &[Path]) -> TokenStream2 {
+    if paths.is_empty() {
+        return quote! { ::std::vec::Vec::new() };
+    }
+    let entries = paths.iter().map(|p| {
+        quote! {
+            ::nest_rs_guards::dispatch::ScopedLayerSpec {
+                type_id: ::core::any::TypeId::of::<#p>(),
+                name: ::core::any::type_name::<#p>(),
+                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_filters::Filter>),
             }
-        })
-        .collect()
+        }
+    });
+    quote! { ::std::vec![#(#entries),*] }
 }
 
 /// Controller-level `#[use_guards(...)]` → `Vec<ScopedGuardSpec>` so `#[routes]`

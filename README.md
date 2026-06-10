@@ -39,7 +39,7 @@ brings up Rust, Postgres and Redis in one step.
    [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
    extension.
 2. Open the repo in VS Code and accept **Reopen in Container**.
-3. `just dev publish-api` — the main Publish API on `http://localhost:3002` (run `just db up` first).
+3. `just dev api` — the main Publish API on `http://localhost:3002` (run `just db up` first).
 
 The container provisions the Rust toolchain and dev tooling (`just`, `bacon`,
 `cargo-nextest`, …), and brings up **Postgres** and **Redis** beside it with
@@ -55,11 +55,11 @@ A Cargo workspace with three kinds of member.
 ```
 nestrs/
 ├─ apps/               applications — one runnable binary each (the Publish workspace)
-│  ├─ publish-auth/   OAuth2 / JWT token issuer
-│  ├─ publish-api/    REST + GraphQL + OpenAPI, persisted & authorized
-│  ├─ publish-assistant/  Model Context Protocol server
-│  ├─ publish-live/   real-time WebSocket gateway
-│  └─ publish-worker/ background jobs & scheduling (headless)
+│  ├─ auth/   OAuth2 / JWT token issuer
+│  ├─ api/    REST + GraphQL + OpenAPI, persisted & authorized
+│  ├─ assistant/  Model Context Protocol server
+│  ├─ live/   real-time WebSocket gateway
+│  └─ worker/ background jobs & scheduling (headless)
 ├─ crates/
 │  ├─ features/        product features — port + adapters (users, posts, authn, …)
 │  ├─ migrations/      shared-database SeaORM migrations (CLI)
@@ -84,9 +84,9 @@ Run `just` with no arguments to list every recipe.
 
 | Command | What it does |
 |---------|--------------|
-| `just dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `just dev publish-api` |
-| `just run <app>` | Run an app in release mode, e.g. `just run publish-api` |
-| `just build <app>` | Build one app in release (default `publish-api`), e.g. `just build publish-live` |
+| `just dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `just dev api` |
+| `just run <app>` | Run an app in release mode, e.g. `just run api` |
+| `just build <app>` | Build one app in release (default `api`), e.g. `just build live` |
 | `just build-all` | Build release binaries for every app in the workspace |
 | `just test` | Run unit + integration tests (no DB) |
 | `just test-e2e` | Run e2e tests (Postgres required) |
@@ -97,7 +97,7 @@ Run `just` with no arguments to list every recipe.
 | `just db <verb>` | Manage the shared database: `up`, `down`, `fresh`, `status`, `seed`, `reset` |
 
 `build-all`, `test`, `test-cov`, `lint`, `fmt` and `check` operate on the
-whole workspace; `dev`, `run`, and `build` take an app name (default `publish-api`);
+whole workspace; `dev`, `run`, and `build` take an app name (default `api`);
 `just db` (run bare to list the verbs) manages the shared Postgres schema and seed data.
 
 ### The Publish workspace
@@ -108,17 +108,17 @@ Full map: [nestrs.dev/publish](https://nestrs.dev/publish/).
 
 | App | Kind | Port |
 |-----|------|------|
-| `publish-auth` | OAuth2 / JWT token issuer | 3001 |
-| `publish-api` | REST + GraphQL + OpenAPI, persisted & authorized | 3002 |
-| `publish-assistant` | Model Context Protocol server | 3003 |
-| `publish-live` | Real-time WebSocket gateway | 3004 |
-| `publish-worker` | Background jobs & scheduling (headless) | — |
+| `auth` | OAuth2 / JWT token issuer | 3001 |
+| `api` | REST + GraphQL + OpenAPI, persisted & authorized | 3002 |
+| `assistant` | Model Context Protocol server | 3003 |
+| `live` | Real-time WebSocket gateway | 3004 |
+| `worker` | Background jobs & scheduling (headless) | — |
 
-`publish-api` and `publish-auth` need Postgres; `publish-worker` needs Redis
+`api` and `auth` need Postgres; `worker` needs Redis
 — run `just db up` once first (or `just db reset` to also load demo users).
-`publish-assistant` and `publish-live` need neither.
+`assistant` and `live` need neither.
 
-The richest reference is `publish-api`. Read it before inventing a second
+The richest reference is `api`. Read it before inventing a second
 pattern — copy it to start a new feature; see [`CLAUDE.md`](CLAUDE.md) for the
 rules a contributor (human or LLM) is expected to follow.
 
@@ -130,8 +130,8 @@ workspace binary** into a single image. Which one runs is chosen at
 
 ```bash
 docker build -t nestrs .
-docker run --rm -p 3002:3002 nestrs                              # default `publish-api`
-docker run --rm -p 3001:3001 nestrs /usr/local/bin/publish-auth  # any other binary
+docker run --rm -p 3002:3002 nestrs                              # default `api`
+docker run --rm -p 3001:3001 nestrs /usr/local/bin/auth  # any other binary
 docker run --rm nestrs /usr/local/bin/migrate up                 # apply migrations
 ```
 

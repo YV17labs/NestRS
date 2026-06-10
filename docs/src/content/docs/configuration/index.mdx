@@ -21,7 +21,7 @@ trait lets you ship one when you need Vault, K8s, or AWS Parameter Store.
 ## A typed config — by example
 
 This is the real `IssuerConfig` from `features/oauth` (signs the OAuth
-clients accepted by `apps/publish-auth`):
+clients accepted by `apps/auth`):
 
 ```rust title="crates/features/src/oauth/config.rs"
 use nest_rs_config::{config, Config, ConfigError, ConfigService};
@@ -132,7 +132,7 @@ use super::service::OAuthFlow;
 pub struct OAuthModule;
 ```
 
-```rust title="apps/publish-auth/src/module.rs"
+```rust title="apps/auth/src/module.rs"
 use nest_rs_config::ConfigModule;
 
 #[module(
@@ -141,7 +141,7 @@ use nest_rs_config::ConfigModule;
         OAuthHttpModule,
     ],
 )]
-pub struct PublishAuthModule;
+pub struct AuthModule;
 ```
 
 - **`ConfigModule::for_root()`** goes first in the root module. It merges
@@ -179,7 +179,7 @@ impl OAuthFlow {
 
 ```bash frame="terminal"
 $ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","org_id":"...","scopes":["read"]}]' \
-  just dev publish-auth
+  just dev auth
 2026-06-03T10:42:11Z INFO nest_rs::config: loaded issuer (2 fields)
 2026-06-03T10:42:11Z INFO nest_rs::http: bound 5 routes on 0.0.0.0:3000
 ```
@@ -187,7 +187,7 @@ $ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","org_id":"..
 A bad value fails the boot before any port opens:
 
 ```bash frame="terminal"
-$ NESTRS_ISSUER__DEFAULT_ORG_ID=not-a-uuid just dev publish-auth
+$ NESTRS_ISSUER__DEFAULT_ORG_ID=not-a-uuid just dev auth
 Error: configuration parse error
   variable: NESTRS_ISSUER__DEFAULT_ORG_ID
   reason  : invalid character at 1: expected hyphen
@@ -196,7 +196,7 @@ Error: configuration parse error
 A failed validation runs after the load:
 
 ```bash frame="terminal"
-$ just dev publish-auth   # no clients configured
+$ just dev auth   # no clients configured
 Error: configuration validation failed for 'issuer'
   - clients: at_least_one_client
 ```

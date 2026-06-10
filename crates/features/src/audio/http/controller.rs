@@ -22,7 +22,7 @@ impl AudioController {
     #[api(
         summary = "Enqueue a transcode job for the worker to process",
         description = "Pushes a TranscodeJob onto the shared `audio` queue; the separate \
-                       publish-worker deployable consumes it over Redis (two apps exchanging, \
+                       worker deployable consumes it over Redis (two apps exchanging, \
                        no RPC). Requires a bearer JWT.",
         tags("Audio")
     )]

@@ -14,6 +14,13 @@ pub struct LoginInput {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TokenRequest {
+    pub grant_type: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

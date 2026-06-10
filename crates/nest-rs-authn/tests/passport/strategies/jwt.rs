@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use jsonwebtoken::get_current_timestamp;
-use nest_rs_authn::{AuthError, JwtOptions, JwtService, JwtStrategy, Outcome, Strategy};
+use nest_rs_authn::{AuthError, JwtOptions, JwtService, JwtStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -24,10 +24,8 @@ async fn authenticates_with_valid_bearer_token() {
         .expect("sign");
     let mut req = crate::common::request(&[("Authorization", &format!("Bearer {token}"))]);
 
-    match strategy.authenticate(&mut req).await.expect("authenticate") {
-        Outcome::Authenticated(claims) => assert_eq!(claims.sub, "alice"),
-        Outcome::Challenge(_) => panic!("expected authenticated principal"),
-    }
+    let claims = strategy.authenticate(&mut req).await.expect("authenticate");
+    assert_eq!(claims.sub, "alice");
 }
 
 #[tokio::test]

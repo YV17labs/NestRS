@@ -32,21 +32,21 @@ Three signal types ship in one crate, behind one import:
 
 ## Wiring it up
 
-```rust title="apps/publish-api/src/main.rs"
+```rust title="apps/api/src/main.rs"
 use anyhow::Result;
 use nest_rs_config::Environment;
 use nest_rs_core::App;
 use nest_rs_opentelemetry::OpenTelemetry;
 
-use publish_api::PublishApiModule;
+use api::ApiModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
-    let _opentelemetry = OpenTelemetry::init("publish-api")?;
+    let _opentelemetry = OpenTelemetry::init("api")?;
 
     App::builder()
-        .module::<PublishApiModule>()
+        .module::<ApiModule>()
         .build()
         .await?
         .run()
@@ -54,14 +54,14 @@ async fn main() -> Result<()> {
 }
 ```
 
-```rust title="apps/publish-api/src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         OpenTelemetryModule,
         ServerTimingModule,
     ],
 )]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
 Two pieces, one rule. `OpenTelemetry::init(name)?` installs the global
@@ -98,7 +98,7 @@ NESTRS_OPENTELEMETRY__SERVICE_VERSION=2026.06.0 \
 NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT=production \
 NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1 \
 RUST_LOG=info \
-  just run publish-api
+  just run api
 ```
 
 The exporter uses HTTP/protobuf via `reqwest` (no `tonic`, no `openssl`) — the
@@ -118,11 +118,11 @@ reqwest client is the right pick, the upstream-recommended pairing.
   `otlp` **without** `http` and stays free of the HTTP transport. Requires
   `otlp` — the interceptor reads the trace id off the OTel span.
 
-```toml title="apps/publish-worker/Cargo.toml"
+```toml title="apps/worker/Cargo.toml"
 nest-rs-opentelemetry.workspace = true
 ```
 
-```toml title="apps/publish-api/Cargo.toml"
+```toml title="apps/api/Cargo.toml"
 nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 ```
 
@@ -150,7 +150,7 @@ use nest_rs_testing::TestApp;
 #[tokio::test]
 async fn users_list_returns_a_page() {
     let app = TestApp::builder()
-        .module::<PublishApiModule>()
+        .module::<ApiModule>()
         .with_test_telemetry()
         .build()
         .await

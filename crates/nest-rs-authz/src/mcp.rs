@@ -14,7 +14,7 @@ use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::{Ability, ActionMarker, current_ability, with_ability};
+use crate::{Ability, ActionMarker, with_ability};
 
 /// Runs `A` then `G` on each MCP HTTP request and scopes the handler to the
 /// resulting ability when present. Inject it as `dyn McpOperationGuard`.
@@ -73,12 +73,5 @@ where
     E::Model: Serialize,
     O: DeserializeOwned,
 {
-    let masked = match current_ability() {
-        Some(ability) => ability.mask::<E>(A::ACTION, model),
-        // Fail closed: an MCP path with no ambient ability must not leak a
-        // fully-populated row. Round-trip through an empty object so only
-        // public (unrestricted) fields survive deserialization into `O`.
-        None => serde_json::Value::Object(Default::default()),
-    };
-    serde_json::from_value(masked)
+    crate::masked_output_ambient::<A, E, O>(model)
 }

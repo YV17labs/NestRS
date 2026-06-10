@@ -1,9 +1,8 @@
 //! Per-handler / per-controller interceptor binding + guard-before-interceptor
 //! ordering, end-to-end through the HTTP harness. Also pins the cross-scope
-//! TypeId dedup: an interceptor declared globally is run by the transport-
-//! level [`HttpEndpointWrap`] wrap; a redeclaration at controller or
-//! method scope is skipped at mount time, so the interceptor still executes
-//! exactly once.
+//! TypeId dedup: an interceptor declared at any combination of global /
+//! controller / method scopes is composed through `compose_chain` by the
+//! per-route pool and executes exactly once.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -210,10 +209,9 @@ async fn same_interceptor_global_and_controller_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Declared globally AND redeclared on the controller. The controller-
-    // scope wrap is skipped at mount time when the TypeId is already
-    // seeded as Global — the transport-level `HttpEndpointWrap` wrap
-    // from `use_interceptors_global` carries the single execution.
+    // Declared globally AND redeclared on the controller. The per-route pool
+    // composes global + controller and dedups by TypeId — broadest (global)
+    // wins, so the interceptor runs once.
     let app = TestApp::builder()
         .module::<DedupModule>()
         .use_interceptors_global([interceptor::<CounterInterceptor>()])
@@ -235,9 +233,8 @@ async fn same_interceptor_global_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Same shape as the controller case — the method-scope wrap is
-    // skipped at mount time because the TypeId is already seeded as
-    // Global.
+    // Same shape as the controller case — global + method compose and dedup
+    // to a single execution (broadest scope wins).
     let app = TestApp::builder()
         .module::<DedupModule>()
         .use_interceptors_global([interceptor::<CounterInterceptor>()])
@@ -255,24 +252,44 @@ async fn same_interceptor_global_and_method_runs_once() {
 }
 
 #[tokio::test]
-async fn same_interceptor_controller_and_method_without_global_executes_twice() {
+async fn same_interceptor_controller_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // With no Global seeding, the controller and method wraps each
-    // execute the interceptor — the HTTP per-scope dedup is wired
-    // against `InterceptorSpecs` (Global) only, mirroring the v5
-    // contract for `Interceptor` / `Filter` (the unified pipe /
-    // exception-filter chain dedups across all three scopes via
-    // `compose_chain`, but those two go through dedicated per-scope
-    // wraps and only skip when a Global declaration matches).
+    // Controller and method both declare `CounterInterceptor`. The per-route
+    // pool composer (`wrap_route_interceptors`) runs every layer kind through
+    // the same `compose_chain` dedup as guards / pipes — broadest scope wins —
+    // so the interceptor executes exactly once, no Global declaration needed.
     let app = TestApp::for_module::<DedupModule>().await.expect("boots");
 
     let resp = app.http().get("/dup-ctrl-method/echo").send().await;
     resp.assert_status_is_ok();
     assert_eq!(
         counter(),
-        2,
-        "controller + method without Global currently run both wraps",
+        1,
+        "controller + method declaration dedups to a single execution",
+    );
+}
+
+#[tokio::test]
+async fn same_interceptor_at_all_three_scopes_runs_once() {
+    let _gate = GATE.lock().await;
+    reset_counter();
+
+    // Global + controller + method — the broadest (global) wins and executes
+    // at the transport edge; both narrower redeclarations are dropped.
+    let app = TestApp::builder()
+        .module::<DedupModule>()
+        .use_interceptors_global([interceptor::<CounterInterceptor>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/dup-ctrl-method/echo").send().await;
+    resp.assert_status_is_ok();
+    assert_eq!(
+        counter(),
+        1,
+        "global + controller + method declaration still executes exactly once",
     );
 }

@@ -12,8 +12,8 @@ use syn::{
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, forwarded_arg_idents, forwarded_idents,
-    from_container_method, impl_self_ident, injected_keys_with_layers,
-    injected_method_with_layers, layer_inject_keys,
+    from_container_method, impl_self_ident, injected_keys_with_layers, injected_method_with_layers,
+    layer_inject_keys,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {

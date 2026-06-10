@@ -125,12 +125,29 @@ impl DupGlobalMethod {
     }
 }
 
+#[controller(path = "/dup-ctrl-method")]
+#[use_exception_filters(DomainErrorFilter)]
+struct DupCtrlMethod;
+
+#[routes]
+impl DupCtrlMethod {
+    #[get("/domain")]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn fail_domain_ctrl_method(&self) -> poem::Result<&'static str> {
+        Err(poem::Error::new(
+            DomainError("dup".into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    }
+}
+
 #[module(providers = [
     DomainErrorFilter,
     GlobalScope,
     ControllerScope,
     MethodScope,
     DupGlobalMethod,
+    DupCtrlMethod,
 ])]
 struct ExceptionFiltersModule;
 
@@ -216,5 +233,29 @@ async fn same_filter_global_and_method_runs_once() {
         catches(),
         1,
         "TypeId dedup: global + method redeclaration must still catch once",
+    );
+}
+
+#[tokio::test]
+async fn same_filter_at_all_three_scopes_catches_once() {
+    let _gate = GATE.lock().await;
+    reset_counter();
+
+    // Global + controller + method — every scope of the exception-filter
+    // pool executes at the route site (typed catches sit closest to the
+    // handler); the dedup still collapses the three declarations to one.
+    let app = TestApp::builder()
+        .module::<ExceptionFiltersModule>()
+        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/dup-ctrl-method/domain").send().await;
+    resp.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        catches(),
+        1,
+        "global + controller + method declaration still catches exactly once",
     );
 }

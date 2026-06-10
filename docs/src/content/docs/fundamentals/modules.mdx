@@ -119,7 +119,7 @@ Splitting keeps transport **opt-in per binary**:
 
 `BlogModule` lists `PostHttpModule`, not `PostModule`. The adapter
 already imports the port; listing both would be redundant. A
-`publish-worker` binary would import `PostModule` (or a queue adapter)
+`worker` binary would import `PostModule` (or a queue adapter)
 without ever pulling in HTTP.
 
 ```mermaid

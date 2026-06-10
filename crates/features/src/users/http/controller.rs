@@ -40,11 +40,11 @@ impl UsersController {
         auth: Ctx<Claims>,
         body: Valid<Json<CreateUserInput>>,
     ) -> Result<Json<User>> {
-        Ok(Json(
-            self.svc
-                .create_in_org(body.into_inner(), auth.org_id)
-                .await?,
-        ))
+        let user = self
+            .svc
+            .create_in_org(body.into_inner(), auth.org_id)
+            .await?;
+        Ok(Json(User::from(&user)))
     }
 
     #[get("/:id")]

@@ -1,0 +1,153 @@
+//! Boot-time fail-secure contract of the layer pool, mirroring the access
+//! graph's posture: a wiring error is a **boot error**, never a runtime
+//! surprise.
+//!
+//! Two checks are pinned here:
+//!
+//! - a global layer spec whose provider was never registered fails boot
+//!   (it would otherwise resolve to `None` and silently drop — for a guard
+//!   that means every route quietly loses its fail-secure net);
+//! - an imperative `HttpTransport::mount(...)` endpoint — opaque to the
+//!   shaper — fails boot when global guards are active, unless the app
+//!   explicitly opts down to a warn with `fail_secure_strict(false)`.
+
+use nest_rs_core::{Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_http::{HttpTransport, async_trait};
+use nest_rs_interceptors::{Interceptor, Next, interceptor};
+use nest_rs_testing::TestApp;
+use poem::{Request, Response};
+
+/// Registered as a provider — the resolvable control case.
+#[injectable]
+#[derive(Default)]
+struct WiredGuard;
+
+impl Layer for WiredGuard {}
+
+#[async_trait]
+impl Guard for WiredGuard {
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+/// Deliberately **not** listed in any module's providers.
+#[injectable]
+#[derive(Default)]
+struct GhostGuard;
+
+impl Layer for GhostGuard {}
+
+#[async_trait]
+impl Guard for GhostGuard {
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+/// Deliberately **not** listed in any module's providers.
+#[injectable]
+#[derive(Default)]
+struct GhostInterceptor;
+
+impl Layer for GhostInterceptor {}
+
+#[async_trait]
+impl Interceptor for GhostInterceptor {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> poem::Result<Response> {
+        next.run(req).await
+    }
+}
+
+#[module(providers = [WiredGuard])]
+struct GuardOnlyModule;
+
+/// `TestApp` is not `Debug`, so unwrap the error arm by hand.
+fn boot_error(result: anyhow::Result<TestApp>, expectation: &str) -> anyhow::Error {
+    match result {
+        Ok(_) => panic!("{expectation}"),
+        Err(err) => err,
+    }
+}
+
+#[tokio::test]
+async fn an_unresolvable_global_guard_fails_boot() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_guards_global([guard::<GhostGuard>()])
+        .build()
+        .await;
+    let err = boot_error(
+        result,
+        "a global guard with no provider must fail boot, not silently drop",
+    );
+    assert!(
+        err.to_string().contains("GhostGuard"),
+        "the error names the unresolvable guard: {err}",
+    );
+}
+
+#[tokio::test]
+async fn an_unresolvable_global_interceptor_fails_boot() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_interceptors_global([interceptor::<GhostInterceptor>()])
+        .build()
+        .await;
+    let err = boot_error(
+        result,
+        "a global interceptor with no provider must fail boot",
+    );
+    assert!(
+        err.to_string().contains("GhostInterceptor"),
+        "the error names the unresolvable interceptor: {err}",
+    );
+}
+
+#[tokio::test]
+async fn an_imperative_mount_under_global_guards_fails_boot() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_guards_global([guard::<WiredGuard>()])
+        .http(HttpTransport::new().mount("/raw", |_c| poem::endpoint::make_sync(|_req| "open")))
+        .build()
+        .await;
+    let err = boot_error(
+        result,
+        "an unshapable endpoint under global guards must fail boot in strict mode",
+    );
+    assert!(
+        err.to_string().contains("/raw"),
+        "the error names the offending mount path: {err}",
+    );
+}
+
+#[tokio::test]
+async fn fail_secure_strict_off_downgrades_the_mount_violation_to_a_warn() {
+    let app = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_guards_global([guard::<WiredGuard>()])
+        .http(
+            HttpTransport::new()
+                .fail_secure_strict(false)
+                .mount("/raw", |_c| poem::endpoint::make_sync(|_req| "open")),
+        )
+        .build()
+        .await
+        .expect("opting out of strict mode boots with a warn");
+    app.http().get("/raw").send().await.assert_status_is_ok();
+}
+
+#[tokio::test]
+async fn an_imperative_mount_without_global_guards_boots() {
+    // No global guards ⇒ nothing for the mount to bypass; strict mode has
+    // nothing to enforce.
+    let app = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .http(HttpTransport::new().mount("/raw", |_c| poem::endpoint::make_sync(|_req| "open")))
+        .build()
+        .await
+        .expect("boots");
+    app.http().get("/raw").send().await.assert_status_is_ok();
+}

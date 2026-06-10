@@ -273,3 +273,26 @@ async fn same_pipe_controller_and_method_runs_once() {
         "TypeId dedup: a pipe at controller + method scope must run once",
     );
 }
+
+#[tokio::test]
+async fn same_pipe_at_all_three_scopes_runs_once() {
+    let _gate = GATE.lock().await;
+    reset_counter();
+
+    // Global + controller + method — the broadest (global) wins inside the
+    // route shaper's pipe pool; both narrower redeclarations are dropped.
+    let app = TestApp::builder()
+        .module::<PipesModule>()
+        .use_pipes_global([pipe::<StripPassword>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let body = post_payload(&app, "/dup-ctrl-method/echo").await;
+    assert!(body.get("password").is_none());
+    assert_eq!(
+        counter(),
+        1,
+        "global + controller + method pipe declaration still executes exactly once",
+    );
+}

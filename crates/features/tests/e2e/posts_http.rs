@@ -9,13 +9,13 @@ use poem::http::{StatusCode, header};
 use serde_json::json;
 use uuid::Uuid;
 
+use features::Claims;
 use features::authn::AuthnModule;
 use features::authz::AuthzHttpModule;
 use features::identity::Role;
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::PostsHttpModule;
 use features::users::ActiveModel as UserActive;
-use features::Claims;
 use nest_rs_authn::{JwtConfig, JwtOptions, JwtService};
 use sea_orm::{ActiveModelTrait, Set};
 
@@ -110,7 +110,10 @@ async fn posts_round_trip() {
         .send()
         .await;
     got.assert_status_is_ok();
-    assert_eq!(got.json().await.value().object().get("body").string(), "World");
+    assert_eq!(
+        got.json().await.value().object().get("body").string(),
+        "World"
+    );
 }
 
 #[tokio::test]

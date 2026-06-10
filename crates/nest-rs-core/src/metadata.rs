@@ -55,3 +55,15 @@ pub trait HandlerMetadata {
 /// metadata*, not part of the Layer vocabulary itself.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Public;
+
+/// Marker inserted into a **response**'s extensions when that response was
+/// produced by mapping a handler error — a route-site `Filter` or a matching
+/// `ExceptionFilter` turned an `Err` into a `Response`.
+///
+/// The data layer reads it to keep transactional integrity: the handler
+/// *failed*, so whatever it wrote inside the ambient transaction is suspect —
+/// the transaction must roll back even when the mapped response carries a
+/// success status. Without this marker, a per-route filter mapping an error
+/// to `200` would silently commit a half-applied mutation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct MappedError;

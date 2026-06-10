@@ -126,7 +126,7 @@ Two modules, two roles:
   apalis worker per method, and shuts them down with the app. A
   producer-only app does NOT import this.
 
-```rust title="apps/publish-worker/src/module.rs"
+```rust title="apps/worker/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_redis::{QueueModule, QueueWorkerModule};
 
@@ -139,21 +139,21 @@ use features::audio::{AudioModule, AudioQueueModule};
     AudioModule,
     AudioQueueModule,
 ])]
-pub struct PublishWorkerModule;
+pub struct WorkerModule;
 ```
 
 `main` is the universal skeleton:
 
-```rust title="apps/publish-worker/src/main.rs"
+```rust title="apps/worker/src/main.rs"
 use anyhow::Result;
 use nest_rs_core::App;
 
-use publish_worker::PublishWorkerModule;
+use worker::WorkerModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     App::builder()
-        .module::<PublishWorkerModule>()
+        .module::<WorkerModule>()
         .build()
         .await?
         .run()
@@ -164,7 +164,7 @@ async fn main() -> Result<()> {
 ## Run it
 
 ```bash
-$ just dev publish-worker
+$ just dev worker
 ```
 
 ```text frame="terminal"

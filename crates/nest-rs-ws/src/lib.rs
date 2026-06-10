@@ -11,7 +11,7 @@
 //! #[gateway(path = "/ws")]
 //! #[use_guards(AuthGuard)]
 //! struct ChatGateway {
-//!     #[inject] room: Arc<RoomService>,
+//!     #[inject] svc: Arc<RoomService>,
 //! }
 //!
 //! #[messages]

@@ -94,11 +94,11 @@ the room. A handler often does both in one call.
 
 ## A worked example
 
-The `apps/publish-live` gateway uses all four scopes — joining at connect,
+The `apps/live` gateway uses all four scopes — joining at connect,
 moving rooms by event, broadcasting peer-visible events, replying with
 a payload:
 
-```rust title="apps/publish-live/src/chat/gateway.rs"
+```rust title="apps/live/src/chat/gateway.rs"
 #[gateway(path = "/ws")]
 pub struct ChatGateway {
     #[inject]

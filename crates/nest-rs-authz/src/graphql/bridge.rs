@@ -25,17 +25,14 @@ pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
 impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
         Box::pin(async move {
-            self.auth
-                .check_http(req)
-                .await
-                .map_err(|denial: Denial| {
-                    tracing::warn!(
-                        target: "nest_rs::authz",
-                        reason = denial.message(),
-                        "graphql authentication failed"
-                    );
-                    denial_to_http_response(denial)
-                })?;
+            self.auth.check_http(req).await.map_err(|denial: Denial| {
+                tracing::warn!(
+                    target: "nest_rs::authz",
+                    reason = denial.message(),
+                    "graphql authentication failed"
+                );
+                denial_to_http_response(denial)
+            })?;
             self.ability
                 .check_http(req)
                 .await

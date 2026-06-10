@@ -128,7 +128,7 @@ two builds of the same schema produce byte-identical files — the diff
 in git tells you what changed.
 
 ```bash title="dev workflow"
-$ NESTRS_GRAPHQL__EMIT_SDL=true just dev publish-api
+$ NESTRS_GRAPHQL__EMIT_SDL=true just dev api
 # schema.graphql is rewritten before the app starts serving
 $ git diff schema.graphql                    # see the wire change
 ```

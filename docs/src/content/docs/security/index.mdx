@@ -63,7 +63,7 @@ point — see [Per-transport bridges](/security/authorization/per-transport-brid
 
 The wiring sketch for an app that serves all three transports:
 
-```rust title="apps/publish-api/src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         DatabaseModule::for_root(None),
@@ -78,7 +78,7 @@ The wiring sketch for an app that serves all three transports:
         UsersWsModule,
     ],
 )]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
 <Aside>

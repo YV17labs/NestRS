@@ -93,7 +93,12 @@ HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
         )
         .unwrap();
 
-        let used = collect_used_ports(&apps).unwrap();
+        let mut used = collect_used_ports(&apps).unwrap();
+        // `collect_used_ports` walks `fs::read_dir`, whose order is not
+        // guaranteed — sort before asserting on the set of discovered ports.
+        // `next_http_port` only reads `.max()`, so production never depends on
+        // the order.
+        used.sort_unstable();
         assert_eq!(used, vec![3001, 3002]);
         assert_eq!(used.into_iter().max().unwrap() + 1, 3003);
     }

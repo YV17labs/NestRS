@@ -194,18 +194,14 @@ mod tests {
         let org = Uuid::now_v7();
         let ab = member(org);
         assert!(ab.can_class(Action::Create, TypeId::of::<post::Entity>()));
-        assert!(
-            ab.can::<post::Entity>(
-                Action::Create,
-                &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
-            )
-        );
-        assert!(
-            !ab.can::<post::Entity>(
-                Action::Create,
-                &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
-            )
-        );
+        assert!(ab.can::<post::Entity>(
+            Action::Create,
+            &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
+        ));
+        assert!(!ab.can::<post::Entity>(
+            Action::Create,
+            &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
+        ));
     }
 
     #[test]
@@ -216,12 +212,10 @@ mod tests {
             Action::Delete,
             &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
         ));
-        assert!(
-            !ab.can::<post::Entity>(
-                Action::Delete,
-                &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
-            )
-        );
+        assert!(!ab.can::<post::Entity>(
+            Action::Delete,
+            &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
+        ));
     }
 
     #[test]

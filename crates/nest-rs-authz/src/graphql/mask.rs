@@ -10,11 +10,7 @@ use super::ability;
 use crate::{Ability, Action, ActionMarker};
 
 /// Mask a loaded model into the wire output type using the ambient ability.
-pub fn masked_output<E, O>(
-    ability: &Ability,
-    action: Action,
-    model: &E::Model,
-) -> Result<O, Error>
+pub fn masked_output<E, O>(ability: &Ability, action: Action, model: &E::Model) -> Result<O, Error>
 where
     E: EntityTrait,
     E::Model: Serialize,
@@ -26,7 +22,10 @@ where
 }
 
 /// Read the ambient ability and mask `model` into `O`.
-pub fn masked_output_for<A, E, O>(ctx: &nest_rs_graphql::async_graphql::Context<'_>, model: &E::Model) -> Result<O, Error>
+pub fn masked_output_for<A, E, O>(
+    ctx: &nest_rs_graphql::async_graphql::Context<'_>,
+    model: &E::Model,
+) -> Result<O, Error>
 where
     A: ActionMarker,
     E: EntityTrait,

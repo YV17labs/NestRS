@@ -76,9 +76,13 @@
 //!
 //! Each shaper macro (`#[routes]`, `#[resolver]`, `#[messages]`) emits a
 //! call to one of [`RouteShaper`] / [`run_layered_graphql_chain`]
-//! / [`run_layered_ws_chain`] at the start of every handler. There is no
-//! global interceptor — the per-route entry is the whole point so we get
-//! TypeId-level dedup against the global chain.
+//! / [`run_layered_ws_chain`] at the start of every handler — the per-route
+//! entry is what gives TypeId-level dedup against the global chain. Guards
+//! have **no** transport-edge band: the pool executes in the shaper
+//! (post-routing, so it reads `#[public]`), at a `Guarded` self-mount's
+//! edge (`SelfMountGuardWrap`), or in-band on `/graphql` (the
+//! [`GlobalPoolOperationGuard`](dispatch::GlobalPoolOperationGuard)
+//! fallback when no bridge is registered).
 //!
 //! **Larger than its siblings on purpose.** Where `nest-rs-interceptors` /
 //! `nest-rs-filters` / `nest-rs-exception-filters` each carry only their own
@@ -90,10 +94,9 @@
 
 mod builder;
 mod denial;
+pub mod dispatch;
 mod endpoint;
 mod guard;
-pub mod dispatch;
-pub mod layer_chain;
 pub mod prelude;
 mod registry;
 
@@ -104,15 +107,19 @@ pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 // (`GraphqlNext`, `WsNext`) now live directly on the base traits in
 // `nest-rs-interceptors` / `nest-rs-filters` / `nest-rs-exception-filters`.
 // Re-exported here for the historical import path used by the macros.
-pub use nest_rs_interceptors::{GraphqlNext, WsNext};
 pub use denial::Denial;
 pub use endpoint::{GuardEndpoint, GuardExt};
 pub use guard::{Guard, GuardAsWsMessageCheck};
-pub use layer_chain::{LayerSource, ResolvedLayer};
+// The dedup logic itself lives in `nest_rs_core::layer_chain` — the single
+// home every execution site (route shaper, transport pool folds, graphql/ws
+// in-band chains) composes through. Re-exported for macro-emitted code.
+pub use nest_rs_core::layer_chain;
+pub use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer};
+pub use nest_rs_interceptors::{GraphqlNext, WsNext};
 pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
 // Re-export dispatch helpers for macro-emitted code.
 pub use dispatch::{
-    RouteShaper, denial_to_graphql_error, denial_to_http_response,
-    run_layered_graphql_chain, run_layered_ws_chain,
+    RouteShaper, denial_to_graphql_error, denial_to_http_response, run_layered_graphql_chain,
+    run_layered_ws_chain,
 };

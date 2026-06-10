@@ -59,14 +59,6 @@ impl OAuthProfile {
     }
 }
 
-#[injectable]
-pub struct TokenIssuer {
-    #[inject]
-    jwt: Arc<JwtService>,
-    #[inject]
-    users: Arc<UsersService>,
-}
-
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct AccessToken {
     pub access_token: String,
@@ -74,9 +66,34 @@ pub struct AccessToken {
     pub expires_in: u64,
 }
 
-impl TokenIssuer {
-    pub fn new(jwt: Arc<JwtService>, users: Arc<UsersService>) -> Self {
-        Self { jwt, users }
+/// The OAuth2 token authority for this app: authenticates a principal
+/// (provider redirect, client registry, or password) and issues the access
+/// token. One responsibility — the app's OAuth2 protocol — so one service.
+#[injectable]
+pub struct OAuthService {
+    #[inject]
+    jwt_svc: Arc<JwtService>,
+    #[inject]
+    oauth: Arc<OAuth2Client>,
+    #[inject]
+    users_svc: Arc<UsersService>,
+    #[inject]
+    config: Arc<IssuerConfig>,
+}
+
+impl OAuthService {
+    pub fn new(
+        jwt_svc: Arc<JwtService>,
+        oauth: Arc<OAuth2Client>,
+        users_svc: Arc<UsersService>,
+        config: Arc<IssuerConfig>,
+    ) -> Self {
+        Self {
+            jwt_svc,
+            oauth,
+            users_svc,
+            config,
+        }
     }
 
     /// `sub` is set for human principals; machine grants
@@ -87,7 +104,7 @@ impl TokenIssuer {
         org_id: Uuid,
         roles: Vec<Role>,
     ) -> Result<AccessToken, TokenError> {
-        issue_with_jwt(&self.jwt, sub, org_id, roles)
+        issue_with_jwt(&self.jwt_svc, sub, org_id, roles)
     }
 
     pub async fn grant_password(
@@ -96,7 +113,7 @@ impl TokenIssuer {
         password: &str,
     ) -> Result<AccessToken, TokenError> {
         let user = self
-            .users
+            .users_svc
             .authenticate(email, password)
             .await
             .map_err(|_| TokenError::InvalidCredentials)?;
@@ -110,39 +127,11 @@ impl TokenIssuer {
         scope: Option<&str>,
         client: &AuthenticatedClient,
     ) -> Result<AccessToken, TokenError> {
-        grant_client_credentials_with_jwt(&self.jwt, grant_type, scope, client)
-    }
-}
-
-#[injectable]
-pub struct OAuthFlow {
-    #[inject]
-    jwt: Arc<JwtService>,
-    #[inject]
-    oauth: Arc<OAuth2Client>,
-    #[inject]
-    users: Arc<UsersService>,
-    #[inject]
-    config: Arc<IssuerConfig>,
-}
-
-impl OAuthFlow {
-    pub fn new(
-        jwt: Arc<JwtService>,
-        oauth: Arc<OAuth2Client>,
-        users: Arc<UsersService>,
-        config: Arc<IssuerConfig>,
-    ) -> Self {
-        Self {
-            jwt,
-            oauth,
-            users,
-            config,
-        }
+        grant_client_credentials_with_jwt(&self.jwt_svc, grant_type, scope, client)
     }
 
     pub fn authorize(&self) -> Result<Authorization, AuthError> {
-        self.oauth.authorize(&self.jwt)
+        self.oauth.authorize(&self.jwt_svc)
     }
 
     pub async fn resolve_caller(
@@ -153,11 +142,11 @@ impl OAuthFlow {
     ) -> Result<Caller, AuthError> {
         let access_token = self
             .oauth
-            .exchange(&self.jwt, transaction, state, code)
+            .exchange(&self.jwt_svc, transaction, state, code)
             .await?;
         let profile: OAuthProfile = self.oauth.userinfo(&access_token).await?;
         let user = self
-            .users
+            .users_svc
             .find_or_create(
                 &profile.email(),
                 &profile.display_name(),
@@ -183,10 +172,10 @@ impl OAuthFlow {
 }
 
 /// Build + sign the access token without going through the injected
-/// `TokenIssuer`. Extracted so the sign + envelope step is testable with a
+/// `OAuthService`. Extracted so the sign + envelope step is testable with a
 /// real `JwtService` and no `UsersService`. Pure of `self`.
 pub(crate) fn issue_with_jwt(
-    jwt: &JwtService,
+    jwt_svc: &JwtService,
     sub: Option<Uuid>,
     org_id: Uuid,
     roles: Vec<Role>,
@@ -195,9 +184,11 @@ pub(crate) fn issue_with_jwt(
         sub,
         org_id,
         roles: roles.clone(),
-        exp: jwt.expiry(),
+        exp: jwt_svc.expiry(),
     };
-    let access_token = jwt.sign(&claims).map_err(|e| TokenError::Sign(e.into()))?;
+    let access_token = jwt_svc
+        .sign(&claims)
+        .map_err(|e| TokenError::Sign(e.into()))?;
     tracing::info!(
         ?sub,
         %org_id,
@@ -207,7 +198,7 @@ pub(crate) fn issue_with_jwt(
     Ok(AccessToken {
         access_token,
         token_type: "Bearer".into(),
-        expires_in: jwt.ttl_secs(),
+        expires_in: jwt_svc.ttl_secs(),
     })
 }
 
@@ -217,7 +208,7 @@ pub(crate) fn issue_with_jwt(
 /// Extracted so the wire-error mapping for `unsupported_grant_type` /
 /// `invalid_scope` is testable with no `UsersService`.
 pub(crate) fn grant_client_credentials_with_jwt(
-    jwt: &JwtService,
+    jwt_svc: &JwtService,
     grant_type: &str,
     scope: Option<&str>,
     client: &AuthenticatedClient,
@@ -226,7 +217,7 @@ pub(crate) fn grant_client_credentials_with_jwt(
         return Err(TokenError::UnsupportedGrant);
     }
     let roles = roles_for_scope(scope, &client.scopes).ok_or(TokenError::InvalidScope)?;
-    issue_with_jwt(jwt, None, client.org_id, roles)
+    issue_with_jwt(jwt_svc, None, client.org_id, roles)
 }
 
 /// Constant-time lookup against a registry, extracted so the credential
@@ -245,8 +236,7 @@ pub(crate) fn authenticate_against_registry(
     let mut matched: Option<&super::config::RegisteredClient> = None;
     for client in clients {
         let id_ok = constant_time_eq(client.client_id.as_bytes(), client_id.as_bytes());
-        let secret_ok =
-            constant_time_eq(client.client_secret.as_bytes(), client_secret.as_bytes());
+        let secret_ok = constant_time_eq(client.client_secret.as_bytes(), client_secret.as_bytes());
         if (id_ok & secret_ok) && matched.is_none() {
             matched = Some(client);
         }
@@ -425,10 +415,10 @@ mod tests {
 
     #[test]
     fn issue_returns_a_bearer_token_envelope_with_the_jwt_ttl() {
-        let jwt = jwt_with_ttl(Duration::from_secs(900));
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(900));
         let org = Uuid::now_v7();
         let sub = Uuid::now_v7();
-        let token = issue_with_jwt(&jwt, Some(sub), org, vec![Role::User]).expect("issue");
+        let token = issue_with_jwt(&jwt_svc, Some(sub), org, vec![Role::User]).expect("issue");
 
         assert_eq!(
             token.token_type, "Bearer",
@@ -446,12 +436,12 @@ mod tests {
 
     #[test]
     fn issue_round_trips_user_subject_through_verify() {
-        let jwt = jwt_with_ttl(Duration::from_secs(60));
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let sub = Uuid::now_v7();
         let org = Uuid::now_v7();
-        let token = issue_with_jwt(&jwt, Some(sub), org, vec![Role::Admin]).expect("issue");
+        let token = issue_with_jwt(&jwt_svc, Some(sub), org, vec![Role::Admin]).expect("issue");
 
-        let claims: Claims = jwt.verify(&token.access_token).expect("verify");
+        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
         assert_eq!(claims.sub, Some(sub));
         assert_eq!(claims.org_id, org);
         assert!(claims.is_admin());
@@ -461,10 +451,10 @@ mod tests {
     fn issue_machine_grant_signs_with_no_subject() {
         // `client_credentials` callers must get a token whose verified claims
         // carry `sub == None` — a non-None here is a privilege bug.
-        let jwt = jwt_with_ttl(Duration::from_secs(60));
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let org = Uuid::now_v7();
-        let token = issue_with_jwt(&jwt, None, org, vec![Role::User]).expect("issue");
-        let claims: Claims = jwt.verify(&token.access_token).expect("verify");
+        let token = issue_with_jwt(&jwt_svc, None, org, vec![Role::User]).expect("issue");
+        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
         assert!(claims.sub.is_none(), "machine grant must omit sub");
         assert_eq!(claims.org_id, org);
     }
@@ -475,10 +465,10 @@ mod tests {
         // `AuthError::Failed`, which the issuer must map to
         // `TokenError::Sign(_)`. The wire string is the opaque RFC 6749
         // `server_error`, never the internal cause.
-        let verify_only = JwtService::new(JwtOptions::eddsa_verify(test_ed25519_public_pem()))
+        let verify_only_svc = JwtService::new(JwtOptions::eddsa_verify(test_ed25519_public_pem()))
             .expect("verify-only jwt");
         let err = issue_with_jwt(
-            &verify_only,
+            &verify_only_svc,
             Some(Uuid::now_v7()),
             Uuid::now_v7(),
             vec![Role::User],
@@ -509,9 +499,9 @@ mod tests {
 
     #[test]
     fn grant_client_credentials_rejects_unknown_grant_type() {
-        let jwt = jwt_with_ttl(Duration::from_secs(60));
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let err =
-            grant_client_credentials_with_jwt(&jwt, "password", None, &auth_client(&["user"]))
+            grant_client_credentials_with_jwt(&jwt_svc, "password", None, &auth_client(&["user"]))
                 .expect_err("non-CC grant rejected");
         assert!(matches!(err, TokenError::UnsupportedGrant));
         assert_eq!(err.to_string(), "unsupported_grant_type");
@@ -521,9 +511,9 @@ mod tests {
     fn grant_client_credentials_rejects_scope_outside_the_client_grant() {
         // Requesting a scope the client wasn't granted maps to
         // `invalid_scope` — a registry change must not silently widen scope.
-        let jwt = jwt_with_ttl(Duration::from_secs(60));
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let err = grant_client_credentials_with_jwt(
-            &jwt,
+            &jwt_svc,
             "client_credentials",
             Some("admin"),
             &auth_client(&["user"]),
@@ -534,14 +524,18 @@ mod tests {
 
     #[test]
     fn grant_client_credentials_issues_a_bearer_token_with_the_clients_org() {
-        let jwt = jwt_with_ttl(Duration::from_secs(60));
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["user", "admin"]);
         let org = client.org_id;
-        let token =
-            grant_client_credentials_with_jwt(&jwt, "client_credentials", Some("user"), &client)
-                .expect("happy path");
+        let token = grant_client_credentials_with_jwt(
+            &jwt_svc,
+            "client_credentials",
+            Some("user"),
+            &client,
+        )
+        .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
-        let claims: Claims = jwt.verify(&token.access_token).expect("verify");
+        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
         assert!(
             claims.sub.is_none(),
             "client_credentials token must carry no sub",
@@ -549,8 +543,8 @@ mod tests {
         assert_eq!(claims.org_id, org);
     }
 
-    // Drive the methods on the injected `TokenIssuer` / `OAuthFlow` directly
-    // so the thin wiring sites are covered alongside the extracted helpers.
+    // Drive the methods on the injected `OAuthService` directly so the thin
+    // wiring sites are covered alongside the extracted helpers.
     // `UsersService` is constructed with a `Disconnected` connection — none
     // of the test paths reach it (every test stays out of `grant_password`
     // and `resolve_caller`).
@@ -576,54 +570,8 @@ mod tests {
         }
     }
 
-    fn token_issuer(ttl: Duration) -> TokenIssuer {
-        TokenIssuer::new(Arc::new(jwt_with_ttl(ttl)), users_service_disconnected())
-    }
-
-    #[test]
-    fn token_issuer_new_builds_a_usable_issuer() {
-        let issuer = token_issuer(Duration::from_secs(60));
-        let token = issuer
-            .issue(Some(Uuid::now_v7()), Uuid::now_v7(), vec![Role::User])
-            .expect("issue");
-        assert_eq!(token.token_type, "Bearer");
-    }
-
-    #[test]
-    fn token_issuer_issue_method_delegates_to_the_helper() {
-        // Round-trips claims through the configured JWT — pins the
-        // `&self.jwt` plumbing the method wraps around `issue_with_jwt`.
-        let issuer = token_issuer(Duration::from_secs(120));
-        let sub = Uuid::now_v7();
-        let org = Uuid::now_v7();
-        let token = issuer
-            .issue(Some(sub), org, vec![Role::Admin])
-            .expect("issue");
-        assert_eq!(token.expires_in, 120);
-        assert!(!token.access_token.is_empty());
-    }
-
-    #[test]
-    fn token_issuer_grant_client_credentials_rejects_non_cc_grant() {
-        let issuer = token_issuer(Duration::from_secs(60));
-        let err = issuer
-            .grant_client_credentials("password", None, &auth_client(&["user"]))
-            .expect_err("password grant on CC endpoint ⇒ unsupported");
-        assert!(matches!(err, TokenError::UnsupportedGrant));
-    }
-
-    #[test]
-    fn token_issuer_grant_client_credentials_issues_with_the_authenticated_org() {
-        let issuer = token_issuer(Duration::from_secs(60));
-        let client = auth_client(&["user"]);
-        let token = issuer
-            .grant_client_credentials("client_credentials", None, &client)
-            .expect("happy CC path");
-        assert_eq!(token.token_type, "Bearer");
-    }
-
-    fn oauth_flow() -> OAuthFlow {
-        let jwt = Arc::new(jwt_with_ttl(Duration::from_secs(60)));
+    fn oauth_service(ttl: Duration) -> OAuthService {
+        let jwt_svc = Arc::new(jwt_with_ttl(ttl));
         let oauth = Arc::new(OAuth2Client::new(complete_oauth_config()).expect("client"));
         let config = Arc::new(IssuerConfig {
             clients: vec![RegisteredClient {
@@ -634,16 +582,56 @@ mod tests {
             }],
             default_org_id: Uuid::now_v7(),
         });
-        OAuthFlow::new(jwt, oauth, users_service_disconnected(), config)
+        OAuthService::new(jwt_svc, oauth, users_service_disconnected(), config)
     }
 
     #[test]
-    fn oauth_flow_new_builds_a_usable_flow() {
+    fn oauth_service_issue_builds_a_usable_token() {
+        let svc = oauth_service(Duration::from_secs(60));
+        let token = svc
+            .issue(Some(Uuid::now_v7()), Uuid::now_v7(), vec![Role::User])
+            .expect("issue");
+        assert_eq!(token.token_type, "Bearer");
+    }
+
+    #[test]
+    fn oauth_service_issue_method_delegates_to_the_helper() {
+        // Round-trips claims through the configured JWT — pins the
+        // `&self.jwt_svc` plumbing the method wraps around `issue_with_jwt`.
+        let svc = oauth_service(Duration::from_secs(120));
+        let sub = Uuid::now_v7();
+        let org = Uuid::now_v7();
+        let token = svc.issue(Some(sub), org, vec![Role::Admin]).expect("issue");
+        assert_eq!(token.expires_in, 120);
+        assert!(!token.access_token.is_empty());
+    }
+
+    #[test]
+    fn oauth_service_grant_client_credentials_rejects_non_cc_grant() {
+        let svc = oauth_service(Duration::from_secs(60));
+        let err = svc
+            .grant_client_credentials("password", None, &auth_client(&["user"]))
+            .expect_err("password grant on CC endpoint ⇒ unsupported");
+        assert!(matches!(err, TokenError::UnsupportedGrant));
+    }
+
+    #[test]
+    fn oauth_service_grant_client_credentials_issues_with_the_authenticated_org() {
+        let svc = oauth_service(Duration::from_secs(60));
+        let client = auth_client(&["user"]);
+        let token = svc
+            .grant_client_credentials("client_credentials", None, &client)
+            .expect("happy CC path");
+        assert_eq!(token.token_type, "Bearer");
+    }
+
+    #[test]
+    fn oauth_service_authorize_builds_a_redirect_to_the_provider() {
         // Smoke-test the constructor: the four `#[inject]` fields land in
         // the struct and `authorize` can compute a fresh redirect URL +
         // signed transaction without I/O.
-        let flow = oauth_flow();
-        let auth = flow.authorize().expect("authorize");
+        let svc = oauth_service(Duration::from_secs(60));
+        let auth = svc.authorize().expect("authorize");
         assert!(
             auth.url.starts_with("https://auth.example/oauth/authorize"),
             "redirect must hit the configured provider, got {}",
@@ -653,18 +641,18 @@ mod tests {
     }
 
     #[test]
-    fn oauth_flow_authenticate_client_matches_a_registered_pair() {
-        let flow = oauth_flow();
-        let auth = flow
+    fn oauth_service_authenticate_client_matches_a_registered_pair() {
+        let svc = oauth_service(Duration::from_secs(60));
+        let auth = svc
             .authenticate_client("ci", "s3cret")
             .expect("matching pair");
         assert_eq!(auth.scopes, vec!["user".to_string()]);
     }
 
     #[test]
-    fn oauth_flow_authenticate_client_rejects_unknown_id() {
-        let flow = oauth_flow();
-        let err = flow
+    fn oauth_service_authenticate_client_rejects_unknown_id() {
+        let svc = oauth_service(Duration::from_secs(60));
+        let err = svc
             .authenticate_client("ghost", "s3cret")
             .expect_err("unknown id");
         assert!(err.to_string().contains("invalid client credentials"));
@@ -675,11 +663,12 @@ mod tests {
         // Empty `scope` (or absent) grants the client's entire allowed set —
         // pin the behaviour because the controller relies on it to support
         // "scope omitted ⇒ everything I'm registered for".
-        let jwt = jwt_with_ttl(Duration::from_secs(60));
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["admin"]);
-        let token = grant_client_credentials_with_jwt(&jwt, "client_credentials", None, &client)
-            .expect("blank scope ok");
-        let claims: Claims = jwt.verify(&token.access_token).expect("verify");
+        let token =
+            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &client)
+                .expect("blank scope ok");
+        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
         assert!(claims.is_admin(), "blank scope should grant the full set");
     }
 }

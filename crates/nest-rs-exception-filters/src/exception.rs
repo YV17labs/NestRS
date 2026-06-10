@@ -42,8 +42,9 @@ pub trait ExceptionFilter: Layer {
 
     /// GraphQL entry. Called with the typed `Exception` extracted from
     /// an `async_graphql::Error`'s source via downcast; the returned
-    /// [`GraphqlError`] replaces the original. Default returns the
-    /// exception's `Display` as a plain message — implementors can do
+    /// [`GraphqlError`] replaces the original. A reserved seam, **not
+    /// wired** today (no macro or dispatcher calls it). Default returns
+    /// the exception's `Display` as a plain message — implementors can do
     /// better by overriding.
     ///
     /// Takes `&Self::Exception` (not by value like
@@ -58,8 +59,9 @@ pub trait ExceptionFilter: Layer {
         GraphqlError::new(exception.to_string())
     }
 
-    /// WS entry. Called with the typed `Exception` extracted from a
-    /// message handler's error via downcast; the returned JSON value
+    /// WS entry — a reserved seam, **not wired** today (no macro or
+    /// dispatcher calls it). Would receive the typed `Exception` extracted
+    /// from a message handler's error via downcast; the returned JSON value
     /// becomes the reply payload (typically an error frame). Default
     /// returns a `{"error": "<message>"}` JSON object — override to
     /// produce a richer envelope.

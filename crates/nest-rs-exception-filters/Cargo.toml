@@ -16,5 +16,8 @@ nest-rs-core.workspace = true
 # `catch_ws` dispatch (typed downcast over the transport's native error).
 nest-rs-graphql.workspace = true
 nest-rs-ws.workspace = true
+# `use_exception_filters_global` attaches its boot-time resolvability check
+# via `HttpBootCheck`. Same safe direction as the sibling trait crates.
+nest-rs-http.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true

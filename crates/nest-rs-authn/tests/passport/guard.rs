@@ -3,10 +3,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nest_rs_authn::{AuthError, AuthGuard, Outcome, Strategy};
+use nest_rs_authn::{AuthError, AuthGuard, Strategy};
 use nest_rs_guards::{Denial, Guard};
-use poem::http::StatusCode;
-use poem::{Body, Request, Response};
+use poem::Request;
 
 struct AuthenticateAs(&'static str);
 
@@ -14,29 +13,8 @@ struct AuthenticateAs(&'static str);
 impl Strategy for AuthenticateAs {
     type Principal = &'static str;
 
-    async fn authenticate(
-        &self,
-        _req: &mut Request,
-    ) -> Result<Outcome<Self::Principal>, AuthError> {
-        Ok(Outcome::Authenticated(self.0))
-    }
-}
-
-struct IssueChallenge;
-
-#[async_trait]
-impl Strategy for IssueChallenge {
-    type Principal = ();
-
-    async fn authenticate(
-        &self,
-        _req: &mut Request,
-    ) -> Result<Outcome<Self::Principal>, AuthError> {
-        Ok(Outcome::Challenge(
-            Response::builder()
-                .status(StatusCode::FOUND)
-                .body(Body::empty()),
-        ))
+    async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
+        Ok(self.0)
     }
 }
 
@@ -46,10 +24,7 @@ struct FailWith;
 impl Strategy for FailWith {
     type Principal = ();
 
-    async fn authenticate(
-        &self,
-        _req: &mut Request,
-    ) -> Result<Outcome<Self::Principal>, AuthError> {
+    async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
         Err(AuthError::MissingCredentials)
     }
 }
@@ -64,23 +39,11 @@ async fn attaches_principal_on_success() {
 }
 
 #[tokio::test]
-async fn challenge_denies_without_attaching_principal() {
-    let guard = AuthGuard::new(Arc::new(IssueChallenge));
-    let mut req = crate::common::request(&[]);
-
-    let denial = guard
-        .check_http(&mut req)
-        .await
-        .expect_err("challenge stops the chain");
-    assert!(matches!(denial, Denial::Unauthorized { .. }));
-    assert!(req.extensions().get::<&'static str>().is_none());
-}
-
-#[tokio::test]
 async fn strategy_error_denies_as_unauthorized() {
     let guard = AuthGuard::new(Arc::new(FailWith));
     let mut req = crate::common::request(&[]);
 
     let denial = guard.check_http(&mut req).await.expect_err("auth failed");
     assert!(matches!(denial, Denial::Unauthorized { .. }));
+    assert!(req.extensions().get::<&'static str>().is_none());
 }

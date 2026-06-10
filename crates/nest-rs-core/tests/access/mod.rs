@@ -14,7 +14,7 @@ struct ServiceA;
 #[injectable]
 struct ServiceB {
     #[inject]
-    a: Arc<ServiceA>,
+    svc: Arc<ServiceA>,
 }
 
 #[module(providers = [ServiceA])]
@@ -56,7 +56,7 @@ struct FixedServiceA;
 #[injectable]
 struct FixedServiceB {
     #[inject]
-    a: Arc<FixedServiceA>,
+    svc: Arc<FixedServiceA>,
 }
 
 #[module(providers = [FixedServiceA])]

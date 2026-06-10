@@ -21,13 +21,13 @@ the outbox writer task, the connection registry, and the dispatch
 plumbing behind one decorator.
 
 In the [**Publish**](/publish/) workspace, live comments and notifications
-run in [`publish-live`](/publish/) on port **3004**.
+run in [`live`](/publish/) on port **3004**.
 
 ## A one-event gateway
 
 The smallest possible gateway: one event, one reply.
 
-```rust title="apps/publish-live/src/chat/gateway.rs"
+```rust title="apps/live/src/chat/gateway.rs"
 use nest_rs_ws::{gateway, messages};
 
 #[gateway(path = "/ws")]
@@ -51,7 +51,7 @@ same event name.
 
 Wire it in like any other provider:
 
-```rust title="apps/publish-live/src/module.rs"
+```rust title="apps/live/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_ws::WsModule;
@@ -65,7 +65,7 @@ use crate::chat::gateway::PingGateway;
     ],
     providers = [PingGateway],
 )]
-pub struct PublishLiveModule;
+pub struct LiveModule;
 ```
 
 `HttpModule` for the transport, `WsModule` for the connection registry
@@ -75,7 +75,7 @@ pub struct PublishLiveModule;
 ## Run it
 
 ```bash
-just dev publish-live
+just dev live
 ```
 
 ```text frame="terminal"
@@ -117,6 +117,6 @@ matter of adding one decorator.
   the macro and runtime: `#[gateway]`, `#[messages]`,
   `#[subscribe_message]`, `#[on_connect]`, `#[on_disconnect]`,
   `WsClient`, `WsServer`, `WsModule`.
-- [`apps/publish-live`](https://github.com/NestRS/NestRS/tree/main/apps/publish-live) —
+- [`apps/live`](https://github.com/NestRS/NestRS/tree/main/apps/live) —
   end-to-end real-time example (`ChatGateway`, `NotifyGateway`) used
   throughout these pages.

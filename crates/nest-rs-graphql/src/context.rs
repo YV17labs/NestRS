@@ -38,8 +38,13 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// implements it to authenticate and install the caller's ambient `Ability`
 /// for the operation's duration.
 ///
-/// Bind with `providers = [MyBridge as dyn GraphqlOperationGuard]`; with none
-/// registered the endpoint runs operations unguarded.
+/// Bind with `providers = [MyBridge as dyn GraphqlOperationGuard]`. With none
+/// registered the endpoint falls back to [`FallbackOperationGuard`] (the
+/// global guard pool, seeded by `use_guards_global`) — `/graphql` is
+/// `EdgePosture::Exempt` at the HTTP edge, so this in-band seam is the
+/// *only* place guards run on GraphQL operations. A registered guard
+/// **replaces** the fallback: it owns the chain (the canonical bridge runs
+/// the same `AuthGuard` + `AuthzGuard` itself, so nothing runs twice).
 pub trait GraphqlOperationGuard: Send + Sync + 'static {
     /// Attach per-request state to the poem request before seeds forward it.
     /// Return `Err(Response)` to reject the operation before parsing.
@@ -54,6 +59,15 @@ pub trait GraphqlOperationGuard: Send + Sync + 'static {
     ) -> BoxFuture<'a, Response>;
 }
 
+/// Factory slot for the fallback [`GraphqlOperationGuard`]. `nest-rs-guards`'
+/// `use_guards_global` provides one (a fn pointer — the container does not
+/// exist yet at builder time) that folds the global guard pool in-band;
+/// [`ContextEndpoint`] invokes it at mount when no `dyn GraphqlOperationGuard`
+/// is registered. This is what keeps `/graphql` fail-secure under
+/// `EdgePosture::Exempt`: forgetting the authz bridge module does not leave
+/// operations unguarded — the global pool still gates them.
+pub struct FallbackOperationGuard(pub fn(&Container) -> Arc<dyn GraphqlOperationGuard>);
+
 /// The `/graphql` endpoint. Mirrors `async_graphql_poem::GraphQL`'s GET / POST
 /// / batch handling but folds every [`GraphqlContextSeed`] over the request first.
 /// The upstream `accept: multipart/mixed` incremental-delivery path
@@ -67,7 +81,34 @@ pub(crate) struct ContextEndpoint<E> {
 
 impl<E> ContextEndpoint<E> {
     pub(crate) fn new(executor: E, container: Container, max_batch_size: usize) -> Self {
-        let op_guard = container.get_dyn::<dyn GraphqlOperationGuard>();
+        let op_guard = match container.get_dyn::<dyn GraphqlOperationGuard>() {
+            Some(guard) => {
+                tracing::debug!(
+                    target: "nest_rs::graphql",
+                    "operations gated by the registered GraphqlOperationGuard",
+                );
+                Some(guard)
+            }
+            None => match container.get::<FallbackOperationGuard>() {
+                Some(factory) => {
+                    tracing::debug!(
+                        target: "nest_rs::graphql",
+                        "operations gated by the global guard pool (fallback operation guard)",
+                    );
+                    Some((factory.0)(&container))
+                }
+                None => {
+                    // No global guards, no bridge: the app has no authn
+                    // posture, so an unguarded schema is its deliberate
+                    // shape — but say so once at boot.
+                    tracing::info!(
+                        target: "nest_rs::graphql",
+                        "no operation guard registered — GraphQL operations run unguarded",
+                    );
+                    None
+                }
+            },
+        };
         Self {
             executor,
             container,
@@ -98,10 +139,10 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
         let (mut req, mut body) = req.split();
         // Guard runs *before* parsing/seeding so attached state is on the
         // request when seeds forward it.
-        if let Some(guard) = &self.op_guard {
-            if let Err(resp) = guard.before(&mut req).await {
-                return Ok(resp);
-            }
+        if let Some(guard) = &self.op_guard
+            && let Err(resp) = guard.before(&mut req).await
+        {
+            return Ok(resp);
         }
         let batch = GraphQLBatchRequest::from_request(&req, &mut body).await?.0;
         let batch = match batch {

@@ -36,7 +36,7 @@ pub struct NotifyNs;
 Attach it to a gateway with `#[gateway(namespace = NotifyNs)]`, and
 the macro self-provides `WsServer<NotifyNs>` for that gateway:
 
-```rust title="apps/publish-live/src/notify/gateway.rs"
+```rust title="apps/live/src/notify/gateway.rs"
 use nest_rs_ws::{gateway, messages, WsClient};
 
 pub struct NotifyNs;

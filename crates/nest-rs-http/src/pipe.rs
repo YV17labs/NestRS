@@ -14,10 +14,13 @@ use std::ops::Deref;
 use std::pin::Pin;
 
 use nest_rs_pipes::{Pipe, PipeError, ValidationPipe};
+use poem::error::ReadBodyError;
 use poem::http::StatusCode;
 use poem::web::{Json, Path, Query};
-use poem::{Error, FromRequest, Request, RequestBody, Response, Result};
+use poem::{Body, Error, FromRequest, Request, RequestBody, Response, Result};
 use validator::Validate;
+
+use crate::{RawBody, RawBodyLimit};
 
 /// Owned-unwrap for poem extractors, so a pipe can take the value they carry
 /// without cloning.
@@ -72,9 +75,37 @@ async fn extract_inner<'a, E>(req: &'a Request, body: &mut RequestBody) -> Resul
 where
     E: FromRequest<'a> + IntoInner,
 {
+    cap_body(req, body).await?;
     let extract: Pin<Box<dyn Future<Output = Result<E>> + Send + '_>> =
         Box::pin(E::from_request(req, body));
     Ok(extract.await?.into_inner())
+}
+
+/// Re-seat the request body bounded to the configured limit before the inner
+/// extractor reads it, so the framework's idiomatic JSON binding
+/// (`Valid<Json<T>>`, `Piped<P, Json<T>>`, and the `#[crud]` codegen that
+/// emits them) can never buffer an unbounded payload — poem's `Json` reads
+/// the body without consulting [`RawBodyLimit`] on its own. Returns `413` when
+/// the payload exceeds the cap. A taken/absent body is a no-op.
+async fn cap_body(req: &Request, body: &mut RequestBody) -> Result<()> {
+    if body.is_none() {
+        return Ok(());
+    }
+    let limit = req
+        .extensions()
+        .get::<RawBodyLimit>()
+        .map(|l| l.0)
+        .unwrap_or(RawBody::DEFAULT_LIMIT);
+    let taken = body.take().map_err(Error::from)?;
+    let bytes = match taken.into_bytes_limit(limit).await {
+        Ok(bytes) => bytes,
+        Err(ReadBodyError::PayloadTooLarge) => {
+            return Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
+        }
+        Err(err) => return Err(Error::from(err)),
+    };
+    *body = RequestBody::new(Body::from_bytes(bytes));
+    Ok(())
 }
 
 /// Applies pipe `P` to the value extractor `E` produces, handing the handler
@@ -308,6 +339,42 @@ mod tests {
         let v: Valid<Json<Greeting>> = Valid::from_request(&req, &mut body)
             .await
             .expect("validation passes");
+        assert_eq!(v.into_inner(), payload);
+    }
+
+    #[tokio::test]
+    async fn valid_rejects_a_body_past_the_configured_limit_with_413() {
+        // A tight per-request cap (4 bytes) installed in extensions; the JSON
+        // body is larger, so the bounded read in `extract_inner` must reject
+        // with 413 before poem's `Json` ever buffers it.
+        let payload = Greeting {
+            msg: "well over four bytes".into(),
+        };
+        let mut req = Request::builder()
+            .content_type("application/json")
+            .body(Body::from_json(&payload).expect("body serializes"));
+        req.extensions_mut().insert(RawBodyLimit(4));
+        let (req, mut body) = req.split();
+
+        let err = match Valid::<Json<Greeting>>::from_request(&req, &mut body).await {
+            Ok(_) => panic!("body exceeds the cap"),
+            Err(e) => e,
+        };
+        assert_eq!(err.into_response().status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn valid_accepts_a_body_within_the_configured_limit() {
+        let payload = Greeting { msg: "hi".into() };
+        let mut req = Request::builder()
+            .content_type("application/json")
+            .body(Body::from_json(&payload).expect("body serializes"));
+        req.extensions_mut().insert(RawBodyLimit(4096));
+        let (req, mut body) = req.split();
+
+        let v: Valid<Json<Greeting>> = Valid::from_request(&req, &mut body)
+            .await
+            .expect("body fits under the cap");
         assert_eq!(v.into_inner(), payload);
     }
 

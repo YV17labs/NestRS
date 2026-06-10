@@ -1,12 +1,21 @@
 //! [`DbContext`] — request boundary that installs the ambient executor.
 //!
-//! Auto-installed by [`DatabaseModule`](crate::DatabaseModule), it wraps every
-//! request *inside* global guards so unauthenticated mutating requests do not
-//! open a transaction. Guards and handlers resolve the same ambient
+//! Auto-installed by [`DatabaseModule`](crate::DatabaseModule), it wraps the
+//! routing tree (band `DATA_CONTEXT`, the innermost transport wrap), so it
+//! covers controller routes and self-mounted surfaces alike. The guard pool
+//! runs *inside* it (in the per-route shaper, post-routing): an
+//! unauthenticated mutating request therefore opens a transaction before the
+//! guard denies it — the denial is a non-2xx response, so that empty
+//! transaction rolls back and nothing persists. The wasted `BEGIN`/`ROLLBACK`
+//! is the accepted cost of guards reading `#[public]` after routing; a lazy
+//! executor (`BEGIN` deferred to first use) is the planned removal.
+//! Guards and handlers resolve the same ambient
 //! [`Executor`](crate::Executor) via [`Repo`](crate::Repo). Safe methods
 //! (GET/HEAD/OPTIONS/TRACE) run on the pool; mutating methods run in a
 //! transaction committed on 2xx/3xx and rolled back otherwise — a failed
-//! mutation never half-persists.
+//! mutation never half-persists, and a response tagged
+//! [`MappedError`](nest_rs_core::MappedError) (an error a filter mapped)
+//! rolls back even when its status reads as success.
 //!
 //! ### Serialization conflict observability
 //!
@@ -149,9 +158,17 @@ fn is_safe(method: &Method) -> bool {
     )
 }
 
-/// 2xx and 3xx commit; any other status or an `Err` rolls back.
+/// 2xx and 3xx commit; any other status or an `Err` rolls back. A response
+/// tagged [`MappedError`](nest_rs_core::MappedError) also rolls back whatever
+/// its status: it was produced by a route-site `Filter` / `ExceptionFilter`
+/// mapping a handler **error** — the mapping shapes the client answer, it
+/// does not bless the failed handler's writes.
 fn should_commit(result: &Result<Response>) -> bool {
-    matches!(result, Ok(resp) if resp.status().is_success() || resp.status().is_redirection())
+    matches!(
+        result,
+        Ok(resp) if (resp.status().is_success() || resp.status().is_redirection())
+            && resp.extensions().get::<nest_rs_core::MappedError>().is_none()
+    )
 }
 
 #[cfg(test)]
@@ -206,5 +223,15 @@ mod tests {
     fn err_rolls_back() {
         let err: Result<Response> = Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
         assert!(!should_commit(&err));
+    }
+
+    #[test]
+    fn a_mapped_error_rolls_back_even_with_a_success_status() {
+        // A route-site Filter / ExceptionFilter that maps a handler error to
+        // a 2xx tags the response `MappedError` — the handler failed, so its
+        // writes must not persist behind the mapped status.
+        let mut resp = StatusCode::OK.into_response();
+        resp.extensions_mut().insert(nest_rs_core::MappedError);
+        assert!(!should_commit(&Ok(resp)));
     }
 }

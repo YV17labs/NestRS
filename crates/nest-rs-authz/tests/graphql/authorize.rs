@@ -1,15 +1,19 @@
-//! The resolver gate end-to-end: an HTTP guard builds the actor's `Ability`, the
-//! `GraphqlContextSeed` forwards it into the GraphQL context, and `authorize` admits or
-//! rejects the query by the caller's role — driven through the in-process harness.
+//! The resolver gate end-to-end through the **in-band** path: the
+//! `GraphqlAbilityBridge` (registered as the `dyn GraphqlOperationGuard`)
+//! runs the guard chain per operation and builds the actor's `Ability`, the
+//! `GraphqlContextSeed` forwards it into the GraphQL context, and `authorize`
+//! admits or rejects the query by the caller's role. `/graphql` is
+//! `EdgePosture::Exempt` — no guard runs at the HTTP edge; this bridge is
+//! the only execution site.
 
 use std::sync::Arc;
 
-use nest_rs_authz::graphql::authorize;
+use nest_rs_authz::graphql::{GraphqlAbilityBridge, authorize};
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
-use nest_rs_graphql::{GraphqlModule, resolver};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, resolver};
+use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
 use nest_rs_testing::TestApp;
@@ -32,9 +36,20 @@ mod widget {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// Stands in for the `AuthGuard` + `AbilityGuard` chain: reads the caller's role
-/// from a header and builds the matching `Ability` onto the request. An admin
-/// gets a Read grant on widgets; anyone else gets nothing.
+/// No-op stand-in for the bridge's authentication slot (`A` in
+/// `GraphqlAbilityBridge<A, G>`) — this test only exercises the ability path.
+#[injectable]
+#[derive(Default)]
+struct PassGuard;
+
+impl Layer for PassGuard {}
+
+#[async_trait]
+impl Guard for PassGuard {}
+
+/// Stands in for the `AbilityGuard` slot: reads the caller's role from a
+/// header and builds the matching `Ability` onto the request. An admin gets a
+/// Read grant on widgets; anyone else gets nothing.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -72,13 +87,24 @@ impl WidgetResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [AbilityInjector, WidgetResolver])]
+/// The same shape `crates/features` wires for the real app:
+/// `GraphqlAbilityBridge<AuthGuard, AuthzGuard> as dyn GraphqlOperationGuard`.
+type TestOpGuard = GraphqlAbilityBridge<PassGuard, AbilityInjector>;
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [
+        PassGuard,
+        AbilityInjector,
+        TestOpGuard as dyn GraphqlOperationGuard,
+        WidgetResolver,
+    ],
+)]
 struct AuthzGraphqlModule;
 
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<AuthzGraphqlModule>()
-        .use_guards_global([guard::<AbilityInjector>()])
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")

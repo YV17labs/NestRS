@@ -208,21 +208,68 @@ contract only. Batch field fetches with `#[dataloader]`
 `(provider, method)` name order; init failure aborts boot, shutdown
 is best-effort.
 
-## Request layers
+## Request layers — one pool, exactly once
+
+**The invariant.** Declaring a layer (guard / pipe / interceptor /
+filter / exception-filter) at any scope — **global** (imperative
+`use_*_global`), **controller** (on the struct), **handler** (beside
+the verb) — contributes to ONE pool per family, deduplicated by
+`TypeId` through `compose_chain` (`nest-rs-core/src/layer_chain.rs`,
+the single dedup logic for all five families). The layer executes
+**exactly once per request**; broadest scope wins; `#[force_*]` is the
+re-run opt-in. Scope never multiplies executions — it chooses the
+**execution site**, matched to the family's nature:
+
+| Family | Site (global scope) | Site (controller/method) |
+|---|---|---|
+| Guard | `RouteShaper` (post-routing — reads `#[public]`); `Guarded` self-mount edge; in-band `/graphql` op-guard | same sites |
+| Pipe | `RouteShaper` | `RouteShaper` |
+| ExceptionFilter | route site (typed catch, closest to handler) | route site |
+| Interceptor | **transport edge** (band 90) — sees 404s, denials, self-mounts; runs *before* auth (no principal/ability/executor) | around the handler, *inside* guards |
+| Filter | **transport edge** (band 50) | around the handler, *inside* guards |
+
+Teachable rule: *global = around the whole HTTP process; scoped =
+around your handler; either way, once.* `Layer::priority` orders
+entries *within* a site, never across sites.
+
+Per-route inner→outer (from `#[routes]`): **handler → ability shaper →
+exception-filter pool → scoped filters → scoped interceptors →
+RouteShaper (guard pool → pipe pool) → `#[meta]`/`#[public]` (route
+data)**. Transport bands (innermost→outermost): **routing → DbContext
+(−10) → global filter pool (50) → global interceptor pool (90) → infra
+`#[interceptor]` (100)**. Same relative nesting at both sites:
+interceptors outside filters, exception-filters closest to the handler.
+Two ways to be transport-wide, deliberately: `use_*_global` = the
+**pool** (app-listed, TypeId-deduped against narrower scopes);
+`#[interceptor]` = **infra** a module import brings (auto-mounted, off
+pool, fixed band — `DbContext`, tracing, timing).
 
 A `Guard` borrows the request **mutably** — gates access (returns
-`Err(Response)`), may attach context read back via
-`nest_rs_http::Ctx<T>`. Bind three ways: **global** (imperative),
-**controller** (on the struct), **handler** (beside the verb) —
-container-resolved, no import; first listed = outermost. Per-route
-inner→outer (from `#[routes]` macro): **handler → ability shaper →
-per-route interceptors → per-route filters (error path) → RouteShaper
-(guards + pipes + exception filters on error) → `#[meta]`/`#[public]`
-(route data)**. Global wraps (priority bands): **routes → global guards
-→ global filters (error path) → global interceptors**. Per-handler
-metadata via `#[meta(EXPR)]` + `nest_rs_http::Reflector`. Asymmetry:
-**global** interceptors wrap *outside* global guards; **per-route**
-interceptors nest *inside* RouteShaper guards.
+`Err(Denial)`), may attach context read back via `nest_rs_http::Ctx<T>`.
+Denials are `Ok(4xx)` responses, never `Err` — filters don't see them;
+global interceptors observe them. Per-handler metadata via
+`#[meta(EXPR)]` + `nest_rs_http::Reflector`.
+
+**Fail-secure boot.** Specs resolve at `configure`: an unresolvable
+global spec (provider's module not imported) **fails boot** naming the
+type (`HttpBootCheck`) — never a silent drop. An imperative
+`HttpTransport::mount(...)` under active global guards fails boot too
+(`fail_secure_strict`, default `true`; `false` downgrades to warn).
+Self-mounts declare an `EdgePosture`: `Guarded` (default — WS upgrade)
+gets the global chain at its edge; `Exempt` (graphql / mcp / openapi)
+gates in-band or is deliberately public. `/graphql` stays fail-secure
+under `Exempt` through the **fallback operation guard**: with no
+registered `GraphqlOperationGuard`, the global guard pool runs in-band
+per operation (a registered bridge *replaces* it — it runs the same
+guards itself, so nothing double-runs). The graphql endpoint's `Public`
+data marker is load-bearing: it lets `AuthGuard` admit anonymous
+operations through to resolver gates.
+
+**Mapped errors never commit.** A route-site `Filter`/`ExceptionFilter`
+that maps a handler `Err` to a response tags it
+`nest_rs_core::MappedError`; `DbContext` rolls back regardless of the
+mapped status. (Global filters sit outside `DbContext` — the rollback
+already happened.)
 
 URI versioning: `#[controller(version = "1")]` mounts under `/v1`
 (`version_path` is the single source of truth).
@@ -243,7 +290,7 @@ writes `type AuthGuard = AuthGuard<JwtStrategy<Claims>>` once.
 **`JwtService`** is global infra (factory phase); symmetric secret or
 EdDSA key pair — a resource server holds **only the public key**
 (can't mint tokens). So **token issuance is its own app**
-(`apps/publish-auth` signs; `apps/publish-api` only verifies). They
+(`apps/auth` signs; `apps/api` only verifies). They
 share `crates/features` and the DB, never RPC each other.
 
 ### Authz follows port + adapters
@@ -300,12 +347,18 @@ from the ambient ability (no ability ⇒ `TRUE`, unscoped). Route-model
 binding goes through the service (`Bind`/`bind` delegate to
 `CrudService::access`).
 
-Install depths: **executor** outermost via auto-registered `DbContext`
-interceptor (just import `DatabaseModule`) — safe methods on the pool,
-mutating in a transaction (commit on 2xx/3xx, rollback otherwise);
-**ability** inside per-route guards via the `#[routes]` shaper (only
-seam that runs after `AbilityGuard` and still wraps the handler) —
-keeps `nest-rs-http` unaware of authz/ORM.
+Install depths: **executor** via the auto-registered `DbContext`
+interceptor (just import `DatabaseModule`) — innermost transport band
+(−10), wrapping routing, so it covers controllers and self-mounts alike.
+Safe methods run on the pool; mutating methods in a transaction —
+commit on 2xx/3xx, rollback otherwise **and** on any
+`MappedError`-tagged response. Guards run *inside* it (post-routing):
+a denied mutation opens an empty txn that rolls back — fail-secure
+holds; the wasted `BEGIN`/`ROLLBACK` is the accepted cost of guards
+reading `#[public]` after routing (lazy executor = the planned fix).
+**Ability** installs inside per-route guards via the `#[routes]` shaper
+(only seam that runs after `AbilityGuard` and still wraps the handler)
+— keeps `nest-rs-http` unaware of authz/ORM.
 
 **HTTP response masking** (`nest-rs-authz` `http` / `Authorize`).
 After success: parse JSON body → build `Model` via `wire_to_model`
@@ -362,9 +415,9 @@ allows at most one `#[ComplexObject]` per wire type, so a custom
 `#[field_resolver]` on the resolver cannot live next to an auto-resolved
 relation on the same entity — pick one source per `ComplexObject`.
 
-Exemplar apps: **Publish** workspace — `apps/publish-api` (REST + GraphQL +
-DB + authz), `apps/publish-live` (WebSockets), `apps/publish-auth` (issuer),
-`apps/publish-assistant` (MCP), `apps/publish-worker` (queue). Simple
+Exemplar apps: **Publish** workspace — `apps/api` (REST + GraphQL +
+DB + authz), `apps/live` (WebSockets), `apps/auth` (issuer),
+`apps/assistant` (MCP), `apps/worker` (queue). Simple
 hello/blog layouts are CLI-scaffolded only — see docs, not hosted in this repo.
 Tutorial feature exemplar: `crates/features/src/posts/`.
 
@@ -434,6 +487,22 @@ Snake_case, no dotted variants.
   `loader.rs`/`credential.rs` unless a second pattern appears twice.
   Extra `impl` blocks for `CrudService`, `#[dataloader]`, `#[hooks]`
   are macro requirements, not extra files. Single-role crates stay flat.
+- **A service's type ends in `Service`; one service per `service.rs`.**
+  Absolute: a business-logic provider whose name doesn't end in
+  `Service` is mis-modeled — rename it, or it isn't a service. One
+  responsibility per service ⇒ one service per file; genuinely distinct
+  responsibilities become distinct services, never two structs crammed
+  into one `service.rs`. Being injectable doesn't make a provider a
+  service: a client, connection, config, guard, strategy, or pipe is a
+  *plain provider* and keeps a role-descriptive name.
+- **Injected service field/variable = `svc`, else `<name>_svc`.** A
+  struct (or test) with exactly one service dependency names it `svc`;
+  with several — or any ambiguity — use the explicit suffix
+  `<name>_svc` (`users_svc: Arc<UsersService>`, `jwt_svc:
+  Arc<JwtService>` — `JwtService` ends in `Service`, so it counts).
+  Non-service deps keep descriptive names (`db: Arc<DatabaseConnection>`,
+  `queue: Arc<QueueConnection>`, `oauth: Arc<OAuth2Client>`,
+  `config: Arc<IssuerConfig>`).
 - **Same-role plural ⇒ pluralized sub-folder** (`pipes/`,
   `strategies/`). Trait file (singular) stays at parent; sub-folder's
   `mod.rs` re-exports flat.
@@ -555,7 +624,7 @@ This file plus the **code** are the source of truth.
 1. **This file** — durable rules.
 2. **`crates/features/src/users/`** — reference feature; copy before
    inventing.
-3. **`apps/publish-api/`** — reference app (REST + GraphQL + DB
+3. **`apps/api/`** — reference app (REST + GraphQL + DB
    + authz); `module.rs` is canonical composition.
 4. **`crates/nestrs-<concern>/`** for whatever you touch.
 

@@ -20,12 +20,12 @@ attached.
 
 ## Mount the throttler
 
-```rust title="apps/publish-api/src/module.rs"
+```rust title="apps/api/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_throttler::ThrottlerModule;
 
 #[module(imports = [ThrottlerModule::for_root(None)])]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
 Passing `None` loads `ThrottlerConfig` from `NESTRS_THROTTLER__*`; the

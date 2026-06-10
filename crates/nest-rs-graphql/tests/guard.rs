@@ -3,7 +3,9 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Error, Result};
-use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, GraphqlResolverGuard, async_trait, resolver};
+use nest_rs_graphql::{
+    GraphqlContextSeed, GraphqlModule, GraphqlResolverGuard, async_trait, resolver,
+};
 use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;

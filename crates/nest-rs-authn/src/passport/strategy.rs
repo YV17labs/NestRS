@@ -1,19 +1,18 @@
-//! [`Strategy`] trait and [`Outcome`] — how a request becomes an authenticated principal.
+//! [`Strategy`] trait — how a request becomes an authenticated principal.
 
 use async_trait::async_trait;
-use poem::{Request, Response};
+use poem::Request;
 
 use crate::error::AuthError;
 
-/// A strategy either authenticates or challenges the client (redirect / 401).
-pub enum Outcome<P> {
-    Authenticated(P),
-    Challenge(Response),
-}
-
+/// Turns a request into a principal. A strategy either authenticates the
+/// caller (`Ok(principal)`) or reports why it could not (`Err`). A strategy
+/// never issues a transport response itself — a redirect-style flow (OAuth
+/// `/authorize`) is a plain handler, so authentication stays a pure
+/// request → principal mapping.
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
     type Principal: Clone + Send + Sync + 'static;
 
-    async fn authenticate(&self, req: &mut Request) -> Result<Outcome<Self::Principal>, AuthError>;
+    async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError>;
 }

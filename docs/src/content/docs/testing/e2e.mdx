@@ -16,10 +16,10 @@ never trips.
 
 ## A round-trip e2e test
 
-```rust title="apps/publish-api/tests/e2e.rs"
+```rust title="apps/api/tests/e2e.rs"
 use nest_rs_authn::JwtConfig;
 use nest_rs_testing::{EphemeralDatabase, TestApp};
-use publish_api::PublishApiModule;
+use api::ApiModule;
 use poem::http::header;
 use serde_json::json;
 
@@ -28,7 +28,7 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
         .await
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
-        .module::<PublishApiModule>()
+        .module::<ApiModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(JwtConfig {
@@ -37,7 +37,7 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
         })
         .build()
         .await
-        .expect("PublishApiModule boots against the throwaway database");
+        .expect("ApiModule boots against the throwaway database");
     (db, app)
 }
 
@@ -65,7 +65,7 @@ async fn create_then_list_users() {
 }
 ```
 
-`TestApp::builder().module::<PublishApiModule>()` runs the same
+`TestApp::builder().module::<ApiModule>()` runs the same
 four-phase boot as `main`, including the access-graph check. A wiring
 regression fails this test, in this binary.
 
@@ -77,7 +77,7 @@ multiple binaries: keep one top-level `e2e.rs`, declare modules under
 it, and share the `boot()` helper through `tests/e2e/common/mod.rs`.
 
 ```text frame="none"
-apps/publish-api/
+apps/api/
 └── tests/
     ├── e2e.rs
     └── e2e/
@@ -91,7 +91,7 @@ apps/publish-api/
 
 `tests/e2e.rs` becomes a flat index:
 
-```rust title="apps/publish-api/tests/e2e.rs"
+```rust title="apps/api/tests/e2e.rs"
 mod common;
 mod users;
 mod orgs;
@@ -101,7 +101,7 @@ mod graphql;
 
 Each module pulls shared setup from `crate::common`:
 
-```rust title="apps/publish-api/tests/e2e/users.rs"
+```rust title="apps/api/tests/e2e/users.rs"
 use crate::common::{admin_token, boot};
 use poem::http::header;
 use serde_json::json;
@@ -151,7 +151,7 @@ rest of the app builds normally.
 ```rust
 let db = EphemeralDatabase::create::<migrations::Migrator>().await?;
 let app = TestApp::builder()
-    .module::<PublishApiModule>()
+    .module::<ApiModule>()
     .provide_arc(db.connection())
     .build()
     .await?;
@@ -201,7 +201,7 @@ impl WeatherProvider for StubWeather {
 }
 
 let app = TestApp::builder()
-    .module::<PublishAssistantModule>()
+    .module::<AssistantModule>()
     .override_dyn::<dyn WeatherProvider>(Arc::new(StubWeather))
     .build()
     .await?;
@@ -272,7 +272,7 @@ still runs, so the access-graph check still fires.
 
 ```rust
 let app = TestApp::builder()
-    .module::<PublishWorkerModule>()
+    .module::<WorkerModule>()
     .provide_arc(db.connection())
     .build_headless()
     .await?;
@@ -298,7 +298,7 @@ E2E is not enough on its own. After the test goes green, run the binary
 and `curl` the affected endpoint:
 
 ```bash frame="terminal"
-$ just dev publish-api &
+$ just dev api &
 $ curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/users
 $ kill %1
 ```

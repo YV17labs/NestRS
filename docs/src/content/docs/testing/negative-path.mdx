@@ -31,7 +31,7 @@ catch bugs the happy path can't:
 
 ## Auth refused
 
-```rust title="apps/publish-api/tests/e2e/users_negatives.rs"
+```rust title="apps/api/tests/e2e/users_negatives.rs"
 use crate::common::boot;
 use poem::http::{StatusCode, header};
 use serde_json::json;
@@ -148,7 +148,7 @@ A separate module per feature, grouped under `tests/e2e/`, keeps the
 suite navigable:
 
 ```text frame="none"
-apps/publish-api/tests/e2e/
+apps/api/tests/e2e/
 ├── users.rs              ← happy paths
 ├── users_negatives.rs    ← failure modes
 ├── orgs.rs

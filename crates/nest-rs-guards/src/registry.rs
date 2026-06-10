@@ -10,8 +10,6 @@ use nest_rs_pipes::GlobalPipe;
 
 use crate::Guard;
 
-pub use nest_rs_exception_filters::ExceptionFilterSpecs;
-
 /// One entry in the `use_guards_global` list. Created by [`guard::<T>()`];
 /// resolved against the live container at configure time.
 pub struct GuardSpec {
@@ -77,6 +75,35 @@ impl PipeSpec {
 /// `AppBuilder::use_guards_global(...)`. Each transport reads it at
 /// configure time and resolves against the live container.
 pub struct GuardSpecs(pub Vec<GuardSpec>);
+
+impl GuardSpecs {
+    /// Resolve every spec into the composed global chain — deduped and
+    /// priority-ordered through the same `compose_chain` as every other
+    /// Layer System site. For the single-site consumers that execute the
+    /// global pool on their own (the self-mount edge wrap, the GraphQL
+    /// fallback operation guard); the per-route shaper builds its own
+    /// bucket because it composes against controller / method scopes too.
+    pub fn resolve_chain(
+        &self,
+        container: &Container,
+        label: &str,
+    ) -> Vec<nest_rs_core::ResolvedLayer<dyn Guard>> {
+        let global: Vec<nest_rs_core::ResolvedLayer<dyn Guard>> = self
+            .0
+            .iter()
+            .filter_map(|spec| {
+                spec.resolve(container)
+                    .map(|layer| nest_rs_core::ResolvedLayer {
+                        type_id: spec.type_id,
+                        name: spec.name,
+                        source: nest_rs_core::LayerSite::Global,
+                        layer,
+                    })
+            })
+            .collect();
+        nest_rs_core::compose_chain(global, Vec::new(), Vec::new(), &[], label)
+    }
+}
 
 /// The unresolved `Vec<PipeSpec>` seeded by `AppBuilder::use_pipes_global`.
 pub struct PipeSpecs(pub Vec<PipeSpec>);

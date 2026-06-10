@@ -11,4 +11,4 @@ mod strategy;
 pub use extractors::{basic_credentials, bearer_token};
 pub use guard::AuthGuard;
 pub use strategies::JwtStrategy;
-pub use strategy::{Outcome, Strategy};
+pub use strategy::Strategy;

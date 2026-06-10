@@ -1,14 +1,16 @@
 //! [`RouteShaper`] — the HTTP per-route shaper. Implements `Interceptor`
 //! so the `#[routes]` macro can wrap it around each route's endpoint at
-//! mount time. Orchestrates guards / pipes / exception-filters at the
-//! route scope, deduplicating against the global chain by `TypeId`.
+//! mount time. Orchestrates the request-side layer families — guards and
+//! pipes — at the route scope, deduplicating against the global chain by
+//! `TypeId`. The response-side families (exception-filters, filters,
+//! interceptors) wrap the endpoint *inside* the shaper — see
+//! [`route_layers`](crate::dispatch::route_layers).
 
 use std::any::TypeId;
-use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use nest_rs_core::{Container, Layer, RequestScope};
-use nest_rs_exception_filters::ExceptionFilterErased;
+use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
+use nest_rs_core::{Container, Layer};
 use nest_rs_http::poem::http::StatusCode;
 use nest_rs_http::poem::{Body, Request, Response, Result};
 use nest_rs_interceptors::{Interceptor, Next};
@@ -17,37 +19,26 @@ use serde_json::Value;
 
 use crate::Guard;
 use crate::dispatch::denial_convert::denial_to_http_response;
-use crate::dispatch::scoped_spec::{
-    ScopedExceptionFilterSpec, ScopedGuardSpec, ScopedPipeSpec, resolve_specs,
-};
-use crate::layer_chain::{LayerSource, ResolvedLayer, compose_chain};
-use crate::registry::{ExceptionFilterSpecs, GuardSpecs, PipeSpecs};
+use crate::dispatch::scoped_spec::{ScopedGuardSpec, ScopedPipeSpec, resolve_specs};
+use crate::registry::{GuardSpecs, PipeSpecs};
 
 /// HTTP per-route shaper.
 ///
 /// Constructed by the `#[routes]` macro at mount time with the
 /// controller / method scope specs. Resolves the global + per-route
-/// chain on first request, dedups by `TypeId`, caches in `OnceLock`s,
-/// runs every layer in declaration order. No `#[public]` skip — guards
-/// decide what `#[public]` means for them via the
-/// [`Public`](nest_rs_core::Public) marker attached as request data.
+/// chain **eagerly against the mount-time container** (the container is
+/// final at `configure`; resolving lazily would only delay surfacing a
+/// broken chain to the first request), dedups by `TypeId`, runs every
+/// layer in declaration order. No `#[public]` skip — guards decide what
+/// `#[public]` means for them via the [`Public`](nest_rs_core::Public)
+/// marker attached as request data.
 ///
 /// Implements [`Layer`] only to satisfy the `Interceptor: Layer` bound;
 /// the shaper never participates in the dedup pass (it *is* the dedup
 /// pass), so default `priority()` / `name()` are correct.
 pub struct RouteShaper {
-    route_label: &'static str,
-    controller_guards: Vec<ScopedGuardSpec>,
-    method_guards: Vec<ScopedGuardSpec>,
-    force_guards: Vec<TypeId>,
-    controller_pipes: Vec<ScopedPipeSpec>,
-    method_pipes: Vec<ScopedPipeSpec>,
-    no_pipes: bool,
-    controller_exception_filters: Vec<ScopedExceptionFilterSpec>,
-    method_exception_filters: Vec<ScopedExceptionFilterSpec>,
-    cached_guards: OnceLock<Vec<ResolvedLayer<dyn Guard>>>,
-    cached_pipes: OnceLock<Vec<ResolvedLayer<dyn GlobalPipe>>>,
-    cached_exception_filters: OnceLock<Vec<ResolvedLayer<dyn ExceptionFilterErased>>>,
+    guards: Vec<ResolvedLayer<dyn Guard>>,
+    pipes: Vec<ResolvedLayer<dyn GlobalPipe>>,
 }
 
 impl RouteShaper {
@@ -55,6 +46,7 @@ impl RouteShaper {
     // call sites the user never reads.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        container: &Container,
         route_label: &'static str,
         controller_guards: Vec<ScopedGuardSpec>,
         method_guards: Vec<ScopedGuardSpec>,
@@ -62,123 +54,88 @@ impl RouteShaper {
         controller_pipes: Vec<ScopedPipeSpec>,
         method_pipes: Vec<ScopedPipeSpec>,
         no_pipes: bool,
-        controller_exception_filters: Vec<ScopedExceptionFilterSpec>,
-        method_exception_filters: Vec<ScopedExceptionFilterSpec>,
     ) -> Self {
-        Self {
+        let guards = resolve_guards(
+            container,
             route_label,
-            controller_guards,
-            method_guards,
-            force_guards,
-            controller_pipes,
-            method_pipes,
-            no_pipes,
-            controller_exception_filters,
-            method_exception_filters,
-            cached_guards: OnceLock::new(),
-            cached_pipes: OnceLock::new(),
-            cached_exception_filters: OnceLock::new(),
-        }
+            &controller_guards,
+            &method_guards,
+            &force_guards,
+        );
+        let pipes = if no_pipes {
+            // `#[no_pipes]` skips every pipe — globals, controller, method.
+            Vec::new()
+        } else {
+            resolve_pipes(container, route_label, &controller_pipes, &method_pipes)
+        };
+        Self { guards, pipes }
     }
+}
 
-    fn resolve_guards(&self, container: &Container) -> Vec<ResolvedLayer<dyn Guard>> {
-        let mut global: Vec<ResolvedLayer<dyn Guard>> = Vec::new();
-        if let Some(specs) = container.get::<GuardSpecs>() {
-            for spec in &specs.0 {
-                if let Some(layer) = spec.resolve(container) {
-                    global.push(ResolvedLayer {
-                        type_id: spec.type_id,
-                        name: spec.name,
-                        source: LayerSource::Global,
-                        layer,
-                    });
-                }
+fn resolve_guards(
+    container: &Container,
+    route_label: &str,
+    controller_guards: &[ScopedGuardSpec],
+    method_guards: &[ScopedGuardSpec],
+    force_guards: &[TypeId],
+) -> Vec<ResolvedLayer<dyn Guard>> {
+    let mut global: Vec<ResolvedLayer<dyn Guard>> = Vec::new();
+    if let Some(specs) = container.get::<GuardSpecs>() {
+        for spec in &specs.0 {
+            if let Some(layer) = spec.resolve(container) {
+                global.push(ResolvedLayer {
+                    type_id: spec.type_id,
+                    name: spec.name,
+                    source: LayerSite::Global,
+                    layer,
+                });
             }
         }
-        let controller = resolve_specs(container, &self.controller_guards, LayerSource::Controller);
-        let method = resolve_specs(container, &self.method_guards, LayerSource::Method);
-        let chain = compose_chain::<dyn Guard>(
-            global,
-            controller,
-            method,
-            &self.force_guards,
-            self.route_label,
-        );
-        log_effective_chain(self.route_label, "guards", &chain);
-        // Globals are run transport-level by the HTTP `HttpEndpointWrap`
-        // that `use_guards_global` attaches; the per-route chain only
-        // executes the controller/method scopes. Globals stay in the
-        // chain *for dedup*: a controller/method declaration with the
-        // same TypeId is skipped here so it doesn't double-fire.
-        chain
-            .into_iter()
-            .filter(|entry| entry.source != LayerSource::Global)
-            .collect()
     }
+    let controller = resolve_specs(container, controller_guards, LayerSite::Controller);
+    let method = resolve_specs(container, method_guards, LayerSite::Method);
+    let chain = compose_chain::<dyn Guard>(
+        dedup_bucket(global),
+        controller,
+        method,
+        force_guards,
+        route_label,
+    );
+    log_effective_chain(route_label, "guards", &chain);
+    // The shaper is the single execution site for the guard pool on a
+    // routed handler: global + controller + method, deduped by `TypeId`
+    // (broadest scope wins), run here *after* routing so a guard reads
+    // `#[public]`. Self-mounting endpoints (no shaper) get the global
+    // chain at the transport edge (`SelfMountGuardWrap`) or in-band
+    // (GraphQL operation guard) instead.
+    chain
+}
 
-    fn resolve_pipes(&self, container: &Container) -> Vec<ResolvedLayer<dyn GlobalPipe>> {
-        // `#[no_pipes]` skips every pipe — globals, controller, method.
-        if self.no_pipes {
-            return Vec::new();
-        }
-        let mut global: Vec<ResolvedLayer<dyn GlobalPipe>> = Vec::new();
-        if let Some(specs) = container.get::<PipeSpecs>() {
-            for spec in &specs.0 {
-                if let Some(layer) = spec.resolve(container) {
-                    global.push(ResolvedLayer {
-                        type_id: spec.type_id,
-                        name: spec.name,
-                        source: LayerSource::Global,
-                        layer,
-                    });
-                }
+fn resolve_pipes(
+    container: &Container,
+    route_label: &str,
+    controller_pipes: &[ScopedPipeSpec],
+    method_pipes: &[ScopedPipeSpec],
+) -> Vec<ResolvedLayer<dyn GlobalPipe>> {
+    let mut global: Vec<ResolvedLayer<dyn GlobalPipe>> = Vec::new();
+    if let Some(specs) = container.get::<PipeSpecs>() {
+        for spec in &specs.0 {
+            if let Some(layer) = spec.resolve(container) {
+                global.push(ResolvedLayer {
+                    type_id: spec.type_id,
+                    name: spec.name,
+                    source: LayerSite::Global,
+                    layer,
+                });
             }
         }
-        let controller = resolve_specs(container, &self.controller_pipes, LayerSource::Controller);
-        let method = resolve_specs(container, &self.method_pipes, LayerSource::Method);
-        let chain =
-            compose_chain::<dyn GlobalPipe>(global, controller, method, &[], self.route_label);
-        log_effective_chain(self.route_label, "pipes", &chain);
-        chain
     }
-
-    fn resolve_exception_filters(
-        &self,
-        container: &Container,
-    ) -> Vec<ResolvedLayer<dyn ExceptionFilterErased>> {
-        let mut global: Vec<ResolvedLayer<dyn ExceptionFilterErased>> = Vec::new();
-        if let Some(specs) = container.get::<ExceptionFilterSpecs>() {
-            for spec in &specs.0 {
-                if let Some(layer) = spec.resolve(container) {
-                    global.push(ResolvedLayer {
-                        type_id: spec.type_id,
-                        name: spec.name,
-                        source: LayerSource::Global,
-                        layer,
-                    });
-                }
-            }
-        }
-        let controller = resolve_specs(
-            container,
-            &self.controller_exception_filters,
-            LayerSource::Controller,
-        );
-        let method = resolve_specs(
-            container,
-            &self.method_exception_filters,
-            LayerSource::Method,
-        );
-        let chain = compose_chain::<dyn ExceptionFilterErased>(
-            global,
-            controller,
-            method,
-            &[],
-            self.route_label,
-        );
-        log_effective_chain(self.route_label, "exception_filters", &chain);
-        chain
-    }
+    let controller = resolve_specs(container, controller_pipes, LayerSite::Controller);
+    let method = resolve_specs(container, method_pipes, LayerSite::Method);
+    let chain =
+        compose_chain::<dyn GlobalPipe>(dedup_bucket(global), controller, method, &[], route_label);
+    log_effective_chain(route_label, "pipes", &chain);
+    chain
 }
 
 impl Layer for RouteShaper {}
@@ -186,46 +143,17 @@ impl Layer for RouteShaper {}
 #[async_trait]
 impl Interceptor for RouteShaper {
     async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
-        let scope = req.extensions().get::<Arc<RequestScope>>().cloned();
-        let Some(scope) = scope else {
-            return next.run(req).await;
-        };
-        let container = scope.root();
-
-        let guards = self
-            .cached_guards
-            .get_or_init(|| self.resolve_guards(container));
-        for entry in guards {
+        for entry in &self.guards {
             if let Err(denial) = entry.layer.check_http(&mut req).await {
                 return Ok(denial_to_http_response(denial));
             }
         }
 
-        let pipes = self
-            .cached_pipes
-            .get_or_init(|| self.resolve_pipes(container));
-        if !pipes.is_empty() {
-            apply_body_pipes(&mut req, pipes).await?;
+        if !self.pipes.is_empty() {
+            apply_body_pipes(&mut req, &self.pipes).await?;
         }
 
-        let filters = self
-            .cached_exception_filters
-            .get_or_init(|| self.resolve_exception_filters(container));
-
-        match next.run(req).await {
-            Ok(resp) => Ok(resp),
-            Err(err) if filters.is_empty() => Err(err),
-            Err(err) => {
-                let mut current = err;
-                for entry in filters {
-                    match entry.layer.try_catch(current).await {
-                        Ok(resp) => return Ok(resp),
-                        Err(unchanged) => current = unchanged,
-                    }
-                }
-                Err(current)
-            }
-        }
+        next.run(req).await
     }
 }
 

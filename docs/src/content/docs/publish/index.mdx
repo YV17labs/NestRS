@@ -22,22 +22,22 @@ reference: Publish.
 
 | App | Port | Role in the story | Transports |
 |-----|------|-------------------|------------|
-| [`publish-auth`](/security/authentication/issuer-and-resource-server/) | 3001 | Authors sign in (OAuth2, JWT issuance) | HTTP |
-| [`publish-api`](/tutorial/) | 3002 | Main API — users, orgs, audio hooks | HTTP, GraphQL, OpenAPI |
-| [`publish-assistant`](/mcp/) | 3003 | AI tools (summarize, tag, weather demo) | MCP |
-| [`publish-live`](/websockets/) | 3004 | Live comments and notifications | WebSockets |
-| [`publish-worker`](/queue/) | — | Async jobs — newsletters, audio queue | Queue, Schedule |
+| [`auth`](/security/authentication/issuer-and-resource-server/) | 3001 | Authors sign in (OAuth2, JWT issuance) | HTTP |
+| [`api`](/tutorial/) | 3002 | Main API — users, orgs, audio hooks | HTTP, GraphQL, OpenAPI |
+| [`assistant`](/mcp/) | 3003 | AI tools (summarize, tag, weather demo) | MCP |
+| [`live`](/websockets/) | 3004 | Live comments and notifications | WebSockets |
+| [`worker`](/queue/) | — | Async jobs — newsletters, audio queue | Queue, Schedule |
 
 ```bash
-just db up                    # Postgres — publish-api + publish-auth
-just dev publish-auth         # issuer on :3001
-just dev publish-api          # resource server on :3002
-just dev publish-live         # WebSockets on :3004
-just dev publish-assistant    # MCP on :3003
-just dev publish-worker       # headless — needs Redis
+just db up                    # Postgres — api + auth
+just dev auth         # issuer on :3001
+just dev api          # resource server on :3002
+just dev live         # WebSockets on :3004
+just dev assistant    # MCP on :3003
+just dev worker       # headless — needs Redis
 ```
 
-`publish-api` and `publish-auth` share the same database and the `features`
+`api` and `auth` share the same database and the `features`
 crate; the worker shares Redis with the API's queue producer. Tokens are
 self-contained JWTs — the API verifies with a public key, never calls the
 issuer over HTTP.
@@ -61,7 +61,7 @@ Three entry points — two learning paths (CLI) and one hosted reference (this r
 
 <Aside type="tip">
 The fullest running composition is
-[`apps/publish-api/`](https://github.com/NestRS/NestRS/tree/main/apps/publish-api)
+[`apps/api/`](https://github.com/NestRS/NestRS/tree/main/apps/api)
 (users, orgs, audio, schedule, queue producer). The tutorial feature exemplar
 lives in
 [`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/posts).
@@ -74,12 +74,12 @@ before inventing a second pattern.
 
 | Feature (`crates/features/`) | Publish role |
 |------------------------------|--------------|
-| `posts` | Blog articles — `publish-api` (HTTP, org + author scoped) |
-| `users` | Authors and editors — `publish-api` |
-| `orgs` | Publications / tenants — `publish-api` |
-| `oauth` | OAuth2 login on `publish-auth` |
+| `posts` | Blog articles — `api` (HTTP, org + author scoped) |
+| `users` | Authors and editors — `api` |
+| `orgs` | Publications / tenants — `api` |
+| `oauth` | OAuth2 login on `auth` |
 | `audio` | Media attachments + queue/schedule hooks |
-| `authn` / `authz` | JWT verification and row-level policy — `publish-api`, not the tutorial blog |
+| `authn` / `authz` | JWT verification and row-level policy — `api`, not the tutorial blog |
 
 ## Where to go next
 

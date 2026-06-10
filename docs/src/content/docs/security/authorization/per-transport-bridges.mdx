@@ -39,7 +39,7 @@ A controller imports the matching module along with its feature
 module. The transports transitively bring every layer the feature
 needs.
 
-```rust title="apps/publish-api/src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         DatabaseModule::for_root(None),
@@ -52,7 +52,7 @@ needs.
         UsersWsModule,
     ],
 )]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
 ## HTTP — the direct case

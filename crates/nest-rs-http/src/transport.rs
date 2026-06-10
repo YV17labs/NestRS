@@ -8,13 +8,17 @@ use poem::middleware::{Cors, SetHeader};
 use poem::{EndpointExt, IntoEndpoint, Response, Route, Server};
 use tokio_util::sync::CancellationToken;
 
+use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
 use crate::controller::HttpControllerMeta;
-use crate::endpoint::HttpEndpointMeta;
+use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::interceptor::HttpEndpointWrap;
 use crate::raw_body::RawBodyLimit;
 use crate::tls::TlsConfig;
 
 type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
+/// Imperative mount paired with its path — kept so the fail-secure boot
+/// check can name the endpoints that bypass the layer pool.
+type NamedMount = (String, MountFn);
 
 /// Join a controller prefix with a route path the way poem's nesting does:
 /// `("/health", "/live") -> "/health/live"`. Public so `nestrs-openapi`
@@ -42,23 +46,27 @@ pub fn version_path(version: Option<&str>, path: &str) -> String {
     }
 }
 
-/// HTTP [`Transport`] backed by poem. At [`Transport::configure`] time, mounts
-/// every `#[module(providers = [...])]`-declared [`HttpControllerMeta`] and
+/// HTTP [`Transport`] backed by poem. At [`Transport::configure`] time, runs
+/// every discovered [`HttpBootCheck`], mounts every
+/// `#[module(providers = [...])]`-declared [`HttpControllerMeta`] and
 /// [`HttpEndpointMeta`], then any imperative [`HttpTransport::mount`], then
 /// folds every discovered [`HttpEndpointWrap`] wrap around the assembled
-/// endpoint. Global Layer System wraps (guards / interceptors / filters /
-/// pipes / exception filters) attach themselves through
+/// endpoint. Transport-edge wraps (the global interceptor / filter pools,
+/// infra `#[interceptor]`s like `DbContext`) attach themselves through
 /// [`HttpEndpointWrap`] from their own crates — this transport stays free
-/// of the cross-transport trait crates and only knows about poem.
+/// of the cross-transport trait crates and only knows about poem. Guards
+/// and pipes never wrap here: they execute in the per-route shaper
+/// (post-routing) or at a `Guarded` self-mount's edge.
 pub struct HttpTransport {
     bind: String,
-    mounts: Vec<MountFn>,
+    mounts: Vec<NamedMount>,
     cors: Option<Cors>,
     tls: Option<TlsConfig>,
     server_header: Option<&'static str>,
     global_prefix: Option<String>,
     max_body_bytes: Option<usize>,
     request_timeout: Option<std::time::Duration>,
+    fail_secure_strict: bool,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -90,8 +98,21 @@ impl HttpTransport {
             global_prefix: None,
             max_body_bytes: None,
             request_timeout: None,
+            // Fail-secure by default: when global guards are active, an
+            // endpoint the transport cannot shape fails boot instead of
+            // mounting unguarded. Opt out via `fail_secure_strict(false)` /
+            // `NESTRS_HTTP__FAIL_SECURE_STRICT=false`.
+            fail_secure_strict: true,
             endpoint: None,
         }
+    }
+
+    /// `true` (the default) makes `configure` **fail** when global guards are
+    /// registered and an imperative [`mount`](Self::mount) endpoint would
+    /// bypass the guard pool; `false` downgrades the violation to a `warn`.
+    pub fn fail_secure_strict(mut self, strict: bool) -> Self {
+        self.fail_secure_strict = strict;
+        self
     }
 
     /// Mount every controller under a shared prefix (e.g. `/api`). Useful
@@ -158,10 +179,14 @@ impl HttpTransport {
         <E::Endpoint as poem::Endpoint>::Output: poem::IntoResponse,
     {
         let path = path.into();
-        self.mounts.push(Box::new(move |container, route| {
-            let endpoint = build(container).into_endpoint().map_to_response().boxed();
-            route.nest(path.clone(), endpoint)
-        }));
+        let mount_path = path.clone();
+        self.mounts.push((
+            path,
+            Box::new(move |container, route| {
+                let endpoint = build(container).into_endpoint().map_to_response().boxed();
+                route.nest(mount_path.clone(), endpoint)
+            }),
+        ));
         self
     }
 
@@ -177,6 +202,12 @@ impl HttpTransport {
 impl Transport for HttpTransport {
     async fn configure(&mut self, container: &Container) -> Result<()> {
         let discovery = DiscoveryService::new(container);
+        // Boot checks first — a misconfigured global layer pool (a spec whose
+        // provider was never registered) must fail boot before anything
+        // mounts; resolved-at-configure means dropped-silently otherwise.
+        for d in discovery.meta::<HttpBootCheck>() {
+            d.meta.run(container).map_err(|msg| anyhow::anyhow!(msg))?;
+        }
         let mut route = Route::new();
 
         for d in discovery.meta::<HttpControllerMeta>() {
@@ -192,6 +223,15 @@ impl Transport for HttpTransport {
             }
             route = d.meta.mount(container, route);
         }
+        // Provided by `use_guards_global` (which can see the `Guard` trait);
+        // absent when no global guard is registered. Applied below to every
+        // `Guarded` self-mount — they have no per-route shaper to carry the
+        // global guard pool, so the transport runs it at their edge.
+        let self_mount_guard = discovery
+            .meta::<SelfMountGuardWrap>()
+            .into_iter()
+            .next()
+            .map(|d| d.meta);
         for d in discovery.meta::<HttpEndpointMeta>() {
             tracing::info!(
                 target: "nest_rs::routes",
@@ -200,9 +240,49 @@ impl Transport for HttpTransport {
                 d.meta.path(),
                 d.meta.label(),
             );
-            route = d.meta.mount(container, route);
+            match (d.meta.posture(), &self_mount_guard) {
+                (EdgePosture::Guarded, Some(wrap)) => {
+                    // Isolate this self-mount into a fresh sub-route, wrap it
+                    // with the global guard chain, and nest it back without
+                    // stripping its own path (so the inner route still matches).
+                    let isolated: BoxEndpoint<'static, Response> =
+                        d.meta.mount(container, Route::new()).boxed();
+                    let wrapped = wrap.apply(container, isolated);
+                    route = route.nest_no_strip(d.meta.path(), wrapped);
+                }
+                _ => {
+                    // `Exempt` surfaces gate in-band (GraphQL operation guard,
+                    // MCP per-request guard) or are deliberately public
+                    // (OpenAPI docs) — no edge wrap.
+                    route = d.meta.mount(container, route);
+                }
+            }
         }
-        for mount in self.mounts.drain(..) {
+        // Fail-secure completeness check: every controller route is shaped
+        // (its `RouteShaper` runs the global guard pool) and every self-mount
+        // declares an `EdgePosture`, but an imperative `mount(...)` is an
+        // opaque poem endpoint the transport can neither shape nor introspect.
+        // When global guards are active, those endpoints bypass the pool —
+        // strict mode (the default) fails boot, the same posture as the
+        // access graph; opting out downgrades to a warn.
+        if !self.mounts.is_empty() && container.get::<GlobalGuardsActive>().is_some() {
+            let paths: Vec<&str> = self.mounts.iter().map(|(p, _)| p.as_str()).collect();
+            if self.fail_secure_strict {
+                anyhow::bail!(
+                    "fail-secure: imperative mount(...) endpoints bypass the global guard pool: \
+                     {} — route them through a #[controller], guard them explicitly, or opt out \
+                     with HttpTransport::fail_secure_strict(false) / \
+                     NESTRS_HTTP__FAIL_SECURE_STRICT=false",
+                    paths.join(", "),
+                );
+            }
+            tracing::warn!(
+                target: "nest_rs::http",
+                paths = paths.join(", ").as_str(),
+                "imperative mount(...) endpoints bypass the global guard pool — route them through a #[controller] or guard them explicitly",
+            );
+        }
+        for (_, mount) in self.mounts.drain(..) {
             route = mount(container, route);
         }
 
@@ -286,11 +366,11 @@ impl Transport for HttpTransport {
         let bind = self.bind;
         let listener = match self.tls {
             Some(tls) => {
-                tracing::info!(addr = %bind, "https transport listening (TLS)");
+                tracing::debug!(addr = %bind, "https transport listening (TLS)");
                 TcpListener::bind(bind).rustls(tls.into_rustls()).boxed()
             }
             None => {
-                tracing::info!(addr = %bind, "http transport listening");
+                tracing::debug!(addr = %bind, "http transport listening");
                 TcpListener::bind(bind).boxed()
             }
         };

@@ -12,7 +12,7 @@ The **`nestrs`** CLI scaffolds projects in **two layouts** — [standalone](#lay
 `crates/features/` + `apps/*`). **`nestrs new` picks the layout automatically**
 from the directory tree — no mode flags, no config file. Generated code follows
 the same decorators as the framework repo (`users/` for features,
-`publish-api/` for composition apps).
+`api/` for composition apps).
 
 <Aside type="caution">
   The CLI ships on crates.io as **`nest-rs-cli`** (binary name **`nestrs`**),
@@ -138,7 +138,7 @@ Optional **`Dockerfile`** ships in **standalone** mode only.
 Templates — `--template` applies to **new monorepos** and **standalone** crates only.
 Every **workspace app** uses the same thin shell; the CLI scans existing
 `apps/*/src/module.rs` files and pins the next HTTP port in code (same pattern
-as `publish-auth` → 3001, `publish-api` → 3002, …).
+as `auth` → 3001, `api` → 3002, …).
 
 | What | Default | Override |
 |------|---------|----------|
@@ -241,7 +241,7 @@ use features::posts::PostsHttpModule;
     // …
     PostsHttpModule,
 ])]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
 `g resource` emits a self-contained, unauthenticated slice so it compiles in any

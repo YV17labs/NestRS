@@ -1,0 +1,72 @@
+input CreateOrgInput {
+	name: String!
+}
+
+input CreateUserInput {
+	email: String!
+	name: String!
+}
+
+type Mutation {
+	createOrg(input: CreateOrgInput!): Org!
+	createUser(input: CreateUserInput!): User!
+	deleteOrg(id: String!): Boolean!
+	deleteUser(id: String!): Boolean!
+	updateOrg(id: String!, input: UpdateOrgInput!): Org
+	updateUser(id: String!, input: UpdateUserInput!): User
+}
+
+type Org {
+	id: String!
+	name: String!
+	posts: [Post!]!
+	users: [User!]!
+}
+
+type Post {
+	author: User
+	authorId: String!
+	body: String!
+	id: String!
+	org: Org
+	orgId: String!
+	title: String!
+}
+
+type Query {
+	org(id: String!): Org
+	orgs: [Org!]!
+	user(id: String!): User
+	users: [User!]!
+}
+
+input UpdateOrgInput {
+	name: String!
+}
+
+input UpdateUserInput {
+	email: String!
+	name: String!
+}
+
+type User {
+	email: String!
+	id: String!
+	name: String!
+	org: Org
+	orgId: String!
+	posts: [Post!]!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+	mutation: Mutation
+}

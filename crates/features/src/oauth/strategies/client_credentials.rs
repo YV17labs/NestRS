@@ -1,31 +1,28 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nest_rs_authn::{AuthError, Outcome, Strategy, basic_credentials};
+use nest_rs_authn::{AuthError, Strategy, basic_credentials};
 use nest_rs_core::injectable;
 use poem::Request;
 
-use super::super::service::{AuthenticatedClient, OAuthFlow};
+use super::super::service::{AuthenticatedClient, OAuthService};
 
 pub type ClientAuthGuard = nest_rs_authn::AuthGuard<ClientCredentialsStrategy>;
 
 #[injectable]
 pub struct ClientCredentialsStrategy {
     #[inject]
-    flow: Arc<OAuthFlow>,
+    svc: Arc<OAuthService>,
 }
 
 #[async_trait]
 impl Strategy for ClientCredentialsStrategy {
     type Principal = AuthenticatedClient;
 
-    async fn authenticate(
-        &self,
-        req: &mut Request,
-    ) -> Result<Outcome<AuthenticatedClient>, AuthError> {
+    async fn authenticate(&self, req: &mut Request) -> Result<AuthenticatedClient, AuthError> {
         let (client_id, client_secret) =
             basic_credentials(req).ok_or(AuthError::MissingCredentials)?;
-        let client = self.flow.authenticate_client(&client_id, &client_secret)?;
-        Ok(Outcome::Authenticated(client))
+        let client = self.svc.authenticate_client(&client_id, &client_secret)?;
+        Ok(client)
     }
 }

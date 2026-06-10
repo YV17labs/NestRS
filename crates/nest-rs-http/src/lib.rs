@@ -5,6 +5,7 @@
 //! via [`HttpEndpointMeta`]), and any extra endpoint registered with
 //! [`HttpTransport::mount`].
 
+mod boot_check;
 mod client_ip;
 mod config;
 mod context;
@@ -22,6 +23,7 @@ mod shaper;
 mod tls;
 mod transport;
 
+pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
 pub use client_ip::ClientIp;
 pub use config::HttpConfig;
 pub use context::Ctx;
@@ -29,7 +31,7 @@ pub use controller::{
     Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, SchemaFn, schema_of,
 };
 pub use cors::CorsConfig;
-pub use endpoint::HttpEndpointMeta;
+pub use endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
 pub use module::{HttpModule, HttpSetup};
 pub use pipe::{IntoInner, Piped, Valid};

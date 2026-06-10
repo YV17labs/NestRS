@@ -41,6 +41,11 @@ pub struct HttpConfig {
     /// slow/stuck request ties up a connection. `None` ⇒ no timeout. Read from
     /// `NESTRS_HTTP__REQUEST_TIMEOUT_SECS`. Default `30`.
     pub request_timeout_secs: Option<u64>,
+    /// `true` (the default) fails boot when global guards are registered and
+    /// an endpoint the transport cannot shape (an imperative `mount(...)`)
+    /// would bypass the guard pool; `false` downgrades to a `warn`. Read from
+    /// `NESTRS_HTTP__FAIL_SECURE_STRICT`.
+    pub fail_secure_strict: bool,
 }
 
 impl Default for HttpConfig {
@@ -54,6 +59,7 @@ impl Default for HttpConfig {
             global_prefix: None,
             max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
             request_timeout_secs: Some(30),
+            fail_secure_strict: true,
         }
     }
 }
@@ -103,6 +109,7 @@ impl Config for HttpConfig {
                 .parse("MAX_BODY_BYTES")?
                 .or(Some(RawBody::DEFAULT_LIMIT)),
             request_timeout_secs: env.parse("REQUEST_TIMEOUT_SECS")?.or(Some(30)),
+            fail_secure_strict: env.flag("FAIL_SECURE_STRICT", true)?,
         })
     }
 }

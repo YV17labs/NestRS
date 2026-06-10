@@ -7,10 +7,12 @@
 //! by listing the `#[mcp]`-decorated provider — no `<Transport>Module`
 //! activation seam to import.
 
+mod allow_guard;
 mod deny_guard;
 mod endpoint;
 mod guard;
 
+pub use allow_guard::AllowAllMcpGuard;
 pub use endpoint::{endpoint, endpoint_with_guard};
 pub use guard::{BoxFuture, McpOperationGuard};
 

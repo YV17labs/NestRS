@@ -70,15 +70,19 @@ impl UsersService {
         Ok(User::from(&user))
     }
 
+    /// Returns the persisted [`entity::Model`] — never the wire `User` — so
+    /// each transport applies its own field-level masking before exposing it
+    /// (HTTP via response masking, GraphQL via `masked_output_for`). Handing
+    /// back a pre-built `User` would bypass the ability filter.
     pub async fn create_in_org(
         &self,
         input: CreateUserInput,
         org_id: Uuid,
-    ) -> Result<User, ServiceError> {
+    ) -> Result<entity::Model, ServiceError> {
         let active = prepare_new_user(input, org_id, None)?;
         let user = active.insert(&Repo::<Users>::conn()?).await?;
         tracing::info!(id = %user.id, %org_id, "user created");
-        Ok(User::from(&user))
+        Ok(user)
     }
 
     pub async fn find_or_create(

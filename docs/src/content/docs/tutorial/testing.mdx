@@ -140,7 +140,7 @@ async fn create_with_empty_title_returns_400() {
 <Aside type="tip">
 The full negative-path matrix — `401` without a token, `403` across
 tenants, transaction rollback on a `5xx` — lives in
-[`publish-api`](/testing/negative-path/) once auth and row-level policy
+[`api`](/testing/negative-path/) once auth and row-level policy
 are in play. Copy those patterns when you wire
 [`users`](/tutorial/security/); the tutorial stops at validation
 because `blog` stays public.
@@ -200,6 +200,6 @@ feature lives in `crates/features/src/posts/`; copying it is the way
 to add the next bare feature.
 
 When you need auth, GraphQL, org scoping, and the full negative-path
-matrix, open [`publish-api`](/publish/) and
+matrix, open [`api`](/publish/) and
 [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
 — same port-and-adapter layout, more layers on top.

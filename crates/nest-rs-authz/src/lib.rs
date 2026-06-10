@@ -16,6 +16,7 @@ mod action;
 mod builder;
 mod context;
 mod factory;
+mod mask;
 mod predicate;
 mod subject;
 
@@ -24,6 +25,7 @@ pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, RuleSpec};
 pub use context::{current_ability, with_ability};
 pub use factory::AbilityFactory;
+pub use mask::masked_output_ambient;
 pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::Subject;
 

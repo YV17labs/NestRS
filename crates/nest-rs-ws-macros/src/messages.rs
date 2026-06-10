@@ -353,7 +353,7 @@ fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -
             ::nest_rs_guards::layer_chain::ResolvedLayer {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
-                source: ::nest_rs_guards::layer_chain::LayerSource::Method,
+                source: ::nest_rs_guards::layer_chain::LayerSite::Method,
                 layer: ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
                     "#[use_guards] WS message guard `",
                     stringify!(#p),
@@ -374,7 +374,7 @@ fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -
                 .map(|(__tid, __name, __arc)| ::nest_rs_guards::layer_chain::ResolvedLayer {
                     type_id: *__tid,
                     name: __name,
-                    source: ::nest_rs_guards::layer_chain::LayerSource::Global,
+                    source: ::nest_rs_guards::layer_chain::LayerSite::Global,
                     layer: ::std::sync::Arc::clone(__arc),
                 })
                 .collect();

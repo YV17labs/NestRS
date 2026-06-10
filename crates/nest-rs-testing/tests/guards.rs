@@ -222,10 +222,10 @@ struct GlobalDedupModule;
 
 #[tokio::test]
 async fn global_guard_redeclared_per_method_is_deduped_to_one_execution() {
-    // Global declares `DenyGuard`; the method re-declares it. Because the
-    // transport-level interceptor already runs globals, the per-route shaper
-    // skips the method redeclaration (the broadest scope wins). Both layers
-    // would deny, so the route is still 403 — the test pins the shape.
+    // Global declares `DenyGuard`; the method re-declares it. The per-route
+    // shaper composes global + method and dedups by TypeId (broadest scope
+    // wins), so the guard runs once. It denies either way, so the route is
+    // still 403 — the test pins the shape.
     let app = TestApp::builder()
         .module::<GlobalDedupModule>()
         .use_guards_global([guard::<DenyGuard>()])

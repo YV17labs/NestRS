@@ -46,5 +46,8 @@ nest-rs-testing.workspace = true
 # so any test using `#[resolver]` needs the crate in scope. Dev-dep cycle is
 # allowed by Cargo (nest-rs-guards depends on us as a normal dep).
 nest-rs-guards.workspace = true
+# The layer-pool test asserts the transport-edge interceptor pool covers the
+# `/graphql` self-mount. Same allowed dev-dep cycle as nest-rs-guards.
+nest-rs-interceptors.workspace = true
 tokio.workspace = true
 serde_json.workspace = true

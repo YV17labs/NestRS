@@ -97,7 +97,7 @@ impl PostsController {}
 ```
 
 No guards on the struct — `blog` is a public API for the tutorial.
-When you copy [`users`](/tutorial/security/) into `publish-api`, the
+When you copy [`users`](/tutorial/security/) into `api`, the
 same shape picks up `#[use_guards(...)]` and hand-written `create` /
 `get` methods that read the caller's org from a JWT.
 

@@ -88,7 +88,7 @@ neither yet, but the attribute is already in place for when you add one.
 ## Read the field-level attributes
 
 Two patterns cover this entity; a third shows up when you copy
-[`users`](/tutorial/security/) in `publish-api`.
+[`users`](/tutorial/security/) in `api`.
 
 | Attribute | Effect |
 |-----------|--------|
@@ -98,7 +98,7 @@ Two patterns cover this entity; a third shows up when you copy
 
 `#[expose(skip)]` matters once a feature carries server-side columns —
 password hashes, tenant ids set from a JWT. The tutorial leaves every
-column on the wire; [`publish-api`](/publish/) is where `skip` and
+column on the wire; [`api`](/publish/) is where `skip` and
 masking become load-bearing.
 
 <Aside type="caution">

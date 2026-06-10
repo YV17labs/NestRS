@@ -103,8 +103,8 @@ Landed with the first `0.1.0` crates.io release and the alpha docs push:
   testing, …). Published on every push to `main` via
   `.github/workflows/docs-pages.yml`.
 - **Reference apps** — the **Publish** workspace under `apps/`
-  (`publish-auth`, `publish-api`, `publish-assistant`, `publish-live`,
-  `publish-worker`), plus a multi-binary Docker image and a dev container
+  (`auth`, `api`, `assistant`, `live`,
+  `worker`), plus a multi-binary Docker image and a dev container
   with Postgres and Redis. Simple hello/blog layouts are CLI-scaffolded
   only — documented at [nestrs.dev](https://nestrs.dev), not hosted here.
 - **Crate-level READMEs** — every framework crate ships a minimal `README.md`

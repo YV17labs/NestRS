@@ -34,7 +34,10 @@ where
     ExceptionFilterSpec {
         type_id: TypeId::of::<F>(),
         name: type_name::<F>(),
-        resolve: |c| c.get::<F>().map(|arc| arc as Arc<dyn ExceptionFilterErased>),
+        resolve: |c| {
+            c.get::<F>()
+                .map(|arc| arc as Arc<dyn ExceptionFilterErased>)
+        },
     }
 }
 

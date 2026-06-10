@@ -10,7 +10,7 @@ import { Aside, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/componen
 You ship one feature — **`posts`** — into the [**Publish**](/publish/) story's
 **`blog`** app: entity, service, `PostsController`, validation, Postgres, and
 an e2e test. No JWT, no GraphQL — that complexity lives in
-[`publish-api`](/publish/) and [`publish-auth`](/publish/). Each page leaves
+[`api`](/publish/) and [`auth`](/publish/). Each page leaves
 you with code that compiles and a command you can run.
 
 ## What you end up with
@@ -89,7 +89,7 @@ Rust 1.75+ is enough. The database and testing pages need Postgres
 
 <Aside type="note">
 Pages on [security](/tutorial/security/) and [GraphQL](/tutorial/graphql/)
-document patterns for **`publish-api`** (auth, multi-transport) — not
+document patterns for **`api`** (auth, multi-transport) — not
 `apps/blog/`. Follow them when you extend the Publish workspace; skip them
 while building the minimal blog.
 </Aside>
@@ -98,7 +98,7 @@ while building the minimal blog.
 The tutorial feature exemplar in this repo is
 [`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/posts)
 — compare your scaffolded `apps/blog/` as you go. The complex reference is
-[`apps/publish-api/`](https://github.com/NestRS/NestRS/tree/main/apps/publish-api)
+[`apps/api/`](https://github.com/NestRS/NestRS/tree/main/apps/api)
 (auth, GraphQL, orgs, queue, and the rest).
 </Aside>
 

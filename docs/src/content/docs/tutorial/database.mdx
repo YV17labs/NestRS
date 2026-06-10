@@ -121,7 +121,7 @@ impl MigratorTrait for Migrator {
 ```
 
 The reference workspace lists other migrations (`org`, `user`, …) for
-`publish-api`. Your tutorial migrator only needs `post` until you
+`api`. Your tutorial migrator only needs `post` until you
 extend the workspace.
 
 ## Run Postgres
@@ -200,7 +200,7 @@ tags the interceptor span and the SQL spans.
 
 <Aside type="note">
 Auth, row-level filtering, and response masking live in
-[`publish-api`](/tutorial/security/) — not in `blog`. Follow those
+[`api`](/tutorial/security/) — not in `blog`. Follow those
 pages when you extend the Publish workspace; skip them while you
 finish the minimal tutorial.
 </Aside>

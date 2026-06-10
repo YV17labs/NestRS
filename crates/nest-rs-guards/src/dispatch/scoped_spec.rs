@@ -7,10 +7,13 @@ use std::sync::Arc;
 
 use nest_rs_core::Container;
 use nest_rs_exception_filters::ExceptionFilterErased;
+use nest_rs_filters::Filter;
+use nest_rs_interceptors::Interceptor;
 use nest_rs_pipes::GlobalPipe;
 
+use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer};
+
 use crate::Guard;
-use crate::layer_chain::{LayerSource, ResolvedLayer};
 
 /// A scoped layer spec (controller / resolver / gateway / handler).
 /// Carries the `TypeId` so dedup against the global chain finds the same
@@ -30,11 +33,17 @@ pub type ScopedPipeSpec = ScopedLayerSpec<dyn GlobalPipe>;
 /// An exception-filter spec for a specific scope — used when the route
 /// or controller declares `#[use_exception_filters(...)]`.
 pub type ScopedExceptionFilterSpec = ScopedLayerSpec<dyn ExceptionFilterErased>;
+/// An interceptor spec for a specific scope — used when the route or
+/// controller declares `#[use_interceptors(...)]`.
+pub type ScopedInterceptorSpec = ScopedLayerSpec<dyn Interceptor>;
+/// A filter spec for a specific scope — used when the route or controller
+/// declares `#[use_filters(...)]`.
+pub type ScopedFilterSpec = ScopedLayerSpec<dyn Filter>;
 
 pub(crate) fn resolve_specs<L: ?Sized>(
     container: &Container,
     specs: &[ScopedLayerSpec<L>],
-    source: LayerSource,
+    source: LayerSite,
 ) -> Vec<ResolvedLayer<L>> {
     specs
         .iter()

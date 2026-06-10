@@ -96,8 +96,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     socket: poem::web::websocket::WebSocketStream,
 ) {
     let (mut sink, mut stream) = socket.split();
-    let (outbox, mut rx) =
-        tokio::sync::mpsc::channel::<String>(crate::server::OUTBOX_CAPACITY);
+    let (outbox, mut rx) = tokio::sync::mpsc::channel::<String>(crate::server::OUTBOX_CAPACITY);
 
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {

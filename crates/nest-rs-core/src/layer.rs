@@ -9,10 +9,14 @@
 //! - [`LayerKind::Pipe`] — input transform / validation.
 //! - [`LayerKind::ExceptionFilter`] — maps thrown errors to responses.
 //!
-//! The execution order across kinds is fixed by the framework (Guard →
-//! Interceptor → Pipe → handler → Interceptor (post) → Exception
-//! Filter on error). Inside a single kind, the chain runs in declaration
-//! order, with [`Layer::priority`] as an optional intra-kind tiebreaker.
+//! The execution order across kinds is fixed by the framework. On a routed
+//! HTTP request: Guard → Pipe → scoped Interceptor → handler, with the
+//! error path unwinding ExceptionFilter (typed catch, closest to the
+//! handler) → Filter (generic mapper) → Interceptor (observer). Global
+//! interceptors / filters execute at the transport edge instead — outside
+//! routing — same relative nesting. Inside a single kind, the chain runs in
+//! declaration order, with [`Layer::priority`] as an optional intra-kind
+//! tiebreaker; priority orders entries *within* a site, never across sites.
 //!
 //! See `nest_rs_guards`, `nest_rs_pipes`, `nest_rs_interceptors`,
 //! `nest_rs_filters`, `nest_rs_exception_filters` for the sub-traits — one
@@ -75,6 +79,17 @@ impl LayerSite {
             Self::Controller => 2,
             Self::Method => 3,
             Self::Inherited => 4,
+        }
+    }
+
+    /// Lowercase label for dedup diagnostics and boot logs.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Module => "module",
+            Self::Controller => "controller",
+            Self::Method => "method",
+            Self::Inherited => "inherited",
         }
     }
 }

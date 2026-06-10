@@ -1,9 +1,8 @@
 //! URI versioning (`#[controller(version = "1")]`) and exception filters
 //! (`#[use_filters]`), end-to-end through the HTTP harness. Also pins the
-//! cross-scope TypeId dedup contract: a filter declared globally is run by
-//! the transport-level [`HttpEndpointWrap`] wrap; a redeclaration at
-//! controller or method scope is skipped at mount time, so it still
-//! executes exactly once.
+//! cross-scope TypeId dedup contract: a filter declared at any combination of
+//! global / controller / method scopes is composed through `compose_chain` by
+//! the per-route pool and executes exactly once.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -189,11 +188,9 @@ async fn same_filter_global_and_controller_runs_once() {
     let _gate = GATE.lock().await;
     reset_filter_counter();
 
-    // Global seeding + a redeclaration on the controller. The
-    // controller-scope wrap is skipped at mount time when the TypeId is
-    // already in `FilterSpecs` — the transport-level
-    // `HttpEndpointWrap` wrap from `use_filters_global` carries the
-    // single execution.
+    // Global seeding + a redeclaration on the controller. The per-route pool
+    // composes global + controller and dedups by TypeId — broadest (global)
+    // wins, so the filter runs once.
     let app = TestApp::builder()
         .module::<DedupFilterModule>()
         .use_filters_global([filter::<CountingFilter>()])
@@ -234,18 +231,13 @@ async fn same_filter_global_and_method_runs_once() {
 }
 
 #[tokio::test]
-async fn same_filter_controller_and_method_without_global_runs_once_by_chain_shape() {
+async fn same_filter_controller_and_method_runs_once() {
     let _gate = GATE.lock().await;
     reset_filter_counter();
 
-    // No Global seeding — both wraps are emitted at mount time (the HTTP
-    // per-scope dedup is wired against `FilterSpecs` (Global) only).
-    // The single execution comes from the [`Filter`] chain shape, not
-    // from a TypeId dedup: a filter runs on the **error path** only,
-    // returning an `Ok(Response)`. The innermost wrap catches the
-    // handler's `Err` and rewrites it; the outer wrap therefore only
-    // ever sees the success path and passes it through. Net effect: one
-    // execution, same as the global-redeclaration cases above.
+    // Controller and method both declare the filter. The per-route pool
+    // composes them through `compose_chain` and dedups by `TypeId` (broadest
+    // scope wins) — one filter wrap on the error path, one execution.
     let app = TestApp::for_module::<DedupFilterModule>()
         .await
         .expect("boots");
@@ -255,6 +247,29 @@ async fn same_filter_controller_and_method_without_global_runs_once_by_chain_sha
     assert_eq!(
         filter_calls(),
         1,
-        "the inner filter rewrites Err → Ok; the outer wrap never fires",
+        "controller + method filter declaration dedups to a single execution",
+    );
+}
+
+#[tokio::test]
+async fn same_filter_at_all_three_scopes_runs_once() {
+    let _gate = GATE.lock().await;
+    reset_filter_counter();
+
+    // Global + controller + method — the broadest (global) wins and maps the
+    // error at the transport edge; both narrower redeclarations are dropped.
+    let app = TestApp::builder()
+        .module::<DedupFilterModule>()
+        .use_filters_global([filter::<CountingFilter>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/dup-ctrl-method/boom").send().await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(
+        filter_calls(),
+        1,
+        "global + controller + method filter declaration still executes exactly once",
     );
 }

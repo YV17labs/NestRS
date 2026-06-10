@@ -121,12 +121,24 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
                     )
                     .all(&__conn)
                     .await?;
-                ::core::result::Result::Ok(
-                    __rows
-                        .into_iter()
-                        .map(|__row| (__row.#pk_ident, <#wire as ::core::convert::From<&Model>>::from(&__row)))
-                        .collect(),
-                )
+                // Row-level filtering happened above (`scoped(Read)`); apply
+                // field-level masking here too, via the ambient ability the
+                // batch runs under (`LoaderScope`) — a relation must not leak
+                // columns the caller is not granted.
+                let mut __map: ::std::collections::HashMap<#pk_ty, #wire> =
+                    ::std::collections::HashMap::with_capacity(__rows.len());
+                for __row in __rows {
+                    let __wire = ::nest_rs_authz::masked_output_ambient::<
+                        ::nest_rs_authz::Read,
+                        Entity,
+                        #wire,
+                    >(&__row)
+                    .map_err(|__e| ::nest_rs_seaorm::ServiceError::Masking(
+                        ::std::string::ToString::to_string(&__e),
+                    ))?;
+                    __map.insert(__row.#pk_ident, __wire);
+                }
+                ::core::result::Result::Ok(__map)
             }
         }
     }
@@ -229,7 +241,19 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                             .collect();
                     for __row in __rows {
                         if let ::core::option::Option::Some(__bucket) = __map.get_mut(&__row.#from) {
-                            __bucket.push(<#wire as ::core::convert::From<&Model>>::from(&__row));
+                            // Field-level masking through the ambient ability,
+                            // mirroring `by_id` — `scoped(Read)` only filters
+                            // rows, not columns.
+                            __bucket.push(
+                                ::nest_rs_authz::masked_output_ambient::<
+                                    ::nest_rs_authz::Read,
+                                    Entity,
+                                    #wire,
+                                >(&__row)
+                                .map_err(|__e| ::nest_rs_seaorm::ServiceError::Masking(
+                                    ::std::string::ToString::to_string(&__e),
+                                ))?,
+                            );
                         }
                     }
                     ::core::result::Result::Ok(__map)

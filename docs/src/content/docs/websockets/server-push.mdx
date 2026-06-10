@@ -117,7 +117,7 @@ The question is "do I have a `WsClient` already?":
 
 A common pattern is to do both in one feature: handlers route messages
 into a service that records state, and the service holds the registry
-and broadcasts the derived event. `apps/publish-live/src/chat/service.rs`
+and broadcasts the derived event. `apps/live/src/chat/service.rs`
 shows exactly this:
 
 ```rust
@@ -170,5 +170,5 @@ needs it.
 
 - [`WsServer`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-ws/src/server.rs) —
   `broadcast`, `emit_to`, `emit`, `connection_count`.
-- [`apps/publish-live/src/chat/service.rs`](https://github.com/NestRS/NestRS/blob/main/apps/publish-live/src/chat/service.rs) —
+- [`apps/live/src/chat/service.rs`](https://github.com/NestRS/NestRS/blob/main/apps/live/src/chat/service.rs) —
   service-side broadcast pattern.

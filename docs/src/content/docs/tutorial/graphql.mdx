@@ -8,7 +8,7 @@ sidebar:
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
 <Aside type="caution">
-This page applies to **`publish-api`**, not **`blog`**. The tutorial app
+This page applies to **`api`**, not **`blog`**. The tutorial app
 mounts HTTP only; GraphQL ships on the full Publish API.
 </Aside>
 
@@ -139,7 +139,7 @@ pub use http::{UsersController, UsersHttpModule};
 The app root imports `GraphqlModule::for_root(None)` to mount the HTTP
 endpoint, and the feature's GraphQL adapter for the operations.
 
-```rust title="apps/publish-api/src/module.rs" {14-15}
+```rust title="apps/api/src/module.rs" {14-15}
         UsersGraphqlModule,
         GraphqlModule::for_root(None),
 ```
@@ -216,10 +216,10 @@ framework writes one as a side effect of the dev run when
 builds, commit it for dev:
 
 ```bash frame="terminal"
-$ NESTRS_GRAPHQL__EMIT_SDL=1 just dev publish-api
-INFO nest_rs::graphql: wrote schema to apps/publish-api/schema.graphql
+$ NESTRS_GRAPHQL__EMIT_SDL=1 just dev api
+INFO nest_rs::graphql: wrote schema to apps/api/schema.graphql
 
-$ head -5 apps/publish-api/schema.graphql
+$ head -5 apps/api/schema.graphql
 type Query {
   user(id: String!): User
   users(first: Int, after: String): [User!]!

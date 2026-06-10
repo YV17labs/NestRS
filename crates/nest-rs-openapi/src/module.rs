@@ -49,10 +49,8 @@ impl DynamicModule for OpenApiSetup {
 }
 
 fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuilder {
-    builder.provide_meta(HttpEndpointMeta::new(
-        DOCS_PATH,
-        "openapi",
-        move |container, route: Route| {
+    builder.provide_meta(
+        HttpEndpointMeta::new(DOCS_PATH, "openapi", move |container, route: Route| {
             let document = build_document(
                 container,
                 &options.title,
@@ -70,6 +68,7 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
                     "/api/swagger-ui-standalone-preset.js",
                     get(ui::swagger_preset),
                 )
-        },
-    ))
+        })
+        .exempt(),
+    )
 }

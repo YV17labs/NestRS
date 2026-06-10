@@ -1,14 +1,20 @@
 //! # nest-rs-interceptors
 //!
-//! Transport-spanning interceptors — the wrap-handler slot of the Layer
-//! System. One impl covers HTTP, GraphQL, and WS via one method per
-//! transport (`intercept` on HTTP, [`wrap_graphql`](Interceptor::wrap_graphql)
-//! per resolver, [`wrap_ws`](Interceptor::wrap_ws) per WS message).
+//! Interceptors — the wrap-handler slot of the Layer System.
 //!
 //! An [`Interceptor`] sees the inputs before the handler runs and the
-//! outputs after, with one continuation per transport. It is a
-//! [`Layer`] sub-trait, so global + per-scope declarations dedup by
-//! [`TypeId`](std::any::TypeId) at mount time (broadest scope wins).
+//! outputs after. `intercept` (HTTP) is the only entry the framework wires
+//! today: a **global** interceptor wraps the whole routing tree at the
+//! transport edge (so it also observes 404s, guard denials, and
+//! self-mounted surfaces — a GraphQL `POST` or WS upgrade is an HTTP
+//! request); a **controller / method** interceptor wraps its handler,
+//! inside the guard chain. The per-resolver / per-message seams
+//! ([`wrap_graphql`](Interceptor::wrap_graphql) /
+//! [`wrap_ws`](Interceptor::wrap_ws)) are reserved and not invoked yet.
+//!
+//! `Interceptor` is a [`Layer`] sub-trait, so global + per-scope
+//! declarations dedup by [`TypeId`](std::any::TypeId) at mount time
+//! (broadest scope wins — one execution, at the broadest scope's site).
 //!
 //! ## Defining an interceptor
 //!

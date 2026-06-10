@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nest_rs_authn::{AuthError, OAuth2Client, Outcome, Strategy};
+use nest_rs_authn::{AuthError, Strategy};
 use nest_rs_core::injectable;
-use poem::http::{StatusCode, header};
-use poem::{Request, Response};
+use poem::Request;
+use poem::http::header;
 use serde::Deserialize;
 
-use super::super::service::{Caller, OAuthFlow};
+use super::super::http::TRANSACTION_COOKIE;
+use super::super::service::{Caller, OAuthService};
 
 pub type OAuthGuard = nest_rs_authn::AuthGuard<OAuthStrategy>;
-
-const TRANSACTION_COOKIE: &str = "oauth_tx";
 
 #[derive(Debug, Default, Deserialize)]
 struct CallbackQuery {
@@ -22,55 +21,29 @@ struct CallbackQuery {
 #[injectable]
 pub struct OAuthStrategy {
     #[inject]
-    flow: Arc<OAuthFlow>,
+    svc: Arc<OAuthService>,
 }
 
+/// Resolves the principal from the provider's redirect back to `/callback`.
+/// The `/authorize` leg that *starts* the flow is a plain public handler
+/// (`OAuthController::authorize`) — it issues a redirect, which is a handler
+/// response, not an authentication outcome.
 #[async_trait]
 impl Strategy for OAuthStrategy {
     type Principal = Caller;
 
-    async fn authenticate(&self, req: &mut Request) -> Result<Outcome<Caller>, AuthError> {
+    async fn authenticate(&self, req: &mut Request) -> Result<Caller, AuthError> {
         let query: CallbackQuery = req.params().unwrap_or_default();
-
-        let Some(code) = query.code else {
-            let authorization = self.flow.authorize()?;
-            let secure = cookie_secure(req);
-            let redirect = Response::builder()
-                .status(StatusCode::FOUND)
-                .header(header::LOCATION, authorization.url)
-                .header(
-                    header::SET_COOKIE,
-                    format!(
-                        "{TRANSACTION_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}{secure}",
-                        authorization.transaction,
-                        OAuth2Client::TRANSACTION_TTL_SECS,
-                    ),
-                )
-                .finish();
-            return Ok(Outcome::Challenge(redirect));
-        };
-
+        let code = query
+            .code
+            .ok_or_else(|| AuthError::Failed("OAuth callback missing code".into()))?;
         let state = query
             .state
             .ok_or_else(|| AuthError::Failed("OAuth callback missing state".into()))?;
         let transaction = transaction_cookie(req)
             .ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
-        let caller = self
-            .flow
-            .resolve_caller(&transaction, &state, &code)
-            .await?;
-        Ok(Outcome::Authenticated(caller))
+        self.svc.resolve_caller(&transaction, &state, &code).await
     }
-}
-
-fn cookie_secure(req: &Request) -> &'static str {
-    let https = req.uri().scheme_str() == Some("https")
-        || req
-            .headers()
-            .get("X-Forwarded-Proto")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.eq_ignore_ascii_case("https"));
-    if https { "; Secure" } else { "" }
 }
 
 fn transaction_cookie(req: &Request) -> Option<String> {

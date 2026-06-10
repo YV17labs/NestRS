@@ -151,7 +151,7 @@ dependency — the same Rust-visibility rule every other adapter follows.
 The app activates the scheduler by importing `ScheduleModule` —
 `ScheduleModule` contributes the scheduler to `App::run` itself:
 
-```rust title="apps/publish-api/src/module.rs"
+```rust title="apps/api/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_schedule::ScheduleModule;
 use features::audio::{AudioHttpModule, AudioScheduleModule};
@@ -161,17 +161,17 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
     AudioScheduleModule,
     ScheduleModule,
 ])]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
-```rust title="apps/publish-api/src/main.rs"
+```rust title="apps/api/src/main.rs"
 use nest_rs_core::App;
-use publish_api::PublishApiModule;
+use api::ApiModule;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     App::builder()
-        .module::<PublishApiModule>()
+        .module::<ApiModule>()
         .build()
         .await?
         .run()
@@ -180,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 `main` carries no transport at all — every transport (`HttpModule`,
-`ScheduleModule`, `QueueWorkerModule`) is imported in `PublishApiModule` and
+`ScheduleModule`, `QueueWorkerModule`) is imported in `ApiModule` and
 attaches itself at boot.
 
 **Without the `ScheduleModule` import, every `#[scheduled]` method
@@ -192,7 +192,7 @@ from the app's module tree.
 ## Run it
 
 ```bash frame="terminal"
-$ just dev publish-api
+$ just dev api
 …
 2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=Scheduler
 2026-06-03T10:18:41Z  INFO nest_rs::schedule: scheduled job (interval) job=AudioTasks::enqueue_transcode interval_ms=5000
@@ -206,7 +206,7 @@ $ just dev publish-api
 A bad trigger fails the boot:
 
 ```bash frame="terminal"
-$ just dev publish-worker
+$ just dev worker
 Error: invalid cron expression for job 'AudioTasks::heartbeat'
   expression : "every monday"
   reason     : missing seconds field

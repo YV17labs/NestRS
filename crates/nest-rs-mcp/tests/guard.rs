@@ -56,3 +56,12 @@ async fn endpoint_with_guard_none_falls_back_to_deny_all() {
     let resp = TestClient::new(unwired).post("/").send().await;
     assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
 }
+
+// The explicit opt-in counterpart to deny-all: wiring `AllowAllMcpGuard`
+// admits the request so a deliberately public tool can be served.
+#[tokio::test]
+async fn allow_all_guard_admits_the_request() {
+    let guard = nest_rs_mcp::AllowAllMcpGuard;
+    let mut req = Request::default();
+    assert!(guard.before(&mut req).await.is_ok());
+}

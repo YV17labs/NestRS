@@ -12,9 +12,24 @@ pub const GLOBEX_AUTHOR: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_
 const GLOBEX_USER_2: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_6102);
 
 const DEMO: [(Uuid, Uuid, &str, &str); 5] = [
-    (ACME_AUTHOR, org::ACME, "Acme Author", "acme-user-1@example.test"),
-    (ACME_USER_2, org::ACME, "Acme Member", "acme-user-2@example.test"),
-    (ACME_USER_3, org::ACME, "Acme Reader", "acme-user-3@example.test"),
+    (
+        ACME_AUTHOR,
+        org::ACME,
+        "Acme Author",
+        "acme-user-1@example.test",
+    ),
+    (
+        ACME_USER_2,
+        org::ACME,
+        "Acme Member",
+        "acme-user-2@example.test",
+    ),
+    (
+        ACME_USER_3,
+        org::ACME,
+        "Acme Reader",
+        "acme-user-3@example.test",
+    ),
     (
         GLOBEX_AUTHOR,
         org::GLOBEX,

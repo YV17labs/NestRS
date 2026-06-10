@@ -125,7 +125,7 @@ impl HelloController {
 }
 "#;
 
-/// Thin workspace app — composition only (`apps/publish-api` shape).
+/// Thin workspace app — composition only (`apps/api` shape).
 pub const APP_CARGO: &str = r#"[package]
 name = "{{kebab}}"
 version.workspace = true
@@ -187,7 +187,7 @@ use features::hello::HelloHttpModule;
 pub struct {{module}};
 "#;
 
-/// Thin workspace app — composition only; HTTP port pinned in code (see `apps/publish-api`).
+/// Thin workspace app — composition only; HTTP port pinned in code (see `apps/api`).
 pub const APP_MODULE: &str = r#"use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_opentelemetry::OpenTelemetryModule;

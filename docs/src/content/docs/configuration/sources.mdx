@@ -35,7 +35,7 @@ during a factory phase, then serves `get` from that map.
 
 A Vault source that hits the API once at startup and caches the result:
 
-```rust title="apps/publish-api/src/vault.rs"
+```rust title="apps/api/src/vault.rs"
 use std::collections::HashMap;
 use std::sync::Arc;
 use nest_rs_config::{ConfigService, ConfigSource};
@@ -66,11 +66,11 @@ impl ConfigSource for VaultSource {
 Wire it in by building the `ConfigService` directly and calling
 `Config::from_env` yourself — bypassing `ConfigModule::for_feature`:
 
-```rust title="apps/publish-api/src/main.rs"
+```rust title="apps/api/src/main.rs"
 use nest_rs_config::ConfigService;
 
 let vault = Arc::new(
-    VaultSource::fetch(&vault_client, "secret/publish-api").await?,
+    VaultSource::fetch(&vault_client, "secret/api").await?,
 );
 let env = ConfigService::with_source("database", vault);
 let db_config = DatabaseConfig::from_env(&env)?;

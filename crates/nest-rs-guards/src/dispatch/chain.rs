@@ -13,10 +13,11 @@ use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as Graphql
 use nest_rs_ws::WsClient;
 use serde_json::Value;
 
+use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
+
 use crate::Guard;
 use crate::dispatch::denial_convert::denial_to_graphql_error;
 use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_specs};
-use crate::layer_chain::{LayerSource, ResolvedLayer, compose_chain};
 use crate::registry::GuardSpecs;
 
 /// GraphQL shaper helper. Called by `#[resolver]` at the start of every
@@ -42,15 +43,21 @@ pub async fn run_layered_graphql_chain(
                 global.push(ResolvedLayer {
                     type_id: spec.type_id,
                     name: spec.name,
-                    source: LayerSource::Global,
+                    source: LayerSite::Global,
                     layer,
                 });
             }
         }
     }
-    let controller = resolve_specs(container, controller_guards, LayerSource::Controller);
-    let method = resolve_specs(container, method_guards, LayerSource::Method);
-    let chain = compose_chain::<dyn Guard>(global, controller, method, force_guards, route_label);
+    let controller = resolve_specs(container, controller_guards, LayerSite::Controller);
+    let method = resolve_specs(container, method_guards, LayerSite::Method);
+    let chain = compose_chain::<dyn Guard>(
+        dedup_bucket(global),
+        controller,
+        method,
+        force_guards,
+        route_label,
+    );
     for entry in &chain {
         if let Err(denial) = entry.layer.check_graphql(ctx).await {
             return Err(denial_to_graphql_error(denial));
@@ -86,15 +93,21 @@ pub async fn run_layered_ws_chain(
                 global.push(ResolvedLayer {
                     type_id: spec.type_id,
                     name: spec.name,
-                    source: LayerSource::Global,
+                    source: LayerSite::Global,
                     layer,
                 });
             }
         }
     }
-    let controller = resolve_specs(container, controller_guards, LayerSource::Controller);
-    let method = resolve_specs(container, method_guards, LayerSource::Method);
-    let chain = compose_chain::<dyn Guard>(global, controller, method, force_guards, route_label);
+    let controller = resolve_specs(container, controller_guards, LayerSite::Controller);
+    let method = resolve_specs(container, method_guards, LayerSite::Method);
+    let chain = compose_chain::<dyn Guard>(
+        dedup_bucket(global),
+        controller,
+        method,
+        force_guards,
+        route_label,
+    );
     for entry in &chain {
         if let Err(denial) = entry.layer.check_ws_message(client, event, data).await {
             return Err(denial.message().to_owned());

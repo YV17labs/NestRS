@@ -7,7 +7,7 @@ use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::{Reflector, async_trait};
 use poem::Request;
 
-use crate::passport::{Outcome, Strategy};
+use crate::passport::Strategy;
 
 #[injectable]
 pub struct AuthGuard<S: Strategy> {
@@ -41,18 +41,10 @@ impl<S: Strategy> Guard for AuthGuard<S> {
         let strategy = std::any::type_name::<S>();
         let is_public = Reflector::new(req).is_public();
         match self.strategy.authenticate(req).await {
-            Ok(Outcome::Authenticated(principal)) => {
+            Ok(principal) => {
                 tracing::debug!(target: "nest_rs::auth", strategy, "authenticated");
                 req.extensions_mut().insert(principal);
                 Ok(())
-            }
-            Ok(Outcome::Challenge(_)) if is_public => {
-                tracing::debug!(target: "nest_rs::auth", strategy, "no credential on a public route — letting it through");
-                Ok(())
-            }
-            Ok(Outcome::Challenge(_)) => {
-                tracing::debug!(target: "nest_rs::auth", strategy, "authentication challenge issued");
-                Err(Denial::unauthorized("authentication challenge"))
             }
             Err(_) if is_public => {
                 tracing::debug!(target: "nest_rs::auth", strategy, "authentication failed on a public route — letting it through");

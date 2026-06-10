@@ -87,10 +87,14 @@ fn is_member_active(reg: &GraphqlResolverRegistration) -> bool {
 }
 
 fn kind_has_members(kind: GraphqlResolverKind) -> bool {
-    inventory::iter::<GraphqlResolverRegistration>().any(|reg| reg.kind == kind && is_member_active(reg))
+    inventory::iter::<GraphqlResolverRegistration>()
+        .any(|reg| reg.kind == kind && is_member_active(reg))
 }
 
-fn build_members(container: &Container, kind: GraphqlResolverKind) -> Vec<Box<dyn GraphqlResolverObject>> {
+fn build_members(
+    container: &Container,
+    kind: GraphqlResolverKind,
+) -> Vec<Box<dyn GraphqlResolverObject>> {
     inventory::iter::<GraphqlResolverRegistration>()
         .filter(|reg| reg.kind == kind && is_member_active(reg))
         .map(|reg| (reg.build)(container))
@@ -193,7 +197,11 @@ macro_rules! discovered_root {
 }
 
 discovered_root!(DiscoveredQuery, GraphqlResolverKind::Query, "Query");
-discovered_root!(DiscoveredMutation, GraphqlResolverKind::Mutation, "Mutation");
+discovered_root!(
+    DiscoveredMutation,
+    GraphqlResolverKind::Mutation,
+    "Mutation"
+);
 
 /// Build the discovered schema. Subscriptions are not yet supported.
 ///

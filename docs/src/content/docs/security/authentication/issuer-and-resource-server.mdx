@@ -14,13 +14,13 @@ two binaries can either share the signing secret (and any compromise
 mints valid tokens for both) or one becomes the issuer and the other
 verifies what it produces. nestrs leans hard on the second posture.
 
-`apps/publish-auth` is the exemplar issuer. `apps/publish-api` is
+`apps/auth` is the exemplar issuer. `apps/api` is
 the exemplar resource server. They share a Postgres database and the
 `crates/features` code; they never RPC each other.
 
 ## The split
 
-| Concern | Issuer (`apps/publish-auth`) | Resource server (`apps/publish-api`) |
+| Concern | Issuer (`apps/auth`) | Resource server (`apps/api`) |
 |---------|-------------------------------|---------------------------------------|
 | JWT private key | Holds it | **Never sees it** |
 | JWT public key | Holds it | Holds it |
@@ -70,7 +70,7 @@ NESTRS_AUTHN__PUBLIC_KEY"`.
 
 ## Two `main` files, one feature set
 
-```rust title="apps/publish-auth/src/module.rs"
+```rust title="apps/auth/src/module.rs"
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -84,14 +84,14 @@ NESTRS_AUTHN__PUBLIC_KEY"`.
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
     ],
 )]
-pub struct PublishAuthModule;
+pub struct AuthModule;
 ```
 
 The issuer imports the OAuth flow controller (`OAuthHttpModule`) and
 the throttler. It does **not** import `UsersHttpModule` — the issuer
 mints tokens, not users.
 
-```rust title="apps/publish-api/src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -106,7 +106,7 @@ mints tokens, not users.
         HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
     ],
 )]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
 The resource server imports the authz transports and every feature
@@ -139,8 +139,8 @@ sprawl is not the goal.
 ## Run them together
 
 ```bash
-just dev publish-auth   # issuer on :3001
-just dev publish-api    # resource server on :3002
+just dev auth   # issuer on :3001
+just dev api    # resource server on :3002
 ```
 
 A round-trip:

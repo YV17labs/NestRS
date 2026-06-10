@@ -6,14 +6,15 @@
 //! - [`AppBuilderPipesExt::use_pipes_global`] — register
 //!   request-body pipes once, applied to every JSON HTTP handler.
 
-use std::sync::Arc;
-
-use nest_rs_core::{AppBuilder, RequestScope};
-use nest_rs_http::{HttpEndpointWrap, endpoint_wrap_priority};
+use nest_rs_core::AppBuilder;
+use nest_rs_core::layer_chain::ResolvedLayer;
+use nest_rs_graphql::FallbackOperationGuard;
+use nest_rs_http::{GlobalGuardsActive, HttpBootCheck, SelfMountGuardWrap};
 use nest_rs_interceptors::InterceptorExt;
 use poem::EndpointExt;
 
-use crate::dispatch::denial_to_http_response;
+use crate::Guard;
+use crate::dispatch::{GlobalPoolOperationGuard, denial_to_http_response};
 use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 
 /// Adds `.use_guards_global(...)` to [`AppBuilder`].
@@ -46,29 +47,61 @@ impl AppBuilderGuardsExt for AppBuilder {
     {
         let collected: Vec<GuardSpec> = specs.into_iter().collect();
         validate_order_by_name(&collected);
-        // Seed `GuardSpecs` (read by the per-route `RouteShaper` for
-        // TypeId dedup against controller / method declarations) AND an
-        // `HttpEndpointWrap` at the GUARDS priority band so the HTTP
-        // transport runs every global guard's `check_http` once around the
-        // assembled endpoint — covers self-mounting routes (`/graphql`,
-        // MCP, WS upgrade) that don't traverse the per-route shaper. The
-        // wrap is a closure (not a named `Interceptor` struct) for
-        // symmetry with `use_interceptors_global` / `use_filters_global`.
-        self.provide(GuardSpecs(collected))
-            .provide_meta(HttpEndpointWrap::with_priority(
-                endpoint_wrap_priority::GUARDS,
-                |container, endpoint| {
-                    let endpoint = endpoint.map_to_response().boxed();
-                    InterceptorExt::interceptor(
-                        endpoint,
-                        GuardsHttpFold {
-                            container: container.clone(),
-                        },
-                    )
+        // Seed `GuardSpecs` — read by the per-route `RouteShaper`, which runs
+        // the global guard pool (deduped against controller / method
+        // declarations) *after* routing so a guard sees `#[public]`. Plus the
+        // two single-site executors for surfaces without a shaper:
+        //
+        // - `SelfMountGuardWrap` — a `Guarded` self-mount (WS upgrade) gets
+        //   the global chain at its HTTP edge;
+        // - `FallbackOperationGuard` — `/graphql` is `Exempt` at the edge and
+        //   gates per operation; when the app registers no
+        //   `dyn GraphqlOperationGuard` bridge, the global pool runs there
+        //   in-band, so a forgotten bridge module never leaves operations
+        //   unguarded. A registered bridge replaces the fallback (it runs
+        //   the same guards itself — nothing runs twice).
+        let active = !collected.is_empty();
+        let builder = self
+            .provide(GuardSpecs(collected))
+            .provide(FallbackOperationGuard(GlobalPoolOperationGuard::factory))
+            .provide_meta(SelfMountGuardWrap::new(|container, endpoint| {
+                let chain = container
+                    .get::<GuardSpecs>()
+                    .map(|specs| specs.resolve_chain(container, "self-mount edge"))
+                    .unwrap_or_default();
+                InterceptorExt::interceptor(endpoint, GuardsHttpFold { chain })
                     .map_to_response()
                     .boxed()
-                },
-            ))
+            }))
+            // A global guard whose provider was never registered would
+            // resolve to `None` and silently drop — every route would lose
+            // its fail-secure net. Fail boot instead, naming the guards.
+            .provide_meta(HttpBootCheck::new(|container| {
+                let Some(specs) = container.get::<GuardSpecs>() else {
+                    return Ok(());
+                };
+                let missing: Vec<&str> = specs
+                    .0
+                    .iter()
+                    .filter(|s| s.resolve(container).is_none())
+                    .map(|s| s.name)
+                    .collect();
+                if missing.is_empty() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "global guard(s) not resolvable from the container: {} — import the \
+                         module that provides them; an unresolvable global guard would \
+                         silently drop and leave every route unguarded",
+                        missing.join(", "),
+                    ))
+                }
+            }));
+        if active {
+            builder.provide(GlobalGuardsActive)
+        } else {
+            builder
+        }
     }
 }
 
@@ -86,20 +119,38 @@ impl AppBuilderPipesExt for AppBuilder {
         I: IntoIterator<Item = PipeSpec>,
     {
         self.provide(PipeSpecs(specs.into_iter().collect()))
+            .provide_meta(HttpBootCheck::new(|container| {
+                let Some(specs) = container.get::<PipeSpecs>() else {
+                    return Ok(());
+                };
+                let missing: Vec<&str> = specs
+                    .0
+                    .iter()
+                    .filter(|s| s.resolve(container).is_none())
+                    .map(|s| s.name)
+                    .collect();
+                if missing.is_empty() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "global pipe(s) not resolvable from the container: {} — import the \
+                         module that provides them; an unresolvable global pipe would \
+                         silently drop its edge validation",
+                        missing.join(", "),
+                    ))
+                }
+            }))
     }
 }
 
-/// Internal adapter — runs the global `GuardSpecs` chain inside an
-/// `Interceptor`-shaped wrap. The HTTP transport only knows how to fold
-/// `HttpEndpointWrap` closures around the assembled endpoint, and those
-/// closures express their work as poem endpoint wrapping; `Interceptor`
-/// is poem's `(req, next) -> response` shape. This type bridges the two
-/// — every other Layer-System global builder follows the same pattern
-/// via an inline closure (interceptors, filters), but guards need
-/// `RequestScope` from `req.extensions()` so a typed struct keeps the
-/// resolution clean.
+/// Internal adapter — runs the composed global guard chain inside an
+/// `Interceptor`-shaped wrap. Used by `SelfMountGuardWrap` to apply the global
+/// guard chain at a `Guarded` self-mounted endpoint's edge (it has no
+/// per-route shaper). The chain is resolved eagerly at configure time — the
+/// container is final there, so a broken chain surfaces at boot, not on the
+/// first request.
 struct GuardsHttpFold {
-    container: nest_rs_core::Container,
+    chain: Vec<ResolvedLayer<dyn Guard>>,
 }
 
 impl nest_rs_core::Layer for GuardsHttpFold {}
@@ -111,22 +162,9 @@ impl nest_rs_interceptors::Interceptor for GuardsHttpFold {
         mut req: poem::Request,
         next: nest_rs_interceptors::Next<'_>,
     ) -> poem::Result<poem::Response> {
-        // Prefer the request-scoped container (carries per-request
-        // overrides) when `RequestScopeEndpoint` installed one; fall
-        // back to the captured root container so guards still run on
-        // endpoints that bypass the request-scope wrapper.
-        let container = req
-            .extensions()
-            .get::<Arc<RequestScope>>()
-            .map(|scope| scope.root().clone())
-            .unwrap_or_else(|| self.container.clone());
-        if let Some(specs) = container.get::<GuardSpecs>() {
-            for spec in &specs.0 {
-                if let Some(guard) = spec.resolve(&container)
-                    && let Err(denial) = guard.check_http(&mut req).await
-                {
-                    return Ok(denial_to_http_response(denial));
-                }
+        for entry in &self.chain {
+            if let Err(denial) = entry.layer.check_http(&mut req).await {
+                return Ok(denial_to_http_response(denial));
             }
         }
         next.run(req).await

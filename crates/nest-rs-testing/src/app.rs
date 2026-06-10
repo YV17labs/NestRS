@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use nest_rs_core::{App, AppBuilder, Container, Module, Transport};
-use nest_rs_exception_filters::{
-    AppBuilderExceptionFiltersExt, ExceptionFilterSpec,
-};
+use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, ExceptionFilterSpec};
 use nest_rs_filters::{AppBuilderFiltersExt, FilterSpec};
 use nest_rs_guards::{AppBuilderGuardsExt, AppBuilderPipesExt, GuardSpec, PipeSpec};
 use nest_rs_http::HttpTransport;

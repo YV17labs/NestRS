@@ -58,7 +58,11 @@ where
 /// masking, and re-serialize. A non-success or non-JSON response, or a scalar
 /// body, passes through; a JSON object/array that does not match `S::Model`
 /// fails closed (see module docs).
-pub async fn mask_entity_response<S>(ability: &Ability, action: Action, mut resp: Response) -> Response
+pub async fn mask_entity_response<S>(
+    ability: &Ability,
+    action: Action,
+    mut resp: Response,
+) -> Response
 where
     S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned + Serialize,

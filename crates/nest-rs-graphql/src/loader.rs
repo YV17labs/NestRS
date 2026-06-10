@@ -28,7 +28,8 @@ pub struct GraphqlLoaderRegistration {
 
 inventory::collect!(GraphqlLoaderRegistration);
 
-pub type GraphqlBatchFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+pub type GraphqlBatchFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 
 pub type GraphqlBatchSpawner = Box<dyn Fn(GraphqlBatchFuture) + Send + Sync>;
 

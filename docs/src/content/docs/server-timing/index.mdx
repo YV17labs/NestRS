@@ -19,12 +19,12 @@ aggregations, reach for [OpenTelemetry](/opentelemetry/).
 
 ## Mount it
 
-```rust title="apps/publish-api/src/module.rs"
+```rust title="apps/api/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_server_timing::ServerTimingModule;
 
 #[module(imports = [ServerTimingModule])]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
 Every response now carries a `Server-Timing` header. The minimum,

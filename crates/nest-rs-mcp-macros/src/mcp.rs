@@ -48,7 +48,7 @@ pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
                                 move || <#name>::from_container(&__cc),
                             ),
                         )
-                    }),
+                    }).exempt(),
                 )
             }
         }

@@ -1,12 +1,11 @@
 //! WebSocket gateway-scope guard dedup against Global on the WS upgrade.
 //!
-//! A WS upgrade is an HTTP `GET`; the global guard chain runs through the
-//! transport-level `HttpEndpointWrap` that `use_guards_global` attaches.
-//! A gateway that
-//! redeclares the same guard via `#[use_guards(...)]` would otherwise wrap
-//! the upgrade endpoint twice — `#[gateway]` skips its inline wrap at
-//! mount time when the TypeId matches a `GuardSpecs` entry. The check
-//! still runs exactly once and a denial still short-circuits the upgrade
+//! A WS upgrade is an HTTP `GET`. The gateway self-mounts with the default
+//! `EdgePosture::Guarded`, so the transport runs the global guard chain at its
+//! edge via `SelfMountGuardWrap`. A gateway that redeclares the same guard via
+//! `#[use_guards(...)]` would otherwise wrap the upgrade twice — `#[gateway]`
+//! skips its inline wrap when the TypeId matches a `GuardSpecs` entry. The
+//! check still runs exactly once and a denial still short-circuits the upgrade
 //! before any `WebSocket::from_request` work.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -89,8 +88,8 @@ async fn gateway_scope_guard_redeclared_against_global_runs_once() {
 
     // Global declares `CountingDenyGuard`; the `DupGateway` redeclares it
     // on the gateway struct. `#[gateway]` skips its inline wrap because
-    // the TypeId is in `GuardSpecs`, so only the transport-level
-    // `HttpEndpointWrap` runs the guard — counter bumps once.
+    // the TypeId is in `GuardSpecs`, so only the self-mount edge wrap
+    // (`SelfMountGuardWrap`) runs the guard — counter bumps once.
     let app = TestApp::builder()
         .module::<GatewayDedupModule>()
         .use_guards_global([guard::<CountingDenyGuard>()])
@@ -118,8 +117,7 @@ async fn bare_gateway_runs_global_guard_once() {
     reset_counter();
 
     // Sanity check: a gateway with no `#[use_guards]` still has the
-    // global guard applied through the transport-level `HttpEndpointWrap`,
-    // exactly once.
+    // global guard applied through the self-mount edge wrap, exactly once.
     let app = TestApp::builder()
         .module::<GatewayDedupModule>()
         .use_guards_global([guard::<CountingDenyGuard>()])
@@ -132,4 +130,3 @@ async fn bare_gateway_runs_global_guard_once() {
 
     assert_eq!(counter(), 1, "the global guard runs once on the WS upgrade");
 }
-

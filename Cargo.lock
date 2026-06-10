@@ -168,6 +168,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-graphql",
+ "features",
+ "migrations",
+ "nest-rs-authn",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-guards",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-openapi",
+ "nest-rs-opentelemetry",
+ "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-resource",
+ "nest-rs-schedule",
+ "nest-rs-seaorm",
+ "nest-rs-server-timing",
+ "nest-rs-testing",
+ "poem",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "validator",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -360,6 +397,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71938f30533e4d95a6d17aa530939da3842c2ab6f4f84b9dae68447e4129f74a"
 
 [[package]]
+name = "assistant"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-mcp",
+ "nest-rs-opentelemetry",
+ "nest-rs-server-timing",
+ "nest-rs-testing",
+ "poem",
+ "reqwest 0.13.4",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "validator",
+]
+
+[[package]]
 name = "async-graphql"
 version = "7.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -536,6 +598,35 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
+name = "auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "features",
+ "migrations",
+ "nest-rs-authn",
+ "nest-rs-authz",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-opentelemetry",
+ "nest-rs-seaorm",
+ "nest-rs-testing",
+ "nest-rs-throttler",
+ "poem",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "validator",
+]
 
 [[package]]
 name = "autocfg"
@@ -2391,6 +2482,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
+name = "live"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "features",
+ "futures-util",
+ "nest-rs-authn",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-guards",
+ "nest-rs-health",
+ "nest-rs-http",
+ "nest-rs-opentelemetry",
+ "nest-rs-testing",
+ "nest-rs-ws",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2675,6 +2791,7 @@ dependencies = [
  "async-trait",
  "nest-rs-core",
  "nest-rs-graphql",
+ "nest-rs-http",
  "nest-rs-ws",
  "poem",
  "serde_json",
@@ -2706,6 +2823,7 @@ dependencies = [
  "nest-rs-graphql-macros",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-interceptors",
  "nest-rs-testing",
  "poem",
  "serde",
@@ -3856,139 +3974,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "publish-api"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-graphql",
- "features",
- "migrations",
- "nest-rs-authn",
- "nest-rs-authz",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-graphql",
- "nest-rs-guards",
- "nest-rs-health",
- "nest-rs-http",
- "nest-rs-openapi",
- "nest-rs-opentelemetry",
- "nest-rs-queue",
- "nest-rs-redis",
- "nest-rs-resource",
- "nest-rs-schedule",
- "nest-rs-seaorm",
- "nest-rs-server-timing",
- "nest-rs-testing",
- "poem",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "validator",
-]
-
-[[package]]
-name = "publish-assistant"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-health",
- "nest-rs-http",
- "nest-rs-mcp",
- "nest-rs-opentelemetry",
- "nest-rs-server-timing",
- "nest-rs-testing",
- "poem",
- "reqwest 0.13.4",
- "rmcp",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "validator",
-]
-
-[[package]]
-name = "publish-auth"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "features",
- "migrations",
- "nest-rs-authn",
- "nest-rs-authz",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-health",
- "nest-rs-http",
- "nest-rs-opentelemetry",
- "nest-rs-seaorm",
- "nest-rs-testing",
- "nest-rs-throttler",
- "poem",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
- "validator",
-]
-
-[[package]]
-name = "publish-live"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "features",
- "futures-util",
- "nest-rs-authn",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-guards",
- "nest-rs-health",
- "nest-rs-http",
- "nest-rs-opentelemetry",
- "nest-rs-testing",
- "nest-rs-ws",
- "parking_lot",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "publish-worker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "features",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-opentelemetry",
- "nest-rs-queue",
- "nest-rs-redis",
- "nest-rs-testing",
- "nest-rs-worker",
- "serde",
- "tokio",
 ]
 
 [[package]]
@@ -6611,6 +6596,23 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "features",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-opentelemetry",
+ "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-testing",
+ "nest-rs-worker",
+ "serde",
+ "tokio",
 ]
 
 [[package]]

@@ -9,8 +9,8 @@ use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
 
 use crate::config::ThrottlerConfig;
-use crate::store::InMemoryThrottler;
 use crate::rate::Throttle;
+use crate::store::InMemoryThrottler;
 
 pub const DEFAULT_THROTTLE: Throttle = Throttle::per_minute(60);
 

@@ -160,7 +160,7 @@ use super::listener::PointsListeners;
 pub struct PointsEventModule;
 ```
 
-```rust title="apps/publish-api/src/module.rs"
+```rust title="apps/api/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_events::EventsModule;
 
@@ -171,7 +171,7 @@ use features::points::{PointsModule, PointsEventModule};
     PointsModule,
     PointsEventModule,
 ])]
-pub struct PublishApiModule;
+pub struct ApiModule;
 ```
 
 <Aside>

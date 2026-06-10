@@ -58,10 +58,8 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
     // resolver-membership check (skipped when resolvers link but no schema
     // mounts).
     let builder = builder.provide(nest_rs_core::ResolverSchemaActive);
-    builder.provide_meta(HttpEndpointMeta::new(
-        log_path,
-        "graphql",
-        move |container, route: Route| {
+    builder.provide_meta(
+        HttpEndpointMeta::new(log_path, "graphql", move |container, route: Route| {
             let schema = build_schema(container.clone(), &options);
             // SDL emit lives here — this is the only place we hold the
             // assembled container; rendered from the serving schema to avoid
@@ -94,7 +92,17 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 );
                 method = method.get(make_sync(move |_| Html(html.clone())));
             }
+            // GraphQL authenticates per-operation — through the registered
+            // `GraphqlOperationGuard` bridge, or the global-pool fallback when
+            // none is registered — never at the HTTP edge (the self-mount is
+            // `Exempt` below, so guards run exactly once, in-band). The
+            // `Public` marker is load-bearing: the in-band chain reads it so
+            // an `AuthGuard` admits an anonymous request through to the
+            // resolver gates (GraphQL errors in a 200, not a blanket HTTP
+            // 401) while a present bearer is still verified.
+            let method = poem::EndpointExt::data(method, ::nest_rs_core::Public);
             route.nest(options.path.as_str(), method)
-        },
-    ))
+        })
+        .exempt(),
+    )
 }

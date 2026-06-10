@@ -62,10 +62,7 @@ pub trait GlobalPipe: Layer {
     /// Inspect or rewrite the GraphQL operation variables in place. Runs
     /// before any resolver fires. Return [`PipeError`] to reject the
     /// operation. Default no-op.
-    fn transform_graphql_variables(
-        &self,
-        _value: &mut serde_json::Value,
-    ) -> Result<(), PipeError> {
+    fn transform_graphql_variables(&self, _value: &mut serde_json::Value) -> Result<(), PipeError> {
         Ok(())
     }
 
@@ -87,10 +84,7 @@ impl<T: GlobalPipe + ?Sized> GlobalPipe for Arc<T> {
         (**self).transform_body(value)
     }
 
-    fn transform_graphql_variables(
-        &self,
-        value: &mut serde_json::Value,
-    ) -> Result<(), PipeError> {
+    fn transform_graphql_variables(&self, value: &mut serde_json::Value) -> Result<(), PipeError> {
         (**self).transform_graphql_variables(value)
     }
 

@@ -114,9 +114,11 @@ async fn reap_stale(admin: &DatabaseConnection) {
         let Ok(name) = row.try_get::<String>("", "datname") else {
             continue;
         };
-        // Name is `nest_rs_e2e_<pid>_<nanos>_<seq>`; an unexpected shape is an
-        // older (unknown) format, treated as stale.
-        let stale = match name.split('_').nth(3).and_then(|t| t.parse::<u128>().ok()) {
+        // Name is `nest_rs_e2e_<pid>_<nanos>_<seq>`; the `nest_rs_e2e` prefix
+        // already spans split indices 0..=2, so `<nanos>` is at index 4 (index
+        // 3 is `<pid>`). An unexpected shape is an older (unknown) format,
+        // treated as stale.
+        let stale = match name.split('_').nth(4).and_then(|t| t.parse::<u128>().ok()) {
             Some(created) => now.saturating_sub(created) > STALE_AFTER_NANOS,
             None => true,
         };

@@ -1,16 +1,16 @@
 _default:
     @just --list
 
-# Run an app in watch mode (default: publish-api). Usage: just dev publish-live
-dev app="publish-api":
+# Run an app in watch mode (default: api). Usage: just dev live
+dev app="api":
     bacon run-long -- --bin {{app}}
 
-# Run an app in release mode (default: publish-api). Usage: just run publish-live
-run app="publish-api":
+# Run an app in release mode (default: api). Usage: just run live
+run app="api":
     cargo run --release --bin {{app}}
 
-# Build one app in release (default: publish-api). Usage: just build publish-live
-build app="publish-api":
+# Build one app in release (default: api). Usage: just build live
+build app="api":
     cargo build --release -p {{app}}
 
 # Build release binaries for every app in the workspace.

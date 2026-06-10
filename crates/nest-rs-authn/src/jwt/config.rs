@@ -75,7 +75,9 @@ impl JwtConfig {
                 )));
             }
             (Some(secret), _, _) => JwtOptions::new(secret.clone()),
-            (None, Some(private), Some(public)) => JwtOptions::eddsa(private.clone(), public.clone()),
+            (None, Some(private), Some(public)) => {
+                JwtOptions::eddsa(private.clone(), public.clone())
+            }
             (None, None, Some(public)) => JwtOptions::eddsa_verify(public.clone()),
             (None, Some(_), None) => {
                 return Err(AuthError::Failed(

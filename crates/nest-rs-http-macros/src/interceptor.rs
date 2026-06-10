@@ -36,7 +36,10 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
         ..
     }) = nv.value
     else {
-        return Err(syn::Error::new(nv.value.span(), "priority must be an integer"));
+        return Err(syn::Error::new(
+            nv.value.span(),
+            "priority must be an integer",
+        ));
     };
     let priority: i32 = lit.base10_parse()?;
     Ok(quote! { #priority })

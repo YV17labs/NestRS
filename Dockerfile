@@ -6,8 +6,8 @@
 # the runtime image. Which one runs is chosen at `docker run` time by
 # overriding the entrypoint:
 #
-#   docker run --rm -p 3002:3002 nestrs                # runs publish-api (default)
-#   docker run --rm -p 3001:3001 nestrs /usr/local/bin/publish-auth
+#   docker run --rm -p 3002:3002 nestrs                # runs api (default)
+#   docker run --rm -p 3001:3001 nestrs /usr/local/bin/auth
 #
 # Stages:
 #   1. chef    — rust toolchain + cargo-chef, shared by planner & builder
@@ -64,4 +64,4 @@ COPY --from=builder --chown=nonroot:nonroot /out/ /usr/local/bin/
 EXPOSE 3002
 USER nonroot:nonroot
 # Default app — override at runtime: `docker run ... /usr/local/bin/<app>`
-ENTRYPOINT ["/usr/local/bin/publish-api"]
+ENTRYPOINT ["/usr/local/bin/api"]

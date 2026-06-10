@@ -49,7 +49,7 @@ impl AccessLog {
     fn emit(self, bytes: u64) {
         self.span.record("http.response.body.size", bytes);
         if self.access_log {
-            let duration_ms = self.start.elapsed().as_secs_f64() * 1e3;
+            let duration_ms = (self.start.elapsed().as_secs_f64() * 1e6).round() / 1e3;
             tracing::info!(
                 target: "nest_rs::access",
                 method = %self.method,

@@ -70,10 +70,6 @@ impl UsersService {
         Ok(User::from(&user))
     }
 
-    /// Returns the persisted [`entity::Model`] — never the wire `User` — so
-    /// each transport applies its own field-level masking before exposing it
-    /// (HTTP via response masking, GraphQL via `masked_output_for`). Handing
-    /// back a pre-built `User` would bypass the ability filter.
     pub async fn create_in_org(
         &self,
         input: CreateUserInput,
@@ -113,12 +109,6 @@ impl UsersService {
     }
 }
 
-/// Validate the input, optionally hash the password, and build the
-/// `ActiveModel`. Pulled out of `register_with_password` / `create_in_org` /
-/// `find_or_create` so validation and hashing failure paths are testable
-/// without a DB. Returns `ServiceError::Validation` on bad input and
-/// `ServiceError::Db` (wrapping a `Custom` `DbErr`) on hashing failure — the
-/// HTTP layer maps both as it would for a real DB error.
 pub(crate) fn prepare_new_user(
     input: CreateUserInput,
     org_id: Uuid,
@@ -135,10 +125,6 @@ pub(crate) fn prepare_new_user(
     Ok(active_for_new_user(input, org_id, password_hash))
 }
 
-/// Branch a loaded user against a supplied password into the
-/// `Ok(model)` / `Err(CredentialError)` decision the authenticate handler
-/// returns. Burns a dummy verify on every miss path so timing does not
-/// distinguish "no such email" / "no password set" / "wrong password".
 pub(crate) fn verify_credentials(
     email: &str,
     user: Option<entity::Model>,
@@ -163,10 +149,6 @@ pub(crate) fn verify_credentials(
     Ok(user)
 }
 
-/// Build the `ActiveModel` for a fresh row: validated input, scoped to
-/// `org_id`, defaulted to [`DEFAULT_ROLE`], optionally carrying a password
-/// hash. Pulled out of `register_with_password` / `create_in_org` /
-/// `find_or_create` so the column wiring is testable without a DB.
 pub(crate) fn active_for_new_user(
     input: CreateUserInput,
     org_id: Uuid,
@@ -234,15 +216,10 @@ mod tests {
         }
     }
 
-    // Pin the new-user default. A change to "admin" would silently
-    // escalate every freshly-registered user — high-value sentinel.
     #[test]
     fn default_role_is_user() {
         assert_eq!(DEFAULT_ROLE, "user");
     }
-
-    // The dataloader contract says: one bucket per requested key, in the
-    // input set — including the ones the DB returned no row for.
 
     #[test]
     fn group_by_name_keeps_every_requested_name_as_a_bucket() {
@@ -266,9 +243,6 @@ mod tests {
 
     #[test]
     fn group_by_name_drops_rows_not_in_the_requested_set() {
-        // A row whose name isn't requested is silently dropped — `is_in(names)`
-        // shouldn't return them, but the grouper must not panic if it ever
-        // does.
         let names = vec!["ada".to_string()];
         let rows = vec![row("ada", Uuid::nil()), row("eve", Uuid::nil())];
         let buckets = group_users_by_name(&names, rows);
@@ -281,11 +255,6 @@ mod tests {
         let buckets = group_users_by_name(&[], vec![row("ada", Uuid::nil())]);
         assert!(buckets.is_empty());
     }
-
-    // The `active_for_new_user` helper carries the contract every insert
-    // path (`register_with_password`, `create_in_org`, `find_or_create`)
-    // depends on. Pin the column wiring here so a refactor of any one
-    // caller can't silently drift from the others.
 
     fn input(name: &str, email: &str) -> CreateUserInput {
         CreateUserInput {
@@ -318,8 +287,6 @@ mod tests {
             active_into_get::<String>(&active, entity::Column::Role).as_deref(),
             Some(DEFAULT_ROLE),
         );
-        // No password hash supplied — column stays NotSet (will default at DB
-        // level), never overwritten with a stray empty string.
         let pw = active.get(entity::Column::PasswordHash);
         assert!(
             matches!(pw, sea_orm::ActiveValue::NotSet),
@@ -335,8 +302,6 @@ mod tests {
             Some("argon2id$mock".into()),
         );
         let pw = active.get(entity::Column::PasswordHash);
-        // Just check the variant — value extraction across SeaORM versions
-        // is fragile, and "Set" is what the writeback layer needs.
         assert!(
             matches!(pw, sea_orm::ActiveValue::Set(_)),
             "password column must be Set when a hash is provided, got {pw:?}",
@@ -355,10 +320,6 @@ mod tests {
             Some("eve@example.com"),
         );
     }
-
-    // `prepare_new_user` is the single validate-then-build path every insert
-    // route shares. Pin the rejection cases here — a `validator` derive change
-    // on the entity must show up as a test failure, not a 500 in prod.
 
     #[test]
     fn prepare_new_user_rejects_empty_name() {
@@ -396,8 +357,6 @@ mod tests {
         let org = Uuid::now_v7();
         let active = prepare_new_user(input("ada", "ada@example.com"), org, Some("hunter2"))
             .expect("valid input");
-        // Argon2id encoded hashes start with `$argon2id$` — a regression to a
-        // weaker hasher (or to storing the plaintext) is caught here.
         let s = active_into_get::<Option<String>>(&active, entity::Column::PasswordHash)
             .flatten()
             .expect("password column must be Set");
@@ -406,10 +365,6 @@ mod tests {
             "password column must hold an argon2id hash, got {s:?}",
         );
     }
-
-    // `verify_credentials` is the pure decision path of `authenticate`. The
-    // burn-on-miss is *security-critical* (timing); these tests pin all three
-    // miss-or-fail shapes return the same opaque `CredentialError`.
 
     fn user_row(password_hash: Option<String>) -> entity::Model {
         entity::Model {
@@ -426,14 +381,11 @@ mod tests {
     fn verify_credentials_rejects_absent_user_with_opaque_error() {
         let err = verify_credentials("ghost@example.com", None, "anything")
             .expect_err("no user ⇒ CredentialError");
-        // Wire string is the opaque constant — never names the missing user.
         assert_eq!(err.to_string(), "invalid credentials");
     }
 
     #[test]
     fn verify_credentials_rejects_user_without_a_password_hash() {
-        // A user provisioned through OAuth (no local credential) cannot log in
-        // via password — `password_hash` is `None`. Same opaque error.
         let err = verify_credentials("ada@example.com", Some(user_row(None)), "hunter2")
             .expect_err("no hash ⇒ CredentialError");
         assert_eq!(err.to_string(), "invalid credentials");
@@ -457,11 +409,6 @@ mod tests {
         assert_eq!(ok.id, id);
     }
 
-    // The dataloader fast-path: an empty `keys` slice must short-circuit to
-    // an empty map without touching the executor. Without this, a request
-    // with no IDs would call into `Repo` and (correctly) fail with no
-    // ambient DbContext — pin the early return.
-
     fn users_service_disconnected() -> UsersService {
         UsersService::new(Arc::new(DatabaseConnection::default()))
     }
@@ -472,11 +419,6 @@ mod tests {
         let out = svc.by_name(&[]).await.expect("empty keys short-circuit");
         assert!(out.is_empty());
     }
-
-    // Without an ambient `DbContext`, `Repo::<Users>::conn()` returns `Err` —
-    // every async method here must surface that as its own error variant,
-    // never panic. Covers the `?` on `Repo::<…>::conn()` plus the early
-    // `map_err(|_| CredentialError)` in `authenticate`.
 
     #[tokio::test]
     async fn authenticate_returns_credential_error_without_an_ambient_executor() {
@@ -491,9 +433,6 @@ mod tests {
     #[tokio::test]
     async fn register_with_password_surfaces_executor_error_as_db_variant() {
         let svc = users_service_disconnected();
-        // Validation succeeds, hashing succeeds, then `Repo::conn()?` fails —
-        // the resulting `ServiceError::Db` carries the synthetic `DbErr::Custom`
-        // and the wire string is the opaque "database error".
         let err = svc
             .register_with_password("ada@example.com", "ada", "hunter2", Uuid::now_v7())
             .await
@@ -504,8 +443,6 @@ mod tests {
 
     #[tokio::test]
     async fn register_with_password_surfaces_validation_error_before_touching_the_db() {
-        // An invalid email must surface as `Validation`, not `Db` — even with
-        // no executor, because validation runs first.
         let svc = users_service_disconnected();
         let err = svc
             .register_with_password("not-an-email", "ada", "hunter2", Uuid::now_v7())
@@ -556,14 +493,10 @@ mod tests {
         assert!(matches!(err, ServiceError::Db(_)));
     }
 
-    // `UsersService::new` is what every wiring site uses — verify it builds
-    // a usable instance and that the held DB handle stays addressable.
     #[test]
     fn new_constructs_a_service_carrying_the_supplied_connection() {
         let db = Arc::new(DatabaseConnection::default());
         let svc = UsersService::new(Arc::clone(&db));
-        // Two clones of the same Arc — strong count is at least the two we
-        // hold; the constructor must not have dropped its reference.
         assert!(Arc::strong_count(&db) >= 2);
         drop(svc);
         assert_eq!(Arc::strong_count(&db), 1);
@@ -571,10 +504,6 @@ mod tests {
 
     #[test]
     fn verify_credentials_rejects_user_with_malformed_stored_hash() {
-        // A garbled hash in the DB (corruption, manual edit) must surface as
-        // "invalid credentials", not crash the request — `verify_password`
-        // returns `Err(InvalidHash)` and the helper coerces to `false` via
-        // `unwrap_or(false)`.
         let err = verify_credentials(
             "ada@example.com",
             Some(user_row(Some("not-a-real-hash".into()))),

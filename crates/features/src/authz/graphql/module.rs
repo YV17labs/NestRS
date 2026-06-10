@@ -17,7 +17,4 @@ use crate::authz::http::AuthzHttpModule;
 )]
 pub struct AuthzGraphqlModule;
 
-// Gated on `GraphqlAuthGuard` so the forwarder is silent in apps that do not
-// import this module — keeps a second GraphQL app with a different principal
-// type from double-forwarding.
 nest_rs_graphql::forward_principal!(Claims, GraphqlAuthGuard);

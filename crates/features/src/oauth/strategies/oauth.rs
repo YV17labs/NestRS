@@ -24,10 +24,6 @@ pub struct OAuthStrategy {
     svc: Arc<OAuthService>,
 }
 
-/// Resolves the principal from the provider's redirect back to `/callback`.
-/// The `/authorize` leg that *starts* the flow is a plain public handler
-/// (`OAuthController::authorize`) — it issues a redirect, which is a handler
-/// response, not an authentication outcome.
 #[async_trait]
 impl Strategy for OAuthStrategy {
     type Principal = Caller;

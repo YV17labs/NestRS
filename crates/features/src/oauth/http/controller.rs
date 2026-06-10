@@ -11,8 +11,6 @@ use poem::http::{StatusCode, header};
 use poem::web::{Form, Json};
 use poem::{Request, Response, Result};
 
-/// Name of the short-lived cookie that carries the signed OAuth transaction
-/// (CSRF + PKCE state) between `/authorize` and `/callback`.
 pub(crate) const TRANSACTION_COOKIE: &str = "oauth_tx";
 
 #[controller(path = "/")]
@@ -47,9 +45,6 @@ impl OAuthController {
         tags("OAuth2")
     )]
     async fn authorize(&self, req: &Request) -> Result<Response> {
-        // Starting the flow is a redirect, not an authentication: build the
-        // 302 + transaction cookie here rather than smuggling a response out
-        // of a guard. `/callback` is where `OAuthStrategy` authenticates.
         let authorization = self
             .svc
             .authorize()
@@ -99,8 +94,6 @@ impl OAuthController {
     }
 }
 
-/// Append `; Secure` only when the request arrived over HTTPS, so the cookie
-/// survives a plaintext local dev round-trip but is hardened in production.
 fn cookie_secure(req: &Request) -> &'static str {
     let https = req.uri().scheme_str() == Some("https")
         || req

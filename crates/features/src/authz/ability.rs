@@ -129,7 +129,6 @@ mod tests {
     #[test]
     fn admin_can_manage_every_org_unconditionally() {
         let ab = admin(Uuid::now_v7());
-        // `Manage` on orgs has no `when` — admins read every org.
         assert!(ab.can_class(Action::Read, TypeId::of::<org::Entity>()));
         assert!(ab.can_class(Action::Update, TypeId::of::<org::Entity>()));
         assert!(ab.can::<org::Entity>(Action::Read, &org_model(Uuid::now_v7())));
@@ -220,11 +219,9 @@ mod tests {
 
     #[test]
     fn empty_roles_behave_as_a_non_admin_member() {
-        // Defence in depth: a token with no role must not silently get admin powers.
         let org = Uuid::now_v7();
         let ab = ability_for(vec![], org);
         assert!(!ab.can::<user::Entity>(Action::Delete, &user_model(Uuid::now_v7(), org)));
-        // Read users still scoped to own org and restricted to {id, name}.
         match ab.permitted_fields::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org)) {
             FieldSet::Only(cols) => assert!(!cols.contains("email")),
             FieldSet::All => panic!("an empty-roles caller must have a restricted field set"),

@@ -37,10 +37,6 @@ mod tests {
 
     use super::*;
 
-    // The `#[expose]` macro emits a `WireModelDefaults` impl per `#[expose(skip)]`
-    // scalar column, so the shaper can reconstruct the full `Model` from a
-    // user-only wire body for `Ability::mask` to walk. A regression here turns
-    // every protected response into a 500 — pin the placeholder shape now.
     #[test]
     fn wire_defaults_fill_in_role_and_password_hash_when_absent() {
         let mut body: Map<String, serde_json::Value> = Map::new();

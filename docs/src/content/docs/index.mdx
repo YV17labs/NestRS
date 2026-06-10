@@ -87,7 +87,9 @@ to a native binary. Start here; grow into a **workspace** when you add more apps
     { kind: 'output', text: '2026-04-29T12:00:00.799422Z  INFO nest_rs::module: module dependencies initialized module="HelloModule"' },
     { kind: 'output', text: '2026-04-29T12:00:00.799862Z  INFO nest_rs::routes: GET    /  (hello)' },
     { kind: 'omit' },
+    { kind: 'output', text: '2026-04-29T12:00:00.802100Z  INFO poem::server: listening addr=socket://0.0.0.0:3000' },
     { kind: 'output', text: '2026-04-29T12:00:00.802552Z  INFO poem::server: server started' },
+    { kind: 'output', text: '2026-04-29T12:00:00.803011Z  INFO nest_rs::access: method=GET path=/ status=200 bytes=11 duration_ms=0.189917 client_ip=127.0.0.1 user_agent=curl/8.7.1 trace_id=48643283b6e9c222dadc23480117d76a' },
     { kind: 'input', text: 'curl http://localhost:3000' },
     { kind: 'response', text: 'Hello World' },
   ]}

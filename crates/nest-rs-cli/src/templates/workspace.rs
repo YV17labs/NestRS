@@ -253,9 +253,10 @@ in the framework repo.
 pub const JUSTFILE: &str = r#"_default:
     @just --list
 
-# Run an app (default: hello). Usage: nestrs run dev blog
+# Run an app with auto-reload — watches the source, rebuilds and restarts on
+# save. Default: hello. Usage: nestrs run dev blog
 dev app="hello":
-    cargo run --bin {{app}}
+    bacon run-long -- --bin {{app}}
 
 # Run an app in release mode. Usage: nestrs run start blog
 start app="hello":

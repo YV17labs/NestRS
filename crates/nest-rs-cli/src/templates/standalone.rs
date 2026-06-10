@@ -165,9 +165,10 @@ ENTRYPOINT ["/usr/local/bin/app"]
 pub const JUSTFILE: &str = r#"_default:
     @just --list
 
-# Run the app (loads `.env` / `.env.development` from the project root).
+# Run the app with auto-reload — watches the source, rebuilds and restarts on
+# save (loads `.env` / `.env.development` from the project root).
 dev:
-    cargo run
+    bacon run-long
 
 # Run an optimized build.
 start:

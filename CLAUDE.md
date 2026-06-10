@@ -584,14 +584,19 @@ Cross-crate framework wiring lives as integration tests in
 `nest-rs-testing` (access-graph rejection, hook ordering, transport
 contribution).
 
-**`just`-driven recipes — three, no more:**
+**The `test` recipe group** — defined in `test.just` (`mod test`), run
+through `nestrs run` (the single front door, which forwards to `just`).
+Bare `nestrs run test` **lists** the kinds (like `db`); pick one:
 
-- `just test` — unit + integration (no DB);
-- `just test-e2e` — e2e (live Postgres/Redis);
-- `just test-cov` — coverage on the full suite.
+- `nestrs run test unit` — unit + integration + doctests (no DB);
+- `nestrs run test e2e` — e2e (live Postgres/Redis);
+- `nestrs run test cov` — coverage on the full suite;
+- `nestrs run test doc` — doctests only.
 
-Gating is a nextest binary filter (`-E 'binary(e2e)'`), **not**
-`#[ignore]`. Do not reintroduce `test-unit`.
+`nextest` does not run doctests, so `unit` adds `cargo test --doc`
+explicitly — otherwise doc examples never run. Gating is a nextest
+binary filter (`-E 'binary(e2e)'`), **not** `#[ignore]`. The keyword is
+`unit` (not a flat `test`/`test-unit` recipe).
 
 **No mocking the database in e2e tests** — real Postgres
 (testcontainers in CI). **Testability rule**: if a type is hard to
@@ -634,8 +639,8 @@ English") apply per session.
 ## Workflow
 
 State the plan in one or two sentences before tools. Batch independent
-calls in parallel. Run `just test` after meaningful changes;
-`just test-e2e` if the change touches transports, DI wiring, or
+calls in parallel. Run `nestrs run test unit` after meaningful changes;
+`nestrs run test e2e` if the change touches transports, DI wiring, or
 persistence. For HTTP/GraphQL changes verify live by curling, then
 **kill any background server before returning control**. Report what
 changed and what was verified — no paragraph-long summary.

@@ -1,6 +1,6 @@
 ---
 title: Test it end to end
-description: A single tests/e2e.rs boots the real BlogModule against a throwaway database; just test-e2e runs it; happy path and failure modes both asserted.
+description: A single tests/e2e.rs boots the real BlogModule against a throwaway database; nestrs run test e2e runs it; happy path and failure modes both asserted.
 sidebar:
   order: 9
 ---
@@ -10,7 +10,7 @@ import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 You ship one e2e test that boots the *real* `BlogModule`
 against a throwaway Postgres, drives it through the same poem runtime
 production uses, and asserts on the round-trip you've been verifying
-by hand. By the end of this page, `just test-e2e` runs it green, a
+by hand. By the end of this page, `nestrs run test e2e` runs it green, a
 wiring regression in any of the previous six steps fails this test,
 and the feature is locked down.
 
@@ -148,7 +148,7 @@ because `blog` stays public.
 
 ## Run it
 
-`just test-e2e` is the recipe; it routes to nextest with the binary
+`nestrs run test e2e` is the recipe; it routes to nextest with the binary
 filter for the e2e file.
 
 <Steps>
@@ -156,14 +156,14 @@ filter for the e2e file.
 1. Bring Postgres up (already done in page 6).
 
    ```bash frame="terminal"
-   $ just db up
+   $ nestrs run db up
    postgres ready on 127.0.0.1:5432
    ```
 
 2. Run the e2e suite.
 
    ```bash frame="terminal"
-   $ just test-e2e
+   $ nestrs run test e2e
    ────────────
         Starting 2 tests across 1 binary
          PASS [   1.4s] features::e2e posts_round_trip
@@ -174,14 +174,15 @@ filter for the e2e file.
    don't need a database.
 
    ```bash frame="terminal"
-   $ just test
+   $ nestrs run test unit
    ```
 
 </Steps>
 
-`just test` and `just test-e2e` are the only two recipes you need; the
-third, `just test-cov`, exists for coverage runs. None of them use
-`#[ignore]` — gating is the nextest binary filter on `tests/e2e.rs`.
+`nestrs run test unit` and `nestrs run test e2e` are the two recipes you reach for day
+to day; `nestrs run test cov` adds coverage and `nestrs run test doc` runs the
+`///` examples. None of them use `#[ignore]` — gating is the nextest binary filter
+on `tests/e2e.rs`.
 
 ## What you have now
 
@@ -189,7 +190,7 @@ third, `just test-cov`, exists for coverage runs. None of them use
   throwaway Postgres provisioned by testcontainers.
 - A happy-path test and a validation failure — enough to catch a
   wiring regression in any of the previous six pages.
-- A `just test-e2e` recipe running them green.
+- A `nestrs run test e2e` recipe running them green.
 
 ## Where you are now
 

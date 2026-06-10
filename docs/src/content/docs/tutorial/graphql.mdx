@@ -216,7 +216,7 @@ framework writes one as a side effect of the dev run when
 builds, commit it for dev:
 
 ```bash frame="terminal"
-$ NESTRS_GRAPHQL__EMIT_SDL=1 just dev api
+$ NESTRS_GRAPHQL__EMIT_SDL=1 nestrs run dev api
 INFO nest_rs::graphql: wrote schema to apps/api/schema.graphql
 
 $ head -5 apps/api/schema.graphql

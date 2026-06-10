@@ -1,14 +1,14 @@
 ---
 title: Seeding
-description: Idempotent demo data via the seed crate — factories, the runner, just db seed.
+description: Idempotent demo data via the seed crate — factories, the runner, nestrs run db seed.
 sidebar:
   order: 8
 ---
 
 Demo data lives in the **`seed`** crate — a product crate under `crates/`,
 beside [`migrations`](/database/migrations/). Seeding is **idempotent**: every
-factory inserts with `ON CONFLICT DO NOTHING`, so `just db seed` can run any
-number of times and only ever fills gaps. `just db reset` chains a fresh
+factory inserts with `ON CONFLICT DO NOTHING`, so `nestrs run db seed` can run any
+number of times and only ever fills gaps. `nestrs run db reset` chains a fresh
 migrate with a seed for a clean slate.
 
 ## A factory
@@ -91,11 +91,11 @@ pub async fn run(db: &DatabaseConnection) -> Result<u64> {
 ## Run it
 
 ```bash
-just db seed     # load demo data (idempotent)
-just db reset    # fresh migrate, then seed
+nestrs run db seed     # load demo data (idempotent)
+nestrs run db reset    # fresh migrate, then seed
 ```
 
-`just db seed` runs the crate's `seed` binary, which reads
+`nestrs run db seed` runs the crate's `seed` binary, which reads
 `NESTRS_DATABASE__URL`, runs `seed::run`, and prints how many rows
 it inserted.
 

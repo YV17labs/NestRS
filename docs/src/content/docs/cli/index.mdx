@@ -22,12 +22,15 @@ the same decorators as the framework repo (`users/` for features,
 ## Install
 
 ```bash
-cargo install --locked nest-rs-cli just
+cargo install --locked nest-rs-cli
 nestrs version
 ```
 
-Requires **Rust 1.95+** (edition 2024). Run **`nestrs doctor`** after install — it
-checks the Rust toolchain and lists optional `NESTRS_*` environment variables.
+Requires **Rust 1.95+** (edition 2024). That single install is all you need: the
+first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
+toolchain it drives — `just`, `bacon`, `cargo-nextest` — once. Run **`nestrs
+doctor`** after install to check the Rust toolchain and list optional `NESTRS_*`
+environment variables.
 
 ## Layout detection
 
@@ -70,7 +73,7 @@ exists`** — it does not overwrite.
 ```bash
 nestrs new hello
 cd hello
-just dev hello
+nestrs run dev hello
 ```
 
 Open **http://localhost:3000/** — `Hello World`. Logic in
@@ -110,7 +113,7 @@ nestrs g resource posts
 ```bash
 nestrs new hello --standalone
 cd hello
-just dev
+nestrs run dev
 ```
 
 Open **http://localhost:3000/** — `Hello World`. Service and controller live
@@ -161,38 +164,61 @@ From the workspace root (or `apps/`, `crates/features/`, …):
 
 ```bash
 nestrs new blog
-just dev blog
+nestrs run dev blog
 ```
 
 Creates a **thin** app under `apps/blog/` (composition root only — no
 `service.rs` / `controller.rs` in the app crate).
 
+## Running tasks
+
+Every project task runs through **`nestrs run <recipe>`** — the single front
+door. It forwards the recipe and its arguments verbatim to
+[`just`](https://github.com/casey/just), which reads the `Justfile` the
+scaffolder wrote:
+
+```bash
+nestrs run dev          # watch mode (rebuild + restart on save)
+nestrs run test unit         # unit + integration
+nestrs run db up        # apply migrations
+nestrs run              # list the available recipes
+```
+
+The recipes are yours to edit. Add your own to the `Justfile` and they run the
+same way — `nestrs run deploy`, `nestrs run docker-up`, whatever you write. The
+framework owns the recipes it ships; you own the rest.
+
+The **first** `nestrs run` installs the toolchain it drives (`just`, `bacon`,
+`cargo-nextest`) once. On CI, where you provision tools yourself, set
+`NESTRS_NO_BOOTSTRAP=1` or pass `--no-bootstrap` — a missing tool then fails
+with the manual install command instead of fetching anything.
+
 ## Build
 
-Release binaries land in `target/release/`. **`just run`** compiles and
-starts the server; use **`just build`** when you only need the artifact
+Release binaries land in `target/release/`. **`nestrs run start`** compiles and
+starts the server; use **`nestrs run build`** when you only need the artifact
 (Docker, CI, or copying the binary elsewhere).
 
 <Tabs syncKey="project-kind">
 <TabItem label="Workspace">
 
 ```bash
-just build              # default app (hello)
-just build blog         # after nestrs new blog
-just build-all          # every app in the workspace
-just run hello          # build + run in release
+nestrs run build              # default app (hello)
+nestrs run build blog         # after nestrs new blog
+nestrs run build --all          # every app in the workspace
+nestrs run start hello        # build + run in release
 ```
 
 </TabItem>
 <TabItem label="Standalone">
 
 ```bash
-just build    # target/release/hello
-just run      # build + run in release
+nestrs run build    # target/release/hello
+nestrs run start    # build + run in release
 ```
 
 The standalone **`Dockerfile`** runs `cargo build --release` in a
-multi-stage image — same output path as `just build`.
+multi-stage image — same output path as `nestrs run build`.
 
 </TabItem>
 </Tabs>

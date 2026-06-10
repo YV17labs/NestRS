@@ -58,28 +58,28 @@ what it doesn't.
 ## Run it
 
 ```bash frame="terminal"
-$ just test                   # unit + integration, no DB
+$ nestrs run test unit                   # unit + integration, no DB
    Compiling api v0.1.0
     Finished `test` profile in 12.4s
 test result: ok. 142 passed in 0.21s
 ```
 
 ```bash frame="terminal"
-$ just test-e2e               # e2e — Postgres required
+$ nestrs run test e2e               # e2e — Postgres required
 [+] Running container postgres:16-alpine
 test create_then_list_users ... ok
 test result: ok. 14 passed in 4.31s
 ```
 
 ```bash frame="terminal"
-$ just test-cov               # full suite with coverage (llvm-cov)
+$ nestrs run test cov               # full suite with coverage (llvm-cov)
 ```
 
 The split is by **what each command needs to run**, not by Rust test
-category. `just test` covers everything that runs without Postgres —
+category. `nestrs run test unit` covers everything that runs without Postgres —
 unit tests *and* integration tests of crates that don't own
-persistence. `just test-e2e` covers the rest. The full suite is
-`just test && just test-e2e`.
+persistence. `nestrs run test e2e` covers the rest. The full suite is
+`nestrs run test unit && nestrs run test e2e`.
 
 ## What "done" requires
 
@@ -88,7 +88,7 @@ persistence. `just test-e2e` covers the rest. The full suite is
 - **Every app ships a `tests/e2e.rs`** booting its real top-level module —
   it proves the route table, the DI graph, the access-graph check, the
   authn/authz layers, and the data path are all wired.
-- **HTTP/GraphQL changes** require `just dev <app>` + `curl` against the
+- **HTTP/GraphQL changes** require `nestrs run dev <app>` + `curl` against the
   affected endpoint. If you cannot run the binary, say so explicitly
   rather than claiming green.
 - **No DB mocking in e2e tests** — real Postgres via `EphemeralDatabase`

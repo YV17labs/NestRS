@@ -72,12 +72,12 @@ fall back to plaintext.
 # Inline (suits k8s secrets, systemd EnvironmentFile, …)
 NESTRS_HTTP__TLS_CERT="$(cat fullchain.pem)" \
 NESTRS_HTTP__TLS_KEY="$(cat privkey.pem)" \
-just dev api
+nestrs run dev api
 
 # Or by path (the transport reads the file at boot)
 NESTRS_HTTP__TLS_CERT_FILE=/etc/letsencrypt/.../fullchain.pem \
 NESTRS_HTTP__TLS_KEY_FILE=/etc/letsencrypt/.../privkey.pem \
-just dev api
+nestrs run dev api
 ```
 
 Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside

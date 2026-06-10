@@ -29,12 +29,12 @@ reference: Publish.
 | [`worker`](/queue/) | — | Async jobs — newsletters, audio queue | Queue, Schedule |
 
 ```bash
-just db up                    # Postgres — api + auth
-just dev auth         # issuer on :3001
-just dev api          # resource server on :3002
-just dev live         # WebSockets on :3004
-just dev assistant    # MCP on :3003
-just dev worker       # headless — needs Redis
+nestrs run db up            # Postgres — api + auth
+nestrs run dev auth         # issuer on :3001
+nestrs run dev api          # resource server on :3002
+nestrs run dev live         # WebSockets on :3004
+nestrs run dev assistant    # MCP on :3003
+nestrs run dev worker       # headless — needs Redis
 ```
 
 `api` and `auth` share the same database and the `features`

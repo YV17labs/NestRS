@@ -39,11 +39,11 @@ brings up Rust, Postgres and Redis in one step.
    [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
    extension.
 2. Open the repo in VS Code and accept **Reopen in Container**.
-3. `just dev api` — the main Publish API on `http://localhost:3002` (run `just db up` first).
+3. `nestrs run dev api` — the main Publish API on `http://localhost:3002` (run `nestrs run db up` first).
 
 The container provisions the Rust toolchain and dev tooling (`just`, `bacon`,
 `cargo-nextest`, …), and brings up **Postgres** and **Redis** beside it with
-`NESTRS_DATABASE__URL` / `NESTRS_QUEUE__URL` already pointed at them. `just dev`
+`NESTRS_DATABASE__URL` / `NESTRS_QUEUE__URL` already pointed at them. `nestrs run dev`
 runs under `bacon` — every save triggers an incremental rebuild and a restart.
 
 > Prefer a local toolchain? See [Getting started → On your own machine](https://nestrs.dev/getting-started/#on-your-own-machine).
@@ -80,25 +80,26 @@ Adding an app means adding a directory under `apps/`; a new feature means a fold
 
 ### Commands
 
-Run `just` with no arguments to list every recipe.
+Run `nestrs run` with no arguments to list every recipe.
 
 | Command | What it does |
 |---------|--------------|
-| `just dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `just dev api` |
-| `just run <app>` | Run an app in release mode, e.g. `just run api` |
-| `just build <app>` | Build one app in release (default `api`), e.g. `just build live` |
-| `just build-all` | Build release binaries for every app in the workspace |
-| `just test` | Run unit + integration tests (no DB) |
-| `just test-e2e` | Run e2e tests (Postgres required) |
-| `just test-cov` | Run coverage on the full suite |
-| `just lint` | Clippy (strict) + format check |
-| `just fmt` | Apply rustfmt |
-| `just check` | Fast type-check (no codegen) |
-| `just db <verb>` | Manage the shared database: `up`, `down`, `fresh`, `status`, `seed`, `reset` |
+| `nestrs run dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `nestrs run dev api` |
+| `nestrs run start <app>` | Run an app in release mode, e.g. `nestrs run start api` |
+| `nestrs run build <app>` | Build one app in release (default `api`), e.g. `nestrs run build live` |
+| `nestrs run build --all` | Build release binaries for every app in the workspace |
+| `nestrs run test unit` | Run unit + integration + doctests (no DB) |
+| `nestrs run test e2e` | Run e2e tests (Postgres required) |
+| `nestrs run test cov` | Run coverage on the full suite |
+| `nestrs run test doc` | Run doctests only (`///` examples) |
+| `nestrs run lint` | Clippy (strict) + format check |
+| `nestrs run fmt` | Apply rustfmt |
+| `nestrs run check` | Fast type-check (no codegen) |
+| `nestrs run db <verb>` | Manage the shared database: `up`, `down`, `fresh`, `status`, `seed`, `reset` |
 
-`build-all`, `test`, `test-cov`, `lint`, `fmt` and `check` operate on the
-whole workspace; `dev`, `run`, and `build` take an app name (default `api`);
-`just db` (run bare to list the verbs) manages the shared Postgres schema and seed data.
+`build --all`, `test` (with `e2e` / `cov` / `doc`), `lint`, `fmt` and `check`
+operate on the whole workspace; `dev`, `start`, and `build` take an app name (default `api`);
+`nestrs run db` (run bare to list the verbs) manages the shared Postgres schema and seed data.
 
 ### The Publish workspace
 
@@ -115,7 +116,7 @@ Full map: [nestrs.dev/publish](https://nestrs.dev/publish/).
 | `worker` | Background jobs & scheduling (headless) | — |
 
 `api` and `auth` need Postgres; `worker` needs Redis
-— run `just db up` once first (or `just db reset` to also load demo users).
+— run `nestrs run db up` once first (or `nestrs run db reset` to also load demo users).
 `assistant` and `live` need neither.
 
 The richest reference is `api`. Read it before inventing a second

@@ -1,6 +1,6 @@
 //! Postgres-backed tests for the database crate.
 //!
-//! Runs under `just test-e2e`; gated out of `just test` by the
+//! Runs under `nestrs run test e2e`; gated out of `nestrs run test unit` by the
 //! `binary(e2e)` nextest filter.
 //!
 //! The modules under `tests/e2e/` are pulled in via `#[path]` because Rust

@@ -134,7 +134,7 @@ Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
   `common` keeps it written once.
 - Cargo links the app crate once per binary; one binary means one link
   step instead of one per concern file.
-- `just test-e2e` runs the whole suite from the workspace root.
+- `nestrs run test e2e` runs the whole suite from the workspace root.
 
 ## Ephemeral Postgres
 
@@ -298,7 +298,7 @@ E2E is not enough on its own. After the test goes green, run the binary
 and `curl` the affected endpoint:
 
 ```bash frame="terminal"
-$ just dev api &
+$ nestrs run dev api &
 $ curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/users
 $ kill %1
 ```

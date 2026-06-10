@@ -130,15 +130,15 @@ The workspace already ships a Postgres in `compose.yml`. Bring it up
 once.
 
 ```bash frame="terminal"
-$ just db up
+$ nestrs run db up
 postgres ready on 127.0.0.1:5432
 
-$ just db migrate
+$ nestrs run db migrate
 applied: m20260609_000000_create_post
 ```
 
-`just db migrate` runs `Migrator::up` against
-`NESTRS_DATABASE__URL` — the env var is set by `just db up`.
+`nestrs run db migrate` runs `Migrator::up` against
+`NESTRS_DATABASE__URL` — the env var is set by `nestrs run db up`.
 
 ## Transactions wrap mutating routes automatically
 
@@ -157,7 +157,7 @@ in the service.
 ## Run the binary
 
 ```bash frame="terminal"
-$ just dev blog
+$ nestrs run dev blog
 DEBUG nest_rs_http::transport: http transport listening addr=0.0.0.0:3005
 INFO nest_rs::orm: connected to postgres
 ```
@@ -193,7 +193,7 @@ tags the interceptor span and the SQL spans.
 - A `DatabaseModule::for_root(None)` import in the app — the data
   layer is on.
 - A migration adding the `post` table, applied through
-  `just db migrate`.
+  `nestrs run db migrate`.
 - `POST /posts` persisting into Postgres inside an automatic
   transaction — no auth filter, no row-level policy, just business
   logic through `Repo`.

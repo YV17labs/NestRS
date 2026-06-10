@@ -18,12 +18,17 @@ if you don't have it:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-Then the CLI, plus [`just`](https://github.com/casey/just) for the recipes the
-scaffolder writes:
+Then the CLI:
 
 ```bash
-cargo install --locked nest-rs-cli just
+cargo install --locked nest-rs-cli
 ```
+
+That's the only thing you install by hand. The first time you run a task with
+`nestrs run`, the CLI installs the dev toolchain it drives —
+[`just`](https://github.com/casey/just) for the recipes, `bacon` for watch mode,
+`cargo-nextest` for tests — once, then never again. Set `NESTRS_NO_BOOTSTRAP=1`
+(or pass `--no-bootstrap`) on CI to opt out and install them yourself.
 
 ## Scaffold and start
 
@@ -45,7 +50,7 @@ per app under `apps/`) or a **standalone** crate (everything in `src/`).
 2. Start the default app.
 
    ```bash
-   just dev hello
+   nestrs run dev hello
    ```
 
    Open **http://localhost:3000/** — `Hello World`, served from
@@ -68,7 +73,7 @@ per app under `apps/`) or a **standalone** crate (everything in `src/`).
 2. Start it.
 
    ```bash
-   just dev
+   nestrs run dev
    ```
 
    Open **http://localhost:3000/** — `Hello World`, from `src/`.

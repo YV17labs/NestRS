@@ -98,7 +98,7 @@ NESTRS_OPENTELEMETRY__SERVICE_VERSION=2026.06.0 \
 NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT=production \
 NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1 \
 RUST_LOG=info \
-  just run api
+  nestrs run start api
 ```
 
 The exporter uses HTTP/protobuf via `reqwest` (no `tonic`, no `openssl`) — the

@@ -1,6 +1,6 @@
 ---
 title: Scaffold the app
-description: Create apps/blog/ with nestrs new blog, start it with just dev blog, see a 404 on / — then read what the CLI generated.
+description: Create apps/blog/ with nestrs new blog, start it with nestrs run dev blog, see a 404 on / — then read what the CLI generated.
 sidebar:
   order: 2
 ---
@@ -9,7 +9,7 @@ import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
 You add the **`blog`** app to your workspace with the [`nestrs` CLI](/cli/) —
 the same tool from [Getting started](/getting-started/). By the end of this
-page, `just dev blog` listens on the port pinned in `module.rs` and replies
+page, `nestrs run dev blog` listens on the port pinned in `module.rs` and replies
 `404` to `GET /` (no routes mounted yet — that's the next page).
 
 <Aside type="note">
@@ -42,7 +42,7 @@ From the workspace root:
 2. Start it under `bacon` (restarts on save).
 
    ```bash
-   just dev blog
+   nestrs run dev blog
    ```
 
 3. Hit the root route — use the port from `apps/blog/src/module.rs`.
@@ -154,7 +154,7 @@ for the e2e test on page 8) and a stub `tests/e2e.rs`.
 1. From the workspace root:
 
    ```bash frame="terminal"
-   $ just dev blog
+   $ nestrs run dev blog
        Compiling blog v0.1.0
         Running `target/debug/blog`
    INFO nest_rs::http: starting on 0.0.0.0:3001
@@ -178,7 +178,7 @@ is healthy, and no route table claims `/` yet. That's the gap the next
 page fills.
 
 <Aside type="tip">
-`just dev blog` runs under `bacon` and restarts on every save.
+`nestrs run dev blog` runs under `bacon` and restarts on every save.
 </Aside>
 
 ## What you have now

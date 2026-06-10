@@ -55,7 +55,7 @@ $ curl -s http://localhost:3005/posts/018f…
 And a passing e2e suite:
 
 ```bash frame="terminal"
-$ just test-e2e
+$ nestrs run test e2e
          PASS [   …] features::e2e posts_round_trip
 ```
 
@@ -64,7 +64,7 @@ $ just test-e2e
 The tutorial assumes you've already followed
 [Getting started](/getting-started/) — a **workspace** you scaffolded with
 [`nestrs new hello`](/getting-started/), the [`nestrs` CLI](/cli/)
-installed, and `just dev hello` serving `Hello World` from
+installed, and `nestrs run dev hello` serving `Hello World` from
 `crates/features/src/hello/`. Page 1 adds `apps/blog/` with
 `nestrs new blog`; everything after that happens in `blog`, not `hello`.
 If you cloned **this** repository to explore Publish, scaffold hello and
@@ -74,12 +74,12 @@ blog in a separate workspace — they are not hosted here. Skim
 `docker` is available for the Postgres step.
 
 Rust 1.75+ is enough. The database and testing pages need Postgres
-(`just db up`); earlier pages run without one.
+(`nestrs run db up`); earlier pages run without one.
 
 ## The pages, in order
 
 <CardGrid>
-  <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="nestrs new blog, just dev blog, 404 on / — then read what the CLI wrote." />
+  <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="nestrs new blog, nestrs run dev blog, 404 on / — then read what the CLI wrote." />
   <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The Post entity with SeaORM and #[expose]." />
   <LinkCard title="3. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts." />
   <LinkCard title="4. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />

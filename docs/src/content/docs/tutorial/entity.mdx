@@ -10,7 +10,7 @@ import { FileTree, Aside } from '@astrojs/starlight/components';
 You declare the shape of a post once — a SeaORM model decorated with
 `#[expose]` — and the macro emits the wire DTO, the create/update
 inputs, the validator wiring, and the JSON schema the HTTP transport
-reaches for. By the end of this page, `just check` passes on a new
+reaches for. By the end of this page, `nestrs run check` passes on a new
 `posts` feature crate path.
 
 ## Move into the features crate
@@ -144,7 +144,7 @@ pub mod posts;
 ## Check
 
 ```bash frame="terminal"
-$ just check
+$ nestrs run check
     Checking features v0.1.0
     Finished `dev` profile [unoptimized] target(s) in 1.42s
 ```

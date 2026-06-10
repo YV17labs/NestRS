@@ -134,7 +134,7 @@ injects something its module doesn't own or import transitively.
 ## What the wire looks like at boot
 
 ```text frame="terminal"
-$ just dev worker
+$ nestrs run dev worker
 2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
 2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
 2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::preview queue=audio.preview concurrency=10 retries=1

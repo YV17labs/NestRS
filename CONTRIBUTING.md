@@ -47,34 +47,35 @@ README. It provisions the Rust toolchain, the dev tooling, and Postgres + Redis
 with `NESTRS_DATABASE__URL` / `NESTRS_QUEUE__URL` already wired.
 
 Prefer a local toolchain? Install Rust (stable, see
-[`rust-toolchain.toml`](rust-toolchain.toml)) and the dev tools:
+[`rust-toolchain.toml`](rust-toolchain.toml)) and the CLI:
 
 ```bash
-cargo install --locked just bacon cargo-nextest cargo-llvm-cov
+cargo install --locked nest-rs-cli      # `nestrs run` bootstraps just, bacon, and cargo-nextest on first use
+cargo install --locked cargo-llvm-cov   # only for `nestrs run test cov`
 rustup component add llvm-tools-preview
 ```
 
 ## The workflow
 
 ```bash
-just dev <app>   # run an app in watch mode (rebuild + restart on save)
-just test        # full test suite (cargo-nextest)
-just lint        # clippy (strict) + format check
-just fmt         # apply rustfmt
-just check       # fast type-check
+nestrs run dev <app>   # run an app in watch mode (rebuild + restart on save)
+nestrs run test unit        # full test suite (cargo-nextest)
+nestrs run lint        # clippy (strict) + format check
+nestrs run fmt         # apply rustfmt
+nestrs run check       # fast type-check
 ```
 
-Run `just` with no arguments to list every recipe.
+Run `nestrs run` with no arguments to list every recipe.
 
 Before opening a PR, make sure these pass:
 
 ```bash
-just fmt && just lint && just test
+nestrs run fmt && nestrs run lint && nestrs run test unit
 ```
 
 Routing and wiring bugs don't surface in **unit** tests — the **e2e** tests
-catch most of them in `just test`. For **HTTP, GraphQL, or MCP changes** that is
-still not sufficient: start the app (`just dev <app>`), exercise the affected
+catch most of them in `nestrs run test unit`. For **HTTP, GraphQL, or MCP changes** that is
+still not sufficient: start the app (`nestrs run dev <app>`), exercise the affected
 endpoints (`curl`, an MCP client, the GraphQL playground), and confirm the
 behaviour live (real socket and external services the in-process harness can't
 reach). A GraphQL change should

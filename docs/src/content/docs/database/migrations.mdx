@@ -1,6 +1,6 @@
 ---
 title: Migrations
-description: SeaORM migrations in the migrations crate — write one, register it, run it with just db.
+description: SeaORM migrations in the migrations crate — write one, register it, run it with nestrs run db.
 sidebar:
   order: 3
 ---
@@ -9,7 +9,7 @@ Schema changes live in the **`migrations`** crate — a product crate under
 `crates/`, not an app. Migrations are
 [SeaORM](https://www.sea-ql.org/SeaORM/)'s, so a migration is a struct
 implementing `MigrationTrait` with an `up` and a `down`. Neither the API nor
-the worker run migrations on startup; you run them explicitly with `just db`.
+the worker run migrations on startup; you run them explicitly with `nestrs run db`.
 
 ## Write a migration
 
@@ -54,7 +54,7 @@ enum Org {
 }
 ```
 
-`down` is the inverse of `up` — it's what `just db down` and `just db fresh`
+`down` is the inverse of `up` — it's what `nestrs run db down` and `nestrs run db fresh`
 replay to roll back cleanly.
 
 ### Foreign keys
@@ -99,10 +99,10 @@ impl MigratorTrait for Migrator {
 ## Run them
 
 ```bash
-just db up       # apply every pending migration
-just db down     # roll back the last applied migration
-just db status   # show applied vs. pending
-just db fresh    # drop every table, then re-apply from scratch
+nestrs run db up       # apply every pending migration
+nestrs run db down     # roll back the last applied migration
+nestrs run db status   # show applied vs. pending
+nestrs run db fresh    # drop every table, then re-apply from scratch
 ```
 
 Each verb shells out to the crate's `migrate` binary, which reads

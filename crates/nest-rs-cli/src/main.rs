@@ -6,6 +6,7 @@ mod naming;
 mod port;
 mod scaffold;
 mod templates;
+mod version;
 
 use clap::Parser;
 

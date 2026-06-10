@@ -18,13 +18,13 @@ rust-version = "1.95"
 anyhow = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 features = { path = "crates/features" }
-nest-rs-core = "0.1"
-nest-rs-config = "0.1"
-nest-rs-guards = "0.1"
-nest-rs-http = "0.1"
-nest-rs-interceptors = "0.1"
-nest-rs-opentelemetry = { version = "0.1", features = ["http"] }
-nest-rs-testing = "0.1"
+nest-rs-core = "{{nestrs_version}}"
+nest-rs-config = "{{nestrs_version}}"
+nest-rs-guards = "{{nestrs_version}}"
+nest-rs-http = "{{nestrs_version}}"
+nest-rs-interceptors = "{{nestrs_version}}"
+nest-rs-opentelemetry = { version = "{{nestrs_version}}", features = ["http"] }
+nest-rs-testing = "{{nestrs_version}}"
 poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
 "#;
 

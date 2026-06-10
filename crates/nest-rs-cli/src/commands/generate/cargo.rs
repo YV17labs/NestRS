@@ -11,49 +11,66 @@ use toml_edit::{DocumentMut, Item, Value};
 
 use crate::naming::Transport;
 use crate::scaffold::Transform;
+use crate::version::framework_req;
 
 /// One dependency the generator may need to introduce.
 pub(crate) struct Dep {
     name: &'static str,
-    /// TOML value placed in `[workspace.dependencies]` when absent.
+    /// TOML value placed in `[workspace.dependencies]` when absent. **Ignored
+    /// for `nest-rs-*` crates** — their version tracks the CLI's own release
+    /// line (see [`framework_req`]), so leave it `""` for those.
     workspace_value: &'static str,
     /// Features to enable in the `features` crate (`[]` ⇒ `{ workspace = true }`).
     features: &'static [&'static str],
 }
 
+impl Dep {
+    /// The `[workspace.dependencies]` value to insert. `nest-rs-*` crates pin
+    /// the lockstep framework requirement; everything else uses its literal.
+    fn workspace_item(&self) -> Item {
+        if self.name.starts_with("nest-rs-") {
+            parse_value(&format!("\"{}\"", framework_req()))
+        } else {
+            parse_value(self.workspace_value)
+        }
+    }
+}
+
+// `nest-rs-*` crates: `workspace_value` is unused — `workspace_item` derives
+// the version from the CLI's own release line (`framework_req`).
 const SEAORM: Dep = Dep {
     name: "nest-rs-seaorm",
-    workspace_value: "\"0.1\"",
+    workspace_value: "",
     features: &["http"],
 };
 const RESOURCE: Dep = Dep {
     name: "nest-rs-resource",
-    workspace_value: "\"0.1\"",
+    workspace_value: "",
     features: &[],
 };
 const GRAPHQL: Dep = Dep {
     name: "nest-rs-graphql",
-    workspace_value: "\"0.1\"",
+    workspace_value: "",
     features: &[],
 };
 const WS: Dep = Dep {
     name: "nest-rs-ws",
-    workspace_value: "\"0.1\"",
+    workspace_value: "",
     features: &[],
 };
 const QUEUE: Dep = Dep {
     name: "nest-rs-queue",
-    workspace_value: "\"0.1\"",
+    workspace_value: "",
     features: &[],
 };
 const SCHEDULE: Dep = Dep {
     name: "nest-rs-schedule",
-    workspace_value: "\"0.1\"",
+    workspace_value: "",
     features: &[],
 };
 const MCP: Dep = Dep {
     name: "nest-rs-mcp",
-    workspace_value: "\"0.1\"",
+    workspace_value: "",
     features: &[],
 };
 const SEA_ORM: Dep = Dep {
@@ -119,7 +136,7 @@ pub fn ensure_workspace_deps(deps: Vec<&'static Dep>) -> Transform {
         let mut changed = false;
         for dep in &deps {
             if table.get(dep.name).is_none() {
-                table.insert(dep.name, parse_value(dep.workspace_value));
+                table.insert(dep.name, dep.workspace_item());
                 changed = true;
             }
         }
@@ -176,7 +193,8 @@ mod tests {
         let src = "[workspace.dependencies]\nnest-rs-core = \"0.1\"\n";
         let t = ensure_workspace_deps(vec![&SEAORM]);
         let out = t(src).expect("adds nest-rs-seaorm");
-        assert!(out.contains("nest-rs-seaorm = \"0.1\""));
+        // The pin tracks the CLI's own release line, not a hard-coded literal.
+        assert!(out.contains(&format!("nest-rs-seaorm = \"{}\"", framework_req())));
         // already present → no-op
         assert!(ensure_workspace_deps(vec![&SEAORM])(&out).is_none());
     }

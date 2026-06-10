@@ -15,16 +15,16 @@ rust-version = "1.95"
 [dependencies]
 anyhow = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-nest-rs-core = "0.1"
-nest-rs-config = "0.1"
-nest-rs-guards = "0.1"
-nest-rs-http = "0.1"
-nest-rs-interceptors = "0.1"
-nest-rs-opentelemetry = { version = "0.1", features = ["http"] }
+nest-rs-core = "{{nestrs_version}}"
+nest-rs-config = "{{nestrs_version}}"
+nest-rs-guards = "{{nestrs_version}}"
+nest-rs-http = "{{nestrs_version}}"
+nest-rs-interceptors = "{{nestrs_version}}"
+nest-rs-opentelemetry = { version = "{{nestrs_version}}", features = ["http"] }
 poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
 
 [dev-dependencies]
-nest-rs-testing = { version = "0.1", features = ["opentelemetry"] }
+nest-rs-testing = { version = "{{nestrs_version}}", features = ["opentelemetry"] }
 "#;
 
 pub const MAIN: &str = r#"use anyhow::Result;

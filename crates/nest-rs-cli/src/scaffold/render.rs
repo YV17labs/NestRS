@@ -42,6 +42,9 @@ impl Renderer {
         put("queue_module", names.module_for(Transport::Queue));
         put("schedule_module", names.module_for(Transport::Schedule));
         put("mcp_module", names.module_for(Transport::Mcp));
+        // The `nest-rs-*` version every generated manifest pins — derived from
+        // the CLI's own version so it can never go stale (see `crate::version`).
+        put("nestrs_version", crate::version::framework_req());
         Self { vars }
     }
 
@@ -62,6 +65,36 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_templates_use_the_version_placeholder_not_a_literal() {
+        // Version-independent: the raw template must defer to the placeholder
+        // so it can never freeze at a literal that rots on the next release.
+        for cargo in [
+            crate::templates::standalone::CARGO,
+            crate::templates::workspace::ROOT_CARGO,
+        ] {
+            assert!(
+                cargo.contains("nest-rs-core = \"{{nestrs_version}}\""),
+                "nest-rs pins must use the {{nestrs_version}} placeholder"
+            );
+            assert!(
+                !cargo.contains("nest-rs-core = \"0."),
+                "a hard-coded nest-rs version would rot on release"
+            );
+        }
+    }
+
+    #[test]
+    fn renderer_substitutes_the_derived_framework_version() {
+        let r = Renderer::new(&Names::parse("demo"));
+        let rendered = r.render(crate::templates::standalone::CARGO);
+        assert!(rendered.contains(&format!(
+            "nest-rs-core = \"{}\"",
+            crate::version::framework_req()
+        )));
+        assert!(!rendered.contains("{{nestrs_version}}"));
+    }
 
     #[test]
     fn renders_seeded_and_extra_vars() {

@@ -108,6 +108,23 @@ pub enum Command {
     /// Generate features, resources, and transport adapters (workspace only).
     #[command(subcommand, visible_aliases = ["g"])]
     Generate(GenerateCommand),
+
+    /// Run a project task through `just` (bootstraps the dev toolchain on first use).
+    ///
+    /// Forwards the recipe and its arguments verbatim:
+    ///   nestrs run dev      → just dev
+    ///   nestrs run test     → just test
+    ///   nestrs run db up    → just db up
+    ///   nestrs run          → list available recipes
+    Run {
+        /// Skip the first-run toolchain bootstrap (CI / offline).
+        #[arg(long)]
+        no_bootstrap: bool,
+
+        /// Recipe and arguments forwarded to `just` (omit to list recipes).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 /// Shared positional + flags for every generator.
@@ -191,6 +208,9 @@ pub fn run(cli: Cli) -> CliResult<()> {
             force,
         }),
         Command::Generate(cmd) => run_generate(cmd),
+        Command::Run { no_bootstrap, args } => {
+            commands::run_task(commands::RunOptions { args, no_bootstrap })
+        }
     }
 }
 

@@ -1,9 +1,6 @@
 [package]
 name = "nest-rs-cli"
-# Out-of-band patch: this fix shipped after 0.2.0; the framework crates stay at
-# 0.2.0, only the CLI moves to 0.2.1. Restored to `version.workspace` right
-# after publishing so the next lockstep release re-absorbs it.
-version = "0.2.1"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

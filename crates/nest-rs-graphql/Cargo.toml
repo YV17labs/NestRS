@@ -41,13 +41,13 @@ tokio.workspace = true
 [dev-dependencies]
 # Boot the schema in-process and fire GraphQL requests at it (the ContextSeed
 # bridge test). nest-rs-http/nest-rs-core are already runtime deps above.
-nest-rs-testing.workspace = true
+nest-rs-testing = { path = "../nest-rs-testing" }
 # `#[resolver]` macro emits paths to `::nest_rs_guards::run_global_graphql_guards`,
 # so any test using `#[resolver]` needs the crate in scope. Dev-dep cycle is
 # allowed by Cargo (nest-rs-guards depends on us as a normal dep).
-nest-rs-guards.workspace = true
+nest-rs-guards = { path = "../nest-rs-guards" }
 # The layer-pool test asserts the transport-edge interceptor pool covers the
 # `/graphql` self-mount. Same allowed dev-dep cycle as nest-rs-guards.
-nest-rs-interceptors.workspace = true
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 tokio.workspace = true
 serde_json.workspace = true

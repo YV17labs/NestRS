@@ -36,4 +36,4 @@ parking_lot.workspace = true
 # The `#[messages]` macro emits `::nest_rs_guards::*` for the Layer-System
 # chain (global + per-message guard dedup). nest-rs-guards depends on
 # nest-rs-ws at the lib level, so this stays a dev-only edge.
-nest-rs-guards.workspace = true
+nest-rs-guards = { path = "../nest-rs-guards" }

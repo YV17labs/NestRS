@@ -50,8 +50,8 @@ serde.workspace = true
 # needs both crates in scope. Allowed as dev-deps despite the cycle through
 # `nest-rs-graphql → nest-rs-http` — Cargo permits cycles that go through
 # dev-dependencies.
-nest-rs-guards.workspace = true
-nest-rs-interceptors.workspace = true
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `tests/global_prefix.rs` drives an in-process server through poem's
 # `TestClient`, gated behind poem's `test` feature.
 poem = { workspace = true, features = ["test"] }

@@ -4,15 +4,16 @@
 #
 # Trigger: push a tag matching `v*.*.*` (e.g. `v0.1.1`). The job verifies the
 # tag matches the workspace `version` in `Cargo.toml`, runs `cargo check`, then
-# `cargo publish --workspace --no-verify` (topological order, skips
-# `publish = false`).
+# `cargo publish --workspace` (Cargo 1.90+ co-publishes interdependent crates
+# in topological order, resolving each crate's `= <version>` internal deps
+# against the local batch — not the index — so the lockstep bump works).
 #
-# `--no-verify` is required for the lockstep bump: the verify pass resolves each
-# crate's internal deps (pinned `= <version>`) against the crates.io index,
-# where the new version doesn't exist yet — so it fails the co-publish with
-# "candidate versions found which didn't match". Skipping verify lets cargo
-# upload in dependency order and wait for the index between crates. Compile
-# coverage is already provided by the `cargo check --workspace` step above.
+# For that ordering to hold, every intra-workspace *dev*-dependency is declared
+# path-only (no version): a versioned dev-edge that points back to a crate which
+# depends on it forms a member cycle Cargo can't order, and it falls back to the
+# index where the new version doesn't exist yet ("candidate versions found which
+# didn't match"). Dev-deps are never published, so dropping the version is free.
+# See rust-lang/cargo#4242 / #16450.
 #
 # Required repo secret: `CRATES_IO_TOKEN` (Settings → Secrets → Actions).
 # Generate the token at https://crates.io/me with scope `publish-new` +
@@ -77,4 +78,4 @@ jobs:
       - name: cargo publish --workspace
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish --workspace --no-verify
+        run: cargo publish --workspace

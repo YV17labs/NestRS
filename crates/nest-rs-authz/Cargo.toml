@@ -77,13 +77,13 @@ sea-orm.workspace = true
 serde.workspace = true
 # Bridge mirror tests boot the full surface (HTTP + GraphQL); compiled when the
 # corresponding feature is enabled (`cargo test -p nest-rs-authz --features full`).
-nest-rs-core.workspace = true
-nest-rs-http.workspace = true
-nest-rs-graphql.workspace = true
-nest-rs-guards.workspace = true
-nest-rs-interceptors.workspace = true
-nest-rs-resource.workspace = true
-nest-rs-testing.workspace = true
+nest-rs-core = { path = "../nest-rs-core" }
+nest-rs-http = { path = "../nest-rs-http" }
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
+nest-rs-resource = { path = "../nest-rs-resource" }
+nest-rs-testing = { path = "../nest-rs-testing" }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
 # since the generated `#[Object]` code names `async_graphql::` paths.
 async-graphql.workspace = true

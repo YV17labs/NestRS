@@ -42,12 +42,12 @@ tokio.workspace = true
 # The config DI test boots a module wiring `ConfigModule::for_feature` and a
 # service injecting the loaded config; serde + validator back the `#[config]`
 # struct's derives.
-nest-rs-config.workspace = true
+nest-rs-config = { path = "../nest-rs-config" }
 serde.workspace = true
 validator.workspace = true
 # The pipes test (`tests/pipes.rs`) needs the `GlobalPipe` trait + a
 # `serde_json::Value` body to observe a pipe rewriting it.
-nest-rs-pipes.workspace = true
+nest-rs-pipes = { path = "../nest-rs-pipes" }
 serde_json.workspace = true
 # The exception-filters test (`tests/exception_filters.rs`) needs the
 # trait + a typed error to throw and catch.
@@ -55,4 +55,4 @@ thiserror.workspace = true
 async-trait.workspace = true
 # The WS gateway-guard dedup test (`tests/ws_gateway_guards.rs`) drives a
 # `#[gateway]` + `#[messages]` impl, so it needs the macros + `WsModule`.
-nest-rs-ws.workspace = true
+nest-rs-ws = { path = "../nest-rs-ws" }

@@ -31,10 +31,10 @@ apalis = { workspace = true, features = ["retry", "timeout", "catch-panic"] }
 apalis-redis.workspace = true
 
 [dev-dependencies]
-nest-rs-core.workspace = true
+nest-rs-core = { path = "../nest-rs-core" }
 # The `#[processor]` macro emits `::nest_rs_worker::*` paths and the test
 # implements `JobContext` directly.
-nest-rs-worker.workspace = true
+nest-rs-worker = { path = "../nest-rs-worker" }
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true

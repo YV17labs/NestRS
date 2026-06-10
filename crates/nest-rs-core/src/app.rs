@@ -79,6 +79,12 @@ impl App {
     pub async fn run(self) -> Result<()> {
         let App { container } = self;
 
+        tracing::info!(
+            target: "nest_rs::app",
+            version = env!("CARGO_PKG_VERSION"),
+            "nestrs starting",
+        );
+
         let mut transports: Vec<Box<dyn Transport>> = Vec::new();
         for contribution in DiscoveryService::new(&container).meta::<TransportContribution>() {
             let transport = (contribution.meta.build)(&container)?;

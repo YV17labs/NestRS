@@ -130,7 +130,9 @@ denial drops that to zero, so no fanout penalty is needed. That means
 #[expose(name = "Org", service = …)]
 #[sea_orm::model]
 pub struct Model {
+    #[expose]
     pub id: Uuid,
+    #[expose]
     pub name: String,
 
     #[sea_orm(has_many)]
@@ -150,11 +152,12 @@ Two shapes:
   is treated as an unbound identifier and the macro expansion fails
   to compile.
 
-The override applies to any non-skip field, scalar or relation:
+The override applies to any exposed field, scalar or relation:
 
 ```rust title="cost an expensive computed scalar"
 #[expose(name = "Report", service = …)]
 pub struct Model {
+    #[expose]
     pub id: Uuid,
     /// Aggregates 24h of metric points server-side.
     #[expose(complexity = 50)]
@@ -163,12 +166,12 @@ pub struct Model {
 ```
 
 <Aside type="caution">
-**`skip` and `complexity` are mutually exclusive.** A skipped field
-has no wire-DTO column AND no auto-emitted resolver — nowhere for
-`#[graphql(complexity = …)]` to land. The macro rejects the
-combination at compile time. To attach a cost to a hand-rolled
-field resolver, drop the `#[expose(complexity = …)]` and put
-`#[graphql(complexity = …)]` directly on the
+**`complexity` needs an exposed field.** An unexposed field (no
+`#[expose]`) has no wire-DTO column AND no auto-emitted resolver —
+nowhere for `#[graphql(complexity = …)]` to land. The macro rejects a
+`complexity` override on a field that isn't otherwise exposed at compile
+time. To attach a cost to a hand-rolled field resolver, leave the
+relation unexposed and put `#[graphql(complexity = …)]` directly on the
 `#[field_resolver]` method instead.
 </Aside>
 
@@ -177,13 +180,13 @@ field resolver, drop the `#[expose(complexity = …)]` and put
 `first * child_complexity` and similar expressions that read a
 GraphQL argument only resolve when the field resolver **declares
 that argument**. The auto-emitted relation does not. For a
-paginated relation taking `first` (or `limit`, or `per_page`), drop
-the auto-emission with `#[expose(skip)]` and write the resolver by
+paginated relation taking `first` (or `limit`, or `per_page`), leave
+the relation unexposed (no `#[expose]`) and write the resolver by
 hand with a regular `#[graphql(complexity = …)]`:
 
 ```rust
+// No #[expose] => no auto-emission; own it on the resolver.
 #[sea_orm(has_many)]
-#[expose(skip)]
 pub posts: HasMany<crate::posts::Entity>,
 
 // in the resolver file:

@@ -51,6 +51,8 @@ Deliberate departures. Don't "fix" them back.
 | Per-method transaction decorator | Ambient `task_local!` executor wraps mutating handlers | No per-method ceremony |
 | Per-module sub-container | Single flat container | Orphan rules prevent accidental coupling |
 | Manual per-endpoint redaction | `Ability::mask` runs automatically after every handler | Forgetting is structurally hard |
+| Hand-written per-transport DTOs (NestJS) | Annotate the entity: `#[expose]` opts a column onto the wire | The entity *is* the wire contract — no DTO to forget to update |
+| Expose-all, hide with opt-out | **Opt-in:** a column crosses HTTP/GraphQL/WS only with `#[expose]`; silence = hidden | Fail-secure on schema evolution — a column added by a later migration never leaks by omission. Same posture as the write side (`input(...)` is already opt-in), now symmetric for reads |
 | Listing every controller/provider | Inventory-based discovery | Module list = decorated things |
 | Class-based DI with reflection | Type-id DI with `#[inject]` fields | Rust has no reflection |
 | Implicit runtime access check | Compile-time + boot-time access graph | Boot fails with a clear graph error |
@@ -298,7 +300,7 @@ share `crates/features` and the DB, never RPC each other.
 | Folder | Provides |
 |---|---|
 | `authz/` (root) | `AppAbility`, `AuthzModule` |
-| `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>`), `AuthzHttpModule` |
+| `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>` — **alias in `features`, not in `nest-rs-authz`**), `AuthzHttpModule` |
 | `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthGuard` (`ResolverGuard` marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
 | `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `WsAuthGuard` (`MessageGuard` marker), `AuthzWsModule` |
 
@@ -362,13 +364,17 @@ reading `#[public]` after routing (lazy executor = the planned fix).
 
 **HTTP response masking** (`nest-rs-authz` `http` / `Authorize`).
 After success: parse JSON body → build `Model` via `wire_to_model`
-(filling `#[expose(skip)]` columns from `impl WireModelDefaults for
-Entity` emitted by the macro) → `Ability::mask`/`mask_many` →
-**`retain_wire_keys`** (unrestricted field grants can't leak
-`#[expose(skip)]` columns). Handlers return the `#[expose]` output
-(e.g. `Json<User>`), not `Model`. Irreconcilable body ⇒ fail
-**closed** with `500`. Column types the macro can't default (`Decimal`,
-custom enums) need a hand-written `impl WireModelDefaults`.
+(filling the **unexposed** columns the wire DTO omits from `impl
+WireModelDefaults for Entity` emitted by the macro) →
+`Ability::mask`/`mask_many` → **`retain_wire_keys`** (unrestricted
+field grants can't leak unexposed columns). Handlers return the
+`#[expose]` output (e.g. `Json<User>`), not `Model`. Irreconcilable
+body ⇒ fail **closed** with `500`. Reconstruction needs a default for
+every unexposed column: the macro provides one for the safe scalar
+types (`String`/`Option`/`bool`/numbers); a hidden column of a type it
+can't default (`Uuid`, timestamps, `Decimal`, custom enums) needs a
+hand-written `impl WireModelDefaults`, so columns an ability rule
+predicates on are best left exposed.
 
 Two HTTP extractors: **`Bind<S, A>`** (parse id → load + authorize via
 service: 404 absent, 403 denied) and **`Scope<E, A>`** (explicit
@@ -397,8 +403,8 @@ return `Result<HashMap<…>, E>` (infallible only when truly cannot
 fail). Never map a DB error to an empty batch.
 
 **Relations resolve themselves.** A SeaORM `#[sea_orm(belongs_to, …)]`
-or `#[sea_orm(has_many)]` field on an `#[expose]`d entity becomes a
-GraphQL field auto-resolved by a dataloader. `#[expose(name = "…",
+or `#[sea_orm(has_many)]` field **marked `#[expose]`** on an `#[expose]`d
+entity becomes a GraphQL field auto-resolved by a dataloader. `#[expose(name = "…",
 service = <Path>)]` emits the PK loader (`<Service>ById`) on the
 service for every entity, the FK loader (`<Service>By<FkCol>`) per
 `belongs_to` on the FK-owning side, the `PkLoadable` / `RelatedTo<Parent>`
@@ -406,7 +412,7 @@ trait impls that let the inverse side reach the loader **without
 naming the other service**, and a `#[ComplexObject]` field resolver on
 the wire DTO. Every batch goes through `Repo::scoped(Action::Read)`,
 so an `Ability` filter applies row-level as on any other read.
-`#[expose(skip)]` on a single relation opts that field out — the user
+omitting `#[expose]` on a single relation opts that field out — the user
 writes a `#[field_resolver]` if they need a custom shape (cursor connection,
 extra filter). Cross-entity rule still holds: a service touching another
 entity injects that entity's service; **the FK loader is part of its

@@ -10,6 +10,7 @@ mod attr;
 mod dto;
 mod expose;
 mod input;
+mod lifecycle;
 mod relations;
 mod wire;
 
@@ -17,21 +18,32 @@ mod wire;
 /// declaration. Emits a wire DTO (`Serialize` + `JsonSchema`) and
 /// `Create/Update` input types; add the `graphql` flag (and enable the
 /// `graphql` feature on `nest-rs-resource`) for GraphQL types and
-/// auto-resolved relations.
+/// auto-resolved relations. Add `soft_delete` and/or `timestamps` for lifecycle
+/// columns (see `nest-rs-seaorm` `SoftDeletable` + `CrudService::soft_delete_column`).
+///
+/// **Exposure is opt-in.** A column crosses the wire only when it carries
+/// `#[expose]`; a field with no `#[expose]` is hidden from every transport
+/// (HTTP, GraphQL, WS). `#[expose(input(...))]` opts the field into the write
+/// DTOs *and* implies read. The payoff is fail-secure evolution: a column added
+/// by a later migration stays invisible until someone deliberately exposes it —
+/// no `mfa_secret` ever leaks by omission.
 ///
 /// ```ignore
 /// #[expose(name = "User", service = super::service::UsersService)]
 /// #[expose(name = "User", service = super::service::UsersService, graphql)]
+/// #[expose(name = "User", service = super::service::UsersService, soft_delete, timestamps)]
 /// #[sea_orm::model]
 /// pub struct Model {
 ///     #[sea_orm(primary_key, auto_increment = false)]
+///     #[expose]                                                  // read-only
 ///     pub id: Uuid,
-///     #[expose(skip)]
+///     #[expose]                                                  // read-only
 ///     pub org_id: Uuid,
-///     #[expose(input(create, update), validate(length(min = 1)))]
+///     #[expose(input(create, update), validate(length(min = 1)))] // read + write
 ///     pub name: String,
-///     #[expose(input(create), validate(email))]
+///     #[expose(input(create), validate(email))]                  // read + create-only
 ///     pub email: String,
+///     pub password_hash: Option<String>,                         // no #[expose] ⇒ hidden
 /// }
 /// ```
 ///

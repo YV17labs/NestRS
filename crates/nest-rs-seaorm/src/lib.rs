@@ -25,6 +25,7 @@ mod page;
 mod repo;
 pub mod retry;
 mod service;
+mod soft_delete;
 mod worker;
 
 #[cfg(feature = "graphql")]
@@ -46,6 +47,7 @@ pub use module::{DatabaseModule, DatabaseSetup};
 pub use page::{Page, PageParams};
 pub use repo::{Repo, scope_for};
 pub use service::{Access, CreateModel, CrudService, UpdateModel};
+pub use soft_delete::{SoftDeletable, live_condition};
 pub use worker::WorkerDbContext;
 
 #[cfg(feature = "health")]

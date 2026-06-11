@@ -6,9 +6,10 @@
 
 use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
+use sea_orm::sea_query::Condition;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait, IntoActiveModel,
-    PrimaryKeyTrait,
+    ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait,
+    IntoActiveModel, PrimaryKeyTrait, QueryFilter,
 };
 
 use nest_rs_authz::{Action, current_ability};
@@ -57,10 +58,28 @@ where
         Self::Entity::default().table_name()
     }
 
+    /// Soft-delete opt-in. Override on the service to return the entity's
+    /// `deleted_at` column. `None` (default) ⇒ hard delete and unfiltered reads
+    /// — exactly today's behaviour.
+    fn soft_delete_column() -> Option<<Self::Entity as EntityTrait>::Column> {
+        None
+    }
+
+    fn live_read_filter() -> Condition {
+        match Self::soft_delete_column() {
+            Some(col) => crate::soft_delete::live_condition_for_column(col),
+            None => Condition::all(),
+        }
+    }
+
     /// Every row the caller may [`Read`](Action::Read), ability-scoped by `Repo`.
     async fn list(&self) -> Result<Vec<<Self::Entity as EntityTrait>::Model>, DbErr> {
         tracing::debug!(target: "nest_rs::orm", entity = Self::entity_name(), "listing rows");
-        Repo::<Self::Entity>::all().await
+        let conn = Repo::<Self::Entity>::conn()?;
+        Repo::<Self::Entity>::scoped(Action::Read)
+            .filter(Self::live_read_filter())
+            .all(&conn)
+            .await
     }
 
     /// A keyset page of readable rows, ascending by primary key.
@@ -74,7 +93,7 @@ where
         <Self::Entity as EntityTrait>::Model: Send + Sync,
     {
         tracing::debug!(target: "nest_rs::orm", entity = Self::entity_name(), first, ?after, "paging rows");
-        Repo::<Self::Entity>::page(first, after).await
+        Repo::<Self::Entity>::page(first, after, Self::live_read_filter()).await
     }
 
     /// Load a row by id and authorize the caller for `action` on it. The load is
@@ -90,7 +109,8 @@ where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     {
         let conn = Repo::<Self::Entity>::conn()?;
-        let Some(model) = Self::Entity::find_by_id(id).one(&conn).await? else {
+        let query = Self::Entity::find_by_id(id).filter(Self::live_read_filter());
+        let Some(model) = query.one(&conn).await? else {
             return Ok(Access::Missing);
         };
         let allowed = current_ability()
@@ -163,14 +183,37 @@ where
     /// id past its scope.
     async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), DbErr> {
         let entity = Self::entity_name();
-        let result = Repo::<Self::Entity>::delete(model).await?;
-        if result.rows_affected == 0 {
-            tracing::warn!(target: "nest_rs::orm", entity, "delete denied — row outside the caller's scope");
-            return Err(DbErr::RecordNotFound(format!(
-                "{entity} row not found or outside the caller's scope"
-            )));
+        let out_of_scope =
+            || DbErr::RecordNotFound(format!("{entity} row not found or outside the caller's scope"));
+        match Self::soft_delete_column() {
+            Some(col) => match Repo::<Self::Entity>::soft_delete(model, col).await {
+                Ok(()) => {
+                    tracing::info!(target: "nest_rs::orm", entity, "row soft-deleted");
+                    Ok(())
+                }
+                Err(DbErr::RecordNotUpdated) => {
+                    tracing::warn!(
+                        target: "nest_rs::orm",
+                        entity,
+                        "soft-delete denied — row outside the caller's scope",
+                    );
+                    Err(out_of_scope())
+                }
+                Err(err) => Err(err),
+            },
+            None => {
+                let result = Repo::<Self::Entity>::delete(model).await?;
+                if result.rows_affected == 0 {
+                    tracing::warn!(
+                        target: "nest_rs::orm",
+                        entity,
+                        "delete denied — row outside the caller's scope",
+                    );
+                    return Err(out_of_scope());
+                }
+                tracing::info!(target: "nest_rs::orm", entity, "row deleted");
+                Ok(())
+            }
         }
-        tracing::info!(target: "nest_rs::orm", entity, "row deleted");
-        Ok(())
     }
 }

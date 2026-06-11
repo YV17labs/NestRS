@@ -59,7 +59,9 @@ Known, deliberate gaps in features that already ship:
   via `Connection<T>` (the auto-emitted resolver returns a raw `Vec<T>` today —
   fine at small N, a DoS waiting at large N), and a `via = "..."` override for
   HasMany so non-conventional FK columns work without falling back to a manual
-  `#[field_resolver]`.
+  `#[field_resolver]`. Adopter backlog landed: HTTP-only `#[expose]`, opt-in
+  `soft_delete`/`timestamps`, relation-graph diagnostics, guard naming doc
+  ([FRAMEWORK-CORRECTIONS.md](FRAMEWORK-CORRECTIONS.md)).
 - **API versioning strategies** — header- and media-type-based selection
   (which need request-time dispatch); URI versioning (`#[controller(version =
   "1")]`) already ships.

@@ -21,6 +21,11 @@ use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 /// route is a `500` (an authn guard must run first). On a `#[public]`
 /// route the guard builds an Ability for the anonymous (visitor) actor —
 /// see the dev's `AbilityFactory` to define visitor rules.
+///
+/// **`AuthzGuard` is not a framework type.** Apps define a project alias once
+/// in their authz adapter, e.g. `pub type AuthzGuard = AbilityGuard<AppAbility>;`
+/// in `features/authz/http/guard.rs`. Import that alias from your feature crate,
+/// not from `nest_rs_authz`.
 #[injectable]
 pub struct AbilityGuard<F: AbilityFactory> {
     #[inject]

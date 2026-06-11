@@ -1472,6 +1472,7 @@ dependencies = [
  "anyhow",
  "async-graphql",
  "async-trait",
+ "chrono",
  "migrations",
  "nest-rs-authn",
  "nest-rs-authz",
@@ -3068,12 +3069,15 @@ name = "nest-rs-resource"
 version = "0.2.0"
 dependencies = [
  "async-graphql",
+ "async-trait",
  "nest-rs-graphql",
  "nest-rs-resource-macros",
+ "nest-rs-seaorm",
  "schemars",
  "sea-orm",
  "serde",
  "serde_json",
+ "uuid",
  "validator",
 ]
 
@@ -3122,6 +3126,7 @@ dependencies = [
  "anyhow",
  "async-graphql",
  "async-trait",
+ "chrono",
  "nest-rs-authz",
  "nest-rs-config",
  "nest-rs-core",

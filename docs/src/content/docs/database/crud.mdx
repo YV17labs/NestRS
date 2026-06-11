@@ -239,6 +239,66 @@ split this framework is built around.
 - [GraphQL](/graphql/) — the `#[crud]` twin on a resolver; relations and
   field resolvers backed by dataloaders.
 
+## Soft delete and timestamps
+
+Opt in on the entity — never imposed on every table (join tables, lookups):
+
+```rust title="src/items/entity.rs"
+#[expose(
+    name = "Item",
+    service = super::service::ItemsService,
+    soft_delete,
+    timestamps,
+)]
+pub struct Model {
+    // …
+    #[expose]
+    pub created_at: DateTimeWithTimeZone,
+    #[expose]
+    pub updated_at: DateTimeWithTimeZone,
+    // No #[expose] => hidden on every transport.
+    pub deleted_at: Option<DateTimeWithTimeZone>,
+}
+```
+
+Activate on the service (one line — the framework cannot infer opt-in per
+service without specialization):
+
+```rust title="src/items/service.rs"
+impl CrudService for ItemsService {
+    type Entity = Items;
+    type Create = CreateItemInput;
+    type Update = UpdateItemInput;
+
+    fn soft_delete_column() -> Option<entity::Column> {
+        Some(entity::Column::DeletedAt)
+    }
+}
+```
+
+| Concern | Behaviour |
+|---------|-----------|
+| `list` / `page` / `access` | AND `deleted_at IS NULL` with the ability scope |
+| `delete` (via `CrudService`) | `UPDATE … SET deleted_at = now()` — idempotent |
+| Hard purge | `Repo::delete` directly (admin escape hatch) |
+| `timestamps` flag | Emits `ActiveModelBehavior::before_save` — **remove** any manual empty `impl ActiveModelBehavior` on the entity |
+
+Migration snippet (Postgres):
+
+```sql
+ALTER TABLE item
+  ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN deleted_at TIMESTAMPTZ NULL;
+```
+
+Custom queries that use `Repo::scoped` must AND
+[`live_condition::<E>()`](https://docs.rs/nest-rs-seaorm/latest/nest_rs_seaorm/fn.live_condition.html)
+when `E: SoftDeletable` (e.g. login-by-email paths).
+
+Entities **without** `soft_delete_column` keep today's hard-delete semantics
+(`orgs/` in Publish stays hard delete).
+
 ### Reference
 
 - `crates/features/src/orgs/` — the empty-impl exemplar (cursor pagination).

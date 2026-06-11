@@ -13,6 +13,23 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(ColumnDef::new(Org::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Org::Name).string().not_null().unique_key())
+                    .col(
+                        ColumnDef::new(Org::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(Org::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(Org::DeletedAt)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await
@@ -30,4 +47,7 @@ enum Org {
     Table,
     Id,
     Name,
+    CreatedAt,
+    UpdatedAt,
+    DeletedAt,
 }

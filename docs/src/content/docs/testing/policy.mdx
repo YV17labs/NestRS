@@ -21,7 +21,7 @@ on policy types, no DI, no DB, microsecond runs.
 For each entity with `#[expose]`, write one test per masking scenario
 the policy supports. The minimum: an admin sees everything an
 unrestricted grant allows, a self-call sees the self-visible fields, a
-stranger sees the public subset, and `#[expose(skip)]` columns never
+stranger sees the public subset, and unexposed columns never
 escape.
 
 ```rust title="crates/features/src/users/policy.rs"
@@ -54,20 +54,20 @@ mod tests {
     }
 
     #[test]
-    fn unrestricted_grant_still_strips_expose_skip_columns() {
+    fn unrestricted_grant_still_strips_unexposed_columns() {
         let masked = AppAbility::admin().mask(fixture()).expect("masked");
         assert!(
             masked.password_hash.is_empty(),
-            "password_hash is #[expose(skip)] — must never leak even with full field grant",
+            "password_hash is unexposed (no #[expose]) — must never leak even with full field grant",
         );
     }
 }
 ```
 
-The third test matters most. An admin gets every granted field, but a
-`#[expose(skip)]` column (a password hash, an API secret) must still
-be stripped on its way to the wire. A bug in `retain_wire_keys` leaks
-it. The test pins the contract.
+The third test matters most. An admin gets every granted field, but an
+unexposed column (a password hash, an API secret — never carries
+`#[expose]`) must still be stripped on its way to the wire. A bug in
+`retain_wire_keys` leaks it. The test pins the contract.
 
 ## Ability conditions — every branch
 
@@ -121,7 +121,7 @@ A balanced setup:
 - **Unit** — every branch of `mask`, `condition_for`, and
   `WireModelDefaults`. Fast, exhaustive.
 - **E2E negative path** — the wrong caller gets `403`, the masked
-  response excludes `#[expose(skip)]` columns, a missing authz module
+  response excludes unexposed columns, a missing authz module
   fails the boot loudly. See [negative-path](/testing/negative-path/).
 
 Together they cover both the policy *and* its wiring.

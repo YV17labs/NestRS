@@ -91,8 +91,8 @@ deep on each.
   the SeaORM `Model` the database returns.
 - **[Wire model defaults](/security/authorization/response-masking/)**
   — `impl WireModelDefaults for Entity`, emitted by the `#[expose]`
-  macro, that fills `#[expose(skip)]` columns the masker cannot infer
-  from the wire body.
+  macro, that fills unexposed columns (those without `#[expose]`) the
+  masker cannot infer from the wire body.
 
 ## Security
 

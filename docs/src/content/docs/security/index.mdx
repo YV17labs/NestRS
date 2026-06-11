@@ -59,7 +59,7 @@ point — see [Per-transport bridges](/security/authorization/per-transport-brid
   [`Authorize` shaper](/security/authorization/response-masking/) runs
   after a 2xx handler: fields the caller cannot read become `null`, and
   `retain_wire_keys` strips back anything outside the wire DTO so an
-  unrestricted grant cannot leak a `#[expose(skip)]` column.
+  unrestricted grant cannot leak an unexposed column.
 
 The wiring sketch for an app that serves all three transports:
 

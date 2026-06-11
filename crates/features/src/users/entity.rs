@@ -2,7 +2,13 @@ use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[expose(name = "User", service = super::service::UsersService, graphql)]
+#[expose(
+    name = "User",
+    service = super::service::UsersService,
+    graphql,
+    soft_delete,
+    timestamps
+)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(
@@ -11,24 +17,29 @@ use serde::{Deserialize, Serialize};
 )]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
+    #[expose]
     pub id: Uuid,
+    #[expose]
     pub org_id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
     #[sea_orm(unique)]
     #[expose(input(create, update), validate(email))]
     pub email: String,
-    #[expose(skip)]
     pub role: String,
-    #[expose(skip)]
     pub password_hash: Option<String>,
+    #[expose]
+    pub created_at: DateTimeWithTimeZone,
+    #[expose]
+    pub updated_at: DateTimeWithTimeZone,
+    pub deleted_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
+    #[expose]
     pub org: HasOne<crate::orgs::Entity>,
     #[sea_orm(has_many)]
+    #[expose]
     pub posts: HasMany<crate::posts::Entity>,
 }
-
-impl ActiveModelBehavior for ActiveModel {}
 
 #[cfg(test)]
 mod tests {

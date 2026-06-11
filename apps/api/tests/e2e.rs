@@ -271,6 +271,11 @@ mod user_row {
         pub org_id: Uuid,
         pub name: String,
         pub email: String,
+        pub role: String,
+        pub password_hash: Option<String>,
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
+        pub deleted_at: Option<DateTimeWithTimeZone>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -387,6 +392,16 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND);
+
+    let tombstone = user_row::Entity::find_by_id(user_a_id)
+        .one(&*db.connection())
+        .await
+        .expect("re-read user A directly")
+        .expect("soft-deleted user row remains in the database");
+    assert!(
+        tombstone.deleted_at.is_some(),
+        "delete stamps deleted_at instead of removing the row",
+    );
 }
 
 #[tokio::test]

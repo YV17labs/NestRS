@@ -15,7 +15,7 @@ use nest_rs_authz::{Action, current_ability};
 use sea_orm::sea_query::{Condition, Expr};
 use sea_orm::{
     ActiveModelTrait, DbErr, Delete, DeleteResult, EntityTrait, IntoActiveModel, PrimaryKeyTrait,
-    QueryFilter, Select, Update,
+    QueryFilter, Select, Update, Value,
 };
 
 use crate::executor::{Executor, ExecutorScope, current_executor, current_executor_scope};
@@ -115,6 +115,27 @@ impl<E: EntityTrait> Repo<E> {
             .exec(&conn)
             .await
     }
+
+    /// Soft-delete a loaded row: stamp `col = now()` in the request transaction,
+    /// gated by `condition_for(Delete)` ANDed with the primary key. Idempotent
+    /// when the row is already tombstoned. Hard purge stays on [`Self::delete`].
+    pub async fn soft_delete<A, M>(model: M, col: E::Column) -> Result<(), DbErr>
+    where
+        A: ActiveModelTrait<Entity = E> + Send,
+        M: IntoActiveModel<A> + Send,
+        E::Model: IntoActiveModel<A>,
+    {
+        let conn = Self::conn()?;
+        let mut active = model.into_active_model();
+        let now: sea_orm::prelude::DateTimeWithTimeZone = chrono::Utc::now().fixed_offset();
+        active.set(col, Value::from(now));
+        Update::one(active)
+            .validate()?
+            .filter(scope_for::<E>(Action::Delete))
+            .exec(&conn)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +148,7 @@ mod tests {
 
     use super::*;
     use crate::executor::{Executor, with_job_executor, with_request_executor};
+    use crate::soft_delete::live_condition;
 
     mod widget {
         use sea_orm::entity::prelude::*;
@@ -144,6 +166,31 @@ mod tests {
         pub enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    mod tombstone {
+        use sea_orm::entity::prelude::*;
+
+        use crate::soft_delete::SoftDeletable;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "tombstones")]
+        pub struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub deleted_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+
+        impl SoftDeletable for Entity {
+            fn deleted_at_column() -> Column {
+                Column::DeletedAt
+            }
+        }
     }
 
     fn sql(cond: Condition) -> String {
@@ -360,5 +407,21 @@ mod tests {
             assert!(matches!(conn, Executor::Pool(_)));
         })
         .await;
+    }
+
+    #[test]
+    fn live_condition_renders_deleted_at_is_null() {
+        let s = tombstone::Entity::find()
+            .filter(live_condition::<tombstone::Entity>())
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        assert!(
+            s.to_ascii_lowercase().contains("deleted_at"),
+            "live filter must target deleted_at: {s}",
+        );
+        assert!(
+            s.contains("NULL"),
+            "live filter must exclude tombstoned rows: {s}",
+        );
     }
 }

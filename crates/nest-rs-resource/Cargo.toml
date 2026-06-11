@@ -25,3 +25,10 @@ serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 validator.workspace = true
+
+[dev-dependencies]
+nest-rs-seaorm.workspace = true
+sea-orm.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+validator.workspace = true

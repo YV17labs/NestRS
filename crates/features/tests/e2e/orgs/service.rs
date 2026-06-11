@@ -11,6 +11,7 @@ async fn seed_org(conn: &sea_orm::DatabaseConnection, id: Uuid, name: &str) {
     ActiveModel {
         id: Set(id),
         name: Set(name.to_owned()),
+        ..Default::default()
     }
     .insert(conn)
     .await

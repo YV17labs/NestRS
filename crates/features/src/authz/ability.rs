@@ -72,6 +72,7 @@ mod tests {
     }
 
     fn user_model(id: Uuid, org_id: Uuid) -> user::Model {
+        let now = chrono::Utc::now().fixed_offset();
         user::Model {
             id,
             org_id,
@@ -79,23 +80,34 @@ mod tests {
             email: "bob@example.com".into(),
             role: "user".into(),
             password_hash: Some("argon2id$...".into()),
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
         }
     }
 
     fn org_model(id: Uuid) -> org::Model {
+        let now = chrono::Utc::now().fixed_offset();
         org::Model {
             id,
             name: "Acme".into(),
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
         }
     }
 
     fn post_model(id: Uuid, org_id: Uuid, author_id: Uuid) -> post::Model {
+        let now = chrono::Utc::now().fixed_offset();
         post::Model {
             id,
             org_id,
             author_id,
             title: "Hello".into(),
             body: "World".into(),
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
         }
     }
 

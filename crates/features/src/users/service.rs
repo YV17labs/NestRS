@@ -6,7 +6,7 @@ use nest_rs_authn::{CredentialError, burn_verify, hash_password, verify_password
 use nest_rs_authz::Action;
 use nest_rs_core::{hooks, injectable};
 use nest_rs_graphql::dataloader;
-use nest_rs_seaorm::{CreateModel, CrudService, Repo, ServiceError};
+use nest_rs_seaorm::{CreateModel, CrudService, Repo, ServiceError, live_condition};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, Set,
@@ -28,6 +28,10 @@ impl CrudService for UsersService {
     type Entity = Users;
     type Create = CreateUserInput;
     type Update = UpdateUserInput;
+
+    fn soft_delete_column() -> Option<entity::Column> {
+        Some(entity::Column::DeletedAt)
+    }
 }
 
 impl UsersService {
@@ -44,6 +48,7 @@ impl UsersService {
         let conn = Repo::<Users>::conn().map_err(|_| CredentialError)?;
         let user = Users::find()
             .filter(entity::Column::Email.eq(email.to_owned()))
+            .filter(live_condition::<Users>())
             .one(&conn)
             .await
             .map_err(|_| CredentialError)?;
@@ -89,6 +94,7 @@ impl UsersService {
     ) -> Result<entity::Model, ServiceError> {
         let conn = Repo::<Users>::conn()?;
         if let Some(user) = Repo::<Users>::scoped(Action::Read)
+            .filter(live_condition::<Users>())
             .filter(entity::Column::Email.eq(email.to_owned()))
             .one(&conn)
             .await?
@@ -171,6 +177,7 @@ impl UsersService {
         }
         tracing::debug!(target: "nest_rs::loader", count = names.len(), "loading users by name");
         let rows = Repo::<Users>::scoped(Action::Read)
+            .filter(live_condition::<Users>())
             .filter(entity::Column::Name.is_in(names.iter().cloned()))
             .all(&Repo::<Users>::conn()?)
             .await?;
@@ -206,6 +213,7 @@ mod tests {
     use super::*;
 
     fn row(name: &str, org_id: Uuid) -> entity::Model {
+        let now = chrono::Utc::now().fixed_offset();
         entity::Model {
             id: Uuid::now_v7(),
             org_id,
@@ -213,6 +221,9 @@ mod tests {
             email: format!("{name}@example.com"),
             role: "user".into(),
             password_hash: None,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
         }
     }
 
@@ -367,6 +378,7 @@ mod tests {
     }
 
     fn user_row(password_hash: Option<String>) -> entity::Model {
+        let now = chrono::Utc::now().fixed_offset();
         entity::Model {
             id: Uuid::now_v7(),
             org_id: Uuid::now_v7(),
@@ -374,6 +386,9 @@ mod tests {
             email: "ada@example.com".into(),
             role: "user".into(),
             password_hash,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
         }
     }
 

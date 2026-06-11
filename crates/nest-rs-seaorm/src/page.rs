@@ -5,7 +5,7 @@
 //! chronological with no extra sort column.
 
 use sea_orm::prelude::Uuid;
-use sea_orm::sea_query::ValueType;
+use sea_orm::sea_query::{Condition, ValueType};
 use sea_orm::{
     DbErr, EntityTrait, Iterable, ModelTrait, PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter,
 };
@@ -91,7 +91,12 @@ where
 {
     /// A keyset page of readable rows, ascending by primary key, starting after
     /// `after`. Fetches one extra row to decide `has_more` and `next_cursor`.
-    pub async fn page(first: u64, after: Option<Uuid>) -> Result<Page<E::Model>, DbErr> {
+    /// `extra` is ANDed onto the ability scope (e.g. `deleted_at IS NULL`).
+    pub async fn page(
+        first: u64,
+        after: Option<Uuid>,
+        extra: Condition,
+    ) -> Result<Page<E::Model>, DbErr> {
         let conn = Self::conn()?;
         let limit = clamp_page_size(first);
 
@@ -102,6 +107,7 @@ where
 
         let mut cursor = E::find()
             .filter(scope_for::<E>(Action::Read))
+            .filter(extra)
             .cursor_by(pk_col);
         if let Some(after) = after {
             cursor.after(after);

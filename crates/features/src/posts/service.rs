@@ -14,6 +14,10 @@ impl CrudService for PostsService {
     type Entity = Posts;
     type Create = CreatePostInput;
     type Update = UpdatePostInput;
+
+    fn soft_delete_column() -> Option<super::entity::Column> {
+        Some(super::entity::Column::DeletedAt)
+    }
 }
 
 impl PostsService {

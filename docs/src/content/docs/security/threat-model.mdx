@@ -25,7 +25,7 @@ back on you.
 | [`AbilityGuard`](/security/authorization/) | Missing or malformed `Ability` (500), unauthenticated GraphQL/WS (403) | Logic bugs in your `AbilityFactory` itself |
 | [`Repo::scoped`](/security/authorization/row-level-filtering/) | Scope leakage on every read — handler cannot forget the filter | Custom queries that ignore `Scope<E, A>` |
 | [`Bind<S, A>`](/security/authorization/by-id-binding/) | Cross-tenant by-id reads (403) and missing rows (404) | Handlers that fetch by id outside `Bind` and skip `access` |
-| [`Authorize` shaper](/security/authorization/response-masking/) | Leak of `#[expose(skip)]` columns, field-restricted grants | A handler returning a hand-built `serde_json::Value` shape that does not match `Model` (500) |
+| [`Authorize` shaper](/security/authorization/response-masking/) | Leak of unexposed columns, field-restricted grants | A handler returning a hand-built `serde_json::Value` shape that does not match `Model` (500) |
 | [`ThrottlerGuard`](/throttler/) | Brute-force login, naïve enumeration scrapes | DDoS at network or HTTP layer (use a CDN / edge throttler) |
 
 ## What the framework does **not** do
@@ -92,9 +92,11 @@ For a production app:
 2. **EdDSA split** between issuer and resource servers.
 3. **Authz guards bound on every controller** (negative-path tests
    catch the missing one).
-4. **`#[expose(skip)]` on every server-only column.** The masker
-   covers a forgotten `#[expose(skip)]` only when the field rule is
-   `.fields([...])`.
+4. **Exposure is opt-in — no `#[expose]` on server-only columns.**
+   A column crosses the wire only when its field carries `#[expose]`,
+   so a forgotten or newly-migrated column is hidden, not leaked. The
+   masker is the second line for columns you *do* expose but restrict,
+   covering them only when the field rule is `.fields([...])`.
 5. **CDN / WAF** in front for DDoS and bot defense.
 6. **Real secret store** for `JWT_PRIVATE_KEY`, OAuth secrets, DB
    credentials.

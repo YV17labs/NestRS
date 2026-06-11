@@ -253,6 +253,12 @@ nestrs g schedule posts    # scheduled tasks
 nestrs g mcp posts         # MCP tool
 ```
 
+<Aside type="note">
+Generated entities default to wire-only `#[expose]` (no GraphQL tokens). Add the
+`graphql` flag and `features = ["graphql"]` on `nest-rs-resource` when you bolt on
+GraphQL — see [HTTP-only resources](/database/#http-only-resources).
+</Aside>
+
 Each adapter delegates to the port's service, so a freshly-generated port plus
 any adapter compiles immediately — the handler is the seam you fill in. The
 generator prints the import line and the app-level module each transport needs

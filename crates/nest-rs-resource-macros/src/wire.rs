@@ -1,4 +1,4 @@
-//! Emit `WireModelDefaults` for `#[expose(skip)]` scalar columns.
+//! Emit `WireModelDefaults` for unexposed scalar columns (no `#[expose]`).
 //!
 //! These placeholders feed `Model::deserialize` only so `Ability::mask` /
 //! `mask_many` can run against the reconstructed `Model`; `retain_wire_keys`
@@ -18,7 +18,10 @@ use syn::Type;
 use crate::attr::{ResourceField, ResourceModel};
 
 fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStream> {
-    if !field.skip || field.is_pk || field.relation.is_some() {
+    // A default is only needed for columns the wire DTO omits — i.e. unexposed
+    // (`!read`) scalars. Exposed columns and relations are reconstructed from
+    // the body itself; the PK is never fabricated.
+    if field.read || field.is_pk || field.relation.is_some() {
         return None;
     }
     let key = &field.ident;

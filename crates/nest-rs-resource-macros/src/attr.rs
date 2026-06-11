@@ -41,9 +41,11 @@ pub(crate) enum RelationKind {
 pub(crate) struct ResourceField {
     pub ident: Ident,
     pub ty: Type,
-    /// Excluded from the GraphQL output type AND, when this is a relation,
-    /// from auto-generated field-resolver emission.
-    pub skip: bool,
+    /// `true` when the field carries `#[expose]` in any form — it then appears
+    /// in the wire / GraphQL output, and a relation gets its auto field
+    /// resolver. A field with **no** `#[expose]` is hidden from every transport.
+    /// Exposure is opt-in: silence means hidden, never leaked.
+    pub read: bool,
     pub in_create: bool,
     pub in_update: bool,
     /// The `#[sea_orm(primary_key)]` column — seeded with UUID v7 by the
@@ -66,7 +68,7 @@ impl ResourceField {
     /// relation never does — it is materialised by a `#[ComplexObject]` field
     /// resolver (or skipped entirely).
     pub fn in_output_struct(&self) -> bool {
-        !self.skip && self.relation.is_none()
+        self.read && self.relation.is_none()
     }
 }
 
@@ -95,21 +97,25 @@ pub(crate) struct ResourceModel {
     pub page_ident: Ident,
     pub fields: Vec<ResourceField>,
     /// Path to the entity's service, used as the receiver of auto-generated
-    /// `#[dataloader]` impls. Required when any non-skip relation is present.
+    /// `#[dataloader]` impls. Required when any exposed relation is present.
     pub service: Option<Path>,
     /// Emit `#[graphql(complex)]` on the output. Set explicitly via
-    /// `complex` or implicitly when any non-skip relation calls for a
+    /// `complex` or implicitly when any exposed relation calls for a
     /// `#[ComplexObject]`.
     pub complex: bool,
     pub paginate: bool,
     /// When set, emit GraphQL surface types (SimpleObject, loaders, relations).
     pub graphql: bool,
+    /// Stamp `deleted_at` instead of hard-deleting; emit [`SoftDeletable`].
+    pub soft_delete: bool,
+    /// Maintain `created_at` / `updated_at` via `ActiveModelBehavior::before_save`.
+    pub timestamps: bool,
 }
 
 impl ResourceModel {
-    /// True iff at least one non-skip relation needs a `#[ComplexObject]`.
+    /// True iff at least one exposed (`#[expose]`) relation needs a `#[ComplexObject]`.
     pub fn has_auto_relations(&self) -> bool {
-        self.fields.iter().any(|f| !f.skip && f.relation.is_some())
+        self.fields.iter().any(|f| f.read && f.relation.is_some())
     }
 }
 
@@ -119,6 +125,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     let mut complex = false;
     let mut paginate = false;
     let mut graphql = false;
+    let mut soft_delete = false;
+    let mut timestamps = false;
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
             name = Some(meta.value()?.parse::<LitStr>()?.value());
@@ -135,9 +143,15 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         } else if meta.path.is_ident("graphql") {
             graphql = true;
             Ok(())
+        } else if meta.path.is_ident("soft_delete") {
+            soft_delete = true;
+            Ok(())
+        } else if meta.path.is_ident("timestamps") {
+            timestamps = true;
+            Ok(())
         } else {
             Err(meta.error(
-                "unknown #[expose(...)] option (expected `name = \"...\"`, `service = …`, `graphql`, `complex`, or `paginate`)",
+                "unknown #[expose(...)] option (expected `name = \"...\"`, `service = …`, `graphql`, `soft_delete`, `timestamps`, `complex`, or `paginate`)",
             ))
         }
     });
@@ -163,7 +177,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     for field in &mut named.named {
         let ident = field.ident.clone().expect("named field has an ident");
         let ty = field.ty.clone();
-        let mut skip = false;
+        let mut read = false;
         let mut in_create = false;
         let mut in_update = false;
         let mut validate = Vec::new();
@@ -207,11 +221,20 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             })?;
         }
 
+        // Exposure is opt-in: the mere presence of `#[expose]` (bare or with
+        // options) marks the field for read exposure; `input(...)` additionally
+        // opts it into the write DTOs (and so implies read). A field carrying
+        // no `#[expose]` is hidden from every transport — silence is never a
+        // leak. A column added by a later migration stays invisible until
+        // someone deliberately exposes it.
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("expose")) {
+            read = true;
+            // Bare `#[expose]` (no parens) carries no options — nothing to parse.
+            if matches!(attr.meta, syn::Meta::Path(_)) {
+                continue;
+            }
             attr.parse_nested_meta(|m| {
-                if m.path.is_ident("skip") {
-                    skip = true;
-                } else if m.path.is_ident("input") {
+                if m.path.is_ident("input") {
                     let content;
                     syn::parenthesized!(content in m.input);
                     let kinds = content.parse_terminated(Ident::parse, Token![,])?;
@@ -236,29 +259,11 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     complexity = Some(m.value()?.parse::<Expr>()?);
                 } else {
                     return Err(m.error(
-                        "unknown #[expose(...)] field option (expected `skip`, `input(...)`, `validate(...)`, or `complexity = ...`)",
+                        "unknown #[expose(...)] field option (expected `input(...)`, `validate(...)`, or `complexity = ...`)",
                     ));
                 }
                 Ok(())
             })?;
-        }
-
-        if skip && (in_create || in_update) {
-            return Err(syn::Error::new_spanned(
-                &field.ident,
-                "a `skip` field cannot also be an `input`",
-            ));
-        }
-
-        if skip && complexity.is_some() {
-            // A skipped field has no wire-DTO column AND no auto-emitted
-            // resolver — the only two places `#[graphql(complexity = …)]`
-            // would land. Silently dropping the override hides the bug; the
-            // user's intent is unrecoverable so fail loudly.
-            return Err(syn::Error::new_spanned(
-                &field.ident,
-                "`skip` and `complexity` are mutually exclusive — a skipped field has no resolver or wire column to attach a cost to (a hand-rolled `#[field_resolver]` declares its own `#[graphql(complexity = …)]`)",
-            ));
         }
 
         field.attrs.retain(|a| !a.path().is_ident("expose"));
@@ -299,10 +304,20 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             _ => None,
         };
 
+        // A relation is materialised by a field resolver, not a column setter —
+        // `input(...)` on it would emit `__am.<rel> = Set(self.<rel>)` against a
+        // `HasOne`/`HasMany` marker and fail deep in expansion. Refuse early.
+        if relation.is_some() && (in_create || in_update) {
+            return Err(syn::Error::new_spanned(
+                &field.ident,
+                "a relation field cannot be an `input` — expose the scalar FK column (e.g. `org_id`) as the input instead",
+            ));
+        }
+
         fields.push(ResourceField {
             ident,
             ty,
-            skip,
+            read,
             in_create,
             in_update,
             is_pk,
@@ -310,6 +325,36 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             relation,
             complexity,
         });
+    }
+
+    if soft_delete {
+        let Some(field) = fields.iter().find(|f| f.ident == "deleted_at") else {
+            return Err(syn::Error::new_spanned(
+                &source_ident,
+                "`#[expose(..., soft_delete)]` requires a `deleted_at: Option<…>` column",
+            ));
+        };
+        if !crate::lifecycle::is_option_type(&field.ty) {
+            return Err(syn::Error::new_spanned(
+                &field.ident,
+                "`deleted_at` must be `Option<DateTimeWithTimeZone>` (or similar) for soft delete",
+            ));
+        }
+    }
+    if timestamps {
+        for name in ["created_at", "updated_at"] {
+            fields
+                .iter()
+                .find(|f| f.ident == name)
+                .ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        &source_ident,
+                        format!(
+                            "`#[expose(..., timestamps)]` requires `{name}` on the entity — remove any manual `impl ActiveModelBehavior` when using this flag",
+                        ),
+                    )
+                })?;
+        }
     }
 
     Ok(ResourceModel {
@@ -323,6 +368,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         complex,
         paginate,
         graphql,
+        soft_delete,
+        timestamps,
     })
 }
 
@@ -347,9 +394,34 @@ fn relation_cardinality(ty: &Type) -> Option<(Cardinality, Path)> {
     Some((card, target.path.clone()))
 }
 
-/// `true` when the type's last path segment is `Uuid` (rendered as `String` in
+/// The trailing async-graphql derive (`SimpleObject` for output objects,
+/// `InputObject` for inputs) to splice into a `#[derive(...)]` list — present
+/// only when `#[expose(graphql)]` is on, empty otherwise. One home for the
+/// `async_graphql` derive path so the three emit sites don't each spell it out.
+pub(crate) fn graphql_object_derive(model: &ResourceModel, derive: &str) -> TokenStream2 {
+    if !model.graphql {
+        return TokenStream2::new();
+    }
+    let derive = format_ident!("{derive}");
+    quote! { ::nest_rs_resource::graphql::async_graphql::#derive, }
+}
+
+/// `true` when the type's last path segment is `Uuid` (rendered as `String` on
 /// the GraphQL output). Purely syntactic: `Option<Uuid>` and aliases pass
 /// through with their native type.
 pub(crate) fn is_uuid(ty: &Type) -> bool {
     matches!(ty, Type::Path(tp) if tp.path.segments.last().is_some_and(|s| s.ident == "Uuid"))
+}
+
+/// `true` for SeaORM's `DateTimeWithTimeZone` — rendered as RFC 3339 `String`
+/// on the wire and in GraphQL (async-graphql has no native chrono mapping).
+pub(crate) fn is_datetime_tz(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Path(tp) if tp
+            .path
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "DateTimeWithTimeZone")
+    )
 }

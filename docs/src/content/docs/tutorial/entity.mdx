@@ -44,7 +44,8 @@ validator.workspace = true
 
 A post has an id, a title, and a body. SeaORM owns the column types;
 `#[expose]` decides which columns cross the wire and which inputs the
-HTTP layer accepts. No org column, no auth hooks — the tutorial keeps
+HTTP layer accepts. Exposure is opt-in — a field surfaces only when it
+carries `#[expose]`. No org column, no auth hooks — the tutorial keeps
 the domain small so you can focus on the entity → service → controller
 chain.
 
@@ -68,6 +69,7 @@ use serde::{Deserialize, Serialize};
 )]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
+    #[expose]
     pub id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub title: String,
@@ -84,13 +86,13 @@ The decorator translates one declaration into every wire surface:
 
 | Generated | What it is | Where it surfaces |
 |-----------|-----------|-------------------|
-| `Post` | The wire DTO — every `#[expose]`d column, no SeaORM internals | HTTP responses, OpenAPI schema |
+| `Post` | The wire DTO — every `#[expose]`d column, no SeaORM internals and nothing left unexposed | HTTP responses, OpenAPI schema |
 | `CreatePostInput` | A struct holding fields marked `input(create)` | `POST /posts` body |
 | `UpdatePostInput` | A struct holding fields marked `input(update)` | `PATCH /posts/:id` body |
 
 `service = super::service::PostsService` tells the macro which service
-owns the entity. The path is required as soon as the entity declares a
-non-skip relation or another feature needs the PK loader — `posts` has
+owns the entity. The path is required as soon as the entity declares an
+exposed relation or another feature needs the PK loader — `posts` has
 neither yet, but the attribute is already in place for when you add one.
 
 ## Read the field-level attributes
@@ -100,17 +102,19 @@ Two patterns cover this entity; a third shows up when you copy
 
 | Attribute | Effect |
 |-----------|--------|
-| `#[expose(input(create, update), validate(length(min = 1)))]` | Field appears in `CreatePostInput` and `UpdatePostInput`, with the `validator` rule wired |
-| `#[expose(input(create))]` | Field only appears in `CreatePostInput` — common for fields that can be set but not edited |
-| `#[expose(skip)]` | Field is excluded from `Post` and from every input — the masker fills it back in from defaults so `Ability::mask` sees the whole row |
+| `#[expose]` | Bare — the field is read-only on the wire (appears in `Post`), but not in any input |
+| `#[expose(input(create, update), validate(length(min = 1)))]` | Field appears in `Post` (input implies read) and in `CreatePostInput` and `UpdatePostInput`, with the `validator` rule wired |
+| `#[expose(input(create))]` | Field appears in `Post` and only in `CreatePostInput` — common for fields that can be set but not edited |
+| *(no `#[expose]`)* | Field is hidden from `Post` and from every input — the masker fills it back in from defaults so `Ability::mask` sees the whole row |
 
-`#[expose(skip)]` matters once a feature carries server-side columns —
-password hashes, tenant ids set from a JWT. The tutorial leaves every
-column on the wire; [`api`](/publish/) is where `skip` and
-masking become load-bearing.
+Leaving a field unexposed matters once a feature carries server-side
+columns — password hashes, tenant ids set from a JWT. Because exposure
+is opt-in, those columns stay off the wire by default;
+[`api`](/publish/) is where unexposed columns and masking become
+load-bearing.
 
 <Aside type="caution">
-A `skip`ped column whose type isn't trivial to default (a `Decimal`, a
+An unexposed column whose type isn't trivial to default (a `Decimal`, a
 custom enum) needs a hand-written `impl WireModelDefaults` so the
 masker can still walk the row. The error message points at the missing
 impl when boot fails.

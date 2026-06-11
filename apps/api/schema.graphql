@@ -17,9 +17,11 @@ type Mutation {
 }
 
 type Org {
+	createdAt: String!
 	id: String!
 	name: String!
 	posts: [Post!]!
+	updatedAt: String!
 	users: [User!]!
 }
 
@@ -27,10 +29,12 @@ type Post {
 	author: User
 	authorId: String!
 	body: String!
+	createdAt: String!
 	id: String!
 	org: Org
 	orgId: String!
 	title: String!
+	updatedAt: String!
 }
 
 type Query {
@@ -50,12 +54,14 @@ input UpdateUserInput {
 }
 
 type User {
+	createdAt: String!
 	email: String!
 	id: String!
 	name: String!
 	org: Org
 	orgId: String!
 	posts: [Post!]!
+	updatedAt: String!
 }
 
 """

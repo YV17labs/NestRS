@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 )]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
+    #[expose]
     pub id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,

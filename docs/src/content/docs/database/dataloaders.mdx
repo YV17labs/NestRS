@@ -17,7 +17,7 @@ you write your own for custom keys.
 
 ## Most relations need no loader code
 
-A `belongs_to` or `has_many` declared on an `#[expose]`'d entity becomes a
+A `belongs_to` or `has_many` whose relation field carries `#[expose]` becomes a
 GraphQL field auto-resolved through a dataloader. The macro emits:
 
 - a **PK loader** on the owner's service (`<Service>ById`) for every entity
@@ -36,8 +36,11 @@ GraphQL field auto-resolved through a dataloader. The macro emits:
 #[sea_orm(table_name = "item")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
+    #[expose]
     pub id: Uuid,
+    #[expose]
     pub org_id: Uuid,
+    #[expose]
     pub name: String,
 }
 
@@ -57,7 +60,7 @@ dataloader. No `#[dataloader]` to write, no wiring on the resolver — and
 every batch runs through `Repo::scoped(Action::Read)`, so the ability filter
 applies row-level on related rows as on any other read.
 
-Opt a single relation out with `#[expose(skip)]` and write a custom
+Leave a single relation unexposed (no `#[expose]`) and write a custom
 `#[field_resolver]` if you need a non-default shape (cursor connection,
 extra filter).
 

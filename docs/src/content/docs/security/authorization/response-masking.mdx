@@ -1,6 +1,6 @@
 ---
 title: Response masking
-description: After a 2xx, the Authorize shaper deserializes the body into Model, runs Ability::mask, then retain_wire_keys — an unrestricted grant cannot leak a #[expose(skip)] column.
+description: After a 2xx, the Authorize shaper deserializes the body into Model, runs Ability::mask, then retain_wire_keys — an unrestricted grant cannot leak an unexposed column.
 sidebar:
   order: 5
 ---
@@ -9,7 +9,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 The third layer of authorization runs after the handler returns. The
 `Authorize<A, S>` shaper parses the successful JSON body,
-reconstructs the SeaORM `Model` (filling `#[expose(skip)]` columns
+reconstructs the SeaORM `Model` (filling unexposed columns
 from `WireModelDefaults`), runs typed `Ability::mask` to strip the
 fields the caller cannot read, then keeps only the keys the wire DTO
 exposed in the first place. The route never has to call `mask`
@@ -29,7 +29,7 @@ Handler returns Json<UserWire>
        │
 parse JSON → Value
        │
-wire_to_model::<S>     ← fill #[expose(skip)] columns via WireModelDefaults
+wire_to_model::<S>     ← fill unexposed columns via WireModelDefaults
        │
 ability.mask::<S>      ← typed: filters by row, masks by field
        │
@@ -47,8 +47,8 @@ Each step has a defined failure mode:
   out (collection responses) or every restricted field becomes
   `null`.
 - **`retain_wire_keys`** — strips back any field the wire DTO never
-  carried. An unrestricted `Ability` grant cannot leak a
-  `#[expose(skip)]` column (like `password_hash`).
+  carried. An unrestricted `Ability` grant cannot leak an
+  unexposed column (like `password_hash`).
 - **Re-serialize fails** → 500.
 
 Non-2xx, non-JSON, and scalar responses pass through untouched.
@@ -133,8 +133,8 @@ fn retain_wire_keys(masked: &mut Value, wire: &Value) {
 
 Why this step exists: an `Ability` grant with no `.fields` permits
 every column on the `Model`. If the `Model` carries a
-`password_hash` field (server-only, `#[expose(skip)]` in the wire
-DTO), an unrestricted grant would have it pass `Ability::mask`
+`password_hash` field (server-only, never carries `#[expose]` so it is
+absent from the wire DTO), an unrestricted grant would have it pass `Ability::mask`
 untouched. `retain_wire_keys` then drops it because it was never on
 the wire DTO to begin with.
 
@@ -149,7 +149,7 @@ Both apply. A column on neither list never leaves.
 ## `WireModelDefaults` — filling the gaps
 
 To run `Ability::mask` the shaper needs a typed `S::Model`. The wire
-body, by design, omits `#[expose(skip)]` columns. `WireModelDefaults`
+body, by design, omits every unexposed column. `WireModelDefaults`
 fills them with placeholder values so deserialization succeeds:
 
 ```rust
@@ -159,7 +159,7 @@ pub trait WireModelDefaults: EntityTrait {
 ```
 
 The `#[expose]` macro emits an impl per entity that fills every
-skipped scalar column with a JSON default (`""`, `0`, `null`). The
+unexposed scalar column with a JSON default (`""`, `0`, `null`). The
 defaults are discarded again by `retain_wire_keys` before the body
 ships — they never reach the wire.
 

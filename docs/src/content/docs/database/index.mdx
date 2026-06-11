@@ -42,6 +42,7 @@ use uuid::Uuid;
 )]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
+    #[expose]
     pub id: Uuid,
 
     #[expose(input(create, update), validate(length(min = 1)))]
@@ -60,12 +61,53 @@ handlers (`Item`), the `CreateItemInput` and `UpdateItemInput` filtered by
 schema, the PK dataloader (`ItemsServiceById`) for relations, and the
 `From<&Model>` / `IntoActiveModel` plumbing every handler needs.
 
-`service = …` is required as soon as the entity declares any non-skip
-relation — the macro emits the PK loader on it. Use `#[expose(skip)]` on a
-column to keep it out of every wire surface.
+Exposure is **opt-in**: a column crosses the wire only when its field carries
+`#[expose]`. A bare `#[expose]` is read-only; `#[expose(input(...))]` adds write
+and implies read. A field with no `#[expose]` is hidden from every transport, so
+a column added by a later migration never reaches a client until you expose it.
+
+`service = …` is required as soon as the entity declares an exposed relation —
+the macro emits the PK loader on it.
 
 Relations declared with `#[sea_orm(belongs_to, …)]` or `#[sea_orm(has_many)]`
-auto-resolve through dataloaders — see [Dataloaders](/database/dataloaders/).
+auto-resolve through dataloaders when the relation field carries `#[expose]`
+(and the entity has the `graphql` flag) — see [Dataloaders](/database/dataloaders/).
+
+## HTTP-only resources
+
+REST/OpenAPI adopters can compile without pulling in GraphQL:
+
+```toml title="Cargo.toml"
+nest-rs-resource = { version = "0.2", default-features = false }
+nest-rs-seaorm = { version = "0.2", features = ["http"] }
+nest-rs-authz = { version = "0.2", features = ["http"] }
+```
+
+```rust title="src/items/entity.rs"
+#[expose(name = "Item", service = super::service::ItemsService)]
+// no `graphql` flag — wire DTO + CRUD inputs only
+pub struct Model {
+    #[expose]
+    pub org_id: Uuid, // scalar FK, not HasOne<Org>
+    // …
+}
+```
+
+GraphQL surface when you need it:
+
+```toml
+nest-rs-resource = { version = "0.2", features = ["graphql"] }
+```
+
+```rust
+#[expose(name = "Item", service = super::service::ItemsService, graphql)]
+```
+
+<Aside type="note">
+An **exposed** SeaORM relation without the `graphql` flag is a **compile error**
+— use scalar FK columns for HTTP-first Phase 0, or leave relation fields
+unexposed (no `#[expose]`).
+</Aside>
 
 ## The service
 

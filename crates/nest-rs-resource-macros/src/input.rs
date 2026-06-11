@@ -5,7 +5,7 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-use crate::attr::{ResourceField, ResourceModel};
+use crate::attr::{ResourceField, ResourceModel, graphql_object_derive};
 
 pub fn emit(model: &ResourceModel) -> TokenStream2 {
     let create = input_struct(&model.create_input_ident, model, |f| f.in_create);
@@ -36,11 +36,7 @@ fn input_struct(
         }
     });
 
-    let graphql_derives = if model.graphql {
-        quote! { ::nest_rs_resource::graphql::async_graphql::InputObject, }
-    } else {
-        quote! {}
-    };
+    let graphql_derives = graphql_object_derive(model, "InputObject");
 
     quote! {
         #[derive(

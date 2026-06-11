@@ -114,7 +114,7 @@ not compile alongside it.
 
 You have three honest ways out:
 
-1. **Mark the relation `#[expose(skip)]`** and own the full complex
+1. **Leave the relation unexposed (no `#[expose]`)** and own the full complex
    object on the resolver. The relation stays declared at the ORM
    level (the SQL join still works), it just no longer surfaces as a
    GraphQL field automatically. Write your `#[field_resolver]` for

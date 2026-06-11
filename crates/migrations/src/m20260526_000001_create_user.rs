@@ -22,6 +22,23 @@ impl MigrationTrait for Migration {
                             .default("user"),
                     )
                     .col(ColumnDef::new(User::PasswordHash).string().null())
+                    .col(
+                        ColumnDef::new(User::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(User::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(User::DeletedAt)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_user_org_id")
@@ -51,6 +68,9 @@ enum User {
     Email,
     Role,
     PasswordHash,
+    CreatedAt,
+    UpdatedAt,
+    DeletedAt,
 }
 
 #[derive(DeriveIden)]

@@ -3,11 +3,11 @@
 //!
 //! 1. Wraps the handler in [`with_ability`] so the data layer scopes every
 //!    query via `current_ability()` — no hand-written filter.
-//! 2. Masks the JSON response: parse into `S::Model` (filling columns the
-//!    `#[expose]` output omits via [`WireModelDefaults`]), run typed
+//! 2. Masks the JSON response: parse into `S::Model` (filling the unexposed
+//!    columns the `#[expose]` output omits via [`WireModelDefaults`]), run typed
 //!    [`Ability::mask`] / [`Ability::mask_many`], then strip keys absent from
-//!    the wire body so an unrestricted field grant cannot leak `#[expose(skip)]`
-//!    columns (e.g. `password_hash`).
+//!    the wire body so an unrestricted field grant cannot leak unexposed columns
+//!    (e.g. `password_hash`, which carries no `#[expose]`).
 //!
 //! Fails **closed**: a successful JSON body that cannot be reconciled with
 //! `S::Model` yields 500 rather than shipping data unmasked.
@@ -157,7 +157,8 @@ where
 }
 
 /// Keep only keys the handler actually exposed on the wire (DTO fields), so an
-/// unrestricted field grant cannot leak `#[expose(skip)]` columns.
+/// unrestricted field grant cannot leak unexposed columns (those without
+/// `#[expose]`).
 fn retain_wire_keys(masked: &mut Value, wire: &Value) {
     let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
         return;

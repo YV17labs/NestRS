@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{ItemStruct, parse_macro_input};
 
-use crate::{active, attr, dto, input, relations, wire};
+use crate::{active, attr, dto, input, lifecycle, relations, wire};
 
 pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(item as ItemStruct);
@@ -24,7 +24,7 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     } else if model.has_auto_relations() {
         return syn::Error::new_spanned(
             &model.source_ident,
-            "non-skip SeaORM relations require `#[expose(..., graphql)]` — use scalar FK columns for HTTP-only entities, or mark relations `#[expose(skip)]`",
+            "an exposed SeaORM relation requires `#[expose(..., graphql)]` on the entity — use scalar FK columns for HTTP-only entities, or leave the relation unexposed (no `#[expose]`)",
         )
         .to_compile_error()
         .into();
@@ -47,6 +47,7 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     let inputs = input::emit(&model);
     let active = active::emit(&model);
     let wire_defaults = wire::emit(&model);
+    let lifecycle = lifecycle::emit(&model);
     let relations = if model.graphql {
         match relations::emit(&model) {
             Ok(tokens) => tokens,
@@ -62,6 +63,7 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
         #inputs
         #active
         #wire_defaults
+        #lifecycle
         #relations
     }
     .into()

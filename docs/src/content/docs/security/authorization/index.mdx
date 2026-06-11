@@ -67,8 +67,11 @@ one statement, no terminal `.add()` call. See
 
 ## Mount it on the controller
 
-The `AuthzHttpModule` provides `AuthzGuard` (the type alias for
-`AbilityGuard<AppAbility>`). Bind it after `AuthGuard`:
+The `AuthzHttpModule` provides `AuthzGuard` — a **project type alias** for
+`AbilityGuard<AppAbility>` defined in `features/authz/http/guard.rs`, **not**
+exported from `nest_rs_authz`. Import `AuthzGuard` from your feature crate, or
+use `AbilityGuard<YourAbility>` directly from `nest_rs_authz::http`. Bind it
+after `AuthGuard`:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]

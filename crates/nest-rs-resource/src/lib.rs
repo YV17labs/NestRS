@@ -6,6 +6,11 @@
 //! feature on this crate to also emit GraphQL types, auto-resolved relations,
 //! and dataloaders.
 //!
+//! **Exposure is opt-in:** a column reaches the wire only when its field
+//! carries `#[expose]` (or `#[expose(input(...))]`, which implies read). A field
+//! with no `#[expose]` stays hidden on every transport, so a column added by a
+//! later migration never leaks by omission.
+//!
 //! ```ignore
 //! // HTTP / OpenAPI / masking — no GraphQL deps in the entity crate.
 //! #[expose(name = "Item", service = super::service::ItemsService)]

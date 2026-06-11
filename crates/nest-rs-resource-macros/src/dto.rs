@@ -1,11 +1,12 @@
-//! Emit the wire output object plus its `From<&Model>`. A `skip` field is
-//! absent; a `Uuid` renders as `String` on the wire. Derives `JsonSchema` for
-//! OpenAPI; with `graphql`, also `SimpleObject`.
+//! Emit the wire output object plus its `From<&Model>`. Only `#[expose]`d
+//! columns appear — an unexposed field is absent; a `Uuid` renders as `String`
+//! on the wire. Derives `JsonSchema` for OpenAPI; with `graphql`, also
+//! `SimpleObject`.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-use crate::attr::{ResourceModel, complexity_attr, is_uuid};
+use crate::attr::{ResourceModel, complexity_attr, graphql_object_derive, is_datetime_tz, is_uuid};
 
 pub fn emit(model: &ResourceModel) -> TokenStream2 {
     let output = &model.output_ident;
@@ -23,6 +24,11 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
         if is_uuid(&field.ty) {
             decls.push(quote! { #complexity pub #name: ::std::string::String });
             inits.push(quote! { #name: ::std::string::ToString::to_string(&model.#name) });
+        } else if is_datetime_tz(&field.ty) {
+            decls.push(quote! { #complexity pub #name: ::std::string::String });
+            inits.push(quote! {
+                #name: ::chrono::DateTime::<::chrono::FixedOffset>::to_rfc3339(&model.#name)
+            });
         } else {
             let ty = &field.ty;
             decls.push(quote! { #complexity pub #name: #ty });
@@ -36,11 +42,7 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
         quote! {}
     };
 
-    let graphql_derives = if model.graphql {
-        quote! { ::nest_rs_resource::graphql::async_graphql::SimpleObject, }
-    } else {
-        quote! {}
-    };
+    let graphql_derives = graphql_object_derive(model, "SimpleObject");
 
     let page = emit_page(model);
 
@@ -76,11 +78,7 @@ fn emit_page(model: &ResourceModel) -> TokenStream2 {
     }
     let output = &model.output_ident;
     let page = &model.page_ident;
-    let graphql_derives = if model.graphql {
-        quote! { ::nest_rs_resource::graphql::async_graphql::SimpleObject, }
-    } else {
-        quote! {}
-    };
+    let graphql_derives = graphql_object_derive(model, "SimpleObject");
     quote! {
         #[derive(
             ::core::fmt::Debug,

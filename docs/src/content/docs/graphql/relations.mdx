@@ -7,7 +7,8 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Declaring a SeaORM relation on an `#[expose]`d entity is the **whole
+Declaring a SeaORM relation on an exposed entity — and marking the
+relation field `#[expose]` — is the **whole
 field-resolver story** for entity-to-entity links — no
 `#[field_resolver]`, no `#[dataloader]` to write by hand. Pass
 `service = …` to `#[expose]` and the macro emits the PK loader on the
@@ -28,11 +29,15 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "user")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
+    #[expose]
     pub id: Uuid,
+    #[expose]
     pub org_id: Uuid,
+    #[expose]
     pub name: String,
 
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
+    #[expose]
     pub org: HasOne<crate::orgs::Entity>,
 }
 ```
@@ -44,10 +49,13 @@ pub struct Model {
 #[sea_orm(table_name = "org")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
+    #[expose]
     pub id: Uuid,
+    #[expose]
     pub name: String,
 
     #[sea_orm(has_many)]
+    #[expose]
     pub users: HasMany<crate::users::Entity>,
 }
 ```
@@ -137,31 +145,33 @@ the cost driver. Override per field with `#[expose(complexity = …)]`
 when the realistic fanout differs — full details in
 [Query limits](/graphql/query-limits/#override-on-the-field).
 
-## Opt out: skip a single relation
+## Opt out: leave a single relation unexposed
 
-`#[expose(skip)]` on a relation disables auto-emission for that field
-only. The relation stays declared at the ORM level (SeaORM still knows
-about it), and you can write a hand-rolled `#[field_resolver]` if you
-need a custom shape — say a `Connection<User>` with cursor pagination,
-or a filtered subset.
+Leaving a relation field unexposed (no `#[expose]`) keeps auto-emission
+off for that field only. The relation stays declared at the ORM level
+(SeaORM still knows about it), and you can write a hand-rolled
+`#[field_resolver]` if you need a custom shape — say a `Connection<User>`
+with cursor pagination, or a filtered subset.
 
 ```rust
 #[expose(name = "Org", service = …)]
 #[sea_orm::model]
 pub struct Model {
+    #[expose]
     pub id: Uuid,
+    #[expose]
     pub name: String,
 
+    // No #[expose] => not auto-resolved; own it with a #[field_resolver].
     #[sea_orm(has_many)]
-    #[expose(skip)]
     pub users: HasMany<crate::users::Entity>,
 }
 ```
 
 <Aside type="caution">
-**Skip is per-field.** Skipping one relation lets a `#[field_resolver]`
-own that field, but every *other* `#[expose]`-emitted relation on the
-same `User` / `Org` type still lives in the auto-emitted
+**Opting out is per-field.** Leaving one relation unexposed lets a
+`#[field_resolver]` own that field, but every *other* `#[expose]`-emitted
+relation on the same `User` / `Org` type still lives in the auto-emitted
 `#[ComplexObject]`. If you need custom logic on a type that already has
 auto-resolved relations, the single-`ComplexObject` rule applies — see
 [Field resolvers](/graphql/field-resolvers/).
@@ -169,7 +179,7 @@ auto-resolved relations, the single-`ComplexObject` rule applies — see
 
 ## A custom shape: the cursor connection
 
-When `skip` opens the slot, write the replacement on the resolver:
+When the unexposed relation opens the slot, write the replacement on the resolver:
 
 ```rust title="src/orgs/graphql/resolver.rs"
 use async_graphql::{Context, Result, connection::*};
@@ -204,6 +214,22 @@ The connection helper, the page service method, and the `User` wire
 DTO all stay where they belong — the resolver only translates between
 the two.
 
+## Complex graphs (Phase 0 guidance)
+
+Bidirectional or multi-hop graphs (`org ↔ membership ↔ user`) can produce
+conflicting auto-generated loader impls at compile time. Prefer **scalar FK
+columns** on early entities and add GraphQL relation fields once the schema
+stabilises.
+
+When two `belongs_to` relations on the same entity target the **same** parent,
+the macro refuses with an actionable error — leave one side
+unexposed (no `#[expose]`) and write a hand-rolled `#[field_resolver]`, or flatten to
+FK columns only.
+
+Composite primary keys and duplicate loader targets are refused at compile time
+(not a cryptic `E0119`). See `crates/nest-rs-resource-macros/src/relations.rs`
+for the diagnostics.
+
 ## Where to go next
 
 - [Dataloaders](/graphql/dataloader/) — write a custom batch loader
@@ -211,7 +237,7 @@ the two.
   PK + FK loaders don't fit. Cross-link to
   [Database / Dataloaders](/database/dataloaders/).
 - [Field resolvers](/graphql/field-resolvers/) — the
-  `#[expose(skip)]` escape hatch, and the single-`ComplexObject` rule
+  leave-it-unexposed escape hatch, and the single-`ComplexObject` rule
   in detail.
 - [Database / CRUD](/database/crud/) — the service contract every
   loader (auto-emitted or hand-rolled) routes through.

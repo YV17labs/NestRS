@@ -2,16 +2,16 @@
 //! (so other entities can resolve `belongs_to` references without each one
 //! re-declaring the loader), trait impls connecting the entity to its loader,
 //! the wire DTO, and `#[ComplexObject]` field resolvers on the wire DTO for
-//! every non-skip relation.
+//! every exposed (`#[expose]`) relation.
 //!
 //! Emission lives at the entity's call site (e.g. `users/entity.rs`); paths
 //! resolve relative to that scope. Absolute paths are used for framework
 //! crates so the user does not need to `use` them in `entity.rs`.
 //!
-//! Phase 1 — `belongs_to`: emits one `#[ComplexObject]` field per non-skip
+//! Phase 1 — `belongs_to`: emits one `#[ComplexObject]` field per exposed
 //! `HasOne` plus the PK loader on the service.
 //!
-//! Phase 2 — `has_many`: emits one `#[ComplexObject]` field per non-skip
+//! Phase 2 — `has_many`: emits one `#[ComplexObject]` field per exposed
 //! `HasMany`. The FK-side dataloader (`by_<fk_col>`) and the matching
 //! `RelatedTo<Parent>` impl are emitted by the **FK-owning** entity (the side
 //! that declares `belongs_to`), keeping every emission local to one module.
@@ -36,8 +36,8 @@ use crate::attr::{RelationKind, ResourceField, ResourceModel, complexity_attr, i
 /// differs. The override expression may reference `child_complexity` and
 /// pure literals only — it lands on a method with no GraphQL arguments, so
 /// names like `first` would resolve as unbound identifiers in the generated
-/// closure. Paginated relations need `#[expose(skip)]` + a hand-rolled
-/// `#[field_resolver]` carrying its own `#[graphql(complexity = …)]`.
+/// closure. Paginated relations are left unexposed (no `#[expose]`) and given a
+/// hand-rolled `#[field_resolver]` carrying its own `#[graphql(complexity = …)]`.
 pub(crate) const DEFAULT_HAS_MANY_COMPLEXITY: &str = "10 * child_complexity";
 
 pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
@@ -45,7 +45,7 @@ pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
         if model.has_auto_relations() {
             return Err(syn::Error::new_spanned(
                 &model.source_ident,
-                "this entity declares a non-skip relation but `#[expose(... service = …)]` is missing — add the service path so the macro can emit its PK dataloader and PkLoadable impl",
+                "this entity declares an exposed relation but `#[expose(... service = …)]` is missing — add the service path so the macro can emit its PK dataloader and PkLoadable impl",
             ));
         }
         return Ok(TokenStream2::new());
@@ -64,7 +64,7 @@ pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
         // tuple-key loader; refuse for now rather than ship a footgun.
         return Err(syn::Error::new_spanned(
             &extra.ident,
-            "auto-relations on composite primary keys are not supported yet — write a hand-rolled `#[dataloader]` on the service and `#[expose(skip)]` the relation fields",
+            "auto-relations on composite primary keys are not supported yet — write a hand-rolled `#[dataloader]` on the service and leave the relation fields unexposed (no `#[expose]`)",
         ));
     }
 
@@ -82,6 +82,14 @@ pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     })
 }
 
+fn live_rows_filter(model: &ResourceModel) -> TokenStream2 {
+    if model.soft_delete {
+        quote! { .filter(::nest_rs_seaorm::live_condition::<Entity>()) }
+    } else {
+        quote! {}
+    }
+}
+
 /// `#[dataloader] impl <Service> { async fn by_id(&self, keys: &[Pk]) -> ... }`.
 /// Read-scoped via the ambient `Ability` — every call goes through `Repo`.
 fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField) -> TokenStream2 {
@@ -90,6 +98,7 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
     let pk_col = pascal_case(pk_ident);
     let wire = &model.output_ident;
     let target_label = format!("loading {} by id", wire);
+    let live = live_rows_filter(model);
 
     quote! {
         #[::nest_rs_resource::graphql::dataloader]
@@ -113,6 +122,7 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
                 let __rows = ::nest_rs_seaorm::Repo::<Entity>::scoped(
                     ::nest_rs_authz::Action::Read,
                 )
+                    #live
                     .filter(
                         <Column as ::sea_orm::ColumnTrait>::is_in(
                             &Column::#pk_col,
@@ -156,7 +166,7 @@ fn emit_pk_loadable_impl(model: &ResourceModel, loader: &Ident) -> TokenStream2 
     }
 }
 
-/// FK-side emission. For each non-skip `belongs_to` (the FK-owning side knows
+/// FK-side emission. For each exposed `belongs_to` (the FK-owning side knows
 /// the column name + type), emits a `by_<fk_col>` batched loader on the
 /// service plus an `impl RelatedTo<TargetEntity> for Entity` so the inverse
 /// `has_many` field resolver on the target side can find this loader without
@@ -170,7 +180,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
     // even if the FK loaders were both registered. Refuse it at parse time.
     let mut seen_targets: Vec<(String, &Ident)> = Vec::new();
     for field in &model.fields {
-        if field.skip {
+        if !field.read {
             continue;
         }
         let Some(RelationKind::BelongsTo { from, target, .. }) = &field.relation else {
@@ -181,7 +191,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
             return Err(syn::Error::new_spanned(
                 &field.ident,
                 format!(
-                    "two `belongs_to` relations targeting the same parent are not supported (clashes with `{}`); mark one `#[expose(skip)]` and write a hand-rolled `#[field_resolver]`",
+                    "two `belongs_to` relations targeting the same parent are not supported (clashes with `{}`); leave one unexposed (no `#[expose]`) and write a hand-rolled `#[field_resolver]`",
                     prev,
                 ),
             ));
@@ -203,6 +213,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
         let loader_ident = format_ident!("{}By{}", last_segment_ident(service), fk_col_pascal,);
         let wire = &model.output_ident;
         let target_label = format!("loading {} by {}", wire, from);
+        let live = live_rows_filter(model);
 
         blocks.push(quote! {
             #[::nest_rs_resource::graphql::dataloader]
@@ -226,6 +237,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                     let __rows = ::nest_rs_seaorm::Repo::<Entity>::scoped(
                         ::nest_rs_authz::Action::Read,
                     )
+                        #live
                         .filter(
                             <Column as ::sea_orm::ColumnTrait>::is_in(
                                 &Column::#fk_col_pascal,
@@ -272,13 +284,13 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
     Ok(quote! { #(#blocks)* })
 }
 
-/// `#[ComplexObject] impl <Wire> { … }` — one method per non-skip relation.
+/// `#[ComplexObject] impl <Wire> { … }` — one method per exposed relation.
 /// `BelongsTo` → `Option<TargetWire>` via `PkLoadable`. `HasMany` →
 /// `Vec<TargetWire>` via `RelatedTo<Self::Entity>`.
 fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Result<TokenStream2> {
     let mut methods = Vec::new();
     for field in &model.fields {
-        if field.skip {
+        if !field.read {
             continue;
         }
         let Some(kind) = &field.relation else {

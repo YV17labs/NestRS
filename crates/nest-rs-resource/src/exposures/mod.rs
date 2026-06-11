@@ -4,5 +4,6 @@
 //! they all serve the same generated code.
 
 pub mod pagination;
+#[cfg(feature = "graphql")]
 pub mod relations;
 pub mod wire;

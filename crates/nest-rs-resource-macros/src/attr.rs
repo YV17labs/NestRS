@@ -102,6 +102,8 @@ pub(crate) struct ResourceModel {
     /// `#[ComplexObject]`.
     pub complex: bool,
     pub paginate: bool,
+    /// When set, emit GraphQL surface types (SimpleObject, loaders, relations).
+    pub graphql: bool,
 }
 
 impl ResourceModel {
@@ -116,6 +118,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     let mut service: Option<Path> = None;
     let mut complex = false;
     let mut paginate = false;
+    let mut graphql = false;
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
             name = Some(meta.value()?.parse::<LitStr>()?.value());
@@ -129,9 +132,12 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         } else if meta.path.is_ident("paginate") {
             paginate = true;
             Ok(())
+        } else if meta.path.is_ident("graphql") {
+            graphql = true;
+            Ok(())
         } else {
             Err(meta.error(
-                "unknown #[expose(...)] option (expected `name = \"...\"`, `service = …`, `complex`, or `paginate`)",
+                "unknown #[expose(...)] option (expected `name = \"...\"`, `service = …`, `graphql`, `complex`, or `paginate`)",
             ))
         }
     });
@@ -140,7 +146,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     let name = name.ok_or_else(|| {
         syn::Error::new_spanned(
             &item.ident,
-            "#[expose(name = \"...\")] is required (the GraphQL type / input base name)",
+            "#[expose(name = \"...\")] is required (the wire DTO / OpenAPI schema name)",
         )
     })?;
     let name_ident = format_ident!("{}", name);
@@ -316,6 +322,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         service,
         complex,
         paginate,
+        graphql,
     })
 }
 

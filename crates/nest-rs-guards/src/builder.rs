@@ -8,13 +8,16 @@
 
 use nest_rs_core::AppBuilder;
 use nest_rs_core::layer_chain::ResolvedLayer;
-use nest_rs_graphql::FallbackOperationGuard;
 use nest_rs_http::{GlobalGuardsActive, HttpBootCheck, SelfMountGuardWrap};
 use nest_rs_interceptors::InterceptorExt;
 use poem::EndpointExt;
 
 use crate::Guard;
-use crate::dispatch::{GlobalPoolOperationGuard, denial_to_http_response};
+use crate::dispatch::denial_to_http_response;
+#[cfg(feature = "graphql")]
+use crate::dispatch::GlobalPoolOperationGuard;
+#[cfg(feature = "graphql")]
+use nest_rs_graphql::FallbackOperationGuard;
 use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 
 /// Adds `.use_guards_global(...)` to [`AppBuilder`].
@@ -61,9 +64,12 @@ impl AppBuilderGuardsExt for AppBuilder {
         //   unguarded. A registered bridge replaces the fallback (it runs
         //   the same guards itself — nothing runs twice).
         let active = !collected.is_empty();
-        let builder = self
-            .provide(GuardSpecs(collected))
-            .provide(FallbackOperationGuard(GlobalPoolOperationGuard::factory))
+        let mut builder = self.provide(GuardSpecs(collected));
+        #[cfg(feature = "graphql")]
+        {
+            builder = builder.provide(FallbackOperationGuard(GlobalPoolOperationGuard::factory));
+        }
+        let builder = builder
             .provide_meta(SelfMountGuardWrap::new(|container, endpoint| {
                 let chain = container
                     .get::<GuardSpecs>()

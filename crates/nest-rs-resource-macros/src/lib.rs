@@ -13,13 +13,15 @@ mod input;
 mod relations;
 mod wire;
 
-/// Expose a SeaORM entity to GraphQL + OpenAPI from one declaration. Emits a
-/// GraphQL output object (`SimpleObject` + `JsonSchema`) and `Create/Update`
-/// input types; re-emits the entity untouched so the ORM macros keep full
-/// power.
+/// Expose a SeaORM entity to REST/OpenAPI (and optionally GraphQL) from one
+/// declaration. Emits a wire DTO (`Serialize` + `JsonSchema`) and
+/// `Create/Update` input types; add the `graphql` flag (and enable the
+/// `graphql` feature on `nest-rs-resource`) for GraphQL types and
+/// auto-resolved relations.
 ///
 /// ```ignore
-/// #[expose(name = "User")]
+/// #[expose(name = "User", service = super::service::UsersService)]
+/// #[expose(name = "User", service = super::service::UsersService, graphql)]
 /// #[sea_orm::model]
 /// pub struct Model {
 ///     #[sea_orm(primary_key, auto_increment = false)]

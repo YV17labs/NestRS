@@ -22,6 +22,7 @@ pub use crate::{
 };
 pub use async_trait::async_trait;
 pub use nest_rs_core::{HandlerMetadata, Layer, LayerKind, LayerSite, Public, injectable};
+#[cfg(feature = "graphql")]
 pub use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 pub use nest_rs_http::poem::Request as HttpRequest;
 pub use nest_rs_ws::WsClient;

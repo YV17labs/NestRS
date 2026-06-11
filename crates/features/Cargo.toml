@@ -18,7 +18,7 @@ nest-rs-authn.workspace = true
 nest-rs-authz = { workspace = true, features = ["http", "graphql"] }
 nest-rs-config.workspace = true
 nest-rs-graphql.workspace = true
-nest-rs-guards.workspace = true
+nest-rs-guards = { workspace = true, features = ["graphql"] }
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-queue.workspace = true
@@ -26,7 +26,7 @@ nest-rs-redis.workspace = true
 nest-rs-schedule.workspace = true
 nest-rs-throttler.workspace = true
 nest-rs-ws.workspace = true
-nest-rs-resource.workspace = true
+nest-rs-resource = { workspace = true, features = ["graphql"] }
 async-graphql.workspace = true
 async-trait.workspace = true
 poem.workspace = true

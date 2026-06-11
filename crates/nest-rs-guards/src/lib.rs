@@ -120,6 +120,7 @@ pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
 // Re-export dispatch helpers for macro-emitted code.
 pub use dispatch::{
-    RouteShaper, denial_to_graphql_error, denial_to_http_response, run_layered_graphql_chain,
-    run_layered_ws_chain,
+    RouteShaper, denial_to_http_response, run_layered_ws_chain,
 };
+#[cfg(feature = "graphql")]
+pub use dispatch::{denial_to_graphql_error, run_layered_graphql_chain};

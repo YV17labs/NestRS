@@ -6,12 +6,20 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Expose a SeaORM entity to GraphQL + OpenAPI from one declaration, via the #[expose] attribute."
+description = "Expose a SeaORM entity to REST/OpenAPI (wire DTO) from one declaration, via the #[expose] attribute; optional GraphQL surface with the `graphql` flag + feature."
 
+[features]
+default = []
+graphql = [
+    "dep:async-graphql",
+    "dep:nest-rs-graphql",
+    "nest-rs-resource-macros/graphql",
+]
 
 [dependencies]
 nest-rs-resource-macros.workspace = true
-async-graphql.workspace = true
+async-graphql = { workspace = true, optional = true }
+nest-rs-graphql = { workspace = true, optional = true }
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true

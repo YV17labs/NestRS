@@ -1,10 +1,7 @@
 //! Page-based pagination primitives shared by every `#[expose(paginate)]`
-//! entity. [`PageArgs`] is the request side (one type binds a GraphQL
-//! `#[query]` argument and a REST `Valid<Json<…>>` / query extractor); the
-//! per-entity `<Name>Page` envelope (emitted by the macro) is the response
-//! side.
+//! entity. [`PageArgs`] is the request side (REST `Valid<Json<…>>` / query
+//! extractor; GraphQL `#[query]` argument when `graphql` is enabled).
 
-use async_graphql::InputObject;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use validator::Validate;
@@ -20,13 +17,14 @@ fn default_per_page() -> u64 {
 /// 1-based `page` and `per_page` size. Defaults (1, 20) apply on both surfaces.
 /// `validator` bounds enforce at the boundary (`Valid<…>` for REST; resolvers
 /// call [`PageArgs::validate`]).
-#[derive(Debug, Clone, Deserialize, InputObject, JsonSchema, Validate)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, Validate)]
+#[cfg_attr(feature = "graphql", derive(crate::graphql::async_graphql::InputObject))]
 pub struct PageArgs {
-    #[graphql(default = 1)]
+    #[cfg_attr(feature = "graphql", graphql(default = 1))]
     #[serde(default = "default_page")]
     #[validate(range(min = 1))]
     pub page: u64,
-    #[graphql(default = 20)]
+    #[cfg_attr(feature = "graphql", graphql(default = 20))]
     #[serde(default = "default_per_page")]
     #[validate(range(min = 1, max = 100))]
     pub per_page: u64,

@@ -8,6 +8,10 @@ repository.workspace = true
 homepage.workspace = true
 description = "Transport-spanning guards for nestrs — one trait, three transports (HTTP, GraphQL, WS), declared once with App::builder().use_guards_global(...)."
 
+[features]
+default = []
+graphql = ["dep:nest-rs-graphql"]
+
 [dependencies]
 async-trait.workspace = true
 serde_json.workspace = true
@@ -15,7 +19,7 @@ tracing.workspace = true
 poem.workspace = true
 nest-rs-core.workspace = true
 nest-rs-http.workspace = true
-nest-rs-graphql.workspace = true
+nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-interceptors.workspace = true
 nest-rs-pipes.workspace = true
 nest-rs-ws.workspace = true

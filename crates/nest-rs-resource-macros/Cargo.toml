@@ -8,6 +8,9 @@ repository.workspace = true
 homepage.workspace = true
 description = "Internal — the #[expose] attribute (SeaORM entity to GraphQL + OpenAPI); re-exported by nest-rs-resource, not a direct dependency."
 
+[features]
+graphql = []
+
 [lib]
 proc-macro = true
 

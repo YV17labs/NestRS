@@ -21,7 +21,6 @@ http = [
     "dep:nest-rs-core",
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
-    "dep:nest-rs-graphql",
     "dep:nest-rs-resource",
     "dep:nest-rs-ws",
     "dep:poem",
@@ -33,8 +32,8 @@ http = [
 graphql = [
     "dep:nest-rs-core",
     "dep:nest-rs-graphql",
-    "dep:nest-rs-guards",
-    "dep:nest-rs-resource",
+    "nest-rs-guards/graphql",
+    "nest-rs-resource/graphql",
     "dep:poem",
 ]
 # MCP surface: HTTP operation guard (`McpAbilityBridge`) + `with_request_ability`.

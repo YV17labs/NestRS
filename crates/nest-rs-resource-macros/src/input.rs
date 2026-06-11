@@ -36,12 +36,18 @@ fn input_struct(
         }
     });
 
+    let graphql_derives = if model.graphql {
+        quote! { ::nest_rs_resource::graphql::async_graphql::InputObject, }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #[derive(
             ::core::fmt::Debug,
             ::core::clone::Clone,
             ::serde::Deserialize,
-            ::nest_rs_graphql::async_graphql::InputObject,
+            #graphql_derives
             ::validator::Validate,
             ::schemars::JsonSchema,
         )]

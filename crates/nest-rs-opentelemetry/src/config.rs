@@ -3,8 +3,8 @@ use nest_rs_config::env_var;
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///
 /// Env vars under the `otel` domain
-/// (`NESTRS_OPENTELEMETRY__{LOG_LEVEL,LOG_FORMAT,SERVICE_NAME,SERVICE_VERSION,
-/// SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO}`).
+/// (`NESTRS_OPENTELEMETRY__{LOG_LEVEL,LOG_FORMAT,LOG_SOURCE_LOCATION,SERVICE_NAME,
+/// SERVICE_VERSION,SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO}`).
 /// OTel exporter is wired only when `otlp_endpoint` is set; otherwise the
 /// subscriber stays console-only.
 #[derive(Clone, Debug)]
@@ -18,6 +18,10 @@ pub struct OpenTelemetryConfig {
     /// `EnvFilter` syntax; applied to console layer and OTel log appender.
     pub log_filter: String,
     pub log_format: LogFormat,
+    /// Append the emitting `file:line` to every console event. Useful in dev
+    /// to locate a log's origin; off by default (adds width to every line and
+    /// leaks source paths in prod).
+    pub log_source_location: bool,
     /// Base endpoint (e.g. `http://localhost:4318`); exporter appends
     /// `/v1/traces`, `/v1/metrics`, `/v1/logs`.
     pub otlp_endpoint: Option<String>,
@@ -43,6 +47,19 @@ impl LogFormat {
     }
 }
 
+/// Canonical env-flag grammar shared by every `nest-rs-opentelemetry` boolean
+/// var: `1`/`true`/`yes`/`on` → `true`, `0`/`false`/`no`/`off` → `false`,
+/// anything else → `None`. Case-insensitive, trimmed. Callers apply their own
+/// default for the unrecognized/absent case (source-location defaults off,
+/// access-log defaults on), keeping the truthy/falsy vocabulary in one place.
+pub(crate) fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 impl OpenTelemetryConfig {
     pub fn new(service_name: impl Into<String>) -> Self {
         Self {
@@ -52,6 +69,7 @@ impl OpenTelemetryConfig {
             service_instance_id: None,
             log_filter: "info".into(),
             log_format: LogFormat::Text,
+            log_source_location: false,
             otlp_endpoint: None,
             trace_sample_ratio: 1.0,
         }
@@ -76,6 +94,9 @@ impl OpenTelemetryConfig {
         {
             cfg.log_format = fmt;
         }
+        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION") {
+            cfg.log_source_location = parse_bool(&raw).unwrap_or(false);
+        }
 
         cfg.otlp_endpoint = env_var("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT");
         if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__SAMPLE_RATIO")
@@ -94,6 +115,11 @@ impl OpenTelemetryConfig {
 
     pub fn with_log_format(mut self, format: LogFormat) -> Self {
         self.log_format = format;
+        self
+    }
+
+    pub fn with_log_source_location(mut self, enabled: bool) -> Self {
+        self.log_source_location = enabled;
         self
     }
 
@@ -178,6 +204,17 @@ mod tests {
     }
 
     #[test]
+    fn source_location_is_off_by_default() {
+        assert!(!OpenTelemetryConfig::new("svc").log_source_location);
+    }
+
+    #[test]
+    fn with_log_source_location_toggles_the_flag() {
+        let cfg = OpenTelemetryConfig::new("svc").with_log_source_location(true);
+        assert!(cfg.log_source_location);
+    }
+
+    #[test]
     fn with_otlp_endpoint_attaches_the_value() {
         let cfg = OpenTelemetryConfig::new("svc").with_otlp_endpoint("http://otel:4318");
         assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://otel:4318"));
@@ -229,6 +266,7 @@ mod tests {
                 ("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID", None),
                 ("NESTRS_OPENTELEMETRY__LOG_LEVEL", None),
                 ("NESTRS_OPENTELEMETRY__LOG_FORMAT", None),
+                ("NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION", None),
                 ("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT", None),
                 ("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", None),
             ],
@@ -241,6 +279,7 @@ mod tests {
                 assert!(cfg.otlp_endpoint.is_none());
                 assert_eq!(cfg.log_filter, "info");
                 assert_eq!(cfg.log_format, LogFormat::Text);
+                assert!(!cfg.log_source_location);
                 assert_eq!(cfg.trace_sample_ratio, 1.0);
             },
         );
@@ -259,6 +298,7 @@ mod tests {
                 ),
                 ("NESTRS_OPENTELEMETRY__LOG_LEVEL", Some("debug,hyper=warn")),
                 ("NESTRS_OPENTELEMETRY__LOG_FORMAT", Some("json")),
+                ("NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION", Some("true")),
                 (
                     "NESTRS_OPENTELEMETRY__OTLP_ENDPOINT",
                     Some("http://otel:4318"),
@@ -273,6 +313,7 @@ mod tests {
                 assert_eq!(cfg.service_instance_id.as_deref(), Some("pinned-1"));
                 assert_eq!(cfg.log_filter, "debug,hyper=warn");
                 assert_eq!(cfg.log_format, LogFormat::Json);
+                assert!(cfg.log_source_location);
                 assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://otel:4318"));
                 assert!((cfg.trace_sample_ratio - 0.25).abs() < f64::EPSILON);
             },

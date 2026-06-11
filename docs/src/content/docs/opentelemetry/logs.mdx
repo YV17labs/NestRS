@@ -62,6 +62,27 @@ NESTRS_OPENTELEMETRY__LOG_FORMAT=json
 JSON drops the `current_span` and `span_list` fields — the OTel export carries
 span structure, and duplicating it in the console line is noise.
 
+## Source location (file:line)
+
+To trace a console line back to the exact source that emitted it, enable source
+location:
+
+```bash
+NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION=true
+```
+
+Each event then carries the emitting `file:line`:
+
+```text frame="terminal"
+DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs: layer declared at multiple scopes…
+```
+
+Off by default — it widens every line and leaks source paths, so it stays out
+of production. **Scaffolded projects turn it on in `.env.development`** (next to
+`LOG_LEVEL=debug`), so a fresh `nestrs new` app ships with it on while
+developing and off everywhere else. Pin it explicitly with
+`OpenTelemetryConfig::with_log_source_location(true)`.
+
 ## Access log
 
 The HTTP interceptor emits one access event per request on `nest_rs::access`,

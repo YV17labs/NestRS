@@ -48,7 +48,7 @@ impl OpenTelemetry {
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
         let _ = Registry::default()
             .with(filter)
-            .with(console_layer(LogFormat::Text))
+            .with(console_layer(LogFormat::Text, false))
             .try_init();
         mark_initialized();
     }
@@ -56,7 +56,7 @@ impl OpenTelemetry {
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
         let filter =
             EnvFilter::try_new(&config.log_filter).unwrap_or_else(|_| EnvFilter::new("info"));
-        let fmt_layer = console_layer(config.log_format);
+        let fmt_layer = console_layer(config.log_format, config.log_source_location);
 
         #[cfg(feature = "otlp")]
         {
@@ -118,13 +118,21 @@ impl OpenTelemetry {
 /// Boxed because `text` and `json` layers have distinct concrete types.
 /// `FmtSpan::NONE` by default — only the explicit access-log event shows up
 /// in the console.
-fn console_layer<S>(format: LogFormat) -> Box<dyn Layer<S> + Send + Sync + 'static>
+fn console_layer<S>(
+    format: LogFormat,
+    source_location: bool,
+) -> Box<dyn Layer<S> + Send + Sync + 'static>
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     match format {
-        LogFormat::Text => tracing_subscriber::fmt::layer().boxed(),
+        LogFormat::Text => tracing_subscriber::fmt::layer()
+            .with_file(source_location)
+            .with_line_number(source_location)
+            .boxed(),
         LogFormat::Json => tracing_subscriber::fmt::layer()
+            .with_file(source_location)
+            .with_line_number(source_location)
             .json()
             .with_current_span(false)
             .with_span_list(false)
@@ -174,13 +182,20 @@ mod tests {
     fn console_layer_produces_a_text_layer_for_text_format() {
         // The returned layer is type-erased (`Box<dyn Layer<_>>`); compose it
         // against a registry to confirm the branch builds a working layer.
-        let layer = console_layer::<Registry>(LogFormat::Text);
+        let layer = console_layer::<Registry>(LogFormat::Text, false);
         let _subscriber = Registry::default().with(layer);
     }
 
     #[test]
     fn console_layer_produces_a_json_layer_for_json_format() {
-        let layer = console_layer::<Registry>(LogFormat::Json);
+        let layer = console_layer::<Registry>(LogFormat::Json, false);
+        let _subscriber = Registry::default().with(layer);
+    }
+
+    #[test]
+    fn console_layer_builds_with_source_location_enabled() {
+        // The `with_file`/`with_line_number` branch composes against a registry.
+        let layer = console_layer::<Registry>(LogFormat::Text, true);
         let _subscriber = Registry::default().with(layer);
     }
 

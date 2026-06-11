@@ -22,13 +22,10 @@ use {
 /// value (including `"1"`, `"yes"`, garbage) stays on, so a typo cannot
 /// silently disable observability.
 pub(crate) fn parse_access_log_flag(raw: Option<&str>) -> bool {
-    match raw {
-        None => true,
-        Some(raw) => !matches!(
-            raw.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "off" | "no"
-        ),
-    }
+    // Default ON: absent or unrecognized (`None` from `parse_bool`) stays on, so
+    // a typo cannot silently disable observability; only an explicit falsy value
+    // turns it off.
+    raw.and_then(crate::config::parse_bool).unwrap_or(true)
 }
 
 #[cfg(feature = "otlp")]

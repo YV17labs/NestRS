@@ -48,17 +48,20 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
 
     let container = Container::builder()
         .attach_meta::<IntervalHost, CronJobMeta>(CronJobMeta {
-            name: "interval",
+            provider: "IntervalHost",
+            method: "interval",
             trigger: Trigger::Interval(Duration::from_millis(200)),
             run: tick_interval,
         })
         .attach_meta::<TimeoutHost, CronJobMeta>(CronJobMeta {
-            name: "timeout",
+            provider: "TimeoutHost",
+            method: "timeout",
             trigger: Trigger::Timeout(Duration::from_millis(300)),
             run: tick_timeout,
         })
         .attach_meta::<CronHost, CronJobMeta>(CronJobMeta {
-            name: "cron",
+            provider: "CronHost",
+            method: "cron",
             trigger: Trigger::Cron {
                 expr: CronExpression::EVERY_SECOND,
                 tz: None,
@@ -106,7 +109,8 @@ async fn invalid_cron_expression_fails_configure() {
 
     let container = Container::builder()
         .attach_meta::<BadHost, CronJobMeta>(CronJobMeta {
-            name: "broken",
+            provider: "BadHost",
+            method: "broken",
             trigger: Trigger::Cron {
                 expr: "not a cron expression",
                 tz: None,
@@ -120,7 +124,7 @@ async fn invalid_cron_expression_fails_configure() {
         .await
         .expect_err("an invalid cron expression aborts configure");
     assert!(
-        err.to_string().contains("broken"),
+        err.to_string().contains("BadHost::broken"),
         "the error names the offending job: {err}",
     );
 }
@@ -161,7 +165,8 @@ async fn jobs_run_inside_the_bound_job_context() {
     let container = Container::builder()
         .provide_dyn::<dyn JobContext>(Arc::new(MarkerContext))
         .attach_meta::<ObserveHost, CronJobMeta>(CronJobMeta {
-            name: "observe",
+            provider: "ObserveHost",
+            method: "observe",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_observe,
         })

@@ -16,7 +16,7 @@ use syn::{
     FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Path, ReturnType, Type, parse_macro_input,
 };
 
-use nest_rs_codegen::{injected_method_with_layers, layer_inject_keys};
+use nest_rs_codegen::{impl_self_ident, injected_method_with_layers, layer_inject_keys};
 
 use crate::attr::{take_flag_attr, take_use_attr};
 
@@ -24,7 +24,16 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
     let self_ty = item.self_ty.clone();
 
+    // Gateway struct name — logged as a structured field beside each mounted
+    // event at boot, mirroring how `#[routes]` logs its controller.
+    let gateway_name = match impl_self_ident(&self_ty, "#[messages]") {
+        Ok(name) => name,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let gateway_name = LitStr::new(&gateway_name.to_string(), gateway_name.span());
+
     let mut arms: Vec<TokenStream2> = Vec::new();
+    let mut event_names: Vec<LitStr> = Vec::new();
     let mut chain_inserts: Vec<TokenStream2> = Vec::new();
     // Folded into `Discoverable::injected` for the access-graph check, same
     // as HTTP per-route layer keys.
@@ -65,6 +74,7 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(e) => e,
             Err(err) => return err.to_compile_error().into(),
         };
+        event_names.push(event.clone());
 
         let guards = match take_use_attr(&mut method.attrs, "use_guards") {
             Ok(paths) => paths,
@@ -221,6 +231,15 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                         <#self_ty>::PATH,
                         "ws",
                         |__container, __route| {
+                            #(
+                                ::nest_rs_ws::tracing::info!(
+                                    target: "nest_rs::routes",
+                                    gateway = #gateway_name,
+                                    path = <#self_ty>::PATH,
+                                    event = #event_names,
+                                    "mounted message",
+                                );
+                            )*
                             let __gw = ::std::sync::Arc::new(
                                 <#self_ty>::from_container(__container),
                             );

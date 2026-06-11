@@ -13,7 +13,7 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, guard};
-use nest_rs_http::{HttpTransport, async_trait};
+use nest_rs_http::{HttpTransport, async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
 use poem::{Request, Response};
@@ -150,4 +150,35 @@ async fn an_imperative_mount_without_global_guards_boots() {
         .await
         .expect("boots");
     app.http().get("/raw").send().await.assert_status_is_ok();
+}
+
+/// A controller route with no guard and no `#[public]` marker — an *implicit*
+/// access decision. With no global guard pool to cover it, the transport warns
+/// at boot (`access_is_implicit`) but does **not** fail: the warning nudges the
+/// developer to make the decision explicit; it never blocks an honest build.
+#[controller(path = "/")]
+struct OpenController;
+
+#[routes]
+impl OpenController {
+    #[post("/thing")]
+    async fn create(&self) -> String {
+        "made".into()
+    }
+}
+
+#[module(providers = [OpenController])]
+struct OpenModule;
+
+#[tokio::test]
+async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
+    let app = TestApp::for_module::<OpenModule>()
+        .await
+        .expect("an implicit access decision is a warning, not a boot failure");
+    // The route is served — the posture check observes, it does not gate.
+    app.http()
+        .post("/thing")
+        .send()
+        .await
+        .assert_status_is_ok();
 }

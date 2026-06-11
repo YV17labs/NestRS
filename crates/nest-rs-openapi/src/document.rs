@@ -204,6 +204,8 @@ mod tests {
             description: None,
             request_body: None,
             response: None,
+            scoped_guarded: false,
+            public: false,
         }
     }
 

@@ -210,18 +210,40 @@ impl Transport for HttpTransport {
         }
         let mut route = Route::new();
 
+        // A global guard pool shapes every controller route (it runs post-routing
+        // on all of them), so per-route coverage only matters when no pool is
+        // registered — then a route is covered iff it declares a controller/method
+        // guard or is explicitly `#[public]`. Anything else is an *implicit*
+        // access decision: fail-secure asks the developer to make it explicit.
+        let global_guards = container.get::<GlobalGuardsActive>().is_some();
+        let mut unguarded: Vec<String> = Vec::new();
+
         for d in discovery.meta::<HttpControllerMeta>() {
             let prefix = d.meta.effective_prefix();
             for r in &d.meta.routes {
+                let path = join_path(&prefix, r.path);
                 tracing::info!(
                     target: "nest_rs::routes",
-                    "{:<6} {}  ({})",
-                    r.verb.as_str(),
-                    join_path(&prefix, r.path),
-                    r.handler,
+                    controller = d.meta.controller,
+                    method = r.verb.as_str(),
+                    path = path.as_str(),
+                    handler = r.handler,
+                    "mounted route",
                 );
+                if r.access_is_implicit(global_guards) {
+                    unguarded.push(format!("{} {} ({})", r.verb.as_str(), path, r.handler));
+                }
             }
             route = d.meta.mount(container, route);
+        }
+
+        if !unguarded.is_empty() {
+            tracing::warn!(
+                target: "nest_rs::layers",
+                count = unguarded.len(),
+                routes = unguarded.join(", ").as_str(),
+                "unguarded routes without `#[public]` — bind a guard or mark them public",
+            );
         }
         // Provided by `use_guards_global` (which can see the `Guard` trait);
         // absent when no global guard is registered. Applied below to every
@@ -235,10 +257,9 @@ impl Transport for HttpTransport {
         for d in discovery.meta::<HttpEndpointMeta>() {
             tracing::info!(
                 target: "nest_rs::routes",
-                "{:<6} {}  ({})",
-                "*",
-                d.meta.path(),
-                d.meta.label(),
+                kind = d.meta.label(),
+                path = d.meta.path(),
+                "mounted endpoint",
             );
             match (d.meta.posture(), &self_mount_guard) {
                 (EdgePosture::Guarded, Some(wrap)) => {

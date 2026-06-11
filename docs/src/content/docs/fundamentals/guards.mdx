@@ -388,15 +388,20 @@ pub struct PostController { /* ... */ }
 ```
 
 `AuthGuard` and `AuthzGuard` run **exactly once** per request, not twice.
-The controller's two extra lines cost zero runtime overhead and one `warn`
-at boot.
+The controller's two extra lines cost zero runtime overhead and one `debug`
+line at boot.
 
 **Declare layers on the provider that needs them, not only at the app
 boundary.** A `crates/features` controller is designed to be portable — if
 it relies only on `use_guards_global([...])` to be secure, forgetting
-that line in a second app silently turns every route public. The compiler
-will not complain. Redeclaring on `PostController` binds the policy to the
-code that needs it. The same rule applies to interceptors and filters.
+that line in a second app turns every route public. The compiler will not
+complain — but boot now does: with **no global guard pool active**, every
+route that binds no controller/method guard and is not marked `#[public]`
+is reported in a single `warn` on `nest_rs::layers` (an *implicit* access
+decision). The fix is the same either way: redeclare on `PostController`
+to bind the policy to the code that needs it, or mark genuinely-open
+routes `#[public]` on purpose. The same rule applies to interceptors and
+filters.
 
 ```mermaid
 flowchart TB

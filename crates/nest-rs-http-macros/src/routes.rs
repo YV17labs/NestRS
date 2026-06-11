@@ -107,6 +107,10 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
+        // Captured before `guards` is moved into the handler tuple — feeds the
+        // route's `scoped_guarded` flag (combined at runtime with any
+        // controller-level guards) for the boot-time posture check.
+        let method_guarded = !guards.is_empty();
         let force_guards = match take_use_attr(&mut method.attrs, "force_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
@@ -263,6 +267,9 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 tags: #tags,
                 request_body: #request_body,
                 response: #response,
+                scoped_guarded: #method_guarded
+                    || !<#self_ty>::__nestrs_controller_guard_specs().is_empty(),
+                public: #is_public,
             }
         });
     }
@@ -349,6 +356,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
                 let __meta = ::nest_rs_http::HttpControllerMeta::new(
+                    #ctrl_tag,
                     <#self_ty>::PATH,
                     <#self_ty>::VERSION,
                     ::std::vec![#(#route_metas),*],

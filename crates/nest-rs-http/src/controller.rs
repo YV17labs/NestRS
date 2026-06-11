@@ -60,6 +60,23 @@ pub struct HttpRouteMeta {
     pub tags: &'static [&'static str],
     pub request_body: Option<SchemaFn>,
     pub response: Option<SchemaFn>,
+    /// A controller- or method-level `#[use_guards]` covers this route. Read at
+    /// boot by the fail-secure posture check. A global guard pool covers every
+    /// route regardless, so the check only consults this when no pool is active.
+    pub scoped_guarded: bool,
+    /// `#[public]` — an explicit, intentional public surface. Suppresses the
+    /// posture warning (the access decision was made deliberately).
+    pub public: bool,
+}
+
+impl HttpRouteMeta {
+    /// The route's access decision is **implicit**: no global guard pool covers
+    /// it, it binds no controller/method guard, and it is not marked
+    /// `#[public]`. The HTTP transport warns on these at boot so the developer
+    /// guards the route or declares it public on purpose — never by omission.
+    pub fn access_is_implicit(&self, global_guards: bool) -> bool {
+        !global_guards && !self.scoped_guarded && !self.public
+    }
 }
 
 type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
@@ -69,6 +86,10 @@ type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
 /// [`nest_rs_core::DiscoveryService::meta`]; apps can read the same metadata
 /// to drive secondary concerns (OpenAPI rendering, route listings).
 pub struct HttpControllerMeta {
+    /// The controller struct name (`UsersController`). Links a mounted route
+    /// back to its source type — surfaced as a field in the boot route log and
+    /// the default OpenAPI tag.
+    pub controller: &'static str,
     pub path: &'static str,
     pub version: Option<&'static str>,
     pub routes: Vec<HttpRouteMeta>,
@@ -77,6 +98,7 @@ pub struct HttpControllerMeta {
 
 impl HttpControllerMeta {
     pub fn new<F>(
+        controller: &'static str,
         path: &'static str,
         version: Option<&'static str>,
         routes: Vec<HttpRouteMeta>,
@@ -86,6 +108,7 @@ impl HttpControllerMeta {
         F: Fn(&Container, Route) -> Route + Send + Sync + 'static,
     {
         Self {
+            controller,
             path,
             version,
             routes,
@@ -140,7 +163,8 @@ mod tests {
 
     #[test]
     fn effective_prefix_returns_path_unchanged_without_a_version() {
-        let meta = HttpControllerMeta::new("/users", None, Vec::new(), |_c, r| r);
+        let meta =
+            HttpControllerMeta::new("UsersController", "/users", None, Vec::new(), |_c, r| r);
         assert_eq!(meta.effective_prefix(), "/users");
     }
 
@@ -148,7 +172,8 @@ mod tests {
     fn effective_prefix_prepends_the_uri_version_when_present() {
         // `version_path` joins `/v<v>` ahead of the controller path — the
         // single place URI versioning lives, so this is the contract.
-        let meta = HttpControllerMeta::new("/users", Some("1"), Vec::new(), |_c, r| r);
+        let meta =
+            HttpControllerMeta::new("UsersController", "/users", Some("1"), Vec::new(), |_c, r| r);
         assert_eq!(meta.effective_prefix(), "/v1/users");
     }
 
@@ -163,8 +188,11 @@ mod tests {
             tags: &["Users"],
             request_body: None,
             response: None,
+            scoped_guarded: false,
+            public: false,
         }];
-        let meta = HttpControllerMeta::new("/users", Some("2"), routes, |_c, r| r);
+        let meta =
+            HttpControllerMeta::new("UsersController", "/users", Some("2"), routes, |_c, r| r);
         assert_eq!(meta.path, "/users");
         assert_eq!(meta.version, Some("2"));
         assert_eq!(meta.routes.len(), 1);
@@ -177,7 +205,7 @@ mod tests {
         // The mount closure is the seam `#[routes]` emits; assert it's called
         // exactly once per `mount` invocation and receives the same container.
         static CALLS: AtomicUsize = AtomicUsize::new(0);
-        let meta = HttpControllerMeta::new("/health", None, Vec::new(), |_c, r| {
+        let meta = HttpControllerMeta::new("HealthController", "/health", None, Vec::new(), |_c, r| {
             CALLS.fetch_add(1, Ordering::SeqCst);
             r
         });
@@ -188,5 +216,41 @@ mod tests {
         assert_eq!(CALLS.load(Ordering::SeqCst), 1);
         let _ = meta.mount(&container, Route::new());
         assert_eq!(CALLS.load(Ordering::SeqCst), 2);
+    }
+
+    fn route(scoped_guarded: bool, public: bool) -> HttpRouteMeta {
+        HttpRouteMeta {
+            verb: HttpVerb::Post,
+            path: "/",
+            handler: "create",
+            summary: None,
+            description: None,
+            tags: &[],
+            request_body: None,
+            response: None,
+            scoped_guarded,
+            public,
+        }
+    }
+
+    #[test]
+    fn access_is_implicit_only_when_uncovered_and_no_global_pool() {
+        // The one case the posture check warns on: no global pool, no scoped
+        // guard, not public.
+        assert!(route(false, false).access_is_implicit(false));
+    }
+
+    #[test]
+    fn a_global_pool_covers_every_route() {
+        // With the pool active the route is shaped regardless of its own decls.
+        assert!(!route(false, false).access_is_implicit(true));
+    }
+
+    #[test]
+    fn a_scoped_guard_or_public_marker_makes_the_decision_explicit() {
+        // No global pool, but the route owns its decision either way.
+        assert!(!route(true, false).access_is_implicit(false));
+        assert!(!route(false, true).access_is_implicit(false));
+        assert!(!route(true, true).access_is_implicit(false));
     }
 }

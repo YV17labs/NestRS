@@ -68,27 +68,33 @@ in `main`.
 
 ### "I want to validate the request before any handler runs and block it if invalid."
 
-That's a guard. Gate the request, return `Err(Response)` on rejection.
+That's a guard. Gate the request, return `Err(Denial)` on rejection.
 
 ```rust
+use nest_rs_guards::prelude::*;
+use nest_rs_http::poem::Request as HttpRequest;
+
 #[injectable]
 #[derive(Default)]
 pub struct RequireApiKey;
 
+impl Layer for RequireApiKey {}
+
 #[async_trait]
 impl Guard for RequireApiKey {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
+    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
         if req.headers().get("x-api-key").is_some() {
             Ok(())
         } else {
-            Err(Response::builder().status(StatusCode::UNAUTHORIZED).body("missing key"))
+            Err(Denial::unauthorized("missing key"))
         }
     }
 }
 ```
 
 Bind with `#[use_guards(RequireApiKey)]` per controller or per handler,
-or globally via `HttpTransport::guard(...)`.
+or globally via
+`App::builder().use_guards_global([guard::<RequireApiKey>()])`.
 
 ### "I want to attach something to the request so the handler can read it."
 
@@ -97,8 +103,8 @@ A guard does that too. The guard borrows the request mutably:
 ```rust
 #[async_trait]
 impl Guard for AuthGuard {
-    async fn check(&self, req: &mut Request) -> Result<(), Response> {
-        let claims = verify_bearer(req)?;
+    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
+        let claims = verify_bearer(req).map_err(|_| Denial::unauthorized("invalid token"))?;
         req.extensions_mut().insert(claims);
         Ok(())
     }
@@ -119,16 +125,19 @@ limits, body-decoding — those things live on `HttpConfig` and are
 applied as poem middleware by the transport, not as NestRS Guards or
 Interceptors.
 
-If a third-party crate ships a `poem::Middleware` you want to bolt on,
-attach it through poem's own `.with(...)` API on a `HttpTransport`
-builder. The framework doesn't get in the way; it just doesn't dress
-those up as one of its named primitives.
+If a third-party crate ships a `poem::Middleware`, there's no public
+hook to bolt it directly onto the transport — `nest-rs-http` doesn't
+expose the underlying poem endpoint. Reach for the framework's own
+primitives instead: an **Interceptor** wraps the handler the same way a
+`poem::Middleware` would, with DI and the access graph on top. The
+lower-level knobs poem middleware is often used for — CORS, TLS,
+body-size limits, request timeout — live on `HttpConfig`.
 
 <Aside>
-Treat `Middleware` as a lower-level extension point — useful when
-wrapping an external crate. For your *own* cross-cutting work, write a
-Guard or an Interceptor; you get DI, the access graph, and per-route
-binding for free.
+For cross-cutting work, write a Guard or an Interceptor; you get DI,
+the access graph, and per-route binding for free. Connection- and
+protocol-level concerns (CORS, TLS, limits) are configured on
+`HttpConfig`, not as a named primitive.
 </Aside>
 
 ## Going further

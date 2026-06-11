@@ -173,7 +173,7 @@ fn map_decode_error(err: jsonwebtoken::errors::Error) -> AuthError {
         _ => AuthError::InvalidToken,
     };
     if !matches!(mapped, AuthError::Expired) {
-        tracing::warn!(target: "nest_rs::auth", error = %err, "JWT verification failed");
+        tracing::warn!(target: "nest_rs::authn", error = %err, "JWT verification failed");
     }
     mapped
 }

@@ -99,9 +99,6 @@ deep on each.
 - **[Strategy](/security/authentication/)** — a plain `#[injectable]`
   that turns a request into a principal; `AuthGuard<S>` is generic
   over it.
-- **[Outcome](/security/authentication/)** — what `Strategy::authenticate`
-  returns: `Authenticated(P)` for a bearer token, `Challenge(R)` for
-  an OAuth redirect.
 - **[Principal](/security/authentication/)** — the typed identity a
   strategy returns (`Claims` for JWT, a session for OAuth); read back
   in a handler through `Ctx<P>`.

@@ -101,7 +101,7 @@ For a production app:
 6. **Real secret store** for `JWT_PRIVATE_KEY`, OAuth secrets, DB
    credentials.
 7. **TLS terminated** at the edge or at the app (`HttpConfig`).
-8. **Logging at the right level.** `nest_rs::auth` and `nest_rs::orm`
+8. **Logging at the right level.** `nest_rs::authn` and `nest_rs::orm`
    emit `warn`+ on denials and security events — pipe them to your
    SIEM, do not silence them.
 

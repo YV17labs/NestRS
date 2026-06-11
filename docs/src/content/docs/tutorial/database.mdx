@@ -130,15 +130,15 @@ The workspace already ships a Postgres in `compose.yml`. Bring it up
 once.
 
 ```bash frame="terminal"
-$ nestrs run db up
+$ docker compose up -d
 postgres ready on 127.0.0.1:5432
 
-$ nestrs run db migrate
+$ nestrs run db up
 applied: m20260609_000000_create_post
 ```
 
-`nestrs run db migrate` runs `Migrator::up` against
-`NESTRS_DATABASE__URL` — the env var is set by `nestrs run db up`.
+`nestrs run db up` runs `Migrator::up` against `NESTRS_DATABASE__URL`
+— the connection string comes from the `.env` cascade.
 
 ## Transactions wrap mutating routes automatically
 
@@ -193,7 +193,7 @@ tags the interceptor span and the SQL spans.
 - A `DatabaseModule::for_root(None)` import in the app — the data
   layer is on.
 - A migration adding the `post` table, applied through
-  `nestrs run db migrate`.
+  `nestrs run db up`.
 - `POST /posts` persisting into Postgres inside an automatic
   transaction — no auth filter, no row-level policy, just business
   logic through `Repo`.

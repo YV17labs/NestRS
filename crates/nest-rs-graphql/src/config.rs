@@ -1,7 +1,8 @@
 //! [`GraphqlConfig`] — loaded from `NESTRS_GRAPHQL__*`. Every field defaults
-//! production-safe (playground off, SDL emit off, no anti-DoS limits); an
-//! `.env.development` opts the tooling in and an app's `module.rs` pins the
-//! production limits so `app.rs` carries no config literal.
+//! production-safe (playground off, SDL emit off, depth/complexity limits on,
+//! introspection disabled); an `.env.development` opts the tooling in and an
+//! app's `module.rs` can pin tighter limits so `app.rs` carries no config
+//! literal.
 
 use std::path::PathBuf;
 
@@ -22,9 +23,9 @@ pub struct GraphqlConfig {
     /// (Re)write `schema_path` from the live schema once at boot. Default
     /// `false`. A write failure is logged, never fatal.
     pub emit_sdl: bool,
-    /// Maximum nesting depth of an incoming query AST. `None` (the default)
-    /// disables the check — opt in by setting `NESTRS_GRAPHQL__MAX_DEPTH` or
-    /// pinning the field. A sensible production value is in the 10-20 range:
+    /// Maximum nesting depth of an incoming query AST. Defaults to `Some(15)`
+    /// (production-safe); set `None` to disable the check. A sensible value is
+    /// in the 10-20 range:
     /// caps recursive bombs (`{ a { a { a { … } } } }`) without rejecting
     /// legitimate nested queries. Cheap to enforce (one AST walk).
     ///
@@ -33,9 +34,9 @@ pub struct GraphqlConfig {
     /// query. Use `None` to disable.
     #[validate(range(min = 1))]
     pub max_depth: Option<usize>,
-    /// Maximum complexity score of an incoming query AST. `None` (the default)
-    /// disables the check — opt in by setting `NESTRS_GRAPHQL__MAX_COMPLEXITY`
-    /// or pinning the field. Score = 1 per field + per-field overrides emitted
+    /// Maximum complexity score of an incoming query AST. Defaults to
+    /// `Some(2000)` (production-safe); set `None` to disable the check. Score =
+    /// 1 per field + per-field overrides emitted
     /// by `#[expose]` on list relations (multiplier on the unbounded fanout).
     /// A sensible production value sits in the 1000-5000 range and should be
     /// tuned from observed legitimate queries.

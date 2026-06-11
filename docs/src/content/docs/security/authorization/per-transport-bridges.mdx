@@ -1,6 +1,6 @@
 ---
 title: Per-transport bridges
-description: AuthzHttpModule, AuthzGraphqlModule, AuthzWsModule, and AuthzMcpModule re-establish the ambient ability at each transport's dispatch point.
+description: AuthzHttpModule, AuthzGraphqlModule, and AuthzWsModule re-establish the ambient ability at each transport's dispatch point; MCP wires the McpAbilityBridge directly.
 sidebar:
   order: 6
 ---
@@ -23,17 +23,20 @@ The bridges live in:
 - `nest_rs_seaorm::ws` — the WS data-context (split avoids a
   circular dep)
 
-Each ships a one-import `Authz<Transport>Module` in
-`crates/features/src/authz/`.
+HTTP, GraphQL, and WS each ship a one-import `Authz<Transport>Module`
+in `crates/features/src/authz/`. MCP has the framework bridge
+(`nest_rs_authz::mcp::McpAbilityBridge`) but no packaged
+`AuthzMcpModule` yet — an app registers the bridge directly as
+`dyn McpOperationGuard` (see [MCP](#mcp--same-shape-as-http) below).
 
-## The four modules
+## The bridges
 
-| Module | Provides | What it bridges |
+| Bridge | Provides | What it bridges |
 |--------|----------|------------------|
 | `AuthzHttpModule` | `AuthzGuard` (`AbilityGuard<AppAbility>`) | The HTTP request — guard runs on `&mut Request`, attaches `Arc<Ability>` |
 | `AuthzGraphqlModule` | `AppGraphqlGuard` (`dyn OperationGuard`), `GraphqlAuthGuard` (resolver marker), `LoaderScope` (`dyn BatchContext`) | Re-runs the HTTP guard chain on `/graphql`, scopes the operation, snapshots ability around dataloader batches |
 | `AuthzWsModule` | `WsDataContext` (`dyn SocketContext`) | Re-establishes the pool + ability per WS message |
-| `AuthzMcpModule` | `McpAbilityBridge` (`dyn McpOperationGuard`) | Re-runs the HTTP guard chain on the MCP endpoint, installs ambient ability for the tool call |
+| `McpAbilityBridge` (framework, wired directly) | `dyn McpOperationGuard` | Re-runs the HTTP guard chain on the MCP endpoint, installs ambient ability for the tool call |
 
 A controller imports the matching module along with its feature
 module. The transports transitively bring every layer the feature

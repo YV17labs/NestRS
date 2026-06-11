@@ -11,9 +11,9 @@ Authentication answers one question: *who is calling*. The shape of
 the answer is up to the `Strategy` — a JWT in the `Authorization`
 header, an OAuth provider redirect, a basic-auth `client_id:secret`,
 something app-specific. `AuthGuard<S>` runs the strategy on every
-request its controller covers, returns a `401` (or a redirect) when it
-fails, and attaches the principal to the request so the handler reads
-it back with `Ctx<Principal>`.
+request its controller covers, returns a `401` when it fails, and
+attaches the principal to the request so the handler reads it back with
+`Ctx<Principal>`.
 
 The framework ships [`JwtStrategy`](/security/authentication/jwt/)
 (JSON Web Tokens), an
@@ -29,13 +29,15 @@ cargo add nest-rs-authn
 
 ## A strategy and a guard
 
-A strategy implements one async method. It returns
-`Outcome::Authenticated(principal)` on success, or `Outcome::Challenge`
-on failure — a 401 body, a 302 redirect, whatever the protocol needs.
+A strategy implements one async method. It returns the principal on
+success (`Ok`), or an `AuthError` describing why it could not (`Err`).
+A strategy never issues a transport response itself — a redirect-style
+flow (OAuth `/authorize`) is a plain handler, so authentication stays a
+pure request → principal mapping.
 
 ```rust
 use async_trait::async_trait;
-use nest_rs_authn::{AuthError, Outcome, Strategy};
+use nest_rs_authn::{AuthError, Strategy};
 use poem::Request;
 
 #[injectable]
@@ -48,10 +50,10 @@ pub struct ApiKeyStrategy {
 impl Strategy for ApiKeyStrategy {
     type Principal = ApiKey;
 
-    async fn authenticate(&self, req: &mut Request) -> Result<Outcome<ApiKey>, AuthError> {
+    async fn authenticate(&self, req: &mut Request) -> Result<ApiKey, AuthError> {
         let key = req.headers().get("x-api-key").and_then(|h| h.to_str().ok());
         match key.and_then(|k| self.svc.lookup(k)) {
-            Some(api_key) => Ok(Outcome::Authenticated(api_key)),
+            Some(api_key) => Ok(api_key),
             None => Err(AuthError::MissingCredentials),
         }
     }
@@ -100,28 +102,26 @@ the guard means missing the type, and the framework returns `500` —
 the access graph would already have failed the boot if the controller's
 import tree did not provide `AuthGuard`.
 
-## Outcome — authenticated or challenge
+## One return type — principal or error
 
 ```rust
-pub enum Outcome<P> {
-    Authenticated(P),
-    Challenge(Response),
-}
+async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError>;
 ```
 
-The two variants cover both styles:
+A strategy maps a request to a principal and nothing else — it never
+issues a transport response. The two protocol styles both fit:
 
-- **Bearer protocols** return `Authenticated(principal)` on a valid
-  token, `AuthError` on a missing or invalid one — the guard turns the
+- **Bearer protocols** return `Ok(principal)` on a valid token,
+  `Err(AuthError)` on a missing or invalid one — the guard turns the
   error into a 401 with `WWW-Authenticate: Bearer`.
-- **Redirect protocols** (OAuth) return
-  `Challenge(redirect_response)` — the guard short-circuits with that
-  redirect. The browser bounces to the provider, comes back to the
-  callback, and the strategy completes.
+- **Redirect protocols** (OAuth) keep the redirect *out* of the
+  strategy: the `/authorize` endpoint is a plain handler that returns a
+  302, the browser bounces to the provider and comes back to the
+  callback, and only then does a strategy verify the resulting token.
 
-The same trait serves both shapes because the framework never asks the
-strategy what kind it is — it just runs `authenticate` and reacts to
-the outcome.
+The same trait serves both shapes because authentication is always a
+pure request → principal mapping; the guard just runs `authenticate`
+and reacts to the `Result`.
 
 ## Public routes opt out
 
@@ -157,8 +157,9 @@ re-parse them:
   client_secret)`, splitting on the first colon (RFC 7617).
 
 Both return `None` rather than erroring on missing/malformed headers
-— the strategy decides whether a missing credential is a `Challenge`
-or an `AuthError`.
+— the strategy decides whether a missing credential is an `AuthError`
+or simply an anonymous request the guard lets through on a `#[public]`
+route.
 
 ## Errors
 

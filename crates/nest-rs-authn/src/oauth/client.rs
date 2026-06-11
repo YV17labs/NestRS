@@ -125,7 +125,7 @@ impl OAuth2Client {
         let tx: Transaction = jwt.verify(transaction)?;
         if tx.csrf != state {
             tracing::warn!(
-                target: "nest_rs::auth",
+                target: "nest_rs::authn",
                 reason = "csrf_state_mismatch",
                 "OAuth callback rejected"
             );

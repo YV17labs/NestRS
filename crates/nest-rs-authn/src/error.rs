@@ -47,7 +47,7 @@ impl AuthError {
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         if let Self::Failed(ref detail) = self {
-            tracing::warn!(target: "nest_rs::auth", detail = %detail, "authentication failed");
+            tracing::warn!(target: "nest_rs::authn", detail = %detail, "authentication failed");
         }
         Response::builder()
             .status(StatusCode::UNAUTHORIZED)

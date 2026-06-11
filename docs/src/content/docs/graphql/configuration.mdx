@@ -28,12 +28,16 @@ pub struct GraphqlConfig {
     /// (Re)write `schema_path` from the live schema once at boot.
     /// Default `false`. A write failure is logged, never fatal.
     pub emit_sdl: bool,
-    /// Reject queries nesting deeper than this. Default `None` —
-    /// opt in for any production app. See Query limits.
+    /// Reject queries nesting deeper than this. Default `Some(15)`
+    /// (production-safe); set `None` to disable. See Query limits.
     pub max_depth: Option<usize>,
     /// Reject queries whose complexity score exceeds this. Default
-    /// `None` — opt in for any production app. See Query limits.
+    /// `Some(2000)` (production-safe); set `None` to disable. See Query limits.
     pub max_complexity: Option<usize>,
+    /// Disable GraphQL introspection. Default `true` (production-safe).
+    pub disable_introspection: bool,
+    /// Maximum operations in a single HTTP batch request. Default `10`.
+    pub max_batch_size: usize,
 }
 ```
 
@@ -43,8 +47,10 @@ pub struct GraphqlConfig {
 | `playground` | `NESTRS_GRAPHQL__PLAYGROUND` | `false` | When `true`, `GET <path>` serves the offline playground HTML. |
 | `schema_path` | `NESTRS_GRAPHQL__SCHEMA_PATH` | `schema.graphql` | Where the SDL gets written. |
 | `emit_sdl` | `NESTRS_GRAPHQL__EMIT_SDL` | `false` | When `true`, the running app writes its live SDL to `schema_path` once at boot. |
-| `max_depth` | `NESTRS_GRAPHQL__MAX_DEPTH` | unset | Bound on AST nesting depth. See [Query limits](/graphql/query-limits/). |
-| `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` | unset | Bound on query complexity score. See [Query limits](/graphql/query-limits/). |
+| `max_depth` | `NESTRS_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth; `None` disables. See [Query limits](/graphql/query-limits/). |
+| `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score; `None` disables. See [Query limits](/graphql/query-limits/). |
+| `disable_introspection` | `NESTRS_GRAPHQL__DISABLE_INTROSPECTION` | `true` | When `true`, the schema rejects introspection queries (production-safe). |
+| `max_batch_size` | `NESTRS_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request. |
 
 <Aside type="caution">
 **`playground = true` in production is a CVE.** It exposes the full
@@ -77,9 +83,8 @@ use std::path::PathBuf;
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
         path: "/api/graphql".into(),
-        playground: false,
         schema_path: PathBuf::from("./schema.graphql"),
-        emit_sdl: false,
+        ..Default::default()
     }),
 ])]
 pub struct AppModule;
@@ -112,12 +117,12 @@ keep it off and rely on the committed SDL plus introspection-aware
 clients reading from a sandbox environment.
 
 <Aside type="tip">
-**Introspection** is on whenever the schema is reachable —
-async-graphql ships introspection enabled by default. To turn it off
-in production, disable it via async-graphql's `Schema` configuration
-in a custom build (no `GraphqlConfig` field for it today). The
-playground toggle is independent: turning the playground off does
-**not** turn introspection off.
+**Introspection is disabled by default** (`disable_introspection =
+true`). Flip it to `false` (or set
+`NESTRS_GRAPHQL__DISABLE_INTROSPECTION=false`) in a dev profile when a
+client tool needs the schema. The playground toggle is independent:
+the playground needs introspection on to be useful, so enable both in
+`.env.development`.
 </Aside>
 
 ## SDL emission

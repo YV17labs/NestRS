@@ -48,7 +48,7 @@ controllers, login services, OAuth flows all inject the same instance.
    `bearer_token`.
 2. Calls `JwtService::verify::<C>(token)` to verify the signature,
    check `exp` / `nbf`, and deserialize the claims.
-3. Returns `Outcome::Authenticated(claims)` on success.
+3. Returns `Ok(claims)` on success.
 
 A missing header yields `AuthError::MissingCredentials`; a bad
 signature yields `AuthError::InvalidSignature`; an expired token
@@ -168,7 +168,7 @@ let claims: Claims = self.jwt.verify(token)?;
 The verification path runs `Validation::leeway`, checks `nbf`, and
 matches `aud` only when `JwtConfig::audience` is set — otherwise the
 audience check is disabled. Invalid signatures and expired tokens hit
-`tracing::warn!` under `nest_rs::auth`.
+`tracing::warn!` under `nest_rs::authn`.
 
 <Aside type="caution">
 A short `ttl` is the first defense against token replay. The

@@ -2,7 +2,7 @@
 title: Repo and executor
 description: Repo is the only DB gateway a service uses; the ambient executor is what makes transactions and row-level filtering transparent.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -66,7 +66,7 @@ Repo::<Items>::find_by_id(id).await?;      // None if absent OR out of scope
 Repo::<Items>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
 Repo::<Items>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
 Repo::<Items>::delete(model).await?;       // 0 rows if out of scope
-Repo::<Items>::page(first, after).await?;  // keyset page — see Pagination
+Repo::<Items>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
 ```
 
 A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with

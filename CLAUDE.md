@@ -285,8 +285,10 @@ AuthzGuard)]`. Verification alias and policy live in
 
 **`Strategy`** turns a request into a principal (plain `#[injectable]`,
 no macro). **`AuthGuard<S>`** is generic over it.
-`Strategy::authenticate` returns an **`Outcome`** (`Authenticated` or
-`Challenge` — one trait serves bearer and OAuth). Standard
+`Strategy::authenticate` returns `Result<Self::Principal, AuthError>`
+— a pure request → principal mapping that **never issues a transport
+response**; a redirect-style flow (OAuth `/authorize`) is a plain
+handler, so one trait serves bearer and OAuth alike. Standard
 resource-server: `JwtStrategy<C>` ships it; `features::authn::core`
 writes `type AuthGuard = AuthGuard<JwtStrategy<Claims>>` once.
 **`JwtService`** is global infra (factory phase); symmetric secret or
@@ -553,9 +555,10 @@ site > 0.5 s = defect.
 ## Observability
 
 - **Span targets dotted, lowercase, framework-prefixed.**
-  `nest_rs::http`, `nest_rs::orm`, `nest_rs::authn`, `nest_rs::authz`,
-  `nest_rs::ws`, `nest_rs::queue`, `nest_rs::schedule`. App spans use
-  the app name (`api::users`). One target per concern per crate.
+  `nest_rs::http`, `nest_rs::routes`, `nest_rs::orm`, `nest_rs::authn`,
+  `nest_rs::authz`, `nest_rs::ws`, `nest_rs::queue`,
+  `nest_rs::schedule`. App spans use the app name (`api::users`). One
+  target per concern per crate.
 - **Level per layer.** Controllers/resolvers/gateways: `info` on
   success. Services: `debug`. `Repo`: `trace`. Denials/security:
   `warn`+. Unexpected errors: `error`. Hot paths respect

@@ -61,7 +61,7 @@ impl Layer for RateLimitGuard {}
 impl Guard for RateLimitGuard {
     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
         if over_quota(req) {
-            return Err(Denial::rate_limited("rate limited", 60));
+            return Err(Denial::rate_limited(60, "rate limited"));
         }
         Ok(())
     }

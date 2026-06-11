@@ -42,16 +42,16 @@ impl<S: Strategy> Guard for AuthGuard<S> {
         let is_public = Reflector::new(req).is_public();
         match self.strategy.authenticate(req).await {
             Ok(principal) => {
-                tracing::debug!(target: "nest_rs::auth", strategy, "authenticated");
+                tracing::debug!(target: "nest_rs::authn", strategy, "authenticated");
                 req.extensions_mut().insert(principal);
                 Ok(())
             }
             Err(_) if is_public => {
-                tracing::debug!(target: "nest_rs::auth", strategy, "authentication failed on a public route — letting it through");
+                tracing::debug!(target: "nest_rs::authn", strategy, "authentication failed on a public route — letting it through");
                 Ok(())
             }
             Err(error) => {
-                tracing::warn!(target: "nest_rs::auth", strategy, error = %error, "authentication failed");
+                tracing::warn!(target: "nest_rs::authn", strategy, error = %error, "authentication failed");
                 Err(Denial::unauthorized(error.client_message()))
             }
         }

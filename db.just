@@ -1,5 +1,7 @@
 # Database lifecycle recipes, exposed as `nestrs run db <verb>` (see `mod db` in
-# the root Justfile). Verbs mirror SeaORM's migrate subcommands; all read DATABASE_URL.
+# the root Justfile). Verbs mirror SeaORM's migrate subcommands; the tools
+# resolve DatabaseConfig from the `.env` cascade (NESTRS_DATABASE__*), same as
+# the apps.
 
 # Bare `nestrs run db` lists these instead of running the first recipe.
 _default:

@@ -43,7 +43,7 @@ pub use executor::{
     Executor, ExecutorScope, current_executor, current_executor_scope, with_executor,
     with_job_executor, with_request_executor,
 };
-pub use module::{DatabaseModule, DatabaseSetup};
+pub use module::{DatabaseModule, DatabaseSetup, connect_from_env};
 pub use page::{Page, PageParams};
 pub use repo::{Repo, scope_for};
 pub use service::{Access, CreateModel, CrudService, UpdateModel};

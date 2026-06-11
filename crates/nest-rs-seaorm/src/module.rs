@@ -45,6 +45,16 @@ impl DynamicModule for DatabaseSetup {
     }
 }
 
+/// Open a standalone connection from `NESTRS_DATABASE__*`, resolving the same
+/// [`DatabaseConfig`] the app's [`DatabaseModule`] uses. The single connector
+/// for tools outside the DI container (`migrate`, `seed`) — a new config knob
+/// reaches them without editing each binary.
+pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
+    use nest_rs_config::{Config, ConfigService};
+    let config = DatabaseConfig::from_env(&ConfigService::for_namespace("database"))?;
+    connect(&config).await
+}
+
 /// The URL may carry credentials, so it is never logged.
 async fn connect(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> {
     if config.url.is_empty() {

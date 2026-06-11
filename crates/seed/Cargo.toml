@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+nest-rs-seaorm.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
 tokio.workspace = true

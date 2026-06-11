@@ -5,8 +5,10 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+nest-rs-seaorm.workspace = true
 sea-orm-migration.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
+tracing-subscriber.workspace = true

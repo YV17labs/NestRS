@@ -2587,9 +2587,11 @@ name = "migrations"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "nest-rs-seaorm",
  "sea-orm",
  "sea-orm-migration",
  "tokio",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -4855,6 +4857,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "migrations",
+ "nest-rs-seaorm",
  "nest-rs-testing",
  "sea-orm",
  "tokio",

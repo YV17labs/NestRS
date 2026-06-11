@@ -38,6 +38,15 @@ pub enum GraphqlResolverKind {
     Mutation,
 }
 
+impl GraphqlResolverKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Mutation => "mutation",
+        }
+    }
+}
+
 /// Object-safe view of a code-first resolver. `ContainerType`/`OutputType`
 /// aren't object-safe (static `type_name`/`create_type_info`), so the runtime
 /// roots store members behind this boxed-future shim. Blanket-impl'd for
@@ -65,6 +74,9 @@ impl<T: ContainerType + Send + Sync> GraphqlResolverObject for T {
 #[doc(hidden)]
 pub struct GraphqlResolverRegistration {
     pub kind: GraphqlResolverKind,
+    /// The resolver struct name (`UsersResolver`) — logged as a structured
+    /// field beside each mounted operation at boot, mirroring `#[routes]`.
+    pub resolver_name: &'static str,
     pub resolver_type_id: fn() -> TypeId,
     pub type_info: fn(&mut Registry) -> MetaType,
     pub build: fn(&Container) -> Box<dyn GraphqlResolverObject>,
@@ -121,6 +133,15 @@ fn merge_type_info<T: OutputType>(
                 ..
             } = (reg.type_info)(registry)
             {
+                for field_name in member_fields.keys() {
+                    tracing::info!(
+                        target: "nest_rs::routes",
+                        resolver = reg.resolver_name,
+                        kind = kind.as_str(),
+                        field = field_name.as_str(),
+                        "mounted operation",
+                    );
+                }
                 fields.extend(member_fields);
             }
         }

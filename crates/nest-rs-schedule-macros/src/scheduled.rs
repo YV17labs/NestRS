@@ -67,12 +67,12 @@ pub(crate) fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         let method_ident = method.sig.ident.clone();
         let method_name = method_ident.to_string();
-        let job_name = format!("{provider_name}::{method_name}");
 
         submissions.push(quote! {
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_schedule::ScheduledMethod {
-                    name: #job_name,
+                    provider: #provider_name,
+                    method: #method_name,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     trigger: #trigger_tokens,
                     run: |__container| ::std::boxed::Box::pin(async move {

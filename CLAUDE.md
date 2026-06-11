@@ -554,9 +554,16 @@ site > 0.5 s = defect.
   success. Services: `debug`. `Repo`: `trace`. Denials/security:
   `warn`+. Unexpected errors: `error`. Hot paths respect
   `RUST_LOG=info`.
-- **Structured fields, not formatted strings.** Attach `actor_id`,
-  `tenant_id`, `request_id`. Prefer `user_id = %id` to
-  `format!("user {}…")`.
+- **Message + fields, never interpolation.** Production output is JSON,
+  so every event is split: a **constant, general message** (the event
+  name — `"mounted route"`, not `"GET /v1/users mounted"`) plus the
+  dynamic data as **structured fields** that become JSON keys. Never
+  bake values into the message string or hand-format columns (`{:<6}`)
+  — alignment is the dev pretty-printer's job, and a baked string is
+  unqueryable once it's JSON. Attach `actor_id`, `tenant_id`,
+  `request_id`; prefer `method = verb, path = %p` to
+  `format!("{verb} {p}")`. A list belongs in one field
+  (`routes = list.join(", ")`), not the message.
 - **Production output is OTLP, not stdout.** `nest-rs-opentelemetry`
   ships an appender; app opts in via `OpenTelemetryModule`. Dev
   pretty-print only under a `dev` profile.

@@ -640,6 +640,11 @@ fn root_object(
     if methods.is_empty() {
         return quote!();
     }
+    // Resolver struct name, logged beside each mounted operation at boot.
+    let resolver_name = impl_self_ident(self_ty, "#[resolver]")
+        .map(|i| i.to_string())
+        .unwrap_or_else(|_| "resolver".to_string());
+    let resolver_name = LitStr::new(&resolver_name, proc_macro2::Span::call_site());
     quote! {
         #[allow(non_camel_case_types)]
         pub struct #obj(::std::sync::Arc<#self_ty>);
@@ -652,6 +657,7 @@ fn root_object(
         ::nest_rs_graphql::inventory::submit! {
             ::nest_rs_graphql::GraphqlResolverRegistration {
                 kind: ::nest_rs_graphql::GraphqlResolverKind::#kind,
+                resolver_name: #resolver_name,
                 resolver_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 type_info: |__r| __r.create_fake_output_type::<#obj>(),
                 build: |__c| ::std::boxed::Box::new(

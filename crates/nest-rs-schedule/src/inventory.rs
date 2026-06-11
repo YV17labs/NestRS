@@ -30,8 +30,15 @@ pub type RunFn =
 /// The synthesized metadata one running job carries. Tests register this
 /// directly via `attach_meta::<…, CronJobMeta>`; the `#[scheduled]` path
 /// builds one from each [`ScheduledMethod`] at boot.
+///
+/// `provider` (the host struct) and `method` stay split rather than baked into
+/// a single label so structured logs can filter/group on either alone — a
+/// composite string would be unqueryable once the output is JSON.
 pub struct CronJobMeta {
-    pub name: &'static str,
+    /// The host struct, e.g. `"AudioTasks"`.
+    pub provider: &'static str,
+    /// The scheduled method, e.g. `"heartbeat"`.
+    pub method: &'static str,
     pub trigger: Trigger,
     pub run: RunFn,
 }
@@ -39,9 +46,11 @@ pub struct CronJobMeta {
 /// Link-time inventory entry submitted by `#[scheduled]` per `#[every]` /
 /// `#[cron]` / `#[after]`-tagged method.
 pub struct ScheduledMethod {
-    /// `"ProviderType::method"` — the human-readable label `Scheduler` logs and
-    /// the `name` field of the synthesized [`CronJobMeta`].
-    pub name: &'static str,
+    /// The host struct (e.g. `"AudioTasks"`) — logged as its own field and
+    /// copied to the synthesized [`CronJobMeta`].
+    pub provider: &'static str,
+    /// The scheduled method (e.g. `"heartbeat"`) — logged as its own field.
+    pub method: &'static str,
     /// `TypeId::of::<Provider>()` — checked against
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so an
     /// unreachable provider's jobs do not fire.

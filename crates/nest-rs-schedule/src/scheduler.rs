@@ -24,17 +24,17 @@ pub struct Scheduler {
 
 enum Job {
     Interval {
-        name: &'static str,
+        id: JobId,
         period: Duration,
         run: RunFn,
     },
     Timeout {
-        name: &'static str,
+        id: JobId,
         delay: Duration,
         run: RunFn,
     },
     Cron {
-        name: &'static str,
+        id: JobId,
         // Boxed because a parsed Cron is ~330 bytes (large_enum_variant).
         schedule: Box<Cron>,
         tz: Option<Tz>,
@@ -42,10 +42,24 @@ enum Job {
     },
 }
 
+/// A job's identity, kept split (host struct + method) so logs filter on
+/// either field alone instead of parsing a baked `Provider::method` string.
+#[derive(Clone, Copy)]
+struct JobId {
+    provider: &'static str,
+    method: &'static str,
+}
+
+impl std::fmt::Display for JobId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}::{}", self.provider, self.method)
+    }
+}
+
 impl Job {
-    fn name(&self) -> &'static str {
+    fn id(&self) -> JobId {
         match self {
-            Job::Interval { name, .. } | Job::Timeout { name, .. } | Job::Cron { name, .. } => name,
+            Job::Interval { id, .. } | Job::Timeout { id, .. } | Job::Cron { id, .. } => *id,
         }
     }
 }
@@ -59,33 +73,36 @@ impl Scheduler {
     }
 
     fn resolve(meta: &Arc<CronJobMeta>) -> Result<Job> {
-        let name = meta.name;
+        let id = JobId {
+            provider: meta.provider,
+            method: meta.method,
+        };
         Ok(match meta.trigger {
             Trigger::Interval(period) => Job::Interval {
-                name,
+                id,
                 period,
                 run: meta.run,
             },
             Trigger::Timeout(delay) => Job::Timeout {
-                name,
+                id,
                 delay,
                 run: meta.run,
             },
             Trigger::Cron { expr, tz } => {
                 let schedule = Cron::from_str(expr).with_context(|| {
-                    format!("cron job `{name}` has an invalid cron expression `{expr}`")
+                    format!("cron job `{id}` has an invalid cron expression `{expr}`")
                 })?;
                 let tz = tz
                     .map(|name_str| {
                         name_str.parse::<Tz>().map_err(|e| {
                             anyhow::anyhow!(
-                                "cron job `{name}` has an invalid timezone `{name_str}`: {e}"
+                                "cron job `{id}` has an invalid timezone `{name_str}`: {e}"
                             )
                         })
                     })
                     .transpose()?;
                 Job::Cron {
-                    name,
+                    id,
                     schedule: Box::new(schedule),
                     tz,
                     run: meta.run,
@@ -124,13 +141,15 @@ impl Transport for Scheduler {
             {
                 tracing::debug!(
                     target: "nest_rs::schedule",
-                    job = entry.name,
+                    provider = entry.provider,
+                    method = entry.method,
                     "skipped scheduled method: provider unreachable from app's module tree",
                 );
                 continue;
             }
             let synthesized = Arc::new(CronJobMeta {
-                name: entry.name,
+                provider: entry.provider,
+                method: entry.method,
                 trigger: entry.trigger,
                 run: entry.run,
             });
@@ -139,21 +158,24 @@ impl Transport for Scheduler {
         self.jobs = jobs;
         for job in &self.jobs {
             match job {
-                Job::Interval { name, period, .. } => tracing::info!(
+                Job::Interval { id, period, .. } => tracing::info!(
                     target: "nest_rs::schedule",
-                    job = name,
+                    provider = id.provider,
+                    method = id.method,
                     interval_ms = period.as_millis() as u64,
                     "scheduled job (interval)",
                 ),
-                Job::Timeout { name, delay, .. } => tracing::info!(
+                Job::Timeout { id, delay, .. } => tracing::info!(
                     target: "nest_rs::schedule",
-                    job = name,
+                    provider = id.provider,
+                    method = id.method,
                     delay_ms = delay.as_millis() as u64,
                     "scheduled job (one-shot)",
                 ),
-                Job::Cron { name, tz, .. } => tracing::info!(
+                Job::Cron { id, tz, .. } => tracing::info!(
                     target: "nest_rs::schedule",
-                    job = name,
+                    provider = id.provider,
+                    method = id.method,
                     timezone = tz.map(|t| t.name()).unwrap_or("UTC"),
                     "scheduled job (cron)",
                 ),
@@ -199,7 +221,7 @@ async fn run_job(
     token: CancellationToken,
     ctx: Option<Arc<dyn JobContext>>,
 ) {
-    let name = job.name();
+    let id = job.id();
     match job {
         Job::Interval { period, run, .. } => {
             let mut ticker = interval(period);
@@ -210,14 +232,14 @@ async fn run_job(
             loop {
                 tokio::select! {
                     _ = token.cancelled() => break,
-                    _ = ticker.tick() => fire(name, run, &container, &ctx).await,
+                    _ = ticker.tick() => fire(id, run, &container, &ctx).await,
                 }
             }
         }
         Job::Timeout { delay, run, .. } => {
             tokio::select! {
                 _ = token.cancelled() => return,
-                _ = sleep(delay) => fire(name, run, &container, &ctx).await,
+                _ = sleep(delay) => fire(id, run, &container, &ctx).await,
             }
             token.cancelled().await;
         }
@@ -229,7 +251,8 @@ async fn run_job(
                 None => {
                     tracing::warn!(
                         target: "nest_rs::schedule",
-                        job = name,
+                        provider = id.provider,
+                        method = id.method,
                         "cron job has no future occurrence; it will not run again",
                     );
                     token.cancelled().await;
@@ -238,7 +261,7 @@ async fn run_job(
             };
             tokio::select! {
                 _ = token.cancelled() => break,
-                _ = sleep(wait) => fire(name, run, &container, &ctx).await,
+                _ = sleep(wait) => fire(id, run, &container, &ctx).await,
             }
         },
     }
@@ -260,7 +283,7 @@ fn next_delay(schedule: &Cron, tz: Option<Tz>) -> Option<Duration> {
 }
 
 async fn fire(
-    name: &'static str,
+    id: JobId,
     run: RunFn,
     container: &Container,
     ctx: &Option<Arc<dyn JobContext>>,
@@ -269,7 +292,8 @@ async fn fire(
     if let Err(err) = result {
         tracing::error!(
             target: "nest_rs::schedule",
-            job = name,
+            provider = id.provider,
+            method = id.method,
             error = %err,
             "scheduled job failed",
         );

@@ -53,7 +53,11 @@ impl SocketContext for WsDataContext {
         Box::pin(async move {
             // A downcast miss is a framework bug; run unscoped rather than panic.
             let Some(cx) = captured.downcast_ref::<CapturedContext>() else {
-                tracing::error!(target: "nest_rs::ws", "unexpected captured socket context");
+                tracing::error!(
+                    target: "nest_rs::ws",
+                    reason = "socket_context_downcast_miss",
+                    "unexpected captured socket context"
+                );
                 return inner.await;
             };
             let executor = cx.executor.clone();

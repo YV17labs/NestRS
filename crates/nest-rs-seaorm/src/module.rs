@@ -50,7 +50,11 @@ async fn connect(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> 
     if config.url.is_empty() {
         anyhow::bail!("NESTRS_DATABASE__URL must be set");
     }
-    tracing::info!(target: "nest_rs::orm", "connecting to database");
+    tracing::info!(
+        target: "nest_rs::orm",
+        max_connections = ?config.max_connections,
+        "connecting to database"
+    );
     Ok(Database::connect(config.connect_options()).await?)
 }
 

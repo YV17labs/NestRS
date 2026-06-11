@@ -25,7 +25,8 @@ impl AudioTasks {
     async fn warmup_on_boot(&self) -> Result<()> {
         tracing::info!(
             target: "features::audio",
-            "audio producer warmup — pipeline is ready to enqueue",
+            phase = "warmup",
+            "audio pipeline ready to enqueue",
         );
         Ok(())
     }
@@ -53,16 +54,17 @@ mod tests {
 
     #[test]
     fn three_methods_are_discovered_through_the_inventory() {
-        let names: Vec<&'static str> = nest_rs_core::inventory::iter::<ScheduledMethod>()
-            .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioTasks>())
-            .map(|m| m.name)
-            .collect();
+        let names: Vec<(&'static str, &'static str)> =
+            nest_rs_core::inventory::iter::<ScheduledMethod>()
+                .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioTasks>())
+                .map(|m| (m.provider, m.method))
+                .collect();
         assert!(
-            names.contains(&"AudioTasks::enqueue_transcode"),
+            names.contains(&("AudioTasks", "enqueue_transcode")),
             "{names:?}"
         );
-        assert!(names.contains(&"AudioTasks::warmup_on_boot"), "{names:?}");
-        assert!(names.contains(&"AudioTasks::heartbeat"), "{names:?}");
+        assert!(names.contains(&("AudioTasks", "warmup_on_boot")), "{names:?}");
+        assert!(names.contains(&("AudioTasks", "heartbeat")), "{names:?}");
     }
 
     #[test]

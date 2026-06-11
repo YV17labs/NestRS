@@ -183,8 +183,8 @@ fn validate_order_by_name(specs: &[GuardSpec]) {
         if saw_authz && is_authn {
             tracing::warn!(
                 target: "nest_rs::layers",
-                "global guard order looks reversed — `{}` (looks like authn) follows a guard that looks like authz; authn should precede authz",
-                s.name,
+                guard = %s.name,
+                "guard order looks reversed: authn should precede authz"
             );
         }
         if is_authz {

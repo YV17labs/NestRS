@@ -564,6 +564,22 @@ site > 0.5 s = defect.
   `request_id`; prefer `method = verb, path = %p` to
   `format!("{verb} {p}")`. A list belongs in one field
   (`routes = list.join(", ")`), not the message.
+- **Metadata is mandatory — a bare log is a defect.** Every event
+  carries at least one structured field. A `tracing::info!("…")` with
+  no fields is unqueryable once it's JSON and must not pass review —
+  fields are how the event is filtered, joined, and correlated, not a
+  nicety. Attach whatever tracing context the call site already holds
+  (`actor_id`, `tenant_id`, `request_id`, `entity`/`id`, `signal`,
+  `count`). The intolerable case is a security or denial event
+  (`warn`+) emitted bare: those are exactly the events queried under
+  incident, so a denial with no `actor_id`/resource field is a
+  security gap, not a style nit.
+- **One event, said once.** Don't restate in the message what a field
+  or the enclosing span already carries, and don't emit the same event
+  at two layers (a service `warn` plus a transport `warn` for one
+  failure is duplicate noise — log it at its source layer per *Level
+  per layer*). The message stays a short, constant event name:
+  meaningful but never a sentence — the fields carry the specifics.
 - **Production output is OTLP, not stdout.** `nest-rs-opentelemetry`
   ships an appender; app opts in via `OpenTelemetryModule`. Dev
   pretty-print only under a `dev` profile.

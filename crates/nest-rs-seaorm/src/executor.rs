@@ -114,8 +114,8 @@ pub fn current_executor() -> Option<Executor> {
         None => {
             tracing::error!(
                 target: "nest_rs::orm",
-                "ambient executor is not a SeaORM Executor — another ORM module installed it; \
-                 returning None so the Repo error path runs instead of a downcast panic",
+                reason = "executor_downcast_miss",
+                "ambient executor is not a SeaORM Executor"
             );
             None
         }

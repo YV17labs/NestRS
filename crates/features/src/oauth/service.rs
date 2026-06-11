@@ -178,6 +178,7 @@ pub(crate) fn issue_with_jwt(
         .sign(&claims)
         .map_err(|e| TokenError::Sign(e.into()))?;
     tracing::info!(
+        target: "nest_rs::auth",
         ?sub,
         %org_id,
         roles = ?claims.roles,
@@ -197,9 +198,18 @@ pub(crate) fn grant_client_credentials_with_jwt(
     client: &AuthenticatedClient,
 ) -> Result<AccessToken, TokenError> {
     if grant_type != "client_credentials" {
+        tracing::warn!(target: "nest_rs::auth", grant_type, "unsupported grant type");
         return Err(TokenError::UnsupportedGrant);
     }
-    let roles = roles_for_scope(scope, &client.scopes).ok_or(TokenError::InvalidScope)?;
+    let roles = roles_for_scope(scope, &client.scopes).ok_or_else(|| {
+        tracing::warn!(
+            target: "nest_rs::auth",
+            requested_scope = ?scope,
+            allowed = ?client.scopes,
+            "requested scope not granted"
+        );
+        TokenError::InvalidScope
+    })?;
     issue_with_jwt(jwt_svc, None, client.org_id, roles)
 }
 
@@ -216,7 +226,10 @@ pub(crate) fn authenticate_against_registry(
             matched = Some(client);
         }
     }
-    let client = matched.ok_or_else(|| AuthError::Failed("invalid client credentials".into()))?;
+    let client = matched.ok_or_else(|| {
+        tracing::warn!(target: "nest_rs::auth", client_id, "client authentication failed");
+        AuthError::Failed("invalid client credentials".into())
+    })?;
     Ok(AuthenticatedClient {
         org_id: client.org_id,
         scopes: client.scopes.clone(),

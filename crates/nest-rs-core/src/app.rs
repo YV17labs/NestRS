@@ -120,12 +120,14 @@ impl App {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     if first_err.is_none() {
+                        tracing::error!(target: "nest_rs::app", error = %e, "transport failed; shutting down");
                         first_err = Some(e);
                         cancel.cancel();
                     }
                 }
                 Err(join_err) => {
                     if first_err.is_none() {
+                        tracing::error!(target: "nest_rs::app", error = %join_err, "transport task panicked; shutting down");
                         first_err = Some(anyhow!(join_err));
                         cancel.cancel();
                     }
@@ -362,19 +364,19 @@ fn spawn_shutdown_signal(cancel: CancellationToken) {
             let mut sigterm = match signal(SignalKind::terminate()) {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!(error = %e, "failed to install SIGTERM handler");
+                    tracing::warn!(target: "nest_rs::app", error = %e, "failed to install SIGTERM handler");
                     return;
                 }
             };
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT received, shutting down"),
-                _ = sigterm.recv()          => tracing::info!("SIGTERM received, shutting down"),
+                _ = tokio::signal::ctrl_c() => tracing::info!(target: "nest_rs::app", signal = "SIGINT", "shutdown signal received"),
+                _ = sigterm.recv()          => tracing::info!(target: "nest_rs::app", signal = "SIGTERM", "shutdown signal received"),
             }
         }
         #[cfg(not(unix))]
         {
             let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("ctrl-c received, shutting down");
+            tracing::info!(target: "nest_rs::app", signal = "ctrl-c", "shutdown signal received");
         }
         cancel.cancel();
     });

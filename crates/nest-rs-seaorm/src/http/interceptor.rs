@@ -86,13 +86,15 @@ impl Interceptor for DbContext {
                 if should_commit(&result) {
                     tracing::error!(
                         target: "nest_rs::orm",
-                        "transaction escaped the request — the executor was leaked into a spawned task; rolling back and failing the otherwise-successful response so its lost writes are not reported as committed"
+                        outcome = "rollback_and_fail",
+                        "transaction escaped into a spawned task"
                     );
                     return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
                 }
                 tracing::error!(
                     target: "nest_rs::orm",
-                    "transaction escaped the request — the executor was leaked into a spawned task; rolling back (the response had already failed)"
+                    outcome = "rollback",
+                    "transaction escaped into a spawned task"
                 );
                 return result;
             }

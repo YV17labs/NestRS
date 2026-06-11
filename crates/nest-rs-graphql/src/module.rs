@@ -66,16 +66,19 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             // building it twice.
             if options.emit_sdl {
                 let dest = &options.schema_path;
-                match std::fs::write(dest, crate::resolver::render_sdl(&schema)) {
+                let sdl = crate::resolver::render_sdl(&schema);
+                match std::fs::write(dest, &sdl) {
                     Ok(()) => tracing::info!(
                         target: "nest_rs::graphql",
-                        "wrote GraphQL SDL to {}",
-                        dest.display(),
+                        path = %dest.display(),
+                        bytes = sdl.len(),
+                        "wrote GraphQL SDL"
                     ),
                     Err(err) => tracing::warn!(
                         target: "nest_rs::graphql",
-                        "failed to write GraphQL SDL to {}: {err}",
-                        dest.display(),
+                        path = %dest.display(),
+                        error = %err,
+                        "failed to write GraphQL SDL"
                     ),
                 }
             }

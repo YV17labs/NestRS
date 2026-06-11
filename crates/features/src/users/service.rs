@@ -66,7 +66,7 @@ impl UsersService {
             Some(password),
         )?;
         let user = active.insert(&Repo::<Users>::conn()?).await?;
-        tracing::info!(id = %user.id, %org_id, "user registered with password");
+        tracing::info!(target: "nest_rs::auth", id = %user.id, %org_id, "user registered with password");
         Ok(User::from(&user))
     }
 
@@ -77,7 +77,7 @@ impl UsersService {
     ) -> Result<entity::Model, ServiceError> {
         let active = prepare_new_user(input, org_id, None)?;
         let user = active.insert(&Repo::<Users>::conn()?).await?;
-        tracing::info!(id = %user.id, %org_id, "user created");
+        tracing::info!(target: "nest_rs::auth", id = %user.id, %org_id, "user created");
         Ok(user)
     }
 

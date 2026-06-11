@@ -1,6 +1,6 @@
-//! Emit the GraphQL output object plus its `From<&Model>`. A `skip` field is
-//! absent; a `Uuid` renders as `String`. Derives `SimpleObject` + `JsonSchema`
-//! so one declaration feeds GraphQL and OpenAPI.
+//! Emit the wire output object plus its `From<&Model>`. A `skip` field is
+//! absent; a `Uuid` renders as `String` on the wire. Derives `JsonSchema` for
+//! OpenAPI; with `graphql`, also `SimpleObject`.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -15,15 +15,11 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
 
     for field in model.fields.iter().filter(|f| f.in_output_struct()) {
         let name = &field.ident;
-        // `#[expose(complexity = …)]` on a scalar wire field maps straight
-        // through to the SimpleObject derive — async-graphql's visitor honors
-        // `#[graphql(complexity = …)]` on SimpleObject fields just as it does
-        // on `#[ComplexObject]` resolvers, but SimpleObject discards the
-        // expression's argument-variables (a closure with no `let arg = …`
-        // binding), so only `child_complexity` and pure literals are safe on a
-        // scalar; argument-referencing expressions belong on a hand-rolled
-        // `#[field_resolver]` instead.
-        let complexity = complexity_attr(&field.complexity, None);
+        let complexity = if model.graphql {
+            complexity_attr(&field.complexity, None)
+        } else {
+            TokenStream2::new()
+        };
         if is_uuid(&field.ty) {
             decls.push(quote! { #complexity pub #name: ::std::string::String });
             inits.push(quote! { #name: ::std::string::ToString::to_string(&model.#name) });
@@ -34,8 +30,14 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
         }
     }
 
-    let complex = if model.complex {
+    let complex = if model.graphql && model.complex {
         quote! { #[graphql(complex)] }
+    } else {
+        quote! {}
+    };
+
+    let graphql_derives = if model.graphql {
+        quote! { ::nest_rs_resource::graphql::async_graphql::SimpleObject, }
     } else {
         quote! {}
     };
@@ -48,7 +50,7 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
             ::core::clone::Clone,
             ::serde::Serialize,
             ::serde::Deserialize,
-            ::nest_rs_graphql::async_graphql::SimpleObject,
+            #graphql_derives
             ::schemars::JsonSchema,
         )]
         #complex
@@ -74,13 +76,18 @@ fn emit_page(model: &ResourceModel) -> TokenStream2 {
     }
     let output = &model.output_ident;
     let page = &model.page_ident;
+    let graphql_derives = if model.graphql {
+        quote! { ::nest_rs_resource::graphql::async_graphql::SimpleObject, }
+    } else {
+        quote! {}
+    };
     quote! {
         #[derive(
             ::core::fmt::Debug,
             ::core::clone::Clone,
             ::serde::Serialize,
             ::serde::Deserialize,
-            ::nest_rs_graphql::async_graphql::SimpleObject,
+            #graphql_derives
             ::schemars::JsonSchema,
         )]
         pub struct #page {

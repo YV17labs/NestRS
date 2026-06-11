@@ -2,7 +2,7 @@ use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[expose(name = "Org", service = super::service::OrgsService)]
+#[expose(name = "Org", service = super::service::OrgsService, graphql)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(

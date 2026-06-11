@@ -1,11 +1,14 @@
 //! Convert a transport-agnostic [`Denial`] to a transport-native error
-//! shape — poem [`Response`] for HTTP, [`GraphqlError`] for GraphQL.
+//! shape — poem [`Response`] for HTTP, [`GraphqlError`] for GraphQL (with the
+//! `graphql` feature).
 
-use nest_rs_graphql::async_graphql::{Error as GraphqlError, ErrorExtensions};
 use nest_rs_http::poem::http::StatusCode;
 use nest_rs_http::poem::{Body, Response};
 
 use crate::denial::Denial;
+
+#[cfg(feature = "graphql")]
+use nest_rs_graphql::async_graphql::{Error as GraphqlError, ErrorExtensions};
 
 /// Convert a transport-agnostic [`Denial`] to a poem [`Response`].
 pub fn denial_to_http_response(denial: Denial) -> Response {
@@ -30,6 +33,7 @@ pub fn denial_to_http_response(denial: Denial) -> Response {
 }
 
 /// Convert a [`Denial`] to an async-graphql error frame.
+#[cfg(feature = "graphql")]
 pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
     let code = match denial.http_status() {
         401 => "UNAUTHENTICATED",

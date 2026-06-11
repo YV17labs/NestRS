@@ -6,12 +6,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
-use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 use nest_rs_http::poem::Request as HttpRequest;
 use nest_rs_ws::{WsClient, WsMessageCheck};
 use serde_json::Value;
 
 use crate::denial::Denial;
+
+#[cfg(feature = "graphql")]
+use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 
 /// A transport-spanning guard.
 ///
@@ -35,7 +37,9 @@ pub trait Guard: Layer {
         Ok(())
     }
 
-    /// GraphQL resolver entry. Default = no-op.
+    /// GraphQL resolver entry. Default = no-op. Available with the `graphql`
+    /// feature on this crate.
+    #[cfg(feature = "graphql")]
     async fn check_graphql(&self, _ctx: &GraphqlContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
@@ -57,6 +61,7 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
         (**self).check_http(req).await
     }
 
+    #[cfg(feature = "graphql")]
     async fn check_graphql(&self, ctx: &GraphqlContext<'_>) -> Result<(), Denial> {
         (**self).check_graphql(ctx).await
     }

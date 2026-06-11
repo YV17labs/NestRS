@@ -5,7 +5,6 @@
 use std::sync::Arc;
 
 use nest_rs_core::{HandlerMetadata, Layer, injectable};
-use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::{Reflector, async_trait};
 use nest_rs_ws::WsClient;
@@ -13,6 +12,9 @@ use poem::Request;
 use serde_json::Value;
 
 use crate::{AbilityBuilder, AbilityFactory, current_ability};
+
+#[cfg(feature = "graphql")]
+use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 
 /// Bind after the auth guard: `#[use_guards(AuthGuard, AbilityGuard<AppAbility>)]`.
 /// `F::Actor` is read from request extensions; its absence on a non-public
@@ -56,6 +58,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         }
     }
 
+    #[cfg(feature = "graphql")]
     async fn check_graphql(&self, _ctx: &GraphqlContext<'_>) -> Result<(), Denial> {
         if current_ability().is_none() {
             return Err(Denial::unauthorized(

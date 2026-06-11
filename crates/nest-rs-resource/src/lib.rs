@@ -1,20 +1,29 @@
-//! Expose a SeaORM entity to GraphQL **and** OpenAPI from one declaration.
+//! Expose a SeaORM entity to REST/OpenAPI from one declaration via [`macro@expose`].
 //!
-//! [`macro@expose`] generates the GraphQL output object (`SimpleObject` +
-//! `JsonSchema`) and `Create/Update` input types from a SeaORM entity. Adding
-//! `paginate` emits a `<Name>Page` envelope on both surfaces, paired with the
-//! shared [`PageArgs`] request type.
+//! The wire DTO (`Serialize` + `JsonSchema`), CRUD input types, pagination
+//! envelope, and [`WireModelDefaults`] for response masking are always emitted.
+//! Add the `graphql` flag on `#[expose(...)]` **and** enable the `graphql`
+//! feature on this crate to also emit GraphQL types, auto-resolved relations,
+//! and dataloaders.
 //!
-//! **Relations** declared with `#[sea_orm(belongs_to, …)]` / `#[sea_orm(has_many)]`
-//! and **not** marked `#[expose(skip)]` are auto-exposed as GraphQL fields,
-//! backed by per-request dataloaders that respect the ambient `Ability` —
-//! `belongs_to` resolves via [`PkLoadable`]; `has_many` via [`RelatedTo`]
-//! (Phase 2). Opt out per relation with `#[expose(skip)]` and write a manual
-//! `#[field_resolver]` if a custom resolver is needed.
+//! ```ignore
+//! // HTTP / OpenAPI / masking — no GraphQL deps in the entity crate.
+//! #[expose(name = "Item", service = super::service::ItemsService)]
+//!
+//! // + GraphQL surface (requires `features = ["graphql"]` on `nest-rs-resource`).
+//! #[expose(name = "Item", service = super::service::ItemsService, graphql)]
+//! ```
 
 mod exposures;
 
+#[cfg(feature = "graphql")]
+pub mod graphql {
+    pub use nest_rs_graphql::async_graphql;
+    pub use nest_rs_graphql::dataloader;
+}
+
 pub use exposures::pagination::PageArgs;
+#[cfg(feature = "graphql")]
 pub use exposures::relations::{PkLoadable, RelatedTo};
 pub use exposures::wire::WireModelDefaults;
 pub use nest_rs_resource_macros::expose;

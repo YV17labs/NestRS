@@ -11,20 +11,49 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    // An auto-resolved relation implies `#[graphql(complex)]` on the wire
-    // output — the macro attaches a `#[ComplexObject]` for the field
-    // resolvers. Setting it here lets users omit the explicit `complex`.
-    if model.has_auto_relations() {
+    if model.graphql {
+        #[cfg(not(feature = "graphql"))]
+        {
+            return syn::Error::new_spanned(
+                &model.source_ident,
+                "`#[expose(..., graphql)]` requires the `graphql` feature on `nest-rs-resource` (`features = [\"graphql\"]`)",
+            )
+            .to_compile_error()
+            .into();
+        }
+    } else if model.has_auto_relations() {
+        return syn::Error::new_spanned(
+            &model.source_ident,
+            "non-skip SeaORM relations require `#[expose(..., graphql)]` — use scalar FK columns for HTTP-only entities, or mark relations `#[expose(skip)]`",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    if model.graphql && !model.complex && model.has_auto_relations() {
         model.complex = true;
+    }
+
+    if model.complex && !model.graphql {
+        return syn::Error::new_spanned(
+            &model.source_ident,
+            "`#[expose(complex)]` requires `graphql` — the wire DTO has no GraphQL object shape",
+        )
+        .to_compile_error()
+        .into();
     }
 
     let output = dto::emit(&model);
     let inputs = input::emit(&model);
     let active = active::emit(&model);
     let wire_defaults = wire::emit(&model);
-    let relations = match relations::emit(&model) {
-        Ok(tokens) => tokens,
-        Err(err) => return err.to_compile_error().into(),
+    let relations = if model.graphql {
+        match relations::emit(&model) {
+            Ok(tokens) => tokens,
+            Err(err) => return err.to_compile_error().into(),
+        }
+    } else {
+        quote! {}
     };
 
     quote! {

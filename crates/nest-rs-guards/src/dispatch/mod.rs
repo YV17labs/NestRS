@@ -23,13 +23,19 @@
 
 mod chain;
 mod denial_convert;
+#[cfg(feature = "graphql")]
 mod operation_guard;
 mod route_layers;
 mod route_shaper;
 mod scoped_spec;
 
-pub use chain::{run_layered_graphql_chain, run_layered_ws_chain};
-pub use denial_convert::{denial_to_graphql_error, denial_to_http_response};
+pub use chain::{run_layered_ws_chain};
+#[cfg(feature = "graphql")]
+pub use chain::run_layered_graphql_chain;
+pub use denial_convert::denial_to_http_response;
+#[cfg(feature = "graphql")]
+pub use denial_convert::denial_to_graphql_error;
+#[cfg(feature = "graphql")]
 pub use operation_guard::GlobalPoolOperationGuard;
 pub use route_layers::{wrap_route_exception_filters, wrap_route_filters, wrap_route_interceptors};
 pub use route_shaper::RouteShaper;

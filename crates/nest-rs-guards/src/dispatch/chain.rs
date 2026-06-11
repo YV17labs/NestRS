@@ -9,16 +9,20 @@
 use std::any::TypeId;
 
 use nest_rs_core::Container;
-use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
 use nest_rs_ws::WsClient;
 use serde_json::Value;
 
 use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
 
 use crate::Guard;
-use crate::dispatch::denial_convert::denial_to_graphql_error;
 use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_specs};
 use crate::registry::GuardSpecs;
+
+#[cfg(feature = "graphql")]
+use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
+
+#[cfg(feature = "graphql")]
+use crate::dispatch::denial_convert::denial_to_graphql_error;
 
 /// GraphQL shaper helper. Called by `#[resolver]` at the start of every
 /// resolver method. Dedups per-resolver guards against the global chain.
@@ -28,6 +32,7 @@ use crate::registry::GuardSpecs;
 /// resolver, so wiring them belongs at the GraphQL transport's request
 /// entry. The trait method exists today for surface symmetry; runtime
 /// wiring at the operation level is queued.
+#[cfg(feature = "graphql")]
 pub async fn run_layered_graphql_chain(
     ctx: &GraphqlContext<'_>,
     container: &Container,

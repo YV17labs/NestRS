@@ -92,7 +92,7 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
     let target_label = format!("loading {} by id", wire);
 
     quote! {
-        #[::nest_rs_graphql::dataloader]
+        #[::nest_rs_resource::graphql::dataloader]
         impl #service {
             async fn by_id(
                 &self,
@@ -205,7 +205,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
         let target_label = format!("loading {} by {}", wire, from);
 
         blocks.push(quote! {
-            #[::nest_rs_graphql::dataloader]
+            #[::nest_rs_resource::graphql::dataloader]
             impl #service {
                 async fn #method_name(
                     &self,
@@ -298,7 +298,7 @@ fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Resul
     }
     let wire = &model.output_ident;
     Ok(quote! {
-        #[::nest_rs_graphql::async_graphql::ComplexObject]
+        #[::nest_rs_resource::graphql::async_graphql::ComplexObject]
         impl #wire {
             #(#methods)*
         }
@@ -336,12 +336,12 @@ fn emit_belongs_to_method(
         #complexity
         async fn #name(
             &self,
-            __ctx: &::nest_rs_graphql::async_graphql::Context<'_>,
-        ) -> ::nest_rs_graphql::async_graphql::Result<
+            __ctx: &::nest_rs_resource::graphql::async_graphql::Context<'_>,
+        ) -> ::nest_rs_resource::graphql::async_graphql::Result<
             ::core::option::Option<<#target as ::nest_rs_resource::PkLoadable>::Wire>,
         > {
             let __loader = __ctx.data_unchecked::<
-                ::nest_rs_graphql::async_graphql::dataloader::DataLoader<
+                ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
                     <#target as ::nest_rs_resource::PkLoadable>::Loader,
                 >,
             >();
@@ -378,12 +378,12 @@ fn emit_has_many_method(
         #complexity
         async fn #name(
             &self,
-            __ctx: &::nest_rs_graphql::async_graphql::Context<'_>,
-        ) -> ::nest_rs_graphql::async_graphql::Result<
+            __ctx: &::nest_rs_resource::graphql::async_graphql::Context<'_>,
+        ) -> ::nest_rs_resource::graphql::async_graphql::Result<
             ::std::vec::Vec<<#target as ::nest_rs_resource::RelatedTo<Entity>>::Wire>,
         > {
             let __loader = __ctx.data_unchecked::<
-                ::nest_rs_graphql::async_graphql::dataloader::DataLoader<
+                ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
                     <#target as ::nest_rs_resource::RelatedTo<Entity>>::Loader,
                 >,
             >();
@@ -402,7 +402,7 @@ fn wire_key_expr(ty: &Type, ident: &Ident) -> TokenStream2 {
     if is_uuid(ty) {
         quote! {
             ::uuid::Uuid::parse_str(&self.#ident)
-                .map_err(|__e| ::nest_rs_graphql::async_graphql::Error::new(__e.to_string()))?
+                .map_err(|__e| ::nest_rs_resource::graphql::async_graphql::Error::new(__e.to_string()))?
         }
     } else {
         quote! { ::core::clone::Clone::clone(&self.#ident) }

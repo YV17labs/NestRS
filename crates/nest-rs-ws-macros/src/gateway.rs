@@ -179,7 +179,7 @@ fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
                     >(__container)
                         .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
                     if __is_global {
-                        ::tracing::warn!(
+                        ::tracing::debug!(
                             target: "nest_rs::layers",
                             layer = ::core::any::type_name::<#p>(),
                             scope = "gateway",

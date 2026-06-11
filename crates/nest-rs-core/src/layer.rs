@@ -55,7 +55,7 @@ pub enum LayerKind {
 /// resolution ([`RequestScope`](crate::RequestScope)). A Layer's site is
 /// the place it was *declared*; it has nothing to do with the DI scope of
 /// the Layer's provider.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LayerSite {
     /// `App::builder().use_*_global(...)`.
     Global,

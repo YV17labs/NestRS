@@ -19,6 +19,7 @@ request.
 | HTTP request log | `nest_rs::access` | `info` |
 | HTTP span | `nest_rs::http` | `info` |
 | ORM queries | `nest_rs::orm` | `trace` |
+| Layer composition (per-route guard/pipe/… chains) | `nest_rs::layers` | `trace` for the per-route effective-chain dump; `debug` for the redundant multi-scope lint (HTTP deduped once, WS per gateway); `warn` for actionable posture smells (reversed authn/authz order, denials, **routes with no guard and no `#[public]` when no global pool is active**) |
 | Authn / Authz | `nest_rs::authn` / `nest_rs::authz` | `info` (denials `warn`) |
 | WebSocket events | `nest_rs::ws` | `info` |
 | Queue / Schedule | `nest_rs::queue` / `nest_rs::schedule` | `info` |

@@ -169,7 +169,7 @@ pub(super) fn log_effective_chain<L: Layer + ?Sized>(
         .iter()
         .map(|e| format!("{} ({})", e.name, e.source.label()))
         .collect();
-    tracing::debug!(
+    tracing::trace!(
         target: "nest_rs::layers",
         route,
         kind,

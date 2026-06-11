@@ -82,14 +82,7 @@ where
             let forced = force.contains(&entry.type_id);
             if let Some((_, existing)) = seen.iter().find(|(tid, _)| *tid == entry.type_id) {
                 if !forced {
-                    tracing::warn!(
-                        target: "nest_rs::layers",
-                        layer = entry.name,
-                        existing_scope = existing.label(),
-                        skipped_scope = entry.source.label(),
-                        route = route_label,
-                        "layer declared at multiple scopes — broadest wins, later declaration ignored (use `#[force_*]` to force a re-run)",
-                    );
+                    report_redundant_scope(entry.type_id, *existing, entry.source, entry.name);
                     continue;
                 }
                 tracing::info!(
@@ -110,6 +103,65 @@ where
     entries.sort_by_key(|e| e.layer.priority());
 
     entries
+}
+
+/// Report a redundant multi-scope declaration **once per process**.
+///
+/// `compose_chain` runs per route, so a layer declared at both a broad scope
+/// (e.g. `global`) and a narrower one (e.g. `controller`) would otherwise warn
+/// on every route of that controller — a process-global structural fact spam-
+/// emitted as if it were a per-request event. Dedup by `(layer, scope-pair)`
+/// so it surfaces a single line at boot. Level is `debug`: it is informative
+/// (the controller/method declaration was skipped because a broader scope
+/// already covers it) yet fail-secure (broadest wins, the layer still runs
+/// exactly once), so it stays out of `warn` — a config lint, not an actionable
+/// security event, kept off `warn` to avoid alert fatigue. `#[force_*]` opts a
+/// duplicate back into re-running (logged at `info`).
+fn report_redundant_scope(type_id: TypeId, existing: LayerSite, skipped: LayerSite, name: &'static str) {
+    use std::collections::HashSet;
+    use std::sync::{LazyLock, Mutex};
+
+    static SEEN: LazyLock<Mutex<HashSet<(TypeId, LayerSite, LayerSite)>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+
+    // On a poisoned lock, fall back to emitting — a duplicate diagnostic line
+    // is harmless; a swallowed one is not.
+    let first_time = SEEN
+        .lock()
+        .map(|mut seen| seen.insert((type_id, existing, skipped)))
+        .unwrap_or(true);
+    if first_time {
+        tracing::debug!(
+            target: "nest_rs::layers",
+            layer = short_type_name(name),
+            kept = existing.label(),
+            skipped = skipped.label(),
+            "redundant layer declaration deduped — broadest scope wins (`#[force_*]` to re-run)",
+        );
+    }
+}
+
+/// Strip module paths from a `type_name`, keeping the leaf of each segment so
+/// generics survive: `a::b::AuthGuard<c::d::JwtStrategy<e::Claims>>` becomes
+/// `AuthGuard<JwtStrategy<Claims>>`. Diagnostic-only — the full path adds no
+/// information a reader scanning boot logs can act on.
+fn short_type_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut segment_start = 0;
+    for (i, c) in name.char_indices() {
+        if !(c.is_alphanumeric() || c == '_' || c == ':') {
+            out.push_str(leaf(&name[segment_start..i]));
+            out.push(c);
+            segment_start = i + c.len_utf8();
+        }
+    }
+    out.push_str(leaf(&name[segment_start..]));
+    out
+}
+
+/// The substring after the last `::` of a path segment.
+fn leaf(segment: &str) -> &str {
+    segment.rsplit("::").next().unwrap_or(segment)
 }
 
 /// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration —

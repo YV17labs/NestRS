@@ -26,10 +26,11 @@ declarative wiring — hold today but lean on developer discipline at a few seam
 Closing these is what makes the guarantees *airtight*, the real edge over a
 framework that only **documents** the same concerns.
 
-- **Insulate the GraphQL schema composition** — the self-composing schema reads
-  async-graphql's public-but-internal `registry` API. It is guarded by tests, but a
-  thin adapter (one place that breaks, behind a pinned-version compile guard) would
-  keep an async-graphql bump from rippling through the crate.
+- **Harden the GraphQL schema composition** — the self-composing schema reads
+  async-graphql's public-but-internal `registry` API. That access is already
+  centralised in one module (`nest-rs-graphql/src/resolver.rs`) and guarded by
+  tests; what remains is a pinned-version compile guard so an async-graphql bump
+  fails loudly at that single seam rather than rippling silently through the crate.
 - **Keyed / multi-instance providers** — the flat container keys by type, so a
   second instance of a type (two `OAuth2Client`s, for GitHub *and* Google) needs a
   hand-written newtype today. A keyed registration (`provide_keyed`) would let one
@@ -112,6 +113,11 @@ Landed with the first `0.1.0` crates.io release and the alpha docs push:
 - **Crate-level READMEs** — every framework crate ships a minimal `README.md`
   (description + links to [nestrs.dev](https://nestrs.dev) and GitHub);
   extension-point contracts live in the docs site.
+- **Scaffolding CLI** — **`nest-rs-cli`** / binary **`nestrs`**: `nestrs new`
+  (standalone + `--in-workspace`), `nestrs g feature` (port + optional `--http`),
+  the `g resource` / `http` / `graphql` / `ws` / `queue` / `schedule` / `mcp`
+  generators, and `nestrs doctor` all ship in the workspace; crates.io with the
+  next lockstep release.
 
 ## Next — project & release infrastructure
 
@@ -126,10 +132,9 @@ companion, and an example app, which a repo-per-crate split would make impossibl
   `fmt --check`, `clippy -D warnings`, `build`, and `test --workspace`. The e2e
   tests exercise live Postgres and Redis, so CI provisions both as service
   containers. It publishes nothing — its only artifact is a green/red signal.
-- **Scaffolding CLI** — **`nest-rs-cli`** / binary **`nestrs`**: `nestrs new`
-  (standalone + `--in-workspace`), `nestrs g feature` (port + optional `--http`),
-  `nestrs doctor`. Shipped in the workspace; crates.io with the next lockstep
-  release. Next: `resolver`, `entity`, `resource`, migrations, `nestrs info`.
+- **Scaffolding CLI — remaining generators** — the shipped `nestrs g` surface
+  (see *Shipped*) still lacks `resolver`, `entity`, migrations, and a `nestrs info`
+  command.
 
 ## Later — deferred
 

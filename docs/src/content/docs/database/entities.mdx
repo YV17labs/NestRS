@@ -76,11 +76,14 @@ pub struct Model {
 }
 ```
 
-SeaORM owns the column types and the `#[sea_orm(...)]` attributes —
-`#[expose]` only **reads** them and decides what crosses the wire. The
-two decorators compose: `#[sea_orm::model]` builds the `Entity`,
-`Column`, `ActiveModel`, and `Relation` machinery; `#[expose]` builds
-the transport surface on top.
+[SeaORM](https://www.sea-ql.org/SeaORM/docs/index/) owns the column
+types and the `#[sea_orm(...)]` attributes — `#[expose]` only **reads**
+them and decides what crosses the wire. The two decorators compose:
+`#[sea_orm::model]` builds the `Entity`, `Column`, `ActiveModel`, and
+`Relation` machinery; `#[expose]` builds the transport surface on top.
+For everything about columns, types, relations, and migrations, the
+[official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
+is the source of truth.
 
 ## The header
 
@@ -220,13 +223,28 @@ cost the macro attaches.
 
 ## Virtual and computed fields
 
-There is no "virtual column" attribute — `#[expose]` only surfaces real
-SeaORM columns and relations. For a value computed at query time
-(a derived total, a formatted label, a cursor connection over a
-relation), leave the source unexposed and write a `#[field_resolver]`
-on the resolver instead. Cost it with `#[expose(complexity = …)]` on an
-exposed field, or `#[graphql(complexity = …)]` directly on a
-hand-rolled resolver.
+There is no `#[expose]` "virtual column" attribute — `#[expose]` only
+surfaces real SeaORM columns and relations. For a value computed at
+query time (a derived total, a formatted label, a cursor connection
+over a relation), leave the source unexposed and write a
+`#[field_resolver]` on the resolver instead. Cost it with
+`#[expose(complexity = …)]` on an exposed field, or
+`#[graphql(complexity = …)]` directly on a hand-rolled resolver.
+
+SeaORM itself offers two lower-level mechanisms underneath, neither of
+which `#[expose]` reads — wire them through a `#[field_resolver]` (or a
+hand-shaped HTTP response) if you want them on the wire:
+
+- **A non-persisted field on the `Model`** — `#[sea_orm(ignore)]` keeps
+  a field on the struct but out of the table and every query (set to
+  `Default::default()` on load). Useful for transient state carried on
+  the model.
+- **A value computed by the database** — a `DerivePartialModel` with
+  `#[sea_orm(from_expr = "…")]` selects a SQL expression into a result
+  struct; a plain method on `impl Model` covers values computed in Rust.
+
+See the [official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
+for both.
 
 <Aside type="caution">
 async-graphql allows at most **one** `#[ComplexObject]` per wire type.
@@ -298,3 +316,6 @@ See [Migrations](/database/migrations/) for writing and running them
   resolve.
 - [Response masking](/security/authorization/response-masking/) — what
   unexposed columns and `WireModelDefaults` are for.
+- [SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/) —
+  the official reference for entities, columns, relations, and
+  migrations underneath `#[expose]`.

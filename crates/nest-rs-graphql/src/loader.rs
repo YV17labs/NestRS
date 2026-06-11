@@ -97,9 +97,8 @@ impl Extension for LoaderExtension {
         let Some(reachable) = self.container.get::<ReachableProviders>() else {
             tracing::warn!(
                 target: "nest_rs::graphql",
-                "LoaderExtension: no ReachableProviders seeded — skipping every loader. \
-                 Build the schema through App::builder/App::new (production) or seed \
-                 the marker on the hand-rolled container."
+                hint = "build the schema via App::builder/App::new or seed ReachableProviders",
+                "loaders skipped: no ReachableProviders seeded"
             );
             return next.run(ctx, request).await;
         };

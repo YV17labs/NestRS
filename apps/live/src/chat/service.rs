@@ -40,7 +40,7 @@ impl RoomService {
 
         let reached = self.server.broadcast("message", &stored).unwrap_or(0);
         tracing::info!(
-            target: "chat",
+            target: "live::chat",
             author = %stored.author,
             total,
             reached,

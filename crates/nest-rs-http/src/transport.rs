@@ -242,7 +242,8 @@ impl Transport for HttpTransport {
                 target: "nest_rs::layers",
                 count = unguarded.len(),
                 routes = unguarded.join(", ").as_str(),
-                "unguarded routes without `#[public]` — bind a guard or mark them public",
+                hint = "bind a guard or mark them #[public]",
+                "unguarded routes detected",
             );
         }
         // Provided by `use_guards_global` (which can see the `Guard` trait);
@@ -300,7 +301,8 @@ impl Transport for HttpTransport {
             tracing::warn!(
                 target: "nest_rs::http",
                 paths = paths.join(", ").as_str(),
-                "imperative mount(...) endpoints bypass the global guard pool — route them through a #[controller] or guard them explicitly",
+                hint = "route through a #[controller] or guard explicitly",
+                "imperative mounts bypass the global guard pool",
             );
         }
         for (_, mount) in self.mounts.drain(..) {

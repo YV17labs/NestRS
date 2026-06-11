@@ -57,7 +57,9 @@ impl JwtConfig {
             (Some(secret), Some(private), Some(public)) if !secret.trim().is_empty() => {
                 tracing::warn!(
                     target: "nest_rs::auth",
-                    "NESTRS_AUTHN__SECRET is set alongside EdDSA keys — ignoring SECRET and using EdDSA"
+                    secret_present = true,
+                    eddsa_present = true,
+                    "ignoring NESTRS_AUTHN__SECRET in favour of EdDSA keys"
                 );
                 JwtOptions::eddsa(private.clone(), public.clone())
             }

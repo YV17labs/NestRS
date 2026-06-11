@@ -228,7 +228,7 @@ impl ContainerBuilder {
             tracing::warn!(
                 target: "nest_rs::container",
                 provider = type_name,
-                "provider override: a value of this type was already registered and is being replaced",
+                "provider override",
             );
         }
     }
@@ -245,8 +245,7 @@ impl ContainerBuilder {
                 provider = type_name,
                 existing_kind = "transient",
                 new_kind = "singleton",
-                "provider scope conflict: a transient factory of this type is already registered — \
-                 the new singleton will be shadowed (transient wins on resolution)",
+                "provider scope conflict",
             );
         }
     }
@@ -261,8 +260,7 @@ impl ContainerBuilder {
                 provider = type_name,
                 existing_kind = "singleton",
                 new_kind = "transient",
-                "provider scope conflict: a singleton of this type is already registered — \
-                 the new transient factory will shadow it on resolution",
+                "provider scope conflict",
             );
         }
     }

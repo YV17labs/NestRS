@@ -85,7 +85,8 @@ impl<E> ContextEndpoint<E> {
             Some(guard) => {
                 tracing::debug!(
                     target: "nest_rs::graphql",
-                    "operations gated by the registered GraphqlOperationGuard",
+                    mode = "operation_guard",
+                    "graphql operations gated",
                 );
                 Some(guard)
             }
@@ -93,7 +94,8 @@ impl<E> ContextEndpoint<E> {
                 Some(factory) => {
                     tracing::debug!(
                         target: "nest_rs::graphql",
-                        "operations gated by the global guard pool (fallback operation guard)",
+                        mode = "global_guard_pool",
+                        "graphql operations gated",
                     );
                     Some((factory.0)(&container))
                 }
@@ -101,9 +103,10 @@ impl<E> ContextEndpoint<E> {
                     // No global guards, no bridge: the app has no authn
                     // posture, so an unguarded schema is its deliberate
                     // shape — but say so once at boot.
-                    tracing::info!(
+                    tracing::warn!(
                         target: "nest_rs::graphql",
-                        "no operation guard registered — GraphQL operations run unguarded",
+                        mode = "unguarded",
+                        "no operation guard registered — graphql operations run unguarded",
                     );
                     None
                 }

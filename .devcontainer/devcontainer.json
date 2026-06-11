@@ -3,7 +3,7 @@
 	"dockerComposeFile": "docker-compose.yml",
 	"service": "dev",
 	"workspaceFolder": "/workspaces/nestrs",
-	"postCreateCommand": "cp -n .env.example .env.local || true",
+	"postCreateCommand": "cargo install --locked --path crates/nest-rs-cli",
 	"customizations": {
 		"vscode": {
 			"extensions": [
@@ -17,6 +17,7 @@
 			"settings": {
 				"rust-analyzer.check.command": "clippy",
 				"rust-analyzer.cargo.features": "all",
+				"rust-analyzer.cargo.targetDir": true,
 				"editor.formatOnSave": true
 			}
 		}
@@ -28,12 +29,24 @@
 			"installOhMyZsh": true
 		}
 	},
-	"forwardPorts": [3000, 3001, 3002, 3003, 3004],
+	"forwardPorts": [
+		3001,
+		3002,
+		3003,
+		3004
+	],
 	"portsAttributes": {
-		"3000": { "label": "app" },
-		"3001": { "label": "auth" },
-		"3002": { "label": "api" },
-		"3003": { "label": "mcp" },
-		"3004": { "label": "chat" }
+		"3001": {
+			"label": "auth"
+		},
+		"3002": {
+			"label": "api"
+		},
+		"3003": {
+			"label": "assistant"
+		},
+		"3004": {
+			"label": "live"
+		}
 	}
 }

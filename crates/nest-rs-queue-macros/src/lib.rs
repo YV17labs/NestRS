@@ -29,6 +29,27 @@ mod processor;
 /// where `T: Job`. The macro extracts the job type from the second
 /// parameter, generates a typed handler, and submits a per-method
 /// inventory entry the worker drains.
+///
+/// # Expands to
+///
+/// The impl unchanged, plus per `#[process]` method: a hidden type-erased
+/// handler `fn` (unwraps the wire envelope, deserializes the job, resolves the
+/// provider, dispatches inside the `JobContext`) and a `ProcessMethod`
+/// submitted to the link-time inventory. No `Discoverable` — the host's own
+/// `#[injectable]` owns it.
+///
+/// ```ignore
+/// impl AudioProcessor { /* unchanged */ }
+/// fn __nestrs_process_handler_audio_processor_transcode(payload, container) -> Pin<Box<dyn Future<…>>> { /* … */ }
+/// ::nest_rs_core::inventory::submit! {
+///     ::nest_rs_queue::ProcessMethod {
+///         name: "AudioProcessor::transcode", queue: "audio",
+///         concurrency: 5, retries: 3,
+///         provider_type_id: || TypeId::of::<AudioProcessor>(),
+///         handler: __nestrs_process_handler_audio_processor_transcode,
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     processor::processor(args, input)

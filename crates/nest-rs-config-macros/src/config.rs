@@ -26,6 +26,10 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
+// Deliberately bespoke rather than `nest_rs_codegen::parse_named_str_arg`: that
+// shared helper parses a single `key = "..."` and cannot name an *unexpected*
+// argument, whereas `#[config]` rejects unknown keys by name (see the `other`
+// arm below). The friendlier diagnostic is worth the local parser.
 fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
     let metas = Punctuated::<MetaNameValue, Token![,]>::parse_terminated.parse2(args)?;
 

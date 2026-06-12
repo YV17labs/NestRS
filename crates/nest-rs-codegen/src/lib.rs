@@ -16,7 +16,7 @@ mod inject;
 mod ty;
 
 pub use args::parse_named_str_arg;
-pub use casing::pascal_case;
+pub use casing::{pascal_case, snake_case};
 pub use crud::{CrudConfig, Paginate, parse_crud_args, singular_of};
 pub use inject::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,

@@ -2,6 +2,20 @@
 
 use syn::Ident;
 
+/// `AudioJobs` → `audio_jobs`. Camel/Pascal → snake, inserting `_` before each
+/// interior uppercase. Shared by `#[processor]`/`#[scheduled]`-style macros that
+/// derive a stable wire/queue name from a struct ident.
+pub fn snake_case(camel: &str) -> String {
+    let mut out = String::with_capacity(camel.len() + 4);
+    for (i, ch) in camel.chars().enumerate() {
+        if ch.is_uppercase() && i != 0 {
+            out.push('_');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
+}
+
 /// `org_id` → `OrgId`. Matches SeaORM's `Column` enum naming and the
 /// `<Service>By<Method>` loader struct convention from `#[dataloader]`.
 pub fn pascal_case(ident: &Ident) -> Ident {

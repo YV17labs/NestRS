@@ -8,11 +8,12 @@
 //! it. Inventory is exactly the seam `#[hooks]`, `#[scheduled]`, and
 //! `#[processor]` use, for the same reason.
 
+use nest_rs_codegen::impl_self_ident;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{ImplItem, ItemImpl, ReturnType, Type, parse_macro_input};
+use syn::{ImplItem, ItemImpl, ReturnType, parse_macro_input};
 
 const PROBE_ATTRS: [(&str, &str); 3] = [
     ("liveness", "Liveness"),
@@ -34,8 +35,8 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut item = parse_macro_input!(input as ItemImpl);
     let self_ty = item.self_ty.clone();
-    let provider_name = match impl_self_name(&self_ty) {
-        Ok(name) => name,
+    let provider_name = match impl_self_ident(&self_ty, "#[indicators]") {
+        Ok(ident) => ident.to_string(),
         Err(err) => return err.to_compile_error().into(),
     };
 
@@ -127,16 +128,4 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
         #(#submissions)*
     };
     out.into()
-}
-
-fn impl_self_name(self_ty: &Type) -> syn::Result<String> {
-    if let Type::Path(p) = self_ty
-        && let Some(seg) = p.path.segments.last()
-    {
-        return Ok(seg.ident.to_string());
-    }
-    Err(syn::Error::new_spanned(
-        self_ty,
-        "#[indicators] expects an `impl` block on a named struct (e.g. `impl AppHealth`)",
-    ))
 }

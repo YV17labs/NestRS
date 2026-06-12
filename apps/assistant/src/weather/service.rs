@@ -48,7 +48,7 @@ impl WeatherProvider for OpenMeteoClient {
         let current = payload
             .current_weather
             .ok_or(WeatherError::MissingPayload)?;
-        tracing::info!(
+        tracing::debug!(
             target: "assistant::weather",
             latitude,
             longitude,

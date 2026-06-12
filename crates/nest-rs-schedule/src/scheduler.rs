@@ -139,7 +139,7 @@ impl Transport for Scheduler {
             if let Some(r) = reachable.as_ref()
                 && !r.0.contains(&provider_id)
             {
-                tracing::debug!(
+                tracing::warn!(
                     target: "nest_rs::schedule",
                     provider = entry.provider,
                     method = entry.method,

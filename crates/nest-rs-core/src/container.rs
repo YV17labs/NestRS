@@ -355,7 +355,8 @@ impl ContainerBuilder {
             tracing::warn!(
                 target: "nest_rs::container",
                 provider = std::any::type_name::<T>(),
-                "request-scoped provider override: a factory of this type was already registered and is being replaced",
+                kind = "request_scoped",
+                "provider override",
             );
         }
         self.scoped.insert(
@@ -383,7 +384,8 @@ impl ContainerBuilder {
             tracing::warn!(
                 target: "nest_rs::container",
                 provider = std::any::type_name::<T>(),
-                "transient provider override: a factory of this type was already registered and is being replaced",
+                kind = "transient",
+                "provider override",
             );
         }
         self.warn_if_cross_kind_transient(id, std::any::type_name::<T>());

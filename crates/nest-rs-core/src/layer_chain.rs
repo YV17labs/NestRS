@@ -136,7 +136,8 @@ fn report_redundant_scope(type_id: TypeId, existing: LayerSite, skipped: LayerSi
             layer = short_type_name(name),
             kept = existing.label(),
             skipped = skipped.label(),
-            "redundant layer declaration deduped — broadest scope wins (`#[force_*]` to re-run)",
+            hint = "broadest scope wins; use `#[force_*]` to re-run",
+            "redundant layer declaration deduped",
         );
     }
 }

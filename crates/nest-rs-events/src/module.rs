@@ -45,7 +45,7 @@ fn wire_listeners(
             if let Some(r) = reachable.as_ref()
                 && !r.0.contains(&provider_id)
             {
-                tracing::debug!(
+                tracing::warn!(
                     target: "nest_rs::events",
                     listener = entry.name,
                     "skipped #[on_event] method: provider unreachable from app's module tree",

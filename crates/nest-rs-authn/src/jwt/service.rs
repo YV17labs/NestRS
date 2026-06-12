@@ -176,8 +176,11 @@ fn map_decode_error(err: jsonwebtoken::errors::Error) -> AuthError {
         ErrorKind::ImmatureSignature => AuthError::NotYetValid,
         _ => AuthError::InvalidToken,
     };
+    // The guard layer (`AuthGuard::check_http`) emits the single `warn` for an
+    // authentication failure with strategy + route context; this stays `debug`
+    // so the typed decode reason is available without double-counting denials.
     if !matches!(mapped, AuthError::Expired) {
-        tracing::warn!(target: "nest_rs::authn", error = %err, "JWT verification failed");
+        tracing::debug!(target: "nest_rs::authn", error = %err, "JWT verification failed");
     }
     mapped
 }

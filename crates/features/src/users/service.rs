@@ -74,7 +74,7 @@ impl UsersService {
             Some(password),
         )?;
         let user = active.insert(&Repo::<Users>::conn()?).await?;
-        tracing::info!(target: "nest_rs::authn", id = %user.id, %org_id, "user registered with password");
+        tracing::info!(target: "features::users", id = %user.id, %org_id, "user registered with password");
         Ok(User::from(&user))
     }
 
@@ -85,7 +85,7 @@ impl UsersService {
     ) -> Result<entity::Model, ServiceError> {
         let active = prepare_new_user(input, org_id, None)?;
         let user = active.insert(&Repo::<Users>::conn()?).await?;
-        tracing::info!(target: "nest_rs::authn", id = %user.id, %org_id, "user created");
+        tracing::info!(target: "features::users", id = %user.id, %org_id, "user created");
         Ok(user)
     }
 
@@ -113,7 +113,7 @@ impl UsersService {
             None,
         )?;
         let user = active.insert(&conn).await?;
-        tracing::info!(target: "nest_rs::authn", id = %user.id, %org_id, "provisioned a user");
+        tracing::info!(target: "features::users", id = %user.id, %org_id, "provisioned a user");
         Ok(user)
     }
 }
@@ -141,18 +141,18 @@ pub(crate) fn verify_credentials(
 ) -> Result<entity::Model, CredentialError> {
     let Some(user) = user else {
         burn_verify(password);
-        tracing::warn!(target: "nest_rs::authn", %email, "login failed");
+        tracing::warn!(target: "features::users", %email, reason = "unknown_email", "login failed");
         return Err(CredentialError);
     };
 
     let Some(ref hash) = user.password_hash else {
         burn_verify(password);
-        tracing::warn!(target: "nest_rs::authn", %email, "login failed");
+        tracing::warn!(target: "features::users", %email, reason = "no_password_set", "login failed");
         return Err(CredentialError);
     };
 
     if !verify_password(hash, password).unwrap_or(false) {
-        tracing::warn!(target: "nest_rs::authn", %email, "login failed");
+        tracing::warn!(target: "features::users", %email, reason = "bad_password", "login failed");
         return Err(CredentialError);
     }
     Ok(user)
@@ -193,7 +193,7 @@ impl UsersService {
     #[on_application_shutdown]
     async fn report(&self) -> Result<()> {
         let count = Users::find().count(self.db.as_ref()).await?;
-        tracing::info!(target: "nest_rs::lifecycle", count, "users present at shutdown");
+        tracing::info!(target: "features::users", count, "users present at shutdown");
         Ok(())
     }
 }

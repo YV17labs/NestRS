@@ -84,6 +84,7 @@ impl OpenTelemetry {
             tracing::info!(
                 target: "nest_rs::opentelemetry",
                 service = %config.service_name,
+                mode = "otlp",
                 endpoint = config.otlp_endpoint.as_deref().unwrap_or("<none>"),
                 sample_ratio = config.trace_sample_ratio,
                 log_format = ?config.log_format,
@@ -109,8 +110,9 @@ impl OpenTelemetry {
             tracing::info!(
                 target: "nest_rs::opentelemetry",
                 service = %config.service_name,
+                mode = "console",
                 log_format = ?config.log_format,
-                "OpenTelemetry initialised (console only)"
+                "OpenTelemetry initialised"
             );
             Ok(OpenTelemetry {})
         }

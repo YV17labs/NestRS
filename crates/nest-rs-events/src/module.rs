@@ -22,12 +22,15 @@ impl Module for EventsModule {
     }
 }
 
-// No-op when EventsModule was not imported (the bus is then absent).
+// No-op when EventsModule was not imported (the bus is then absent). Infra
+// hook self-gates inside `wire_listeners`, so it opts out of the inert-hook
+// warn with `present: |_| true`.
 nest_rs_core::inventory::submit! {
     LifecycleHook {
         phase: LifecyclePhase::OnApplicationBootstrap,
         provider: "EventsModule",
         method: "wire_listeners",
+        present: |_| true,
         run: wire_listeners,
     }
 }

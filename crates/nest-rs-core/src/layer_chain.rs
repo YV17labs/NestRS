@@ -52,7 +52,10 @@ impl<L: ?Sized> Clone for ResolvedLayer<L> {
 ///
 /// Behaviour:
 ///
-/// 1. Dedup by `TypeId` — the broadest site wins, the rest log a `warn`.
+/// 1. Dedup by `TypeId` — the broadest site wins; a narrower-scope duplicate
+///    is deduped and reported once per process at `debug` (see
+///    [`report_redundant_scope`]), not `warn` (fail-secure: the layer still
+///    runs exactly once).
 /// 2. The broadest-site rule is bypassed for any `TypeId` listed in
 ///    `force` — those entries always survive even if the same `TypeId`
 ///    is global.

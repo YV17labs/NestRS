@@ -51,7 +51,8 @@ pub struct ProcessorMeta {
 /// `#[process]`-tagged method. A `JobConsumer` drains this registry at boot
 /// and filters by
 /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so a method on a
-/// provider not reachable from the app's module tree is silently skipped.
+/// provider not reachable from the app's module tree is skipped with a boot
+/// `warn` (the consumer logs it, so leftover code stays visible).
 pub struct ProcessMethod {
     pub name: &'static str,
     pub queue: &'static str,

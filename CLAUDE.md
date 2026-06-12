@@ -19,7 +19,7 @@ framework defect.
 Leverage = **procedural macros** (decorators as declarative in Rust as
 in TS). `crates/nestrs-*` = framework; `crates/features/` = product
 vertical slices (port at the feature root + one adapter sub-folder per
-transport: `http/`, `graphql/`, `ws/`, `queue/`, `mcp/`);
+transport: `http/`, `graphql/`, `ws/`, `queue/`, `schedule/`, `mcp/`);
 `apps/<name>/` = `main.rs` + `module.rs` composing edges.
 
 ## Rule priority — Rust first, conventions second
@@ -92,7 +92,13 @@ something the feature can't generalize*.
   `core/` sub-folder — is deliberate.
 - **`apps/<name>` — pure composition.** `main.rs` + `module.rs` only,
   by default. A feature folder under `apps/<x>/` is the exception
-  (glue handler over several features, deployment-specific route).
+  (glue handler over several features, deployment-specific route). Such
+  an app-local feature **may flatten** — handler + `service.rs` +
+  `module.rs` at the folder root, no port/adapter split (`live/chat/`,
+  `assistant/weather/`). The hexagonal port+adapter split (sub-folder
+  per transport) is mandatory only in `crates/features/`, where a slice
+  must serve many apps and transports; an app-local single-transport
+  slice that only this binary uses keeps the lighter layout.
 
 **Port + adapters** (`users/`):
 
@@ -103,6 +109,7 @@ something the feature can't generalize*.
 | `users/graphql/` | `resolver.rs` (field + root merged into `UsersResolver`) | `UsersGraphqlModule` |
 | `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `WsModule` too) |
 | `users/queue/` | `processor.rs` | `UsersQueueModule` |
+| `users/schedule/` | `tasks.rs` (`#[scheduled]` host) | `UsersScheduleModule` |
 | `users/mcp/` | `tool.rs` | `UsersMcpModule` |
 
 Each adapter imports `UsersModule` explicitly — composition, not
@@ -145,12 +152,21 @@ bar. **Do not propose an external DI crate.** Extend ours.
   factory outputs). `main` holds only
   `App::builder().module::<AppModule>()` (+ transports). Sync apps
   keep `App::new`.
-- **Providers are singletons** unless `#[injectable(scope = request)]`
-  — built per request, deps from the singleton root. **One level
-  deep**: request-scoped may inject singletons; never the reverse or
-  another request-scoped. Reach one through the request boundary
-  (today **HTTP only**: `nest_rs_http::Scoped<T>`), never via
-  `#[inject]`.
+- **Providers are singletons** unless scoped. Two non-default scopes
+  exist:
+  - `#[injectable(scope = request)]` — built per request, deps from the
+    singleton root. **One level deep**: request-scoped may inject
+    singletons; never the reverse or another request-scoped. Reach one
+    through the request boundary (today **HTTP only**:
+    `nest_rs_http::Scoped<T>`), never via `#[inject]`.
+  - `#[injectable(scope = transient)]` — rebuilt on **every** resolution
+    (no caching): same scope, multiple resolutions, distinct instances. A
+    transient may depend on singletons or request-scoped providers. A
+    transient that (transitively) depends on itself **panics at
+    resolution** with a cycle diagnostic naming the chain — this is the
+    one provider error caught at first-resolution rather than at boot.
+    Reach for it only when a fresh instance per use is genuinely required;
+    singleton is the default.
 - **Modules compose by type or configured value.** `#[module(imports =
   [...])]` takes a bare type or a call like
   `OpenApiModule::for_root(opts)` (`DynamicModule`). Configure via
@@ -304,7 +320,7 @@ share `crates/features` and the DB, never RPC each other.
 | `authz/` (root) | `AppAbility`, `AuthzModule` |
 | `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>` — **alias in `features`, not in `nest-rs-authz`**), `AuthzHttpModule` |
 | `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthGuard` (`ResolverGuard` marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
-| `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `WsAuthGuard` (`MessageGuard` marker), `AuthzWsModule` |
+| `authz/ws/` | `WsDataContext` as `dyn SocketContext` (re-seeds executor + ability per message), `AuthzWsModule` |
 
 No app-side `authz/` folder — bridges live with the rest of authz.
 
@@ -318,14 +334,25 @@ bring every layer they need).
 |---|---|---|---|
 | HTTP | `#[controller]` | `#[use_guards(AuthGuard, AuthzGuard)]` on impl | `[<Feature>Module, AuthzHttpModule]` |
 | GraphQL | `#[resolver]` | `#[use_guards(GraphqlAuthGuard)]` on impl | `[<Feature>Module, AuthzGraphqlModule]` |
-| WS | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AuthzGuard)]` on gateway struct + `#[use_guards(WsAuthGuard)]` on each `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
+| WS | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
 
-**Why markers (not real guards) for GraphQL/WS?** HTTP guards run on
-`&mut Request` before the handler — they *are* the auth chain.
-GraphQL/WS run authn/ability at the operation guard / connection
-upgrade, then seed `Ability` into per-operation context. The marker
+**Why GraphQL uses a marker but WS binds real guards.** HTTP guards run
+on `&mut Request` before the handler — they *are* the auth chain.
+GraphQL runs authn/ability **in-band** per operation, then seeds
+`Ability` into per-operation context; the `GraphqlAuthGuard` **marker**
 turns that seeded-context dep into an `#[inject]` the access graph can
-validate: omit the authz module ⇒ boot fails naming the missing guard.
+validate — omit `AuthzGraphqlModule` ⇒ boot fails naming the missing
+guard. WS instead reuses the connection **upgrade** (an HTTP `GET`), so
+the gateway binds the real HTTP guards (`AuthGuard`, `AuthzGuard`) on its
+struct; they run once at upgrade and are access-graph-validated the same
+way — omit `AuthzWsModule` ⇒ those guards are unreachable ⇒ boot fails.
+Because the upgrade's task-locals have unwound by the time a message
+handler runs, `WsDataContext` (the `SocketContext` bridge `AuthzWsModule`
+provides) re-seeds executor + ability around each message; per-message
+`Guard`s (bound beside a `#[subscribe_message]`, reusing
+`Guard::check_ws_message`) add event-level checks when needed. There is
+**no** `WsAuthGuard`/`MessageGuard` marker type — WS reuses the HTTP
+`Guard` trait directly.
 
 **Public handlers** omit `#[use_guards(...)]` for that transport and
 lose the transitive `Authz<Transport>Module` import — the app must
@@ -467,8 +494,10 @@ Tutorial feature exemplar: `crates/features/src/posts/`.
   GET, so `#[gateway(path = "/ws")]` self-mounts on `HttpTransport`
   (inherits port/CORS/TLS). `#[messages]` orchestrates
   `#[subscribe_message]` + `#[on_connect]`/`#[on_disconnect]`; one
-  envelope `{event, data}`. Guards at two scopes (connection `Guard`,
-  per-message `MessageGuard`). Per-gateway namespace via `WsServer<N>`.
+  envelope `{event, data}`. Guards at two scopes, both reusing the HTTP
+  `Guard` trait: connection-level (on the upgrade) and per-message
+  (`Guard::check_ws_message`, bound beside a `#[subscribe_message]`).
+  Per-gateway namespace via `WsServer<N>`.
 
 ## Naming — strict
 
@@ -484,12 +513,14 @@ Snake_case, no dotted variants.
 | Resolver (GraphQL) | `resolver.rs` |
 | Gateway (WS) | `gateway.rs` |
 | Processor (queue) | `processor.rs` |
+| Scheduled tasks (schedule) | `tasks.rs` |
 | Tool (MCP) | `tool.rs` |
 | Entity (ORM + `#[expose]`) | `entity.rs` |
 | DTO / Input types | `dto.rs` |
 | Domain-specific error (only when framework errors can't carry it) | `error.rs` |
 | GraphQL bridge type alias | `<feature>/graphql/bridge.rs` |
 | Guard / Strategy | `guard.rs` / `strategy.rs` |
+| Guard *alias* binding a strategy (e.g. `type AuthGuard = AuthGuard<S>`) | co-located in the strategy's file, not a separate `guard.rs` |
 | Static constants | `constants.rs` |
 
 - **`mod.rs` / `lib.rs` carry no business logic** — only `//!` doc,

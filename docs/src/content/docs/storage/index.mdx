@@ -1,0 +1,146 @@
+---
+title: Storage
+description: S3-compatible object storage — an injectable Storage client with presigned URLs, built on object_store and ready for any S3/MinIO/RustFS server.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Object storage shares the rest of the framework's shape. `Storage` is a
+regular `#[injectable]` provider: inject it, call a handful of async
+methods. It hands clients short-lived **presigned URLs** so bytes never
+transit your API, and reads or writes objects server-side for workers
+that transform them.
+
+The client ships in **`nest-rs-storage`**, built on
+[`object_store`](https://docs.rs/object_store) — the generic
+object-store abstraction maintained under Apache Arrow. It is
+**multi-driver** (S3, GCS, Azure, local filesystem, in-memory) behind
+one trait, with presigning in a separate `Signer` trait the S3 driver
+implements. The AWS-S3 driver is wired by default and speaks to real
+AWS S3 as well as any S3-compatible server (MinIO, RustFS) in path- or
+virtual-host style.
+
+<Aside>
+`object_store` is reqwest/rustls-based — no `aws-runtime` / `aws-sdk-*`
+in the tree — so it builds on the pinned toolchain where the official
+AWS SDK currently does not.
+</Aside>
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs-storage
+```
+
+## Wire it in
+
+`StorageModule` owns its `StorageConfig` (namespace `storage`, loaded
+from `NESTRS_STORAGE__*`) and registers `Storage` as a singleton
+provider. Import it where a feature needs storage:
+
+```rust title="crates/features/src/file_assets/module.rs"
+use nest_rs_core::module;
+use nest_rs_storage::StorageModule;
+
+use crate::file_assets::FileAssetsService;
+
+#[module(imports = [StorageModule], providers = [FileAssetsService])]
+pub struct FileAssetsModule;
+```
+
+## Configuration
+
+Every field is settable via `NESTRS_STORAGE__*` env **or** a pinned
+`StorageConfig` — the framework-wide dual-path config rule.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ENDPOINT` | `http://rustfs:9000` | S3 endpoint; empty ⇒ real AWS S3 |
+| `REGION` | `us-east-1` | region |
+| `ACCESS_KEY` / `SECRET_KEY` | `nestrs` | static credentials |
+| `BUCKET` | `nestrs` | target bucket |
+| `FORCE_PATH_STYLE` | `true` | `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
+
+## Presigned uploads
+
+The canonical flow keeps bytes off the API. A handler injects `Storage`
+and returns a signed `PUT` URL; the client uploads straight to the
+object store; a later call reads the object's metadata to finalize.
+
+```rust title="crates/features/src/file_assets/service.rs"
+use std::sync::Arc;
+use std::time::Duration;
+
+use nest_rs_core::injectable;
+use nest_rs_storage::{Result, Storage};
+
+#[injectable]
+pub struct FileAssetsService {
+    #[inject]
+    storage: Arc<Storage>,
+}
+
+impl FileAssetsService {
+    /// Hand the client a short-lived URL to PUT bytes to directly.
+    pub async fn request_upload(&self, key: &str) -> Result<String> {
+        self.storage.presign_put(key, Duration::from_secs(900)).await
+    }
+
+    /// After the client uploads, read size back to finalize the record.
+    pub async fn confirm_upload(&self, key: &str) -> Result<i64> {
+        let info = self.storage.head(key).await?.expect("object present");
+        Ok(info.byte_size)
+    }
+}
+```
+
+<Aside type="caution">
+`head` reports the object's **size** but not its `Content-Type`:
+`object_store`'s `ObjectMeta` does not carry it, so `HeadInfo` exposes
+only the byte size. Keep the mime type you were given at
+upload-request time rather than reading it back. `put_bytes` still
+*sets* the content type on write — only the `head` read-back path
+lacks it.
+</Aside>
+
+## Server-side read and write
+
+Workers that transform objects (e.g. generating a WebP variant) read
+and write bytes directly:
+
+```rust
+let original = self.storage.get_bytes(key).await?;
+let webp = transcode(&original)?;
+self.storage
+    .put_bytes(&variant_key, webp, "image/webp")
+    .await?;
+```
+
+`presign_get` is the counterpart to `presign_put` for serving private
+originals: a short-lived signed `GET` URL the client fetches directly.
+
+## API
+
+| Method | Purpose |
+|---|---|
+| `bucket_name()` | the configured bucket |
+| `presign_put(key, expires)` | signed `PUT` URL for direct client upload |
+| `presign_get(key, expires)` | signed `GET` URL for serving private originals |
+| `head(key) -> Option<HeadInfo>` | object size; `None` if absent |
+| `get_bytes(key)` | download full bytes (server-side) |
+| `put_bytes(key, bytes, content_type)` | upload bytes (server-side) |
+
+## Another backend
+
+Because the seam is the `object_store` traits, pointing `Storage` at
+GCS, Azure, the local filesystem, or in-memory is a builder change
+inside the crate — not an API change for the features that inject it.
+The S3 driver is the default because it also covers every S3-compatible
+server.
+
+### Reference
+
+- `crates/nest-rs-storage/` — `Storage`, `HeadInfo`, `StorageConfig`,
+  `StorageModule`.

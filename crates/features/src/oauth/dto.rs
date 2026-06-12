@@ -1,8 +1,12 @@
+use nest_rs_http::input;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use validator::Validate;
 
-#[derive(Debug, Deserialize, Validate, JsonSchema)]
+// `#[input]` appends `Deserialize`, `Validate`, and `#[serde(deny_unknown_fields)]`,
+// so a login body carrying an extra field (e.g. `is_admin: true`) is rejected at
+// parse time rather than silently ignored — fail-secure on the auth edge.
+#[input]
+#[derive(Debug, JsonSchema)]
 pub struct LoginInput {
     #[validate(email)]
     pub email: String,
@@ -24,6 +28,7 @@ pub struct TokenRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use validator::Validate;
 
     fn input(email: &str, password: &str) -> LoginInput {
         LoginInput {

@@ -18,7 +18,7 @@ use syn::{
 
 use nest_rs_codegen::{impl_self_ident, injected_method_with_layers, layer_inject_keys};
 
-use crate::attr::{take_flag_attr, take_use_attr};
+use crate::attr::take_use_attr;
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
@@ -84,9 +84,20 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        // `#[public]` is consumed but not acted on at the framework level;
-        // a WS guard that cares can read its own marker from socket state.
-        let _is_public = take_flag_attr(&mut method.attrs, "public");
+        // `#[public]` is not honored on a per-message handler — unlike an HTTP
+        // route, a WS event has no public/anonymous fast-path; access is decided
+        // by the guards bound beside it. Reject it loudly rather than silently
+        // dropping a marker on an auth surface (the old behavior).
+        if let Some(attr) = method.attrs.iter().find(|a| a.path().is_ident("public")) {
+            return syn::Error::new_spanned(
+                attr,
+                "#[public] is not supported on a #[subscribe_message] handler; \
+                 WS per-message access is controlled by the guards bound beside it \
+                 (omit guards to leave an event ungated)",
+            )
+            .to_compile_error()
+            .into();
+        }
         all_message_layers.extend(guards.iter().cloned());
         all_message_layers.extend(force_guards.iter().cloned());
 

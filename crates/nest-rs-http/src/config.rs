@@ -3,6 +3,7 @@ use validator::Validate;
 
 use crate::cors::CorsConfig;
 use crate::raw_body::RawBody;
+use crate::security_headers::SecurityHeadersConfig;
 use crate::tls::TlsConfig;
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -46,6 +47,10 @@ pub struct HttpConfig {
     /// would bypass the guard pool; `false` downgrades to a `warn`. Read from
     /// `NESTRS_HTTP__FAIL_SECURE_STRICT`.
     pub fail_secure_strict: bool,
+    /// Default security response headers (`nosniff`, `X-Frame-Options`, HSTS
+    /// under TLS). On by default; tune via `NESTRS_HTTP__SECURITY_HEADERS`,
+    /// `__FRAME_OPTIONS`, `__HSTS`, `__CONTENT_TYPE_OPTIONS`.
+    pub security_headers: SecurityHeadersConfig,
 }
 
 impl Default for HttpConfig {
@@ -60,6 +65,7 @@ impl Default for HttpConfig {
             max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
             request_timeout_secs: Some(30),
             fail_secure_strict: true,
+            security_headers: SecurityHeadersConfig::default(),
         }
     }
 }
@@ -110,6 +116,7 @@ impl Config for HttpConfig {
                 .or(Some(RawBody::DEFAULT_LIMIT)),
             request_timeout_secs: env.parse("REQUEST_TIMEOUT_SECS")?.or(Some(30)),
             fail_secure_strict: env.flag("FAIL_SECURE_STRICT", true)?,
+            security_headers: SecurityHeadersConfig::from_env(env)?,
         })
     }
 }

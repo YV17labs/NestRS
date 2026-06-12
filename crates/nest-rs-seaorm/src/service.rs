@@ -109,7 +109,7 @@ where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     {
         let conn = Repo::<Self::Entity>::conn()?;
-        let query = Self::Entity::find_by_id(id).filter(Self::live_read_filter());
+        let query = Repo::<Self::Entity>::unscoped_by_id(id).filter(Self::live_read_filter());
         let Some(model) = query.one(&conn).await? else {
             return Ok(Access::Missing);
         };

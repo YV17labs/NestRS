@@ -398,7 +398,13 @@ per-message transaction). **Worker transports** install pool via
 orm-agnostic `JobContext` (`WorkerDbContext`, auto-bound by
 `DatabaseModule`) — system work ⇒ no ability ⇒ unscoped, correct.
 A truly contextless path (shutdown hook) keeps an injected
-`Arc<DatabaseConnection>` — the **only** documented `Repo` bypass.
+`Arc<DatabaseConnection>` — the only `Repo`-*less* bypass (no executor
+at all). Two ability-less paths stay **inside** `Repo` via
+`Repo::unscoped()` / `unscoped_by_id()`: pre-authentication credential
+lookup (no principal yet ⇒ no ability) and `CrudService::access` (must
+distinguish `Denied` from `Missing`, so it filters by ability
+explicitly after the unscoped load). Every other read uses
+`scoped`/`all`/`find_by_id`, which apply the ambient ability `WHERE`.
 
 **`#[dataloader]` batch methods** live on the service, use `Repo`,
 return `Result<HashMap<…>, E>` (infallible only when truly cannot

@@ -5,6 +5,12 @@
 //! Keys are not evicted, so an unbounded set of distinct clients grows the map.
 //! Acceptable for the in-process default; a future Redis store would handle
 //! expiry natively.
+//!
+//! **Scope is per-process, by design.** The counter lives in this replica's
+//! memory, so N replicas of an app give a client up to N× the configured limit
+//! on an auth-sensitive endpoint. That is a deliberate trade for the
+//! zero-dependency default; deployments that need a global limit implement
+//! [`ThrottlerStore`] over a shared store (Redis) and bind that guard instead.
 
 use std::collections::HashMap;
 use std::net::IpAddr;

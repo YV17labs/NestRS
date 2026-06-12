@@ -134,6 +134,7 @@ export default defineConfig({
         { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
         { label: 'HTTP', items: [{ autogenerate: { directory: 'http' } }] },
         { label: 'Database', items: [{ autogenerate: { directory: 'database' } }] },
+        { label: 'Storage', items: [{ autogenerate: { directory: 'storage' } }] },
         {
           label: 'Security',
           items: [

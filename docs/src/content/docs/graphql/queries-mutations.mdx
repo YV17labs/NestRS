@@ -26,11 +26,19 @@ pub struct ProductsResolver;
 #[resolver]
 impl ProductsResolver {
     #[query]
+    #[public]
     async fn product_count(&self) -> i32 {
         42
     }
 }
 ```
+
+`#[public]` is the operation's **access posture**: every `#[query]` /
+`#[mutation]` declares either `#[public]` (deliberately ungated) or
+`#[authorize(Action, Entity)]` (ability gate + automatic response
+masking) — a method with neither does not compile. The toy examples on
+this page are `#[public]`; the service-backed ones at the bottom carry
+`#[authorize]`.
 
 On the wire this reads as:
 
@@ -53,6 +61,7 @@ Add typed parameters and they become required GraphQL arguments;
 #[resolver]
 impl ProductsResolver {
     #[query]
+    #[public]
     async fn product(&self, id: String, locale: Option<String>) -> String {
         let locale = locale.as_deref().unwrap_or("en");
         format!("product {id} in {locale}")
@@ -92,6 +101,7 @@ pub struct ProductsResolver;
 #[resolver]
 impl ProductsResolver {
     #[query]
+    #[public]
     async fn product(&self, id: String) -> Product {
         Product { id, name: "Widget".into(), price_cents: 1999 }
     }
@@ -138,6 +148,7 @@ pub struct ProductsResolver;
 #[resolver]
 impl ProductsResolver {
     #[mutation]
+    #[public]
     async fn create_product(&self, input: CreateProductInput) -> Product {
         Product {
             id: "p-001".into(),
@@ -175,6 +186,7 @@ pub struct ProfileResolver;
 #[resolver]
 impl ProfileResolver {
     #[query]
+    #[public]
     async fn me(&self, ctx: &Context<'_>) -> Result<String> {
         let claims = ctx.data::<crate::Claims>()?;
         Ok(format!("you are {}", claims.subject))
@@ -197,6 +209,7 @@ error:
 use async_graphql::{Error, Result};
 
 #[query]
+#[public]
 async fn product(&self, id: String) -> Result<Product> {
     if id.is_empty() {
         return Err(Error::new("id must not be empty"));
@@ -216,6 +229,7 @@ this is the same shape every adapter uses:
 ```rust
 use std::sync::Arc;
 use async_graphql::Result;
+use nest_rs_authz::{Create, Read};
 use nest_rs_graphql::{mutation, query, resolver};
 
 #[resolver]
@@ -227,11 +241,13 @@ pub struct ProductsResolver {
 #[resolver]
 impl ProductsResolver {
     #[query]
+    #[authorize(Read, ProductEntity)]
     async fn product(&self, id: String) -> Result<Option<Product>> {
         Ok(self.svc.find_by_id(&id).await?)
     }
 
     #[mutation]
+    #[authorize(Create, ProductEntity)]
     async fn create_product(&self, input: CreateProductInput) -> Result<Product> {
         Ok(self.svc.create(input).await?)
     }
@@ -239,8 +255,11 @@ impl ProductsResolver {
 ```
 
 The service stays the single audited choke point to the database. The
-resolver only translates between the wire shape and the service. See
-[Database / CRUD](/database/crud/) for the service contract.
+resolver only translates between the wire shape and the service —
+`#[authorize(Action, Entity)]` is each operation's access posture,
+gating the call against the ambient ability and masking the returned
+value automatically. See [Database / CRUD](/database/crud/) for the
+service contract.
 
 ## Where to go next
 

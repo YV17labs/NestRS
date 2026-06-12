@@ -37,6 +37,7 @@ pub struct GreetingResolver;
 #[resolver]
 impl GreetingResolver {
     #[query]
+    #[public]
     async fn greeting(&self, name: Option<String>) -> String {
         format!("Hello, {}!", name.as_deref().unwrap_or("World"))
     }
@@ -48,6 +49,10 @@ impl GreetingResolver {
 - **`#[resolver]`** on the impl block orchestrates the operations within.
 - **`#[query]`** declares a top-level query. The method name becomes the
   field name (camelCased on the wire: `greeting`).
+- **`#[public]`** declares the operation's **access posture** —
+  deliberately ungated. Every `#[query]` / `#[mutation]` carries either
+  `#[public]` or `#[authorize(Action, Entity)]` (ability gate +
+  automatic response masking); a method with neither does not compile.
 - Arguments are mapped to GraphQL input arguments by serde. `Option<T>`
   becomes nullable.
 
@@ -104,6 +109,7 @@ pub struct GreetingResolver {
 #[resolver]
 impl GreetingResolver {
     #[query]
+    #[public]
     async fn greeting(&self, name: Option<String>) -> String {
         self.svc.greet(name.as_deref().unwrap_or("World"))
     }

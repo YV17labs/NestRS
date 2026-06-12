@@ -444,7 +444,7 @@ module fails boot with a clear error naming the missing guard.
 ```rust
 #[resolver]
 #[use_guards(GraphqlAuthGuard)]
-impl PostResolver { /* ... */ }
+pub struct PostResolver { /* ... */ }
 ```
 
 ```rust

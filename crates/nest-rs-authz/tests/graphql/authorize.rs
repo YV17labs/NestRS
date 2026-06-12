@@ -1,17 +1,18 @@
 //! The resolver gate end-to-end through the **in-band** path: the
 //! `GraphqlAbilityBridge` (registered as the `dyn GraphqlOperationGuard`)
 //! runs the guard chain per operation and builds the actor's `Ability`, the
-//! `GraphqlContextSeed` forwards it into the GraphQL context, and `authorize`
-//! admits or rejects the query by the caller's role. `/graphql` is
+//! `GraphqlContextSeed` forwards it into the GraphQL context, and the declared
+//! `#[authorize(Read, …)]` posture admits or rejects the query by the caller's
+//! role. `/graphql` is
 //! `EdgePosture::Exempt` — no guard runs at the HTTP edge; this bridge is
 //! the only execution site.
 
 use std::sync::Arc;
 
-use nest_rs_authz::graphql::{GraphqlAbilityBridge, authorize};
+use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
+use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, resolver};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::async_trait;
@@ -21,8 +22,9 @@ use nest_rs_testing::TestApp;
 /// A throwaway SeaORM entity to act as the authorization `Subject`.
 mod widget {
     use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
     #[sea_orm(table_name = "widgets")]
     pub struct Model {
         #[sea_orm(primary_key)]
@@ -75,14 +77,16 @@ impl Guard for AbilityInjector {
     }
 }
 
+impl nest_rs_resource::WireModelDefaults for widget::Entity {}
+
 #[resolver]
 struct WidgetResolver;
 
 #[resolver]
 impl WidgetResolver {
     #[query]
-    async fn widget_name(&self, ctx: &Context<'_>) -> GqlResult<String> {
-        authorize::<Read, widget::Entity>(ctx)?;
+    #[authorize(Read, widget::Entity)]
+    async fn widget_name(&self) -> GqlResult<String> {
         Ok("ada".into())
     }
 }

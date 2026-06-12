@@ -27,6 +27,7 @@ pub struct ItemsResolver;
 #[resolver]
 impl ItemsResolver {
     #[query]
+    #[public]
     async fn item(&self, id: String) -> Result<String> {
         if id.is_empty() {
             return Err(Error::new("id must not be empty"));
@@ -60,6 +61,7 @@ on without parsing the message:
 use async_graphql::{Error, Result};
 
 #[query]
+#[public]
 async fn item(&self, id: String) -> Result<String> {
     if id.is_empty() {
         return Err(Error::new("id must not be empty").extend_with(|_, e| {
@@ -103,11 +105,13 @@ A resolver propagates that into a GraphQL `Result<T>` with `?`:
 
 ```rust
 use async_graphql::Result;
+use nest_rs_authz::Read;
 use nest_rs_graphql::{query, resolver};
 
 #[resolver]
 impl ItemsResolver {
     #[query]
+    #[authorize(Read, ItemEntity)]
     async fn item(&self, id: String) -> Result<Item> {
         Ok(self.svc.find_by_id(&id).await?)
     }
@@ -135,6 +139,7 @@ fn graphql_from_service(err: ServiceError) -> Error {
 }
 
 #[query]
+#[authorize(Read, ItemEntity)]
 async fn item(&self, id: String) -> Result<Item> {
     self.svc.find_by_id(&id).await.map_err(graphql_from_service)
 }
@@ -151,8 +156,8 @@ turns an `Ability` refusal into a `FORBIDDEN`-coded error before the
 resolver runs. A `GraphqlAuthGuard` does the same for missing or
 invalid principals (`UNAUTHENTICATED`).
 
-The handler doesn't write the mapping; it just calls
-`authorize::<Action, Entity>(ctx)?`. See [Security](/security/) for
+The handler doesn't write the mapping; it just declares
+`#[authorize(Action, Entity)]`. See [Security](/security/) for
 the full chain.
 
 ## `Option<T>` vs error
@@ -173,6 +178,7 @@ The bind helper follows this rule: `bind::<UsersService, Read>(ctx,
 
 ```rust
 #[query]
+#[authorize(Read, UserEntity)]
 async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
     Ok(bind::<UsersService, Read>(ctx, &id)
         .await?

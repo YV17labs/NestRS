@@ -20,6 +20,24 @@ mod resolver;
 /// per-method `#[use_guards(...)]` stacks inside it. A denial short-circuits
 /// as a GraphQL error.
 ///
+/// **Every `#[query]`/`#[mutation]` declares its access posture** — forgetting
+/// one is a compile error, never a silently ungated operation:
+///
+/// - `#[authorize(Action, Entity)]` — the GraphQL analog of the HTTP
+///   `Authorize<A, E>` extractor: the macro emits the class-level gate
+///   (`nest_rs_authz::graphql::authorize`) before the call and automatic
+///   response masking (`masked_value_for`) after it. The mask sees through the
+///   wire DTO itself, `Option<…>` and `Vec<…>`; scalars pass through; an
+///   irreconcilable value fails **closed**. Append `unmasked`
+///   (`#[authorize(Read, E, unmasked)]`) to keep the gate but mask a custom
+///   shape (e.g. a cursor connection) yourself via `masked_output_for`.
+///   Requires a `Result` return so denials can surface.
+/// - `#[public]` — deliberately ungated: no `#[authorize]` gate, no response
+///   mask. Struct- and method-level `#[use_guards]` still run.
+///
+/// A `#[field_resolver]` takes neither: it inherits the operation's posture
+/// (bind `#[use_guards]` beside it for an extra per-field gate).
+///
 /// **One `#[ComplexObject]` per wire type.** async-graphql allows at most one
 /// `#[ComplexObject]` impl per output type. A `#[field_resolver]` here and an
 /// auto-resolved `#[expose]`d relation on the *same* entity both emit one, so
@@ -51,6 +69,22 @@ mod resolver;
 /// methods merge into one `#[ComplexObject]` impl per parent type, plus an
 /// `impl Discoverable` (with a no-op `register`).
 ///
+/// Each delegating method wraps the inherent one in (innermost→outermost) the
+/// declared posture, then the layered guard chain:
+///
+/// ```ignore
+/// // one #[authorize(Read, users::Entity)] query, inside __UsersResolverQuery
+/// async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
+///     /* layered guard chain (global + resolver-scope + method guards) */
+///     ::nest_rs_authz::graphql::authorize::<Read, users::Entity>(ctx)?;   // class gate
+///     match self.0.user(ctx, id).await {                                  // inherent body
+///         Ok(out) => Ok(::nest_rs_authz::graphql::masked_value_for::<
+///             Read, users::Entity, _>(ctx, out)?),                        // response mask
+///         Err(err) => Err(err),
+///     }
+/// }
+/// ```
+///
 /// ```ignore
 /// // impl form
 /// pub struct __UsersResolverQuery(Arc<UsersResolver>);
@@ -78,19 +112,20 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Expands to
 ///
-/// The missing operation methods (each delegating to the entity's `CrudService`,
-/// authorizing + masking through `nest_rs_authz::graphql`), prepended to the
-/// impl block, then the whole block re-emitted under `#[resolver]` — so its
-/// `#[query]`/`#[mutation]` expansion (roots, registry, `Discoverable`) applies.
+/// The missing operation methods — each delegating to the entity's
+/// `CrudService` and declaring its posture with `#[authorize(Action, Entity)]`
+/// exactly as a hand-written operation would (gate + response mask come from
+/// `#[resolver]`'s posture expansion, one mechanism for both) — prepended to
+/// the impl block, then the whole block re-emitted under `#[resolver]`.
 ///
 /// ```ignore
 /// #[::nest_rs_graphql::resolver]
 /// impl UsersResolver {
-///     #[query]    async fn users(&self, ctx) -> Result<Vec<User>> { /* CrudService::list + mask */ }
-///     #[query]    async fn user(&self, ctx, id) -> Result<Option<User>> { /* CrudService::access */ }
-///     #[mutation] async fn create_user(&self, ctx, input) -> Result<User> { /* … */ }
-///     #[mutation] async fn update_user(&self, ctx, id, input) -> Result<Option<User>> { /* … */ }
-///     #[mutation] async fn delete_user(&self, ctx, id) -> Result<bool> { /* … */ }
+///     #[query]    #[authorize(Read, Entity)]   async fn users(&self) -> Result<Vec<User>> { /* CrudService::list */ }
+///     #[query]    #[authorize(Read, Entity)]   async fn user(&self, id) -> Result<Option<User>> { /* CrudService::access */ }
+///     #[mutation] #[authorize(Create, Entity)] async fn create_user(&self, input) -> Result<User> { /* … */ }
+///     #[mutation] #[authorize(Update, Entity)] async fn update_user(&self, id, input) -> Result<Option<User>> { /* … */ }
+///     #[mutation] #[authorize(Delete, Entity)] async fn delete_user(&self, id) -> Result<bool> { /* … */ }
 ///     // …any hand-written methods kept as-is…
 /// }
 /// ```

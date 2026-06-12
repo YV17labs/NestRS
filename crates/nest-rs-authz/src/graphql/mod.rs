@@ -1,9 +1,14 @@
 //! GraphQL bindings (feature `graphql`) — the resolver analog of
 //! [`crate::http`]: [`GraphqlAbilityBridge`] is the per-operation guard that
 //! authenticates and installs the ambient ability; [`authorize`] is the
-//! class-level gate; [`ability`] accesses the per-request ability. Importing
-//! this module submits the `GraphqlContextSeed` that forwards `Arc<Ability>` into
-//! each operation's GraphQL context.
+//! class-level gate; [`masked_value_for`] masks a resolver's return value;
+//! [`ability`] accesses the per-request ability. Importing this module submits
+//! the `GraphqlContextSeed` that forwards `Arc<Ability>` into each operation's
+//! GraphQL context.
+//!
+//! A resolver does not call these directly: `#[authorize(Action, Entity)]` on
+//! a `#[query]`/`#[mutation]` makes `#[resolver]` emit both the gate and the
+//! response mask — the GraphQL analog of the HTTP `Authorize<A, E>` extractor.
 //!
 //! Data-coupled bindings live in `nest_rs_seaorm::graphql` (`bind`,
 //! `LoaderScope`).
@@ -12,9 +17,9 @@
 //! #[resolver]
 //! impl UsersResolver {
 //!     #[query]
-//!     async fn users(&self, ctx: &Context<'_>) -> Result<Vec<User>> {
-//!         authorize::<Read, users::Entity>(ctx)?;
-//!         // ...
+//!     #[authorize(Read, users::Entity)]
+//!     async fn users(&self) -> Result<Vec<User>> {
+//!         // gate + response masking are emitted by the macro
 //!     }
 //! }
 //! ```
@@ -27,4 +32,4 @@ mod mask;
 pub use authorize::authorize;
 pub use bridge::GraphqlAbilityBridge;
 pub use context::ability;
-pub use mask::{masked_output, masked_output_for};
+pub use mask::{masked_output, masked_output_for, masked_value_for};

@@ -28,6 +28,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::extractor::Authorize;
+use crate::wire_mask::{MaskedWire, mask_wire_json};
 use crate::{Ability, Action, ActionMarker, with_ability};
 
 impl<A, S> RouteResponseShaper for Authorize<A, S>
@@ -96,110 +97,30 @@ where
         }
     };
 
-    let masked = match &wire {
-        Value::Array(items) => {
-            let models: Result<Vec<S::Model>, _> =
-                items.iter().map(|item| wire_to_model::<S>(item)).collect();
-            models.map(|models| {
-                let masked = ability.mask_many::<S>(action, models.iter());
-                match S::wire_keys() {
-                    // Strain every surviving row against the entity's static
-                    // exposed-column set. `mask_many` may drop rows, so the
-                    // masked vec no longer aligns with `items` by index — but
-                    // the static key set needs no per-row body to strain
-                    // against, which is exactly what closes the dropped-row leak.
-                    Some(keys) => Value::Array(
-                        masked
-                            .into_iter()
-                            .map(|mut row| {
-                                retain_static_keys(&mut row, keys);
-                                row
-                            })
-                            .collect(),
-                    ),
-                    // Opt-out entity (no `#[expose]`): we can only strain against
-                    // the per-row body, which is sound only when nothing was
-                    // dropped (index alignment preserved).
-                    None => {
-                        if masked.len() == items.len() {
-                            Value::Array(
-                                masked
-                                    .into_iter()
-                                    .zip(items.iter())
-                                    .map(|(mut row, wire_row)| {
-                                        retain_body_keys(&mut row, wire_row);
-                                        row
-                                    })
-                                    .collect(),
-                            )
-                        } else {
-                            Value::Array(masked)
-                        }
-                    }
-                }
-            })
-        }
-        Value::Object(_) => wire_to_model::<S>(&wire).map(|model| {
-            let mut masked = ability.mask::<S>(action, &model);
-            match S::wire_keys() {
-                Some(keys) => retain_static_keys(&mut masked, keys),
-                None => retain_body_keys(&mut masked, &wire),
-            }
-            masked
-        }),
-        // Scalar / null — nothing to strip.
-        _ => {
+    // One masking semantics for every transport: the value-level round-trip
+    // (wire → `S::Model` → mask → exposed-key strainer) lives in
+    // `crate::wire_mask`, shared with the GraphQL resolver wrapper.
+    match mask_wire_json::<S>(ability, action, &wire) {
+        Ok(MaskedWire::Passthrough) => {
+            // Scalar / null — nothing to strip.
             resp.set_body(bytes);
-            return resp;
-        }
-    };
-
-    match masked.and_then(|value| serde_json::to_vec(&value)) {
-        Ok(out) => {
-            resp.set_body(out);
             resp
         }
-        Err(_) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("response masking failed: body did not match the authorized subject type"),
+        Ok(MaskedWire::Masked(value)) => match serde_json::to_vec(&value) {
+            Ok(out) => {
+                resp.set_body(out);
+                resp
+            }
+            Err(_) => masking_failed(),
+        },
+        Err(_) => masking_failed(),
     }
 }
 
-/// Deserialize a handler JSON object into `S::Model`, filling columns the wire
-/// DTO omits so policy can run. The placeholder defaults are stripped again by
-/// [`retain_static_keys`] before the response ships — they never reach the wire.
-fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
-where
-    S: EntityTrait + WireModelDefaults,
-    S::Model: DeserializeOwned,
-{
-    if let Ok(model) = serde_json::from_value(wire.clone()) {
-        return Ok(model);
-    }
-    let Value::Object(mut map) = wire.clone() else {
-        return serde_json::from_value(wire.clone());
-    };
-    S::fill_wire_defaults(&mut map);
-    serde_json::from_value(Value::Object(map))
-}
-
-/// Keep only the entity's statically-known exposed (`#[expose]`) columns, so
-/// neither an unrestricted field grant nor a handler returning a raw `Model`
-/// can leak an unexposed column. Keying on the static set (not the response
-/// body) is what makes this hold even when `mask_many` drops rows, and it cuts
-/// a raw-`Model` body down to its exposed columns rather than trusting it.
-fn retain_static_keys(masked: &mut Value, keys: &'static [&'static str]) {
-    if let Some(masked_obj) = masked.as_object_mut() {
-        masked_obj.retain(|key, _| keys.contains(&key.as_str()));
-    }
-}
-
-/// Fallback strainer for entities that opt out of [`WireModelDefaults::wire_keys`]
-/// (no `#[expose]`): keep only keys the response body already carried. Sound
-/// only when the body is itself the wire shape and rows weren't dropped.
-fn retain_body_keys(masked: &mut Value, wire: &Value) {
-    let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
-        return;
-    };
-    masked_obj.retain(|key, _| wire_obj.contains_key(key));
+/// The fail-closed response: a successful body that cannot be reconciled with
+/// the authorized subject type ships a 500, never unmasked data.
+fn masking_failed() -> Response {
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .body("response masking failed: body did not match the authorized subject type")
 }

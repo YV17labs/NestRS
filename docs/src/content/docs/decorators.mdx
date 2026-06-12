@@ -46,9 +46,11 @@ position without leaving the page.
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[resolver]` | struct + impl block | Marks a resolver provider and orchestrates its operations | [GraphQL](/graphql/) |
-| `#[query]` | method | Root query operation | [Queries and mutations](/graphql/queries-mutations/) |
-| `#[mutation]` | method | Root mutation operation | [Queries and mutations](/graphql/queries-mutations/) |
-| `#[field_resolver]` | method | Custom field resolver on a wire type | [Field resolvers](/graphql/field-resolvers/) |
+| `#[query]` | method | Root query operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[authorize]` | method | Access posture: gates the operation by ability (`Action`, `Entity`) and masks the response | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[public]` | method | Access posture: deliberately ungated operation — no gate, no mask | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[field_resolver]` | method | Custom field resolver on a wire type; takes no posture attribute | [Field resolvers](/graphql/field-resolvers/) |
 | `#[dataloader]` | impl block on service | Batches a method into a request-scoped DataLoader | [Dataloader](/graphql/dataloader/) |
 
 ## WebSockets

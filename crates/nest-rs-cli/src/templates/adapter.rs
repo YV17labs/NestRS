@@ -63,7 +63,11 @@ pub struct {{resolver}} {
 
 #[resolver]
 impl {{resolver}} {
+    // SECURITY: scaffolded as #[public]. Before exposing real data, declare
+    // #[authorize(Action, Entity)] instead (class gate + automatic response
+    // masking) and import AuthzGraphqlModule — see crates/features/src/users/graphql/.
     #[query]
+    #[public]
     async fn {{snake}}_count(&self) -> Result<usize> {
         Ok(self.svc.count())
     }

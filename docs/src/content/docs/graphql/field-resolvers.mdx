@@ -35,6 +35,7 @@ pub struct UsersResolver;
 #[resolver]
 impl UsersResolver {
     #[query]
+    #[public]
     async fn user(&self, id: String) -> User {
         User { id, name: "Ada".into() }
     }
@@ -82,6 +83,7 @@ pub struct UsersResolver {
 #[resolver]
 impl UsersResolver {
     #[query]
+    #[public]
     async fn user(&self, id: String) -> User {
         User { id, name: "Ada".into() }
     }

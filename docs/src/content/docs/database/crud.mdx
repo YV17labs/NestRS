@@ -138,33 +138,39 @@ type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 #[resolver]
+#[use_guards(AuthGuard, AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
-    users: Arc<UsersService>,
+    svc: Arc<UsersService>,
 }
 
 #[crud(
-    service = users,
+    service = svc,
     entity = UserEntity,
     output = User,
     create = CreateUserInput,
     update = UpdateUserInput,
 )]
-#[use_guards(GraphqlAuthGuard)]
 impl UsersResolver {
     #[mutation]
+    #[authorize(Create, UserEntity)]
     async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {
-        authorize::<Create, UserEntity>(ctx)?;
         let actor = ctx.data::<Claims>()?;
-        Ok(self.users.create_in_org(input, actor.org_id).await?)
+        let user = self.svc.create_in_org(input, actor.org_id).await?;
+        Ok(User::from(&user))
     }
 
     #[query]
+    #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
         Ok(bind::<UsersService, Read>(ctx, &id).await?.as_ref().map(User::from))
     }
 }
 ```
+
+Every operation — generated or hand-written — declares its posture with
+`#[authorize(Action, Entity)]` (gate + automatic response masking) or
+`#[public]`; an operation with neither does not compile.
 
 Same override rule — the GraphQL `create_user` and `user` you wrote take
 over; `users`, `update_user`, `delete_user` are generated.

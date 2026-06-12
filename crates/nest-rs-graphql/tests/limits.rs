@@ -19,6 +19,7 @@ struct LimitsResolver;
 #[resolver]
 impl LimitsResolver {
     #[query]
+    #[public]
     async fn root(&self) -> NestedNode {
         NestedNode {
             label: "root".into(),

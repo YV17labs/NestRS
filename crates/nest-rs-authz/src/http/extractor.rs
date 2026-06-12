@@ -15,6 +15,13 @@ use crate::{Ability, ActionMarker, Subject};
 /// client error). Class-level only — the per-row filter and response mask
 /// enforce conditions.
 ///
+/// **The parameter is load-bearing even bound as `_authz`** — it is the
+/// route's masking declaration, not dead code: its presence in the signature
+/// is what makes `#[routes]` install the response shaper (automatic response
+/// masking + ambient ability). Deleting the "unused" parameter disarms both.
+/// The GraphQL analog is `#[authorize(Action, Entity)]` on a
+/// `#[query]`/`#[mutation]`.
+///
 /// `#[routes]` installs the response shaper (masking + ambient ability) by
 /// **textually** matching a handler-parameter type whose path has a segment
 /// literally named `Authorize` or `Bind` — so `nest_rs_authz::http::Authorize`

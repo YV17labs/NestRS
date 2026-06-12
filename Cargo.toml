@@ -69,6 +69,18 @@ figment = { version = "0.10", features = ["toml", "env"] }
 # single-static-binary promise.
 poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
 
+# S3-compatible object storage (nest-rs-storage). `object_store` is the generic,
+# multi-driver object-store abstraction (S3/GCS/Azure/fs/memory) under Apache
+# Arrow; the `aws` feature brings the `AmazonS3` driver + its `Signer` (presign).
+# Chosen over `aws-sdk-s3` because it is reqwest/rustls-based with no
+# `aws-runtime` (which fails to build on the pinned toolchain). Last release
+# 0.13.2 (2025) — within the freshness bar.
+object_store = { version = "0.13", features = ["aws"] }
+# `object_store::signer::signed_url` takes a `reqwest::Method`, a re-export of
+# `http::Method`. Depend on `http` directly so nest-rs-storage stays decoupled
+# from whichever reqwest minor object_store pins internally.
+http = "1"
+
 # Response-body plumbing for the access log: wrap poem's body stream in a byte
 # counter so the access event reports the exact size sent (poem stamps
 # Content-Length past the interceptor). `bytes::Bytes` is the chunk type,
@@ -173,6 +185,7 @@ nest-rs-authn = { version = "0.2.0", path = "crates/nest-rs-authn" }
 nest-rs-throttler = { version = "0.2.0", path = "crates/nest-rs-throttler" }
 nest-rs-config = { version = "0.2.0", path = "crates/nest-rs-config" }
 nest-rs-config-macros = { version = "0.2.0", path = "crates/nest-rs-config-macros" }
+nest-rs-storage = { version = "0.2.0", path = "crates/nest-rs-storage" }
 nest-rs-events = { version = "0.2.0", path = "crates/nest-rs-events" }
 nest-rs-events-macros = { version = "0.2.0", path = "crates/nest-rs-events-macros" }
 nest-rs-authz = { version = "0.2.0", path = "crates/nest-rs-authz" }

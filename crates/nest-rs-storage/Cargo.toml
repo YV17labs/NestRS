@@ -1,0 +1,33 @@
+[package]
+name = "nest-rs-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "S3-compatible object storage for nestrs: a thin, injectable Storage client (presigned PUT/GET, head, byte read/write) built on the `object_store` crate. Multi-driver by design (S3/GCS/Azure/fs/memory); the AWS-S3 driver is wired by default and works against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style."
+
+[dependencies]
+nest-rs-core.workspace = true
+# `StorageModule` owns its `#[config]` `StorageConfig` (namespace `storage`),
+# loaded from `NESTRS_STORAGE__*`; `validator` backs its `#[validate]` rules.
+nest-rs-config.workspace = true
+validator.workspace = true
+# The object-store abstraction. `aws` brings the `AmazonS3` driver, which
+# implements both `ObjectStore` and the `Signer` trait used for presigning.
+object_store.workspace = true
+# `signed_url` takes a `reqwest::Method`, which is a re-export of `http::Method`
+# (http 1.x). Depending on `http` directly keeps us decoupled from whichever
+# reqwest minor object_store pins internally.
+http.workspace = true
+# `get_bytes` hands back `object_store`'s `Bytes` (Arc-backed, cheap clone) so a
+# downloaded body is never copied on the way out.
+bytes.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+# The integration test signs a PUT, uploads raw bytes over HTTP, then reads
+# them back — it needs an independent HTTP client.
+reqwest.workspace = true

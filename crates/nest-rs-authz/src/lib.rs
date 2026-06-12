@@ -19,6 +19,8 @@ mod factory;
 mod mask;
 mod predicate;
 mod subject;
+#[cfg(any(feature = "http", feature = "graphql"))]
+mod wire_mask;
 
 pub use ability::{Ability, FieldSet};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};

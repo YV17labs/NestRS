@@ -92,6 +92,11 @@ use poem::web::Json;
 
 use crate::{{snake}}::{{{create_input}}, {{entity}}, {{service}}};
 
+// SECURITY: scaffolded without guards so the slice compiles in any workspace.
+// Before exposing real data, bind #[use_guards(AuthGuard, AuthzGuard)] on this
+// struct, import AuthzHttpModule in http/module.rs, and declare
+// `_authz: Authorize<Action, Entity>` per handler (the masking declaration) —
+// see crates/features/src/users/http/.
 #[controller(path = "/{{kebab}}")]
 pub struct {{controller}} {
     #[inject]

@@ -42,6 +42,7 @@ nest_rs_graphql::inventory::submit! {
 #[resolver]
 impl TagResolver {
     #[query]
+    #[public]
     async fn tag(&self, ctx: &Context<'_>) -> String {
         ctx.data_opt::<RequestTag>()
             .map(|t| t.0.clone())

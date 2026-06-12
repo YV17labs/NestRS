@@ -154,16 +154,75 @@ fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> bool {
     true
 }
 
-/// True when the method's return type's last path segment is `Result` — the
-/// macro only emits the global guard chain (with its `?`-propagated
-/// `async_graphql::Error`) on `Result`-returning queries/mutations. A bare-
-/// return resolver is treated as `#[public]` by signature: it can't surface
-/// an authn/authz failure, so the global chain stays off it.
+/// `#[authorize(Action, Entity)]` parsed off a `#[query]`/`#[mutation]`
+/// method: the operation's declared access posture. The macro emits the
+/// class-level gate (`authorize::<Action, Entity>`) before the call and the
+/// automatic response mask (`masked_value_for`) after it — the GraphQL analog
+/// of the HTTP `Authorize<A, E>` extractor. `unmasked` keeps the gate but
+/// leaves response masking to the method body (custom shapes the value-level
+/// round-trip cannot see through, e.g. a cursor connection).
+struct AuthorizeSpec {
+    action: Path,
+    entity: Path,
+    unmasked: bool,
+}
+
+/// Extract and remove a `#[authorize(...)]` attribute. At most one per method.
+fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
+    let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
+        return Ok(None);
+    };
+    let attr = attrs.remove(pos);
+    if attrs.iter().any(|a| a.path().is_ident("authorize")) {
+        return Err(syn::Error::new_spanned(
+            &attr,
+            "at most one `#[authorize(...)]` per operation",
+        ));
+    }
+    let paths: Vec<Path> = attr
+        .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?
+        .into_iter()
+        .collect();
+    let shape_err = || {
+        syn::Error::new_spanned(
+            &attr,
+            "expected `#[authorize(Action, Entity)]` — e.g. `#[authorize(Read, users::Entity)]`; \
+             append `unmasked` (`#[authorize(Read, users::Entity, unmasked)]`) to keep the \
+             class gate but mask the response yourself",
+        )
+    };
+    let unmasked = match paths.len() {
+        2 => false,
+        3 if paths[2].is_ident("unmasked") => true,
+        _ => return Err(shape_err()),
+    };
+    let mut paths = paths.into_iter();
+    match (paths.next(), paths.next()) {
+        (Some(action), Some(entity)) => Ok(Some(AuthorizeSpec {
+            action,
+            entity,
+            unmasked,
+        })),
+        _ => Err(shape_err()),
+    }
+}
+
+/// True when the method's return type's last path segment ends with `Result`
+/// (`Result`, `GqlResult`, any `*Result` alias) — the macro only emits the
+/// global guard chain (with its `?`-propagated `async_graphql::Error`) on
+/// `Result`-returning queries/mutations. A bare-return resolver can't surface
+/// an authn/authz failure, so the global chain stays off it (and the posture
+/// check forces it to be `#[public]`). An alias that hides `Result` under an
+/// unrelated name isn't recognised — spell the return type `Result` there.
 fn sig_returns_result(sig: &Signature) -> bool {
     match &sig.output {
         syn::ReturnType::Default => false,
         syn::ReturnType::Type(_, ty) => match &**ty {
-            Type::Path(tp) => tp.path.segments.last().is_some_and(|s| s.ident == "Result"),
+            Type::Path(tp) => tp
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident.to_string().ends_with("Result")),
             _ => false,
         },
     }
@@ -190,16 +249,20 @@ fn ctx_param_ident(sig: &Signature) -> Option<Ident> {
     })
 }
 
-/// Ensure the delegating signature has a `&Context` (async-graphql injects
-/// every `&Context<'_>` param so an added one is not a schema argument).
+/// Ensure the delegating signature has a `&Context`. async-graphql's
+/// `#[Object]` recognises the context parameter **only directly after
+/// `&self`** (any later `&Context` is read as a schema argument), so the
+/// added parameter is inserted at position 1.
 fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
     if let Some(ident) = ctx_param_ident(sig) {
         return (sig.clone(), ident);
     }
     let ident = format_ident!("__guard_ctx");
     let mut sig = sig.clone();
-    sig.inputs
-        .push(parse_quote!(#ident: &::nest_rs_graphql::async_graphql::Context<'_>));
+    sig.inputs.insert(
+        1,
+        parse_quote!(#ident: &::nest_rs_graphql::async_graphql::Context<'_>),
+    );
     (sig, ident)
 }
 
@@ -354,10 +417,15 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        // Consume `#[public]` so it isn't emitted as an unknown attribute;
-        // GraphQL guards that care can inspect a custom marker the dev
-        // seeds via `GraphqlContextSeed` (the framework does not act on the flag).
-        let _is_public = take_flag_attr(&mut method.attrs, "public");
+        // The operation's access posture: `#[authorize(Action, Entity)]`
+        // (class gate + automatic response masking) or `#[public]`
+        // (deliberately ungated). Exactly one is required on every
+        // `#[query]`/`#[mutation]` — see the posture check below.
+        let authorize_spec = match take_authorize(&mut method.attrs) {
+            Ok(spec) => spec,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        let is_public = take_flag_attr(&mut method.attrs, "public");
         all_guard_paths.extend(method_guards.iter().cloned());
         all_guard_paths.extend(force_method_guards.iter().cloned());
         // `#[field_resolver]` skips resolver-level guards: a field resolver
@@ -376,6 +444,21 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
         let method_name = method.sig.ident.clone();
 
         if is_field {
+            // A field resolver runs per-row inside an operation whose posture
+            // (`#[authorize]`/`#[public]`) was already enforced on the root
+            // query/mutation — a posture attribute here would be a silent
+            // no-op lie, so reject it (same stance as `#[public]` on a WS
+            // `#[subscribe_message]`).
+            if authorize_spec.is_some() || is_public {
+                return syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "a `#[field_resolver]` inherits the operation's access posture — \
+                     `#[authorize(...)]`/`#[public]` belong on the root `#[query]`/`#[mutation]`; \
+                     for an extra per-field gate bind `#[use_guards(...)]` here",
+                )
+                .to_compile_error()
+                .into();
+            }
             // Field resolvers gate per-row — they never replay the global
             // chain; only their own `#[use_guards]` apply.
             let field_label = format!("{}.{}", quote!(#self_ty), method_name);
@@ -400,6 +483,44 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                 None => field_groups.push((parent_ty, vec![deleg])),
             }
         } else {
+            // Posture is mandatory and fail-secure: an operation the developer
+            // forgot to think about does not compile, instead of shipping
+            // ungated and unmasked. `#[authorize]` needs a `Result` return so
+            // the gate's denial (and a masking failure) can surface.
+            match (&authorize_spec, is_public) {
+                (Some(_), true) => {
+                    return syn::Error::new_spanned(
+                        &method.sig.ident,
+                        "`#[authorize(...)]` and `#[public]` contradict — an operation is \
+                         gated or public, not both",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                (Some(_), false) if !sig_returns_result(&method.sig) => {
+                    return syn::Error::new_spanned(
+                        &method.sig.ident,
+                        "`#[authorize(...)]` needs a `Result` return type so a denial (and a \
+                         masking failure) can surface as a GraphQL error; a bare-return \
+                         operation can only be `#[public]`",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                (None, false) => {
+                    return syn::Error::new_spanned(
+                        &method.sig.ident,
+                        "every `#[query]`/`#[mutation]` declares its access posture: \
+                         `#[authorize(Action, Entity)]` (class-level gate + automatic response \
+                         masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` \
+                         (no `#[authorize]` gate and no response mask — `#[use_guards]` \
+                         guards still run)",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                _ => {}
+            }
             let is_query = verb_attr.path().is_ident("query");
             let arg_idents = match forwarded_arg_idents(&sig) {
                 Ok(idents) => idents,
@@ -435,9 +556,36 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                 &route_label,
                 needs_global,
             );
+            // `#[authorize(A, E)]`: class gate before the call, automatic
+            // response masking after it — the same two effects the HTTP
+            // `Authorize<A, E>` extractor + response shaper carry, emitted
+            // here so a hand-written operation writes neither by hand.
+            let gate = authorize_spec.as_ref().map(|spec| {
+                let (action, entity) = (&spec.action, &spec.entity);
+                quote! {
+                    ::nest_rs_authz::graphql::authorize::<#action, #entity>(#gctx)?;
+                }
+            });
+            let body = match authorize_spec.as_ref().filter(|spec| !spec.unmasked) {
+                Some(spec) => {
+                    let (action, entity) = (&spec.action, &spec.entity);
+                    quote! {
+                        match #call {
+                            ::core::result::Result::Ok(__out) => ::core::result::Result::Ok(
+                                ::nest_rs_authz::graphql::masked_value_for::<#action, #entity, _>(
+                                    #gctx, __out,
+                                )?,
+                            ),
+                            ::core::result::Result::Err(__err) =>
+                                ::core::result::Result::Err(__err),
+                        }
+                    }
+                }
+                None => call,
+            };
             let delegating = quote! {
                 #(#deleg_attrs)*
-                #gsig { #checks #call }
+                #gsig { #checks #gate #body }
             };
             if is_query {
                 query_methods.push(delegating);

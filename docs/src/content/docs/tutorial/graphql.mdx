@@ -33,7 +33,6 @@ from the framework crate; the schema model itself is async-graphql's.
 use std::sync::Arc;
 
 use async_graphql::{Context, Result};
-use nest_rs_authz::graphql::authorize;
 use nest_rs_authz::{Create, Read};
 use nest_rs_graphql::{crud, resolver};
 use nest_rs_seaorm::graphql::bind;
@@ -47,11 +46,11 @@ use crate::users::{CreateUserInput, Entity as UserEntity, UpdateUserInput, User,
 #[use_guards(AuthGuard, AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
-    users: Arc<UsersService>,
+    svc: Arc<UsersService>,
 }
 
 #[crud(
-    service = users,
+    service = svc,
     entity = UserEntity,
     output = User,
     create = CreateUserInput,
@@ -59,13 +58,15 @@ pub struct UsersResolver {
 )]
 impl UsersResolver {
     #[mutation]
+    #[authorize(Create, UserEntity)]
     async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {
-        authorize::<Create, UserEntity>(ctx)?;
         let actor = ctx.data::<Claims>()?;
-        Ok(self.users.create_in_org(input, actor.org_id).await?)
+        let user = self.svc.create_in_org(input, actor.org_id).await?;
+        Ok(User::from(&user))
     }
 
     #[query]
+    #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
         Ok(bind::<UsersService, Read>(ctx, &id)
             .await?
@@ -75,13 +76,26 @@ impl UsersResolver {
 }
 ```
 
+`#[authorize(Action, Entity)]` is each operation's **access posture**:
+the macro emits the class-level gate before your body runs and masks
+the returned value after it — you never call `authorize` or a masking
+function by hand. A deliberately open operation declares `#[public]`
+instead.
+
+<Aside type="note">
+Posture is **mandatory and fail-secure**: a `#[query]`/`#[mutation]`
+with neither `#[authorize(...)]` nor `#[public]` does not compile. You
+cannot forget to think about access — the build breaks before an
+ungated, unmasked operation can ship.
+</Aside>
+
 Symmetry with the HTTP controller is intentional — the service is the
 same, the inputs are the same, the policy is the same. The bridges
 are different:
 
 | HTTP | GraphQL | Job |
 |------|---------|-----|
-| `Authorize<Create, E>` extractor | `authorize::<Create, E>(ctx)?` call | Refuse the operation if the ability disallows it |
+| `Authorize<Create, E>` extractor | `#[authorize(Create, E)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
 | `Bind<UsersService, Read>` extractor | `bind::<UsersService, Read>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
 | `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the authz bridge seeded |
 
@@ -91,18 +105,21 @@ the same thing.
 
 ## The GraphQL module
 
-The adapter imports the port (`UsersModule`) and the authz bridge
-(`AuthzGraphqlModule`):
+The adapter imports the port (`UsersModule`), the authz bridge
+(`AuthzGraphqlModule`), and — because the entity exposes a
+`belongs_to` org relation (next section) — the org port whose service
+hosts the auto-emitted loader:
 
 ```rust title="crates/features/src/users/graphql/module.rs"
 use nest_rs_core::module;
 
 use super::resolver::UsersResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
+use crate::orgs::OrgsModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, AuthzGraphqlModule],
+    imports = [UsersModule, OrgsModule, AuthzGraphqlModule],
     providers = [UsersResolver],
 )]
 pub struct UsersGraphqlModule;

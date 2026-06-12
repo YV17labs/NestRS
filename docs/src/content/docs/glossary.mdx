@@ -140,7 +140,9 @@ deep on each.
   `#[routes] impl` block.
 - **[Resolver (GraphQL)](/graphql/queries-mutations/)** — a struct
   marked with `#[resolver]` whose `#[query]` / `#[mutation]` /
-  `#[field_resolver]` methods compose into the schema at boot.
+  `#[field_resolver]` methods compose into the schema at boot; every
+  `#[query]` / `#[mutation]` declares an access posture —
+  `#[authorize(Action, Entity)]` or `#[public]`.
 - **[Gateway (WS)](/websockets/messages/)** — a struct marked with
   `#[gateway(path = "/ws")]` whose `#[subscribe_message]` methods
   handle WS events; self-mounts on `HttpTransport`.

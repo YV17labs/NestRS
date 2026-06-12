@@ -87,6 +87,7 @@ struct PingResolver;
 #[resolver]
 impl PingResolver {
     #[query]
+    #[public]
     async fn ping(&self) -> GqlResult<String> {
         Ok("pong".into())
     }

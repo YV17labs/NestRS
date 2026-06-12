@@ -62,10 +62,16 @@ Deliberate departures. Don't "fix" them back.
 
 DX targets, not perf promises (Rust perf is the default).
 
-- **New CRUD feature ≤ 60 lines** in `crates/features/<feature>/`.
-  When that breaks, open an issue — don't rewrite the boilerplate.
-- **Adding a feature = copying `crates/features/src/users/`.** If the
-  copy isn't enough, fix the exemplar — don't invent a second pattern.
+- **New CRUD feature ≤ 60 lines of hand-written glue beyond the
+  entity's own column declarations** in `crates/features/<feature>/`
+  (measured on `orgs/`: ~30 non-entity body lines for a full HTTP CRUD
+  slice). When that breaks, open an issue — don't rewrite the
+  boilerplate.
+- **Adding a feature = copying `crates/features/src/users/`** — plus
+  the two wiring edits the copy can't carry: `pub mod <feature>;` in
+  `features/src/lib.rs` and the `<Feature><Edge>Module` entry in the
+  serving app's `module.rs` (`nestrs g` does all three). If the copy
+  isn't enough, fix the exemplar — don't invent a second pattern.
 - **Security wired by composition, not ceremony.** Importing
   `DatabaseModule` + `Authz<Edge>Module` activates row-level
   filtering, transaction scope, and response masking. Handlers opt
@@ -332,8 +338,8 @@ bring every layer they need).
 
 | Transport | Handler | Guard binding | Module import |
 |---|---|---|---|
-| HTTP | `#[controller]` | `#[use_guards(AuthGuard, AuthzGuard)]` on impl | `[<Feature>Module, AuthzHttpModule]` |
-| GraphQL | `#[resolver]` | `#[use_guards(GraphqlAuthGuard)]` on impl | `[<Feature>Module, AuthzGraphqlModule]` |
+| HTTP | `#[controller]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct | `[<Feature>Module, AuthzHttpModule]` |
+| GraphQL | `#[resolver]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct + per-op posture `#[authorize(Action, Entity)]`/`#[public]` (mandatory — no posture ⇒ compile error) | `[<Feature>Module, AuthzGraphqlModule]` |
 | WS | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
 
 **Why GraphQL uses a marker but WS binds real guards.** HTTP guards run
@@ -391,19 +397,41 @@ reading `#[public]` after routing (lazy executor = the planned fix).
 (only seam that runs after `AbilityGuard` and still wraps the handler)
 — keeps `nest-rs-http` unaware of authz/ORM.
 
-**HTTP response masking** (`nest-rs-authz` `http` / `Authorize`).
-After success: parse JSON body → build `Model` via `wire_to_model`
+**Response masking — one shared core, two transports**
+(`nest-rs-authz` `wire_mask`, value-level and fail-closed). After
+success: parse the wire JSON → build `Model` via `wire_to_model`
 (filling the **unexposed** columns the wire DTO omits from `impl
 WireModelDefaults for Entity` emitted by the macro) →
 `Ability::mask`/`mask_many` → **`retain_wire_keys`** (unrestricted
 field grants can't leak unexposed columns). Handlers return the
 `#[expose]` output (e.g. `Json<User>`), not `Model`. Irreconcilable
-body ⇒ fail **closed** with `500`. Reconstruction needs a default for
-every unexposed column: the macro provides one for the safe scalar
-types (`String`/`Option`/`bool`/numbers); a hidden column of a type it
-can't default (`Uuid`, timestamps, `Decimal`, custom enums) needs a
-hand-written `impl WireModelDefaults`, so columns an ability rule
-predicates on are best left exposed.
+body ⇒ fail **closed** (HTTP `500`, GraphQL error). Reconstruction
+needs a default for every unexposed column: the macro provides one for
+the safe scalar types (`String`/`Option`/`bool`/numbers); a hidden
+column of a type it can't default (`Uuid`, timestamps, `Decimal`,
+custom enums) needs a hand-written `impl WireModelDefaults`, so
+columns an ability rule predicates on are best left exposed.
+
+- **HTTP**: the `Authorize<A, E>` extractor in a handler's signature is
+  the arming declaration — `#[routes]` installs the response shaper
+  (ambient ability + masking) when it sees it. It is *not* dead code:
+  removing the `_authz: Authorize<…>` parameter disarms masking for
+  that route.
+- **GraphQL**: `#[authorize(Action, Entity)]` beside a
+  `#[query]`/`#[mutation]` is the same declaration — `#[resolver]`
+  emits the class gate before the call and `masked_value_for` around
+  the returned value (wire DTO, `Option`, `Vec`; scalars pass).
+  **Posture is mandatory**: an operation without `#[authorize(...)]`
+  or `#[public]` does not compile, so a forgotten declaration is a
+  build break, never an unmasked response. `unmasked` opts a custom
+  shape (cursor connection) out of the automatic mask;
+  `masked_output_for` is the manual primitive it pairs with.
+  `#[crud]`-generated operations declare the same attribute — one
+  mechanism, generated or hand-written. One schema-typed caveat HTTP
+  doesn't have: GraphQL cannot ship a masked-out **non-nullable**
+  field (HTTP just omits the key), so the whole operation fails
+  closed — a column a field-grant may mask should be `Option` on the
+  entity (nullable on the wire).
 
 Two HTTP extractors: **`Bind<S, A>`** (parse id → load + authorize via
 service: 404 absent, 403 denied) and **`Scope<E, A>`** (explicit

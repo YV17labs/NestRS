@@ -12,6 +12,7 @@ struct LooseResolver;
 #[resolver]
 impl LooseResolver {
     #[query]
+    #[public]
     async fn loose(&self) -> String {
         "ok".into()
     }

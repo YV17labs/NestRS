@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_graphql::{Context, Result};
-use nest_rs_authz::graphql::{authorize, masked_output_for};
 use nest_rs_authz::{Create, Read};
 use nest_rs_graphql::{crud, resolver};
 use nest_rs_seaorm::graphql::bind;
@@ -27,20 +26,19 @@ pub struct UsersResolver {
 )]
 impl UsersResolver {
     #[mutation]
+    #[authorize(Create, UserEntity)]
     async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {
-        authorize::<Create, UserEntity>(ctx)?;
         let actor = ctx.data::<Claims>()?;
         let user = self.svc.create_in_org(input, actor.org_id).await?;
-        masked_output_for::<Create, UserEntity, User>(ctx, &user)
+        Ok(User::from(&user))
     }
 
     #[query]
+    #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        match bind::<UsersService, Read>(ctx, &id).await? {
-            Some(user) => Ok(Some(masked_output_for::<Read, UserEntity, User>(
-                ctx, &user,
-            )?)),
-            None => Ok(None),
-        }
+        Ok(bind::<UsersService, Read>(ctx, &id)
+            .await?
+            .as_ref()
+            .map(User::from))
     }
 }

@@ -82,11 +82,13 @@ struct GuardedResolver;
 #[resolver]
 impl GuardedResolver {
     #[query]
+    #[public]
     async fn secret(&self) -> Result<String> {
         Ok("classified".into())
     }
 
     #[query]
+    #[public]
     async fn whoami(&self, ctx: &Context<'_>) -> Result<String> {
         Ok(ctx
             .data_opt::<Role>()

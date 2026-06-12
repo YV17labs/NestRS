@@ -29,13 +29,18 @@ pub enum LifecyclePhase {
 
 type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
-/// One lifecycle hook submitted to the link-time registry by `#[hooks]`. The
-/// `run` thunk resolves the provider from the container; it is a no-op if the
-/// provider was never registered in any module.
+/// One lifecycle hook submitted to the link-time registry by `#[hooks]`.
 pub struct LifecycleHook {
     pub phase: LifecyclePhase,
     pub provider: &'static str,
     pub method: &'static str,
+    /// Whether this hook's provider is resolvable in the assembled container.
+    /// `#[hooks]` emits a `Container::get::<Provider>().is_some()` probe, so a
+    /// hook whose provider was never listed in any reachable module is surfaced
+    /// with a boot `warn` and skipped — leftover code stays visible instead of
+    /// vanishing silently (the module-gated discovery rule). Module-level infra
+    /// hooks that self-gate inside `run` pass `|_| true` to opt out.
+    pub present: fn(&Container) -> bool,
     pub run: for<'a> fn(&'a Container) -> HookFuture<'a>,
 }
 
@@ -49,9 +54,26 @@ fn hooks_for(phase: LifecyclePhase) -> Vec<&'static LifecycleHook> {
     hooks
 }
 
+/// Emit the inert-hook `warn`: a linked hook whose provider is unreachable from
+/// the running app's module tree never fires, so surface it instead of letting
+/// it disappear (mirrors the schedule/queue/resolver discovery warns).
+fn warn_unreachable_hook(hook: &LifecycleHook, phase: LifecyclePhase) {
+    tracing::warn!(
+        target: "nest_rs::lifecycle",
+        ?phase,
+        provider = hook.provider,
+        method = hook.method,
+        "skipped lifecycle hook: provider unreachable from app's module tree",
+    );
+}
+
 /// Init-phase runner: sequential, aborts on the first error.
 pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> anyhow::Result<()> {
     for hook in hooks_for(phase) {
+        if !(hook.present)(container) {
+            warn_unreachable_hook(hook, phase);
+            continue;
+        }
         tracing::debug!(
             target: "nest_rs::lifecycle",
             ?phase,
@@ -73,6 +95,10 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
 /// provider's cleanup error does not skip another's.
 pub(crate) async fn run_phase_lenient(container: &Container, phase: LifecyclePhase) {
     for hook in hooks_for(phase) {
+        if !(hook.present)(container) {
+            warn_unreachable_hook(hook, phase);
+            continue;
+        }
         if let Err(err) = (hook.run)(container).await {
             tracing::error!(
                 target: "nest_rs::lifecycle",
@@ -117,6 +143,7 @@ mod tests {
             phase: LifecyclePhase::OnModuleInit,
             provider: "Probe",
             method: "touch",
+            present: |container| container.get::<Probe>().is_some(),
             run: run_touch,
         }
     }
@@ -147,5 +174,35 @@ mod tests {
         run_phase(&container, LifecyclePhase::OnApplicationShutdown)
             .await
             .unwrap();
+    }
+
+    // A hook whose `present` probe returns false models a `#[hooks]` provider
+    // listed in no reachable module: it must be warned-and-skipped, never run.
+    // `run_unreachable` panics if invoked, so a regression that drops the
+    // `present` gate fails this test loudly.
+    fn run_unreachable(_container: &Container) -> HookFuture<'_> {
+        Box::pin(async { panic!("an unreachable hook must be skipped, never run") })
+    }
+
+    inventory::submit! {
+        LifecycleHook {
+            phase: LifecyclePhase::BeforeApplicationShutdown,
+            provider: "Unreachable",
+            method: "never",
+            present: |_| false,
+            run: run_unreachable,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_hook_is_skipped_by_both_runners() {
+        let container = Container::builder().build();
+        // Init runner: present=false ⇒ warn + skip, so the phase still succeeds
+        // and `run_unreachable` never fires.
+        run_phase(&container, LifecyclePhase::BeforeApplicationShutdown)
+            .await
+            .expect("a skipped hook must not fail the phase");
+        // Shutdown runner: same skip, best-effort (also must not panic).
+        run_phase_lenient(&container, LifecyclePhase::BeforeApplicationShutdown).await;
     }
 }

@@ -18,11 +18,14 @@ pub struct HealthModule;
 // resolve indicator providers at request time. The `EventsModule` uses the
 // same lifecycle-hook seam to wire its discovered handlers — see
 // `crates/nestrs-events/src/module.rs`.
+// Infra hook self-gates inside `install_container` (no-op when the service is
+// absent), so it opts out of the inert-hook warn with `present: |_| true`.
 nest_rs_core::inventory::submit! {
     LifecycleHook {
         phase: LifecyclePhase::OnApplicationBootstrap,
         provider: "HealthModule",
         method: "install_container",
+        present: |_| true,
         run: install_container,
     }
 }

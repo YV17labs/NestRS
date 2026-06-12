@@ -38,6 +38,12 @@ impl WireModelDefaults for widget::Entity {
         map.entry(String::from("secret"))
             .or_insert_with(|| serde_json::Value::String(String::new()));
     }
+
+    // `secret` is unexposed — mirrors what `#[expose]` emits for a real entity,
+    // so the masker strains against the static set rather than the body keys.
+    fn wire_keys() -> Option<&'static [&'static str]> {
+        Some(&["id", "name"])
+    }
 }
 
 #[derive(Serialize)]
@@ -117,6 +123,37 @@ impl WidgetController {
             },
         ])
     }
+
+    // A handler that (incorrectly) returns a raw `Model` carrying the unexposed
+    // `secret`. The shaper must still strip it: masking keys on the entity's
+    // static wire-key set, not on whatever the body shipped.
+    #[get("/raw/one")]
+    async fn raw_one(&self, _authz: Authorize<Read, widget::Entity>) -> Json<widget::Model> {
+        Json(widget::Model {
+            id: 1,
+            name: "ada".into(),
+            secret: "s1".into(),
+        })
+    }
+
+    // A raw-`Model` list where the ability drops row id=2 (so `mask_many`
+    // returns fewer rows than the body) under an unrestricted grant on id=1.
+    // The dropped-row branch must still strip `secret` from the survivor.
+    #[get("/raw/list")]
+    async fn raw_list(&self, _authz: Authorize<Read, widget::Entity>) -> Json<Vec<widget::Model>> {
+        Json(vec![
+            widget::Model {
+                id: 1,
+                name: "ada".into(),
+                secret: "s1".into(),
+            },
+            widget::Model {
+                id: 2,
+                name: "bob".into(),
+                secret: "s2".into(),
+            },
+        ])
+    }
 }
 
 #[module(providers = [AbilityInjector, ListAbilityInjector, WidgetController])]
@@ -168,7 +205,60 @@ async fn an_unrestricted_grant_cannot_leak_skipped_columns() {
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
         !body.contains("secret"),
-        "retain_wire_keys must drop secret even when every field is permitted: {body}",
+        "masking must drop secret even when every field is permitted: {body}",
+    );
+}
+
+#[tokio::test]
+async fn a_raw_model_handler_cannot_leak_unexposed_columns() {
+    // Regression: a handler returning `Json(Model)` instead of the wire DTO must
+    // not leak the unexposed `secret`, even under an unrestricted (admin) grant.
+    let app = boot().await;
+    let resp = app
+        .http()
+        .get("/widgets/raw/one")
+        .header("x-role", "admin")
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("body");
+    assert!(
+        !body.contains("secret") && !body.contains("s1"),
+        "a raw-Model body must be cut down to exposed columns: {body}",
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body)
+            .expect("json")
+            .get("name")
+            .and_then(|v| v.as_str()),
+        Some("ada"),
+        "exposed columns survive: {body}",
+    );
+}
+
+#[tokio::test]
+async fn a_dropped_row_does_not_leak_unexposed_columns() {
+    // Regression: when `mask_many` drops a row (id=2 denied) under an
+    // unrestricted grant on id=1, the survivor must still be stripped — the
+    // dropped-row branch previously skipped the wire-key strainer.
+    let app = boot().await;
+    let resp = app
+        .http()
+        .get("/widgets/raw/list")
+        .header("x-role", "admin")
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("body");
+    assert!(
+        !body.contains("secret") && !body.contains("s1") && !body.contains("s2"),
+        "dropped-row masking must still strip unexposed columns: {body}",
+    );
+    let rows: serde_json::Value = serde_json::from_str(&body).expect("json array");
+    assert_eq!(
+        rows.as_array().map(|r| r.len()),
+        Some(1),
+        "only the permitted row survives: {body}",
     );
 }
 

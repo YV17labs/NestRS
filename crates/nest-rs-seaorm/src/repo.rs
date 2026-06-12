@@ -82,6 +82,35 @@ impl<E: EntityTrait> Repo<E> {
         E::find().filter(scope_for::<E>(action))
     }
 
+    /// A [`Select`] that **bypasses the ambient ability filter** — for the two
+    /// sanctioned ability-less query paths:
+    ///
+    /// 1. **Pre-authentication** credential lookup, which runs before any
+    ///    principal (hence any ability) exists — routing it through
+    ///    [`scoped`](Self::scoped) on a request-scoped executor would deny every
+    ///    row (`scope_for` fail-closed), making login impossible.
+    /// 2. **Access binding** (`CrudService::access`), which is deliberately
+    ///    unscoped so a denied-but-existing row reports `Denied` rather than
+    ///    `Missing`; the ability check is then applied explicitly per row.
+    ///
+    /// Still runs against the ambient [`Repo::conn`] executor, so it participates
+    /// in the request transaction — only the row-level scope is dropped. Reach
+    /// for this **only** in those two cases; every other read must use
+    /// [`scoped`](Self::scoped).
+    pub fn unscoped() -> Select<E> {
+        E::find()
+    }
+
+    /// The by-primary-key analog of [`unscoped`](Self::unscoped) — a
+    /// `find_by_id` [`Select`] with **no** ability filter, for `CrudService::access`
+    /// (see the second sanctioned case in [`unscoped`](Self::unscoped)). Chain
+    /// the soft-delete / live filter and execute against [`Repo::conn`].
+    pub fn unscoped_by_id(
+        id: <E::PrimaryKey as PrimaryKeyTrait>::ValueType,
+    ) -> Select<E> {
+        E::find_by_id(id)
+    }
+
     /// Update a row, gated by `condition_for(Update)` ANDed with the primary
     /// key: a row outside the caller's scope is never touched and surfaces as
     /// [`DbErr::RecordNotUpdated`], so a caller cannot mutate by id past its

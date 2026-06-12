@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use nest_rs_core::{Container, DiscoveryService, Transport};
 use poem::endpoint::BoxEndpoint;
-use poem::http::header::{HeaderValue, SERVER};
+use poem::http::header::{HeaderName, HeaderValue, SERVER};
 use poem::listener::{Listener, TcpListener};
 use poem::middleware::{Cors, SetHeader};
 use poem::{EndpointExt, IntoEndpoint, Response, Route, Server};
@@ -67,6 +67,7 @@ pub struct HttpTransport {
     max_body_bytes: Option<usize>,
     request_timeout: Option<std::time::Duration>,
     fail_secure_strict: bool,
+    security_headers: crate::SecurityHeadersConfig,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -103,8 +104,17 @@ impl HttpTransport {
             // mounting unguarded. Opt out via `fail_secure_strict(false)` /
             // `NESTRS_HTTP__FAIL_SECURE_STRICT=false`.
             fail_secure_strict: true,
+            security_headers: crate::SecurityHeadersConfig::default(),
             endpoint: None,
         }
+    }
+
+    /// Pin the default security-header policy. [`HttpModule`](crate::HttpModule)
+    /// passes `HttpConfig.security_headers`; defaults are safe (nosniff +
+    /// `X-Frame-Options: DENY` + HSTS under TLS).
+    pub fn security_headers(mut self, cfg: crate::SecurityHeadersConfig) -> Self {
+        self.security_headers = cfg;
+        self
     }
 
     /// `true` (the default) makes `configure` **fail** when global guards are
@@ -360,6 +370,22 @@ impl Transport for HttpTransport {
         // No `Interceptor` trait needed — `EndpointExt::data` is enough.
         if let Some(limit) = self.max_body_bytes.take() {
             endpoint = endpoint.data(RawBodyLimit(limit)).map_to_response().boxed();
+        }
+        // Default security headers (nosniff / frame-deny / HSTS-under-TLS).
+        // Applied inside CORS so a preflight isn't burdened, and overriding so a
+        // handler that set one wins is a deliberate exception, not the default.
+        let security_headers = self.security_headers.headers(self.tls.is_some());
+        if !security_headers.is_empty() {
+            let mut set = SetHeader::new();
+            for (name, value) in security_headers {
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(&value),
+                ) {
+                    set = set.overriding(name, value);
+                }
+            }
+            endpoint = endpoint.with(set).map_to_response().boxed();
         }
         // Server header is purely cosmetic — apply before CORS so the
         // preflight short-circuit (no body) still carries it for observability.

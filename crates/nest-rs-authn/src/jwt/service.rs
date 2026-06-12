@@ -116,6 +116,10 @@ impl JwtService {
         };
 
         let mut validation = Validation::new(options.algorithm);
+        // Pin expiry validation explicitly — the most security-critical claim
+        // check must not ride on a library default that a future version could
+        // flip. (jsonwebtoken defaults this to `true` today; we state intent.)
+        validation.validate_exp = true;
         validation.validate_nbf = true;
         validation.leeway = options.leeway.as_secs();
         match &options.audience {

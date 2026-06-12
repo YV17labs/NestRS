@@ -46,7 +46,10 @@ impl UsersService {
     ) -> Result<entity::Model, CredentialError> {
         burn_verify(password);
         let conn = Repo::<Users>::conn().map_err(|_| CredentialError)?;
-        let user = Users::find()
+        // Pre-authentication: no principal exists yet, so no ability — the
+        // sanctioned unscoped path (see `Repo::unscoped`). Routing through
+        // `scoped` here would deny every row on a request executor.
+        let user = Repo::<Users>::unscoped()
             .filter(entity::Column::Email.eq(email.to_owned()))
             .filter(live_condition::<Users>())
             .one(&conn)

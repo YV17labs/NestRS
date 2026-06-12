@@ -10,6 +10,21 @@ use serde_json::{Map, Value};
 /// masking handlers must deserialize without the hidden columns).
 pub trait WireModelDefaults: EntityTrait {
     fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
+
+    /// The exposed (`#[expose]`) column names that may cross the wire. Response
+    /// masking retains **only** these keys, so neither an unrestricted field
+    /// grant nor a handler that returns a raw `Model` can leak an unexposed
+    /// column (`password_hash`, `role`, …) — the strainer keys on the entity's
+    /// statically-known exposed set rather than on whatever the response body
+    /// happened to carry.
+    ///
+    /// `None` ⇒ the entity opted out of key-set retention (the default no-op
+    /// impl, used by entities without `#[expose]`); the masker then falls back
+    /// to retaining the response body's own keys, which is only sound when the
+    /// body is already the wire shape.
+    fn wire_keys() -> Option<&'static [&'static str]> {
+        None
+    }
 }
 
 #[cfg(test)]

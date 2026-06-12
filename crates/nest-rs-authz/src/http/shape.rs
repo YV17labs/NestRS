@@ -5,9 +5,12 @@
 //!    query via `current_ability()` — no hand-written filter.
 //! 2. Masks the JSON response: parse into `S::Model` (filling the unexposed
 //!    columns the `#[expose]` output omits via [`WireModelDefaults`]), run typed
-//!    [`Ability::mask`] / [`Ability::mask_many`], then strip keys absent from
-//!    the wire body so an unrestricted field grant cannot leak unexposed columns
-//!    (e.g. `password_hash`, which carries no `#[expose]`).
+//!    [`Ability::mask`] / [`Ability::mask_many`], then retain only the entity's
+//!    statically-known exposed columns ([`WireModelDefaults::wire_keys`]) so
+//!    neither an unrestricted field grant nor a handler returning a raw `Model`
+//!    can leak an unexposed column (e.g. `password_hash`, which carries no
+//!    `#[expose]`). Keying on the static set rather than the response body keeps
+//!    this sound even when `mask_many` drops rows.
 //!
 //! Fails **closed**: a successful JSON body that cannot be reconciled with
 //! `S::Model` yields 500 rather than shipping data unmasked.
@@ -99,25 +102,49 @@ where
                 items.iter().map(|item| wire_to_model::<S>(item)).collect();
             models.map(|models| {
                 let masked = ability.mask_many::<S>(action, models.iter());
-                if masked.len() == items.len() {
-                    Value::Array(
+                match S::wire_keys() {
+                    // Strain every surviving row against the entity's static
+                    // exposed-column set. `mask_many` may drop rows, so the
+                    // masked vec no longer aligns with `items` by index — but
+                    // the static key set needs no per-row body to strain
+                    // against, which is exactly what closes the dropped-row leak.
+                    Some(keys) => Value::Array(
                         masked
                             .into_iter()
-                            .zip(items.iter())
-                            .map(|(mut row, wire_row)| {
-                                retain_wire_keys(&mut row, wire_row);
+                            .map(|mut row| {
+                                retain_static_keys(&mut row, keys);
                                 row
                             })
                             .collect(),
-                    )
-                } else {
-                    Value::Array(masked)
+                    ),
+                    // Opt-out entity (no `#[expose]`): we can only strain against
+                    // the per-row body, which is sound only when nothing was
+                    // dropped (index alignment preserved).
+                    None => {
+                        if masked.len() == items.len() {
+                            Value::Array(
+                                masked
+                                    .into_iter()
+                                    .zip(items.iter())
+                                    .map(|(mut row, wire_row)| {
+                                        retain_body_keys(&mut row, wire_row);
+                                        row
+                                    })
+                                    .collect(),
+                            )
+                        } else {
+                            Value::Array(masked)
+                        }
+                    }
                 }
             })
         }
         Value::Object(_) => wire_to_model::<S>(&wire).map(|model| {
             let mut masked = ability.mask::<S>(action, &model);
-            retain_wire_keys(&mut masked, &wire);
+            match S::wire_keys() {
+                Some(keys) => retain_static_keys(&mut masked, keys),
+                None => retain_body_keys(&mut masked, &wire),
+            }
             masked
         }),
         // Scalar / null — nothing to strip.
@@ -140,7 +167,7 @@ where
 
 /// Deserialize a handler JSON object into `S::Model`, filling columns the wire
 /// DTO omits so policy can run. The placeholder defaults are stripped again by
-/// [`retain_wire_keys`] before the response ships — they never reach the wire.
+/// [`retain_static_keys`] before the response ships — they never reach the wire.
 fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
 where
     S: EntityTrait + WireModelDefaults,
@@ -156,10 +183,21 @@ where
     serde_json::from_value(Value::Object(map))
 }
 
-/// Keep only keys the handler actually exposed on the wire (DTO fields), so an
-/// unrestricted field grant cannot leak unexposed columns (those without
-/// `#[expose]`).
-fn retain_wire_keys(masked: &mut Value, wire: &Value) {
+/// Keep only the entity's statically-known exposed (`#[expose]`) columns, so
+/// neither an unrestricted field grant nor a handler returning a raw `Model`
+/// can leak an unexposed column. Keying on the static set (not the response
+/// body) is what makes this hold even when `mask_many` drops rows, and it cuts
+/// a raw-`Model` body down to its exposed columns rather than trusting it.
+fn retain_static_keys(masked: &mut Value, keys: &'static [&'static str]) {
+    if let Some(masked_obj) = masked.as_object_mut() {
+        masked_obj.retain(|key, _| keys.contains(&key.as_str()));
+    }
+}
+
+/// Fallback strainer for entities that opt out of [`WireModelDefaults::wire_keys`]
+/// (no `#[expose]`): keep only keys the response body already carried. Sound
+/// only when the body is itself the wire shape and rows weren't dropped.
+fn retain_body_keys(masked: &mut Value, wire: &Value) {
     let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
         return;
     };

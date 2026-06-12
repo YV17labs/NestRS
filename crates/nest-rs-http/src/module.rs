@@ -59,6 +59,7 @@ impl DynamicModule for HttpSetup {
                     http = http.request_timeout(std::time::Duration::from_secs(secs));
                 }
                 http = http.fail_secure_strict(cfg.fail_secure_strict);
+                http = http.security_headers(cfg.security_headers.clone());
                 Ok(Box::new(http))
             },
         })

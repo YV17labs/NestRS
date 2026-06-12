@@ -1,8 +1,8 @@
 //! Emit `WireModelDefaults` for unexposed scalar columns (no `#[expose]`).
 //!
 //! These placeholders feed `Model::deserialize` only so `Ability::mask` /
-//! `mask_many` can run against the reconstructed `Model`; `retain_wire_keys`
-//! strips them again before the body hits the network.
+//! `mask_many` can run against the reconstructed `Model`; the masker strips them
+//! again (via `WireModelDefaults::wire_keys`) before the body hits the network.
 //!
 //! **The type set is narrow on purpose.** `Ability::can(action, &model)` runs
 //! per row — a rule predicated on a skipped column would compare the placeholder
@@ -65,12 +65,28 @@ pub fn emit(model: &ResourceModel) -> proc_macro2::TokenStream {
     } else {
         quote!(map)
     };
+    // The exposed, non-relation columns — the exact key set masking may ship.
+    // The wire DTO serializes each under its field ident with no rename, and the
+    // reconstructed `Model` serializes the same idents, so retaining a masked
+    // `Model` against these names keeps precisely the `#[expose]`d columns.
+    let wire_keys = model
+        .fields
+        .iter()
+        .filter(|f| f.in_output_struct())
+        .map(|f| {
+            let key = &f.ident;
+            quote! { stringify!(#key) }
+        });
     quote! {
         impl ::nest_rs_resource::WireModelDefaults for Entity {
             fn fill_wire_defaults(
                 #param: &mut ::serde_json::Map<::std::string::String, ::serde_json::Value>,
             ) {
                 #(#entries)*
+            }
+
+            fn wire_keys() -> ::core::option::Option<&'static [&'static str]> {
+                ::core::option::Option::Some(&[#(#wire_keys),*])
             }
         }
     }

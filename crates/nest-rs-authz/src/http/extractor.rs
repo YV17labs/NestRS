@@ -15,8 +15,15 @@ use crate::{Ability, ActionMarker, Subject};
 /// client error). Class-level only — the per-row filter and response mask
 /// enforce conditions.
 ///
-/// `#[routes]` installs the response shaper when any path segment is named
-/// `Authorize` or `Bind` (aliases on the type name are fine).
+/// `#[routes]` installs the response shaper (masking + ambient ability) by
+/// **textually** matching a handler-parameter type whose path has a segment
+/// literally named `Authorize` or `Bind` — so `nest_rs_authz::http::Authorize`
+/// or any module-qualified path works, but a **renamed** alias
+/// (`use ... as Az`) does **not**: the class-level gate still runs, but masking
+/// and the ambient-ability install are silently skipped. The miss is
+/// fail-closed (a request-scoped executor with no ambient ability denies every
+/// row via `scope_for`), so the route degrades to "no data", never a leak —
+/// but prefer a qualified path over a rename to keep masking active.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>

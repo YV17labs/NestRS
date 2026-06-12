@@ -1,5 +1,5 @@
 mod module;
-mod producer;
+mod tasks;
 
 pub use module::AudioScheduleModule;
-pub use producer::AudioTasks;
+pub use tasks::AudioTasks;

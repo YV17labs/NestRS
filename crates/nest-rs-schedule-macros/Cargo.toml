@@ -15,6 +15,7 @@ proc-macro = true
 syn.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true
+nest-rs-codegen.workspace = true
 # Validate a `cron(...)` string literal at macro-expansion time, so a bad
 # expression is a compile error rather than a boot-time surprise.
 croner.workspace = true

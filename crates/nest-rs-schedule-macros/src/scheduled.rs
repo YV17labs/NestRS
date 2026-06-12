@@ -11,6 +11,7 @@
 
 use std::str::FromStr;
 
+use nest_rs_codegen::impl_self_ident;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -18,15 +19,15 @@ use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    Attribute, Expr, ExprLit, ImplItem, ItemImpl, Lit, LitStr, MetaNameValue, Token, Type,
+    Attribute, Expr, ExprLit, ImplItem, ItemImpl, Lit, LitStr, MetaNameValue, Token,
     parse_macro_input,
 };
 
 pub(crate) fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
     let self_ty = item.self_ty.clone();
-    let provider_name = match impl_self_name(&self_ty) {
-        Ok(name) => name,
+    let provider_name = match impl_self_ident(&self_ty, "#[scheduled]") {
+        Ok(ident) => ident.to_string(),
         Err(err) => return err.to_compile_error().into(),
     };
 
@@ -180,12 +181,8 @@ fn parse_cron(attr: &Attribute) -> syn::Result<TokenStream2> {
     if let Expr::Lit(ExprLit {
         lit: Lit::Str(s), ..
     }) = &expr
-        && let Err(e) = croner::Cron::from_str(&s.value())
     {
-        return Err(syn::Error::new(
-            s.span(),
-            format!("invalid cron expression: {e}"),
-        ));
+        validate_cron_literal(s)?;
     }
     let tz_tokens = match tz {
         Some(lit) => quote! { ::std::option::Option::Some(#lit) },
@@ -194,6 +191,16 @@ fn parse_cron(attr: &Attribute) -> syn::Result<TokenStream2> {
     Ok(quote! {
         ::nest_rs_schedule::Trigger::Cron { expr: #expr, tz: #tz_tokens }
     })
+}
+
+/// Validate a literal cron expression at macro-expansion time, so a bad
+/// expression is a compile error (spanned at the literal) rather than a
+/// boot-time surprise. `CronExpression::X` paths are not literals and validate
+/// at boot instead.
+fn validate_cron_literal(s: &LitStr) -> syn::Result<()> {
+    croner::Cron::from_str(&s.value())
+        .map(|_| ())
+        .map_err(|e| syn::Error::new(s.span(), format!("invalid cron expression: {e}")))
 }
 
 fn as_str_lit(value: &Expr, key: &str) -> syn::Result<LitStr> {
@@ -244,14 +251,41 @@ fn period_millis(lit: &LitStr) -> syn::Result<u64> {
         .ok_or_else(|| syn::Error::new(lit.span(), "duration overflows u64 milliseconds"))
 }
 
-fn impl_self_name(self_ty: &Type) -> syn::Result<String> {
-    if let Type::Path(p) = self_ty
-        && let Some(seg) = p.path.segments.last()
-    {
-        return Ok(seg.ident.to_string());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proc_macro2::Span;
+
+    fn lit(s: &str) -> LitStr {
+        LitStr::new(s, Span::call_site())
     }
-    Err(syn::Error::new_spanned(
-        self_ty,
-        "#[scheduled] expects an `impl` block on a named struct (e.g. `impl AudioTasks`)",
-    ))
+
+    #[test]
+    fn valid_cron_literal_passes() {
+        validate_cron_literal(&lit("0 0 * * *")).expect("a well-formed cron literal validates");
+    }
+
+    #[test]
+    fn invalid_cron_literal_is_a_compile_error() {
+        let err = validate_cron_literal(&lit("not a cron expression"))
+            .expect_err("a malformed cron literal must fail at macro expansion");
+        assert!(
+            err.to_string().contains("invalid cron expression"),
+            "error names the problem, got: {err}",
+        );
+    }
+
+    #[test]
+    fn period_millis_parses_each_suffix() {
+        assert_eq!(period_millis(&lit("500ms")).unwrap(), 500);
+        assert_eq!(period_millis(&lit("30s")).unwrap(), 30_000);
+        assert_eq!(period_millis(&lit("5m")).unwrap(), 300_000);
+        assert_eq!(period_millis(&lit("1h")).unwrap(), 3_600_000);
+    }
+
+    #[test]
+    fn period_millis_rejects_zero_and_missing_suffix() {
+        assert!(period_millis(&lit("0s")).is_err());
+        assert!(period_millis(&lit("10")).is_err());
+    }
 }

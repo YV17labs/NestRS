@@ -2902,6 +2902,7 @@ dependencies = [
 name = "nest-rs-health-macros"
 version = "0.2.0"
 dependencies = [
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -3057,6 +3058,7 @@ dependencies = [
 name = "nest-rs-queue-macros"
 version = "0.2.0"
 dependencies = [
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -3133,6 +3135,7 @@ name = "nest-rs-schedule-macros"
 version = "0.2.0"
 dependencies = [
  "croner",
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

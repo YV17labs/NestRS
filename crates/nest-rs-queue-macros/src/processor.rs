@@ -14,6 +14,7 @@
 //! emission targets through the same import root regardless of which
 //! backend integration (nestrs-redis, …) is wired in.
 
+use nest_rs_codegen::{impl_self_ident, snake_case};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -26,7 +27,7 @@ use syn::{
 pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
     let self_ty = item.self_ty.clone();
-    let provider_ident = match impl_self_ident(&self_ty) {
+    let provider_ident = match impl_self_ident(&self_ty, "#[processor]") {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -65,8 +66,8 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
         let method_name = method_ident.to_string();
         let qualified_name = format!("{provider_name}::{method_name}");
 
-        let provider_snake = to_snake(&provider_name);
-        let method_snake = to_snake(&method_name);
+        let provider_snake = snake_case(&provider_name);
+        let method_snake = snake_case(&method_name);
         let handler_ident = format_ident!(
             "__nestrs_process_handler_{}_{}",
             provider_snake,
@@ -231,18 +232,6 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
     out.into()
 }
 
-fn impl_self_ident(self_ty: &Type) -> syn::Result<Ident> {
-    if let Type::Path(p) = self_ty
-        && let Some(seg) = p.path.segments.last()
-    {
-        return Ok(seg.ident.clone());
-    }
-    Err(syn::Error::new_spanned(
-        self_ty,
-        "#[processor] expects an `impl` block on a named struct (e.g. `impl AudioJobs`)",
-    ))
-}
-
 /// Extract the second parameter's type — the job payload. Errors out crisply
 /// when the signature is wrong (no `&self`, or no job arg).
 fn extract_job_type(method: &syn::ImplItemFn) -> syn::Result<Type> {
@@ -324,15 +313,4 @@ impl Parse for ProcessArgs {
             retries,
         })
     }
-}
-
-fn to_snake(camel: &str) -> String {
-    let mut out = String::with_capacity(camel.len() + 4);
-    for (i, ch) in camel.chars().enumerate() {
-        if ch.is_uppercase() && i != 0 {
-            out.push('_');
-        }
-        out.extend(ch.to_lowercase());
-    }
-    out
 }

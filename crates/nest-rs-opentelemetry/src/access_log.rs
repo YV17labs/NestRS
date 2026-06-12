@@ -57,6 +57,7 @@ impl AccessLog {
                 client_ip = %self.client_ip,
                 user_agent = %self.user_agent,
                 trace_id = %self.trace_id,
+                "request served",
             );
         }
     }

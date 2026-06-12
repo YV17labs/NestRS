@@ -144,11 +144,17 @@ where
         let model = input.into_active_model().insert(&conn).await?;
         if let Some(ability) = current_ability() {
             if !ability.can::<Self::Entity>(Action::Create, &model) {
-                tracing::warn!(target: "nest_rs::orm", entity, "create denied — row outside the caller's scope");
+                tracing::warn!(
+                    target: "nest_rs::orm",
+                    entity,
+                    id = ?model_pk::<Self::Entity>(&model),
+                    action = ?Action::Create,
+                    "create denied — row outside the caller's scope",
+                );
                 return Err(DbErr::RecordNotInserted);
             }
         }
-        tracing::info!(target: "nest_rs::orm", entity, "row created");
+        tracing::debug!(target: "nest_rs::orm", entity, id = ?model_pk::<Self::Entity>(&model), "row created");
         Ok(model)
     }
 
@@ -163,14 +169,21 @@ where
         input: Self::Update,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
         let entity = Self::entity_name();
+        let id = model_pk::<Self::Entity>(&model);
         let active = input.apply_to(model.into_active_model());
         match Repo::<Self::Entity>::update(active).await {
             Ok(updated) => {
-                tracing::info!(target: "nest_rs::orm", entity, "row updated");
+                tracing::debug!(target: "nest_rs::orm", entity, ?id, "row updated");
                 Ok(updated)
             }
             Err(DbErr::RecordNotUpdated) => {
-                tracing::warn!(target: "nest_rs::orm", entity, "update denied — row outside the caller's scope");
+                tracing::warn!(
+                    target: "nest_rs::orm",
+                    entity,
+                    ?id,
+                    action = ?Action::Update,
+                    "update denied — row outside the caller's scope",
+                );
                 Err(DbErr::RecordNotUpdated)
             }
             Err(err) => Err(err),
@@ -183,18 +196,21 @@ where
     /// id past its scope.
     async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), DbErr> {
         let entity = Self::entity_name();
+        let id = model_pk::<Self::Entity>(&model);
         let out_of_scope =
             || DbErr::RecordNotFound(format!("{entity} row not found or outside the caller's scope"));
         match Self::soft_delete_column() {
             Some(col) => match Repo::<Self::Entity>::soft_delete(model, col).await {
                 Ok(()) => {
-                    tracing::info!(target: "nest_rs::orm", entity, "row soft-deleted");
+                    tracing::debug!(target: "nest_rs::orm", entity, ?id, "row soft-deleted");
                     Ok(())
                 }
                 Err(DbErr::RecordNotUpdated) => {
                     tracing::warn!(
                         target: "nest_rs::orm",
                         entity,
+                        ?id,
+                        action = ?Action::Delete,
                         "soft-delete denied — row outside the caller's scope",
                     );
                     Err(out_of_scope())
@@ -207,13 +223,27 @@ where
                     tracing::warn!(
                         target: "nest_rs::orm",
                         entity,
+                        ?id,
+                        action = ?Action::Delete,
                         "delete denied — row outside the caller's scope",
                     );
                     return Err(out_of_scope());
                 }
-                tracing::info!(target: "nest_rs::orm", entity, "row deleted");
+                tracing::debug!(target: "nest_rs::orm", entity, ?id, "row deleted");
                 Ok(())
             }
         }
     }
+}
+
+/// First primary-key column value of a model, formatted for log correlation on
+/// denial/mutation events. Generic over the entity; every entity has at least
+/// one primary-key column (mirrors the `page` cursor's `expect`).
+fn model_pk<E: EntityTrait>(model: &E::Model) -> sea_orm::Value {
+    use sea_orm::{Iterable, ModelTrait, PrimaryKeyToColumn};
+    let pk_col = E::PrimaryKey::iter()
+        .next()
+        .expect("an entity has at least one primary-key column")
+        .into_column();
+    model.get(pk_col)
 }

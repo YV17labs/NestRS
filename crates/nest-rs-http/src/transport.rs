@@ -415,11 +415,11 @@ impl Transport for HttpTransport {
         let bind = self.bind;
         let listener = match self.tls {
             Some(tls) => {
-                tracing::debug!(addr = %bind, "https transport listening (TLS)");
+                tracing::debug!(target: "nest_rs::http", addr = %bind, tls = true, "transport listening");
                 TcpListener::bind(bind).rustls(tls.into_rustls()).boxed()
             }
             None => {
-                tracing::debug!(addr = %bind, "http transport listening");
+                tracing::debug!(target: "nest_rs::http", addr = %bind, tls = false, "transport listening");
                 TcpListener::bind(bind).boxed()
             }
         };

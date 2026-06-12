@@ -68,7 +68,15 @@ impl OpenTelemetryConfig {
             deployment_environment: None,
             service_instance_id: None,
             log_filter: "info".into(),
-            log_format: LogFormat::Text,
+            // Production output is OTLP/JSON; the human-readable pretty-print is
+            // a dev affordance only. Default by build profile so a release deploy
+            // that mounts `OpenTelemetryModule` emits JSON without needing
+            // `NESTRS_OPENTELEMETRY__LOG_FORMAT` set (which still overrides).
+            log_format: if cfg!(debug_assertions) {
+                LogFormat::Text
+            } else {
+                LogFormat::Json
+            },
             log_source_location: false,
             otlp_endpoint: None,
             trace_sample_ratio: 1.0,

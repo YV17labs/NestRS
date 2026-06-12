@@ -130,7 +130,8 @@ async fn finalize_transaction(
                     error = %err,
                     attempts = DEFAULT_RETRY_ATTEMPTS,
                     initial_backoff_ms = DEFAULT_INITIAL_BACKOFF.as_millis() as u64,
-                    "serialization conflict at commit — handler is not replayable from the interceptor; use `retry::retry_on_conflict` at a programmatic transaction boundary instead",
+                    hint = "handler is not replayable from the interceptor; use `retry::retry_on_conflict` at a programmatic transaction boundary",
+                    "serialization conflict at commit",
                 );
                 Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
             }

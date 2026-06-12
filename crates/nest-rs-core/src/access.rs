@@ -255,11 +255,10 @@ pub(crate) fn unreachable_resolvers_from_inventory(roots: &[TypeId]) -> Vec<&'st
 pub(crate) fn warn_unreachable_resolvers_from_inventory(roots: &[TypeId]) {
     for name in unreachable_resolvers_from_inventory(roots) {
         tracing::warn!(
-            target: "nest_rs::access",
+            target: "nest_rs::access_graph",
             resolver = name,
-            "resolver linked into the binary but in no reachable module — \
-             skipped from the GraphQL schema; add it to a feature module's \
-             `#[module(providers = [...])]` if you meant to expose it",
+            hint = "add it to a feature module's `#[module(providers = [...])]` if you meant to expose it",
+            "unreachable resolver skipped from the GraphQL schema",
         );
     }
 }

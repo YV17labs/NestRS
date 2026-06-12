@@ -125,7 +125,13 @@ pub fn parse_crud_args(args: TokenStream2) -> syn::Result<CrudConfig> {
 }
 
 /// Lowercased last segment of the output type (`User` → `user`); base for
-/// generated operation names.
+/// generated operation names (the list op is `<singular>s`).
+///
+/// This is a naive lowercase, **not** real singularization/pluralization: an
+/// irregular or already-plural entity yields an ungrammatical op name
+/// (`Category` → list op `categorys`, `Person` → `persons`). When that matters,
+/// hand-write the operation — `#[crud]` skips generating any op a method of the
+/// same name already defines.
 pub fn singular_of(output: &Path) -> String {
     output
         .segments

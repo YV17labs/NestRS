@@ -22,6 +22,27 @@ mod messages;
 /// HTTP upgrade request so a rejected handshake never opens the socket. The
 /// `Discoverable` impl is emitted by `#[messages]` (it needs the message
 /// table).
+///
+/// # Expands to
+///
+/// The struct unchanged, plus inherent items: `PATH`, `from_container`,
+/// `__nestrs_injected` (inject keys + connection guards), `__nestrs_registry` /
+/// `__nestrs_provide_registry` (resolve/provide the `WsServer<Ns>`), and
+/// `__nestrs_gateway_layers` (wraps the endpoint with the connection-level
+/// guard chain, deduped against the global chain). No `Discoverable` here —
+/// `#[messages]` emits it.
+///
+/// ```ignore
+/// pub struct ChatGateway { /* … */ }
+/// impl ChatGateway {
+///     pub const PATH: &'static str = "/ws";
+///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* … */ }
+///     pub fn __nestrs_injected() -> Vec<TypeId> { /* … */ }
+///     pub fn __nestrs_registry(c) -> Arc<::nest_rs_ws::WsServer<Ns>> { /* … */ }
+///     pub fn __nestrs_provide_registry(b) -> ContainerBuilder { /* … */ }
+///     pub fn __nestrs_gateway_layers<E>(c, ep) -> BoxEndpoint { /* guard layers */ }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     gateway::gateway(args, input)
@@ -40,6 +61,28 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Emits `Gateway` (dispatcher + hooks) and `Discoverable` — the latter
 /// attaches an `HttpEndpointMeta` so the gateway self-mounts on the HTTP
 /// transport at `PATH`.
+///
+/// # Expands to
+///
+/// The impl unchanged, an `impl Gateway` whose `dispatch` matches the event
+/// name to the right handler (deserializing `data`, serializing the reply) and
+/// carries the `on_connect`/`on_disconnect` overrides, and an `impl
+/// Discoverable` whose `register` attaches an `HttpEndpointMeta` that
+/// self-mounts at `PATH` and composes the per-event guard chains (global +
+/// per-message, deduped) once at mount.
+///
+/// ```ignore
+/// #[::nest_rs_ws::async_trait]
+/// impl ::nest_rs_ws::Gateway for ChatGateway {
+///     async fn dispatch(&self, client, event, data) -> ::nest_rs_ws::WsReply {
+///         match event { "send" => { /* deser data → call handler → reply */ } _ => unknown }
+///     }
+///     async fn on_connect(&self, client) { /* … */ }    // if present
+/// }
+/// impl ::nest_rs_core::Discoverable for ChatGateway {
+///     fn register(b) -> ContainerBuilder { /* attach_meta::<_, HttpEndpointMeta>(… self-mount at PATH …) */ }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
     messages::messages(args, input)

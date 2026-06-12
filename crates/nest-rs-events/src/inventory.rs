@@ -8,7 +8,9 @@ use crate::EventBus;
 /// `#[on_event]`-tagged method. [`crate::EventsModule`] drains the registry at
 /// bootstrap and filters by
 /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so a method on a
-/// provider not reachable from the app's module tree is silently skipped.
+/// provider not reachable from the app's module tree is warned and skipped
+/// (boot `tracing::warn`, target `nest_rs::events`) — never silently dropped, so
+/// leftover code doesn't disappear without a trace.
 pub struct ListenerMethod {
     pub name: &'static str,
     pub provider_type_id: fn() -> TypeId,

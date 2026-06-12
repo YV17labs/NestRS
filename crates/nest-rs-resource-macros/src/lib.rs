@@ -49,6 +49,27 @@ mod wire;
 ///
 /// Generates `User`, `CreateUserInput`, `UpdateUserInput`, `From<&Model> for
 /// User`. Adding `paginate` also emits `UserPage`.
+///
+/// # Expands to
+///
+/// The original entity unchanged, plus: the wire DTO (`Serialize` +
+/// `JsonSchema`, GraphQL `SimpleObject` under `graphql`), the `Create`/`Update`
+/// input types, active-model write glue, `impl WireModelDefaults` (for response
+/// masking to rebuild unexposed columns), lifecycle column glue
+/// (`soft_delete`/`timestamps`), and — under `graphql` — the relation loaders +
+/// `#[ComplexObject]` field resolvers for `#[expose]`d relations.
+///
+/// ```ignore
+/// pub struct Model { /* the entity, unchanged */ }
+///
+/// pub struct User { pub id: Uuid, pub name: String, /* #[expose]d columns only */ }
+/// impl From<&Model> for User { /* … */ }
+/// pub struct CreateUserInput { /* #[expose(input(create))] columns */ }
+/// pub struct UpdateUserInput { /* #[expose(input(update))] columns */ }
+/// impl ::nest_rs_seaorm::WireModelDefaults for Entity { /* defaults for unexposed columns */ }
+/// // graphql: relation PK/FK loaders + `#[ComplexObject] impl User { … }`
+/// // paginate: `pub struct UserPage { … }`
+/// ```
 #[proc_macro_attribute]
 pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     expose::expose(args, item)

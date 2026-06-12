@@ -19,6 +19,50 @@ mod resolver;
 /// `#[use_guards(...)]` on the impl block runs before every operation;
 /// per-method `#[use_guards(...)]` stacks inside it. A denial short-circuits
 /// as a GraphQL error.
+///
+/// **One `#[ComplexObject]` per wire type.** async-graphql allows at most one
+/// `#[ComplexObject]` impl per output type. A `#[field_resolver]` here and an
+/// auto-resolved `#[expose]`d relation on the *same* entity both emit one, so
+/// they collide — the compiler reports a coherence error (`E0119`) deep in the
+/// expansion, not a friendly message. Pick a single source per type: either let
+/// the relation auto-resolve, or drop `#[expose]` on that relation and write the
+/// field yourself.
+///
+/// # Expands to
+///
+/// On the struct: the original struct, a `from_container` constructor, the
+/// `__nestrs_injected` / `__nestrs_resolver_guard_specs` helpers `#[resolver]
+/// impl` reads back, and a resolver-membership descriptor.
+///
+/// ```ignore
+/// // struct form
+/// pub struct UsersResolver { /* … */ }
+/// impl UsersResolver {
+///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* … */ }
+///     pub fn __nestrs_injected() -> Vec<TypeId> { /* inject keys + guards */ }
+///     pub fn __nestrs_resolver_guard_specs() -> Vec<ScopedGuardSpec> { /* … */ }
+/// }
+/// ::nest_rs_core::inventory::submit! { ::nest_rs_core::ResolverDescriptor { … } }
+/// ```
+///
+/// On the impl: `#[query]`/`#[mutation]` methods split into hidden
+/// `__<Base>Query` / `__<Base>Mutation` `#[Object]` roots (each submitting a
+/// `GraphqlResolverRegistration` to the link-time registry), `#[field_resolver]`
+/// methods merge into one `#[ComplexObject]` impl per parent type, plus an
+/// `impl Discoverable` (with a no-op `register`).
+///
+/// ```ignore
+/// // impl form
+/// pub struct __UsersResolverQuery(Arc<UsersResolver>);
+/// #[::nest_rs_graphql::async_graphql::Object]
+/// impl __UsersResolverQuery { /* delegating query methods */ }
+/// ::nest_rs_graphql::inventory::submit! { ::nest_rs_graphql::GraphqlResolverRegistration { … } }
+///
+/// #[::nest_rs_graphql::async_graphql::ComplexObject]
+/// impl User { /* #[field_resolver] methods for parent `User` */ }
+///
+/// impl ::nest_rs_core::Discoverable for UsersResolver { /* injected + no-op register */ }
+/// ```
 #[proc_macro_attribute]
 pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     resolver::resolver(args, input)
@@ -31,6 +75,25 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[crud(entity = …::Entity, output = Dto, create = CreateDto, update =
 /// UpdateDto, readonly)]`. Write a matching operation method to override it —
 /// the macro keeps yours and skips its own.
+///
+/// # Expands to
+///
+/// The missing operation methods (each delegating to the entity's `CrudService`,
+/// authorizing + masking through `nest_rs_authz::graphql`), prepended to the
+/// impl block, then the whole block re-emitted under `#[resolver]` — so its
+/// `#[query]`/`#[mutation]` expansion (roots, registry, `Discoverable`) applies.
+///
+/// ```ignore
+/// #[::nest_rs_graphql::resolver]
+/// impl UsersResolver {
+///     #[query]    async fn users(&self, ctx) -> Result<Vec<User>> { /* CrudService::list + mask */ }
+///     #[query]    async fn user(&self, ctx, id) -> Result<Option<User>> { /* CrudService::access */ }
+///     #[mutation] async fn create_user(&self, ctx, input) -> Result<User> { /* … */ }
+///     #[mutation] async fn update_user(&self, ctx, id, input) -> Result<Option<User>> { /* … */ }
+///     #[mutation] async fn delete_user(&self, ctx, id) -> Result<bool> { /* … */ }
+///     // …any hand-written methods kept as-is…
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
     crud::entry(args, input)
@@ -45,6 +108,25 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// **request-scoped**: rebuilt per request from the fully assembled container
 /// (so import order is irrelevant) and seeded into the GraphQL context, read
 /// by a `#[field_resolver]` as `&DataLoader<…>`.
+///
+/// # Expands to
+///
+/// Per method, a `<Owner><Name>` newtype implementing async-graphql's
+/// `Loader<K>`, plus a `GraphqlLoaderRegistration` submitted to the link-time
+/// registry whose `seed` builds the request's `DataLoader` from the assembled
+/// container.
+///
+/// ```ignore
+/// pub struct UsersServiceById(Arc<UsersService>);
+/// impl ::nest_rs_graphql::async_graphql::dataloader::Loader<Uuid> for UsersServiceById {
+///     type Value = User;
+///     type Error = …; // E from Result<…, E>, else ::std::convert::Infallible
+///     async fn load(&self, keys: &[Uuid]) -> Result<HashMap<Uuid, User>, Self::Error> { /* delegate */ }
+/// }
+/// ::nest_rs_graphql::inventory::submit! {
+///     ::nest_rs_graphql::GraphqlLoaderRegistration { owner_type_id, seed: |c, req| { … } }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
     dataloader::dataloader(args, input)

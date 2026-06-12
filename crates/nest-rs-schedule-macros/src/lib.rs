@@ -27,6 +27,25 @@ mod scheduled;
 /// share the provider's `#[inject]` dependencies — pooling related cron
 /// methods on a single service keeps shared state (clients, caches) in
 /// one place.
+///
+/// # Expands to
+///
+/// The impl unchanged (methods stay callable), plus one `ScheduledMethod`
+/// submitted to the link-time inventory per trigger-tagged method, whose `run`
+/// resolves the provider from the container and invokes the method. No
+/// `Discoverable` — the host's own `#[injectable]` owns it.
+///
+/// ```ignore
+/// impl ReportTasks { /* unchanged */ }
+/// ::nest_rs_core::inventory::submit! {
+///     ::nest_rs_schedule::ScheduledMethod {
+///         provider: "ReportTasks", method: "nightly",
+///         provider_type_id: || TypeId::of::<ReportTasks>(),
+///         trigger: ::nest_rs_schedule::Trigger::Cron { expr, tz }, // or Interval / Timeout
+///         run: |c| Box::pin(async move { /* resolve + call */ }),
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
     scheduled::scheduled(args, input)

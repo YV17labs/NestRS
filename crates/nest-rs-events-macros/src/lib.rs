@@ -14,6 +14,12 @@ mod listeners;
 /// methods on the same impl block share the provider's `#[inject]`
 /// dependencies — the pattern the framework is built for.
 ///
+/// Provided for **symmetry with the other orchestrators** (`#[processor]`,
+/// `#[scheduled]`, `#[hooks]`): one `Discoverable` per host, methods submitted
+/// to inventory. The events family carries its weight even before a product
+/// feature adopts it, so the orchestrator pattern stays uniform across every
+/// transport and concern.
+///
 /// Per-method requirements (one `#[on_event]` per method):
 ///
 /// - `async fn(&self, event: T)` — the event type `T` is read from the second
@@ -40,6 +46,26 @@ mod listeners;
 ///     #[on_event]
 ///     async fn on_redeemed(&self, e: PointsRedeemed) {
 ///         self.svc.debit(e.user_id, e.amount).await;
+///     }
+/// }
+/// ```
+///
+/// # Expands to
+///
+/// The impl unchanged, plus per `#[on_event]` method: a hidden `wire` fn that
+/// resolves the provider and subscribes a closure to the `EventBus`, and a
+/// `ListenerMethod` submitted to the link-time inventory the `EventsModule`
+/// drains at bootstrap. No `Discoverable` — the host's own `#[injectable]`
+/// owns it.
+///
+/// ```ignore
+/// impl PointsHandlers { /* unchanged */ }
+/// fn __nestrs_listener_wire_points_handlers_on_awarded(container, bus) { /* subscribe::<PointsAwarded> */ }
+/// ::nest_rs_core::inventory::submit! {
+///     ::nest_rs_events::ListenerMethod {
+///         name: "PointsHandlers::on_awarded",
+///         provider_type_id: || TypeId::of::<PointsHandlers>(),
+///         wire: __nestrs_listener_wire_points_handlers_on_awarded,
 ///     }
 /// }
 /// ```

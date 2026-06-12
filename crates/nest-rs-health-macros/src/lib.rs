@@ -28,6 +28,25 @@ mod indicators;
 /// share the provider's `#[inject]` dependencies — pool a DB ping, a Redis
 /// ping, and a migration check on a single `AppHealth` service rather than
 /// writing a struct per check.
+///
+/// # Expands to
+///
+/// The impl unchanged, plus one `HealthIndicator` submitted to the link-time
+/// inventory per probe-tagged method, whose `run` resolves the provider and
+/// invokes the method (adapting its return to `anyhow::Result<()>`). No
+/// `Discoverable` — the host's own `#[injectable]` owns it.
+///
+/// ```ignore
+/// impl AppHealth { /* unchanged */ }
+/// ::nest_rs_core::inventory::submit! {
+///     ::nest_rs_health::HealthIndicator {
+///         name: "db_ping",
+///         kind: ::nest_rs_health::ProbeKind::Readiness, // Liveness / Startup
+///         provider_type_id: || TypeId::of::<AppHealth>(),
+///         run: |c| Box::pin(async move { /* resolve + call → Ok/Err */ }),
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
     indicators::indicators(args, input)

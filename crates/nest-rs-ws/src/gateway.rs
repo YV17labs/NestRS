@@ -153,9 +153,9 @@ async fn serve_connection<G: Gateway, N: 'static>(
 
 /// Per-message guards run **inside** a present [`SocketContext::around`], so
 /// they see the same ambient task-locals the handler does — without that, a
-/// marker like `WsAuthGuard` reading `current_ability()` would see `None` and
-/// fail closed on a mis-wired gateway. The no-context path runs guards then
-/// the handler bare.
+/// per-message `Guard` reading `current_ability()` would see `None` and fail
+/// closed on a mis-wired gateway. The no-context path runs guards then the
+/// handler bare.
 async fn handle_text<G: Gateway>(
     gateway: &G,
     guards: &EventLayerTable,

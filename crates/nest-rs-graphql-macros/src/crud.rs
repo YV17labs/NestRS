@@ -19,7 +19,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
-use nest_rs_codegen::{parse_crud_args, singular_of};
+use nest_rs_codegen::{Paginate, parse_crud_args, singular_of};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
@@ -74,18 +74,58 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let mut generated: Vec<ImplItem> = Vec::new();
 
     if !existing.contains(&list_op.to_string()) {
-        generated.push(parse_quote! {
-            #[query]
-            #[authorize(::nest_rs_authz::Read, #entity)]
-            async fn #list_op(
-                &self,
-            ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
-                let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
+        let list_method: ImplItem = match cfg.paginate {
+            // Keyset pagination (the default): `first` capped by
+            // `clamp_page_size`, `after` = the last item's id (UUID-v7 keys
+            // are time-ordered, so the cursor is just the previous page's
+            // last `id`). The body stays a plain `Vec` so the automatic
+            // response mask applies unchanged.
+            Paginate::Cursor => parse_quote! {
+                #[query]
+                #[authorize(::nest_rs_authz::Read, #entity)]
+                async fn #list_op(
+                    &self,
+                    first: ::core::option::Option<u64>,
+                    after: ::core::option::Option<::std::string::String>,
+                ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
+                    let __after = after
+                        .as_deref()
+                        .and_then(|__s| ::uuid::Uuid::parse_str(__s).ok());
+                    let __page = ::nest_rs_seaorm::CrudService::page(
+                        &*self.#service,
+                        ::core::option::Option::unwrap_or(first, 20),
+                        __after,
+                    )
                     .await
                     .map_err(#gql_err)?;
-                ::core::result::Result::Ok(__rows.iter().map(#output::from).collect())
+                    ::core::result::Result::Ok(
+                        __page.items.iter().map(#output::from).collect(),
+                    )
+                }
+            },
+            // Explicit opt-out (`paginate = none`): the full ability-scoped
+            // collection, still backstopped by `CrudService::list`'s hard cap.
+            Paginate::None => parse_quote! {
+                #[query]
+                #[authorize(::nest_rs_authz::Read, #entity)]
+                async fn #list_op(
+                    &self,
+                ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
+                    let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
+                        .await
+                        .map_err(#gql_err)?;
+                    ::core::result::Result::Ok(__rows.iter().map(#output::from).collect())
+                }
+            },
+            Paginate::Page => {
+                return Err(syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    "#[crud] GraphQL list does not yet support `paginate = page` (offset); \
+                     use `paginate = cursor` (the default) or `paginate = none`",
+                ));
             }
-        });
+        };
+        generated.push(list_method);
     }
 
     if !existing.contains(&get_op.to_string()) {

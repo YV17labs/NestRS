@@ -72,14 +72,30 @@ where
         }
     }
 
-    /// Every row the caller may [`Read`](Action::Read), ability-scoped by `Repo`.
+    /// Every row the caller may [`Read`](Action::Read), ability-scoped by
+    /// `Repo` — up to [`LIST_CAP`](crate::LIST_CAP) rows. The cap is a
+    /// backstop so no endpoint built on `list` can ever return an unbounded
+    /// result set; a capped result logs a `warn`. Collections that may
+    /// legitimately exceed it paginate with [`page`](CrudService::page).
     async fn list(&self) -> Result<Vec<<Self::Entity as EntityTrait>::Model>, DbErr> {
+        use sea_orm::QuerySelect;
         tracing::debug!(target: "nest_rs::orm", entity = Self::entity_name(), "listing rows");
         let conn = Repo::<Self::Entity>::conn()?;
-        Repo::<Self::Entity>::scoped(Action::Read)
+        let rows = Repo::<Self::Entity>::scoped(Action::Read)
             .filter(Self::live_read_filter())
+            .limit(crate::LIST_CAP + 1)
             .all(&conn)
-            .await
+            .await?;
+        let (rows, capped) = crate::page::split_overfetched(rows, crate::LIST_CAP);
+        if capped {
+            tracing::warn!(
+                target: "nest_rs::orm",
+                entity = Self::entity_name(),
+                cap = crate::LIST_CAP,
+                "list result truncated at the hard cap"
+            );
+        }
+        Ok(rows)
     }
 
     /// A keyset page of readable rows, ascending by primary key.

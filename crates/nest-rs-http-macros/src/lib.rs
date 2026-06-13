@@ -152,7 +152,12 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Generate standard REST operations (list/get/create/update/delete) on a
 /// `#[controller]` impl block, re-emitting under `#[routes]`. Grammar:
 /// `#[crud(entity = …::Entity, output = Dto, create = CreateDto,
-/// update = UpdateDto, readonly, paginate = cursor|page)]`.
+/// update = UpdateDto, readonly, paginate = cursor|page|none)]`.
+///
+/// The generated list is **keyset-paginated by default** (`?first=&after=`,
+/// next cursor echoed in `x-next-cursor`, body a plain maskable array);
+/// `paginate = none` opts out into the full collection, backstopped by
+/// `CrudService::list`'s hard cap.
 ///
 /// Guards are declared once on the controller (`#[use_guards(...)]` on the
 /// struct) — every generated route inherits them. A hand-written
@@ -171,9 +176,10 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// #[::nest_rs_http::routes]
 /// impl UsersController {
 ///     #[get("/")]   #[api(summary = "List Users", tags("User"))]
-///     async fn list(&self, _authz: Authorize<Read, Entity>) -> Result<Json<Vec<Dto>>> {
-///         Ok(Json(CrudService::list(&*self.svc).await.map_err(__nestrs_crud_internal_UsersController)?
-///             .iter().map(Dto::from).collect()))
+///     async fn list(&self, _authz: Authorize<Read, Entity>, page: Query<PageParams>) -> Result<Response> {
+///         let p = CrudService::page(&*self.svc, page.limit(), page.after_uuid())
+///             .await.map_err(__nestrs_crud_internal_UsersController)?;
+///         // Json(Vec<Dto>) + `x-next-cursor` header when p.next_cursor is Some
 ///     }
 ///     // get → CrudService::access(Read, id); create/update/delete unless `readonly`,
 ///     // each guarded by Authorize<Action, Entity> and mapping Access::{Denied=>403,Missing=>404}

@@ -62,7 +62,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     if !existing.contains("list") {
         let summary = format!("List {tag}");
         let list_method: ImplItem = match cfg.paginate {
-            None => parse_quote! {
+            // Explicit opt-out (`paginate = none`): the full ability-scoped
+            // collection, still backstopped by `CrudService::list`'s hard cap.
+            Paginate::None => parse_quote! {
                 #[get("/")]
                 #[api(summary = #summary, tags(#tag))]
                 async fn list(
@@ -77,9 +79,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     ))
                 }
             },
-            // Keyset pagination: next cursor in `x-next-cursor` so the body
-            // stays a plain (maskable) array.
-            Some(Paginate::Cursor) => parse_quote! {
+            // Keyset pagination (the default): next cursor in `x-next-cursor`
+            // so the body stays a plain (maskable) array.
+            Paginate::Cursor => parse_quote! {
                 #[get("/")]
                 #[api(summary = #summary, tags(#tag))]
                 async fn list(
@@ -109,11 +111,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     ::core::result::Result::Ok(__resp)
                 }
             },
-            Some(Paginate::Page) => {
+            Paginate::Page => {
                 return Err(syn::Error::new(
                     Span::call_site(),
                     "#[crud] REST list does not yet support `paginate = page` (offset); \
-                     use `paginate = cursor`",
+                     use `paginate = cursor` (the default) or `paginate = none`",
                 ));
             }
         };

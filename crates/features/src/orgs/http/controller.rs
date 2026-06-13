@@ -19,6 +19,5 @@ pub struct OrgsController {
     output = Org,
     create = CreateOrgInput,
     update = UpdateOrgInput,
-    paginate = cursor,
 )]
 impl OrgsController {}

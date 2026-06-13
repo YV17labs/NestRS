@@ -87,3 +87,50 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Ability, AbilityBuilder, with_ability};
+
+    struct NoRules;
+
+    impl AbilityFactory for NoRules {
+        type Actor = ();
+        fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+    }
+
+    fn guard() -> AbilityGuard<NoRules> {
+        AbilityGuard {
+            factory: Arc::new(NoRules),
+        }
+    }
+
+    // The WS-auth fail-secure carry-over: a gateway module that imported
+    // `AuthzHttpModule` instead of `AuthzWsModule` boots (the upgrade guards
+    // resolve) but registers no `SocketContext`, so no ability is re-seeded
+    // around message handlers. The per-message guard must then deny — not
+    // silently pass an unauthenticated message through.
+    #[tokio::test]
+    async fn ws_message_without_ambient_ability_is_denied() {
+        let client = WsClient::for_test();
+        let denial = guard()
+            .check_ws_message(&client, "ping", &Value::Null)
+            .await
+            .expect_err("missing ambient ability must deny");
+        assert_eq!(denial.http_status(), 401);
+    }
+
+    #[tokio::test]
+    async fn ws_message_with_ambient_ability_passes() {
+        let client = WsClient::for_test();
+        let ability: Arc<Ability> = Arc::new(AbilityBuilder::new().build());
+        with_ability(ability, async {
+            guard()
+                .check_ws_message(&client, "ping", &Value::Null)
+                .await
+                .expect("seeded ability admits the message");
+        })
+        .await;
+    }
+}

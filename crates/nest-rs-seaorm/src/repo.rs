@@ -229,6 +229,21 @@ mod tests {
             .to_string()
     }
 
+    // A message handler on a gateway whose module skipped `AuthzWsModule`
+    // (no `SocketContext` registered) runs with no ambient executor at all.
+    // The WS-auth fail-secure carry-over rests on this erroring, never
+    // falling back to some default connection.
+    #[tokio::test]
+    async fn conn_without_ambient_executor_is_an_error() {
+        match Repo::<widget::Entity>::conn() {
+            Ok(_) => panic!("no ambient executor must error"),
+            Err(err) => assert!(
+                err.to_string().contains("no ambient database executor"),
+                "the error names the missing scope: {err}",
+            ),
+        }
+    }
+
     // `Condition` carries an opaque builder; build SQL from a stub query to
     // peek at the rendered shape without a real DB. Reusing the same trick
     // the scope/e2e tests use, but here against a freshly-installed

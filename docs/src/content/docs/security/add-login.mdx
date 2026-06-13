@@ -1,0 +1,132 @@
+---
+title: Add login and protect a route
+description: The canonical first auth task, end to end — issue a JWT on POST /login, bind the two guards, curl the round-trip.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The first auth task is always the same: **a `POST /login` that returns a
+token, and routes that require it**. This page walks that happy path end
+to end on the Publish exemplar. Everything here is real code from the
+repo — follow along, then adapt the policy to your domain.
+
+Three pieces, two of which you already have:
+
+| Piece | Where it lives | You write |
+|---|---|---|
+| `POST /login` — verify credentials, sign a JWT | `crates/features/src/oauth/` (`grant_password`) | a thin handler |
+| `AuthGuard` — bearer JWT → principal | alias over the shipped `JwtStrategy` | one `type` line |
+| `AuthzGuard` — principal → `Ability` | alias over the shipped `AbilityGuard` | one `type` line + your policy |
+
+## 1. Issue a token on `POST /login`
+
+The handler is thin: validate the body, delegate to the service, return
+the token. Credential verification (`UsersService::authenticate`, argon2)
+and signing (`JwtService`) are already in the box:
+
+```rust title="crates/features/src/oauth/http/controller.rs (excerpt)"
+#[post("/login")]
+#[use_guards(ThrottlerGuard)]
+#[meta(Throttle::per_minute(10))]
+async fn login(&self, body: Valid<Json<LoginInput>>) -> Result<Json<AccessToken>> {
+    let input = body.into_inner();
+    Ok(Json(
+        self.svc.grant_password(&input.email, &input.password).await?,
+    ))
+}
+```
+
+`grant_password` authenticates the email/password pair and signs the
+claims — invalid credentials come back as one opaque error (no
+"user exists but wrong password" oracle). Note the route binds a
+**throttler**, not an auth guard: login is the one route that must accept
+anonymous callers, and rate-limiting is its protection.
+
+For signing to work the app needs a key. The simplest single-app setup is
+a symmetric secret (32 bytes minimum):
+
+```bash
+export NESTRS_AUTHN__SECRET="an-actual-random-32-byte-minimum-secret"
+```
+
+<Aside type="tip">
+In production the Publish workspace splits issuing into its own app —
+`apps/auth` holds the private key and signs; `apps/api` holds only the
+public key and can never mint a token. Start single-app with a symmetric
+secret; split later without touching your features. See
+[Issuer and resource server](/security/authentication/issuer-and-resource-server/).
+</Aside>
+
+## 2. Bind the two guards on whatever must be protected
+
+The two guards are project-local aliases written **once**:
+
+```rust title="crates/features/src/authn/strategy.rs"
+pub type AuthGuard = nest_rs_authn::AuthGuard<AppJwtStrategy>;
+```
+
+```rust title="crates/features/src/authz/http/guard.rs"
+pub type AuthzGuard = AbilityGuard<AppAbility>;
+```
+
+Then protecting a controller is one attribute — `AuthGuard` turns the
+bearer token into a principal, `AuthzGuard` turns the principal into the
+request's `Ability`:
+
+```rust title="crates/features/src/users/http/controller.rs (excerpt)"
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+```
+
+And the feature's HTTP module imports the authz adapter:
+
+```rust title="crates/features/src/users/http/module.rs (excerpt)"
+#[module(imports = [UsersModule, AuthzHttpModule], providers = [UsersController])]
+pub struct UsersHttpModule;
+```
+
+That import is load-bearing: forget it and the app **fails at boot**
+naming the unreachable guard — it never silently serves the route
+unprotected.
+
+## 3. Curl the round-trip
+
+```bash
+nestrs run dev auth   # issuer on :3001
+nestrs run dev api    # resource server on :3002
+```
+
+```bash
+# 401 — no token
+curl -si http://localhost:3002/users | head -1
+
+# Log in, keep the bearer
+TOKEN=$(curl -sX POST http://localhost:3001/login \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"ada@example.com","password":"hunter2"}' \
+    | jq -r .access_token)
+
+# 200 — and every row is already filtered to Ada's org
+curl -s http://localhost:3002/users \
+    -H "Authorization: Bearer $TOKEN" | jq '.[].name'
+```
+
+That last call gets more than a yes/no gate: with both guards bound, the
+ambient `Ability` row-filters every query the service runs and masks the
+response body — see
+[What you get once both are mounted](/security/#what-you-get-once-both-are-mounted).
+
+## Going further
+
+- [Authentication](/security/authentication/) — the shipped JWT strategy,
+  then writing your own.
+- [Password flow](/security/authentication/password/) — what
+  `grant_password` does under the hood.
+- [Policies](/security/authorization/policies/) — replace the demo policy
+  with your domain's rules.
+- [Issuer and resource server](/security/authentication/issuer-and-resource-server/)
+  — the production split.

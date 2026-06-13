@@ -86,6 +86,12 @@ deep on each.
 - **[Scope (extractor)](/security/authorization/row-level-filtering/)**
   — the explicit-condition counterpart to `Bind`; hands a hand-built
   query a SeaORM `Condition` derived from the ambient ability.
+- **[`#[expose]`](/database/entities/)** — the opt-in read-side
+  exposure attribute on an entity column or relation: a column crosses
+  HTTP/GraphQL/WS only with `#[expose]`, silence = hidden — fail-secure
+  on schema evolution. The struct-level form emits the wire DTO;
+  `input(...)` on a field opts it into the generated create/update
+  input types — the write side is opt-in the same way.
 - **[Wire model](/security/authorization/response-masking/)** — the
   `#[expose]` output struct (`User`) the wire produces; distinct from
   the SeaORM `Model` the database returns.
@@ -108,7 +114,8 @@ deep on each.
   and field grants.
 - **[Subject](/security/authorization/policies/)** — the entity an
   ability rule targets (`users::Entity`); how an action is scoped to a
-  type.
+  type. CASL vocabulary: the subject is the *resource type* acted upon,
+  never the caller — the caller is the principal.
 - **[Action](/security/authorization/policies/)** — the verb a rule
   governs (`Read`, `Create`, `Update`, `Delete`, custom variants); the
   same enum `Repo::scoped` keys on.

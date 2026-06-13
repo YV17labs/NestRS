@@ -1,63 +1,24 @@
 ---
 title: Response masking
-description: After a 2xx, the Authorize shaper deserializes the body into Model, runs Ability::mask, then retain_wire_keys — an unrestricted grant cannot leak an unexposed column.
+description: Declare Authorize<A, S> on the handler and every successful response is masked automatically — fail-closed, with an unexposed column unable to leak.
 sidebar:
   order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-The third layer of authorization runs after the handler returns. The
-`Authorize<A, S>` shaper parses the successful JSON body,
-reconstructs the SeaORM `Model` (filling unexposed columns
-from `WireModelDefaults`), runs typed `Ability::mask` to strip the
-fields the caller cannot read, then keeps only the keys the wire DTO
-exposed in the first place. The route never has to call `mask`
-itself.
+The third layer of authorization runs after the handler returns — and the
+80% of this page is one sentence: **declare `Authorize<A, S>` as a handler
+parameter and masking runs automatically after every successful
+response**. Fields the caller cannot read are stripped, rows they cannot
+see are dropped, and a body that cannot be verified fails **closed** (500)
+rather than shipping unmasked. The route never calls `mask` itself.
 
-The shaper fails **closed**: a successful body that cannot be
-reconciled with `Model` yields 500 rather than shipping data
-unmasked. Better a misconfigured route than a leak.
+## Declare it — `Authorize<A, S>`
 
-## What runs after a 2xx
-
-```text
-Handler returns Json<UserWire>
-       │
-       ▼
-  body in bytes
-       │
-parse JSON → Value
-       │
-wire_to_model::<S>     ← fill unexposed columns via WireModelDefaults
-       │
-ability.mask::<S>      ← typed: filters by row, masks by field
-       │
-retain_wire_keys       ← drop anything not on the wire DTO
-       │
-serialize → response body
-```
-
-Each step has a defined failure mode:
-
-- **Parse fails** (the body was not JSON) → original bytes ship.
-- **`wire_to_model` fails** (object shape does not match `Model`) →
-  500. Fail closed.
-- **`Ability::mask` runs** — any row the caller cannot read drops
-  out (collection responses) or every restricted field becomes
-  `null`.
-- **`retain_wire_keys`** — strips back any field the wire DTO never
-  carried. An unrestricted `Ability` grant cannot leak an
-  unexposed column (like `password_hash`).
-- **Re-serialize fails** → 500.
-
-Non-2xx, non-JSON, and scalar responses pass through untouched.
-
-## Where it binds
-
-`Authorize<A, S>` is the handler-level extractor that triggers the
-shaper. Declare it as a parameter; the `#[routes]` orchestrator
-detects it by type name and installs the shaper:
+`Authorize<A, S>` is the handler-level extractor that arms the shaper.
+Declare it as a parameter; the `#[routes]` orchestrator detects it and
+installs the shaper:
 
 ```rust
 use nest_rs_authz::{Read, http::Authorize};
@@ -83,13 +44,78 @@ async fn list(
    on the way out.
 
 <Aside type="caution">
-`#[routes]` reads the `Authorize` parameter **by type name** to
-install the shaper. Importing it under an alias (`use ... as Foo`)
-keeps the gate working but silently disables response masking — the
-shaper never binds. Keep `Authorize` unaliased.
+The parameter is load-bearing even bound as `_authz` — deleting the
+"unused" parameter disarms masking for that route. And `#[routes]` reads
+it **by type name**: importing it under an alias (`use ... as Foo`) keeps
+the gate working but silently disables the shaper. Keep `Authorize`
+unaliased.
 </Aside>
 
-## `Ability::mask` — what it strips
+The GraphQL analog is `#[authorize(Action, Entity)]` on a
+`#[query]`/`#[mutation]` — same declaration, same automatic mask.
+
+## What you get
+
+- **Field masking.** Restricted fields become `null` (single objects) per
+  the ability's `.fields([...])` grants.
+- **Row dropping.** In collection responses, rows the caller cannot read
+  drop out entirely.
+- **Two-layer defense.** The wire DTO decides what may *ever* ship
+  (column-level allowlist — no `#[expose]`, no wire); the `Ability`
+  decides what may ship *to this caller*. A column on neither list never
+  leaves — even an unrestricted grant cannot leak an unexposed column
+  like `password_hash`.
+- **Fail-closed.** A successful body that cannot be reconciled with the
+  entity's `Model` yields 500 rather than shipping unmasked. A
+  misconfigured route surfaces as a 500 in prod; the alternative —
+  shipping unmasked data — is worse.
+
+Non-2xx, non-JSON, and scalar responses pass through untouched.
+
+Pair every masked route with a
+[negative-path test](/testing/negative-path/) that pins the masked body
+shape — a regression surfaces immediately, not after an audit.
+
+## How it works (internals)
+
+<Aside type="note">
+Everything below is the mechanism, not the surface — first-time builders
+can stop here and come back when they hit a hand-written
+`WireModelDefaults` or want to audit the fail-closed path.
+</Aside>
+
+### The pipeline after a 2xx
+
+```text
+Handler returns Json<UserWire>
+       │
+       ▼
+  body in bytes
+       │
+parse JSON → Value
+       │
+wire_to_model::<S>     ← fill unexposed columns via WireModelDefaults
+       │
+ability.mask::<S>      ← typed: filters by row, masks by field
+       │
+retain_wire_keys       ← drop anything not on the wire DTO
+       │
+serialize → response body
+```
+
+Each step has a defined failure mode:
+
+- **Parse fails** (the body was not JSON) → original bytes ship.
+- **`wire_to_model` fails** (object shape does not match `Model`) →
+  500. Fail closed — and the same for a failure on any array element,
+  or a re-serialize failure.
+- **`Ability::mask` runs** — any row the caller cannot read drops
+  out (collection responses) or every restricted field becomes
+  `null`.
+- **`retain_wire_keys`** — strips back any field the wire DTO never
+  carried.
+
+### `Ability::mask` — what it strips
 
 ```rust
 pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
@@ -117,7 +143,7 @@ permitted. A grant with `.fields([Id, Name])` returns
 `FieldSet::Only(union_of_grants)` unless any matching grant is
 `FieldSet::All`, which clears the restriction.
 
-## `retain_wire_keys` — the defense in depth
+### `retain_wire_keys` — the defense in depth
 
 After `Ability::mask` produces a `serde_json::Value`, the shaper
 drops keys absent from the original wire body:
@@ -138,15 +164,7 @@ absent from the wire DTO), an unrestricted grant would have it pass `Ability::ma
 untouched. `retain_wire_keys` then drops it because it was never on
 the wire DTO to begin with.
 
-Two layers:
-
-- The DTO decides what may ever ship (column-level allowlist).
-- The `Ability` decides what may ship to this caller (row-level
-  policy).
-
-Both apply. A column on neither list never leaves.
-
-## `WireModelDefaults` — filling the gaps
+### `WireModelDefaults` — filling the gaps
 
 To run `Ability::mask` the shaper needs a typed `S::Model`. The wire
 body, by design, omits every unexposed column. `WireModelDefaults`
@@ -185,28 +203,6 @@ defaults yields 500 with `"response masking failed: body did not
 match the authorized subject type"`. The test bench is the right
 home for noticing this — a unit test that runs the shaper against
 the handler's `Json<T>` shape pins it.
-
-## Fail-closed — what that buys you
-
-The shaper's posture is asymmetric: every uncertain path collapses
-to 500.
-
-- JSON parse failure → original bytes ship (the body was not JSON to
-  begin with).
-- `wire_to_model` failure on an array element → 500 for the whole
-  response.
-- `wire_to_model` failure on an object → 500.
-- Re-serialize failure → 500.
-
-The principle: a route configured to mask must mask. If the framework
-cannot prove the body was masked, it does not ship the body. The
-operational cost is that a misconfigured route surfaces as 500 in
-prod; the alternative — shipping unmasked data — is worse.
-
-Pair every masked route with a
-[negative-path test](/testing/negative-path/) that pins the masked
-body shape. A regression that breaks the `WireModelDefaults` impl
-surfaces immediately, not after an audit.
 
 ## Going further
 

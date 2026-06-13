@@ -35,6 +35,11 @@ That's the only thing you install by hand. The first time you run a task with
 Pick a layout — a **workspace** (monorepo: shared `crates/features/`, one binary
 per app under `apps/`) or a **standalone** crate (everything in `src/`).
 
+Either way the scaffold depends on the individual `nest-rs-*` crates it
+needs — that is the recommended install path throughout these docs (each
+module page adds one `cargo add nest-rs-<crate>` line). The `nest-rs`
+umbrella crate is an optional shortcut; see [Packages](/packages/).
+
 <Tabs syncKey="getting-started-cli">
 <TabItem label="Workspace">
 

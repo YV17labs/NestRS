@@ -35,7 +35,8 @@ position without leaving the page.
 | `#[redirect]` | method | Issues a redirect and discards the handler payload | [Responses](/http/responses/) |
 | `#[use_guards]` | struct or method | Binds container-resolved Guards, first listed outermost | [Guards](/fundamentals/guards/) |
 | `#[use_interceptors]` | struct or method | Binds container-resolved Interceptors | [Interceptors](/fundamentals/interceptors/) |
-| `#[use_filters]` | struct or method | Binds exception Filters, wrapping outside the guards | [Exception filters](/fundamentals/exception-filters/) |
+| `#[use_filters]` | struct or method | Binds error-mapping Filters (response mapping; the global pool runs at the transport band) | [Exception filters](/fundamentals/exception-filters/#route-bound-filters-via-use_filters) |
+| `#[use_exception_filters]` | struct or method | Binds typed ExceptionFilters — downcast catch, the layer closest to the handler | [Exception filters](/fundamentals/exception-filters/#typed-catches-via-exceptionfilter) |
 | `#[meta]` | method | Attaches typed metadata read back via `Reflector` (repeatable) | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[interceptor]` | struct | Marks a struct as a global HTTP interceptor | [Interceptors](/fundamentals/interceptors/) |

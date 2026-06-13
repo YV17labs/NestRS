@@ -257,7 +257,11 @@ async fn login(&self, body: Valid<Json<LoginInput>>) -> Result<Json<AccessToken>
 }
 ```
 
-Read it from inside a guard:
+### Advanced: reading `#[meta]` from a guard
+
+Everything below is for the **guard author**, not the handler — a
+handler only attaches metadata; the guard reads it back at decision
+time:
 
 ```rust
 use nest_rs_http::Reflector;

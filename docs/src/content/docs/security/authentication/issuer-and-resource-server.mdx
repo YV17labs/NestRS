@@ -147,7 +147,8 @@ A round-trip:
 
 ```bash
 TOKEN=$(curl -sX POST http://localhost:3001/login \
-    -d 'email=ada@example.com&password=hunter2' \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"ada@example.com","password":"hunter2"}' \
     | jq -r .access_token)
 
 curl -s http://localhost:3002/users \

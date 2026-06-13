@@ -12,10 +12,15 @@ HTTP, GraphQL, queues, authorization, observability — is a separate package
 you **import only when the binary needs it**. A headless worker compiles no
 HTTP stack; an MCP-only assistant compiles no GraphQL schema.
 
-Most apps depend on the [`nest-rs`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs)
-umbrella and enable surface crates through **Cargo features** (for example
-`features = ["http", "seaorm", "graphql"]`). You can also depend on individual
-`nest-rs-*` crates directly when you want tighter control over the graph.
+**The recommended install path is depending on the individual `nest-rs-*`
+crates you need** — it is what `nestrs new` scaffolds, what every exemplar
+app in the Publish workspace does, and what each module's adoption page
+means by `cargo add nest-rs-<crate>`. The
+[`nest-rs`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs)
+umbrella (one dependency, surface crates behind **Cargo features** such as
+`features = ["http", "seaorm", "graphql"]`, plus `nest_rs::prelude`) is an
+optional convenience for quick experiments — same crates underneath, less
+control over the graph.
 
 <Aside type="note">
 This page lists **framework crates** — the batteries NestRS ships. Product
@@ -136,24 +141,38 @@ as the exemplar.
 
 ## Adding a crate to your app
 
-In a workspace app, list the umbrella with the features you need:
+List the individual crates the binary needs — this is the real
+`apps/api/Cargo.toml` (REST + GraphQL + DB + authz), trimmed to the
+framework lines:
 
 ```toml title="apps/api/Cargo.toml"
 [dependencies]
-nest-rs = { workspace = true, features = [
-  "http",
-  "graphql",
-  "openapi",
-  "config",
-  "seaorm",
-  "authn",
-  "authz",
-  "health",
-  "opentelemetry",
-] }
+nest-rs-core.workspace = true
+nest-rs-config.workspace = true
+nest-rs-http.workspace = true
+nest-rs-graphql.workspace = true
+nest-rs-openapi.workspace = true
+nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
+nest-rs-authn.workspace = true
+nest-rs-authz = { workspace = true, features = ["http", "graphql"] }
+nest-rs-health.workspace = true
+nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 ```
 
-Then import the matching **modules** in `AppModule` — for example
+In a fresh project outside this workspace, the same line is
+`cargo add nest-rs-<crate>` — exactly what each module's adoption page
+shows. Then import the matching **modules** in `AppModule` — for example
 `HttpModule::for_root(...)`, `DatabaseModule::for_root(...)`,
 `GraphqlModule`, `AuthzHttpModule`. The [Publish workspace](/publish/) and
 [Getting started](/getting-started/) walk through a full composition.
+
+Prefer one dependency for a quick experiment? The umbrella collapses the
+list:
+
+```toml
+[dependencies]
+nest-rs = { version = "0.2", features = ["http", "seaorm", "graphql"] }
+```
+
+Same crates underneath; switch to per-crate dependencies when the app
+hardens.

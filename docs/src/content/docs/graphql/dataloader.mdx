@@ -8,12 +8,12 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A `#[dataloader]` turns a per-parent DB read into a per-request batch.
-A `#[field_resolver]` asks the loader for one value per parent, the
-loader collects every key the request needs, the framework fires one
-query at the end. The user writes one method on a service; the loader
-struct, the registration in the async-graphql request context, the
-batch spawner that re-installs the request's ambient executor and
-`Ability` around each batch — all of that lands from the macro.
+You write one batch method on a service; a `#[field_resolver]` asks
+the loader for one value per parent, the loader collects every key the
+request needs, and the framework fires one query at the end. The rest
+of the machinery lands from the macro — what exactly is covered in
+[Under the hood](#under-the-hood-per-request-scope-ambient-ability)
+below.
 
 `#[expose(service = …)]` already emits the **PK loader** (`<Service>ById`)
 and **FK loaders** (`<Service>By<Col>` per `belongs_to`)
@@ -127,7 +127,12 @@ empty map. The CLAUDE.md rule:
 > **Forbidden** — batch/loader methods return `Result`. Silent failure
 > violates Rust-first.
 
-## Per-request scope, ambient `Ability`
+## Under the hood: per-request scope, ambient `Ability`
+
+The loader struct, the registration in the async-graphql request
+context, the batch spawner that re-installs the request's ambient
+executor and `Ability` around each batch — all of that lands from the
+macro. None of it is yours to wire.
 
 The macro seeds **one loader instance per GraphQL request** into the
 async-graphql context. Two calls within the same response share the

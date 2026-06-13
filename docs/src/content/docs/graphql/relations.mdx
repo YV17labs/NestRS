@@ -214,7 +214,10 @@ The connection helper, the page service method, and the `User` wire
 DTO all stay where they belong — the resolver only translates between
 the two.
 
-## Complex graphs (Phase 0 guidance)
+## Advanced: compile-time caveats on complex graphs (Phase 0)
+
+You can skip this on a first read — it only matters once a schema grows
+bidirectional or multi-hop relations.
 
 Bidirectional or multi-hop graphs (`org ↔ membership ↔ user`) can produce
 conflicting auto-generated loader impls at compile time. Prefer **scalar FK

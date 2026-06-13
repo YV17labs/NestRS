@@ -14,6 +14,11 @@ by-id write, and every response body before it leaves the process.
 Bind the two guards on the controller and the framework does the rest
 — there is no per-handler checklist.
 
+**Here for the first auth task?**
+[Add login and protect a route](/security/add-login/) walks the whole
+happy path — issue a JWT on `POST /login`, bind the two guards, curl the
+round-trip — before any of the reference below.
+
 The authn layer leans on [`jsonwebtoken`](https://docs.rs/jsonwebtoken),
 [`argon2`](https://docs.rs/argon2), and the
 [`oauth2`](https://docs.rs/oauth2) crate. The authz layer is the
@@ -105,13 +110,14 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
     - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `Bind<S, A>`, the `Access` outcome
     - [response-masking.mdx](/security/authorization/response-masking/) — `Authorize`, `mask`, `WireModelDefaults`
     - [per-transport-bridges.mdx](/security/authorization/per-transport-bridges/) — HTTP / GraphQL / WS / MCP
-  - [threat-model.mdx](/security/threat-model/) — what each layer catches, honestly
+  - [threat-model.mdx](/security/threat-model/) — what each layer catches, honestly (read before production, not needed for your first feature)
 </FileTree>
 
 ## Going further
 
 - [Threat model](/security/threat-model/) — what these layers cover and
-  what they don't.
+  what they don't (explanation — read before going to production, not
+  needed for your first feature).
 - [Guards](/fundamentals/guards/) — the primitive every security layer
   builds on.
 - [Throttler](/throttler/) — rate limiting as a guard, composes with

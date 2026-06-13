@@ -9,14 +9,14 @@ import { Aside } from '@astrojs/starlight/components';
 
 This page continues **`blog`** from
 [Modules](/fundamentals/modules/) — step ② onward, before the
-[tutorial](/tutorial/) `posts/` layout. Once handlers live in `post/`, the
+[tutorial](/tutorial/) `posts/` layout. Once handlers live in `posts/`, the
 container still does the same job: build each provider once (or per
 scope), wire `#[inject]` fields, fail at boot if something is unreachable.
 
 ```mermaid
 flowchart LR
-  A["PostModule<br/>registers PostService"] --> B["PostHttpModule<br/>registers PostController"]
-  B --> C["PostController<br/>#[inject] PostService"]
+  A["PostsModule<br/>registers PostsService"] --> B["PostsHttpModule<br/>registers PostsController"]
+  B --> C["PostsController<br/>#[inject] PostsService"]
 ```
 
 ## A provider in one glance
@@ -25,23 +25,23 @@ A provider is any struct the container can build. Mark it
 `#[injectable]`, list it in a module's `providers = [...]`, declare
 dependencies as `#[inject]` fields.
 
-```rust title="crates/features/src/post/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 use nest_rs_core::injectable;
 use sea_orm::DatabaseConnection;
 
 #[injectable]
-pub struct PostService {
+pub struct PostsService {
     #[inject]
     db: Arc<DatabaseConnection>,
 }
 
-impl PostService {
+impl PostsService {
     pub async fn list(&self) -> Vec<Post> { /* ... */ }
 }
 ```
 
-`#[injectable]` registers `PostService` by `TypeId`. The
+`#[injectable]` registers `PostsService` by `TypeId`. The
 `#[inject] db` field says: resolve `Arc<DatabaseConnection>` from the
 container when you build me — typically seeded by
 `DatabaseModule::for_root(...)`.
@@ -49,18 +49,18 @@ container when you build me — typically seeded by
 Controllers, resolvers, and gateways are providers too — they just also
 mount on a transport:
 
-```rust title="crates/features/src/post/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
 use nest_rs_http::{controller, routes};
 
 #[controller(path = "/posts")]
-pub struct PostController {
+pub struct PostsController {
     #[inject]
-    svc: Arc<PostService>,
+    svc: Arc<PostsService>,
 }
 
 #[routes]
-impl PostController {
+impl PostsController {
     #[get("/")]
     async fn list(&self) -> Vec<Post> {
         self.svc.list().await
@@ -68,27 +68,27 @@ impl PostController {
 }
 ```
 
-```rust title="crates/features/src/post/module.rs"
-#[module(providers = [PostService])]
-pub struct PostModule;
+```rust title="crates/features/src/posts/module.rs"
+#[module(providers = [PostsService])]
+pub struct PostsModule;
 ```
 
-```rust title="crates/features/src/post/http/module.rs"
+```rust title="crates/features/src/posts/http/module.rs"
 #[module(
-    imports = [PostModule],
-    providers = [PostController],
+    imports = [PostsModule],
+    providers = [PostsController],
 )]
-pub struct PostHttpModule;
+pub struct PostsHttpModule;
 ```
 
-`PostModule` owns the service. `PostHttpModule` owns the controller and
-imports the port so `PostController` can inject `PostService`.
+`PostsModule` owns the service. `PostsHttpModule` owns the controller and
+imports the port so `PostsController` can inject `PostsService`.
 
 ```mermaid
 flowchart TB
-  PM[PostModule] --> PS[PostService]
-  PHM[PostHttpModule] --> PM
-  PHM --> PC[PostController]
+  PM[PostsModule] --> PS[PostsService]
+  PHM[PostsHttpModule] --> PM
+  PHM --> PC[PostsController]
   PC -. "#[inject]" .-> PS
 ```
 
@@ -99,8 +99,8 @@ the container and listed in `providers = [...]`:
 
 | Decorator | Role in `blog` |
 |-----------|----------------|
-| `#[injectable]` | `PostService` — data layer |
-| `#[controller]` | `PostController` — HTTP routes |
+| `#[injectable]` | `PostsService` — data layer |
+| `#[controller]` | `PostsController` — HTTP routes |
 | `#[interceptor]` | Cross-cutting HTTP wrapper (logging, DB context, …) |
 
 Other transports use the same idea (`#[resolver]`, `#[gateway]`,
@@ -114,7 +114,7 @@ import tree reaches ([Modules](/fundamentals/modules/#compose-the-root-module)).
 
 ```rust
 #[injectable]                    // singleton — default
-pub struct PostService { /* ... */ }
+pub struct PostsService { /* ... */ }
 
 #[injectable(scope = request)]   // one instance per request
 pub struct RequestLogger { /* ... */ }
@@ -129,7 +129,7 @@ pub struct IdGenerator { /* ... */ }
 | `request` | Once per request | Cached for that request |
 | `transient` | On every resolution | Never cached |
 
-**Singletons** — `PostService`, `PostController`, the DB pool: built at
+**Singletons** — `PostsService`, `PostsController`, the DB pool: built at
 boot, injected as `Arc<T>`.
 
 **Request-scoped** — may inject singletons; singletons may **not**
@@ -155,7 +155,7 @@ builder). A transient must not depend on itself — cycles panic at
 resolution with a clear diagnostic.
 
 <Aside type="note">
-Most services in `post/` are **singletons**. Reach for `request` or
+Most services in `posts/` are **singletons**. Reach for `request` or
 `transient` only when you need per-request or per-call isolation.
 </Aside>
 
@@ -170,17 +170,17 @@ infrastructure (DB pool, config, …).
 Typical mistake — controller registered without importing the port:
 
 ```rust
-// ✗ PostModule not in imports — PostService unreachable here
-#[module(providers = [PostController])]
-pub struct PostHttpModule;
+// ✗ PostsModule not in imports — PostsService unreachable here
+#[module(providers = [PostsController])]
+pub struct PostsHttpModule;
 ```
 
 ```text frame="terminal"
 Error: module access violation:
-  `PostController` (in module `PostHttpModule`) depends on `PostService`, but
-  `PostHttpModule` imports no module that provides it. `PostService` is
-  provided by `PostModule` — add `PostModule` to
-  `#[module(imports = [...])]` of `PostHttpModule`.
+  `PostsController` (in module `PostsHttpModule`) depends on `PostsService`, but
+  `PostsHttpModule` imports no module that provides it. `PostsService` is
+  provided by `PostsModule` — add `PostsModule` to
+  `#[module(imports = [...])]` of `PostsHttpModule`.
 ```
 
 The message names the consumer, the missing type, and the module that
@@ -193,10 +193,10 @@ must import a module that provides that guard.
 
 ```mermaid
 flowchart TB
-  PHM[PostHttpModule]
-  PM[PostModule]
-  PC[PostController]
-  PS[PostService]
+  PHM[PostsHttpModule]
+  PM[PostsModule]
+  PC[PostsController]
+  PS[PostsService]
   PHM -->|imports| PM
   PHM --> PC
   PC -. needs .-> PS
@@ -205,39 +205,39 @@ flowchart TB
 
 ## Hiding the impl — `pub trait` + `as dyn Trait`
 
-When another feature must call into `post/` without naming the concrete
+When another feature must call into `posts/` without naming the concrete
 struct, expose a `pub trait` and keep the impl module-private:
 
-```rust title="crates/features/src/post/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 
 #[async_trait]
-pub trait PostService: Send + Sync {
+pub trait PostsService: Send + Sync {
     async fn list(&self) -> Result<Vec<Post>, Error>;
 }
 
 #[injectable]
-pub(crate) struct PostServiceImpl {
+pub(crate) struct PostsServiceImpl {
     #[inject]
     db: Arc<DatabaseConnection>,
 }
 
 #[async_trait]
-impl PostService for PostServiceImpl { /* ... */ }
+impl PostsService for PostsServiceImpl { /* ... */ }
 ```
 
-```rust title="post/module.rs"
-#[module(providers = [PostServiceImpl as dyn PostService])]
-pub struct PostModule;
+```rust title="posts/module.rs"
+#[module(providers = [PostsServiceImpl as dyn PostsService])]
+pub struct PostsModule;
 ```
 
-Consumers inject `Arc<dyn PostService>`, never `PostServiceImpl`. There
+Consumers inject `Arc<dyn PostsService>`, never `PostsServiceImpl`. There
 is **no `exports = [...]`** list — Rust visibility plus the
 `as dyn Trait` binding is the encapsulation primitive.
 
 <Aside>
-When you do not need to hide the impl, register `PostService` directly
-in `PostModule` — as in the snippets above. The trait pattern is optional:
+When you do not need to hide the impl, register `PostsService` directly
+in `PostsModule` — as in the snippets above. The trait pattern is optional:
 use it when a second feature needs the port without coupling to your
 concrete type.
 </Aside>
@@ -245,7 +245,7 @@ concrete type.
 ## The runtime escape hatch
 
 ```rust
-let svc: Arc<PostService> = container.get::<PostService>().unwrap();
+let svc: Arc<PostsService> = container.get::<PostsService>().unwrap();
 ```
 
 `Container::get` / `get_dyn` resolve imperatively and **bypass the access
@@ -257,8 +257,8 @@ prefer `#[inject]` so refactors stay checked at boot.
   `providers = [...]`.
 - **`#[inject]`** — declares a dependency; the access graph proves it is
   reachable through `imports`.
-- **Port owns the service, adapter owns the controller** — `PostModule` +
-  `PostHttpModule`, same as on the Modules page.
+- **Port owns the service, adapter owns the controller** — `PostsModule` +
+  `PostsHttpModule`, same as on the Modules page.
 </Aside>
 
 ## Going further

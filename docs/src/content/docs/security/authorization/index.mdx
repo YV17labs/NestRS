@@ -33,6 +33,8 @@ calls `define` per request, after the authn guard attached the
 principal. The resulting `Ability` lives in request extensions and as
 a `task_local!` for the data layer.
 
+A minimal policy is one statement — "members read their org's users":
+
 ```rust title="crates/features/src/authz/ability.rs"
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
 
@@ -44,19 +46,31 @@ impl AbilityFactory for AppAbility {
     type Actor = Claims;
 
     fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
-        if actor.is_admin() {
-            ab.can(Action::Manage, user::Entity)
-                .when(|p| p.eq(user::Column::OrgId, actor.org_id));
-            ab.can(Action::Manage, org::Entity);
-        } else {
-            ab.can(Action::Read, user::Entity)
-                .when(|p| p.eq(user::Column::OrgId, actor.org_id))
-                .fields([user::Column::Id, user::Column::Name]);
-            ab.can(Action::Create, user::Entity)
-                .when(|p| p.eq(user::Column::OrgId, actor.org_id));
-            ab.can(Action::Read, org::Entity)
-                .when(|p| p.eq(org::Column::Id, actor.org_id));
-        }
+        ab.can(Action::Read, user::Entity)
+            .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+    }
+}
+```
+
+That one line lands the class-level gate, the SQL pre-filter
+(`WHERE org_id = $caller_org_id`), and the response-side check on
+every loaded row. The next step is a role matrix — same builder,
+branched on the principal:
+
+```rust
+fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
+    if actor.is_admin() {
+        ab.can(Action::Manage, user::Entity)
+            .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+        ab.can(Action::Manage, org::Entity);
+    } else {
+        ab.can(Action::Read, user::Entity)
+            .when(|p| p.eq(user::Column::OrgId, actor.org_id))
+            .fields([user::Column::Id, user::Column::Name]);
+        ab.can(Action::Create, user::Entity)
+            .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+        ab.can(Action::Read, org::Entity)
+            .when(|p| p.eq(org::Column::Id, actor.org_id));
     }
 }
 ```
@@ -183,6 +197,9 @@ controller with the transport's authz module, and write a
 - [By-id binding](/security/authorization/by-id-binding/) —
   `Bind<S, A>` and the 404/403 distinction.
 - [Response masking](/security/authorization/response-masking/) —
-  `Authorize`, `mask`, `retain_wire_keys`, `WireModelDefaults`.
+  declare `Authorize<A, E>` and masking is automatic; the
+  `mask`/`retain_wire_keys`/`WireModelDefaults` pipeline is documented
+  as internals (skip on a first pass).
 - [Per-transport bridges](/security/authorization/per-transport-bridges/)
-  — how GraphQL, WS, and MCP re-establish the ambient ability.
+  — how GraphQL, WS, and MCP re-establish the ambient ability
+  (explanation — useful once you add a second transport, not before).

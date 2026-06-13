@@ -61,8 +61,8 @@ guards and **captures the post-guard request state**, anything those
 guards attach (the principal, an ambient ability, the database
 executor) is re-installed around every message dispatch on the
 connection. Without that capture, a per-message guard like
-`WsAuthGuard` reading `current_ability()` would see `None` once the
-upgrade request had unwound.
+`AuthzGuard` — whose `check_ws_message` reads `current_ability()` and
+fails closed — would see `None` once the upgrade request had unwound.
 
 ## Per-message: the envelope gate
 
@@ -146,23 +146,29 @@ frame is sent.
 The same `Guard` trait runs across all three transports, so a guard
 that implements `check_http`, `check_graphql`, and `check_ws_message`
 can be wired anywhere without rewriting. A guard that only makes
-sense for one transport (a `MessageGuard`-shaped check) implements
-only `check_ws_message` and leaves the others on the default
-`Ok(())`.
+sense for one transport implements only `check_ws_message` and leaves
+the others on the default `Ok(())` — there is no separate
+message-guard trait or marker type.
 </Aside>
 
 ## Authentication and authorization
 
-Connection-level `AuthGuard` and per-message `AuthzGuard` are the
-nestrs equivalent of the HTTP pair — same strategy, same ability
-machinery. They wire through dedicated WS bridges from
-`nest_rs_authn` and `nest_rs_authz` so the gateway can read the
-ambient principal and ability inside every dispatch.
+WebSockets reuse the HTTP pair **directly** — there is no WS-specific
+guard type. The gateway struct binds
+`#[use_guards(AuthGuard, AuthzGuard)]`; both run once on the upgrade
+(an HTTP `GET`) and are access-graph-validated like any HTTP binding:
+omit `AuthzWsModule` and those guards are unreachable, so boot fails.
+Because the upgrade's task-locals unwind before message handlers run,
+`WsDataContext` — the `SocketContext` bridge `AuthzWsModule` provides
+— re-seeds the executor and ability around each message. Binding
+`AuthzGuard` beside a `#[subscribe_message]` adds a per-message check
+through `check_ws_message`: it denies, fail-closed, when no ambient
+ability is present.
 
 See [Security](/security/) for the strategy + ability composition; the
-WS-specific bits — `WsDataContext`, `WsAuthGuard`, the `forward_principal!`
-macro — live in the same authn/authz crates as their HTTP and GraphQL
-siblings, behind the matching `ws` feature.
+WS-specific bit — `WsDataContext` — lives in `nest_rs_seaorm` behind
+the `ws` feature (packaged by `AuthzWsModule`), alongside its HTTP and
+GraphQL sibling bridges.
 
 ## Going further
 

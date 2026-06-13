@@ -12,7 +12,7 @@ through four steps — step ① inline, then the composed root the
 [tutorial](/tutorial/) implements:
 
 1. **One root module** — handlers inline, one transport.
-2. **Extract a feature** — domain code moves to `post/` with its own prefix.
+2. **Extract a feature** — domain code moves to `posts/` with its own prefix.
 3. **Wire imports** — static vs dynamic framework modules.
 4. **Compose** — the root lists imports only; adapters own the handlers.
 
@@ -22,7 +22,7 @@ rest of this page.
 
 ```mermaid
 flowchart LR
-  A["① BlogModule<br/>inline handlers"] --> B["② post/ feature<br/>PostModule + adapters"]
+  A["① BlogModule<br/>inline handlers"] --> B["② posts/ feature<br/>PostsModule + adapters"]
   B --> C["③ framework imports<br/>DB, HTTP, config"]
   C --> D["④ root composes<br/>no inline providers"]
 ```
@@ -74,59 +74,59 @@ ensures every `#[inject]` resolves through `imports`.
 
 List order does not affect registration. We still list imports in a
 readable order: **config → infrastructure → transports → auth wiring →
-feature adapters**. The app root imports **`PostHttpModule`**, not
-`PostModule` — the port rides along inside the adapter's own `imports`.
+feature adapters**. The app root imports **`PostsHttpModule`**, not
+`PostsModule` — the port rides along inside the adapter's own `imports`.
 Business modules sit at the bottom of the list.
 
 ## Extract a feature
 
 When a domain outgrows the app root, it moves to `crates/features/` with
-its **own name prefix**. The blog handlers become `PostService` and
-`PostController` under `PostModule` — same domain, feature naming, not
+its **own name prefix**. The blog handlers become `PostsService` and
+`PostsController` under `PostsModule` — same domain, feature naming, not
 the app-root `Blog*` prefix anymore.
 
 <FileTree>
-- crates/features/src/post/
-  - module.rs (PostModule — the port)
-  - service.rs (PostService)
+- crates/features/src/posts/
+  - module.rs (PostsModule — the port)
+  - service.rs (PostsService)
   - entity.rs
   - dto.rs
   - error.rs
   - http/
-    - module.rs (PostHttpModule — imports PostModule)
-    - controller.rs (PostController)
+    - module.rs (PostsHttpModule — imports PostsModule)
+    - controller.rs (PostsController)
 </FileTree>
 
 One feature, several modules — never one umbrella import. The port
-(`PostModule`) holds the data layer — `PostService`, entity, repo wiring.
+(`PostsModule`) holds the data layer — `PostsService`, entity, repo wiring.
 It registers **no** controller, resolver, or gateway. Each transport
-adapter (`PostHttpModule`, …) imports the port and mounts **its** edge
+adapter (`PostsHttpModule`, …) imports the port and mounts **its** edge
 only.
 
-### Why not put the controller in `PostModule`?
+### Why not put the controller in `PostsModule`?
 
-If `PostController` lived in `PostModule`, every binary that imported
-`PostModule` would mount HTTP routes — a worker that only enqueues jobs,
-another feature that injects `PostService`, a headless test harness.
+If `PostsController` lived in `PostsModule`, every binary that imported
+`PostsModule` would mount HTTP routes — a worker that only enqueues jobs,
+another feature that injects `PostsService`, a headless test harness.
 Importing the port would always drag the transport with it.
 
 Splitting keeps transport **opt-in per binary**:
 
 | Root imports | What activates |
 |--------------|----------------|
-| `PostModule` only | Data layer — `PostService` injectable, **no HTTP routes** |
-| `PostHttpModule` | HTTP adapter — imports `PostModule` transitively, mounts `PostController` |
+| `PostsModule` only | Data layer — `PostsService` injectable, **no HTTP routes** |
+| `PostsHttpModule` | HTTP adapter — imports `PostsModule` transitively, mounts `PostsController` |
 
-`BlogModule` lists `PostHttpModule`, not `PostModule`. The adapter
+`BlogModule` lists `PostsHttpModule`, not `PostsModule`. The adapter
 already imports the port; listing both would be redundant. A
-`worker` binary would import `PostModule` (or a queue adapter)
+`worker` binary would import `PostsModule` (or a queue adapter)
 without ever pulling in HTTP.
 
 ```mermaid
 flowchart TB
-  PM[PostModule] --> PS[PostService]
-  PHM[PostHttpModule] --> PM
-  PHM --> PC[PostController]
+  PM[PostsModule] --> PS[PostsService]
+  PHM[PostsHttpModule] --> PM
+  PHM --> PC[PostsController]
   PC -. "injects" .-> PS
 ```
 
@@ -154,10 +154,10 @@ HttpModule::for_root(HttpConfig {
 ```
 
 **Static** — a bare type, no parameters. Feature adapters like
-`PostHttpModule` import this way:
+`PostsHttpModule` import this way:
 
 ```rust
-PostHttpModule
+PostsHttpModule
 ```
 
 Static modules dedupe automatically: if two branches of the import tree
@@ -187,8 +187,8 @@ and deployment-specific host/port from env. See
 ## Compose the root module
 
 Once `blog` needs persistence, the inline
-`BlogService` / `BlogController` pair moves into `post/` (renamed
-`PostService` / `PostController`). The root module no longer lists
+`BlogService` / `BlogController` pair moves into `posts/` (renamed
+`PostsService` / `PostsController`). The root module no longer lists
 providers — it only composes imports:
 
 ```rust title="apps/blog/src/module.rs"
@@ -197,17 +197,17 @@ providers — it only composes imports:
         ConfigModule::for_root(),
         DatabaseModule::for_root(None),
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-        PostHttpModule,
+        PostsHttpModule,
     ],
 )]
 pub struct BlogModule;
 ```
 
-`HttpModule` starts the transport. `PostHttpModule` registers
-`PostController` on it. Framework first, feature adapter second — same
+`HttpModule` starts the transport. `PostsHttpModule` registers
+`PostsController` on it. Framework first, feature adapter second — same
 pattern for every HTTP feature.
 
-`PostHttpModule` pulls in `PostModule` through its own `imports` list.
+`PostsHttpModule` pulls in `PostsModule` through its own `imports` list.
 The root never lists the port when it only wants this transport — and
 never lists a transport it does not serve.
 
@@ -224,18 +224,18 @@ flowchart TB
   BM --> CM[ConfigModule]
   BM --> DM[DatabaseModule]
   BM --> HM[HttpModule]
-  BM --> PHM[PostHttpModule]
-  PHM --> PM[PostModule]
-  PM --> PS[PostService]
-  PHM --> PC[PostController]
+  BM --> PHM[PostsHttpModule]
+  PHM --> PM[PostsModule]
+  PM --> PS[PostsService]
+  PHM --> PC[PostsController]
 ```
 
-Solid arrows from `BlogModule` are **direct** imports. `PostModule` is
-reachable only through `PostHttpModule` — that is the point.
+Solid arrows from `BlogModule` are **direct** imports. `PostsModule` is
+reachable only through `PostsHttpModule` — that is the point.
 
 <Aside type="note" title="What to remember">
 - **`#[module]` = two lists** — `providers` you build, `imports` you depend on.
-- **Port vs adapter** — data in `PostModule`, routes in `PostHttpModule`; import the adapter at the root when you want that transport.
+- **Port vs adapter** — data in `PostsModule`, routes in `PostsHttpModule`; import the adapter at the root when you want that transport.
 - **Opt-in per binary** — import only the modules your deploy serves; everything else stays inert.
 </Aside>
 

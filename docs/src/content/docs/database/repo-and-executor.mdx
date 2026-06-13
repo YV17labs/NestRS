@@ -19,7 +19,35 @@ The invariant: **every data access goes through a service, and a service
 reaches the DB only through `Repo`**. That is the single audited choke
 point per entity.
 
-## The ambient executor
+## Repo's surface
+
+From a handler's point of view there is nothing to set up: you call the
+service, the service calls `Repo`, and `Repo` picks up the ambient
+executor the framework installed before the handler ran — the pool on a
+safe route, a transaction on a mutation. No connection parameter, no
+transaction object to thread through the call stack.
+
+`Repo<E>` is generic over the entity. Every method runs against the ambient
+executor, every read carries the ambient ability filter:
+
+```rust
+Repo::<Items>::conn()?;                    // raw handle for a custom query
+Repo::<Items>::all().await?;               // every readable row
+Repo::<Items>::find_by_id(id).await?;      // None if absent OR out of scope
+Repo::<Items>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
+Repo::<Items>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
+Repo::<Items>::delete(model).await?;       // 0 rows if out of scope
+Repo::<Items>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
+```
+
+A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
+the primary key, so a caller cannot mutate a row outside its scope even
+with a leaked id. The macro-generated `CrudService::access(action, id)`
+loads unscoped so a denied-but-existing row surfaces as `Access::Denied`
+(distinct from `Access::Missing`) — the gateway route-model binding goes
+through.
+
+## Under the hood: the ambient executor
 
 `Executor` is a SeaORM connection — the pool or the request's transaction —
 installed in a `tokio::task_local!` for the duration of the handler. Two
@@ -53,28 +81,6 @@ Three scopes coexist:
 to fail closed when a request runs with no ambient ability, while a worker
 runs unscoped (no caller ⇒ no scope to apply). See
 [Security](/security/) for the ability half.
-
-## Repo's surface
-
-`Repo<E>` is generic over the entity. Every method runs against the ambient
-executor, every read carries the ambient ability filter:
-
-```rust
-Repo::<Items>::conn()?;                    // raw handle for a custom query
-Repo::<Items>::all().await?;               // every readable row
-Repo::<Items>::find_by_id(id).await?;      // None if absent OR out of scope
-Repo::<Items>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
-Repo::<Items>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
-Repo::<Items>::delete(model).await?;       // 0 rows if out of scope
-Repo::<Items>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
-```
-
-A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
-the primary key, so a caller cannot mutate a row outside its scope even
-with a leaked id. The macro-generated `CrudService::access(action, id)`
-loads unscoped so a denied-but-existing row surfaces as `Access::Denied`
-(distinct from `Access::Missing`) — the gateway route-model binding goes
-through.
 
 ## The DbContext interceptor
 

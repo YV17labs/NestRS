@@ -130,6 +130,7 @@ export default defineConfig({
             { label: 'CLI', slug: 'cli' },
           ],
         },
+        { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
         { label: 'Fundamentals', items: [{ autogenerate: { directory: 'fundamentals' } }] },
         { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
         { label: 'HTTP', items: [{ autogenerate: { directory: 'http' } }] },
@@ -139,6 +140,7 @@ export default defineConfig({
           label: 'Security',
           items: [
             { label: 'Overview', slug: 'security' },
+            { label: 'Add login + protect a route', slug: 'security/add-login' },
             { label: 'Threat model', slug: 'security/threat-model' },
             {
               label: 'Authentication',
@@ -150,8 +152,6 @@ export default defineConfig({
             },
           ],
         },
-        { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
-        { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
         { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },
         { label: 'WebSockets', items: [{ autogenerate: { directory: 'websockets' } }] },
         { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
@@ -159,6 +159,7 @@ export default defineConfig({
         { label: 'Schedule', items: [{ autogenerate: { directory: 'schedule' } }] },
         { label: 'Events', items: [{ autogenerate: { directory: 'events' } }] },
         { label: 'MCP', items: [{ autogenerate: { directory: 'mcp' } }] },
+        { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
         {
           label: 'Observability',
           items: [

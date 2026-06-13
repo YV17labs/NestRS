@@ -5,6 +5,10 @@ sidebar:
   order: 4
 ---
 
+Metrics are the aggregate counterpart to [traces](/opentelemetry/traces/) —
+reach for them when you need a number over time (signups per minute, job
+duration percentiles, queue depth) rather than the story of one request.
+
 `OpenTelemetryModule` provides `Arc<OpenTelemetryMeter>` — the OTel global
 meter, wrapped so it flows through the DI graph. Inject it like any other
 dependency.

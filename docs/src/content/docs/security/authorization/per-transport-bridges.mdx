@@ -78,8 +78,28 @@ installs that ability as a task-local via `with_ability` so
 ## GraphQL — marker guards over a shared dispatch
 
 A GraphQL `POST /graphql` is one HTTP request that multiplexes many
-operations. Per-operation guards cannot run as HTTP guards because
-the operations are inside the body, not the URL. The bridge:
+operations, so per-operation auth cannot run as plain HTTP guards. What
+you write is unchanged in spirit: import `AuthzGraphqlModule`, bind the
+**marker** on the resolver, and declare each operation's posture:
+
+```rust
+#[resolver]
+#[use_guards(GraphqlAuthGuard)]
+impl UsersResolver { /* #[authorize(Action, Entity)] or #[public] per op */ }
+```
+
+That's the whole resolver-side surface. The marker exists for the access
+graph: HTTP guards run on `&mut Request` *before* the handler — they
+*are* the auth chain. GraphQL instead runs authn/ability **in-band** per
+operation and seeds the ability into per-operation context; the marker
+turns "this resolver depends on the seeded ability" into an `#[inject]`
+the access graph validates — omit the authz module and **boot fails**
+naming the missing guard, never a silently unauthenticated schema.
+
+### Under the hood: the operation bridge
+
+The seeding is done by `GraphqlAbilityBridge`, registered as the
+`dyn GraphqlOperationGuard`:
 
 ```rust
 #[injectable]
@@ -99,18 +119,9 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
 `AbilityGuard`) on the GraphQL request — best-effort: a failed authn
 leaves no ability and the resolvers' `authorize`/`bind` refuse.
 `around` installs the resulting ability via `with_ability` for the
-duration of the operation.
-
-The resolver then binds a **marker** guard, not a real guard:
-
-```rust
-#[resolver]
-#[use_guards(GraphqlAuthGuard)]
-impl UsersResolver { /* ... */ }
-```
-
-`GraphqlAuthGuard` is a `dyn GraphqlResolverGuard` that fails closed
-if `Arc<Ability>` is absent from the operation's data:
+duration of the operation. The marker itself is a
+`dyn GraphqlResolverGuard` that fails closed if `Arc<Ability>` is
+absent from the operation's data:
 
 ```rust
 async fn check(&self, ctx: &Context<'_>) -> Result<()> {
@@ -121,13 +132,6 @@ async fn check(&self, ctx: &Context<'_>) -> Result<()> {
     }
 }
 ```
-
-Why a marker? HTTP guards run on `&mut Request` *before* the handler
-— they *are* the auth chain. GraphQL runs the authn/ability work at
-the operation guard, then seeds the ability into per-operation
-context. The marker turns "this resolver depends on the seeded
-ability" into an `#[inject]` the access graph validates: omit the
-authz module and boot fails naming the missing guard.
 
 The bridge also registers a `LoaderScope` as `dyn BatchContext` so
 dataloaders that fan out across batches snapshot the ability + pool
@@ -153,8 +157,12 @@ executor and the ambient `Ability` for every message — no per-message
 transaction (mutations are explicit in your service), no shared state
 across messages.
 
-A gateway binds the connection-level `AuthGuard` and per-message
-markers:
+Unlike GraphQL, WS has **no marker type** — it reuses the HTTP `Guard`
+trait directly. The gateway struct binds the real guards; because the
+upgrade is an HTTP `GET`, they run once on it, and the access graph
+validates them like any HTTP binding (omit `AuthzWsModule` ⇒ the
+guards are unreachable ⇒ boot fails). An optional per-message check
+binds a real `Guard` beside the message:
 
 ```rust
 #[gateway(path = "/ws")]
@@ -164,14 +172,19 @@ pub struct ChatGateway { /* ... */ }
 #[messages]
 impl ChatGateway {
     #[subscribe_message]
-    #[use_guards(WsAuthGuard)]
+    #[use_guards(AuthzGuard)]
     async fn send(&self, ...) -> Result<()> { /* ... */ }
 }
 ```
 
-`AuthGuard` + `AuthzGuard` run at the upgrade (the upgrade is an
-HTTP request); `WsAuthGuard` is the per-message marker that fails
-closed if the ambient ability did not survive.
+`AuthGuard` + `AuthzGuard` run at the upgrade. The upgrade's
+task-locals unwind before any message handler runs, so `WsDataContext`
+re-seeds the executor and ability around each message; a guard bound
+beside a `#[subscribe_message]` then runs through
+`Guard::check_ws_message`. `AuthzGuard`'s implementation fails closed:
+no ambient ability (say the app imported `AuthzHttpModule` instead of
+`AuthzWsModule`, so nothing re-seeded it) ⇒ the message is denied with
+a 401-shaped error frame, never silently passed through.
 
 ## MCP — same shape as HTTP
 

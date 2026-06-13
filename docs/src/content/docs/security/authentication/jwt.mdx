@@ -39,6 +39,19 @@ pass a `JwtConfig` to pin it in code. The factory phase builds
 `JwtService` once and registers it as global infrastructure —
 controllers, login services, OAuth flows all inject the same instance.
 
+One env var makes it work end to end — a shared HS256 secret (32 bytes
+minimum; anything shorter fails the boot):
+
+```bash frame="terminal"
+export NESTRS_AUTHN__SECRET='a-32-byte-minimum-development-secret!!'
+```
+
+With that set, `JwtService` signs and verifies against the same
+secret: `AuthGuard` returns a 401 without a valid
+`Authorization: Bearer` token and attaches the claims otherwise.
+Every other knob is optional — the full env table and the
+HS256-vs-EdDSA decision come [later on this page](#configuration).
+
 ## What `JwtStrategy` does
 
 `JwtStrategy<C>` is an `#[injectable]` over an `Arc<JwtService>` and a
@@ -54,54 +67,6 @@ A missing header yields `AuthError::MissingCredentials`; a bad
 signature yields `AuthError::InvalidSignature`; an expired token
 yields `AuthError::Expired`. `AuthGuard` maps every variant to a 401
 with `WWW-Authenticate: Bearer`.
-
-## Configuration
-
-`JwtConfig` follows the framework-wide dual-path rule: every field is
-settable from `NESTRS_AUTHN__*` env vars **or** from a pinned struct
-passed to `AuthnModule::for_root(config)`.
-
-| Field | Env var | Notes |
-|-------|---------|-------|
-| `secret` | `NESTRS_AUTHN__SECRET` | HS256 shared secret |
-| `private_key` | `NESTRS_AUTHN__PRIVATE_KEY` | EdDSA PEM, issuer only |
-| `public_key` | `NESTRS_AUTHN__PUBLIC_KEY` | EdDSA PEM, verifier needs it |
-| `leeway_secs` | `NESTRS_AUTHN__LEEWAY_SECS` | Clock skew, default 30 |
-| `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — unset disables the check |
-
-`JwtConfig::into_options` walks the three key fields and chooses a
-mode:
-
-- `secret` set → HMAC HS256 (both sign and verify).
-- `private_key` + `public_key` → EdDSA (sign and verify).
-- `public_key` alone → EdDSA verify-only — a resource server with no
-  private key cannot mint a token even if it wanted to.
-- nothing → boot fails with `"no JWT key configured"`.
-
-A misconfiguration (`private_key` without `public_key`) fails the boot
-loudly, naming the offending env var.
-
-## HS256 vs EdDSA — pick on deployment shape
-
-**HS256** is fine when one binary both issues and verifies tokens.
-Symmetric — anyone with the secret can mint a token. Convenient for
-local development and single-process apps. Set
-`NESTRS_AUTHN__SECRET`.
-
-**EdDSA** is the production posture for split deployments. The issuer
-holds the private PEM; every resource server holds the public PEM
-only. Even a compromised resource server cannot mint a token. The
-issuer sets both `PRIVATE_KEY` and `PUBLIC_KEY`; verifiers set only
-`PUBLIC_KEY`.
-
-See [Issuer and resource server](/security/authentication/issuer-and-resource-server/)
-for the deployment pattern.
-
-```bash
-# generate an EdDSA key pair
-openssl genpkey -algorithm ed25519 -out jwt.pem
-openssl pkey -in jwt.pem -pubout -out jwt.pub
-```
 
 ## Claims — your shape, your business rules
 
@@ -169,6 +134,54 @@ The verification path runs `Validation::leeway`, checks `nbf`, and
 matches `aud` only when `JwtConfig::audience` is set — otherwise the
 audience check is disabled. Invalid signatures and expired tokens hit
 `tracing::warn!` under `nest_rs::authn`.
+
+## Configuration
+
+`JwtConfig` follows the framework-wide dual-path rule: every field is
+settable from `NESTRS_AUTHN__*` env vars **or** from a pinned struct
+passed to `AuthnModule::for_root(config)`.
+
+| Field | Env var | Notes |
+|-------|---------|-------|
+| `secret` | `NESTRS_AUTHN__SECRET` | HS256 shared secret |
+| `private_key` | `NESTRS_AUTHN__PRIVATE_KEY` | EdDSA PEM, issuer only |
+| `public_key` | `NESTRS_AUTHN__PUBLIC_KEY` | EdDSA PEM, verifier needs it |
+| `leeway_secs` | `NESTRS_AUTHN__LEEWAY_SECS` | Clock skew, default 30 |
+| `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — unset disables the check |
+
+`JwtConfig::into_options` walks the three key fields and chooses a
+mode:
+
+- `secret` set → HMAC HS256 (both sign and verify).
+- `private_key` + `public_key` → EdDSA (sign and verify).
+- `public_key` alone → EdDSA verify-only — a resource server with no
+  private key cannot mint a token even if it wanted to.
+- nothing → boot fails with `"no JWT key configured"`.
+
+A misconfiguration (`private_key` without `public_key`) fails the boot
+loudly, naming the offending env var.
+
+## HS256 vs EdDSA — pick on deployment shape
+
+**HS256** is fine when one binary both issues and verifies tokens.
+Symmetric — anyone with the secret can mint a token. Convenient for
+local development and single-process apps. Set
+`NESTRS_AUTHN__SECRET`.
+
+**EdDSA** is the production posture for split deployments. The issuer
+holds the private PEM; every resource server holds the public PEM
+only. Even a compromised resource server cannot mint a token. The
+issuer sets both `PRIVATE_KEY` and `PUBLIC_KEY`; verifiers set only
+`PUBLIC_KEY`.
+
+See [Issuer and resource server](/security/authentication/issuer-and-resource-server/)
+for the deployment pattern.
+
+```bash
+# generate an EdDSA key pair
+openssl genpkey -algorithm ed25519 -out jwt.pem
+openssl pkey -in jwt.pem -pubout -out jwt.pub
+```
 
 <Aside type="caution">
 A short `ttl` is the first defense against token replay. The

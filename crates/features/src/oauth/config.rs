@@ -38,7 +38,7 @@ impl Config for IssuerConfig {
     fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
         let clients = match env.get("CLIENTS") {
             Some(raw) => serde_json::from_str(&raw)
-                .map_err(|e| ConfigError::parse(env.var("CLIENTS"), e.to_string()))?,
+                .map_err(|e| ConfigError::parse(env.var_name("CLIENTS"), e.to_string()))?,
             None => Vec::new(),
         };
         let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(DEFAULT_ORG);

@@ -293,3 +293,92 @@ async fn same_interceptor_at_all_three_scopes_runs_once() {
         "global + controller + method declaration still executes exactly once",
     );
 }
+
+// --- infra `#[interceptor]` — transport-edge band, auto-mounted, non-provider ---
+
+static EDGE_EVENTS: Mutex<Vec<&'static str>> = Mutex::const_new(Vec::new());
+
+/// Infra interceptor (the `DbContext` shape): attached by `#[interceptor]`
+/// as an `HttpEndpointWrap` at the transport edge — never a provider, never
+/// in the per-route pool.
+#[nest_rs_http::interceptor]
+struct EdgeStamp;
+
+impl Layer for EdgeStamp {}
+
+#[async_trait]
+impl Interceptor for EdgeStamp {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+        // The edge band sees matched and unmatched routes alike — resolve
+        // the error branch so a 404 is observed (and stamped) too.
+        let mut resp = next.run(req).await.unwrap_or_else(|err| err.into_response());
+        EDGE_EVENTS.lock().await.push("edge");
+        resp.headers_mut()
+            .insert("x-edge", "hit".parse().expect("static header value"));
+        Ok(resp)
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct ScopedProbe;
+
+impl Layer for ScopedProbe {}
+
+#[async_trait]
+impl Interceptor for ScopedProbe {
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+        let resp = next.run(req).await?;
+        EDGE_EVENTS.lock().await.push("scoped");
+        Ok(resp)
+    }
+}
+
+#[controller(path = "/edge")]
+struct EdgeController;
+
+#[routes]
+impl EdgeController {
+    #[get("/probe")]
+    #[use_interceptors(ScopedProbe)]
+    async fn probe(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [EdgeStamp, ScopedProbe, EdgeController])]
+struct EdgeModule;
+
+#[tokio::test]
+async fn infra_interceptor_mounts_at_the_transport_edge_and_is_not_a_provider() {
+    let _gate = GATE.lock().await;
+    EDGE_EVENTS.lock().await.clear();
+
+    let app = TestApp::for_module::<EdgeModule>().await.expect("boots");
+
+    // A matched route: the scoped interceptor completes inside, the infra
+    // wrap completes outside — band nesting matches the CLAUDE.md table.
+    let resp = app.http().get("/edge/probe").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_header("x-edge", "hit");
+    assert_eq!(
+        *EDGE_EVENTS.lock().await,
+        vec!["scoped", "edge"],
+        "infra band wraps outside the per-route interceptor pool",
+    );
+
+    // An unmatched path: the infra band still sees (and stamps) the 404 —
+    // the pool interceptors never run for it.
+    EDGE_EVENTS.lock().await.clear();
+    let resp = app.http().get("/edge/nowhere").send().await;
+    resp.assert_status(StatusCode::NOT_FOUND);
+    resp.assert_header("x-edge", "hit");
+    assert_eq!(*EDGE_EVENTS.lock().await, vec!["edge"]);
+
+    // `#[interceptor]` mounts infrastructure; it must not register the type
+    // as a resolvable provider.
+    assert!(
+        app.container().get::<EdgeStamp>().is_none(),
+        "an infra interceptor is not a provider",
+    );
+}

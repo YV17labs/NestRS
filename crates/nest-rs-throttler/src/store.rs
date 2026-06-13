@@ -94,14 +94,14 @@ impl InMemoryThrottler {
         let now = Instant::now();
         let mut windows = self.windows.lock();
         windows.retain(|_, window| now.duration_since(window.start) < limit.window);
-        if !windows.contains_key(key) && windows.len() >= MAX_KEYS {
-            if let Some(oldest) = windows
+        if !windows.contains_key(key)
+            && windows.len() >= MAX_KEYS
+            && let Some(oldest) = windows
                 .iter()
                 .min_by_key(|(_, window)| window.start)
                 .map(|(k, _)| k.clone())
-            {
-                windows.remove(&oldest);
-            }
+        {
+            windows.remove(&oldest);
         }
         let window = windows.entry(key.to_owned()).or_insert(Window {
             start: now,

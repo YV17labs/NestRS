@@ -158,17 +158,17 @@ where
         let entity = Self::entity_name();
         let conn = Repo::<Self::Entity>::conn()?;
         let model = input.into_active_model().insert(&conn).await?;
-        if let Some(ability) = current_ability() {
-            if !ability.can::<Self::Entity>(Action::Create, &model) {
-                tracing::warn!(
-                    target: "nest_rs::orm",
-                    entity,
-                    id = ?model_pk::<Self::Entity>(&model),
-                    action = ?Action::Create,
-                    "create denied — row outside the caller's scope",
-                );
-                return Err(DbErr::RecordNotInserted);
-            }
+        if let Some(ability) = current_ability()
+            && !ability.can::<Self::Entity>(Action::Create, &model)
+        {
+            tracing::warn!(
+                target: "nest_rs::orm",
+                entity,
+                id = ?model_pk::<Self::Entity>(&model),
+                action = ?Action::Create,
+                "create denied — row outside the caller's scope",
+            );
+            return Err(DbErr::RecordNotInserted);
         }
         tracing::debug!(target: "nest_rs::orm", entity, id = ?model_pk::<Self::Entity>(&model), "row created");
         Ok(model)

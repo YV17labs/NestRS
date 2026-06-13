@@ -42,7 +42,15 @@ impl<S: Strategy> Guard for AuthGuard<S> {
         let is_public = Reflector::new(req).is_public();
         match self.strategy.authenticate(req).await {
             Ok(principal) => {
-                tracing::debug!(target: "nest_rs::authn", strategy, "authenticated");
+                // Record the audit identity on the request span (the OTel
+                // interceptor pre-declares `actor_id`) so every downstream
+                // event — denials included — inherits who is calling.
+                if let Some(actor_id) = crate::PrincipalIdentity::actor_id(&principal) {
+                    tracing::Span::current().record("actor_id", actor_id.as_str());
+                    tracing::debug!(target: "nest_rs::authn", strategy, actor_id, "authenticated");
+                } else {
+                    tracing::debug!(target: "nest_rs::authn", strategy, "authenticated");
+                }
                 req.extensions_mut().insert(principal);
                 Ok(())
             }

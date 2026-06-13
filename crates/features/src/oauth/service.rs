@@ -24,6 +24,21 @@ pub struct AuthenticatedClient {
     pub scopes: Vec<String>,
 }
 
+/// Audit identity: the authenticated user.
+impl nest_rs_authn::PrincipalIdentity for Caller {
+    fn actor_id(&self) -> Option<String> {
+        Some(self.user_id.to_string())
+    }
+}
+
+/// A machine principal scoped to an org — no per-user identity; the org
+/// is already a span/log field wherever it matters.
+impl nest_rs_authn::PrincipalIdentity for AuthenticatedClient {
+    fn actor_id(&self) -> Option<String> {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct OAuthProfile {
     id: i64,

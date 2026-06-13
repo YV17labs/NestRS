@@ -5,10 +5,12 @@
 
 mod extractors;
 mod guard;
+mod principal;
 mod strategies;
 mod strategy;
 
 pub use extractors::{basic_credentials, bearer_token};
 pub use guard::AuthGuard;
+pub use principal::PrincipalIdentity;
 pub use strategies::JwtStrategy;
 pub use strategy::Strategy;

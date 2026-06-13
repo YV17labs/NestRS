@@ -27,40 +27,11 @@ Anything else is a `Strategy` you write yourself.
 cargo add nest-rs-authn
 ```
 
-## A strategy and a guard
+## Bind the shipped JWT strategy
 
-A strategy implements one async method. It returns the principal on
-success (`Ok`), or an `AuthError` describing why it could not (`Err`).
-A strategy never issues a transport response itself — a redirect-style
-flow (OAuth `/authorize`) is a plain handler, so authentication stays a
-pure request → principal mapping.
-
-```rust
-use async_trait::async_trait;
-use nest_rs_authn::{AuthError, Strategy};
-use poem::Request;
-
-#[injectable]
-pub struct ApiKeyStrategy {
-    #[inject]
-    svc: Arc<KeysService>,
-}
-
-#[async_trait]
-impl Strategy for ApiKeyStrategy {
-    type Principal = ApiKey;
-
-    async fn authenticate(&self, req: &mut Request) -> Result<ApiKey, AuthError> {
-        let key = req.headers().get("x-api-key").and_then(|h| h.to_str().ok());
-        match key.and_then(|k| self.svc.lookup(k)) {
-            Some(api_key) => Ok(api_key),
-            None => Err(AuthError::MissingCredentials),
-        }
-    }
-}
-```
-
-`AuthGuard<S>` is generic over the strategy. A resource-server app
+The common case writes no strategy at all. `AuthGuard<S>` is generic
+over the strategy, and the framework ships
+[`JwtStrategy`](/security/authentication/jwt/) — a resource-server app
 ships a single type alias and a tiny module:
 
 ```rust title="crates/features/src/authn/mod.rs"
@@ -101,6 +72,52 @@ async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
 the guard means missing the type, and the framework returns `500` —
 the access graph would already have failed the boot if the controller's
 import tree did not provide `AuthGuard`.
+
+## Advanced: write your own strategy
+
+When the credential is not a JWT — an API key, a session cookie,
+something app-specific — a strategy implements one async method. It
+returns the principal on success (`Ok`), or an `AuthError` describing
+why it could not (`Err`). A strategy never issues a transport response
+itself — a redirect-style flow (OAuth `/authorize`) is a plain handler,
+so authentication stays a pure request → principal mapping.
+
+```rust
+use async_trait::async_trait;
+use nest_rs_authn::{AuthError, PrincipalIdentity, Strategy};
+use poem::Request;
+
+#[injectable]
+pub struct ApiKeyStrategy {
+    #[inject]
+    svc: Arc<KeysService>,
+}
+
+#[async_trait]
+impl Strategy for ApiKeyStrategy {
+    type Principal = ApiKey;
+
+    async fn authenticate(&self, req: &mut Request) -> Result<ApiKey, AuthError> {
+        let key = req.headers().get("x-api-key").and_then(|h| h.to_str().ok());
+        match key.and_then(|k| self.svc.lookup(k)) {
+            Some(api_key) => Ok(api_key),
+            None => Err(AuthError::MissingCredentials),
+        }
+    }
+}
+
+// Every principal declares its audit identity — the value the framework
+// records as `actor_id` on the request span, so denials are attributable.
+impl PrincipalIdentity for ApiKey {
+    fn actor_id(&self) -> Option<String> {
+        Some(self.owner_id.to_string())
+    }
+}
+```
+
+A custom strategy binds exactly like the shipped one:
+`AuthGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
+bound with `#[use_guards(...)]`.
 
 ## One return type — principal or error
 

@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 
 use crate::error::AuthError;
 use crate::jwt::JwtService;
-use crate::passport::{Strategy, bearer_token};
+use crate::passport::{PrincipalIdentity, Strategy, bearer_token};
 
 #[injectable]
 pub struct JwtStrategy<C: Send + Sync + 'static> {
@@ -30,7 +30,7 @@ impl<C: Send + Sync + 'static> JwtStrategy<C> {
 }
 
 #[async_trait]
-impl<C: DeserializeOwned + Clone + Send + Sync + 'static> Strategy for JwtStrategy<C> {
+impl<C: DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static> Strategy for JwtStrategy<C> {
     type Principal = C;
 
     async fn authenticate(&self, req: &mut Request) -> Result<C, AuthError> {

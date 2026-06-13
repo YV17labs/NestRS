@@ -3,13 +3,19 @@
 use std::sync::Arc;
 
 use jsonwebtoken::get_current_timestamp;
-use nest_rs_authn::{AuthError, JwtOptions, JwtService, JwtStrategy, Strategy};
+use nest_rs_authn::{AuthError, JwtOptions, JwtService, JwtStrategy, PrincipalIdentity, Strategy};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct TestClaims {
     sub: String,
     exp: u64,
+}
+
+impl PrincipalIdentity for TestClaims {
+    fn actor_id(&self) -> Option<String> {
+        Some(self.sub.clone())
+    }
 }
 
 #[tokio::test]

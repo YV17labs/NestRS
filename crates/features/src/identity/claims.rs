@@ -24,6 +24,14 @@ impl Claims {
     }
 }
 
+/// Audit identity: the `sub` claim. A subject-less token (e.g. a
+/// client-credentials grant carried in these claims) has no actor id.
+impl nest_rs_authn::PrincipalIdentity for Claims {
+    fn actor_id(&self) -> Option<String> {
+        self.sub.map(|sub| sub.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -35,6 +43,16 @@ mod tests {
             roles,
             exp: 0,
         }
+    }
+
+    #[test]
+    fn actor_id_is_the_sub_claim() {
+        use nest_rs_authn::PrincipalIdentity;
+        let with_sub = claims(vec![]);
+        assert_eq!(with_sub.actor_id(), Some(Uuid::nil().to_string()));
+        let mut subjectless = claims(vec![]);
+        subjectless.sub = None;
+        assert_eq!(subjectless.actor_id(), None);
     }
 
     #[test]

@@ -310,7 +310,11 @@ no macro). **`AuthGuard<S>`** is generic over it.
 `Strategy::authenticate` returns `Result<Self::Principal, AuthError>`
 — a pure request → principal mapping that **never issues a transport
 response**; a redirect-style flow (OAuth `/authorize`) is a plain
-handler, so one trait serves bearer and OAuth alike. Standard
+handler, so one trait serves bearer and OAuth alike. Every
+`Strategy::Principal` is bound on **`PrincipalIdentity`** (`actor_id()
+-> Option<String>`): on success `AuthGuard` records `actor_id` onto the
+request span (pre-declared by the OTel interceptor), so every downstream
+event — denials included — is attributable without per-site threading. Standard
 resource-server: `JwtStrategy<C>` ships it; `features::authn::core`
 writes `type AuthGuard = AuthGuard<JwtStrategy<Claims>>` once.
 **`JwtService`** is global infra (factory phase); symmetric secret or

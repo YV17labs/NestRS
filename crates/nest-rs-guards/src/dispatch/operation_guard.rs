@@ -53,6 +53,7 @@ impl GraphqlOperationGuard for GlobalPoolOperationGuard {
                     tracing::warn!(
                         target: "nest_rs::layers",
                         guard = entry.name,
+                        path = %req.uri().path(),
                         reason = denial.message(),
                         "graphql operation denied by the global guard pool",
                     );

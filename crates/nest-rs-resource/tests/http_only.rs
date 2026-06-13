@@ -31,5 +31,8 @@ impl CrudService for ThingsService {
 
 #[test]
 fn wire_only_expose_compiles_without_graphql_tokens() {
-    assert!(true, "this test file compiling is the regression guard");
+    // The regression guard is that this file compiles and the `CrudService`
+    // impl above resolves with no `async_graphql` tokens in scope.
+    // Constructing the service exercises that impl at runtime.
+    let _svc = ThingsService;
 }

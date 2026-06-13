@@ -98,7 +98,7 @@ impl FileAssetsService {
 
 <Aside type="caution">
 `head` reports the object's **size** but not its `Content-Type`:
-`object_store`'s `ObjectMeta` does not carry it, so `HeadInfo` exposes
+`object_store`'s `ObjectMeta` does not carry it, so `HeadMetadata` exposes
 only the byte size. Keep the mime type you were given at
 upload-request time rather than reading it back. `put_bytes` still
 *sets* the content type on write — only the `head` read-back path
@@ -128,7 +128,7 @@ originals: a short-lived signed `GET` URL the client fetches directly.
 | `bucket_name()` | the configured bucket |
 | `presign_put(key, expires)` | signed `PUT` URL for direct client upload |
 | `presign_get(key, expires)` | signed `GET` URL for serving private originals |
-| `head(key) -> Option<HeadInfo>` | object size; `None` if absent |
+| `head(key) -> Option<HeadMetadata>` | object size; `None` if absent |
 | `get_bytes(key)` | download full bytes (server-side) |
 | `put_bytes(key, bytes, content_type)` | upload bytes (server-side) |
 
@@ -142,5 +142,5 @@ server.
 
 ### Reference
 
-- `crates/nest-rs-storage/` — `Storage`, `HeadInfo`, `StorageConfig`,
+- `crates/nest-rs-storage/` — `Storage`, `HeadMetadata`, `StorageConfig`,
   `StorageModule`.

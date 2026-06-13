@@ -26,8 +26,169 @@ cargo add nest-rs-config
 
 ## A typed config — by example
 
-This is the real `IssuerConfig` from `features/oauth` (signs the OAuth
-clients accepted by `apps/auth`):
+The common case is three short blocks: a `#[config]` struct, a derived
+`Validate`, and a `from_env` that maps one line per variable.
+
+```rust title="src/items/config.rs"
+use nest_rs_config::{config, Config, ConfigService};
+use validator::Validate;
+
+#[config(namespace = "items")]
+#[derive(Clone, Validate)]
+pub struct ItemsConfig {
+    #[validate(range(min = 1, max = 500))]
+    pub page_size: u32,
+    pub cache_enabled: bool,
+}
+
+impl Config for ItemsConfig {
+    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
+        Ok(Self {
+            page_size: env.parse("PAGE_SIZE")?.unwrap_or(50),
+            cache_enabled: env.flag("CACHE_ENABLED", false)?,
+        })
+    }
+}
+```
+
+Three pieces do the heavy lifting:
+
+- **`#[config(namespace = "items")]`** binds the struct to the
+  `NESTRS_ITEMS__*` scheme. The macro wires the `Namespaced` trait — no
+  manual constant to write.
+- **`impl Config { fn from_env(env: &ConfigService) }`** is the
+  hand-written contract: one line per variable. A reviewer reading this
+  file knows exactly which env vars exist, with which defaults, and what
+  happens when one is malformed.
+- **`#[derive(Validate)]`** plus `#[validate(...)]` attributes run after
+  the load. A failure aborts boot naming the field. A rule the derive
+  cannot express is the one case for a hand-written `impl Validate` —
+  see the [Advanced section](#advanced-hand-written-from_env-and-custom-validation)
+  at the end of this page.
+
+`env.parse("PAGE_SIZE")?` reads + parses into the field's type; unset
+returns `None`, set-but-unparseable returns `Err` naming the
+variable — boot-fatal, no silent fallback. `env.flag` accepts the
+usual boolean spellings.
+
+## The dual-path rule
+
+Every field a module's config exposes must be reachable two ways:
+
+1. The pinned struct, passed to `Module::for_root(MyConfig { ... })` —
+   programmatic, type-checked, comes from code.
+2. The `NESTRS_<NS>__<KEY>` environment variable, mapped explicitly in
+   `from_env`.
+
+That is the framework-wide rule for every `nest-rs-*` module. An
+env-only field can't be set from a config file; a code-only field can't
+be overridden in deployment. Both, always.
+
+## `ConfigService` API
+
+The reader handed to `from_env` is a thin wrapper around the namespace
+prefix. Five methods, all sync.
+
+| Method                                      | Reads                                       |
+|---------------------------------------------|---------------------------------------------|
+| `env.get("KEY")` → `Option<String>`         | `NESTRS_<NS>__KEY` as a raw string          |
+| `env.parse::<T>("KEY")?` → `Option<T>`      | Same, parsed via `FromStr`                  |
+| `env.flag("KEY", default)?` → `bool`        | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
+| `env.list("KEY")` → `Vec<String>`           | Comma-separated, trimmed, empties dropped   |
+| `env.var_name("KEY")` → `String`            | The full env-var **name** (for error messages) |
+
+Empty strings count as unset, so `FOO=` in a `.env` file does not blank
+an in-code default.
+
+## Wire it into the app
+
+The wiring is two module imports. The feature owns its config; the root
+module imports `ConfigModule::for_root()` once.
+
+```rust title="src/items/module.rs"
+use nest_rs_config::ConfigModule;
+use super::config::ItemsConfig;
+use super::service::ItemsService;
+
+#[module(
+    imports = [ConfigModule::for_feature::<ItemsConfig>()],
+    providers = [ItemsService],
+)]
+pub struct ItemsModule;
+```
+
+```rust title="src/module.rs"
+use nest_rs_config::ConfigModule;
+
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        ItemsHttpModule,
+    ],
+)]
+pub struct AppModule;
+```
+
+- **`ConfigModule::for_root()`** goes first in the root module. It merges
+  the `.env` cascade once (real env vars always win) and registers
+  `Arc<Environment>` so every later `Config::load` sees the merged
+  environment.
+- **`ConfigModule::for_feature::<C>()`** queues a factory in the boot's
+  factory phase. The factory calls `C::load()` (= `from_env` + `validate`);
+  on failure the boot aborts with the variable named.
+
+## Inject it
+
+A consumer injects `Arc<ItemsConfig>` like any provider — the type is
+the token.
+
+```rust title="src/items/service.rs"
+#[injectable]
+pub struct ItemsService {
+    #[inject]
+    config: Arc<ItemsConfig>,
+}
+
+impl ItemsService {
+    pub async fn list(&self) -> Result<Vec<Item>, ServiceError> {
+        let page = self.config.page_size;
+        // ...
+    }
+}
+```
+
+## Run it
+
+A bad value fails the boot before any port opens:
+
+```bash frame="terminal"
+$ NESTRS_ITEMS__PAGE_SIZE=lots nestrs run dev api
+Error: invalid value for NESTRS_ITEMS__PAGE_SIZE: invalid digit found in string
+```
+
+A violated `#[validate]` rule aborts the same way after the load,
+naming the field.
+
+## Why hand-written `from_env`
+
+Auto-deserializing from env vars sounds convenient, but the contract
+becomes implicit (which vars exist? what are their types?). With
+`from_env` written explicitly:
+
+- The full env contract of a feature is one impl block, in one file.
+- A missing variable falls back to a code default, not silently to
+  `Default::default()`.
+- Unparseable values fail loudly, naming the variable.
+- A reviewer reads the contract by reading ten lines, not by chasing
+  serde attributes.
+
+## Advanced: hand-written `from_env` and custom validation
+
+The derive covers per-field rules and `FromStr` covers scalar parsing.
+Two things push a config past them: a field carrying a **structured
+payload** (a JSON blob in one variable) and a **rule spanning the whole
+struct**. This is the real `IssuerConfig` from `features/oauth` (signs
+the OAuth clients accepted by `apps/auth`) — it needs both:
 
 ```rust title="crates/features/src/oauth/config.rs"
 use nest_rs_config::{config, Config, ConfigError, ConfigService};
@@ -66,7 +227,7 @@ impl Config for IssuerConfig {
     fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
         let clients = match env.get("CLIENTS") {
             Some(raw) => serde_json::from_str(&raw)
-                .map_err(|e| ConfigError::parse(env.var("CLIENTS"), e.to_string()))?,
+                .map_err(|e| ConfigError::parse(env.var_name("CLIENTS"), e.to_string()))?,
             None => Vec::new(),
         };
         let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(DEFAULT_ORG);
@@ -75,56 +236,18 @@ impl Config for IssuerConfig {
 }
 ```
 
-Three lines do the heavy lifting:
+- **`clients` is a JSON array in a single variable.** `env.get("CLIENTS")`
+  returns the raw string and `serde_json::from_str` does the structured
+  parse — mapping the failure through
+  `ConfigError::parse(env.var_name("CLIENTS"), …)` so the boot error
+  still names `NESTRS_ISSUER__CLIENTS`.
+- **"At least one client" is a struct-level rule**, so `impl Validate`
+  is written by hand, building the same `ValidationErrors` the derive
+  would. It runs after the load and aborts boot exactly like a derived
+  rule. Per-field rules stay on the derive, as in the lead example.
 
-- **`#[config(namespace = "issuer")]`** binds the struct to the
-  `NESTRS_ISSUER__*` scheme. The macro wires the `Namespaced` trait — no
-  manual constant to write.
-- **`impl Config { fn from_env(env: &ConfigService) }`** is the
-  hand-written contract: one line per variable. A reviewer reading this
-  file knows exactly which env vars exist, with which defaults, and what
-  happens when one is malformed.
-- **`impl Validate`** runs after the load. A failure aborts boot naming
-  the field. For per-field rules, derive `Validate` and use
-  `#[validate(...)]` attributes instead of implementing it by hand.
-
-`env.parse("DEFAULT_ORG_ID")?` reads + parses into the field's type;
-unset returns `None`, set-but-unparseable returns `Err` naming the
-variable — boot-fatal, no silent fallback.
-
-## The dual-path rule
-
-Every field a module's config exposes must be reachable two ways:
-
-1. The pinned struct, passed to `Module::for_root(MyConfig { ... })` —
-   programmatic, type-checked, comes from code.
-2. The `NESTRS_<NS>__<KEY>` environment variable, mapped explicitly in
-   `from_env`.
-
-That is the framework-wide rule for every `nest-rs-*` module. An
-env-only field can't be set from a config file; a code-only field can't
-be overridden in deployment. Both, always.
-
-## `ConfigService` API
-
-The reader handed to `from_env` is a thin wrapper around the namespace
-prefix. Five methods, all sync.
-
-| Method                                      | Reads                                       |
-|---------------------------------------------|---------------------------------------------|
-| `env.get("KEY")` → `Option<String>`         | `NESTRS_<NS>__KEY` as a raw string          |
-| `env.parse::<T>("KEY")?` → `Option<T>`      | Same, parsed via `FromStr`                  |
-| `env.flag("KEY", default)?` → `bool`        | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
-| `env.list("KEY")` → `Vec<String>`           | Comma-separated, trimmed, empties dropped   |
-| `env.var("KEY")` → `String`                 | The full env-var name (for error messages)  |
-
-Empty strings count as unset, so `FOO=` in a `.env` file does not blank
-an in-code default.
-
-## Wire it into the app
-
-The wiring is two module imports. The feature owns its config; the root
-module imports `ConfigModule::for_root()` once.
+Wiring and consumption do not change — the same `for_feature` import,
+the same `Arc<IssuerConfig>` injection:
 
 ```rust title="crates/features/src/oauth/module.rs"
 use nest_rs_config::ConfigModule;
@@ -150,19 +273,6 @@ use nest_rs_config::ConfigModule;
 pub struct AuthModule;
 ```
 
-- **`ConfigModule::for_root()`** goes first in the root module. It merges
-  the `.env` cascade once (real env vars always win) and registers
-  `Arc<Environment>` so every later `Config::load` sees the merged
-  environment.
-- **`ConfigModule::for_feature::<C>()`** queues a factory in the boot's
-  factory phase. The factory calls `C::load()` (= `from_env` + `validate`);
-  on failure the boot aborts with the variable named.
-
-## Inject it
-
-A consumer injects `Arc<IssuerConfig>` like any provider — the type is
-the token.
-
 ```rust title="crates/features/src/oauth/service.rs"
 #[injectable]
 pub struct OAuthFlow {
@@ -181,7 +291,7 @@ impl OAuthFlow {
 }
 ```
 
-## Run it
+### Run it
 
 ```bash frame="terminal"
 $ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","org_id":"...","scopes":["read"]}]' \
@@ -206,19 +316,6 @@ $ nestrs run dev auth   # no clients configured
 Error: configuration validation failed for 'issuer'
   - clients: at_least_one_client
 ```
-
-## Why hand-written `from_env`
-
-Auto-deserializing from env vars sounds convenient, but the contract
-becomes implicit (which vars exist? what are their types?). With
-`from_env` written explicitly:
-
-- The full env contract of a feature is one impl block, in one file.
-- A missing variable falls back to a code default, not silently to
-  `Default::default()`.
-- Unparseable values fail loudly, naming the variable.
-- A reviewer reads the contract by reading ten lines, not by chasing
-  serde attributes.
 
 ## Going further
 

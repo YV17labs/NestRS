@@ -36,12 +36,14 @@ impl ConfigService {
         }
     }
 
-    pub fn var(&self, key: &str) -> String {
+    /// The full `NESTRS_<NAMESPACE>__<KEY>` variable **name** (not its value)
+    /// — for error messages and docs that must cite the exact variable.
+    pub fn var_name(&self, key: &str) -> String {
         format!("{PREFIX}{}__{}", self.namespace, key.to_ascii_uppercase())
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
-        self.source.get(&self.var(key))
+        self.source.get(&self.var_name(key))
     }
 
     /// `Err` (naming the variable) when set-but-unparseable — boot-fatal, no
@@ -56,7 +58,7 @@ impl ConfigService {
             Some(raw) => raw
                 .parse::<T>()
                 .map(Some)
-                .map_err(|e| ConfigError::parse(self.var(key), e.to_string())),
+                .map_err(|e| ConfigError::parse(self.var_name(key), e.to_string())),
         }
     }
 
@@ -68,7 +70,7 @@ impl ConfigService {
                 "1" | "true" | "yes" | "on" => Ok(true),
                 "0" | "false" | "no" | "off" => Ok(false),
                 other => Err(ConfigError::parse(
-                    self.var(key),
+                    self.var_name(key),
                     format!("expected a boolean, got `{other}`"),
                 )),
             },
@@ -96,11 +98,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn var_builds_the_namespaced_name() {
+    fn var_name_builds_the_namespaced_name() {
         let env = ConfigService::for_namespace("database");
-        assert_eq!(env.var("URL"), "NESTRS_DATABASE__URL");
+        assert_eq!(env.var_name("URL"), "NESTRS_DATABASE__URL");
         assert_eq!(
-            env.var("max_connections"),
+            env.var_name("max_connections"),
             "NESTRS_DATABASE__MAX_CONNECTIONS"
         );
     }

@@ -106,9 +106,9 @@ impl Storage {
     /// carry the stored `Content-Type`, so it is not returned here. Callers that
     /// need the mime type should keep the value they supplied at
     /// upload-request time rather than relying on `head`.
-    pub async fn head(&self, key: &str) -> Result<Option<HeadInfo>> {
+    pub async fn head(&self, key: &str) -> Result<Option<HeadMetadata>> {
         match self.store()?.head(&Path::from(key)).await {
-            Ok(meta) => Ok(Some(HeadInfo {
+            Ok(meta) => Ok(Some(HeadMetadata {
                 byte_size: meta.size as i64,
             })),
             Err(object_store::Error::NotFound { .. }) => Ok(None),
@@ -146,6 +146,6 @@ impl Storage {
 }
 
 /// Result of a `head` — the metadata we cache onto a stored-file record.
-pub struct HeadInfo {
+pub struct HeadMetadata {
     pub byte_size: i64,
 }

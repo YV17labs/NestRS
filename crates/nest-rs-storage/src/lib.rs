@@ -38,7 +38,7 @@
 //! - [`Storage::presign_put`] / [`Storage::presign_get`] — short-lived signed
 //!   URLs handed to a client to upload/download directly.
 //! - [`Storage::head`] — size of an uploaded object (`None` if absent).
-//!   `object_store` does not expose the stored `Content-Type`, so [`HeadInfo`]
+//!   `object_store` does not expose the stored `Content-Type`, so [`HeadMetadata`]
 //!   carries only the byte size.
 //! - [`Storage::get_bytes`] / [`Storage::put_bytes`] — server-side byte
 //!   read/write (e.g. a worker transforming an original).
@@ -48,7 +48,7 @@ mod config;
 mod error;
 mod module;
 
-pub use client::{HeadInfo, Storage};
+pub use client::{HeadMetadata, Storage};
 pub use config::StorageConfig;
 pub use error::{Result, StorageError};
 pub use module::StorageModule;

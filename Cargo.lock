@@ -2973,6 +2973,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-http",
  "nest-rs-mcp-macros",
+ "nest-rs-testing",
  "poem",
  "rmcp",
  "schemars",

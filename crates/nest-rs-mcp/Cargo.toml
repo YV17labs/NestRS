@@ -19,5 +19,6 @@ schemars.workspace = true
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }
 nest-rs-http = { path = "../nest-rs-http" }
+nest-rs-testing = { path = "../nest-rs-testing" }
 poem = { workspace = true, features = ["test"] }
 tokio.workspace = true

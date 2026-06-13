@@ -8,12 +8,15 @@ use syn::{Ident, Path, Token};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Paginate {
-    /// Keyset over the primary key. Default for new resources; free for
-    /// UUID-v7 keys (ordered).
+    /// Keyset over the primary key — the default. Free for UUID-v7 keys
+    /// (ordered).
     Cursor,
     /// Offset (`page`/`per_page`). Random access at the cost of O(offset)
     /// scans and instability under concurrent inserts.
     Page,
+    /// Explicit opt-out: the full (ability-scoped) collection in one
+    /// response, still backstopped by `CrudService::list`'s hard cap.
+    None,
 }
 
 pub struct CrudConfig {
@@ -26,8 +29,10 @@ pub struct CrudConfig {
     pub update: Option<Path>,
     /// Generate only `list` + `get`.
     pub readonly: bool,
-    /// `None` returns the full (ability-scoped) collection.
-    pub paginate: Option<Paginate>,
+    /// How the generated list op bounds its result set. Defaults to
+    /// [`Paginate::Cursor`] — an unbounded list is an explicit opt-out
+    /// (`paginate = none`), never the silent default.
+    pub paginate: Paginate,
 }
 
 impl Parse for CrudConfig {
@@ -38,7 +43,7 @@ impl Parse for CrudConfig {
         let mut create = None;
         let mut update = None;
         let mut readonly = false;
-        let mut paginate = None;
+        let mut paginate = Paginate::Cursor;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -67,16 +72,17 @@ impl Parse for CrudConfig {
                 "paginate" => {
                     input.parse::<Token![=]>()?;
                     let mode: Ident = input.parse()?;
-                    paginate = Some(match mode.to_string().as_str() {
+                    paginate = match mode.to_string().as_str() {
                         "cursor" => Paginate::Cursor,
                         "page" => Paginate::Page,
+                        "none" => Paginate::None,
                         _ => {
                             return Err(syn::Error::new(
                                 mode.span(),
-                                "expected `cursor` or `page`",
+                                "expected `cursor`, `page`, or `none`",
                             ));
                         }
-                    });
+                    };
                 }
                 other => {
                     return Err(syn::Error::new(

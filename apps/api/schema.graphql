@@ -39,9 +39,9 @@ type Post {
 
 type Query {
 	org(id: String!): Org
-	orgs: [Org!]!
+	orgs(after: String, first: Int): [Org!]!
 	user(id: String!): User
-	users: [User!]!
+	users(after: String, first: Int): [User!]!
 }
 
 input UpdateOrgInput {

@@ -107,8 +107,13 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `users`/`user`/`create_user`/…).
 ///
 /// `#[crud(entity = …::Entity, output = Dto, create = CreateDto, update =
-/// UpdateDto, readonly)]`. Write a matching operation method to override it —
-/// the macro keeps yours and skips its own.
+/// UpdateDto, readonly, paginate = cursor|none)]`. Write a matching operation
+/// method to override it — the macro keeps yours and skips its own.
+///
+/// The generated list query is **keyset-paginated by default**
+/// (`first: Int, after: ID` — `after` is the previous page's last `id`,
+/// UUID-v7 keys being time-ordered); `paginate = none` opts out into the
+/// full collection, backstopped by `CrudService::list`'s hard cap.
 ///
 /// # Expands to
 ///
@@ -121,7 +126,7 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```ignore
 /// #[::nest_rs_graphql::resolver]
 /// impl UsersResolver {
-///     #[query]    #[authorize(Read, Entity)]   async fn users(&self) -> Result<Vec<User>> { /* CrudService::list */ }
+///     #[query]    #[authorize(Read, Entity)]   async fn users(&self, first: Option<u64>, after: Option<String>) -> Result<Vec<User>> { /* CrudService::page */ }
 ///     #[query]    #[authorize(Read, Entity)]   async fn user(&self, id) -> Result<Option<User>> { /* CrudService::access */ }
 ///     #[mutation] #[authorize(Create, Entity)] async fn create_user(&self, input) -> Result<User> { /* … */ }
 ///     #[mutation] #[authorize(Update, Entity)] async fn update_user(&self, id, input) -> Result<Option<User>> { /* … */ }

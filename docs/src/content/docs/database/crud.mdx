@@ -39,7 +39,6 @@ pub struct OrgsController {
     output = Org,
     create = CreateOrgInput,
     update = UpdateOrgInput,
-    paginate = cursor,
 )]
 impl OrgsController {}
 ```
@@ -68,7 +67,7 @@ the request's transaction, and `Ability` filters every row.
     output = Org,         // the #[expose]-generated wire type returned by handlers
     create = CreateOrgInput,
     update = UpdateOrgInput,
-    paginate = cursor,    // optional — keyset (REST) or page (GraphQL)
+    paginate = cursor,    // optional — cursor is already the default; `none` opts out
     readonly,             // optional — only list + get, no mutations
 )]
 impl OrgsController {}
@@ -82,8 +81,10 @@ impl OrgsController {}
   on it.
 - `create` and `update` map to the `#[expose(input(create), input(update))]`
   generated input types. Omit them with `readonly` for a read-only resource.
-- `paginate = cursor` adds keyset pagination (next cursor in
-  `x-next-cursor`); `paginate = page` is GraphQL-only.
+- `paginate` defaults to `cursor` — every generated list is keyset-paginated
+  (next cursor in `x-next-cursor` on REST, `first`/`after` arguments on
+  GraphQL). `paginate = none` opts out into the full collection (backstopped
+  by `CrudService::list`'s hard cap).
 
 ## Override one handler, keep the rest
 
@@ -179,18 +180,21 @@ over; `users`, `update_user`, `delete_user` are generated.
 
 | Form              | Surface     | Wire shape                                      |
 |-------------------|-------------|-------------------------------------------------|
-| `paginate = cursor` | HTTP + GraphQL | `Vec<T>` body + `x-next-cursor` header (REST); `<T>Page { items, ... }` (GraphQL) |
-| `paginate = page`   | GraphQL only   | `<T>Page { items, total, page, per_page, ... }` |
+| `paginate = cursor` (default) | HTTP + GraphQL | `Vec<T>` body + `x-next-cursor` header (REST); `[T]` + `first`/`after` arguments (GraphQL) |
+| `paginate = none`   | HTTP + GraphQL | full ability-scoped collection, hard-capped by `CrudService::list` |
+| `paginate = page`   | not wired yet  | compile error pointing here — hand-write against `<T>Page` |
 
-Keyset pagination (`cursor`) is the recommended default — stable under
-inserts, and the body stays a plain array so response masking works
-unchanged. Offset pagination (`page`) ships an envelope; the `#[expose]`
-attribute on the entity must declare `paginate` to generate the matching
-`<T>Page` type:
+Keyset pagination (`cursor`) is the default — stable under inserts, and the
+body stays a plain array so response masking works unchanged. For an
+offset envelope (page numbers + total), hand-write the operation against
+the `<T>Page` type the entity's `#[expose]` attribute emits when it
+declares `paginate`:
 
 ```rust
 #[expose(name = "Item", complex, paginate)]
 ```
+
+See [Pagination](/database/pagination/) for both shapes end to end.
 
 ## By-id binding goes through the service
 
@@ -231,19 +235,6 @@ root with `HttpModule::for_root(...)` and `DatabaseModule::for_root(...)`.
 Importing only `OrgsModule` (no HTTP module) gives a worker the same
 `OrgsService` without mounting the endpoints — that is the port + adapter
 split this framework is built around.
-
-## Going further
-
-- [Database](/database/) — `CrudService`, `Repo`, the ambient executor;
-  why every CRUD call goes through the service.
-- [Security](/security/) — `Ability`, `Authorize`, the masking shaper;
-  what makes `Read` / `Create` / `Update` / `Delete` mean what they
-  mean here.
-- [OpenAPI](/openapi/) — every generated route ships with an `#[api]`
-  summary and the right `tags`, so the document at `GET /api-json`
-  composes automatically.
-- [GraphQL](/graphql/) — the `#[crud]` twin on a resolver; relations and
-  field resolvers backed by dataloaders.
 
 ## Soft delete and timestamps
 
@@ -315,3 +306,16 @@ Entities **without** `soft_delete_column` keep today's hard-delete semantics
 - `crates/nest-rs-seaorm/` — `CrudService`, `Access`, `Repo`.
 - `crates/nest-rs-resource/` — `#[expose]` for the entity, pagination
   envelopes.
+
+## Going further
+
+- [Database](/database/) — `CrudService`, `Repo`, the ambient executor;
+  why every CRUD call goes through the service.
+- [Security](/security/) — `Ability`, `Authorize`, the masking shaper;
+  what makes `Read` / `Create` / `Update` / `Delete` mean what they
+  mean here.
+- [OpenAPI](/openapi/) — every generated route ships with an `#[api]`
+  summary and the right `tags`, so the document at `GET /api-json`
+  composes automatically.
+- [GraphQL](/graphql/) — the `#[crud]` twin on a resolver; relations and
+  field resolvers backed by dataloaders.

@@ -353,6 +353,36 @@ fn generate_ws_adapter_ensures_dep_and_wires() {
 }
 
 #[test]
+fn generate_queue_adapter_puts_command_at_the_port() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "queue", "posts", "-p", path]);
+
+    let feature = dir.path().join("crates/features/src/posts");
+
+    // The imperative queue payload is a `Command` at the port, not inside the
+    // `queue/` adapter — a producer↔worker contract the processor imports.
+    let command_rs = fs::read_to_string(feature.join("command.rs")).unwrap();
+    assert!(command_rs.contains("pub struct ProcessPostCommand"));
+
+    let processor_rs = fs::read_to_string(feature.join("queue/processor.rs")).unwrap();
+    assert!(processor_rs.contains("use crate::posts::ProcessPostCommand;"));
+    assert!(processor_rs.contains("job: ProcessPostCommand"));
+    // The payload is imported, never redefined in the adapter.
+    assert!(!processor_rs.contains("pub struct ProcessPostCommand"));
+
+    // The port `mod.rs` exposes both the command and the adapter module.
+    let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
+    assert!(mod_rs.contains("mod command;"));
+    assert!(mod_rs.contains("pub use command::ProcessPostCommand;"));
+    assert!(mod_rs.contains("pub mod queue;"));
+    assert!(mod_rs.contains("PostsQueueModule"));
+}
+
+#[test]
 fn generate_adapter_is_rejected_on_rerun() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());

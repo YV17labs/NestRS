@@ -98,14 +98,8 @@ impl {{gateway}} {
 pub const QUEUE_PROCESSOR: &str = r#"use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_queue::processor;
-use serde::{Deserialize, Serialize};
 
-/// The job payload exchanged over the `{{kebab}}` queue. Producer and consumer
-/// apps share this contract through the feature crate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct {{singular}}Dto {
-    pub id: String,
-}
+use crate::{{snake}}::{{command}};
 
 #[injectable]
 #[derive(Default)]
@@ -114,14 +108,30 @@ pub struct {{processor}};
 #[processor]
 impl {{processor}} {
     #[process(queue = "{{kebab}}", concurrency = 1, retries = 3)]
-    async fn handle(&self, job: {{singular}}Dto) -> Result<()> {
+    async fn handle(&self, job: {{command}}) -> Result<()> {
         tracing::info!(target: "features::{{snake}}", id = %job.id, "processing job");
         Ok(())
     }
 }
 "#;
 
-/// The queue processor has no port dependency, so its module imports nothing.
+/// The queue payload — an imperative **`Command`** living at the feature *port*,
+/// not in the `queue/` adapter: it is a producer↔worker contract the consumer's
+/// `processor.rs` imports. The default is a Command (the common case); rename it
+/// verb-led to the real action, or switch to an `…Event` (past tense) when a
+/// fact is published to several consumers.
+pub const QUEUE_COMMAND: &str = r#"use serde::{Deserialize, Serialize};
+
+/// Imperative payload for the `{{kebab}}` queue — "do this work", handled by one
+/// processor. Rename it to the action it commands (e.g. `GenerateMediaVariantCommand`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct {{command}} {
+    pub id: String,
+}
+"#;
+
+/// The queue processor has no port *provider* dependency, so its module imports
+/// nothing — the `Command` it handles is a plain type, not an injected provider.
 pub const QUEUE_MODULE: &str = r#"use nest_rs_core::module;
 
 use super::processor::{{processor}};

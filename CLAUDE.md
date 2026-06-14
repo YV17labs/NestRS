@@ -93,9 +93,10 @@ something the feature can't generalize*.
   names a concrete `Claims`, entity, or policy — generic *over* them.
 - **`crates/features/` — product features.** Hexagonal per slice: port
   at the feature root (`entity.rs`, `service.rs`, `dto.rs` / `dtos/`,
-  `error.rs`, `module.rs`); each adapter is a sub-folder per
-  transport with its own `module.rs`. Port at the root — not in a
-  `core/` sub-folder — is deliberate.
+  any queue payload `command.rs` / `event.rs`, `error.rs`,
+  `module.rs`); each adapter is a sub-folder per transport with its own
+  `module.rs`. Port at the root — not in a `core/` sub-folder — is
+  deliberate.
 - **`apps/<name>` — pure composition.** `main.rs` + `module.rs` only,
   by default. A feature folder under `apps/<x>/` is the exception
   (glue handler over several features, deployment-specific route). Such
@@ -114,7 +115,7 @@ something the feature can't generalize*.
 | `users/http/` | `controller.rs`, `error.rs` | `UsersHttpModule` |
 | `users/graphql/` | `resolver.rs` (field + root merged into `UsersResolver`) | `UsersGraphqlModule` |
 | `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `WsModule` too) |
-| `users/queue/` | `processor.rs` | `UsersQueueModule` |
+| `users/queue/` | `processor.rs` (payload `Command`/`Event` lives at the port) | `UsersQueueModule` |
 | `users/schedule/` | `tasks.rs` (`#[scheduled]` host) | `UsersScheduleModule` |
 | `users/mcp/` | `tool.rs` | `UsersMcpModule` |
 
@@ -548,27 +549,51 @@ Snake_case, no dotted variants.
 | Scheduled tasks (schedule) | `tasks.rs` |
 | Tool (MCP) | `tool.rs` |
 | Entity (ORM + `#[expose]`) | `entity.rs` / `entities/` |
-| DTO (suffix `Dto`; one → `dto.rs`, 2+ → `dtos/<x>_dto.rs` + `mod.rs`) | `dto.rs` / `dtos/` |
+| REST body (suffix `Dto`; one → `dto.rs`, 2+ → `dtos/<x>_dto.rs` + `mod.rs`) | `dto.rs` / `dtos/` |
+| Queue payload — imperative (suffix `Command`; one → `command.rs`, 2+ → `commands/<x>_command.rs`) | `command.rs` / `commands/` |
+| Queue payload — published fact (suffix `Event`; one → `event.rs`, 2+ → `events/<x>_event.rs`) | `event.rs` / `events/` |
+| GraphQL input — hand-written (suffix `Input`; one → `graphql/input.rs`, 2+ → `graphql/inputs/<x>_input.rs`) | `graphql/input.rs` / `graphql/inputs/` |
 | Domain-specific error (only when framework errors can't carry it) | `error.rs` |
 | GraphQL bridge type alias | `<feature>/graphql/bridge.rs` |
 | Guard / Strategy | `guard.rs` / `strategy.rs` |
 | Guard *alias* binding a strategy (e.g. `type AuthGuard = AuthGuard<S>`) | co-located in the strategy's file, not a separate `guard.rs` |
 | Static constants | `constants.rs` |
 
-- **DTOs carry the `Dto` suffix.** Any object whose sole role is moving
-  data across a boundary — HTTP request/response body, GraphQL input,
-  queue payload — is a DTO and ends in `Dto` (`CreateUserDto`,
-  `LoginDto`, `AccessTokenDto`, `TranscodeDto`). No `…Input`/`…Job`/
-  `…Response` suffixes. The role word is carried by **both** the type and
-  its file, exactly like every other role — **the entity is the only
-  exception** (it stays `Model` in `entity.rs`, and its `#[expose]`d wire
-  struct keeps the bare entity name: the entity *is* the wire contract).
-  Placement mirrors the entity rule: one DTO → `dto.rs`; two or more →
-  a pluralized `dtos/` directory, one `<snake>_dto.rs` per type, flat
-  re-export from `dtos/mod.rs`. The macro-generated `Create<E>Dto` /
-  `Update<E>Dto` (and GraphQL `input Create<E>Dto`) live inside the
-  entity's `#[expose]` block, not a separate file — generated DTOs follow
-  the same suffix as hand-written ones.
+- **A transfer object is named for the boundary it crosses — each layer
+  speaks its native vocabulary.** The suffix is the boundary, not a
+  generic "it moves data" (`…Job`/`…Response`/a blanket `…Dto` are all
+  wrong):
+  - **REST body** (request/response) → **`Dto`** (`CreateUserDto`,
+    `LoginDto`, `AccessTokenDto`, `TranscodeDto`), at the port —
+    `dto.rs` / `dtos/`.
+  - **Queue payload, imperative** ("do X" → one handler, idempotent,
+    replayable; verb-led name) → **`Command`**
+    (`GenerateMediaVariantCommand`, `TranscodeCommand`), at the port —
+    `command.rs` / `commands/`.
+  - **Queue payload, published fact** ("X happened" → potentially many
+    consumers; past-tense name) → **`Event`** (`OrderPlacedEvent`), at
+    the port — `event.rs` / `events/`. A scaffolded job defaults to a
+    `Command` (the common case); choose `Event` only when broadcasting a
+    fact.
+  - **GraphQL input, hand-written** (transport-specific) → **`Input`**,
+    in the `graphql/` adapter — `graphql/input.rs` / `graphql/inputs/`.
+  - **GraphQL output** → the object type itself (bare name, or `Payload`
+    for a wrapper), with the resolver.
+
+  A queue payload is a producer↔worker contract, so it lives at the
+  **port** (feature root), never in the consumer-side `queue/` adapter —
+  the `processor.rs` imports it. The role word is carried by **both** the
+  type and its file, and placement mirrors the entity rule: one → the
+  bare file, two or more → a pluralized directory (one `<snake>_<role>.rs`
+  per type, flat re-export from its `mod.rs`). **The entity is the only
+  exception** — it stays `Model` in `entity.rs`, and its `#[expose]`d wire
+  struct keeps the bare entity name (the entity *is* the wire contract).
+  The macro-generated `Create<E>Dto` / `Update<E>Dto` are the deliberate
+  **shared** type: one Rust struct serves as both the REST body and the
+  GraphQL `input Create<E>Dto` (`create = CreateUserDto`), so it keeps the
+  `Dto` suffix and lives inside the entity's `#[expose]` block, not a
+  separate file — its context is the entity/CRUD, not a single layer. Do
+  not split it per transport unless a genuine need appears.
 - **`mod.rs` / `lib.rs` carry no business logic** — only `//!` doc,
   `mod`, `pub use`. Exception: proc-macro `#[proc_macro*]` entries
   (Rust forces them at the crate root) must be thin delegations.

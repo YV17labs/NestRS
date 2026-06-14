@@ -5,7 +5,7 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_redis::QueueConnection;
 
-use super::dto::{AUDIO_QUEUE, TranscodeDto};
+use super::command::{AUDIO_QUEUE, TranscodeCommand};
 
 #[injectable]
 pub struct AudioService {
@@ -16,8 +16,8 @@ pub struct AudioService {
 impl AudioService {
     pub async fn enqueue_transcode(&self, file: String) -> Result<()> {
         self.queue
-            .of::<TranscodeDto>(AUDIO_QUEUE)
-            .push(TranscodeDto { file: file.clone() })
+            .of::<TranscodeCommand>(AUDIO_QUEUE)
+            .push(TranscodeCommand { file: file.clone() })
             .await?;
         tracing::info!(target: "features::audio", %file, "enqueued transcode job");
         Ok(())

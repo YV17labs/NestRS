@@ -36,6 +36,7 @@ impl Renderer {
         put("table", names.table());
         put("create_dto", names.create_dto());
         put("update_dto", names.update_dto());
+        put("command", names.command());
         put("http_module", names.module_for(Transport::Http));
         put("graphql_module", names.module_for(Transport::Graphql));
         put("ws_module", names.module_for(Transport::Ws));
@@ -105,5 +106,7 @@ mod tests {
             "PostsModule on 3001 → Post"
         );
         assert_eq!(r.render("{{http_module}}"), "PostsHttpModule");
+        // The scaffolded queue payload is a verb-led Command.
+        assert_eq!(r.render("{{command}}"), "ProcessPostCommand");
     }
 }

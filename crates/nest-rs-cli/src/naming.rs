@@ -150,6 +150,15 @@ impl Names {
         format!("Update{}Dto", self.singular)
     }
 
+    /// Default queue payload a `g queue` scaffold emits — an imperative
+    /// **`Command`** ("do this work" → one handler), the common case. Verb-led
+    /// per the convention; the developer renames it to the real action
+    /// (`GenerateMediaVariantCommand`), or switches to an `…Event` (past tense)
+    /// when publishing a fact to several consumers.
+    pub fn command(&self) -> String {
+        format!("Process{}Command", self.singular)
+    }
+
     /// `Users<Transport>Module`, e.g. `UsersHttpModule`.
     pub fn module_for(&self, transport: Transport) -> String {
         format!("{}{}Module", self.pascal, transport.module_infix())
@@ -173,23 +182,59 @@ impl Names {
     }
 }
 
-/// File holding a data-transfer object, mirroring the entity rule: a lone DTO
-/// lives in `dto.rs`; two or more split into a `dtos/` directory with one
-/// `<stem>_dto.rs` per type, re-exported flat by `dtos/mod.rs`. `stem` is the
-/// snake_case type name *without* the `Dto` suffix (`LoginDto` → `login`,
-/// `TokenRequestDto` → `token_request`).
-///
-/// This is the convention authority a multi-DTO scaffolder will call to place
-/// generated files; today's generators emit DTOs inside the entity's
-/// `#[expose]` block, so it has no caller yet — keep it as the single source
-/// of the placement rule rather than re-deriving it at each future call site.
+/// Placement for a boundary object that lives at the feature **port**, mirroring
+/// the entity rule: a lone instance lives in `<role>.rs`; two or more split into
+/// a pluralized `<role>s/` directory with one `<stem>_<role>.rs` per type,
+/// re-exported flat by `<role>s/mod.rs`. `stem` is the snake_case type name
+/// *without* the role suffix (`LoginDto` → `login`, `GenerateMediaVariantCommand`
+/// → `generate_media_variant`). The boundary picks the role word — REST body
+/// `dto`, imperative queue payload `command`, published-fact queue payload
+/// `event` (see [`dto_file`], [`command_file`], [`event_file`]).
+fn port_role_file(role: &str, stem: &str, total: usize) -> String {
+    if total <= 1 {
+        format!("{role}.rs")
+    } else {
+        format!("{role}s/{stem}_{role}.rs")
+    }
+}
+
+/// File holding a **REST** data-transfer object (`Dto`): one → `dto.rs`, 2+ →
+/// `dtos/<stem>_dto.rs`. The macro-generated `Create<E>Dto`/`Update<E>Dto`
+/// (shared REST+GraphQL CRUD body) live inside the entity's `#[expose]` block,
+/// so the multi-DTO directory form has no generator caller yet — kept as the
+/// single source of the placement rule rather than re-deriving it.
 #[allow(dead_code)]
 pub fn dto_file(stem: &str, total: usize) -> String {
-    if total <= 1 {
-        "dto.rs".to_string()
-    } else {
-        format!("dtos/{stem}_dto.rs")
-    }
+    port_role_file("dto", stem, total)
+}
+
+/// File holding an **imperative queue payload** (`Command` — "do this work",
+/// one handler): one → `command.rs`, 2+ → `commands/<stem>_command.rs`. The
+/// payload is a producer↔worker contract, so it lives at the port; the
+/// `queue/` adapter's `processor.rs` imports it. The single-`command.rs` form
+/// is what `g queue` emits today; the `commands/` directory form is the
+/// placement authority for the multi-payload case.
+#[allow(dead_code)]
+pub fn command_file(stem: &str, total: usize) -> String {
+    port_role_file("command", stem, total)
+}
+
+/// File holding a **published-fact queue payload** (`Event` — "X happened",
+/// potentially many consumers): one → `event.rs`, 2+ →
+/// `events/<stem>_event.rs`. Same port placement as a [`command_file`]; choose
+/// `Event` only when broadcasting a fact rather than commanding one handler.
+#[allow(dead_code)]
+pub fn event_file(stem: &str, total: usize) -> String {
+    port_role_file("event", stem, total)
+}
+
+/// File holding a **hand-written GraphQL input** (`Input` — transport-specific,
+/// not the shared CRUD body). Same role-file rule as the port objects, but
+/// nested under the `graphql/` adapter (not the port): one → `graphql/input.rs`,
+/// 2+ → `graphql/inputs/<stem>_input.rs`.
+#[allow(dead_code)]
+pub fn input_file(stem: &str, total: usize) -> String {
+    format!("graphql/{}", port_role_file("input", stem, total))
 }
 
 fn to_kebab(raw: &str) -> String {
@@ -308,6 +353,8 @@ mod tests {
         let names = Names::parse("posts");
         assert_eq!(names.create_dto(), "CreatePostDto");
         assert_eq!(names.update_dto(), "UpdatePostDto");
+        // A scaffolded queue payload defaults to an imperative, verb-led Command.
+        assert_eq!(names.command(), "ProcessPostCommand");
         assert_eq!(names.processor(), "PostsProcessor");
         assert_eq!(names.module_for(Transport::Http), "PostsHttpModule");
         assert_eq!(names.module_for(Transport::Graphql), "PostsGraphqlModule");
@@ -324,5 +371,43 @@ mod tests {
         // covering both a simple and a multi-word stem.
         assert_eq!(dto_file("login", 2), "dtos/login_dto.rs");
         assert_eq!(dto_file("token_request", 2), "dtos/token_request_dto.rs");
+    }
+
+    #[test]
+    fn command_file_layout_mirrors_the_dto_rule() {
+        // A lone imperative payload lives directly in `command.rs`.
+        assert_eq!(command_file("transcode", 1), "command.rs");
+        // Two or more split into a pluralized `commands/` directory, one
+        // `<stem>_command.rs` per type — simple and multi-word stems.
+        assert_eq!(
+            command_file("transcode", 2),
+            "commands/transcode_command.rs"
+        );
+        assert_eq!(
+            command_file("generate_media_variant", 2),
+            "commands/generate_media_variant_command.rs"
+        );
+    }
+
+    #[test]
+    fn event_file_layout_mirrors_the_dto_rule() {
+        // A lone published-fact payload lives directly in `event.rs`.
+        assert_eq!(event_file("order_placed", 1), "event.rs");
+        // Two or more split into a pluralized `events/` directory.
+        assert_eq!(
+            event_file("order_placed", 2),
+            "events/order_placed_event.rs"
+        );
+    }
+
+    #[test]
+    fn input_file_layout_lives_under_the_graphql_adapter() {
+        // A lone hand-written GraphQL input sits in the `graphql/` adapter.
+        assert_eq!(input_file("create_post", 1), "graphql/input.rs");
+        // Two or more split into a pluralized `graphql/inputs/` directory.
+        assert_eq!(
+            input_file("create_post", 2),
+            "graphql/inputs/create_post_input.rs"
+        );
     }
 }

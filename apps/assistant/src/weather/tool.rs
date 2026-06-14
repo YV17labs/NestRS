@@ -6,7 +6,7 @@ use nest_rs_mcp::{
 };
 use validator::Validate;
 
-use crate::weather::dto::CoordsParams;
+use crate::weather::dtos::CoordsParamsDto;
 use crate::weather::service::WeatherProvider;
 
 #[mcp(path = "/mcp")]
@@ -21,7 +21,7 @@ impl WeatherTool {
     #[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
     async fn current_weather(
         &self,
-        Parameters(params): Parameters<CoordsParams>,
+        Parameters(params): Parameters<CoordsParamsDto>,
     ) -> Result<CallToolResult, McpError> {
         params
             .validate()

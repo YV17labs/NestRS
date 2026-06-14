@@ -5,13 +5,13 @@ use nest_rs_core::injectable;
 use nest_rs_ws::WsServer;
 use parking_lot::Mutex;
 
-use crate::chat::dto::{ChatMessage, SendMessage};
+use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 
 #[injectable]
 pub struct RoomService {
     #[inject]
     server: Arc<WsServer>,
-    history: Mutex<Vec<ChatMessage>>,
+    history: Mutex<Vec<ChatMessageDto>>,
     present: AtomicUsize,
 }
 
@@ -28,8 +28,8 @@ impl RoomService {
         self.present.load(Ordering::Relaxed)
     }
 
-    pub fn record(&self, message: SendMessage) -> ChatMessage {
-        let stored = ChatMessage {
+    pub fn record(&self, message: SendMessageDto) -> ChatMessageDto {
+        let stored = ChatMessageDto {
             author: message.author,
             text: message.text,
         };
@@ -49,7 +49,7 @@ impl RoomService {
         stored
     }
 
-    pub fn history(&self) -> Vec<ChatMessage> {
+    pub fn history(&self) -> Vec<ChatMessageDto> {
         self.history.lock().clone()
     }
 }
@@ -65,7 +65,7 @@ mod tests {
             history: Mutex::new(Vec::new()),
             present: AtomicUsize::new(0),
         };
-        let stored = room.record(SendMessage {
+        let stored = room.record(SendMessageDto {
             author: "ada".into(),
             text: "hello".into(),
         });

@@ -41,7 +41,7 @@ async fn worker_app_boots_and_consumes_through_the_queue_transport() {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct ProbeJob {
+struct ProbeDto {
     tag: String,
 }
 
@@ -54,7 +54,7 @@ struct ProbeConsumer;
 #[processor]
 impl ProbeConsumer {
     #[process(queue = "nestrs-e2e-probe", concurrency = 1, retries = 0)]
-    async fn handle(&self, job: ProbeJob) -> anyhow::Result<()> {
+    async fn handle(&self, job: ProbeDto) -> anyhow::Result<()> {
         if let Some(tx) = PROBE_TX.get() {
             let _ = tx.send(job.tag);
         }
@@ -89,8 +89,8 @@ async fn enqueued_job_is_processed_through_real_redis() {
         .container()
         .get::<QueueConnection>()
         .expect("QueueModule seeded the shared QueueConnection");
-    conn.of::<ProbeJob>(PROBE_QUEUE)
-        .push(ProbeJob { tag: tag.clone() })
+    conn.of::<ProbeDto>(PROBE_QUEUE)
+        .push(ProbeDto { tag: tag.clone() })
         .await
         .expect("enqueue onto the probe queue");
 

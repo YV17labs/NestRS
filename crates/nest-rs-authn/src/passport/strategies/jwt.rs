@@ -30,7 +30,9 @@ impl<C: Send + Sync + 'static> JwtStrategy<C> {
 }
 
 #[async_trait]
-impl<C: DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static> Strategy for JwtStrategy<C> {
+impl<C: DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static> Strategy
+    for JwtStrategy<C>
+{
     type Principal = C;
 
     async fn authenticate(&self, req: &mut Request) -> Result<C, AuthError> {

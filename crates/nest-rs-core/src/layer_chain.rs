@@ -120,7 +120,12 @@ where
 /// exactly once), so it stays out of `warn` — a config lint, not an actionable
 /// security event, kept off `warn` to avoid alert fatigue. `#[force_*]` opts a
 /// duplicate back into re-running (logged at `info`).
-fn report_redundant_scope(type_id: TypeId, existing: LayerSite, skipped: LayerSite, name: &'static str) {
+fn report_redundant_scope(
+    type_id: TypeId,
+    existing: LayerSite,
+    skipped: LayerSite,
+    name: &'static str,
+) {
     use std::collections::HashSet;
     use std::sync::{LazyLock, Mutex};
 

@@ -311,7 +311,10 @@ impl Interceptor for EdgeStamp {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
         // The edge band sees matched and unmatched routes alike — resolve
         // the error branch so a 404 is observed (and stamped) too.
-        let mut resp = next.run(req).await.unwrap_or_else(|err| err.into_response());
+        let mut resp = next
+            .run(req)
+            .await
+            .unwrap_or_else(|err| err.into_response());
         EDGE_EVENTS.lock().await.push("edge");
         resp.headers_mut()
             .insert("x-edge", "hit".parse().expect("static header value"));

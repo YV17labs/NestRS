@@ -18,7 +18,10 @@ fn default_per_page() -> u64 {
 /// `validator` bounds enforce at the boundary (`Valid<…>` for REST; resolvers
 /// call [`PageArgs::validate`]).
 #[derive(Debug, Clone, Deserialize, JsonSchema, Validate)]
-#[cfg_attr(feature = "graphql", derive(crate::graphql::async_graphql::InputObject))]
+#[cfg_attr(
+    feature = "graphql",
+    derive(crate::graphql::async_graphql::InputObject)
+)]
 pub struct PageArgs {
     #[cfg_attr(feature = "graphql", graphql(default = 1))]
     #[serde(default = "default_page")]

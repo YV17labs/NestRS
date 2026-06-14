@@ -133,7 +133,11 @@ mod tests {
             frame_options: override_header(Some(String::new()), Some("DENY".into())),
             ..Default::default()
         };
-        assert!(!cfg.headers(false).iter().any(|(k, _)| *k == "x-frame-options"));
+        assert!(
+            !cfg.headers(false)
+                .iter()
+                .any(|(k, _)| *k == "x-frame-options")
+        );
         assert!(
             cfg.headers(false)
                 .iter()

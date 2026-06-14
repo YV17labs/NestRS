@@ -172,8 +172,13 @@ mod tests {
     fn effective_prefix_prepends_the_uri_version_when_present() {
         // `version_path` joins `/v<v>` ahead of the controller path — the
         // single place URI versioning lives, so this is the contract.
-        let meta =
-            HttpControllerMeta::new("UsersController", "/users", Some("1"), Vec::new(), |_c, r| r);
+        let meta = HttpControllerMeta::new(
+            "UsersController",
+            "/users",
+            Some("1"),
+            Vec::new(),
+            |_c, r| r,
+        );
         assert_eq!(meta.effective_prefix(), "/v1/users");
     }
 
@@ -205,10 +210,11 @@ mod tests {
         // The mount closure is the seam `#[routes]` emits; assert it's called
         // exactly once per `mount` invocation and receives the same container.
         static CALLS: AtomicUsize = AtomicUsize::new(0);
-        let meta = HttpControllerMeta::new("HealthController", "/health", None, Vec::new(), |_c, r| {
-            CALLS.fetch_add(1, Ordering::SeqCst);
-            r
-        });
+        let meta =
+            HttpControllerMeta::new("HealthController", "/health", None, Vec::new(), |_c, r| {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+                r
+            });
         let container = Container::builder().build();
         let route = Route::new();
 

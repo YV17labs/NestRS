@@ -13,12 +13,12 @@ use nest_rs_interceptors::InterceptorExt;
 use poem::EndpointExt;
 
 use crate::Guard;
-use crate::dispatch::denial_to_http_response;
 #[cfg(feature = "graphql")]
 use crate::dispatch::GlobalPoolOperationGuard;
+use crate::dispatch::denial_to_http_response;
+use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::FallbackOperationGuard;
-use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 
 /// Adds `.use_guards_global(...)` to [`AppBuilder`].
 ///

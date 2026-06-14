@@ -103,7 +103,7 @@ use serde::{Deserialize, Serialize};
 /// The job payload exchanged over the `{{kebab}}` queue. Producer and consumer
 /// apps share this contract through the feature crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct {{singular}}Job {
+pub struct {{singular}}Dto {
     pub id: String,
 }
 
@@ -114,7 +114,7 @@ pub struct {{processor}};
 #[processor]
 impl {{processor}} {
     #[process(queue = "{{kebab}}", concurrency = 1, retries = 3)]
-    async fn handle(&self, job: {{singular}}Job) -> Result<()> {
+    async fn handle(&self, job: {{singular}}Dto) -> Result<()> {
         tracing::info!(target: "features::{{snake}}", id = %job.id, "processing job");
         Ok(())
     }

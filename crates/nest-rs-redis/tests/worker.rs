@@ -141,7 +141,7 @@ const ENVELOPE_QUEUE: &str = "envelope-test";
 static ENVELOPE_LAST_N: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Serialize, Deserialize)]
-struct EnvelopeJob {
+struct EnvelopeCommand {
     n: u32,
 }
 
@@ -152,7 +152,7 @@ struct EnvelopeProc;
 #[processor]
 impl EnvelopeProc {
     #[process(queue = "envelope-test", concurrency = 1, retries = 0)]
-    async fn handle(&self, job: EnvelopeJob) -> anyhow::Result<()> {
+    async fn handle(&self, job: EnvelopeCommand) -> anyhow::Result<()> {
         ENVELOPE_LAST_N.store(job.n, Ordering::SeqCst);
         Ok(())
     }
@@ -292,7 +292,7 @@ async fn missing_provider_returns_err_without_panicking() {
 
 #[tokio::test]
 async fn payload_schema_drift_returns_err_without_panicking() {
-    // Bug 3 sibling: a v=1 envelope whose payload doesn't match `EnvelopeJob`
+    // Bug 3 sibling: a v=1 envelope whose payload doesn't match `EnvelopeCommand`
     // must surface as Err so apalis applies the retry budget — not crash the
     // worker process via a panic.
     let payload = json!({
@@ -324,7 +324,7 @@ static STRICT_LAST_V: AtomicU32 = AtomicU32::new(0);
 static STRICT_LAST_PAYLOAD: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Serialize, Deserialize)]
-struct StrictJob {
+struct StrictCommand {
     // Same two field names as the wire envelope — this is the bug:
     // detection that only looks at "has v + has payload" mis-classifies
     // this user job as an envelope.
@@ -341,7 +341,7 @@ struct StrictProc;
 #[processor]
 impl StrictProc {
     #[process(queue = "strict-envelope-test", concurrency = 1, retries = 0)]
-    async fn handle(&self, job: StrictJob) -> anyhow::Result<()> {
+    async fn handle(&self, job: StrictCommand) -> anyhow::Result<()> {
         STRICT_LAST_V.store(job.v, Ordering::SeqCst);
         STRICT_LAST_PAYLOAD.store(job.payload, Ordering::SeqCst);
         Ok(())
@@ -398,7 +398,7 @@ async fn float_valued_v_is_accepted_as_envelope_version() {
 async fn string_v_falls_through_to_legacy_path() {
     // `"v": "1"` is not a JSON Number — outside the contract. Detection
     // must reject it as an envelope and fall through to legacy decode.
-    // The legacy decode then fails for EnvelopeJob (because the top-level
+    // The legacy decode then fails for EnvelopeCommand (because the top-level
     // shape is `{v, payload}` instead of `{n}`), surfacing as Err — not a
     // hard envelope-format error and not a panic.
     let payload = json!({

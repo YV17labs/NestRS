@@ -21,9 +21,9 @@ impl AudioController {
     #[post("/transcode")]
     #[api(
         summary = "Enqueue a transcode job for the worker to process",
-        description = "Pushes a TranscodeDto onto the shared `audio` queue; the separate \
-                       worker deployable consumes it over Redis (two apps exchanging, \
-                       no RPC). Requires a bearer JWT.",
+        description = "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the \
+                       shared `audio` queue; the separate worker deployable consumes it over \
+                       Redis (two apps exchanging, no RPC). Requires a bearer JWT.",
         tags("Audio")
     )]
     async fn transcode(&self, body: Json<TranscodeDto>) -> Result<Json<TranscodeDto>> {

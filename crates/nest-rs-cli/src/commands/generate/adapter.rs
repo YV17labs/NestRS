@@ -54,6 +54,20 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     s.create(dir.join("module.rs"), r.render(module_tmpl));
     s.create(dir.join("mod.rs"), r.render(adapter::MOD));
 
+    // The queue payload is a producer↔worker contract, so it lives at the
+    // *port* (`command.rs`), not in the consumer-side `queue/` adapter — the
+    // generated `processor.rs` imports it. Lines wiring it into the feature
+    // `mod.rs` are folded into the single edit below (one edit per file).
+    let mut port_lines = Vec::new();
+    if transport == Transport::Queue {
+        s.create(
+            feature_root.join("command.rs"),
+            r.render(adapter::QUEUE_COMMAND),
+        );
+        port_lines.push("mod command;".to_string());
+        port_lines.push(format!("pub use command::{};", names.command()));
+    }
+
     // Ensure the transport's crates.
     let deps = adapter_deps(transport);
     if !deps.is_empty() {
@@ -64,19 +78,17 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         s.edit(ws.features_cargo(), ensure_features_deps(deps));
     }
 
-    // Wire the feature's `mod.rs` to expose the adapter.
-    s.edit(
-        feature_root.join("mod.rs"),
-        ensure_lines(vec![
-            format!("pub mod {};", transport.folder()),
-            format!(
-                "pub use {}::{{{}, {}}};",
-                transport.folder(),
-                handler,
-                tmodule
-            ),
-        ]),
-    );
+    // Wire the feature's `mod.rs` to expose the adapter (and, for queue, the
+    // port `Command` created above) — one edit, since each `s.edit` re-reads
+    // the file from disk.
+    port_lines.push(format!("pub mod {};", transport.folder()));
+    port_lines.push(format!(
+        "pub use {}::{{{}, {}}};",
+        transport.folder(),
+        handler,
+        tmodule
+    ));
+    s.edit(feature_root.join("mod.rs"), ensure_lines(port_lines));
 
     // Wire the adapter module into the current app, when the cursor is in one.
     let wired_app = wire_into_app(

@@ -1,8 +1,9 @@
 //! `#[crud]` — generate standard REST operations on a `#[controller]` impl
-//! block (`list` + `get` always; `create`/`update`/`delete` unless `readonly`)
-//! and re-emit under `#[routes]`. Handlers delegate to the entity's
-//! [`CrudService`] (`access` for by-id route-model binding); a hand-written
-//! method overrides its generated counterpart.
+//! block (all five by default; a subset with `ops = [list, get, ...]`) and
+//! re-emit under `#[routes]`. Read ops delegate to the entity's
+//! [`CrudService`] (`access` for by-id route-model binding); the write ops
+//! delegate to its opt-in `Creatable`/`Updatable`/`Deletable` impls. A
+//! hand-written method overrides its generated counterpart.
 
 use std::collections::HashSet;
 
@@ -23,6 +24,7 @@ pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
 
 pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let cfg = parse_crud_args(args)?;
+    let ops = cfg.generated_ops()?;
     let self_ty = item.self_ty.clone();
     let base = impl_self_ident(&self_ty, "#[crud]")?;
 
@@ -59,7 +61,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
 
     let mut generated: Vec<ImplItem> = Vec::new();
 
-    if !existing.contains("list") {
+    if ops.list && !existing.contains("list") {
         let summary = format!("List {tag}");
         let list_method: ImplItem = match cfg.paginate {
             // Explicit opt-out (`paginate = none`): the full ability-scoped
@@ -122,7 +124,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         generated.push(list_method);
     }
 
-    if !existing.contains("get") {
+    if ops.get && !existing.contains("get") {
         let summary = format!("Fetch {tag} by id");
         generated.push(parse_quote! {
             #[get("/:id")]
@@ -155,108 +157,106 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         });
     }
 
-    if !cfg.readonly {
-        if let Some(create) = &cfg.create
-            && !existing.contains("create")
-        {
-            let summary = format!("Create {tag}");
-            generated.push(parse_quote! {
-                #[post("/")]
-                #[api(summary = #summary, tags(#tag))]
-                async fn create(
-                    &self,
-                    _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Create, #entity>,
-                    __body: ::nest_rs_http::Valid<::poem::web::Json<#create>>,
-                ) -> ::poem::Result<::poem::web::Json<#output>> {
-                    let __row = ::nest_rs_seaorm::CrudService::create(
-                        &*self.#service,
-                        __body.into_inner(),
-                    )
-                    .await
-                    .map_err(#internal)?;
-                    ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
-                }
-            });
-        }
+    if let Some(create) = ops.create
+        && !existing.contains("create")
+    {
+        let summary = format!("Create {tag}");
+        generated.push(parse_quote! {
+            #[post("/")]
+            #[api(summary = #summary, tags(#tag))]
+            async fn create(
+                &self,
+                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Create, #entity>,
+                __body: ::nest_rs_http::Valid<::poem::web::Json<#create>>,
+            ) -> ::poem::Result<::poem::web::Json<#output>> {
+                let __row = ::nest_rs_seaorm::Creatable::create(
+                    &*self.#service,
+                    __body.into_inner(),
+                )
+                .await
+                .map_err(#internal)?;
+                ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
+            }
+        });
+    }
 
-        if let Some(update) = &cfg.update
-            && !existing.contains("update")
-        {
-            let summary = format!("Update {tag} by id");
-            generated.push(parse_quote! {
-                #[patch("/:id")]
-                #[api(summary = #summary, tags(#tag))]
-                async fn update(
-                    &self,
-                    _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Update, #entity>,
-                    __id: ::poem::web::Path<::uuid::Uuid>,
-                    __body: ::nest_rs_http::Valid<::poem::web::Json<#update>>,
-                ) -> ::poem::Result<::poem::web::Json<#output>> {
-                    #id_v7_check
-                    match ::nest_rs_seaorm::CrudService::access(
-                        &*self.#service,
-                        ::nest_rs_authz::Action::Update,
-                        __id.0,
-                    )
-                    .await
-                    .map_err(#internal)?
-                    {
-                        ::nest_rs_seaorm::Access::Found(__m) => {
-                            let __row = ::nest_rs_seaorm::CrudService::update(
-                                &*self.#service,
-                                __m,
-                                __body.into_inner(),
-                            )
+    if let Some(update) = ops.update
+        && !existing.contains("update")
+    {
+        let summary = format!("Update {tag} by id");
+        generated.push(parse_quote! {
+            #[patch("/:id")]
+            #[api(summary = #summary, tags(#tag))]
+            async fn update(
+                &self,
+                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Update, #entity>,
+                __id: ::poem::web::Path<::uuid::Uuid>,
+                __body: ::nest_rs_http::Valid<::poem::web::Json<#update>>,
+            ) -> ::poem::Result<::poem::web::Json<#output>> {
+                #id_v7_check
+                match ::nest_rs_seaorm::CrudService::access(
+                    &*self.#service,
+                    ::nest_rs_authz::Action::Update,
+                    __id.0,
+                )
+                .await
+                .map_err(#internal)?
+                {
+                    ::nest_rs_seaorm::Access::Found(__m) => {
+                        let __row = ::nest_rs_seaorm::Updatable::update(
+                            &*self.#service,
+                            __m,
+                            __body.into_inner(),
+                        )
+                        .await
+                        .map_err(#internal)?;
+                        ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
+                    }
+                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
+                        ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
+                    ),
+                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
+                        ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
+                    ),
+                }
+            }
+        });
+    }
+
+    if ops.delete && !existing.contains("delete") {
+        let summary = format!("Delete {tag} by id");
+        generated.push(parse_quote! {
+            #[delete("/:id")]
+            #[api(summary = #summary, tags(#tag))]
+            async fn delete(
+                &self,
+                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Delete, #entity>,
+                __id: ::poem::web::Path<::uuid::Uuid>,
+            ) -> ::poem::Result<::poem::http::StatusCode> {
+                #id_v7_check
+                match ::nest_rs_seaorm::CrudService::access(
+                    &*self.#service,
+                    ::nest_rs_authz::Action::Delete,
+                    __id.0,
+                )
+                .await
+                .map_err(#internal)?
+                {
+                    ::nest_rs_seaorm::Access::Found(__m) => {
+                        ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
                             .await
                             .map_err(#internal)?;
-                            ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
-                        }
-                        ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                            ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
-                        ),
-                        ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                            ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
-                        ),
+                        ::core::result::Result::Ok(::poem::http::StatusCode::NO_CONTENT)
                     }
+                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
+                        ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
+                    ),
+                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
+                        ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
+                    ),
                 }
-            });
-        }
-
-        if !existing.contains("delete") {
-            let summary = format!("Delete {tag} by id");
-            generated.push(parse_quote! {
-                #[delete("/:id")]
-                #[api(summary = #summary, tags(#tag))]
-                async fn delete(
-                    &self,
-                    _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Delete, #entity>,
-                    __id: ::poem::web::Path<::uuid::Uuid>,
-                ) -> ::poem::Result<::poem::http::StatusCode> {
-                    #id_v7_check
-                    match ::nest_rs_seaorm::CrudService::access(
-                        &*self.#service,
-                        ::nest_rs_authz::Action::Delete,
-                        __id.0,
-                    )
-                    .await
-                    .map_err(#internal)?
-                    {
-                        ::nest_rs_seaorm::Access::Found(__m) => {
-                            ::nest_rs_seaorm::CrudService::delete(&*self.#service, __m)
-                                .await
-                                .map_err(#internal)?;
-                            ::core::result::Result::Ok(::poem::http::StatusCode::NO_CONTENT)
-                        }
-                        ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                            ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
-                        ),
-                        ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                            ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
-                        ),
-                    }
-                }
-            });
-        }
+            }
+        });
     }
 
     generated.append(&mut item.items);
@@ -275,4 +275,43 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             )
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+    use syn::parse_quote;
+
+    use super::*;
+
+    fn generated_methods(args: TokenStream2) -> String {
+        let item: ItemImpl = parse_quote! { impl Things {} };
+        crud(args, item).expect("crud generates").to_string()
+    }
+
+    // `ops = [list, get, delete]` generates exactly those three routes — no
+    // `create`/`update`, and no need for `create = `/`update = ` input types.
+    #[test]
+    fn partial_ops_generate_only_the_listed_routes() {
+        let out = generated_methods(quote! {
+            service = svc, entity = E, output = Thing, ops = [list, get, delete]
+        });
+        assert!(out.contains("fn list"), "list expected: {out}");
+        assert!(out.contains("fn get"), "get expected: {out}");
+        assert!(out.contains("fn delete"), "delete expected: {out}");
+        assert!(!out.contains("fn create"), "create must be absent: {out}");
+        assert!(!out.contains("fn update"), "update must be absent: {out}");
+    }
+
+    // Requesting a write op without its input type is a hard macro error.
+    #[test]
+    fn create_op_without_input_type_fails_to_expand() {
+        let item: ItemImpl = parse_quote! { impl Things {} };
+        let err = crud(
+            quote! { service = svc, entity = E, output = Thing, ops = [create] },
+            item,
+        )
+        .expect_err("create without an input type must fail");
+        assert!(err.to_string().contains("create"));
+    }
 }

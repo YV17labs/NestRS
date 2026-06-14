@@ -41,7 +41,7 @@ impl ActiveModelBehavior for ActiveModel {}
 "#;
 
 pub const SERVICE: &str = r#"use nest_rs_core::injectable;
-use nest_rs_seaorm::CrudService;
+use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
 
 use super::entity::{{{create_op}}, Entity as {{pascal}}, {{update_op}}};
 
@@ -49,11 +49,22 @@ use super::entity::{{{create_op}}, Entity as {{pascal}}, {{update_op}}};
 #[derive(Default)]
 pub struct {{service}};
 
+// Read API + the audited ORM choke point.
 impl CrudService for {{service}} {
     type Entity = {{pascal}};
+}
+
+// Opt-in write capabilities — drop any your resource does not offer (and the
+// matching #[crud] op), instead of declaring a placeholder input type.
+impl Creatable for {{service}} {
     type Create = {{create_op}};
+}
+
+impl Updatable for {{service}} {
     type Update = {{update_op}};
 }
+
+impl Deletable for {{service}} {}
 "#;
 
 pub const MODULE: &str = r#"use nest_rs_core::module;
@@ -86,7 +97,7 @@ pub struct {{http_module}};
 pub const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs_http::{Valid, controller, routes};
-use nest_rs_seaorm::{CrudService, ServiceError};
+use nest_rs_seaorm::{Creatable, CrudService, ServiceError};
 use poem::Result;
 use poem::web::Json;
 

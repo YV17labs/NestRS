@@ -31,6 +31,7 @@ pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
 
 fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let cfg = parse_crud_args(args)?;
+    let ops = cfg.generated_ops()?;
 
     let existing: HashSet<String> = item
         .items
@@ -73,7 +74,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     let mut generated: Vec<ImplItem> = Vec::new();
 
-    if !existing.contains(&list_op.to_string()) {
+    if ops.list && !existing.contains(&list_op.to_string()) {
         let list_method: ImplItem = match cfg.paginate {
             // Keyset pagination (the default): `first` capped by
             // `clamp_page_size`, `after` = the last item's id (UUID-v7 keys
@@ -128,7 +129,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         generated.push(list_method);
     }
 
-    if !existing.contains(&get_op.to_string()) {
+    if ops.get && !existing.contains(&get_op.to_string()) {
         generated.push(parse_quote! {
             #[query]
             #[authorize(::nest_rs_authz::Read, #entity)]
@@ -157,95 +158,93 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
 
-    if !cfg.readonly {
-        if let Some(create) = &cfg.create
-            && !existing.contains(&create_op.to_string())
-        {
-            generated.push(parse_quote! {
-                #[mutation]
-                #[authorize(::nest_rs_authz::Create, #entity)]
-                async fn #create_op(
-                    &self,
-                    input: #create,
-                ) -> ::nest_rs_graphql::async_graphql::Result<#output> {
-                    let __row = ::nest_rs_seaorm::CrudService::create(&*self.#service, input)
+    if let Some(create) = ops.create
+        && !existing.contains(&create_op.to_string())
+    {
+        generated.push(parse_quote! {
+            #[mutation]
+            #[authorize(::nest_rs_authz::Create, #entity)]
+            async fn #create_op(
+                &self,
+                input: #create,
+            ) -> ::nest_rs_graphql::async_graphql::Result<#output> {
+                let __row = ::nest_rs_seaorm::Creatable::create(&*self.#service, input)
+                    .await
+                    .map_err(#gql_err)?;
+                ::core::result::Result::Ok(#output::from(&__row))
+            }
+        });
+    }
+
+    if let Some(update) = ops.update
+        && !existing.contains(&update_op.to_string())
+    {
+        generated.push(parse_quote! {
+            #[mutation]
+            #[authorize(::nest_rs_authz::Update, #entity)]
+            async fn #update_op(
+                &self,
+                id: ::std::string::String,
+                input: #update,
+            ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
+                #parse_id
+                match ::nest_rs_seaorm::CrudService::access(
+                    &*self.#service,
+                    ::nest_rs_authz::Action::Update,
+                    __id,
+                )
+                .await
+                .map_err(#gql_err)?
+                {
+                    ::nest_rs_seaorm::Access::Found(__m) => {
+                        let __row = ::nest_rs_seaorm::Updatable::update(
+                            &*self.#service,
+                            __m,
+                            input,
+                        )
                         .await
                         .map_err(#gql_err)?;
-                    ::core::result::Result::Ok(#output::from(&__row))
+                        ::core::result::Result::Ok(::core::option::Option::Some(
+                            #output::from(&__row),
+                        ))
+                    }
+                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
+                    ::nest_rs_seaorm::Access::Missing => {
+                        ::core::result::Result::Ok(::core::option::Option::None)
+                    }
                 }
-            });
-        }
+            }
+        });
+    }
 
-        if let Some(update) = &cfg.update
-            && !existing.contains(&update_op.to_string())
-        {
-            generated.push(parse_quote! {
-                #[mutation]
-                #[authorize(::nest_rs_authz::Update, #entity)]
-                async fn #update_op(
-                    &self,
-                    id: ::std::string::String,
-                    input: #update,
-                ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
-                    #parse_id
-                    match ::nest_rs_seaorm::CrudService::access(
-                        &*self.#service,
-                        ::nest_rs_authz::Action::Update,
-                        __id,
-                    )
-                    .await
-                    .map_err(#gql_err)?
-                    {
-                        ::nest_rs_seaorm::Access::Found(__m) => {
-                            let __row = ::nest_rs_seaorm::CrudService::update(
-                                &*self.#service,
-                                __m,
-                                input,
-                            )
+    if ops.delete && !existing.contains(&delete_op.to_string()) {
+        generated.push(parse_quote! {
+            #[mutation]
+            #[authorize(::nest_rs_authz::Delete, #entity)]
+            async fn #delete_op(
+                &self,
+                id: ::std::string::String,
+            ) -> ::nest_rs_graphql::async_graphql::Result<bool> {
+                #parse_id
+                match ::nest_rs_seaorm::CrudService::access(
+                    &*self.#service,
+                    ::nest_rs_authz::Action::Delete,
+                    __id,
+                )
+                .await
+                .map_err(#gql_err)?
+                {
+                    ::nest_rs_seaorm::Access::Found(__m) => {
+                        ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
                             .await
                             .map_err(#gql_err)?;
-                            ::core::result::Result::Ok(::core::option::Option::Some(
-                                #output::from(&__row),
-                            ))
-                        }
-                        ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
-                        ::nest_rs_seaorm::Access::Missing => {
-                            ::core::result::Result::Ok(::core::option::Option::None)
-                        }
+                        ::core::result::Result::Ok(true)
                     }
+                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
+                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Ok(false),
                 }
-            });
-        }
-
-        if !existing.contains(&delete_op.to_string()) {
-            generated.push(parse_quote! {
-                #[mutation]
-                #[authorize(::nest_rs_authz::Delete, #entity)]
-                async fn #delete_op(
-                    &self,
-                    id: ::std::string::String,
-                ) -> ::nest_rs_graphql::async_graphql::Result<bool> {
-                    #parse_id
-                    match ::nest_rs_seaorm::CrudService::access(
-                        &*self.#service,
-                        ::nest_rs_authz::Action::Delete,
-                        __id,
-                    )
-                    .await
-                    .map_err(#gql_err)?
-                    {
-                        ::nest_rs_seaorm::Access::Found(__m) => {
-                            ::nest_rs_seaorm::CrudService::delete(&*self.#service, __m)
-                                .await
-                                .map_err(#gql_err)?;
-                            ::core::result::Result::Ok(true)
-                        }
-                        ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
-                        ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Ok(false),
-                    }
-                }
-            });
-        }
+            }
+        });
     }
 
     generated.append(&mut item.items);

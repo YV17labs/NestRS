@@ -6,7 +6,9 @@ use nest_rs_authn::{CredentialError, burn_verify, hash_password, verify_password
 use nest_rs_authz::Action;
 use nest_rs_core::{hooks, injectable};
 use nest_rs_graphql::dataloader;
-use nest_rs_seaorm::{CreateModel, CrudService, Repo, ServiceError, live_condition};
+use nest_rs_seaorm::{
+    CreateModel, Creatable, CrudService, Deletable, Repo, ServiceError, Updatable, live_condition,
+};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
     QueryFilter, Set,
@@ -26,13 +28,21 @@ pub struct UsersService {
 
 impl CrudService for UsersService {
     type Entity = Users;
-    type Create = CreateUser;
-    type Update = UpdateUser;
 
     fn soft_delete_column() -> Option<entity::Column> {
         Some(entity::Column::DeletedAt)
     }
 }
+
+impl Creatable for UsersService {
+    type Create = CreateUser;
+}
+
+impl Updatable for UsersService {
+    type Update = UpdateUser;
+}
+
+impl Deletable for UsersService {}
 
 impl UsersService {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {

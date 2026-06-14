@@ -46,7 +46,9 @@ pub use executor::{
 pub use module::{DatabaseModule, DatabaseSetup, connect_from_env};
 pub use page::{LIST_CAP, Page, PageParams};
 pub use repo::{Repo, scope_for};
-pub use service::{Access, CreateModel, CrudService, UpdateModel};
+pub use service::{
+    Access, CreateModel, Creatable, CrudService, Deletable, Updatable, UpdateModel,
+};
 pub use soft_delete::{SoftDeletable, live_condition};
 pub use worker::WorkerDbContext;
 

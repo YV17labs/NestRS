@@ -107,8 +107,13 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `users`/`user`/`create_user`/…).
 ///
 /// `#[crud(entity = …::Entity, output = Dto, create = CreateDto, update =
-/// UpdateDto, readonly, paginate = cursor|none)]`. Write a matching operation
-/// method to override it — the macro keeps yours and skips its own.
+/// UpdateDto, ops = [list, get, ...], paginate = cursor|none)]`. Write a matching
+/// operation method to override it — the macro keeps yours and skips its own.
+///
+/// `ops` selects which operations to generate (omit for all five). A `create`/
+/// `update` op needs its input type and the service's `Creatable`/`Updatable`
+/// impl; `delete` needs `Deletable`. Requesting an op without its type is a
+/// compile error — a resource exposes only the operations it actually has.
 ///
 /// The generated list query is **keyset-paginated by default**
 /// (`first: Int, after: ID` — `after` is the previous page's last `id`,

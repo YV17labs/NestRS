@@ -152,7 +152,15 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Generate standard REST operations (list/get/create/update/delete) on a
 /// `#[controller]` impl block, re-emitting under `#[routes]`. Grammar:
 /// `#[crud(entity = …::Entity, output = Dto, create = CreateDto,
-/// update = UpdateDto, readonly, paginate = cursor|page|none)]`.
+/// update = UpdateDto, ops = [list, get, ...], paginate = cursor|page|none)]`.
+///
+/// `ops` selects which operations to generate; omit it for all five
+/// (back-compatible). A write op is generated only when the resource genuinely
+/// offers it: `create`/`update` require their input type **and** that the
+/// service implements `Creatable`/`Updatable`; `delete` requires `Deletable`.
+/// Listing `ops = [create]` without `create = <Type>` is a compile error, not a
+/// silently dropped (or no-op) route — so a resource never exposes a write it
+/// does not have.
 ///
 /// The generated list is **keyset-paginated by default** (`?first=&after=`,
 /// next cursor echoed in `x-next-cursor`, body a plain maskable array);
@@ -181,7 +189,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///             .await.map_err(__nestrs_crud_internal_UsersController)?;
 ///         // Json(Vec<Dto>) + `x-next-cursor` header when p.next_cursor is Some
 ///     }
-///     // get → CrudService::access(Read, id); create/update/delete unless `readonly`,
+///     // get → CrudService::access(Read, id); create/update/delete per `ops`,
 ///     // each guarded by Authorize<Action, Entity> and mapping Access::{Denied=>403,Missing=>404}
 ///     // … plus any hand-written methods (which override the generated ones)
 /// }

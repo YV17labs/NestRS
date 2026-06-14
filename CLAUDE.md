@@ -389,6 +389,31 @@ from the ambient ability (no ability ⇒ `TRUE`, unscoped). Route-model
 binding goes through the service (`Bind`/`bind` delegate to
 `CrudService::access`).
 
+**Write capability is segregated, never a placeholder.** `CrudService`
+carries only the **read** half (`list`/`page`/`access` + the entity's
+helpers) — every resource implements it. The write half lives in three
+**opt-in** traits a resource implements only when it genuinely offers
+the operation: `Creatable` (`type Create` + `create`), `Updatable`
+(`type Update` + `update`), `Deletable` (`delete`). A read-only resource
+(a relation, a projection, an append-only log) implements just
+`CrudService` and declares **no** `Create`/`Update` type — there is no
+`struct … { _unused }` stub and no no-op `apply_to`/`into_active_model`
+to write, because Rust's associated-type defaults are unstable and a
+placeholder would be the only alternative under a single trait. The
+entity-derived input types (`CreateUser`/`UpdateUser`) are still emitted
+by `#[expose(input(...))]` and named on the matching trait, exactly as
+before — only the read-only case changes.
+
+**`#[crud]` generates only the operations a resource has.** `ops = [list,
+get, delete]` synthesises exactly those (HTTP *and* GraphQL); omit `ops`
+for all five (back-compatible — existing slices are unchanged). A
+`create`/`update` op requires its input type (`create = `/`update = `)
+**and** the service's `Creatable`/`Updatable` impl; `delete` requires
+`Deletable`. Listing an op without its input type is a **compile error**
+(named in the diagnostic), and an op whose trait the service does not
+implement fails to resolve — a forgotten or impossible operation is a
+build break, never a silent no-op mutation exposed on the wire.
+
 Install depths: **executor** via the auto-registered `DbContext`
 interceptor (just import `DatabaseModule`) — innermost transport band
 (−10), wrapping routing, so it covers controllers and self-mounts alike.
@@ -608,7 +633,8 @@ Snake_case, no dotted variants.
   merge.
 - **One role → one file per folder.** Don't split a service into
   `loader.rs`/`credential.rs` unless a second pattern appears twice.
-  Extra `impl` blocks for `CrudService`, `#[dataloader]`, `#[hooks]`
+  Extra `impl` blocks for `CrudService` (+ the opt-in `Creatable`/
+  `Updatable`/`Deletable` write traits), `#[dataloader]`, `#[hooks]`
   are macro requirements, not extra files. Single-role crates stay flat.
 - **A service's type ends in `Service`; one service per `service.rs`.**
   Absolute: a business-logic provider whose name doesn't end in

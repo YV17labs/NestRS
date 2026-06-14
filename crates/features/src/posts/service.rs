@@ -1,5 +1,5 @@
 use nest_rs_core::injectable;
-use nest_rs_seaorm::{CreateModel, CrudService, Repo, ServiceError};
+use nest_rs_seaorm::{CreateModel, Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
 use sea_orm::ActiveModelTrait;
 use sea_orm::Set;
 use uuid::Uuid;
@@ -12,13 +12,21 @@ pub struct PostsService;
 
 impl CrudService for PostsService {
     type Entity = Posts;
-    type Create = CreatePost;
-    type Update = UpdatePost;
 
     fn soft_delete_column() -> Option<super::entity::Column> {
         Some(super::entity::Column::DeletedAt)
     }
 }
+
+impl Creatable for PostsService {
+    type Create = CreatePost;
+}
+
+impl Updatable for PostsService {
+    type Update = UpdatePost;
+}
+
+impl Deletable for PostsService {}
 
 impl PostsService {
     pub async fn create_in_org(

@@ -38,8 +38,12 @@ pub enum Access<M> {
     Missing,
 }
 
-/// The entity's CRUD API. Implement it with the three associated types to inherit
-/// every method; override any to extend it.
+/// The entity's **read** API and the single audited gateway to the ORM. Every
+/// resource implements it; the write half is segregated into the opt-in
+/// [`Creatable`], [`Updatable`], and [`Deletable`] traits so a resource carries
+/// — and exposes — only the operations it genuinely has. A read-only resource
+/// (e.g. a relation or a projection) implements just this trait and never has
+/// to declare an unused `Create`/`Update` placeholder.
 #[async_trait]
 pub trait CrudService: Send + Sync
 where
@@ -48,8 +52,6 @@ where
         Send + Sync + IntoActiveModel<<Self::Entity as EntityTrait>::ActiveModel>,
 {
     type Entity: EntityTrait;
-    type Create: CreateModel<Self::Entity> + Send;
-    type Update: UpdateModel<Self::Entity> + Send;
 
     /// The entity's table name; included as the `entity` field on every log
     /// (the flat module path can't distinguish entities — they all log from
@@ -142,6 +144,17 @@ where
         }
     }
 
+}
+
+/// Opt-in write capability: the resource accepts **inserts**. Carries the
+/// create-input type and the audited `create` path. A resource implements it
+/// only when it genuinely creates rows — so there is no placeholder `Create`
+/// type, and `#[crud(ops = [..create..])]` cannot generate a `create` op for a
+/// resource that does not offer one.
+#[async_trait]
+pub trait Creatable: CrudService {
+    type Create: CreateModel<Self::Entity> + Send;
+
     /// Insert a row from a create-input DTO, in the request transaction.
     ///
     /// Defense in depth beyond the route's `Authorize<Create, _>` gate: when an
@@ -173,6 +186,15 @@ where
         tracing::debug!(target: "nest_rs::orm", entity, id = ?model_pk::<Self::Entity>(&model), "row created");
         Ok(model)
     }
+}
+
+/// Opt-in write capability: the resource accepts **updates**. Carries the
+/// update-input type and the audited `update` path. Implemented only when the
+/// resource genuinely mutates rows — so a `update<E>` op is never generated for
+/// a resource that has no honest update to apply.
+#[async_trait]
+pub trait Updatable: CrudService {
+    type Update: UpdateModel<Self::Entity> + Send;
 
     /// Apply an update-input DTO to a loaded row, in the request transaction.
     /// Ability-scoped by [`Repo::update`]: a row outside the caller's scope is
@@ -205,7 +227,14 @@ where
             Err(err) => Err(err),
         }
     }
+}
 
+/// Opt-in write capability: the resource accepts **deletes** (hard or, when
+/// [`soft_delete_column`](CrudService::soft_delete_column) is set, soft). A
+/// resource that is append-only simply does not implement it — and
+/// `#[crud(ops = [..delete..])]` cannot expose a delete it does not have.
+#[async_trait]
+pub trait Deletable: CrudService {
     /// Delete a loaded row, in the request transaction. Ability-scoped by
     /// [`Repo::delete`]: a row outside the caller's scope yields a zero-row
     /// result mapped to [`DbErr::RecordNotFound`], so a caller cannot delete by

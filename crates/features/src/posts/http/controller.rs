@@ -10,7 +10,7 @@ use poem::web::Json;
 use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::posts::{CreatePostDto, Entity as PostEntity, Post, PostsService, UpdatePostDto};
+use crate::posts::{CreatePost, Entity as PostEntity, Post, PostsService, UpdatePost};
 
 #[controller(path = "/posts")]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -23,8 +23,8 @@ pub struct PostsController {
     service = svc,
     entity = PostEntity,
     output = Post,
-    create = CreatePostDto,
-    update = UpdatePostDto,
+    create = CreatePost,
+    update = UpdatePost,
 )]
 impl PostsController {
     #[post("/")]
@@ -38,7 +38,7 @@ impl PostsController {
         &self,
         _authz: Authorize<Create, PostEntity>,
         auth: Ctx<Claims>,
-        body: Valid<Json<CreatePostDto>>,
+        body: Valid<Json<CreatePost>>,
     ) -> Result<Json<Post>> {
         let author_id = auth.sub.ok_or_else(|| {
             poem::Error::from_string(

@@ -43,7 +43,7 @@ impl ActiveModelBehavior for ActiveModel {}
 pub const SERVICE: &str = r#"use nest_rs_core::injectable;
 use nest_rs_seaorm::CrudService;
 
-use super::entity::{{{create_dto}}, Entity as {{pascal}}, {{update_dto}}};
+use super::entity::{{{create_op}}, Entity as {{pascal}}, {{update_op}}};
 
 #[injectable]
 #[derive(Default)]
@@ -51,8 +51,8 @@ pub struct {{service}};
 
 impl CrudService for {{service}} {
     type Entity = {{pascal}};
-    type Create = {{create_dto}};
-    type Update = {{update_dto}};
+    type Create = {{create_op}};
+    type Update = {{update_op}};
 }
 "#;
 
@@ -90,7 +90,7 @@ use nest_rs_seaorm::{CrudService, ServiceError};
 use poem::Result;
 use poem::web::Json;
 
-use crate::{{snake}}::{{{create_dto}}, {{entity}}, {{service}}};
+use crate::{{snake}}::{{{create_op}}, {{entity}}, {{service}}};
 
 // SECURITY: scaffolded without guards so the slice compiles in any workspace.
 // Before exposing real data, bind #[use_guards(AuthGuard, AuthzGuard)] on this
@@ -112,7 +112,7 @@ impl {{controller}} {
     }
 
     #[post("/")]
-    async fn create(&self, body: Valid<Json<{{create_dto}}>>) -> Result<Json<{{entity}}>> {
+    async fn create(&self, body: Valid<Json<{{create_op}}>>) -> Result<Json<{{entity}}>> {
         let model = self
             .svc
             .create(body.into_inner())

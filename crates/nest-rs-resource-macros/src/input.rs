@@ -1,4 +1,4 @@
-//! Emit `Create<Name>Dto` / `Update<Name>Dto` from `#[expose(input(...))]`
+//! Emit `Create<Name>` / `Update<Name>` from `#[expose(input(...))]`
 //! fields. `validate(...)` bodies are re-emitted verbatim as `#[validate(...)]`
 //! so REST `Valid<Json<…>>` and the service enforce the same rules.
 
@@ -8,8 +8,8 @@ use quote::quote;
 use crate::attr::{ResourceField, ResourceModel, graphql_object_derive};
 
 pub fn emit(model: &ResourceModel) -> TokenStream2 {
-    let create = input_struct(&model.create_dto_ident, model, |f| f.in_create);
-    let update = input_struct(&model.update_dto_ident, model, |f| f.in_update);
+    let create = input_struct(&model.create_ident, model, |f| f.in_create);
+    let update = input_struct(&model.update_ident, model, |f| f.in_update);
     quote! {
         #create
         #update

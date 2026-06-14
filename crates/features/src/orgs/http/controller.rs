@@ -4,7 +4,7 @@ use nest_rs_http::{controller, crud};
 
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::orgs::{CreateOrgDto, Entity as OrgEntity, Org, OrgsService, UpdateOrgDto};
+use crate::orgs::{CreateOrg, Entity as OrgEntity, Org, OrgsService, UpdateOrg};
 
 #[controller(path = "/orgs")]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -17,7 +17,7 @@ pub struct OrgsController {
     service = svc,
     entity = OrgEntity,
     output = Org,
-    create = CreateOrgDto,
-    update = UpdateOrgDto,
+    create = CreateOrg,
+    update = UpdateOrg,
 )]
 impl OrgsController {}

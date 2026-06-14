@@ -47,7 +47,7 @@ mod wire;
 /// }
 /// ```
 ///
-/// Generates `User`, `CreateUserDto`, `UpdateUserDto`, `From<&Model> for
+/// Generates `User`, `CreateUser`, `UpdateUser`, `From<&Model> for
 /// User`. Adding `paginate` also emits `UserPage`.
 ///
 /// # Expands to
@@ -64,8 +64,8 @@ mod wire;
 ///
 /// pub struct User { pub id: Uuid, pub name: String, /* #[expose]d columns only */ }
 /// impl From<&Model> for User { /* … */ }
-/// pub struct CreateUserDto { /* #[expose(input(create))] columns */ }
-/// pub struct UpdateUserDto { /* #[expose(input(update))] columns */ }
+/// pub struct CreateUser { /* #[expose(input(create))] columns */ }
+/// pub struct UpdateUser { /* #[expose(input(update))] columns */ }
 /// impl ::nest_rs_seaorm::WireModelDefaults for Entity { /* defaults for unexposed columns */ }
 /// // graphql: relation PK/FK loaders + `#[ComplexObject] impl User { … }`
 /// // paginate: `pub struct UserPage { … }`

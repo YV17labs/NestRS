@@ -563,9 +563,10 @@ Snake_case, no dotted variants.
   speaks its native vocabulary.** The suffix is the boundary, not a
   generic "it moves data" (`…Job`/`…Response`/a blanket `…Dto` are all
   wrong):
-  - **REST body** (request/response) → **`Dto`** (`CreateUserDto`,
-    `LoginDto`, `AccessTokenDto`, `TranscodeDto`), at the port —
-    `dto.rs` / `dtos/`.
+  - **REST body** (request/response) → **`Dto`** (`LoginDto`,
+    `AccessTokenDto`, `TranscodeDto`), at the port — `dto.rs` / `dtos/`.
+    A *hand-written* body only — the entity-derived CRUD forms are bare
+    (see the entity exception below).
   - **Queue payload, imperative** ("do X" → one handler, idempotent,
     replayable; verb-led name) → **`Command`**
     (`GenerateMediaVariantCommand`, `TranscodeCommand`), at the port —
@@ -585,15 +586,21 @@ Snake_case, no dotted variants.
   the `processor.rs` imports it. The role word is carried by **both** the
   type and its file, and placement mirrors the entity rule: one → the
   bare file, two or more → a pluralized directory (one `<snake>_<role>.rs`
-  per type, flat re-export from its `mod.rs`). **The entity is the only
-  exception** — it stays `Model` in `entity.rs`, and its `#[expose]`d wire
-  struct keeps the bare entity name (the entity *is* the wire contract).
-  The macro-generated `Create<E>Dto` / `Update<E>Dto` are the deliberate
-  **shared** type: one Rust struct serves as both the REST body and the
-  GraphQL `input Create<E>Dto` (`create = CreateUserDto`), so it keeps the
-  `Dto` suffix and lives inside the entity's `#[expose]` block, not a
-  separate file — its context is the entity/CRUD, not a single layer. Do
-  not split it per transport unless a genuine need appears.
+  per type, flat re-export from its `mod.rs`). **The entity and its
+  derived CRUD forms are the exception** — the entity stays `Model` in
+  `entity.rs`, its `#[expose]`d wire struct keeps the bare entity name
+  (the entity *is* the wire contract), and the macro-generated
+  `Create<E>` / `Update<E>` are **bare too**: a CRUD shape derived from
+  the entity has no *single* boundary — one Rust struct is at once the
+  service's `Create`/`Update` type (transport-agnostic), the GraphQL
+  `input`, and the REST body — so a transfer suffix would be wrong at the
+  service layer and give a non-idiomatic `input Create<E>Dto`. It joins
+  the entity exception: no suffix, lives inside the entity's `#[expose]`
+  block (`create = CreateUser`), not a separate file. The resulting SDL
+  reads `input CreateUser` — deliberate. Hand-written transfer objects
+  keep their boundary suffix (`…Dto`/`…Input`/`…Command`/`…Event`); only
+  the entity-derived forms drop it. Do not split per transport unless a
+  genuine need appears.
 - **`mod.rs` / `lib.rs` carry no business logic** — only `//!` doc,
   `mod`, `pub use`. Exception: proc-macro `#[proc_macro*]` entries
   (Rust forces them at the crate root) must be thin delegations.

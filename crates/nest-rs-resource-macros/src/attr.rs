@@ -92,8 +92,8 @@ pub(crate) fn complexity_attr(user: &Option<Expr>, default: Option<&str>) -> Tok
 pub(crate) struct ResourceModel {
     pub source_ident: Ident,
     pub output_ident: Ident,
-    pub create_dto_ident: Ident,
-    pub update_dto_ident: Ident,
+    pub create_ident: Ident,
+    pub update_ident: Ident,
     pub page_ident: Ident,
     pub fields: Vec<ResourceField>,
     /// Path to the entity's service, used as the receiver of auto-generated
@@ -360,8 +360,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     Ok(ResourceModel {
         source_ident,
         output_ident: name_ident.clone(),
-        create_dto_ident: format_ident!("Create{}Dto", name_ident),
-        update_dto_ident: format_ident!("Update{}Dto", name_ident),
+        create_ident: format_ident!("Create{}", name_ident),
+        update_ident: format_ident!("Update{}", name_ident),
         page_ident: format_ident!("{}Page", name_ident),
         fields,
         service,

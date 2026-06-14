@@ -1,19 +1,19 @@
-input CreateOrgDto {
+input CreateOrg {
 	name: String!
 }
 
-input CreateUserDto {
+input CreateUser {
 	email: String!
 	name: String!
 }
 
 type Mutation {
-	createOrg(input: CreateOrgDto!): Org!
-	createUser(input: CreateUserDto!): User!
+	createOrg(input: CreateOrg!): Org!
+	createUser(input: CreateUser!): User!
 	deleteOrg(id: String!): Boolean!
 	deleteUser(id: String!): Boolean!
-	updateOrg(id: String!, input: UpdateOrgDto!): Org
-	updateUser(id: String!, input: UpdateUserDto!): User
+	updateOrg(id: String!, input: UpdateOrg!): Org
+	updateUser(id: String!, input: UpdateUser!): User
 }
 
 type Org {
@@ -44,11 +44,11 @@ type Query {
 	users(after: String, first: Int): [User!]!
 }
 
-input UpdateOrgDto {
+input UpdateOrg {
 	name: String!
 }
 
-input UpdateUserDto {
+input UpdateUser {
 	email: String!
 	name: String!
 }

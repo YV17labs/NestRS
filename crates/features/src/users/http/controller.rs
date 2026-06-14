@@ -10,7 +10,7 @@ use poem::web::Json;
 use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUserDto, Entity as UserEntity, UpdateUserDto, User, UsersService};
+use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[controller(path = "/users")]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -23,8 +23,8 @@ pub struct UsersController {
     service = svc,
     entity = UserEntity,
     output = User,
-    create = CreateUserDto,
-    update = UpdateUserDto,
+    create = CreateUser,
+    update = UpdateUser,
 )]
 impl UsersController {
     #[post("/")]
@@ -38,7 +38,7 @@ impl UsersController {
         &self,
         _authz: Authorize<Create, UserEntity>,
         auth: Ctx<Claims>,
-        body: Valid<Json<CreateUserDto>>,
+        body: Valid<Json<CreateUser>>,
     ) -> Result<Json<User>> {
         let user = self
             .svc

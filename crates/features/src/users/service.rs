@@ -14,7 +14,7 @@ use sea_orm::{
 use uuid::Uuid;
 use validator::Validate;
 
-use super::entity::{self, CreateUserDto, Entity as Users, UpdateUserDto, User};
+use super::entity::{self, CreateUser, Entity as Users, UpdateUser, User};
 
 const DEFAULT_ROLE: &str = "user";
 
@@ -26,8 +26,8 @@ pub struct UsersService {
 
 impl CrudService for UsersService {
     type Entity = Users;
-    type Create = CreateUserDto;
-    type Update = UpdateUserDto;
+    type Create = CreateUser;
+    type Update = UpdateUser;
 
     fn soft_delete_column() -> Option<entity::Column> {
         Some(entity::Column::DeletedAt)
@@ -66,7 +66,7 @@ impl UsersService {
         org_id: Uuid,
     ) -> Result<User, ServiceError> {
         let active = prepare_new_user(
-            CreateUserDto {
+            CreateUser {
                 name: name.to_owned(),
                 email: email.to_owned(),
             },
@@ -80,7 +80,7 @@ impl UsersService {
 
     pub async fn create_in_org(
         &self,
-        input: CreateUserDto,
+        input: CreateUser,
         org_id: Uuid,
     ) -> Result<entity::Model, ServiceError> {
         let active = prepare_new_user(input, org_id, None)?;
@@ -105,7 +105,7 @@ impl UsersService {
             return Ok(user);
         }
         let active = prepare_new_user(
-            CreateUserDto {
+            CreateUser {
                 name: name.to_owned(),
                 email: email.to_owned(),
             },
@@ -119,7 +119,7 @@ impl UsersService {
 }
 
 pub(crate) fn prepare_new_user(
-    input: CreateUserDto,
+    input: CreateUser,
     org_id: Uuid,
     password: Option<&str>,
 ) -> Result<entity::ActiveModel, ServiceError> {
@@ -159,7 +159,7 @@ pub(crate) fn verify_credentials(
 }
 
 pub(crate) fn active_for_new_user(
-    input: CreateUserDto,
+    input: CreateUser,
     org_id: Uuid,
     password_hash: Option<String>,
 ) -> entity::ActiveModel {
@@ -270,8 +270,8 @@ mod tests {
         assert!(buckets.is_empty());
     }
 
-    fn input(name: &str, email: &str) -> CreateUserDto {
-        CreateUserDto {
+    fn input(name: &str, email: &str) -> CreateUser {
+        CreateUser {
             name: name.into(),
             email: email.into(),
         }
@@ -474,7 +474,7 @@ mod tests {
         let svc = users_service_disconnected();
         let err = svc
             .create_in_org(
-                CreateUserDto {
+                CreateUser {
                     name: "ada".into(),
                     email: "ada@example.com".into(),
                 },
@@ -490,7 +490,7 @@ mod tests {
         let svc = users_service_disconnected();
         let err = svc
             .create_in_org(
-                CreateUserDto {
+                CreateUser {
                     name: String::new(),
                     email: "ada@example.com".into(),
                 },

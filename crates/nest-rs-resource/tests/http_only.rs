@@ -25,8 +25,8 @@ struct ThingsService;
 
 impl CrudService for ThingsService {
     type Entity = Entity;
-    type Create = CreateThingDto;
-    type Update = UpdateThingDto;
+    type Create = CreateThing;
+    type Update = UpdateThing;
 }
 
 #[test]

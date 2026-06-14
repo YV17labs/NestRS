@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use features::users::{CreateUserDto, UsersService};
+use features::users::{CreateUser, UsersService};
 use nest_rs_seaorm::ServiceError;
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
@@ -15,7 +15,7 @@ fn service() -> UsersService {
 async fn create_rejects_invalid_email() {
     let err = service()
         .create_in_org(
-            CreateUserDto {
+            CreateUser {
                 name: "Alice".into(),
                 email: "no-at-sign".into(),
             },
@@ -30,7 +30,7 @@ async fn create_rejects_invalid_email() {
 async fn create_rejects_empty_name() {
     let err = service()
         .create_in_org(
-            CreateUserDto {
+            CreateUser {
                 name: "".into(),
                 email: "alice@example.com".into(),
             },

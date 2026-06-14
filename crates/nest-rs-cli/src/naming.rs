@@ -2,7 +2,7 @@
 //!
 //! One input name (any case) → every identifier a generator needs: the
 //! kebab/snake/pascal forms, the singular entity name (`users` → `User`),
-//! the DTO names, and the per-transport module names.
+//! the CRUD form names, and the per-transport module names.
 
 /// The transports a feature can expose. Drives adapter folder names,
 /// module struct names, and the access-graph imports a generator wires.
@@ -142,12 +142,19 @@ impl Names {
         to_kebab(&self.singular).replace('-', "_")
     }
 
-    pub fn create_dto(&self) -> String {
-        format!("Create{}Dto", self.singular)
+    /// Create form derived from the entity (`CreatePost`). No transfer suffix:
+    /// a CRUD shape derived from the entity has no single boundary — it is the
+    /// service's `Create` type, the GraphQL `input`, and the REST body at once —
+    /// so it joins the entity exception and stays bare. Hand-written transfer
+    /// objects keep their boundary suffix (`…Dto`/`…Input`/`…Command`).
+    pub fn create_op(&self) -> String {
+        format!("Create{}", self.singular)
     }
 
-    pub fn update_dto(&self) -> String {
-        format!("Update{}Dto", self.singular)
+    /// Update form derived from the entity (`UpdatePost`). Bare, same rationale
+    /// as [`create_op`](Self::create_op).
+    pub fn update_op(&self) -> String {
+        format!("Update{}", self.singular)
     }
 
     /// Default queue payload a `g queue` scaffold emits — an imperative
@@ -199,7 +206,7 @@ fn port_role_file(role: &str, stem: &str, total: usize) -> String {
 }
 
 /// File holding a **REST** data-transfer object (`Dto`): one → `dto.rs`, 2+ →
-/// `dtos/<stem>_dto.rs`. The macro-generated `Create<E>Dto`/`Update<E>Dto`
+/// `dtos/<stem>_dto.rs`. The macro-generated `Create<E>`/`Update<E>`
 /// (shared REST+GraphQL CRUD body) live inside the entity's `#[expose]` block,
 /// so the multi-DTO directory form has no generator caller yet — kept as the
 /// single source of the placement rule rather than re-deriving it.
@@ -351,8 +358,9 @@ mod tests {
     #[test]
     fn dto_and_transport_module_names() {
         let names = Names::parse("posts");
-        assert_eq!(names.create_dto(), "CreatePostDto");
-        assert_eq!(names.update_dto(), "UpdatePostDto");
+        // CRUD forms derived from the entity carry no transfer suffix.
+        assert_eq!(names.create_op(), "CreatePost");
+        assert_eq!(names.update_op(), "UpdatePost");
         // A scaffolded queue payload defaults to an imperative, verb-led Command.
         assert_eq!(names.command(), "ProcessPostCommand");
         assert_eq!(names.processor(), "PostsProcessor");

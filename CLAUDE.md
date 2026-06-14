@@ -547,14 +547,28 @@ Snake_case, no dotted variants.
 | Processor (queue) | `processor.rs` |
 | Scheduled tasks (schedule) | `tasks.rs` |
 | Tool (MCP) | `tool.rs` |
-| Entity (ORM + `#[expose]`) | `entity.rs` |
-| DTO / Input types | `dto.rs` |
+| Entity (ORM + `#[expose]`) | `entity.rs` / `entities/` |
+| DTO (suffix `Dto`; one → `dto.rs`, 2+ → `dtos/<x>_dto.rs` + `mod.rs`) | `dto.rs` / `dtos/` |
 | Domain-specific error (only when framework errors can't carry it) | `error.rs` |
 | GraphQL bridge type alias | `<feature>/graphql/bridge.rs` |
 | Guard / Strategy | `guard.rs` / `strategy.rs` |
 | Guard *alias* binding a strategy (e.g. `type AuthGuard = AuthGuard<S>`) | co-located in the strategy's file, not a separate `guard.rs` |
 | Static constants | `constants.rs` |
 
+- **DTOs carry the `Dto` suffix.** Any object whose sole role is moving
+  data across a boundary — HTTP request/response body, GraphQL input,
+  queue payload — is a DTO and ends in `Dto` (`CreateUserDto`,
+  `LoginDto`, `AccessTokenDto`, `TranscodeDto`). No `…Input`/`…Job`/
+  `…Response` suffixes. The role word is carried by **both** the type and
+  its file, exactly like every other role — **the entity is the only
+  exception** (it stays `Model` in `entity.rs`, and its `#[expose]`d wire
+  struct keeps the bare entity name: the entity *is* the wire contract).
+  Placement mirrors the entity rule: one DTO → `dto.rs`; two or more →
+  a pluralized `dtos/` directory, one `<snake>_dto.rs` per type, flat
+  re-export from `dtos/mod.rs`. The macro-generated `Create<E>Dto` /
+  `Update<E>Dto` (and GraphQL `input Create<E>Dto`) live inside the
+  entity's `#[expose]` block, not a separate file — generated DTOs follow
+  the same suffix as hand-written ones.
 - **`mod.rs` / `lib.rs` carry no business logic** — only `//!` doc,
   `mod`, `pub use`. Exception: proc-macro `#[proc_macro*]` entries
   (Rust forces them at the crate root) must be thin delegations.

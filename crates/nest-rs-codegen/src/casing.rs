@@ -2,7 +2,7 @@
 
 use syn::Ident;
 
-/// `AudioJobs` → `audio_jobs`. Camel/Pascal → snake, inserting `_` before each
+/// `AudioProcessor` → `audio_processor`. Camel/Pascal → snake, inserting `_` before each
 /// interior uppercase. Shared by `#[processor]`/`#[scheduled]`-style macros that
 /// derive a stable wire/queue name from a struct ident.
 pub fn snake_case(camel: &str) -> String {

@@ -121,7 +121,7 @@ impl Names {
     }
 
     pub fn processor(&self) -> String {
-        format!("{}Jobs", self.pascal)
+        format!("{}Processor", self.pascal)
     }
 
     pub fn tasks(&self) -> String {
@@ -142,12 +142,12 @@ impl Names {
         to_kebab(&self.singular).replace('-', "_")
     }
 
-    pub fn create_input(&self) -> String {
-        format!("Create{}Input", self.singular)
+    pub fn create_dto(&self) -> String {
+        format!("Create{}Dto", self.singular)
     }
 
-    pub fn update_input(&self) -> String {
-        format!("Update{}Input", self.singular)
+    pub fn update_dto(&self) -> String {
+        format!("Update{}Dto", self.singular)
     }
 
     /// `Users<Transport>Module`, e.g. `UsersHttpModule`.
@@ -170,6 +170,25 @@ impl Names {
     /// Shorthand for the HTTP adapter module name.
     pub fn http_module(&self) -> String {
         self.module_for(Transport::Http)
+    }
+}
+
+/// File holding a data-transfer object, mirroring the entity rule: a lone DTO
+/// lives in `dto.rs`; two or more split into a `dtos/` directory with one
+/// `<stem>_dto.rs` per type, re-exported flat by `dtos/mod.rs`. `stem` is the
+/// snake_case type name *without* the `Dto` suffix (`LoginDto` → `login`,
+/// `TokenRequestDto` → `token_request`).
+///
+/// This is the convention authority a multi-DTO scaffolder will call to place
+/// generated files; today's generators emit DTOs inside the entity's
+/// `#[expose]` block, so it has no caller yet — keep it as the single source
+/// of the placement rule rather than re-deriving it at each future call site.
+#[allow(dead_code)]
+pub fn dto_file(stem: &str, total: usize) -> String {
+    if total <= 1 {
+        "dto.rs".to_string()
+    } else {
+        format!("dtos/{stem}_dto.rs")
     }
 }
 
@@ -287,11 +306,23 @@ mod tests {
     #[test]
     fn dto_and_transport_module_names() {
         let names = Names::parse("posts");
-        assert_eq!(names.create_input(), "CreatePostInput");
-        assert_eq!(names.update_input(), "UpdatePostInput");
+        assert_eq!(names.create_dto(), "CreatePostDto");
+        assert_eq!(names.update_dto(), "UpdatePostDto");
+        assert_eq!(names.processor(), "PostsProcessor");
         assert_eq!(names.module_for(Transport::Http), "PostsHttpModule");
         assert_eq!(names.module_for(Transport::Graphql), "PostsGraphqlModule");
         assert_eq!(names.handler_for(Transport::Ws), "PostsGateway");
         assert_eq!(names.http_module(), "PostsHttpModule");
+    }
+
+    #[test]
+    fn dto_file_layout_mirrors_the_entity_rule() {
+        // A lone DTO lives directly in `dto.rs` — no directory.
+        assert_eq!(dto_file("transcode", 1), "dto.rs");
+        // Two or more split into a pluralized `dtos/` directory, one
+        // `<stem>_dto.rs` per type, re-exported flat by `dtos/mod.rs` —
+        // covering both a simple and a multi-word stem.
+        assert_eq!(dto_file("login", 2), "dtos/login_dto.rs");
+        assert_eq!(dto_file("token_request", 2), "dtos/token_request_dto.rs");
     }
 }

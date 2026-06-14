@@ -17,7 +17,7 @@ than that is bolted on top.
 
 ```rust
 #[process(queue = "audio", concurrency = 5, retries = 3)]
-async fn transcode(&self, job: TranscodeJob) -> Result<()> {
+async fn transcode(&self, job: TranscodeDto) -> Result<()> {
     self.svc.transcode(&job.file).await
 }
 ```
@@ -102,7 +102,7 @@ non-Redis backend would expose.
 
 ```rust
 #[process(queue = "audio", retries = 3)]
-async fn transcode(&self, job: TranscodeJob) -> Result<()> {
+async fn transcode(&self, job: TranscodeDto) -> Result<()> {
     match self.svc.transcode(&job.file).await {
         Ok(()) => Ok(()),
         Err(e) => {

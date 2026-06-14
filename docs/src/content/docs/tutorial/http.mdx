@@ -30,7 +30,7 @@ the active-model semantics.
 use nest_rs_core::injectable;
 use nest_rs_seaorm::CrudService;
 
-use super::entity::{CreatePostInput, Entity as Posts, UpdatePostInput};
+use super::entity::{CreatePostDto, Entity as Posts, UpdatePostDto};
 
 #[injectable]
 #[derive(Default)]
@@ -38,8 +38,8 @@ pub struct PostsService;
 
 impl CrudService for PostsService {
     type Entity = Posts;
-    type Create = CreatePostInput;
-    type Update = UpdatePostInput;
+    type Create = CreatePostDto;
+    type Update = UpdatePostDto;
 }
 ```
 
@@ -78,7 +78,7 @@ use std::sync::Arc;
 
 use nest_rs_http::{controller, crud};
 
-use crate::posts::{CreatePostInput, Entity as PostEntity, Post, PostsService, UpdatePostInput};
+use crate::posts::{CreatePostDto, Entity as PostEntity, Post, PostsService, UpdatePostDto};
 
 #[controller(path = "/posts")]
 pub struct PostsController {
@@ -90,8 +90,8 @@ pub struct PostsController {
     service = svc,
     entity = PostEntity,
     output = Post,
-    create = CreatePostInput,
-    update = UpdatePostInput,
+    create = CreatePostDto,
+    update = UpdatePostDto,
 )]
 impl PostsController {}
 ```

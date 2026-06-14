@@ -42,18 +42,18 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_queue::processor;
 
-use crate::audio::{AudioService, TranscodeJob};
+use crate::audio::{AudioService, TranscodeDto};
 
 #[injectable]
-pub struct AudioJobs {
+pub struct AudioProcessor {
     #[inject]
     svc: Arc<AudioService>,
 }
 
 #[processor]
-impl AudioJobs {
+impl AudioProcessor {
     #[process(queue = "audio", concurrency = 5, retries = 3)]
-    async fn transcode(&self, job: TranscodeJob) -> Result<()> {
+    async fn transcode(&self, job: TranscodeDto) -> Result<()> {
         self.svc.transcode(&job.file).await
     }
 }
@@ -65,7 +65,7 @@ same `AudioService` is what an HTTP producer calls to enqueue, so a
 single audited choke point describes everything the feature can do.
 Adapters carry transport mechanics; the service carries intent.
 
-- **`#[injectable]`** makes `AudioJobs` a regular DI provider.
+- **`#[injectable]`** makes `AudioProcessor` a regular DI provider.
 - **`#[processor]`** on the impl block orchestrates the per-method
   `#[process]` attributes and submits one queue consumer per decorated
   method.
@@ -82,15 +82,15 @@ different concurrencies, same service:
 
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[injectable]
-pub struct AudioJobs {
+pub struct AudioProcessor {
     #[inject] svc_audio: Arc<AudioService>,
     #[inject] svc_media: Arc<MediaService>,
 }
 
 #[processor]
-impl AudioJobs {
+impl AudioProcessor {
     #[process(queue = "audio", concurrency = 5, retries = 3)]
-    async fn transcode(&self, job: TranscodeJob) -> Result<()> {
+    async fn transcode(&self, job: TranscodeDto) -> Result<()> {
         self.svc_audio.transcode(&job.file).await
     }
 
@@ -109,8 +109,8 @@ impl AudioJobs {
 `#[process(queue = "audio.cleanup")]` omits the optional `concurrency`
 (default `1`) and `retries` (default `0`).
 
-Three inventory entries — `AudioJobs::transcode`, `AudioJobs::preview`,
-`AudioJobs::cleanup` — all pointing at the same `AudioJobs` instance.
+Three inventory entries — `AudioProcessor::transcode`, `AudioProcessor::preview`,
+`AudioProcessor::cleanup` — all pointing at the same `AudioProcessor` instance.
 Same `Arc<AudioService>`, same `Arc<MediaService>`, three queues. Each
 method still delegates: the processor is a router, never a place where
 business logic accumulates.
@@ -175,7 +175,7 @@ $ nestrs run dev worker
 
 ```text frame="terminal"
 2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
-2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
+2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
 2026-06-03T10:18:46Z  INFO features::audio: transcoded file=track-1717405126521.mp3
 2026-06-03T10:18:46Z  INFO nest_rs::queue: job ok queue=audio elapsed=342ms
 ```

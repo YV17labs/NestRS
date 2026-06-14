@@ -90,7 +90,7 @@ pub struct Claims {
 The handler reads them back through `Ctx<Claims>`:
 
 ```rust
-async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUserInput>>)
+async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUserDto>>)
     -> Result<Json<User>>
 {
     Ok(Json(

@@ -8,7 +8,7 @@ use nest_rs_seaorm::graphql::bind;
 use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUserInput, Entity as UserEntity, UpdateUserInput, User, UsersService};
+use crate::users::{CreateUserDto, Entity as UserEntity, UpdateUserDto, User, UsersService};
 
 #[resolver]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -21,13 +21,13 @@ pub struct UsersResolver {
     service = svc,
     entity = UserEntity,
     output = User,
-    create = CreateUserInput,
-    update = UpdateUserInput,
+    create = CreateUserDto,
+    update = UpdateUserDto,
 )]
 impl UsersResolver {
     #[mutation]
     #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {
+    async fn create_user(&self, ctx: &Context<'_>, input: CreateUserDto) -> Result<User> {
         let actor = ctx.data::<Claims>()?;
         let user = self.svc.create_in_org(input, actor.org_id).await?;
         Ok(User::from(&user))

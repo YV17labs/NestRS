@@ -83,7 +83,7 @@ use serde::Deserialize;
 use validator::Validate;
 
 #[derive(Deserialize, Validate)]
-pub struct CreateUserInput {
+pub struct CreateUserDto {
     #[validate(email)]
     email: String,
     #[validate(length(min = 8))]
@@ -91,7 +91,7 @@ pub struct CreateUserInput {
 }
 
 #[post("/")]
-async fn create(&self, Valid(Json(input)): Valid<Json<CreateUserInput>>)
+async fn create(&self, Valid(Json(input)): Valid<Json<CreateUserDto>>)
     -> Result<Json<User>>
 {
     Ok(Json(self.svc.create(input).await?))

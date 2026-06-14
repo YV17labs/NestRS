@@ -130,7 +130,7 @@ use async_graphql::{InputObject, SimpleObject};
 use nest_rs_graphql::{mutation, resolver};
 
 #[derive(InputObject)]
-pub struct CreateProductInput {
+pub struct CreateProductDto {
     name: String,
     price_cents: i32,
 }
@@ -149,7 +149,7 @@ pub struct ProductsResolver;
 impl ProductsResolver {
     #[mutation]
     #[public]
-    async fn create_product(&self, input: CreateProductInput) -> Product {
+    async fn create_product(&self, input: CreateProductDto) -> Product {
         Product {
             id: "p-001".into(),
             name: input.name,
@@ -248,7 +248,7 @@ impl ProductsResolver {
 
     #[mutation]
     #[authorize(Create, ProductEntity)]
-    async fn create_product(&self, input: CreateProductInput) -> Result<Product> {
+    async fn create_product(&self, input: CreateProductDto) -> Result<Product> {
         Ok(self.svc.create(input).await?)
     }
 }

@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Pushing a job is a one-line call — `queue.of::<TranscodeJob>("audio").push(job).await?` — but
+Pushing a job is a one-line call — `queue.of::<TranscodeDto>("audio").push(job).await?` — but
 *where* that line lives decides whether the feature stays auditable. The
 rule is the same one that holds `Repo` calls behind a service:
 controllers, resolvers, and gateways ask the service to enqueue. The
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 pub const AUDIO_QUEUE: &str = "audio";
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
-pub struct TranscodeJob {
+pub struct TranscodeDto {
     pub file: String,
 }
 ```
@@ -53,7 +53,7 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_redis::QueueConnection;
 
-use super::dto::{AUDIO_QUEUE, TranscodeJob};
+use super::dto::{AUDIO_QUEUE, TranscodeDto};
 
 #[injectable]
 pub struct AudioService {
@@ -64,8 +64,8 @@ pub struct AudioService {
 impl AudioService {
     pub async fn enqueue_transcode(&self, file: String) -> Result<()> {
         self.queue
-            .of::<TranscodeJob>(AUDIO_QUEUE)
-            .push(TranscodeJob { file: file.clone() })
+            .of::<TranscodeDto>(AUDIO_QUEUE)
+            .push(TranscodeDto { file: file.clone() })
             .await?;
         tracing::info!(target: "features::audio", %file, "enqueued transcode job");
         Ok(())
@@ -105,7 +105,7 @@ use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};
 
-use crate::audio::{AudioService, TranscodeJob};
+use crate::audio::{AudioService, TranscodeDto};
 
 #[controller(path = "/audio")]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -117,7 +117,7 @@ pub struct AudioController {
 #[routes]
 impl AudioController {
     #[post("/transcode")]
-    async fn transcode(&self, body: Json<TranscodeJob>) -> Result<Json<TranscodeJob>> {
+    async fn transcode(&self, body: Json<TranscodeDto>) -> Result<Json<TranscodeDto>> {
         let job = body.0;
         self.svc
             .enqueue_transcode(job.file.clone())

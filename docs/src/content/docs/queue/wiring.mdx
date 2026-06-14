@@ -64,7 +64,7 @@ At boot:
 2. `QueueModule::for_root(None)` registers a factory that calls
    `QueueConnection::connect(url)`.
 3. `QueueWorkerModule` contributes the `QueueWorker` transport.
-4. `AudioQueueModule` brings `AudioJobs` (the `#[processor]` host) and
+4. `AudioQueueModule` brings `AudioProcessor` (the `#[processor]` host) and
    its `#[process]` methods into the reachable set.
 5. `QueueWorker::configure` drains `inventory::iter::<ProcessMethod>()`,
    keeps only the methods whose provider is reachable, and logs each
@@ -119,7 +119,7 @@ The same property cuts the other way: the API binary's
 `AudioQueueModule` is **not imported**, so its `#[process]` methods
 sit in the binary as dead code. No worker is spawned for `audio` in
 the API. Even if you accidentally imported `QueueWorkerModule` in the
-API, omitting `AudioQueueModule` would keep `AudioJobs::transcode`
+API, omitting `AudioQueueModule` would keep `AudioProcessor::transcode`
 out of the reachable set — `QueueWorker::serve` would idle until
 shutdown.
 
@@ -136,8 +136,8 @@ injects something its module doesn't own or import transitively.
 ```text frame="terminal"
 $ nestrs run dev worker
 2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
-2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
-2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::preview queue=audio.preview concurrency=10 retries=1
+2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
+2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::preview queue=audio.preview concurrency=10 retries=1
 ```
 
 One `attached` line per transport, one `registered` line per

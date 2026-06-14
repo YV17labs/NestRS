@@ -1,7 +1,7 @@
 use nest_rs_core::module;
 
-use super::processor::AudioJobs;
+use super::processor::AudioProcessor;
 use crate::audio::AudioModule;
 
-#[module(imports = [AudioModule], providers = [AudioJobs])]
+#[module(imports = [AudioModule], providers = [AudioProcessor])]
 pub struct AudioQueueModule;

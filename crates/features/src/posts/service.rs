@@ -4,7 +4,7 @@ use sea_orm::ActiveModelTrait;
 use sea_orm::Set;
 use uuid::Uuid;
 
-use super::entity::{CreatePostInput, Entity as Posts, Post, UpdatePostInput};
+use super::entity::{CreatePostDto, Entity as Posts, Post, UpdatePostDto};
 
 #[injectable]
 #[derive(Default)]
@@ -12,8 +12,8 @@ pub struct PostsService;
 
 impl CrudService for PostsService {
     type Entity = Posts;
-    type Create = CreatePostInput;
-    type Update = UpdatePostInput;
+    type Create = CreatePostDto;
+    type Update = UpdatePostDto;
 
     fn soft_delete_column() -> Option<super::entity::Column> {
         Some(super::entity::Column::DeletedAt)
@@ -23,7 +23,7 @@ impl CrudService for PostsService {
 impl PostsService {
     pub async fn create_in_org(
         &self,
-        input: CreatePostInput,
+        input: CreatePostDto,
         org_id: Uuid,
         author_id: Uuid,
     ) -> Result<Post, ServiceError> {

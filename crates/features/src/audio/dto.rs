@@ -4,6 +4,6 @@ use serde::{Deserialize, Serialize};
 pub const AUDIO_QUEUE: &str = "audio";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TranscodeJob {
+pub struct TranscodeDto {
     pub file: String,
 }

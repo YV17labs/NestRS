@@ -40,7 +40,7 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
         _ => quote! {},
     };
 
-    let create = &model.create_input_ident;
+    let create = &model.create_dto_ident;
     quote! {
         impl ::nest_rs_seaorm::CreateModel<Entity> for #create {
             fn into_active_model(self) -> ActiveModel {
@@ -67,7 +67,7 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
         return quote! {};
     }
 
-    let update = &model.update_input_ident;
+    let update = &model.update_dto_ident;
     quote! {
         impl ::nest_rs_seaorm::UpdateModel<Entity> for #update {
             fn apply_to(self, mut __am: ActiveModel) -> ActiveModel {

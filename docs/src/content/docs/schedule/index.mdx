@@ -65,7 +65,7 @@ impl AudioTasks {
   never stops the job.
 - **The cron method is thin.** Its only job is to decide *when* and
   *what payload* (here a synthetic file id). The enqueue plumbing —
-  the `QueueConnection`, the queue name, the `TranscodeJob` shape —
+  the `QueueConnection`, the queue name, the `TranscodeDto` shape —
   lives inside `AudioService::enqueue_transcode`. The same service
   call is used by the HTTP producer and by this scheduler, so there is
   exactly one place where the "enqueue an audio job" decision lives.

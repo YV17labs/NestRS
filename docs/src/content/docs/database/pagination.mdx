@@ -26,8 +26,8 @@ A `#[crud]` list — REST or GraphQL — is keyset-paginated out of the box:
     service = svc,
     entity = ItemEntity,
     output = Item,
-    create = CreateItemInput,
-    update = UpdateItemInput,
+    create = CreateItemDto,
+    update = UpdateItemDto,
 )]
 impl ItemsController {}
 ```

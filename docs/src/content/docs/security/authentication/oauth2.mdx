@@ -57,7 +57,7 @@ impl OAuthController {
     #[get("/callback")]
     #[public]
     #[use_guards(OAuthGuard)]
-    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessToken>> {
+    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
         Ok(Json(self.issuer.issue(
             Some(caller.user_id),
             caller.org_id,

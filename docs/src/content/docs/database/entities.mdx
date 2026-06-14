@@ -138,8 +138,8 @@ transport.
 | Field attribute | On the wire | In inputs |
 |---|---|---|
 | `#[expose]` | yes (read-only) | no |
-| `#[expose(input(create))]` | yes | `CreateInput` only |
-| `#[expose(input(update))]` | yes | `UpdateInput` only |
+| `#[expose(input(create))]` | yes | `CreateDto` only |
+| `#[expose(input(update))]` | yes | `UpdateDto` only |
 | `#[expose(input(create, update))]` | yes | both |
 | *(no `#[expose]`)* | **hidden** | no |
 
@@ -180,7 +180,7 @@ pub email: String,
 ```
 
 The input structs derive `Validate`. Validation runs at the HTTP edge
-when the handler binds the body through `Valid<Json<CreateInput>>` —
+when the handler binds the body through `Valid<Json<CreateDto>>` —
 the service never sees an invalid input. The full rule set
 (`length`, `email`, `range`, `url`, custom validators, …) is the
 `validator` crate's; see its docs for the catalogue.

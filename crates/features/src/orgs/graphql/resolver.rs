@@ -4,7 +4,7 @@ use nest_rs_graphql::{crud, resolver};
 
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::orgs::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
+use crate::orgs::{CreateOrgDto, Entity as OrgEntity, Org, OrgsService, UpdateOrgDto};
 
 #[resolver]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -17,7 +17,7 @@ pub struct OrgsResolver {
     service = svc,
     entity = OrgEntity,
     output = Org,
-    create = CreateOrgInput,
-    update = UpdateOrgInput,
+    create = CreateOrgDto,
+    update = UpdateOrgDto,
 )]
 impl OrgsResolver {}

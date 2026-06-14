@@ -76,7 +76,7 @@ for these — the framework owns them once, every feature reuses them.
 use nest_rs_seaorm::ServiceError;
 
 impl UsersService {
-    pub async fn create(&self, input: CreateUserInput) -> Result<User, ServiceError> {
+    pub async fn create(&self, input: CreateUserDto) -> Result<User, ServiceError> {
         input.validate()?;                              // → ServiceError::Validation
         let row = active_for_new_user(input).insert(&Repo::<Users>::conn()?).await?;  // → ServiceError::Db
         Ok(User::from(&row))
@@ -84,7 +84,7 @@ impl UsersService {
 }
 
 #[post("/")]
-async fn create(&self, Valid(Json(input)): Valid<Json<CreateUserInput>>)
+async fn create(&self, Valid(Json(input)): Valid<Json<CreateUserDto>>)
     -> Result<Json<User>, ServiceError>
 {
     Ok(Json(self.svc.create(input).await?))

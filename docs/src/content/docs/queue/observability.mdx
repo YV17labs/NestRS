@@ -34,7 +34,7 @@ processor can group, count, or alert without parsing strings:
 
 | Field | Type | Notes |
 |---|---|---|
-| `processor` | `&'static str` | The processor host name, e.g. `AudioJobs::transcode`. |
+| `processor` | `&'static str` | The processor host name, e.g. `AudioProcessor::transcode`. |
 | `queue` | `&'static str` | The Redis queue name. |
 | `concurrency` | `usize` | Fetch buffer (the in-flight ceiling), present on boot lines. |
 | `retries` | `usize` | The configured budget, present on boot lines. |
@@ -50,7 +50,7 @@ attributes.
 
 ```text frame="terminal"
 2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
-2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioJobs::transcode queue=audio concurrency=5 retries=3
+2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
 2026-06-03T10:18:41Z DEBUG nest_rs::queue: skipped #[process] method: provider unreachable from app's module tree processor=ReportJobs::weekly queue=reports
 ```
 
@@ -72,25 +72,25 @@ explains why.
 A successful job, one info line at start, one at end:
 
 ```text frame="terminal"
-2026-06-03T10:18:46Z  INFO nest_rs::queue: job started processor=AudioJobs::transcode queue=audio job_id=01HFEX… attempt=1
+2026-06-03T10:18:46Z  INFO nest_rs::queue: job started processor=AudioProcessor::transcode queue=audio job_id=01HFEX… attempt=1
 2026-06-03T10:18:46Z  INFO features::audio: transcoded file=track-1717405126521.mp3
-2026-06-03T10:18:46Z  INFO nest_rs::queue: job ok processor=AudioJobs::transcode queue=audio job_id=01HFEX… attempt=1 elapsed_ms=342
+2026-06-03T10:18:46Z  INFO nest_rs::queue: job ok processor=AudioProcessor::transcode queue=audio job_id=01HFEX… attempt=1 elapsed_ms=342
 ```
 
 A retried job:
 
 ```text frame="terminal"
-2026-06-03T10:19:02Z  INFO nest_rs::queue: job started processor=AudioJobs::transcode queue=audio job_id=01HFFA… attempt=1
-2026-06-03T10:19:02Z  WARN nest_rs::queue: job failed; retrying processor=AudioJobs::transcode queue=audio job_id=01HFFA… attempt=1 elapsed_ms=12 error="connection refused"
-2026-06-03T10:19:02Z  INFO nest_rs::queue: job started processor=AudioJobs::transcode queue=audio job_id=01HFFA… attempt=2
-2026-06-03T10:19:02Z  INFO nest_rs::queue: job ok processor=AudioJobs::transcode queue=audio job_id=01HFFA… attempt=2 elapsed_ms=298
+2026-06-03T10:19:02Z  INFO nest_rs::queue: job started processor=AudioProcessor::transcode queue=audio job_id=01HFFA… attempt=1
+2026-06-03T10:19:02Z  WARN nest_rs::queue: job failed; retrying processor=AudioProcessor::transcode queue=audio job_id=01HFFA… attempt=1 elapsed_ms=12 error="connection refused"
+2026-06-03T10:19:02Z  INFO nest_rs::queue: job started processor=AudioProcessor::transcode queue=audio job_id=01HFFA… attempt=2
+2026-06-03T10:19:02Z  INFO nest_rs::queue: job ok processor=AudioProcessor::transcode queue=audio job_id=01HFFA… attempt=2 elapsed_ms=298
 ```
 
 A job that exhausts its budget:
 
 ```text frame="terminal"
-2026-06-03T10:19:30Z  WARN nest_rs::queue: job failed; retrying processor=AudioJobs::transcode queue=audio job_id=01HFFB… attempt=3 error="…"
-2026-06-03T10:19:30Z ERROR nest_rs::queue: job failed; budget exhausted processor=AudioJobs::transcode queue=audio job_id=01HFFB… attempts=4 error="…"
+2026-06-03T10:19:30Z  WARN nest_rs::queue: job failed; retrying processor=AudioProcessor::transcode queue=audio job_id=01HFFB… attempt=3 error="…"
+2026-06-03T10:19:30Z ERROR nest_rs::queue: job failed; budget exhausted processor=AudioProcessor::transcode queue=audio job_id=01HFFB… attempts=4 error="…"
 ```
 
 The `error` line is the one to alert on — the budget is gone, the job

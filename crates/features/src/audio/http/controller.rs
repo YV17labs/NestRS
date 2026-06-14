@@ -5,7 +5,7 @@ use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};
 
-use crate::audio::{AudioService, TranscodeJob};
+use crate::audio::{AudioService, TranscodeDto};
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
 
@@ -21,12 +21,12 @@ impl AudioController {
     #[post("/transcode")]
     #[api(
         summary = "Enqueue a transcode job for the worker to process",
-        description = "Pushes a TranscodeJob onto the shared `audio` queue; the separate \
+        description = "Pushes a TranscodeDto onto the shared `audio` queue; the separate \
                        worker deployable consumes it over Redis (two apps exchanging, \
                        no RPC). Requires a bearer JWT.",
         tags("Audio")
     )]
-    async fn transcode(&self, body: Json<TranscodeJob>) -> Result<Json<TranscodeJob>> {
+    async fn transcode(&self, body: Json<TranscodeDto>) -> Result<Json<TranscodeDto>> {
         let job = body.0;
         self.svc
             .enqueue_transcode(job.file.clone())

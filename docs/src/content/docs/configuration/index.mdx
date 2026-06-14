@@ -281,7 +281,7 @@ pub struct OAuthFlow {
 }
 
 impl OAuthFlow {
-    pub fn issue(&self, client_id: &str) -> Result<AccessToken, AuthError> {
+    pub fn issue(&self, client_id: &str) -> Result<AccessTokenDto, AuthError> {
         let client = self.config.clients
             .iter()
             .find(|c| c.client_id == client_id)

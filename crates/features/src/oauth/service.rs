@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use nest_rs_authn::{AuthError, Authorization, JwtService, OAuth2Client, TokenError};
 use nest_rs_core::injectable;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use super::config::IssuerConfig;
+use super::dtos::AccessTokenDto;
 use super::scope::{role_from_db, roles_for_scope};
 use crate::users::UsersService;
 use crate::{Claims, Role};
@@ -71,13 +71,6 @@ impl OAuthProfile {
     }
 }
 
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct AccessToken {
-    pub access_token: String,
-    pub token_type: String,
-    pub expires_in: u64,
-}
-
 #[injectable]
 pub struct OAuthService {
     #[inject]
@@ -110,7 +103,7 @@ impl OAuthService {
         sub: Option<Uuid>,
         org_id: Uuid,
         roles: Vec<Role>,
-    ) -> Result<AccessToken, TokenError> {
+    ) -> Result<AccessTokenDto, TokenError> {
         issue_with_jwt(&self.jwt_svc, sub, org_id, roles)
     }
 
@@ -118,7 +111,7 @@ impl OAuthService {
         &self,
         email: &str,
         password: &str,
-    ) -> Result<AccessToken, TokenError> {
+    ) -> Result<AccessTokenDto, TokenError> {
         let user = self
             .users_svc
             .authenticate(email, password)
@@ -133,7 +126,7 @@ impl OAuthService {
         grant_type: &str,
         scope: Option<&str>,
         client: &AuthenticatedClient,
-    ) -> Result<AccessToken, TokenError> {
+    ) -> Result<AccessTokenDto, TokenError> {
         grant_client_credentials_with_jwt(&self.jwt_svc, grant_type, scope, client)
     }
 
@@ -182,7 +175,7 @@ pub(crate) fn issue_with_jwt(
     sub: Option<Uuid>,
     org_id: Uuid,
     roles: Vec<Role>,
-) -> Result<AccessToken, TokenError> {
+) -> Result<AccessTokenDto, TokenError> {
     let claims = Claims {
         sub,
         org_id,
@@ -199,7 +192,7 @@ pub(crate) fn issue_with_jwt(
         roles = ?claims.roles,
         "issued access token"
     );
-    Ok(AccessToken {
+    Ok(AccessTokenDto {
         access_token,
         token_type: "Bearer".into(),
         expires_in: jwt_svc.ttl_secs(),
@@ -211,7 +204,7 @@ pub(crate) fn grant_client_credentials_with_jwt(
     grant_type: &str,
     scope: Option<&str>,
     client: &AuthenticatedClient,
-) -> Result<AccessToken, TokenError> {
+) -> Result<AccessTokenDto, TokenError> {
     if grant_type != "client_credentials" {
         tracing::warn!(target: "features::oauth", grant_type, "unsupported grant type");
         return Err(TokenError::UnsupportedGrant);

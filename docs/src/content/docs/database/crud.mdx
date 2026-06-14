@@ -24,7 +24,7 @@ use nest_rs_http::{controller, crud};
 
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::orgs::{CreateOrgInput, Entity as OrgEntity, Org, OrgsService, UpdateOrgInput};
+use crate::orgs::{CreateOrgDto, Entity as OrgEntity, Org, OrgsService, UpdateOrgDto};
 
 #[controller(path = "/orgs")]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -37,8 +37,8 @@ pub struct OrgsController {
     service = svc,
     entity = OrgEntity,
     output = Org,
-    create = CreateOrgInput,
-    update = UpdateOrgInput,
+    create = CreateOrgDto,
+    update = UpdateOrgDto,
 )]
 impl OrgsController {}
 ```
@@ -50,8 +50,8 @@ mounts:
 |----------|-------------|--------------------|-----------------------|------------------------|
 | `GET`    | `/orgs`     | `Read` on `Org`    | —                     | `Vec<Org>` + cursor    |
 | `GET`    | `/orgs/:id` | `Read` on `Org`    | —                     | `Org` (404/403)        |
-| `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrgInput`      | `Org`                  |
-| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrgInput`      | `Org` (404/403)        |
+| `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrgDto`      | `Org`                  |
+| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrgDto`      | `Org` (404/403)        |
 | `DELETE` | `/orgs/:id` | `Delete` on `Org`  | —                     | `204` (404/403)        |
 
 Every handler delegates to the same `OrgsService` instance, which goes through
@@ -65,8 +65,8 @@ the request's transaction, and `Ability` filters every row.
     service = svc,        // the field on the struct holding Arc<…Service>
     entity = OrgEntity,   // the SeaORM entity (used in authz Authorize<Action, Entity>)
     output = Org,         // the #[expose]-generated wire type returned by handlers
-    create = CreateOrgInput,
-    update = UpdateOrgInput,
+    create = CreateOrgDto,
+    update = UpdateOrgDto,
     paginate = cursor,    // optional — cursor is already the default; `none` opts out
     readonly,             // optional — only list + get, no mutations
 )]
@@ -103,8 +103,8 @@ pub struct UsersController {
     service = svc,
     entity = UserEntity,
     output = User,
-    create = CreateUserInput,
-    update = UpdateUserInput,
+    create = CreateUserDto,
+    update = UpdateUserDto,
 )]
 impl UsersController {
     #[post("/")]
@@ -113,7 +113,7 @@ impl UsersController {
         &self,
         _authz: Authorize<Create, UserEntity>,
         auth: Ctx<Claims>,
-        body: Valid<Json<CreateUserInput>>,
+        body: Valid<Json<CreateUserDto>>,
     ) -> Result<Json<User>> {
         Ok(Json(
             self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
@@ -149,13 +149,13 @@ pub struct UsersResolver {
     service = svc,
     entity = UserEntity,
     output = User,
-    create = CreateUserInput,
-    update = UpdateUserInput,
+    create = CreateUserDto,
+    update = UpdateUserDto,
 )]
 impl UsersResolver {
     #[mutation]
     #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUserInput) -> Result<User> {
+    async fn create_user(&self, ctx: &Context<'_>, input: CreateUserDto) -> Result<User> {
         let actor = ctx.data::<Claims>()?;
         let user = self.svc.create_in_org(input, actor.org_id).await?;
         Ok(User::from(&user))
@@ -264,8 +264,8 @@ service without specialization):
 ```rust title="src/items/service.rs"
 impl CrudService for ItemsService {
     type Entity = Items;
-    type Create = CreateItemInput;
-    type Update = UpdateItemInput;
+    type Create = CreateItemDto;
+    type Update = UpdateItemDto;
 
     fn soft_delete_column() -> Option<entity::Column> {
         Some(entity::Column::DeletedAt)

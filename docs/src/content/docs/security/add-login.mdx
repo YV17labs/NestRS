@@ -28,7 +28,7 @@ and signing (`JwtService`) are already in the box:
 #[post("/login")]
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]
-async fn login(&self, body: Valid<Json<LoginInput>>) -> Result<Json<AccessToken>> {
+async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<AccessTokenDto>> {
     let input = body.into_inner();
     Ok(Json(
         self.svc.grant_password(&input.email, &input.password).await?,

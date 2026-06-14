@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::oauth::{
-    AccessToken, AuthenticatedClient, Caller, ClientAuthGuard, LoginInput, OAuthGuard,
-    OAuthService, TokenRequest,
+    AccessTokenDto, AuthenticatedClient, Caller, ClientAuthGuard, LoginDto, OAuthGuard,
+    OAuthService, TokenRequestDto,
 };
 use nest_rs_authn::OAuth2Client;
 use nest_rs_http::{Ctx, Valid, controller, routes};
@@ -28,9 +28,9 @@ impl OAuthController {
     async fn token(
         &self,
         client: Ctx<AuthenticatedClient>,
-        body: Form<TokenRequest>,
-    ) -> Result<Json<AccessToken>> {
-        let TokenRequest { grant_type, scope } = body.0;
+        body: Form<TokenRequestDto>,
+    ) -> Result<Json<AccessTokenDto>> {
+        let TokenRequestDto { grant_type, scope } = body.0;
         Ok(Json(self.svc.grant_client_credentials(
             &grant_type,
             scope.as_deref(),
@@ -71,7 +71,7 @@ impl OAuthController {
         summary = "OAuth2 redirect URI — issues this app's token",
         tags("OAuth2")
     )]
-    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessToken>> {
+    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
         Ok(Json(self.svc.issue(
             Some(caller.user_id),
             caller.org_id,
@@ -84,7 +84,7 @@ impl OAuthController {
     #[use_guards(ThrottlerGuard)]
     #[meta(Throttle::per_minute(10))]
     #[api(summary = "Sign in with email and password", tags("Auth"))]
-    async fn login(&self, body: Valid<Json<LoginInput>>) -> Result<Json<AccessToken>> {
+    async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<AccessTokenDto>> {
         let input = body.into_inner();
         Ok(Json(
             self.svc

@@ -34,8 +34,8 @@ impl Renderer {
         put("tool", names.tool());
         put("entity", names.entity());
         put("table", names.table());
-        put("create_input", names.create_input());
-        put("update_input", names.update_input());
+        put("create_dto", names.create_dto());
+        put("update_dto", names.update_dto());
         put("http_module", names.module_for(Transport::Http));
         put("graphql_module", names.module_for(Transport::Graphql));
         put("ws_module", names.module_for(Transport::Ws));

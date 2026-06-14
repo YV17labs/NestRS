@@ -56,7 +56,7 @@ impl ActiveModelBehavior for ActiveModel {}
 ```
 
 From this one declaration, `#[expose]` generates the wire DTO returned by
-handlers (`Item`), the `CreateItemInput` and `UpdateItemInput` filtered by
+handlers (`Item`), the `CreateItemDto` and `UpdateItemDto` filtered by
 `input(create)` / `input(update)`, the GraphQL `SimpleObject`, the OpenAPI
 schema, the PK dataloader (`ItemsServiceById`) for relations, and the
 `From<&Model>` / `IntoActiveModel` plumbing every handler needs.
@@ -117,7 +117,7 @@ use nest_rs_core::injectable;
 use nest_rs_seaorm::{CrudService, Repo};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
 
-use super::entity::{self, CreateItemInput, Entity as Items, Item, UpdateItemInput};
+use super::entity::{self, CreateItemDto, Entity as Items, Item, UpdateItemDto};
 use super::error::ItemError;
 
 #[injectable]
@@ -125,8 +125,8 @@ pub struct ItemsService;
 
 impl CrudService for ItemsService {
     type Entity = Items;
-    type Create = CreateItemInput;
-    type Update = UpdateItemInput;
+    type Create = CreateItemDto;
+    type Update = UpdateItemDto;
 }
 
 impl ItemsService {

@@ -9,7 +9,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 You already wrote the validation rules on the entity — page 2. The
 `#[crud]` macro's generated `POST /posts` handler takes
-`Valid<Json<CreatePostInput>>`, so every request body is checked against
+`Valid<Json<CreatePostDto>>`, so every request body is checked against
 those rules before `PostsService::create` runs. By the end of this page,
 `curl` returns a structured `400` for an empty title and the service
 never sees the bad input.
@@ -24,7 +24,7 @@ body in `Valid<...>`:
 ```rust title="(expanded by #[crud] — you don't write this)"
 async fn create(
     &self,
-    __body: ::nest_rs_http::Valid<::poem::web::Json<CreatePostInput>>,
+    __body: ::nest_rs_http::Valid<::poem::web::Json<CreatePostDto>>,
 ) -> ::poem::Result<::poem::web::Json<Post>> {
     // delegates to CrudService::create
 }
@@ -32,7 +32,7 @@ async fn create(
 
 When you later override `create` on a richer feature — org id from a JWT,
 an explicit authz check — you keep the same extractor:
-`Valid<Json<CreatePostInput>>`. The
+`Valid<Json<CreatePostDto>>`. The
 [`users` controller in `api`](/tutorial/security/) is the
 reference override.
 
@@ -55,7 +55,7 @@ pub body: String,
 ```
 
 `#[expose]` carries the `validate(...)` attribute through to
-`CreatePostInput` and `UpdatePostInput`. No second declaration on the
+`CreatePostDto` and `UpdatePostDto`. No second declaration on the
 DTO; the entity is the single source.
 
 ## The bad-body response
@@ -120,7 +120,7 @@ When `validator`'s built-in rules aren't enough, point at a function:
 
 ```rust
 #[derive(Deserialize, Validate)]
-pub struct CreatePostInput {
+pub struct CreatePostDto {
     #[validate(length(min = 1), custom(function = "not_a_placeholder_title"))]
     pub title: String,
     pub body: String,

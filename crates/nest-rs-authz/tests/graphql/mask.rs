@@ -234,7 +234,8 @@ async fn irreconcilable_masked_value_fails_closed() {
         "masking away a required field must surface an error, not data"
     );
     assert_eq!(
-        json["data"], serde_json::Value::Null,
+        json["data"],
+        serde_json::Value::Null,
         "no partial unmasked data may ship"
     );
 }

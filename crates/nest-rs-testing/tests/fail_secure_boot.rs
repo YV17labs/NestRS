@@ -176,9 +176,5 @@ async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
         .await
         .expect("an implicit access decision is a warning, not a boot failure");
     // The route is served — the posture check observes, it does not gate.
-    app.http()
-        .post("/thing")
-        .send()
-        .await
-        .assert_status_is_ok();
+    app.http().post("/thing").send().await.assert_status_is_ok();
 }

@@ -105,9 +105,7 @@ impl<E: EntityTrait> Repo<E> {
     /// `find_by_id` [`Select`] with **no** ability filter, for `CrudService::access`
     /// (see the second sanctioned case in [`unscoped`](Self::unscoped)). Chain
     /// the soft-delete / live filter and execute against [`Repo::conn`].
-    pub fn unscoped_by_id(
-        id: <E::PrimaryKey as PrimaryKeyTrait>::ValueType,
-    ) -> Select<E> {
+    pub fn unscoped_by_id(id: <E::PrimaryKey as PrimaryKeyTrait>::ValueType) -> Select<E> {
         E::find_by_id(id)
     }
 

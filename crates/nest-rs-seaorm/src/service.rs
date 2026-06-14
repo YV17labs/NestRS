@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait,
-    IntoActiveModel, PrimaryKeyTrait, QueryFilter,
+    ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait, IntoActiveModel,
+    PrimaryKeyTrait, QueryFilter,
 };
 
 use nest_rs_authz::{Action, current_ability};
@@ -213,8 +213,11 @@ where
     async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), DbErr> {
         let entity = Self::entity_name();
         let id = model_pk::<Self::Entity>(&model);
-        let out_of_scope =
-            || DbErr::RecordNotFound(format!("{entity} row not found or outside the caller's scope"));
+        let out_of_scope = || {
+            DbErr::RecordNotFound(format!(
+                "{entity} row not found or outside the caller's scope"
+            ))
+        };
         match Self::soft_delete_column() {
             Some(col) => match Repo::<Self::Entity>::soft_delete(model, col).await {
                 Ok(()) => {

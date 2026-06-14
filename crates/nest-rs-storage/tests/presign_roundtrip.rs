@@ -73,7 +73,11 @@ async fn presign_put_get_round_trip() {
         .await
         .expect("presign_get");
     let got = http.get(&get_url).send().await.expect("GET send");
-    assert!(got.status().is_success(), "presigned GET failed: {}", got.status());
+    assert!(
+        got.status().is_success(),
+        "presigned GET failed: {}",
+        got.status()
+    );
     let got_bytes = got.bytes().await.expect("GET body").to_vec();
     assert_eq!(got_bytes, body, "presigned GET bytes mismatch");
     eprintln!("GET(presigned) {} -> {} bytes match", key, got_bytes.len());
@@ -81,7 +85,11 @@ async fn presign_put_get_round_trip() {
     // 3. Read back server-side through object_store (get_bytes).
     let server_bytes = s.get_bytes(key).await.expect("get_bytes");
     assert_eq!(server_bytes.as_ref(), body.as_slice(), "get_bytes mismatch");
-    eprintln!("get_bytes      {} -> {} bytes match", key, server_bytes.len());
+    eprintln!(
+        "get_bytes      {} -> {} bytes match",
+        key,
+        server_bytes.len()
+    );
 
     // 4. head: size is reported (content-type is the documented object_store gap).
     let info = s.head(key).await.expect("head").expect("object present");
@@ -89,7 +97,10 @@ async fn presign_put_get_round_trip() {
     eprintln!("head           {} -> size={}", key, info.byte_size);
 
     // 5. head on a missing object returns Ok(None).
-    let absent = s.head("spike/object_store/does-not-exist").await.expect("head absent");
+    let absent = s
+        .head("spike/object_store/does-not-exist")
+        .await
+        .expect("head absent");
     assert!(absent.is_none(), "expected None for absent object");
     eprintln!("head(absent)   -> None (Ok)");
 

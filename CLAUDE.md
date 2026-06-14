@@ -92,7 +92,7 @@ something the feature can't generalize*.
 - **`crates/nestrs-*` — framework.** Generic, product-agnostic. Never
   names a concrete `Claims`, entity, or policy — generic *over* them.
 - **`crates/features/` — product features.** Hexagonal per slice: port
-  at the feature root (`entity.rs`, `service.rs`, `dto.rs`,
+  at the feature root (`entity.rs`, `service.rs`, `dto.rs` / `dtos/`,
   `error.rs`, `module.rs`); each adapter is a sub-folder per
   transport with its own `module.rs`. Port at the root — not in a
   `core/` sub-folder — is deliberate.
@@ -110,7 +110,7 @@ something the feature can't generalize*.
 
 | Path | Contents | Module struct |
 |---|---|---|
-| `users/` (root) | `entity.rs`, `service.rs`, `dto.rs`, `error.rs`, `module.rs` | `UsersModule` (port) |
+| `users/` (root) | `entity.rs`, `service.rs`, `dto.rs` / `dtos/`, `error.rs`, `module.rs` | `UsersModule` (port) |
 | `users/http/` | `controller.rs`, `error.rs` | `UsersHttpModule` |
 | `users/graphql/` | `resolver.rs` (field + root merged into `UsersResolver`) | `UsersGraphqlModule` |
 | `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `WsModule` too) |

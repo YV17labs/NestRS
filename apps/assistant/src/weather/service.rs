@@ -5,7 +5,7 @@ use nest_rs_core::injectable;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::weather::dto::WeatherReport;
+use crate::weather::dtos::WeatherReportDto;
 
 const BASE_URL: &str = "https://api.open-meteo.com/v1/forecast";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -21,7 +21,7 @@ pub enum WeatherError {
 
 #[async_trait]
 pub(crate) trait WeatherProvider: Send + Sync + 'static {
-    async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReport, WeatherError>;
+    async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReportDto, WeatherError>;
 }
 
 #[injectable]
@@ -32,7 +32,7 @@ pub(in crate::weather) struct OpenMeteoClient {
 
 #[async_trait]
 impl WeatherProvider for OpenMeteoClient {
-    async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReport, WeatherError> {
+    async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReportDto, WeatherError> {
         tracing::debug!(target: "assistant::weather", latitude, longitude, "fetching current weather");
         let url =
             format!("{BASE_URL}?latitude={latitude}&longitude={longitude}&current_weather=true");
@@ -56,7 +56,7 @@ impl WeatherProvider for OpenMeteoClient {
             "fetched current weather"
         );
 
-        Ok(WeatherReport {
+        Ok(WeatherReportDto {
             temperature_c: current.temperature,
             wind_speed_kmh: current.windspeed,
             wind_direction_deg: current.winddirection,

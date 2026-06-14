@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use nest_rs_ws::{WsClient, gateway, messages};
 
-use crate::chat::dto::{ChatMessage, SendMessage};
+use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::guard::ModeratedGuard;
 use crate::chat::service::RoomService;
 use features::authn::AuthGuard;
@@ -29,12 +29,12 @@ impl ChatGateway {
 
     #[subscribe_message("message")]
     #[use_guards(ModeratedGuard)]
-    async fn on_message(&self, message: SendMessage) {
+    async fn on_message(&self, message: SendMessageDto) {
         self.svc.record(message);
     }
 
     #[subscribe_message("history")]
-    async fn history(&self) -> Vec<ChatMessage> {
+    async fn history(&self) -> Vec<ChatMessageDto> {
         self.svc.history()
     }
 
@@ -44,7 +44,7 @@ impl ChatGateway {
     }
 
     #[subscribe_message("typing")]
-    async fn typing(&self, message: SendMessage, client: &WsClient) {
+    async fn typing(&self, message: SendMessageDto, client: &WsClient) {
         let _ = client.broadcast("typing", &message);
     }
 }

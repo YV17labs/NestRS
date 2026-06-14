@@ -1,4 +1,4 @@
-pub mod dto;
+pub mod dtos;
 pub mod gateway;
 pub mod guard;
 pub mod module;

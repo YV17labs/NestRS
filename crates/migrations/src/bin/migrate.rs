@@ -12,12 +12,21 @@ async fn main() -> Result<()> {
     let conn = nest_rs_seaorm::connect_from_env().await?;
     match std::env::args().nth(1).as_deref() {
         Some("up") => Migrator::up(&conn, None).await?,
-        Some("down") => Migrator::down(&conn, None).await?,
+        // Revert one migration by default; `migrate down N` reverts the last N.
+        // Never `None` here — that reverts *every* migration and drops the
+        // schema. Use `reset` for the full teardown.
+        Some("down") => {
+            let steps = std::env::args()
+                .nth(2)
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(1);
+            Migrator::down(&conn, Some(steps)).await?
+        }
         Some("fresh") => Migrator::fresh(&conn).await?,
         Some("refresh") => Migrator::refresh(&conn).await?,
         Some("reset") => Migrator::reset(&conn).await?,
         Some("status") => Migrator::status(&conn).await?,
-        other => bail!("usage: migrate <up|down|fresh|refresh|reset|status> (got {other:?})"),
+        other => bail!("usage: migrate <up|down [N]|fresh|refresh|reset|status> (got {other:?})"),
     }
     Ok(())
 }

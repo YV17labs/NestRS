@@ -11,9 +11,9 @@ _default:
 up:
     cargo run -p migrations --bin migrate -- up
 
-# Roll back the last applied migration
-down:
-    cargo run -p migrations --bin migrate -- down
+# Roll back the last applied migration (`nestrs run db down 3` reverts the last 3)
+down n='1':
+    cargo run -p migrations --bin migrate -- down {{n}}
 
 # Drop every table and re-apply all migrations from scratch
 fresh:

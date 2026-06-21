@@ -143,7 +143,6 @@ where
             Ok(Access::Denied)
         }
     }
-
 }
 
 /// Opt-in write capability: the resource accepts **inserts**. Carries the

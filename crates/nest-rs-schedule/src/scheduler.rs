@@ -282,12 +282,7 @@ fn next_delay(schedule: &Cron, tz: Option<Tz>) -> Option<Duration> {
     Some((next_utc - now).to_std().unwrap_or(Duration::ZERO))
 }
 
-async fn fire(
-    id: JobId,
-    run: RunFn,
-    container: &Container,
-    ctx: &Option<Arc<dyn JobContext>>,
-) {
+async fn fire(id: JobId, run: RunFn, container: &Container, ctx: &Option<Arc<dyn JobContext>>) {
     let result = run_in_job_context(ctx.as_ref(), run(container)).await;
     if let Err(err) = result {
         tracing::error!(

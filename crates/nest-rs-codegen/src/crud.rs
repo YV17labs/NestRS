@@ -254,10 +254,14 @@ pub fn parse_crud_args(args: TokenStream2) -> syn::Result<CrudConfig> {
     syn::parse2(args)
 }
 
-/// Lowercased last segment of the output type (`User` → `user`); base for
-/// generated operation names (the list op is `<singular>s`).
+/// Snake-cased last segment of the output type (`User` → `user`,
+/// `ArtistExhibition` → `artist_exhibition`); base for generated operation
+/// method names (the list op is `<base>s`). async-graphql camelCases the method
+/// ident, so snake_case — not a bare lowercase — is what lets a compound entity
+/// reach `createArtistExhibition`; flattening the word boundaries to
+/// `artistexhibition` strands it at `createArtistexhibition`.
 ///
-/// This is a naive lowercase, **not** real singularization/pluralization: an
+/// Pluralization stays naive, **not** real singularization/pluralization: an
 /// irregular or already-plural entity yields an ungrammatical op name
 /// (`Category` → list op `categorys`, `Person` → `persons`). When that matters,
 /// hand-write the operation — `#[crud]` skips generating any op a method of the
@@ -266,7 +270,7 @@ pub fn singular_of(output: &Path) -> String {
     output
         .segments
         .last()
-        .map(|s| s.ident.to_string().to_lowercase())
+        .map(|s| crate::snake_case(&s.ident.to_string()))
         .unwrap_or_else(|| "item".to_owned())
 }
 
@@ -278,6 +282,19 @@ mod tests {
 
     fn parse(args: proc_macro2::TokenStream) -> syn::Result<CrudConfig> {
         parse_crud_args(args)
+    }
+
+    // A compound PascalCase entity must keep its word boundaries: async-graphql
+    // camelCases the generated method ident, so `create_artist_exhibition`
+    // becomes `createArtistExhibition`. A flat lowercase collapsed it to
+    // `artistexhibition`, stranding the op at `createArtistexhibition`.
+    #[test]
+    fn singular_of_snake_cases_compound_entity_names() {
+        let compound: syn::Path = syn::parse_quote!(ArtistExhibition);
+        assert_eq!(singular_of(&compound), "artist_exhibition");
+        // Single-word entities are unchanged — no schema churn for `users` &co.
+        let single: syn::Path = syn::parse_quote!(User);
+        assert_eq!(singular_of(&single), "user");
     }
 
     // No `ops` ⇒ back-compatible auto mode: with both input types present every

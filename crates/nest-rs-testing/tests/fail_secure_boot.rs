@@ -178,3 +178,53 @@ async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
     // The route is served — the posture check observes, it does not gate.
     app.http().post("/thing").send().await.assert_status_is_ok();
 }
+
+/// Two controllers claiming the same prefix. Each `nest`s under it, so the
+/// prefix is an exclusive namespace — poem would panic deep in route assembly
+/// ("duplicate path: /dup/*--poem-rest"). The transport catches it at boot
+/// instead, the same posture as every other wiring error.
+#[controller(path = "/dup")]
+struct FirstDupController;
+
+#[routes]
+impl FirstDupController {
+    #[post("/")]
+    #[public]
+    async fn first(&self) -> String {
+        "first".into()
+    }
+}
+
+#[controller(path = "/dup")]
+struct SecondDupController;
+
+#[routes]
+impl SecondDupController {
+    #[post("/")]
+    #[public]
+    async fn second(&self) -> String {
+        "second".into()
+    }
+}
+
+#[module(providers = [FirstDupController, SecondDupController])]
+struct DuplicatePrefixModule;
+
+#[tokio::test]
+async fn two_controllers_sharing_a_prefix_fail_boot_naming_both() {
+    let result = TestApp::builder()
+        .module::<DuplicatePrefixModule>()
+        .build()
+        .await;
+    let err = boot_error(
+        result,
+        "two controllers on one prefix must fail boot, not panic inside poem",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("/dup")
+            && msg.contains("FirstDupController")
+            && msg.contains("SecondDupController"),
+        "the error names the shared prefix and both controllers: {err}",
+    );
+}

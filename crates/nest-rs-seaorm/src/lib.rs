@@ -26,6 +26,7 @@ mod repo;
 pub mod retry;
 mod service;
 mod soft_delete;
+mod time;
 mod worker;
 
 #[cfg(feature = "graphql")]
@@ -48,6 +49,7 @@ pub use page::{LIST_CAP, Page, PageParams};
 pub use repo::{Repo, scope_for};
 pub use service::{Access, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel};
 pub use soft_delete::{SoftDeletable, live_condition};
+pub use time::now;
 pub use worker::WorkerDbContext;
 
 #[cfg(feature = "health")]

@@ -154,7 +154,7 @@ impl<E: EntityTrait> Repo<E> {
     {
         let conn = Self::conn()?;
         let mut active = model.into_active_model();
-        let now: sea_orm::prelude::DateTimeWithTimeZone = chrono::Utc::now().fixed_offset();
+        let now = crate::now();
         active.set(col, Value::from(now));
         Update::one(active)
             .validate()?

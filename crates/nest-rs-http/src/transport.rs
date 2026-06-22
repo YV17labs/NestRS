@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use nest_rs_core::{Container, DiscoveryService, Transport};
@@ -227,9 +229,23 @@ impl Transport for HttpTransport {
         // access decision: fail-secure asks the developer to make it explicit.
         let global_guards = container.get::<GlobalGuardsActive>().is_some();
         let mut unguarded: Vec<String> = Vec::new();
+        // Each controller `nest`s under its own prefix, so a prefix is a
+        // controller's exclusive namespace — two controllers sharing one make
+        // poem panic deep in route assembly ("duplicate path: <prefix>/*--poem-rest").
+        // Catch it here instead, naming both controllers, so it reads like every
+        // other nestrs boot failure rather than an opaque poem internal.
+        let mut prefix_owner: HashMap<String, &'static str> = HashMap::new();
 
         for d in discovery.meta::<HttpControllerMeta>() {
             let prefix = d.meta.effective_prefix();
+            if let Some(first) = prefix_owner.insert(prefix.clone(), d.meta.controller) {
+                anyhow::bail!(
+                    "duplicate controller prefix {prefix:?}: {first} and {} both mount there — a \
+                     controller prefix is its exclusive namespace; give each controller a \
+                     distinct prefix",
+                    d.meta.controller,
+                );
+            }
             for r in &d.meta.routes {
                 let path = join_path(&prefix, r.path);
                 tracing::info!(

@@ -1,4 +1,5 @@
-//! OAuth2 Authorization Code client and [`OAuth2Module`] DI wiring.
+//! OAuth2 grants: the Authorization Code client (user-delegated) and the
+//! client-credentials machine grant, plus [`OAuth2Module`] DI wiring.
 
 mod client;
 mod client_credentials;

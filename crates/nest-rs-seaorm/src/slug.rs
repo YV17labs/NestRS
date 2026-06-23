@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 
 use sea_orm::sea_query::Condition;
-use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, QueryFilter};
 
 use crate::{ServiceError, SoftDeletable, live_condition};
 
@@ -23,6 +23,11 @@ const MAX_ATTEMPTS: u32 = 100;
 ///
 /// Returns the first free candidate (`base`, then `base-2`, `base-3`, …), or a
 /// [`ServiceError`] after [`MAX_ATTEMPTS`] collisions.
+///
+/// Queries the connection directly (not [`Repo`](crate::Repo)) so the probe is
+/// **unscoped by ability**: a slug must be unique across every live row,
+/// including ones the caller cannot see. Per-tenant uniqueness is opted into
+/// explicitly via `extra`, never inferred from the ambient ability.
 pub async fn resolve_unique_slug<E, C>(
     conn: &C,
     slug_column: E::Column,
@@ -50,9 +55,9 @@ where
         }
     }
 
-    Err(ServiceError::Db(DbErr::Custom(format!(
+    Err(ServiceError::internal(format!(
         "could not allocate unique {fallback} slug"
-    ))))
+    )))
 }
 
 /// Lowercase ASCII slug: transliterate, keep alphanumerics, collapse every other

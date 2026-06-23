@@ -53,13 +53,13 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
                 RegisteredClient {
                     client_id: CLIENT_ID.into(),
                     client_secret: CLIENT_SECRET.into(),
-                    org_id: ORG_ID.parse().expect("a valid org uuid"),
+                    payload: ORG_ID.parse().expect("a valid org uuid"),
                     scopes: vec!["admin".into(), "user".into()],
                 },
                 RegisteredClient {
                     client_id: "limited-service".into(),
                     client_secret: "limited-secret".into(),
-                    org_id: ORG_ID.parse().expect("a valid org uuid"),
+                    payload: ORG_ID.parse().expect("a valid org uuid"),
                     scopes: vec!["user".into()],
                 },
             ],

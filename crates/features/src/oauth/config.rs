@@ -1,5 +1,5 @@
+use nest_rs_authn::RegisteredClient;
 use nest_rs_config::{Config, ConfigError, ConfigService, config};
-use serde::Deserialize;
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
 
@@ -8,16 +8,9 @@ const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_a
 #[config(namespace = "issuer")]
 #[derive(Clone, Default)]
 pub struct IssuerConfig {
-    pub clients: Vec<RegisteredClient>,
+    // The org id each client acts as is the framework client's generic payload.
+    pub clients: Vec<RegisteredClient<Uuid>>,
     pub default_org_id: Uuid,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct RegisteredClient {
-    pub client_id: String,
-    pub client_secret: String,
-    pub org_id: Uuid,
-    pub scopes: Vec<String>,
 }
 
 impl Validate for IssuerConfig {
@@ -53,12 +46,12 @@ impl Config for IssuerConfig {
 mod tests {
     use super::*;
 
-    fn client(id: &str) -> RegisteredClient {
+    fn client(id: &str) -> RegisteredClient<Uuid> {
         RegisteredClient {
             client_id: id.into(),
             client_secret: "s3cr3t".into(),
-            org_id: Uuid::nil(),
             scopes: vec!["user".into()],
+            payload: Uuid::nil(),
         }
     }
 

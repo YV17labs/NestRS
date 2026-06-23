@@ -40,6 +40,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 # Argon2id for local credential storage (`hash_password` / `verify_password`).
 argon2.workspace = true
+# Constant-time credential comparison for the client-credentials grant registry.
+subtle.workspace = true
 # `OAuth2Module::for_root` provides the client through the factory phase, whose
 # error channel is anyhow (the container's `Result`).
 anyhow.workspace = true

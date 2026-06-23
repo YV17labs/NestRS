@@ -101,6 +101,11 @@ async-trait = "0.1"
 # every framework crate shares one lock primitive.
 parking_lot = "0.12"
 
+# Constant-time byte comparison for the client-credentials grant. A hand-rolled
+# equality check leaks length via its early return; `subtle` is the audited
+# primitive (dalek). Already in the tree transitively; pulled up as a direct dep.
+subtle = "2"
+
 # GraphQL. `dataloader` gives us async-graphql's batching loader, surfaced via
 # the `#[dataloader]` decorator to kill field-resolver N+1s.
 async-graphql = { version = "7", features = ["dataloader"] }

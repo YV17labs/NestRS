@@ -34,8 +34,8 @@ async fn issues_a_token_for_a_registered_client() {
             clients: vec![RegisteredClient {
                 client_id: "test-client".into(),
                 client_secret: "secret".into(),
-                org_id: Uuid::nil(),
                 scopes: vec!["read".into()],
+                payload: Uuid::nil(),
             }],
             default_org_id: Uuid::nil(),
         })
@@ -144,7 +144,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env(
                 "NESTRS_ISSUER__CLIENTS",
-                r#"[{"client_id":"web","client_secret":"s","org_id":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]"#,
+                r#"[{"client_id":"web","client_secret":"s","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]"#,
             );
             let cfg = IssuerConfig::load().expect("loads with clients");
             assert_eq!(cfg.clients.len(), 1);

@@ -35,7 +35,7 @@ const ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_00a1);
 #[test]
 fn grant_client_credentials_rejects_unknown_grant_type() {
     let client = AuthenticatedClient {
-        org_id: ORG,
+        payload: ORG,
         scopes: vec!["user".into()],
     };
     let err = oauth_service()
@@ -47,7 +47,7 @@ fn grant_client_credentials_rejects_unknown_grant_type() {
 #[test]
 fn grant_client_credentials_rejects_invalid_scope() {
     let client = AuthenticatedClient {
-        org_id: ORG,
+        payload: ORG,
         scopes: vec!["user".into()],
     };
     let err = oauth_service()
@@ -59,7 +59,7 @@ fn grant_client_credentials_rejects_invalid_scope() {
 #[test]
 fn grant_client_credentials_issues_for_valid_scope() {
     let client = AuthenticatedClient {
-        org_id: ORG,
+        payload: ORG,
         scopes: vec!["user".into()],
     };
     let token = oauth_service()

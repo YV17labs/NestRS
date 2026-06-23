@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use nest_rs_authn::{AuthError, Authorization, JwtService, OAuth2Client, TokenError};
+use nest_rs_authn::{
+    AuthError, Authorization, JwtService, OAuth2Client, TokenError, authenticate_against_registry,
+};
 use nest_rs_core::injectable;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -18,24 +20,14 @@ pub struct Caller {
     pub roles: Vec<Role>,
 }
 
-#[derive(Debug, Clone)]
-pub struct AuthenticatedClient {
-    pub org_id: Uuid,
-    pub scopes: Vec<String>,
-}
+/// This example's machine principal: a client scoped to an org (the generic
+/// `payload`). Shape + `PrincipalIdentity` come from the framework grant.
+pub type AuthenticatedClient = nest_rs_authn::AuthenticatedClient<Uuid>;
 
 /// Audit identity: the authenticated user.
 impl nest_rs_authn::PrincipalIdentity for Caller {
     fn actor_id(&self) -> Option<String> {
         Some(self.user_id.to_string())
-    }
-}
-
-/// A machine principal scoped to an org — no per-user identity; the org
-/// is already a span/log field wherever it matters.
-impl nest_rs_authn::PrincipalIdentity for AuthenticatedClient {
-    fn actor_id(&self) -> Option<String> {
-        None
     }
 }
 
@@ -218,41 +210,7 @@ pub(crate) fn grant_client_credentials_with_jwt(
         );
         TokenError::InvalidScope
     })?;
-    issue_with_jwt(jwt_svc, None, client.org_id, roles)
-}
-
-pub(crate) fn authenticate_against_registry(
-    clients: &[super::config::RegisteredClient],
-    client_id: &str,
-    client_secret: &str,
-) -> Result<AuthenticatedClient, AuthError> {
-    let mut matched: Option<&super::config::RegisteredClient> = None;
-    for client in clients {
-        let id_ok = constant_time_eq(client.client_id.as_bytes(), client_id.as_bytes());
-        let secret_ok = constant_time_eq(client.client_secret.as_bytes(), client_secret.as_bytes());
-        if (id_ok & secret_ok) && matched.is_none() {
-            matched = Some(client);
-        }
-    }
-    let client = matched.ok_or_else(|| {
-        tracing::warn!(target: "features::oauth", client_id, "client authentication failed");
-        AuthError::Failed("invalid client credentials".into())
-    })?;
-    Ok(AuthenticatedClient {
-        org_id: client.org_id,
-        scopes: client.scopes.clone(),
-    })
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    issue_with_jwt(jwt_svc, None, client.payload, roles)
 }
 
 #[cfg(test)]
@@ -301,89 +259,6 @@ mod tests {
         assert_eq!(profile(Some("ada"), None, None).display_name(), "ada");
         assert_eq!(profile(Some("ada"), Some(""), None).display_name(), "ada");
         assert_eq!(profile(None, None, None).display_name(), "user-42");
-    }
-
-    #[test]
-    fn constant_time_eq_matches_eq_for_equal_inputs() {
-        assert!(constant_time_eq(b"secret", b"secret"));
-    }
-
-    #[test]
-    fn constant_time_eq_rejects_different_lengths_immediately() {
-        assert!(!constant_time_eq(b"secret", b"secrets"));
-        assert!(!constant_time_eq(b"", b"x"));
-    }
-
-    #[test]
-    fn constant_time_eq_rejects_different_same_length_inputs() {
-        assert!(!constant_time_eq(b"secret", b"public"));
-    }
-
-    use crate::oauth::config::RegisteredClient;
-
-    fn client(id: &str, secret: &str, scopes: &[&str]) -> RegisteredClient {
-        RegisteredClient {
-            client_id: id.into(),
-            client_secret: secret.into(),
-            org_id: uuid::Uuid::nil(),
-            scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
-        }
-    }
-
-    #[test]
-    fn authenticate_against_registry_returns_authenticated_for_a_matching_pair() {
-        let registry = [client("ci", "s3cret", &["user"])];
-        let auth = authenticate_against_registry(&registry, "ci", "s3cret").expect("auth");
-        assert_eq!(auth.scopes, vec!["user".to_string()]);
-    }
-
-    #[test]
-    fn authenticate_against_registry_rejects_wrong_secret() {
-        let registry = [client("ci", "s3cret", &["user"])];
-        let err = authenticate_against_registry(&registry, "ci", "wrong")
-            .expect_err("wrong secret rejected");
-        assert!(matches!(err, AuthError::Failed(_)));
-        assert!(
-            err.to_string().contains("invalid client credentials"),
-            "wire error must be opaque: {err}",
-        );
-    }
-
-    #[test]
-    fn authenticate_against_registry_rejects_unknown_client_id() {
-        let registry = [client("ci", "s3cret", &["user"])];
-        assert!(authenticate_against_registry(&registry, "other", "s3cret").is_err());
-    }
-
-    #[test]
-    fn authenticate_against_registry_picks_the_first_matching_client() {
-        let a = RegisteredClient {
-            scopes: vec!["a".into()],
-            ..client("ci", "s3cret", &["a"])
-        };
-        let b = RegisteredClient {
-            scopes: vec!["b".into()],
-            ..client("ci", "s3cret", &["b"])
-        };
-        let registry = [a, b];
-        let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
-        assert_eq!(auth.scopes, vec!["a".to_string()]);
-    }
-
-    #[test]
-    fn authenticate_against_registry_rejects_empty_registry() {
-        let registry: [RegisteredClient; 0] = [];
-        assert!(authenticate_against_registry(&registry, "any", "any").is_err());
-    }
-
-    #[test]
-    fn authenticate_against_registry_distinguishes_clients_with_a_shared_prefix() {
-        let registry = [
-            client("ci", "s3cret-a", &["a"]),
-            client("ci-prod", "s3cret-b", &["b"]),
-        ];
-        let auth = authenticate_against_registry(&registry, "ci-prod", "s3cret-b").unwrap();
-        assert_eq!(auth.scopes, vec!["b".to_string()]);
     }
 
     use nest_rs_authn::{JwtOptions, JwtService};
@@ -462,7 +337,7 @@ mod tests {
 
     fn auth_client(scopes: &[&str]) -> AuthenticatedClient {
         AuthenticatedClient {
-            org_id: Uuid::now_v7(),
+            payload: Uuid::now_v7(),
             scopes: scopes.iter().map(|s| (*s).into()).collect(),
         }
     }
@@ -494,7 +369,7 @@ mod tests {
     fn grant_client_credentials_issues_a_bearer_token_with_the_clients_org() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["user", "admin"]);
-        let org = client.org_id;
+        let org = client.payload;
         let token = grant_client_credentials_with_jwt(
             &jwt_svc,
             "client_credentials",
@@ -511,7 +386,7 @@ mod tests {
         assert_eq!(claims.org_id, org);
     }
 
-    use nest_rs_authn::{OAuth2Client, OAuth2Config};
+    use nest_rs_authn::{OAuth2Client, OAuth2Config, RegisteredClient};
     use sea_orm::DatabaseConnection;
 
     use crate::users::UsersService;
@@ -539,8 +414,8 @@ mod tests {
             clients: vec![RegisteredClient {
                 client_id: "ci".into(),
                 client_secret: "s3cret".into(),
-                org_id: Uuid::now_v7(),
                 scopes: vec!["user".into()],
+                payload: Uuid::now_v7(),
             }],
             default_org_id: Uuid::now_v7(),
         });

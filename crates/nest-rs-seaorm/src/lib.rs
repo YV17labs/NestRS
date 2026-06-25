@@ -48,7 +48,9 @@ pub use executor::{
 pub use module::{DatabaseModule, DatabaseSetup, connect_from_env};
 pub use page::{LIST_CAP, Page, PageParams};
 pub use repo::{Repo, scope_for};
-pub use service::{Access, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel};
+pub use service::{
+    Access, Authorized, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel,
+};
 pub use slug::resolve_unique_slug;
 pub use soft_delete::{SoftDeletable, live_condition};
 pub use time::now;

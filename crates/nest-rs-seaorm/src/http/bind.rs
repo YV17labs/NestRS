@@ -18,7 +18,7 @@ use poem::{Error, FromRequest, Request, RequestBody, Result};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
-use crate::{Access, CrudService};
+use crate::{Access, Authorized, CrudService};
 
 /// The loaded, authorized entity bound from a path id, through service `S`.
 /// Declare as a handler parameter (`user: Bind<UsersService, Read>`); read the
@@ -28,6 +28,14 @@ pub struct Bind<S: CrudService, A>(<S::Entity as EntityTrait>::Model, PhantomDat
 impl<S: CrudService, A> Bind<S, A> {
     pub fn into_inner(self) -> <S::Entity as EntityTrait>::Model {
         self.0
+    }
+
+    /// Promote the bound model to an [`Authorized`] proof for a service method
+    /// that takes one — the HTTP analog of
+    /// [`bind_required`](crate::graphql::bind_required). Sound because `Bind`
+    /// only ever holds a model returned by [`CrudService::access`].
+    pub fn into_authorized(self) -> Authorized<S::Entity> {
+        Authorized::new(self.0)
     }
 }
 

@@ -7,7 +7,7 @@ use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
-use crate::{Access, CrudService};
+use crate::{Access, Authorized, CrudService};
 
 /// Matches the `nest_rs_authz::graphql` gate's denial shape (code `FORBIDDEN`).
 fn forbidden() -> Error {
@@ -53,5 +53,24 @@ where
         Access::Found(model) => Ok(Some(model)),
         Access::Denied => Err(forbidden()),
         Access::Missing => Ok(None),
+    }
+}
+
+/// Bind a **mutation subject**: turn a by-id argument into the loaded, authorized
+/// entity as an [`Authorized`] proof. Unlike [`bind`] — which returns `None` for
+/// a missing row so a *query* resolves to null — a missing row is an error here
+/// (code `NOT_FOUND`): a mutation has no row to act on. Denied → `FORBIDDEN`;
+/// found → `Authorized`. Hand the result straight to the service method whose
+/// `Authorized<E>` parameter then carries the authorization at the type level,
+/// so the method body cannot reach a row the caller was not allowed to load.
+pub async fn bind_required<S, A>(ctx: &Context<'_>, id: &str) -> Result<Authorized<S::Entity>>
+where
+    S: CrudService + 'static,
+    <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
+    A: ActionMarker,
+{
+    match bind::<S, A>(ctx, id).await? {
+        Some(model) => Ok(Authorized::new(model)),
+        None => Err(Error::new("not found").extend_with(|_, e| e.set("code", "NOT_FOUND"))),
     }
 }

@@ -38,6 +38,41 @@ pub enum Access<M> {
     Missing,
 }
 
+/// Proof that the wrapped row was produced by an **authorized** load — the
+/// ambient ability granted the binding action on it through
+/// [`CrudService::access`], the single gateway every `Bind` /
+/// [`bind_required`](crate::graphql::bind_required) funnels through.
+///
+/// A service method that accepts `Authorized<E>` is *statically* guaranteed its
+/// subject passed that check: the type's constructor is crate-private, so it
+/// cannot be minted from a raw `Entity::find_by_id` — a hand-written mutation
+/// can no longer act on a row the caller was never allowed to load. The model is
+/// read through [`Deref`](std::ops::Deref); [`into_inner`](Authorized::into_inner)
+/// takes ownership for the active-model write (which [`Repo`](crate::Repo)
+/// re-scopes by the ambient ability — defense in depth, not the only line).
+pub struct Authorized<E: EntityTrait>(E::Model);
+
+impl<E: EntityTrait> Authorized<E> {
+    /// Mint the proof. **Crate-private on purpose**: only the binding seams that
+    /// pass through [`CrudService::access`] may construct it, which is what makes
+    /// the type a guarantee rather than a label.
+    pub(crate) fn new(model: E::Model) -> Self {
+        Self(model)
+    }
+
+    /// Take ownership of the authorized model — e.g. for `into_active_model`.
+    pub fn into_inner(self) -> E::Model {
+        self.0
+    }
+}
+
+impl<E: EntityTrait> std::ops::Deref for Authorized<E> {
+    type Target = E::Model;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// The entity's **read** API and the single audited gateway to the ORM. Every
 /// resource implements it; the write half is segregated into the opt-in
 /// [`Creatable`], [`Updatable`], and [`Deletable`] traits so a resource carries

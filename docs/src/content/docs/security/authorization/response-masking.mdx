@@ -183,6 +183,10 @@ ships — they never reach the wire.
 
 A few column types the macro cannot default automatically:
 
+- A non-`Option` `Uuid` (e.g. an unexposed `org_id` foreign key) — no
+  wire default, so the round-trip cannot reconstruct the model and the
+  response fails closed.
+- Non-`Option` timestamps (`DateTimeWithTimeZone`).
 - `Decimal` (no canonical zero in JSON).
 - Custom Rust enums with no `Default` impl.
 - Columns whose `Default` is meaningful business state.
@@ -197,6 +201,17 @@ impl WireModelDefaults for invoice::Entity {
     }
 }
 ```
+
+<Aside type="caution">
+**A column an ability rule predicates on must carry its real value during
+masking — expose it, do not default it.** The mask rebuilds the model and
+re-runs the grant's `Predicate` (e.g. `org_id == actor.org_id`) to decide
+which fields to keep. A `WireModelDefaults` placeholder (`Uuid::nil()`)
+would make that predicate evaluate against the wrong value and mask the
+row's fields *out*. So a tenant key like `org_id` is best `#[expose]`d
+read-only (output, never an input) rather than defaulted — exactly because
+it is the column the policy depends on.
+</Aside>
 
 A handler returning a body that does not deserialize even with
 defaults yields 500 with `"response masking failed: body did not

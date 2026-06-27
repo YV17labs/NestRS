@@ -163,8 +163,53 @@ fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> bool {
 /// round-trip cannot see through, e.g. a cursor connection).
 struct AuthorizeSpec {
     action: Path,
-    entity: Path,
+    /// The entity the gate + mask act on. Explicit (`#[authorize(Action,
+    /// Entity)]`) or, when `bind = Service` is set, **derived** from
+    /// `<Service as CrudService>::Entity` so it is never retyped —
+    /// `#[authorize(Update, bind = ArtworksService)]`.
+    entity: Option<Path>,
     unmasked: bool,
+    /// `bind = Service`: the macro turns a by-id GraphQL argument into the
+    /// loaded, authorized subject and hands it to the operation's
+    /// `Authorized<E, Action>` parameter — the GraphQL analog of the HTTP
+    /// `Bind<S, A>` extractor. The action in the proof is the one named here, so
+    /// the receiving method demands a proof for *exactly* that action. `None` ⇒
+    /// the operation binds its subject itself (or has none).
+    bind: Option<Path>,
+    /// The wire name of the synthesized id argument when `bind` is set, as a
+    /// snake_case ident (async-graphql camelCases it). `None` defaults to `id`;
+    /// `id_arg = file_id` yields `fileId` to preserve an existing SDL argument.
+    id_arg: Option<Ident>,
+}
+
+/// One token in `#[authorize(...)]`: a positional `Path` (action, entity, or
+/// the `unmasked` flag) or a `name = value` option (`bind = Service`,
+/// `id_arg = ident`).
+enum AuthorizeArg {
+    Positional(Path),
+    Bind(Path),
+    IdArg(Ident),
+}
+
+impl syn::parse::Parse for AuthorizeArg {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        if input.peek(Ident) && input.peek2(Token![=]) {
+            let name: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            if name == "bind" {
+                Ok(AuthorizeArg::Bind(input.parse()?))
+            } else if name == "id_arg" {
+                Ok(AuthorizeArg::IdArg(input.parse()?))
+            } else {
+                Err(syn::Error::new_spanned(
+                    name,
+                    "unknown `#[authorize]` option — expected `bind = Service` or `id_arg = ident`",
+                ))
+            }
+        } else {
+            Ok(AuthorizeArg::Positional(input.parse()?))
+        }
+    }
 }
 
 /// Extract and remove a `#[authorize(...)]` attribute. At most one per method.
@@ -179,32 +224,72 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
             "at most one `#[authorize(...)]` per operation",
         ));
     }
-    let paths: Vec<Path> = attr
-        .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?
+    let args: Vec<AuthorizeArg> = attr
+        .parse_args_with(Punctuated::<AuthorizeArg, Token![,]>::parse_terminated)?
         .into_iter()
         .collect();
     let shape_err = || {
         syn::Error::new_spanned(
             &attr,
             "expected `#[authorize(Action, Entity)]` — e.g. `#[authorize(Read, users::Entity)]`; \
-             append `unmasked` (`#[authorize(Read, users::Entity, unmasked)]`) to keep the \
-             class gate but mask the response yourself",
+             append `unmasked` to keep the class gate but mask the response yourself. \
+             `bind = Service` (optionally `id_arg = ident`) binds the subject from an id \
+             argument, and lets the entity be omitted (derived from `Service::Entity`): \
+             `#[authorize(Update, bind = ArtworksService)]`",
         )
     };
-    let unmasked = match paths.len() {
-        2 => false,
-        3 if paths[2].is_ident("unmasked") => true,
+    let mut positional: Vec<Path> = Vec::new();
+    let mut bind: Option<Path> = None;
+    let mut id_arg: Option<Ident> = None;
+    for arg in args {
+        match arg {
+            AuthorizeArg::Positional(p) => positional.push(p),
+            AuthorizeArg::Bind(p) => bind = Some(p),
+            AuthorizeArg::IdArg(i) => id_arg = Some(i),
+        }
+    }
+    if id_arg.is_some() && bind.is_none() {
+        return Err(syn::Error::new_spanned(
+            &attr,
+            "`id_arg` only applies with `bind = Service`",
+        ));
+    }
+    let unmasked = positional.iter().any(|p| p.is_ident("unmasked"));
+    let mut subject: Vec<Path> = positional.into_iter().filter(|p| !p.is_ident("unmasked")).collect();
+    // `Action, Entity` always; `Action` alone is allowed only with `bind`,
+    // where the entity is derived from `Service::Entity` (never retyped).
+    let (action, entity) = match (subject.len(), bind.is_some()) {
+        (2, _) => {
+            let entity = subject.remove(1);
+            (subject.remove(0), Some(entity))
+        }
+        (1, true) => (subject.remove(0), None),
         _ => return Err(shape_err()),
     };
-    let mut paths = paths.into_iter();
-    match (paths.next(), paths.next()) {
-        (Some(action), Some(entity)) => Ok(Some(AuthorizeSpec {
-            action,
-            entity,
-            unmasked,
-        })),
-        _ => Err(shape_err()),
-    }
+    Ok(Some(AuthorizeSpec {
+        action,
+        entity,
+        unmasked,
+        bind,
+        id_arg,
+    }))
+}
+
+/// The ident of a `#[query]`/`#[mutation]` parameter typed `Authorized<E, A>`
+/// (the subject `bind = Service` resolves). Matched on the last path segment so
+/// both `Authorized<E, A>` and a fully-qualified form are recognised.
+fn authorized_param_ident(sig: &Signature) -> Option<Ident> {
+    sig.inputs.iter().find_map(|arg| {
+        let FnArg::Typed(pt) = arg else { return None };
+        let Type::Path(tp) = &*pt.ty else { return None };
+        if tp.path.segments.last()?.ident != "Authorized" {
+            return None;
+        }
+        match &*pt.pat {
+            syn::Pat::Ident(pi) => Some(pi.ident.clone()),
+            _ => None,
+        }
+    })
 }
 
 /// True when the method's return type's last path segment ends with `Result`
@@ -230,7 +315,7 @@ fn sig_returns_result(sig: &Signature) -> bool {
 
 /// The ident of a method's `&Context<'_>` parameter (matched on the last
 /// path segment), so guard injection reuses it instead of adding a second.
-fn ctx_param_ident(sig: &Signature) -> Option<Ident> {
+pub(crate) fn ctx_param_ident(sig: &Signature) -> Option<Ident> {
     sig.inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };
         let Type::Reference(reference) = &*pt.ty else {
@@ -522,14 +607,76 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                 _ => {}
             }
             let is_query = verb_attr.path().is_ident("query");
+            // `bind = Service`: the operation declares its subject as an
+            // `Authorized<E, Action>` parameter; the wrapper exposes a by-id
+            // GraphQL argument in its place, binds it through `bind_required`
+            // (which mints the proof for the attribute's action), and forwards
+            // it — so the resolver body never parses an id or touches raw ORM.
+            // The HTTP `Bind<S, A>` extractor, expressed for GraphQL through the
+            // posture attribute that already carries the action + entity
+            // (declared once, no duplicate).
+            // Pair the spec with its `bind` service only when set — carries the
+            // action alongside so the prelude never re-derives it from the spec.
+            let bind_info = match authorize_spec
+                .as_ref()
+                .and_then(|s| s.bind.as_ref().map(|b| (s, b)))
+            {
+                Some((spec, service)) => {
+                    let Some(subject_ident) = authorized_param_ident(&sig) else {
+                        return syn::Error::new_spanned(
+                            &method_name,
+                            "`#[authorize(Action, bind = Service)]` needs a parameter of type \
+                             `Authorized<E, Action>` to receive the bound subject — the action in \
+                             the type must match the one in the attribute (e.g. \
+                             `#[authorize(Update, bind = FilesService)]` ⇒ `Authorized<FileEntity, Update>`)",
+                        )
+                        .to_compile_error()
+                        .into();
+                    };
+                    let id_ident = spec.id_arg.clone().unwrap_or_else(|| format_ident!("id"));
+                    Some((service.clone(), subject_ident, id_ident, spec.action.clone()))
+                }
+                None => None,
+            };
+            // The wrapper signature: with `bind`, the `Authorized<E, A>`
+            // parameter (not a GraphQL `InputType`) is replaced by the `id`
+            // string argument the SDL exposes; without `bind`, it is the
+            // method's own.
+            let wrapper_sig = match &bind_info {
+                Some((_, subject_ident, id_ident, _)) => {
+                    let mut s = sig.clone();
+                    for input in s.inputs.iter_mut() {
+                        if let FnArg::Typed(pt) = input {
+                            if matches!(&*pt.pat, syn::Pat::Ident(pi) if pi.ident == *subject_ident) {
+                                *input = parse_quote!(#id_ident: ::std::string::String);
+                            }
+                        }
+                    }
+                    s
+                }
+                None => sig.clone(),
+            };
             let arg_idents = match forwarded_arg_idents(&sig) {
                 Ok(idents) => idents,
                 Err(err) => return err.to_compile_error().into(),
             };
+            // Forward the original args, swapping the subject ident for the
+            // locally-bound `__subject` proof when `bind` is set.
+            let call_args: Vec<TokenStream2> = arg_idents
+                .iter()
+                .map(|ident| {
+                    match &bind_info {
+                        Some((_, subject_ident, _, _)) if ident == subject_ident => {
+                            quote!(__subject)
+                        }
+                        _ => quote!(#ident),
+                    }
+                })
+                .collect();
             let call = if sig.asyncness.is_some() {
-                quote! { self.0.#method_name(#(#arg_idents),*).await }
+                quote! { self.0.#method_name(#(#call_args),*).await }
             } else {
-                quote! { self.0.#method_name(#(#arg_idents),*) }
+                quote! { self.0.#method_name(#(#call_args),*) }
             };
             // Global guard chain runs on `Result`-returning queries/mutations
             // only (bare-return resolvers can't surface a denial). Local
@@ -547,7 +694,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             // can't surface a denial, so they still skip globals — the
             // chain helper's `run_layered_graphql_chain` is harmless when
             // every scope is empty.
-            let (gsig, gctx) = ensure_ctx_param(&sig);
+            let (gsig, gctx) = ensure_ctx_param(&wrapper_sig);
             let checks = layered_resolver_chain(
                 &self_ty,
                 &method_guards,
@@ -560,15 +707,40 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             // response masking after it — the same two effects the HTTP
             // `Authorize<A, E>` extractor + response shaper carry, emitted
             // here so a hand-written operation writes neither by hand.
+            // The entity the gate + mask act on: written explicitly, or — when
+            // `bind = Service` is set and the entity was omitted — derived from
+            // `<Service as CrudService>::Entity` so it is never retyped. Computed
+            // from the spec at each use site (gate + mask), never an unwrap of a
+            // separately-built `Option`.
+            let authz_entity = |spec: &AuthorizeSpec| match &spec.entity {
+                Some(entity) => quote!(#entity),
+                None => {
+                    let service = spec.bind.as_ref().expect("entity-less authorize requires bind");
+                    quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity)
+                }
+            };
             let gate = authorize_spec.as_ref().map(|spec| {
-                let (action, entity) = (&spec.action, &spec.entity);
+                let action = &spec.action;
+                let entity = authz_entity(spec);
                 quote! {
                     ::nest_rs_authz::graphql::authorize::<#action, #entity>(#gctx)?;
                 }
             });
+            // `bind = Service`: load + authorize the subject row from the id
+            // argument and bind it to `__subject` before the call. Runs after
+            // the class gate (cheap, no DB) so a class-denied caller never hits
+            // the database. Missing row → NOT_FOUND, denied row → FORBIDDEN.
+            let bind_prelude = bind_info.as_ref().map(|(service, _, id_ident, action)| {
+                quote! {
+                    let __subject = ::nest_rs_seaorm::graphql::bind_required::<#service, #action>(
+                        #gctx, &#id_ident,
+                    ).await?;
+                }
+            });
             let body = match authorize_spec.as_ref().filter(|spec| !spec.unmasked) {
                 Some(spec) => {
-                    let (action, entity) = (&spec.action, &spec.entity);
+                    let action = &spec.action;
+                    let entity = authz_entity(spec);
                     quote! {
                         match #call {
                             ::core::result::Result::Ok(__out) => ::core::result::Result::Ok(
@@ -585,7 +757,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             };
             let delegating = quote! {
                 #(#deleg_attrs)*
-                #gsig { #checks #gate #body }
+                #gsig { #checks #gate #bind_prelude #body }
             };
             if is_query {
                 query_methods.push(delegating);

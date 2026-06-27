@@ -344,7 +344,7 @@ bring every layer they need).
 | Transport | Handler | Guard binding | Module import |
 |---|---|---|---|
 | HTTP | `#[controller]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct | `[<Feature>Module, AuthzHttpModule]` |
-| GraphQL | `#[resolver]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct + per-op posture `#[authorize(Action, Entity)]`/`#[public]` (mandatory — no posture ⇒ compile error) | `[<Feature>Module, AuthzGraphqlModule]` |
+| GraphQL | `#[resolver]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` / a bound-mutation `Authorized<E, A>` parameter (signature-only, under `#[crud]`) — mandatory: no posture ⇒ compile error | `[<Feature>Module, AuthzGraphqlModule]` |
 | WS | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
 
 **Why GraphQL uses a marker but WS binds real guards.** HTTP guards run
@@ -451,13 +451,24 @@ columns an ability rule predicates on are best left exposed.
   `#[query]`/`#[mutation]` is the same declaration — `#[resolver]`
   emits the class gate before the call and `masked_value_for` around
   the returned value (wire DTO, `Option`, `Vec`; scalars pass).
-  **Posture is mandatory**: an operation without `#[authorize(...)]`
-  or `#[public]` does not compile, so a forgotten declaration is a
-  build break, never an unmasked response. `unmasked` opts a custom
-  shape (cursor connection) out of the automatic mask;
+  **Posture is mandatory**: an operation without a declared posture
+  does not compile, so a forgotten declaration is a build break, never
+  an unmasked response. Three ways to declare it, one mechanism:
+  `#[authorize(Action, Entity)]` (class gate + mask); `#[public]` (no
+  gate, no mask); or — for a **bound mutation** — an
+  `Authorized<E, A>` **parameter alone** (signature-only): under
+  `#[crud]`, the parameter type *is* the posture, so `#[crud]`
+  synthesises `#[authorize(A, E)]` + binds the subject from a by-id
+  argument via `bind_required_with(&*self.<service>, …)` (service from
+  `#[crud(service = …)]`, entity + action off the type). The explicit
+  `#[authorize(A, bind = Service)]` form (container-resolved service)
+  still works for resolvers without a `#[crud]` service field. `unmasked`
+  opts a custom shape (cursor connection) out of the automatic mask;
   `masked_output_for` is the manual primitive it pairs with.
   `#[crud]`-generated operations declare the same attribute — one
-  mechanism, generated or hand-written. One schema-typed caveat HTTP
+  mechanism, generated or hand-written. A bound mutation's `Authorized<E, A>`
+  proof is **action-typed**: a `Read` proof cannot be passed where an
+  `Update` proof is required — a compile error, not a runtime surprise. One schema-typed caveat HTTP
   doesn't have: GraphQL cannot ship a masked-out **non-nullable**
   field (HTTP just omits the key), so the whole operation fails
   closed — a column a field-grant may mask should be `Option` on the

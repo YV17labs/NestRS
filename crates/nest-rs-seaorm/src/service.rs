@@ -4,6 +4,8 @@
 //! and audit. Default methods express CRUD through [`Repo`], keeping ambient
 //! scoping and the request transaction transparent.
 
+use std::marker::PhantomData;
+
 use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
@@ -12,7 +14,7 @@ use sea_orm::{
     PrimaryKeyTrait, QueryFilter,
 };
 
-use nest_rs_authz::{Action, current_ability};
+use nest_rs_authz::{Action, ActionMarker, current_ability};
 
 use crate::page::Page;
 use crate::repo::Repo;
@@ -39,25 +41,31 @@ pub enum Access<M> {
 }
 
 /// Proof that the wrapped row was produced by an **authorized** load — the
-/// ambient ability granted the binding action on it through
-/// [`CrudService::access`], the single gateway every `Bind` /
-/// [`bind_required`](crate::graphql::bind_required) funnels through.
+/// ambient ability granted action `A` on it through [`CrudService::access`], the
+/// single gateway every `Bind` / [`bind_required`](crate::graphql::bind_required)
+/// funnels through.
 ///
-/// A service method that accepts `Authorized<E>` is *statically* guaranteed its
-/// subject passed that check: the type's constructor is crate-private, so it
-/// cannot be minted from a raw `Entity::find_by_id` — a hand-written mutation
-/// can no longer act on a row the caller was never allowed to load. The model is
-/// read through [`Deref`](std::ops::Deref); [`into_inner`](Authorized::into_inner)
-/// takes ownership for the active-model write (which [`Repo`](crate::Repo)
-/// re-scopes by the ambient ability — defense in depth, not the only line).
-pub struct Authorized<E: EntityTrait>(E::Model);
+/// The action is carried in the type, not just the binding site: an
+/// `Authorized<E, Update>` is a *different type* from an `Authorized<E, Read>`,
+/// so a service method that takes `Authorized<E, Update>` is statically
+/// guaranteed its subject was authorized for **exactly that action** — a `Read`
+/// proof fed to a method expecting an `Update` proof is a type error, not a
+/// runtime surprise. Combined with the crate-private constructor (only the
+/// binding seams that pass through [`CrudService::access`] may mint one), the
+/// type *is* the policy: a hand-written mutation can neither act on a row the
+/// caller was never allowed to load, nor act under an action it was never
+/// granted. The model is read through [`Deref`](std::ops::Deref);
+/// [`into_inner`](Authorized::into_inner) takes ownership for the active-model
+/// write (which [`Repo`](crate::Repo) re-scopes by the ambient ability — defense
+/// in depth, not the only line).
+pub struct Authorized<E: EntityTrait, A: ActionMarker>(E::Model, PhantomData<fn() -> A>);
 
-impl<E: EntityTrait> Authorized<E> {
+impl<E: EntityTrait, A: ActionMarker> Authorized<E, A> {
     /// Mint the proof. **Crate-private on purpose**: only the binding seams that
     /// pass through [`CrudService::access`] may construct it, which is what makes
     /// the type a guarantee rather than a label.
     pub(crate) fn new(model: E::Model) -> Self {
-        Self(model)
+        Self(model, PhantomData)
     }
 
     /// Take ownership of the authorized model — e.g. for `into_active_model`.
@@ -66,7 +74,7 @@ impl<E: EntityTrait> Authorized<E> {
     }
 }
 
-impl<E: EntityTrait> std::ops::Deref for Authorized<E> {
+impl<E: EntityTrait, A: ActionMarker> std::ops::Deref for Authorized<E, A> {
     type Target = E::Model;
     fn deref(&self) -> &Self::Target {
         &self.0

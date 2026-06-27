@@ -29,12 +29,16 @@ impl<S: CrudService, A> Bind<S, A> {
     pub fn into_inner(self) -> <S::Entity as EntityTrait>::Model {
         self.0
     }
+}
 
-    /// Promote the bound model to an [`Authorized`] proof for a service method
-    /// that takes one — the HTTP analog of
-    /// [`bind_required`](crate::graphql::bind_required). Sound because `Bind`
-    /// only ever holds a model returned by [`CrudService::access`].
-    pub fn into_authorized(self) -> Authorized<S::Entity> {
+impl<S: CrudService, A: ActionMarker> Bind<S, A> {
+    /// Promote the bound model to an [`Authorized<E, A>`] proof for a service
+    /// method that takes one — the HTTP analog of
+    /// [`bind_required`](crate::graphql::bind_required). The action `A` carries
+    /// through, so the proof states *which* action was authorized. Sound because
+    /// `Bind` only ever holds a model returned by [`CrudService::access`] for
+    /// `A::ACTION`.
+    pub fn into_authorized(self) -> Authorized<S::Entity, A> {
         Authorized::new(self.0)
     }
 }

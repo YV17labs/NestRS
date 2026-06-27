@@ -34,11 +34,20 @@ impl ProductsResolver {
 ```
 
 `#[public]` is the operation's **access posture**: every `#[query]` /
-`#[mutation]` declares either `#[public]` (deliberately ungated) or
-`#[authorize(Action, Entity)]` (ability gate + automatic response
-masking) — a method with neither does not compile. The toy examples on
-this page are `#[public]`; the service-backed ones at the bottom carry
-`#[authorize]`.
+`#[mutation]` declares one of three, and a method with none does not
+compile:
+
+- `#[public]` — deliberately ungated.
+- `#[authorize(Action, Entity)]` — ability gate + automatic response
+  masking.
+- *(bound mutations under `#[crud]` only)* an **`Authorized<E, A>`
+  parameter alone** — the subject's type *is* the posture: `#[crud]`
+  reads the action + entity off it, binds the row by id, gates, and
+  masks, so no attribute is written. See
+  [Database / CRUD](/database/crud/#signature-only-mutations).
+
+The toy examples on this page are `#[public]`; the service-backed ones at
+the bottom carry `#[authorize]`.
 
 On the wire this reads as:
 

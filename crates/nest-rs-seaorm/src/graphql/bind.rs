@@ -20,10 +20,7 @@ fn forbidden() -> Error {
 /// `Ok(Some(model))`. Requires the ambient ability; without one this returns an
 /// error so a missing auth bridge cannot silently behave as anonymous.
 ///
-/// The service is resolved from the container by type `S`; when the caller
-/// already holds the service instance (a resolver's `#[inject]` field), prefer
-/// [`bind_required_with`] — it needs no `S` token, so the binding can be driven
-/// entirely from the entity carried by an `Authorized<E, A>` parameter type.
+/// The service is resolved from the container by type `S`.
 pub async fn bind<S, A>(
     ctx: &Context<'_>,
     id: &str,
@@ -40,15 +37,9 @@ where
     bind_with::<S, A>(&service, ctx, id).await
 }
 
-/// [`bind`], but against a service instance the caller already holds (a
-/// resolver's injected `&Service`) instead of resolving it from the container by
-/// type. This is what lets a `#[query]`/`#[mutation]` declare its subject purely
-/// as an `Authorized<E, A>` parameter: `#[crud]` reads the entity + action off
-/// the parameter type and the service off the resolver field, so neither is
-/// retyped in an attribute.
-///
-/// Crate-internal: the public instance-form entry point is
-/// [`bind_required_with`] (the only one the macro layer calls).
+/// Core of [`bind`] against a service instance: ambient-ability check, id parse,
+/// and the authorized load. [`bind`] resolves the service from the container,
+/// then delegates here.
 async fn bind_with<S, A>(
     service: &S,
     ctx: &Context<'_>,
@@ -98,23 +89,6 @@ where
     A: ActionMarker,
 {
     not_found_to_err(bind::<S, A>(ctx, id).await?)
-}
-
-/// [`bind_required`], but against a service instance the caller already holds —
-/// the mutation-subject form that skips the container lookup. The signature-only operation
-/// `#[crud]` synthesises calls this: `bind_required_with(&*self.svc, ctx, &id)`,
-/// with the entity + action inferred from the `Authorized<E, A>` parameter type.
-pub async fn bind_required_with<S, A>(
-    service: &S,
-    ctx: &Context<'_>,
-    id: &str,
-) -> Result<Authorized<S::Entity, A>>
-where
-    S: CrudService + 'static,
-    <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
-    A: ActionMarker,
-{
-    not_found_to_err(bind_with::<S, A>(service, ctx, id).await?)
 }
 
 /// A bound mutation subject must exist (a mutation has no row to act on

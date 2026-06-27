@@ -306,6 +306,22 @@ do*. Compose at the boundary: `#[use_guards(AuthGuard,
 AuthzGuard)]`. Verification alias and policy live in
 `crates/features` (`authn/`, `authz/` + `authz/http/`); apps only mount.
 
+**Absolute rule — only a guard verifies authn/authz.** Authentication
+and authorization are decided in exactly one place: a `Guard`
+(`AuthGuard`/`AuthzGuard`), bound by `#[use_guards(...)]` and — per
+operation — by a **visible** `#[authorize(Action, Entity)]` or
+`#[public]` that `#[resolver]`/`#[routes]` turns into the gate. **A
+parameter type is never a posture.** `Authorized<E, A>`, `Bind`/`bind`,
+and the ability-scoped data layer are *enforcement plumbing* the
+guard's decision flows into — load the authorized row, scope the query,
+mask the response — never the *decision* itself. Every authn/authz
+check must therefore be greppable as an
+`#[authorize]`/`#[use_guards]`/`#[public]` site; smuggling the decision
+into a parameter type, a service method, or a binding helper is a
+framework defect to remove, not a shortcut. (This is why a bare
+`Authorized<E, A>` parameter is **not** accepted as a standalone
+posture — write the `#[authorize]`, then bind the subject in the body.)
+
 **`Strategy`** turns a request into a principal (plain `#[injectable]`,
 no macro). **`AuthGuard<S>`** is generic over it.
 `Strategy::authenticate` returns `Result<Self::Principal, AuthError>`
@@ -344,7 +360,7 @@ bring every layer they need).
 | Transport | Handler | Guard binding | Module import |
 |---|---|---|---|
 | HTTP | `#[controller]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct | `[<Feature>Module, AuthzHttpModule]` |
-| GraphQL | `#[resolver]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` / a bound-mutation `Authorized<E, A>` parameter (signature-only, under `#[crud]`) — mandatory: no posture ⇒ compile error | `[<Feature>Module, AuthzGraphqlModule]` |
+| GraphQL | `#[resolver]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — mandatory: no posture ⇒ compile error | `[<Feature>Module, AuthzGraphqlModule]` |
 | WS | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
 
 **Why GraphQL uses a marker but WS binds real guards.** HTTP guards run
@@ -453,20 +469,19 @@ columns an ability rule predicates on are best left exposed.
   the returned value (wire DTO, `Option`, `Vec`; scalars pass).
   **Posture is mandatory**: an operation without a declared posture
   does not compile, so a forgotten declaration is a build break, never
-  an unmasked response. Three ways to declare it, one mechanism:
-  `#[authorize(Action, Entity)]` (class gate + mask); `#[public]` (no
-  gate, no mask); or — for a **bound mutation** — an
-  `Authorized<E, A>` **parameter alone** (signature-only): under
-  `#[crud]`, the parameter type *is* the posture, so `#[crud]`
-  synthesises `#[authorize(A, E)]` + binds the subject from a by-id
-  argument via `bind_required_with(&*self.<service>, …)` (service from
-  `#[crud(service = …)]`, entity + action off the type). The explicit
+  an unmasked response. **Two** ways to declare it, one mechanism:
+  `#[authorize(Action, Entity)]` (class gate + mask) or `#[public]` (no
+  gate, no mask) — **a parameter type is never a posture** (see *Authn /
+  authz*). A **bound mutation** still receives its subject as an
+  `Authorized<E, A>` parameter, but the posture stays explicit: write
+  `#[authorize(Action, Entity)]` and load the subject in the body with
+  `bind_required::<Service, A>(ctx, &id)`, or use the
   `#[authorize(A, bind = Service)]` form (container-resolved service)
-  still works for resolvers without a `#[crud]` service field. `unmasked`
+  which binds the `Authorized<E, A>` subject for you. `unmasked`
   opts a custom shape (cursor connection) out of the automatic mask;
   `masked_output_for` is the manual primitive it pairs with.
   `#[crud]`-generated operations declare the same attribute — one
-  mechanism, generated or hand-written. A bound mutation's `Authorized<E, A>`
+  mechanism, generated or hand-written. A bound subject's `Authorized<E, A>`
   proof is **action-typed**: a `Read` proof cannot be passed where an
   `Update` proof is required — a compile error, not a runtime surprise. One schema-typed caveat HTTP
   doesn't have: GraphQL cannot ship a masked-out **non-nullable**
@@ -800,6 +815,10 @@ no standalone generator, no CI drift-check.
 - No umbrella module importing every edge of a feature.
 - No transport-level discovery without module-gating.
 - No two decorators that do the same thing — deprecate first.
+- No authn/authz decision outside a guard. Only `#[use_guards]` +
+  visible `#[authorize]`/`#[public]` declare posture; a parameter type
+  (`Authorized<E, A>`), a service method, or a binding helper is never
+  the authorization check.
 - Multiple deployable apps split by responsibility are a goal (not
   microservices sprawl) under two conditions: share code through
   **crates** (never copy-paste — product logic in `crates/features`)

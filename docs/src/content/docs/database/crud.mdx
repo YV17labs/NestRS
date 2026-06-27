@@ -170,60 +170,63 @@ impl UsersResolver {
 ```
 
 Every operation — generated or hand-written — declares its posture with
-`#[authorize(Action, Entity)]` (gate + automatic response masking),
-`#[public]`, or — for a bound mutation — an `Authorized<E, A>` parameter
-alone (next section); an operation with none does not compile.
+`#[authorize(Action, Entity)]` (gate + automatic response masking) or
+`#[public]`; an operation with none does not compile. Posture is **always**
+a visible attribute — a parameter type never stands in for it.
 
 Same override rule — the GraphQL `create_user` and `user` you wrote take
 over; `users`, `update_user`, `delete_user` are generated.
 
-## Signature-only mutations
+## Bound mutations
 
 A **bound mutation** acts on one existing row the caller already named by
-id — `publish`, `archive`, `confirm`. Instead of repeating the service in
-an attribute, declare the subject as an **`Authorized<E, A>` parameter** and
-let the type be the policy. No `#[authorize]` attribute:
+id — `publish`, `archive`, `confirm`. It declares its posture like any
+other operation — a **visible `#[authorize(Action, Entity)]`** — then loads
+the row in the body with `bind_required`, which returns the
+`Authorized<E, A>` proof to hand straight to the service:
 
 ```rust title="crates/features/src/artworks/graphql/resolver.rs"
 #[crud(service = svc, entity = ArtworkEntity, output = Artwork, /* … */)]
 impl ArtworksResolver {
     #[mutation]
-    async fn publish_artwork(
-        &self,
-        artwork: Authorized<ArtworkEntity, Update>,
-    ) -> Result<Artwork> {
+    #[authorize(Update, ArtworkEntity)]
+    async fn publish_artwork(&self, ctx: &Context<'_>, id: String) -> Result<Artwork> {
+        let artwork = bind_required::<ArtworksService, Update>(ctx, &id).await?;
         Ok(Artwork::from(&self.svc.publish(artwork).await?))
     }
 }
 ```
 
-From that one parameter, `#[crud]` synthesises everything the explicit
-`#[authorize(Update, bind = ArtworksService)]` form would, reading each
-piece off what is already declared:
+Two pieces, each with one job:
 
-- the **action** (`Update`) and **entity** (`ArtworkEntity`) — from the
-  parameter type;
-- the **service** — from `#[crud(service = svc)]`, so the row binds through
-  `bind_required_with(&*self.svc, ctx, &id)` (the service *instance*, no
-  type retyped);
-- a by-id `id: String` argument in the subject's place (uniform with every
-  other by-id operation);
-- the class gate `authorize::<Update, ArtworkEntity>` before the load and
-  the response mask after it.
+- `#[authorize(Update, ArtworkEntity)]` is the **posture** — the class gate
+  before the body and the response mask after it. This is the only thing
+  that decides authorization, and it is greppable.
+- `bind_required::<ArtworksService, Update>(ctx, &id)` is the **binding** —
+  it parses the id, runs the row-level access check for `Update` (404 on a
+  missing row, `FORBIDDEN` on a denied one), and returns the loaded
+  `Authorized<ArtworkEntity, Update>`.
 
 The action lives **in the type**, so the proof is action-true: a service
 method that takes `Authorized<E, Update>` cannot be handed an
 `Authorized<E, Read>` — a compile error, not a runtime surprise. The
 `Authorized<E, A>` value is also *proof of authorization*: its constructor
-is sealed, mintable only by the binding seams, so a hand-written mutation
-can neither reach a row the caller could not load nor act under an action
-it was not granted.
+is sealed, mintable only by the binding seams, so the mutation body can
+neither reach a row the caller could not load nor act under an action it
+was not granted.
+
+<Aside type="caution">
+Posture is **always** the visible `#[authorize]`/`#[public]` — a bare
+`Authorized<E, A>` parameter is never accepted as a standalone posture.
+Only a guard, via the attribute, decides authn/authz; `bind_required` and
+the `Authorized` proof are enforcement plumbing the decision flows into.
+</Aside>
 
 <Aside type="note">
-Signature-only is GraphQL + `#[crud]` only: it needs the service field from
-`#[crud(service = …)]`. Outside `#[crud]`, name the service explicitly —
-`#[authorize(Update, bind = ArtworksService)]` (container-resolved) still
-works and is never forced out.
+The `#[authorize(Update, bind = ArtworksService)]` form is a shorthand:
+it keeps the posture explicit **and** binds the `Authorized<E, A>` subject
+for you (container-resolved service), so the body receives the proof
+without calling `bind_required` itself.
 </Aside>
 
 ## Pagination

@@ -17,12 +17,9 @@ use std::collections::HashSet;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{
-    Attribute, FnArg, Ident, ImplItem, ItemImpl, Pat, Signature, Stmt, Type, parse_macro_input,
-    parse_quote,
-};
+use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
-use nest_rs_codegen::{Paginate, nth_generic_type, parse_crud_args, singular_of};
+use nest_rs_codegen::{Paginate, parse_crud_args, singular_of};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
@@ -250,30 +247,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
 
-    // Signature-only mutations: a hand-written `#[mutation]` whose subject is an
-    // `Authorized<E, A>` parameter and which declares no `#[authorize]`/`#[public]`
-    // posture. The parameter type *is* the policy — `#[crud]` reads the entity +
-    // action off it and the service off `#[crud(service = …)]`, then synthesises
-    // the same binding the explicit `#[authorize(A, bind = Service)]` form does:
-    // it adds `#[authorize(A, E)]` (so `#[resolver]` emits the class gate + the
-    // response mask) and replaces the subject with a by-id argument bound through
-    // `bind_required_with(&*self.<service>, …)`. No service type retyped, no id
-    // parsing, no raw ORM — and the action carried in the proof type is the one
-    // the gate enforces, checked by the compiler.
-    for it in item.items.iter_mut() {
-        let ImplItem::Fn(method) = it else { continue };
-        if !has_attr(&method.attrs, "mutation") {
-            continue;
-        }
-        if has_attr(&method.attrs, "authorize") || has_attr(&method.attrs, "public") {
-            continue;
-        }
-        let Some((subject, subject_ty, entity, action)) = authorized_subject(&method.sig) else {
-            continue;
-        };
-        bind_subject_from_signature(method, service, &subject, &subject_ty, &entity, &action);
-    }
-
     generated.append(&mut item.items);
     item.items = generated;
 
@@ -281,64 +254,4 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #[::nest_rs_graphql::resolver]
         #item
     })
-}
-
-fn has_attr(attrs: &[Attribute], name: &str) -> bool {
-    attrs.iter().any(|a| a.path().is_ident(name))
-}
-
-/// For a parameter typed `Authorized<E, A>`, the `(ident, full type, E, A)`. The
-/// full type is reused verbatim in the synthesised `let` so the developer's own
-/// import and spelling drive it; `E`/`A` feed the `#[authorize(A, E)]` posture.
-fn authorized_subject(sig: &Signature) -> Option<(Ident, Type, Type, Type)> {
-    sig.inputs.iter().find_map(|arg| {
-        let FnArg::Typed(pt) = arg else { return None };
-        let entity = nth_generic_type(&pt.ty, "Authorized", 0)?.clone();
-        let action = nth_generic_type(&pt.ty, "Authorized", 1)?.clone();
-        let Pat::Ident(pi) = &*pt.pat else { return None };
-        Some((pi.ident.clone(), (*pt.ty).clone(), entity, action))
-    })
-}
-
-/// Rewrite a signature-only mutation in place: declare the `#[authorize(A, E)]`
-/// posture, swap the `Authorized<E, A>` parameter for an `id: String` argument,
-/// and bind the subject from the resolver's own service field at the body's head.
-fn bind_subject_from_signature(
-    method: &mut syn::ImplItemFn,
-    service: &Ident,
-    subject: &Ident,
-    subject_ty: &Type,
-    entity: &Type,
-    action: &Type,
-) {
-    // Reuse an existing `&Context`, else add one right after `&self` (where
-    // async-graphql expects it on the wrapper `#[resolver]` generates).
-    let ctx_ident = crate::resolver::ctx_param_ident(&method.sig).unwrap_or_else(|| {
-        let ident = format_ident!("__bind_ctx");
-        method.sig.inputs.insert(
-            1,
-            parse_quote!(#ident: &::nest_rs_graphql::async_graphql::Context<'_>),
-        );
-        ident
-    });
-
-    // The subject parameter (not a GraphQL `InputType`) becomes the by-id
-    // argument the SDL exposes — uniform `id`, like every other by-id op.
-    for input in method.sig.inputs.iter_mut() {
-        if let FnArg::Typed(pt) = input
-            && matches!(&*pt.pat, Pat::Ident(pi) if pi.ident == *subject)
-        {
-            *input = parse_quote!(id: ::std::string::String);
-        }
-    }
-
-    method
-        .attrs
-        .push(parse_quote!(#[authorize(#action, #entity)]));
-
-    let bind: Stmt = parse_quote! {
-        let #subject: #subject_ty =
-            ::nest_rs_seaorm::graphql::bind_required_with(&*self.#service, #ctx_ident, &id).await?;
-    };
-    method.block.stmts.insert(0, bind);
 }

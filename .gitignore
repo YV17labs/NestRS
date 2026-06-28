@@ -1,5 +1,6 @@
-# Rust build artifacts
+# Rust build artifacts (root framework workspace + demo/ product workspace)
 /target
+/demo/target
 **/*.rs.bk
 
 # Coverage output (cargo-llvm-cov)

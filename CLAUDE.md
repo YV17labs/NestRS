@@ -83,21 +83,47 @@ DX targets, not perf promises (Rust perf is the default).
 - **One way to do a thing.** Deprecate before adding a second
   decorator for the same concern.
 
+## Two workspaces — framework vs. product
+
+The repo holds **two independent Cargo workspaces**, split along the
+framework/product line:
+
+- **`nestrs/` (root) — the framework.** `members = ["crates/*"]`, all
+  `nest-rs-*` capability crates. Product-agnostic; publishable. No
+  runnable app lives here.
+- **`nestrs/demo/` — the product (the **Publish** demo).** Its own
+  workspace (`members = ["apps/*", "crates/*"]`) holding the runnable
+  apps plus `features` / `migrations` / `seed`. It *consumes* the
+  framework by **relative path** (`nest-rs-* = { path =
+  "../crates/nest-rs-*" }` in `demo/Cargo.toml`), so you `cd demo` and
+  drive it as if it were the app's own repository: `nestrs run`, the
+  `.env` cascade, `Justfile` / `db.just` / `test.just`, the `Dockerfile`
+  (built with the parent as context so it can reach `../crates`), and a
+  separate `Cargo.lock` / `target/` all live under `demo/`. The
+  `.cargo/config.toml` (mold linker) at the root is inherited
+  hierarchically — not duplicated.
+
+Each workspace builds, tests, and locks on its own. A change spanning
+both (a framework crate + a demo app that uses it) compiles in `demo/`
+because the path dep pulls the live framework source.
+
 ## Monorepo layout
 
-Three homes. Dividing rule: `crates/features/` when *any other app
-could reuse it*; `apps/<x>/` only when *this app's exposure decides
-something the feature can't generalize*.
+Three homes, within the **demo** workspace. Dividing rule:
+`demo/crates/features/` when *any other app could reuse it*;
+`demo/apps/<x>/` only when *this app's exposure decides something the
+feature can't generalize*.
 
-- **`crates/nestrs-*` — framework.** Generic, product-agnostic. Never
-  names a concrete `Claims`, entity, or policy — generic *over* them.
-- **`crates/features/` — product features.** Hexagonal per slice: port
+- **`crates/nestrs-*` — framework** (root workspace). Generic,
+  product-agnostic. Never names a concrete `Claims`, entity, or policy
+  — generic *over* them.
+- **`demo/crates/features/` — product features.** Hexagonal per slice: port
   at the feature root (`entity.rs`, `service.rs`, `dto.rs` / `dtos/`,
   any queue payload `command.rs` / `event.rs`, `error.rs`,
   `module.rs`); each adapter is a sub-folder per transport with its own
   `module.rs`. Port at the root — not in a `core/` sub-folder — is
   deliberate.
-- **`apps/<name>` — pure composition.** `main.rs` + `module.rs` only,
+- **`demo/apps/<name>` — pure composition.** `main.rs` + `module.rs` only,
   by default. A feature folder under `apps/<x>/` is the exception
   (glue handler over several features, deployment-specific route). Such
   an app-local feature **may flatten** — handler + `service.rs` +
@@ -808,7 +834,11 @@ no standalone generator, no CI drift-check.
 ## Hard "no" list
 
 - No external DI library.
-- No renaming of `apps/` or `crates/features/`.
+- No collapsing the two workspaces. The framework (`crates/nest-rs-*`,
+  root) and the product (`demo/` — apps + `features`/`migrations`/
+  `seed`) stay split; the demo consumes the framework by relative path.
+  The folder names `demo/apps/` and `demo/crates/features/` are fixed —
+  rename neither.
 - No feature flags for capabilities that don't yet exist.
 - No backwards-compatibility shims (no public API to preserve yet).
 - No mocking the database in e2e tests.
@@ -830,9 +860,9 @@ no standalone generator, no CI drift-check.
 This file plus the **code** are the source of truth.
 
 1. **This file** — durable rules.
-2. **`crates/features/src/users/`** — reference feature; copy before
-   inventing.
-3. **`apps/api/`** — reference app (REST + GraphQL + DB
+2. **`demo/crates/features/src/users/`** — reference feature; copy
+   before inventing.
+3. **`demo/apps/api/`** — reference app (REST + GraphQL + DB
    + authz); `module.rs` is canonical composition.
 4. **`crates/nestrs-<concern>/`** for whatever you touch.
 

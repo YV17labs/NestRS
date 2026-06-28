@@ -1,9 +1,15 @@
 # syntax=docker/dockerfile:1.7
 #
-# Multi-stage build for the entire workspace.
+# Multi-stage build for the demo (product) workspace.
 #
-# Every binary crate under `apps/` is compiled in the builder and shipped in
-# the runtime image. Which one runs is chosen at `docker run` time by
+# Build context is the PARENT (`nestrs/`), not `demo/`: this workspace reaches
+# the framework through `../crates`, so the build must see both trees. Build
+# from one level up:
+#
+#   cd ..  &&  docker build -f demo/Dockerfile -t nestrs .
+#
+# Every binary crate under `demo/apps/` is compiled in the builder and shipped
+# in the runtime image. Which one runs is chosen at `docker run` time by
 # overriding the entrypoint:
 #
 #   docker run --rm -p 3002:3002 nestrs                # runs api (default)
@@ -24,7 +30,7 @@
 #   - No HEALTHCHECK directive: rely on Kubernetes liveness/readiness probes
 #     exposed at /health/{live,ready,startup}.
 
-ARG RUST_VERSION=1.95
+ARG RUST_VERSION=1.96
 ARG CARGO_CHEF_VERSION=0.1.77
 
 # --- chef ---------------------------------------------------------------------
@@ -34,15 +40,19 @@ RUN cargo install cargo-chef --locked --version ${CARGO_CHEF_VERSION}
 WORKDIR /app
 
 # --- planner ------------------------------------------------------------------
+# Cargo commands run from `/app/demo`, the product workspace root (the parent
+# context also carries `../crates`, the framework — see the header).
 FROM chef AS planner
 COPY . .
+WORKDIR /app/demo
 RUN cargo chef prepare --recipe-path recipe.json
 
 # --- builder ------------------------------------------------------------------
 FROM chef AS builder
-COPY --from=planner /app/recipe.json recipe.json
+COPY --from=planner /app/demo/recipe.json /app/demo/recipe.json
+WORKDIR /app/demo
 RUN cargo chef cook --release --recipe-path recipe.json
-COPY . .
+COPY . /app
 RUN cargo build --release --workspace --bins
 # Collect every workspace binary into a single dir so the runtime stage can
 # copy them without enumerating each one.

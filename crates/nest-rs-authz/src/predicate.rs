@@ -3,10 +3,23 @@
 //! ([`Predicate::matches`] → in-memory). Sharing one AST keeps the rows a
 //! query returns and the rows the response check accepts from drifting apart.
 
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 use sea_orm::sea_query::Condition;
 use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, Value};
+
+/// Scalar comparison operator for [`Predicate::Cmp`]. Equality already has its
+/// own variant ([`Predicate::Eq`]); this covers the remaining ordered/inequality
+/// comparisons. Deliberately minimal — extend on demand, not speculatively.
+#[derive(Clone, Copy, Debug)]
+pub enum CmpOp {
+    Ne,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+}
 
 /// A condition over entity `E`, interpreted as SQL or in memory.
 #[derive(Default)]
@@ -15,6 +28,13 @@ pub enum Predicate<E: EntityTrait> {
     Always,
     Eq(E::Column, Value),
     In(E::Column, Vec<Value>),
+    /// Scalar comparison (`Ne`/`Lt`/`Lte`/`Gt`/`Gte`) on one of `E`'s own
+    /// columns. Pure and symmetric: SQL renders the matching operator, the
+    /// in-memory check orders the model's value against the bound value.
+    Cmp(E::Column, CmpOp, Value),
+    /// Nullness test on one of `E`'s own columns. `true` → `IS NULL`,
+    /// `false` → `IS NOT NULL`.
+    IsNull(E::Column, bool),
     And(Vec<Predicate<E>>),
     Or(Vec<Predicate<E>>),
     Not(Box<Predicate<E>>),
@@ -28,6 +48,25 @@ impl<E: EntityTrait> Predicate<E> {
             Predicate::Always => Condition::all(),
             Predicate::Eq(col, value) => Condition::all().add(col.eq(value.clone())),
             Predicate::In(col, values) => Condition::all().add(col.is_in(values.clone())),
+            Predicate::Cmp(col, op, value) => {
+                let v = value.clone();
+                let expr = match op {
+                    CmpOp::Ne => col.ne(v),
+                    CmpOp::Lt => col.lt(v),
+                    CmpOp::Lte => col.lte(v),
+                    CmpOp::Gt => col.gt(v),
+                    CmpOp::Gte => col.gte(v),
+                };
+                Condition::all().add(expr)
+            }
+            Predicate::IsNull(col, is_null) => {
+                let expr = if *is_null {
+                    col.is_null()
+                } else {
+                    col.is_not_null()
+                };
+                Condition::all().add(expr)
+            }
             Predicate::And(parts) => parts
                 .iter()
                 .fold(Condition::all(), |acc, p| acc.add(p.to_condition())),
@@ -49,10 +88,65 @@ impl<E: EntityTrait> Predicate<E> {
                 let actual = model.get(*col);
                 values.iter().any(|v| v == &actual)
             }
+            Predicate::Cmp(col, op, value) => {
+                let actual = model.get(*col);
+                match op {
+                    // `Value: PartialEq`, so inequality needs no ordering.
+                    CmpOp::Ne => &actual != value,
+                    // Ordered comparisons fail closed when the two values are
+                    // not orderable (mismatched variants, or a NULL column):
+                    // an undecidable comparison never reports a match.
+                    _ => match value_ordering(&actual, value) {
+                        Some(ord) => match op {
+                            CmpOp::Lt => ord == Ordering::Less,
+                            CmpOp::Lte => ord != Ordering::Greater,
+                            CmpOp::Gt => ord == Ordering::Greater,
+                            CmpOp::Gte => ord != Ordering::Less,
+                            CmpOp::Ne => unreachable!("Ne handled above"),
+                        },
+                        None => false,
+                    },
+                }
+            }
+            Predicate::IsNull(col, want_null) => model.get(*col).is_some() != *want_null,
             Predicate::And(parts) => parts.iter().all(|p| p.matches(model)),
             Predicate::Or(parts) => parts.iter().any(|p| p.matches(model)),
             Predicate::Not(inner) => !inner.matches(model),
         }
+    }
+}
+
+/// Order two [`Value`]s of the same variant. `Value` derives `PartialEq` but not
+/// `PartialOrd`, so the ordered `Cmp` operators need this. Returns `None` for
+/// `NULL` operands or mismatched variants — the in-memory `Cmp` arm treats that
+/// as "no match" (fail closed). Covers the scalar and temporal column types a
+/// row-level rule realistically orders; equality/`Ne` does not route through here.
+fn value_ordering(a: &Value, b: &Value) -> Option<Ordering> {
+    use Value::*;
+    match (a, b) {
+        (Bool(Some(x)), Bool(Some(y))) => x.partial_cmp(y),
+        (TinyInt(Some(x)), TinyInt(Some(y))) => x.partial_cmp(y),
+        (SmallInt(Some(x)), SmallInt(Some(y))) => x.partial_cmp(y),
+        (Int(Some(x)), Int(Some(y))) => x.partial_cmp(y),
+        (BigInt(Some(x)), BigInt(Some(y))) => x.partial_cmp(y),
+        (TinyUnsigned(Some(x)), TinyUnsigned(Some(y))) => x.partial_cmp(y),
+        (SmallUnsigned(Some(x)), SmallUnsigned(Some(y))) => x.partial_cmp(y),
+        (Unsigned(Some(x)), Unsigned(Some(y))) => x.partial_cmp(y),
+        (BigUnsigned(Some(x)), BigUnsigned(Some(y))) => x.partial_cmp(y),
+        (Float(Some(x)), Float(Some(y))) => x.partial_cmp(y),
+        (Double(Some(x)), Double(Some(y))) => x.partial_cmp(y),
+        (String(Some(x)), String(Some(y))) => x.partial_cmp(y),
+        (Char(Some(x)), Char(Some(y))) => x.partial_cmp(y),
+        (Uuid(Some(x)), Uuid(Some(y))) => x.partial_cmp(y),
+        (ChronoDate(Some(x)), ChronoDate(Some(y))) => x.partial_cmp(y),
+        (ChronoTime(Some(x)), ChronoTime(Some(y))) => x.partial_cmp(y),
+        (ChronoDateTime(Some(x)), ChronoDateTime(Some(y))) => x.partial_cmp(y),
+        (ChronoDateTimeUtc(Some(x)), ChronoDateTimeUtc(Some(y))) => x.partial_cmp(y),
+        (ChronoDateTimeLocal(Some(x)), ChronoDateTimeLocal(Some(y))) => x.partial_cmp(y),
+        (ChronoDateTimeWithTimeZone(Some(x)), ChronoDateTimeWithTimeZone(Some(y))) => {
+            x.partial_cmp(y)
+        }
+        _ => None,
     }
 }
 
@@ -75,6 +169,36 @@ impl<E: EntityTrait> PredicateBuilder<E> {
         values: impl IntoIterator<Item = V>,
     ) -> Predicate<E> {
         Predicate::In(column, values.into_iter().map(Into::into).collect())
+    }
+
+    pub fn ne(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
+        Predicate::Cmp(column, CmpOp::Ne, value.into())
+    }
+
+    pub fn lt(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
+        Predicate::Cmp(column, CmpOp::Lt, value.into())
+    }
+
+    pub fn lte(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
+        Predicate::Cmp(column, CmpOp::Lte, value.into())
+    }
+
+    pub fn gt(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
+        Predicate::Cmp(column, CmpOp::Gt, value.into())
+    }
+
+    pub fn gte(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
+        Predicate::Cmp(column, CmpOp::Gte, value.into())
+    }
+
+    /// `col IS NULL`.
+    pub fn is_null(&self, column: E::Column) -> Predicate<E> {
+        Predicate::IsNull(column, true)
+    }
+
+    /// `col IS NOT NULL`.
+    pub fn is_not_null(&self, column: E::Column) -> Predicate<E> {
+        Predicate::IsNull(column, false)
     }
 
     pub fn all(&self, parts: impl IntoIterator<Item = Predicate<E>>) -> Predicate<E> {
@@ -106,6 +230,8 @@ mod tests {
             pub id: i32,
             pub org_id: i32,
             pub name: String,
+            // Nullable column so `IsNull` and `Cmp`-on-NULL have something to bite on.
+            pub tag: Option<String>,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -119,6 +245,16 @@ mod tests {
             id,
             org_id: org,
             name: name.into(),
+            tag: None,
+        }
+    }
+
+    fn tagged(id: i32, org: i32, name: &str, tag: Option<&str>) -> widget::Model {
+        widget::Model {
+            id,
+            org_id: org,
+            name: name.into(),
+            tag: tag.map(Into::into),
         }
     }
 
@@ -241,6 +377,80 @@ mod tests {
         assert!(p.matches(&model(999, 0, "anyone")));
         assert!(!p.matches(&model(1, 7, "bob")));
         assert!(!p.matches(&model(998, 8, "ada")));
+    }
+
+    #[test]
+    fn ne_excludes_the_bound_value_in_memory_and_sql() {
+        let p = b().ne(widget::Column::OrgId, 7);
+        assert!(!p.matches(&model(1, 7, "a")));
+        assert!(p.matches(&model(1, 8, "a")));
+        let s = sql(&p);
+        assert!(s.contains("org_id"), "Ne must mention column: {s}");
+        assert!(s.contains("<>"), "Ne must compile to SQL <>: {s}");
+    }
+
+    #[test]
+    fn lt_and_lte_order_by_column_value() {
+        let lt = b().lt(widget::Column::OrgId, 5);
+        assert!(lt.matches(&model(1, 4, "a")));
+        assert!(!lt.matches(&model(1, 5, "a")));
+        assert!(!lt.matches(&model(1, 6, "a")));
+        assert!(sql(&lt).contains('<'), "Lt renders <: {}", sql(&lt));
+
+        let lte = b().lte(widget::Column::OrgId, 5);
+        assert!(lte.matches(&model(1, 4, "a")));
+        assert!(lte.matches(&model(1, 5, "a")));
+        assert!(!lte.matches(&model(1, 6, "a")));
+        assert!(sql(&lte).contains("<="), "Lte renders <=: {}", sql(&lte));
+    }
+
+    #[test]
+    fn gt_and_gte_order_by_column_value() {
+        let gt = b().gt(widget::Column::OrgId, 5);
+        assert!(!gt.matches(&model(1, 5, "a")));
+        assert!(gt.matches(&model(1, 6, "a")));
+        assert!(sql(&gt).contains('>'), "Gt renders >: {}", sql(&gt));
+
+        let gte = b().gte(widget::Column::OrgId, 5);
+        assert!(gte.matches(&model(1, 5, "a")));
+        assert!(!gte.matches(&model(1, 4, "a")));
+        assert!(sql(&gte).contains(">="), "Gte renders >=: {}", sql(&gte));
+    }
+
+    #[test]
+    fn ordered_cmp_on_a_null_column_fails_closed() {
+        // `tag IS NULL`, so the ordered comparison is undecidable — the
+        // in-memory check must report no match, never silently admit the row.
+        let p = b().lt(widget::Column::Tag, "m");
+        assert!(!p.matches(&tagged(1, 7, "a", None)));
+        // A present value still orders normally.
+        assert!(p.matches(&tagged(1, 7, "a", Some("abc"))));
+        assert!(!p.matches(&tagged(1, 7, "a", Some("zzz"))));
+    }
+
+    #[test]
+    fn is_null_matches_absent_values_in_memory_and_sql() {
+        let p = b().is_null(widget::Column::Tag);
+        assert!(p.matches(&tagged(1, 7, "a", None)));
+        assert!(!p.matches(&tagged(1, 7, "a", Some("x"))));
+        let s = sql(&p);
+        assert!(s.contains("tag"), "IsNull must mention column: {s}");
+        assert!(
+            s.to_uppercase().contains("IS NULL"),
+            "IsNull must render IS NULL: {s}"
+        );
+    }
+
+    #[test]
+    fn is_not_null_matches_present_values_in_memory_and_sql() {
+        let p = b().is_not_null(widget::Column::Tag);
+        assert!(p.matches(&tagged(1, 7, "a", Some("x"))));
+        assert!(!p.matches(&tagged(1, 7, "a", None)));
+        let s = sql(&p);
+        assert!(
+            s.to_uppercase().contains("IS NOT NULL"),
+            "IsNull(false) must render IS NOT NULL: {s}"
+        );
     }
 
     #[test]

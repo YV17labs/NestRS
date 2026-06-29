@@ -50,8 +50,11 @@ full = ["http", "graphql", "mcp"]
 [dependencies]
 # Engine: always required.
 # A rule's condition lowers to `sea_orm::Condition`; in-memory checks read
-# columns via `ModelTrait::get`.
-sea-orm.workspace = true
+# columns via `ModelTrait::get`. `with-chrono` makes the temporal `Value`
+# variants exist so the in-memory `Cmp` interpreter can order timestamp
+# columns (the dominant scalar-comparison use case) regardless of which
+# features the consuming workspace enables.
+sea-orm = { workspace = true, features = ["with-chrono"] }
 # Response masking serializes a model then strips disallowed keys.
 serde.workspace = true
 serde_json.workspace = true

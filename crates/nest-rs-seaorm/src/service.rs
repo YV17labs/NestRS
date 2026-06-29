@@ -14,10 +14,10 @@ use sea_orm::{
     PrimaryKeyTrait, QueryFilter,
 };
 
-use nest_rs_authz::{Action, ActionMarker, current_ability};
+use nest_rs_authz::{Action, ActionMarker};
 
 use crate::page::Page;
-use crate::repo::Repo;
+use crate::repo::{Repo, scope_for};
 
 /// Build a fresh `ActiveModel` from a create-input DTO. Implemented by `#[expose]`
 /// for each `Create<Name>Input`.
@@ -161,6 +161,13 @@ where
     /// **unscoped** so a denied-but-existing row is [`Access::Denied`] rather than
     /// hidden as [`Access::Missing`] — the route-model-binding gateway the
     /// `Bind`/`bind` adapters delegate to.
+    ///
+    /// Authorization is decided in **SQL**, by re-loading the same id under
+    /// `condition_for(action)` (the very `WHERE` the list path uses). This is
+    /// one source of truth for every predicate kind: a relational rule —
+    /// which an in-memory check cannot evaluate without loading the parent —
+    /// is enforced here exactly as it is on a list read. Cost is one extra
+    /// primary-key lookup on the binding path.
     async fn access(
         &self,
         action: Action,
@@ -170,13 +177,20 @@ where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     {
         let conn = Repo::<Self::Entity>::conn()?;
-        let query = Repo::<Self::Entity>::unscoped_by_id(id).filter(Self::live_read_filter());
-        let Some(model) = query.one(&conn).await? else {
+        let live = Self::live_read_filter();
+        let Some(model) = Repo::<Self::Entity>::unscoped_by_id(id)
+            .filter(live.clone())
+            .one(&conn)
+            .await?
+        else {
             return Ok(Access::Missing);
         };
-        let allowed = current_ability()
-            .map(|ability| ability.can::<Self::Entity>(action, &model))
-            .unwrap_or(false);
+        let allowed = Repo::<Self::Entity>::unscoped_by_id(id)
+            .filter(scope_for::<Self::Entity>(action))
+            .filter(live)
+            .one(&conn)
+            .await?
+            .is_some();
         let entity = Self::entity_name();
         if allowed {
             tracing::debug!(target: "nest_rs::orm", entity, %id, ?action, "access granted");
@@ -199,13 +213,16 @@ pub trait Creatable: CrudService {
 
     /// Insert a row from a create-input DTO, in the request transaction.
     ///
-    /// Defense in depth beyond the route's `Authorize<Create, _>` gate: when an
-    /// [`Ability`](nest_rs_authz::Ability) is ambient (any authenticated request
-    /// path), the freshly built row is checked against `condition_for(Create)`
-    /// and a row outside the caller's scope is rolled back via
-    /// [`DbErr::RecordNotInserted`] — a caller cannot create a row it could not
-    /// then read or update. With no ambient ability (system/worker path) the
-    /// insert stays unscoped, mirroring the read default on a pool executor.
+    /// Defense in depth beyond the route's `Authorize<Create, _>` gate: the
+    /// freshly inserted row is re-checked **in SQL** against
+    /// `condition_for(Create)` — the same source of truth the read filter uses
+    /// — and a row outside the caller's scope is rolled back via
+    /// [`DbErr::RecordNotInserted`]. Deciding in SQL (rather than an in-memory
+    /// `can`) covers every predicate kind, including a **relational** Create
+    /// grant whose scope lives on a parent row the in-memory check cannot
+    /// reach — so a caller cannot create a child under an out-of-scope parent.
+    /// With no ambient ability (system/worker path) `scope_for` is unscoped, so
+    /// the insert stands, mirroring the read default on a pool executor.
     async fn create(
         &self,
         input: Self::Create,
@@ -213,9 +230,13 @@ pub trait Creatable: CrudService {
         let entity = Self::entity_name();
         let conn = Repo::<Self::Entity>::conn()?;
         let model = input.into_active_model().insert(&conn).await?;
-        if let Some(ability) = current_ability()
-            && !ability.can::<Self::Entity>(Action::Create, &model)
-        {
+        let in_scope = Repo::<Self::Entity>::unscoped()
+            .filter(scope_for::<Self::Entity>(Action::Create))
+            .filter(pk_condition::<Self::Entity>(&model))
+            .one(&conn)
+            .await?
+            .is_some();
+        if !in_scope {
             tracing::warn!(
                 target: "nest_rs::orm",
                 entity,
@@ -336,4 +357,17 @@ fn model_pk<E: EntityTrait>(model: &E::Model) -> sea_orm::Value {
         .expect("an entity has at least one primary-key column")
         .into_column();
     model.get(pk_col)
+}
+
+/// Equality condition over **all** of a model's primary-key columns, used to
+/// re-select a freshly inserted row for the scoped create re-check. Spans
+/// composite keys, so it is correct for junction entities too.
+fn pk_condition<E: EntityTrait>(model: &E::Model) -> Condition {
+    use sea_orm::{ColumnTrait, Iterable, ModelTrait, PrimaryKeyToColumn};
+    let mut cond = Condition::all();
+    for pk in E::PrimaryKey::iter() {
+        let col = pk.into_column();
+        cond = cond.add(col.eq(model.get(col)));
+    }
+    cond
 }

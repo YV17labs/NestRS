@@ -6,8 +6,10 @@
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 
-use sea_orm::sea_query::Condition;
-use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, Value};
+use sea_orm::sea_query::{Condition, DynIden, Expr, ExprTrait, Query};
+use sea_orm::{
+    ColumnTrait, EntityTrait, Identity, ModelTrait, RelationDef, RelationTrait, RelationType, Value,
+};
 
 /// Scalar comparison operator for [`Predicate::Cmp`]. Equality already has its
 /// own variant ([`Predicate::Eq`]); this covers the remaining ordered/inequality
@@ -38,6 +40,85 @@ pub enum Predicate<E: EntityTrait> {
     And(Vec<Predicate<E>>),
     Or(Vec<Predicate<E>>),
     Not(Box<Predicate<E>>),
+    /// Scope `E` by a condition on a *related* entity reached through a typed
+    /// SeaORM relation. Type-erased over the related entity (see
+    /// [`RelatedPredicate`]).
+    Related(RelatedPredicate),
+}
+
+/// A condition that scopes `E` by a sub-condition on a *related* entity `R`,
+/// reached through a typed SeaORM relation. Type-erased over `R`: the
+/// sub-condition is pre-lowered to SQL (over `R`'s columns) at rule-definition
+/// time, and the join metadata comes from the [`RelationDef`]. Nothing here is
+/// generic over `R`, so it lives inside the monomorphic [`Predicate<E>`] without
+/// a type parameter.
+///
+/// The in-memory interpreter cannot traverse the relation without loading the
+/// parent, so [`Predicate::matches`] defers to SQL for relational row
+/// visibility (returns `true`); the by-id / create paths re-check against the
+/// same lowered condition in SQL instead (one source of truth).
+#[derive(Clone)]
+pub struct RelatedPredicate {
+    /// `E -> R` relation: yields the from-column (on `E`), the to-column (on
+    /// `R`), both tables, and the relation type.
+    relation: RelationDef,
+    /// `R`'s filter, already lowered to SQL over `R`'s own columns.
+    sub_condition: Condition,
+}
+
+impl RelatedPredicate {
+    /// Lower to a semi-join against the related table. `belongs_to`/`has_one`
+    /// ([`RelationType::HasOne`]) becomes an uncorrelated `IN (subquery)`;
+    /// `has_many` becomes a correlated `EXISTS`. A relation's custom
+    /// `on_condition` is folded into the subquery's `WHERE` so the scope is not
+    /// widened past the join.
+    fn to_condition(&self) -> Condition {
+        let def = &self.relation;
+        // v1 supports single-column keys only. A composite key is rejected at
+        // rule-definition time (see `PredicateBuilder::related`), so reaching
+        // here with one is a framework bug, not user input.
+        let (Some(from_col), Some(to_col)) = (unary_iden(&def.from_col), unary_iden(&def.to_col))
+        else {
+            panic!("relational authz filter reached a composite-key relation after validation");
+        };
+        let from_tbl = def.from_tbl.sea_orm_table().clone();
+        let to_tbl = def.to_tbl.sea_orm_table().clone();
+
+        let mut where_cond = self.sub_condition.clone();
+        if let Some(on) = &def.on_condition {
+            where_cond = where_cond.add(on(from_tbl.clone(), to_tbl.clone()));
+        }
+
+        match def.rel_type {
+            RelationType::HasOne => {
+                let subquery = Query::select()
+                    .expr(Expr::col((to_tbl, to_col)))
+                    .from(def.to_tbl.clone())
+                    .cond_where(where_cond)
+                    .take();
+                Condition::all().add(Expr::col((from_tbl, from_col)).in_subquery(subquery))
+            }
+            RelationType::HasMany => {
+                let correlated = Condition::all()
+                    .add(Expr::col((to_tbl, to_col)).equals((from_tbl, from_col)))
+                    .add(where_cond);
+                let subquery = Query::select()
+                    .expr(Expr::val(1))
+                    .from(def.to_tbl.clone())
+                    .cond_where(correlated)
+                    .take();
+                Condition::all().add(Expr::exists(subquery))
+            }
+        }
+    }
+}
+
+/// The single column of an [`Identity`], or `None` for a composite key.
+fn unary_iden(id: &Identity) -> Option<DynIden> {
+    match id {
+        Identity::Unary(col) => Some(col.clone()),
+        _ => None,
+    }
 }
 
 impl<E: EntityTrait> Predicate<E> {
@@ -74,6 +155,7 @@ impl<E: EntityTrait> Predicate<E> {
                 .iter()
                 .fold(Condition::any(), |acc, p| acc.add(p.to_condition())),
             Predicate::Not(inner) => inner.to_condition().not(),
+            Predicate::Related(rp) => rp.to_condition(),
         }
     }
 
@@ -112,6 +194,13 @@ impl<E: EntityTrait> Predicate<E> {
             Predicate::And(parts) => parts.iter().all(|p| p.matches(model)),
             Predicate::Or(parts) => parts.iter().any(|p| p.matches(model)),
             Predicate::Not(inner) => !inner.matches(model),
+            // Row visibility for a relational rule is decided in SQL (system 2):
+            // the list filter already excluded out-of-scope rows, and the
+            // by-id/create paths re-check against the same lowered condition.
+            // The in-memory check cannot traverse the relation without loading
+            // the parent (it would have to be async and would load rows on the
+            // fly), so it defers rather than guessing. Field masking still runs.
+            Predicate::Related(_) => true,
         }
     }
 }
@@ -212,6 +301,52 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     pub fn not(&self, inner: Predicate<E>) -> Predicate<E> {
         Predicate::Not(Box::new(inner))
     }
+
+    /// Scope `E` by a condition on a related entity `R`, reached via `relation`
+    /// (a variant of `E`'s SeaORM `Relation` enum). The closure builds the
+    /// sub-condition using `R`'s own typed columns.
+    ///
+    /// ```ignore
+    /// // `message` has no `org_id`; its tenant is the parent conversation's.
+    /// ab.can(Action::Read, message::Entity).when(|p| {
+    ///     p.related::<conversation::Entity, _>(
+    ///         message::Relation::Conversation,
+    ///         |c| c.eq(conversation::Column::OrgId, org_id),
+    ///     )
+    /// });
+    /// ```
+    ///
+    /// Two boot-time guards close the gap that type erasure opens. Both panic at
+    /// rule-definition time (never a silently-wrong filter):
+    /// - the relation must point at `R` (its `to_tbl` must be `R`'s table);
+    /// - the relation must be single-column (composite keys are unsupported in
+    ///   v1).
+    pub fn related<R, F>(&self, relation: E::Relation, build: F) -> Predicate<E>
+    where
+        R: EntityTrait,
+        F: FnOnce(PredicateBuilder<R>) -> Predicate<R>,
+    {
+        let def = relation.def();
+        let expected = R::default().table_ref();
+        assert!(
+            def.to_tbl.sea_orm_table() == expected.sea_orm_table(),
+            "related::<{}>() was given a relation pointing at {:?}, not R's table {:?}",
+            std::any::type_name::<R>(),
+            def.to_tbl.sea_orm_table(),
+            expected.sea_orm_table(),
+        );
+        assert!(
+            def.from_col.arity() == 1 && def.to_col.arity() == 1,
+            "related::<{}>() does not support composite-key relations (v1); \
+             use a single-column relation or denormalize the tenant key",
+            std::any::type_name::<R>(),
+        );
+        let sub = build(PredicateBuilder::<R>::new());
+        Predicate::Related(RelatedPredicate {
+            relation: def,
+            sub_condition: sub.to_condition(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +391,57 @@ mod tests {
             name: name.into(),
             tag: tag.map(Into::into),
         }
+    }
+
+    // A parent/child pair for relational tests: `child` belongs_to `parent`,
+    // and the tenant key (`org_id`) lives only on the parent — exactly the
+    // shape the relational filter exists for.
+    mod parent {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "parents")]
+        pub struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub org_id: i32,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    mod child {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "children")]
+        pub struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub parent_id: i32,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {
+            #[sea_orm(
+                belongs_to = "super::parent::Entity",
+                from = "Column::ParentId",
+                to = "super::parent::Column::Id"
+            )]
+            Parent,
+        }
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    fn child_sql(p: &Predicate<child::Entity>) -> String {
+        child::Entity::find()
+            .filter(p.to_condition())
+            .build(DatabaseBackend::Postgres)
+            .to_string()
     }
 
     fn sql(p: &Predicate<widget::Entity>) -> String {
@@ -451,6 +637,85 @@ mod tests {
             s.to_uppercase().contains("IS NOT NULL"),
             "IsNull(false) must render IS NOT NULL: {s}"
         );
+    }
+
+    #[test]
+    fn related_belongs_to_lowers_to_in_subquery() {
+        // `child` scoped by `parent.org_id` (child has no org_id column).
+        let p = PredicateBuilder::<child::Entity>::new()
+            .related::<parent::Entity, _>(child::Relation::Parent, |c| {
+                c.eq(parent::Column::OrgId, 7)
+            });
+        let s = child_sql(&p);
+        assert!(
+            s.contains("IN (SELECT"),
+            "belongs_to must lower to an IN subquery: {s}"
+        );
+        assert!(
+            s.contains("parents"),
+            "subquery must select from the parent table: {s}"
+        );
+        assert!(
+            s.contains("org_id"),
+            "subquery must filter the parent's column: {s}"
+        );
+        assert!(
+            s.contains("parent_id"),
+            "outer query must constrain the child FK: {s}"
+        );
+    }
+
+    #[test]
+    fn related_defers_row_visibility_to_sql_in_memory() {
+        // The in-memory check cannot traverse the relation, so it returns true
+        // and lets the SQL filter (and the by-id/create re-check) decide.
+        let p = PredicateBuilder::<child::Entity>::new()
+            .related::<parent::Entity, _>(child::Relation::Parent, |c| {
+                c.eq(parent::Column::OrgId, 7)
+            });
+        assert!(p.matches(&child::Model {
+            id: 1,
+            parent_id: 99
+        }));
+        assert!(p.matches(&child::Model {
+            id: 2,
+            parent_id: 1
+        }));
+    }
+
+    #[test]
+    fn related_has_many_lowers_to_correlated_exists() {
+        use sea_orm::RelationTrait;
+        // Fabricate the inverse `parent -> children` has_many relation from the
+        // child's belongs_to def (rev keeps the type, so flip it to HasMany).
+        let mut def = child::Relation::Parent.def().rev();
+        def.rel_type = sea_orm::RelationType::HasMany;
+        let sub = PredicateBuilder::<child::Entity>::new().eq(child::Column::Id, 5);
+        let rp = RelatedPredicate {
+            relation: def,
+            sub_condition: sub.to_condition(),
+        };
+        let s = parent::Entity::find()
+            .filter(rp.to_condition())
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        assert!(
+            s.to_uppercase().contains("EXISTS(SELECT"),
+            "has_many must lower to a correlated EXISTS: {s}"
+        );
+        assert!(
+            s.contains("children") && s.contains("parents"),
+            "EXISTS must correlate the child table back to the parent: {s}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "was given a relation pointing at")]
+    fn related_rejects_a_relation_not_pointing_at_r() {
+        // The relation targets `parent`, but R is declared as `child` — the
+        // boot-time guard must catch the mismatch type erasure would hide.
+        let _ = PredicateBuilder::<child::Entity>::new()
+            .related::<child::Entity, _>(child::Relation::Parent, |c| c.eq(child::Column::Id, 1));
     }
 
     #[test]

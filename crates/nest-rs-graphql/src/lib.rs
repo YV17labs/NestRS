@@ -20,7 +20,7 @@ pub use context::GraphqlContextSeed;
 /// Per-operation seam the endpoint runs around every request. Implemented by
 /// `nest_rs_authz::graphql`, bound with
 /// `providers = [MyBridge as dyn GraphqlOperationGuard]`.
-pub use context::{BoxFuture, FallbackOperationGuard, GraphqlOperationGuard};
+pub use context::{BoxFuture, FallbackOperationGuard, GraphqlOperationGuard, GraphqlVariablePipe};
 pub use guard::GraphqlResolverGuard;
 /// Re-establishes per-request ambient state inside a DataLoader batch (the
 /// batch runs on a spawned task where request task-locals are gone).
@@ -34,5 +34,9 @@ pub use async_graphql;
 pub use async_graphql_poem;
 pub use async_trait::async_trait;
 pub use inventory;
+// Re-exported so `#[crud]`-generated create/update ops validate their input
+// (`::nest_rs_graphql::ValidateProbe`) without the consumer depending on
+// nest-rs-pipes directly — the global-validation ("ValidationPipe") path.
+pub use nest_rs_pipes::{MaybeValidateFallback, ValidateProbe};
 
 pub use nest_rs_graphql_macros::{crud, dataloader, resolver};

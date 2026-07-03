@@ -21,6 +21,9 @@ nest-rs-ws-macros.workspace = true
 poem = { workspace = true, features = ["websocket"] }
 serde = { workspace = true }
 serde_json.workspace = true
+# Global pipes over a message's `data` (`transform_ws_data`), bridged from
+# `use_pipes_global` via the `WsDataPipe` seeded fn pointer.
+nest-rs-pipes.workspace = true
 async-trait.workspace = true
 # `StreamExt`/`SinkExt` to split and drive poem's `WebSocketStream`: the connection
 # loop reads while a spawned writer task drains the per-connection outbox.
@@ -37,3 +40,4 @@ parking_lot.workspace = true
 # chain (global + per-message guard dedup). nest-rs-guards depends on
 # nest-rs-ws at the lib level, so this stays a dev-only edge.
 nest-rs-guards = { path = "../nest-rs-guards" }
+validator.workspace = true

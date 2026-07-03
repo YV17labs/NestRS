@@ -68,6 +68,19 @@ pub trait GraphqlOperationGuard: Send + Sync + 'static {
 /// operations unguarded — the global pool still gates them.
 pub struct FallbackOperationGuard(pub fn(&Container) -> Arc<dyn GraphqlOperationGuard>);
 
+/// Bridge slot for global pipes on GraphQL operation **variables** — the
+/// operation-level analog of HTTP's `transform_body`. `nest-rs-guards`'
+/// `use_pipes_global` provides a fn pointer that folds every registered global
+/// pipe's [`GlobalPipe::transform_graphql_variables`](nest_rs_pipes::GlobalPipe)
+/// over an operation's variables; [`ContextEndpoint`] invokes it after parsing,
+/// before execution. Defined here (the endpoint calls it) and provided by
+/// guards (which owns the `PipeSpecs` registry) — the same seeded-fn-pointer
+/// pattern as [`FallbackOperationGuard`], since guards depends on this crate,
+/// not the reverse. A rejection becomes a GraphQL error response.
+pub struct GraphqlVariablePipe(
+    pub fn(&Container, &mut serde_json::Value) -> Result<(), nest_rs_pipes::PipeError>,
+);
+
 /// The `/graphql` endpoint. Mirrors `async_graphql_poem::GraphQL`'s GET / POST
 /// / batch handling but folds every [`GraphqlContextSeed`] over the request first.
 /// The upstream `accept: multipart/mixed` incremental-delivery path
@@ -120,6 +133,33 @@ impl<E> ContextEndpoint<E> {
         }
     }
 
+    /// Run the registered global pipes over each operation's variables when a
+    /// [`GraphqlVariablePipe`] bridge is provided (`use_pipes_global`). No
+    /// bridge ⇒ untouched. A pipe rejection returns a GraphQL error response.
+    fn pipe_variables(&self, batch: BatchRequest) -> std::result::Result<BatchRequest, Response> {
+        let Some(bridge) = self.container.get::<GraphqlVariablePipe>() else {
+            return Ok(batch);
+        };
+        let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Response> {
+            let mut value = serde_json::to_value(&r.variables).unwrap_or(serde_json::Value::Null);
+            if let Err(err) = (bridge.0)(&self.container, &mut value) {
+                return Err(variable_pipe_error_response(&err));
+            }
+            r.variables = serde_json::from_value(value).unwrap_or_default();
+            Ok(r)
+        };
+        match batch {
+            BatchRequest::Single(r) => Ok(BatchRequest::Single(apply(r)?)),
+            BatchRequest::Batch(rs) => {
+                let mut out = std::vec::Vec::with_capacity(rs.len());
+                for r in rs {
+                    out.push(apply(r)?);
+                }
+                Ok(BatchRequest::Batch(out))
+            }
+        }
+    }
+
     fn seed(&self, req: &Request, gql: GqlRequest) -> GqlRequest {
         // Module-gate the inventory: framework-level seeds always fire;
         // owner-keyed seeds fire only when the owner is reachable. A missing
@@ -135,6 +175,21 @@ impl<E> ContextEndpoint<E> {
     }
 }
 
+/// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
+/// with an `errors` array, the GraphQL wire convention (matching how a resolver
+/// error surfaces), with any field-level `details` under `extensions`.
+fn variable_pipe_error_response(err: &nest_rs_pipes::PipeError) -> Response {
+    let mut error = serde_json::json!({ "message": err.message() });
+    if let Some(details) = err.details() {
+        error["extensions"] = serde_json::json!({ "details": details });
+    }
+    let body = serde_json::json!({ "data": serde_json::Value::Null, "errors": [error] });
+    Response::builder()
+        .status(StatusCode::OK)
+        .content_type("application/json")
+        .body(serde_json::to_vec(&body).unwrap_or_default())
+}
+
 impl<E: Executor> Endpoint for ContextEndpoint<E> {
     type Output = Response;
 
@@ -148,6 +203,12 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
             return Ok(resp);
         }
         let batch = GraphQLBatchRequest::from_request(&req, &mut body).await?.0;
+        // Global variable pipes (operation-level; `transform_graphql_variables`).
+        // A rejection short-circuits with a GraphQL error response.
+        let batch = match self.pipe_variables(batch) {
+            Ok(batch) => batch,
+            Err(resp) => return Ok(resp),
+        };
         let batch = match batch {
             BatchRequest::Single(r) => BatchRequest::Single(self.seed(&req, r)),
             BatchRequest::Batch(rs) => {

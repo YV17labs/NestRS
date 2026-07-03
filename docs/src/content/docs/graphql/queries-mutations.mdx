@@ -89,6 +89,20 @@ Validation happens at deserialization: a missing required arg returns
 a parse error, a wrong scalar returns a coercion error. Both come back
 with no resolver call.
 
+Beyond shape checks, an argument binds a [pipe](/fundamentals/pipes/)
+per parameter: `Valid<T>` runs `validator` rules over an input object,
+`Piped<P, T>` names a custom transform. The SDL still shows `T`; a
+rejection surfaces in the response's `errors` — the resolver body never
+runs.
+
+```rust
+#[query]
+#[public]
+async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> {
+    Ok(input.into_inner().name)
+}
+```
+
 ## Returning a typed entity
 
 For anything beyond a scalar, define a `SimpleObject` (output) and

@@ -38,9 +38,10 @@ reference override.
 
 The crate driving this page is
 [**`nest-rs-pipes`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-pipes) —
-it provides the transport-agnostic `Pipe` trait and the bundled
-`ValidationPipe<T>`. The HTTP binding lives in `nest-rs-http` as the
-`Valid<E>` extractor.
+it provides the transport-agnostic `Pipe` trait, the bundled
+`ValidationPipe<T>`, and the value-form `Valid<T>` / `Piped<P, T>`
+carriers that GraphQL, WS, and queue handlers bind per argument. The
+HTTP binding lives in `nest-rs-http` as the `Valid<E>` extractor.
 
 ## Where the rules live
 

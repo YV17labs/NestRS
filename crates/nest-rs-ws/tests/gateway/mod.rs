@@ -2,7 +2,27 @@
 //! the macro picks (Unit / Value / `Result<(), E>` / `Result<T, E>`). The macro
 //! itself lives in `nestrs-ws-macros`; this file pins its observable behaviour.
 
+use nest_rs_pipes::{Pipe, PipeError, Piped, Trim, Valid};
 use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
+use serde::Deserialize;
+use validator::Validate;
+
+/// A pipe that always rejects — exercises the WS pipe error path.
+struct Reject;
+
+impl Pipe for Reject {
+    type In = String;
+    type Out = String;
+    fn transform(_: String) -> Result<String, PipeError> {
+        Err(PipeError::new("bad input"))
+    }
+}
+
+#[derive(Deserialize, Validate)]
+struct NameInput {
+    #[validate(length(min = 1))]
+    name: String,
+}
 
 #[gateway(path = "/test")]
 pub struct TestGateway;
@@ -36,6 +56,25 @@ impl TestGateway {
 
     #[subscribe_message("nothing")]
     async fn nothing_handler(&self) {}
+
+    // `Piped<Trim, String>`: the wire payload is a `String`; the handler sees it
+    // trimmed — the WS analog of the HTTP / GraphQL / queue pipe forms.
+    #[subscribe_message("trim")]
+    async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
+        name.into_inner()
+    }
+
+    // A rejecting pipe replies with an error frame, never reaching the body.
+    #[subscribe_message("checked")]
+    async fn checked_handler(&self, name: Piped<Reject, String>) -> String {
+        name.into_inner()
+    }
+
+    // `Valid<T>`: validates the deserialized payload before the handler runs.
+    #[subscribe_message("named")]
+    async fn named_handler(&self, input: Valid<NameInput>) -> String {
+        input.into_inner().name
+    }
 }
 
 #[tokio::test]
@@ -121,5 +160,67 @@ async fn unknown_event_returns_unknown_error() {
             );
         }
         _ => panic!("expected Error for an unrouted event"),
+    }
+}
+
+#[tokio::test]
+async fn a_piped_payload_runs_the_pipe_before_the_handler() {
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "trim",
+            serde_json::Value::String("  hi  ".to_string()),
+        )
+        .await;
+    match reply {
+        WsReply::Reply(v) => assert_eq!(v.as_str(), Some("hi")),
+        _ => panic!("expected the trimmed payload"),
+    }
+}
+
+#[tokio::test]
+async fn a_rejecting_pipe_replies_with_an_error_frame() {
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "checked",
+            serde_json::Value::String("whatever".to_string()),
+        )
+        .await;
+    match reply {
+        WsReply::Error(msg) => assert!(msg.contains("bad input"), "want 'bad input' in {msg}"),
+        _ => panic!("expected an error frame from the rejecting pipe"),
+    }
+}
+
+#[tokio::test]
+async fn a_valid_payload_is_validated_before_the_handler() {
+    let ok = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "named",
+            serde_json::json!({ "name": "ok" }),
+        )
+        .await;
+    match ok {
+        WsReply::Reply(v) => assert_eq!(v.as_str(), Some("ok")),
+        _ => panic!("expected the validated name"),
+    }
+
+    let bad = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "named",
+            serde_json::json!({ "name": "" }),
+        )
+        .await;
+    match bad {
+        WsReply::Error(msg) => {
+            assert!(
+                msg.contains("validation failed"),
+                "want validation error in {msg}"
+            )
+        }
+        _ => panic!("expected a validation error frame"),
     }
 }

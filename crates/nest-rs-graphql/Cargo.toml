@@ -16,11 +16,18 @@ nest-rs-graphql-macros.workspace = true
 # loaded from `NESTRS_GRAPHQL__*`; serde + validator back its derives.
 nest-rs-config.workspace = true
 serde.workspace = true
+# The `/graphql` endpoint round-trips operation variables through JSON to run
+# global variable pipes (`transform_graphql_variables`) over them.
+serde_json.workspace = true
 validator.workspace = true
 # GraphqlModule self-mounts over HTTP via HttpEndpointMeta — this crate serves
 # GraphQL on the HTTP transport. No cycle: nest-rs-http does not depend on us.
 nest-rs-http.workspace = true
 async-graphql.workspace = true
+# `#[crud]`-generated create/update ops validate their input through the
+# re-exported `ValidateProbe` (global validation, the NestJS `ValidationPipe`
+# analog); re-exported so a crud consumer needs no direct nest-rs-pipes dep.
+nest-rs-pipes.workspace = true
 # `ResolverGuard` is an async trait dispatched concretely from the `#[resolver]`
 # macro; boxed via `async-trait` like `nest-rs-guards`' HTTP `Guard`, and
 # re-exported as `nest_rs_graphql::async_trait` for implementors.
@@ -45,7 +52,7 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # `#[resolver]` macro emits paths to `::nest_rs_guards::run_global_graphql_guards`,
 # so any test using `#[resolver]` needs the crate in scope. Dev-dep cycle is
 # allowed by Cargo (nest-rs-guards depends on us as a normal dep).
-nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
 # The layer-pool test asserts the transport-edge interceptor pool covers the
 # `/graphql` self-mount. Same allowed dev-dep cycle as nest-rs-guards.
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }

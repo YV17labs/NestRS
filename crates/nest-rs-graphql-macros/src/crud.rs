@@ -71,6 +71,19 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let forbidden: TokenStream2 = quote! {
         ::nest_rs_graphql::async_graphql::Error::new("forbidden")
     };
+    // Global validation: create/update inputs run `validator::Validate` before
+    // the service write — the NestJS `ValidationPipe` analog. `ValidateProbe`
+    // no-ops when the input type carries no rules (compile-time dispatch), so
+    // this is free for inputs without `#[validate]`. Runs before the DB load so
+    // a malformed input never reaches the service.
+    let validate_input: TokenStream2 = quote! {
+        {
+            use ::nest_rs_graphql::MaybeValidateFallback as _;
+            ::nest_rs_graphql::ValidateProbe(&input)
+                .maybe_validate()
+                .map_err(#gql_err)?;
+        }
+    };
 
     let mut generated: Vec<ImplItem> = Vec::new();
 
@@ -168,6 +181,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 &self,
                 input: #create,
             ) -> ::nest_rs_graphql::async_graphql::Result<#output> {
+                #validate_input
                 let __row = ::nest_rs_seaorm::Creatable::create(&*self.#service, input)
                     .await
                     .map_err(#gql_err)?;
@@ -188,6 +202,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 input: #update,
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 #parse_id
+                #validate_input
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
                     ::nest_rs_authz::Action::Update,

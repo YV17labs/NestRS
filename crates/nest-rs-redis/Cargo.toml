@@ -35,6 +35,8 @@ nest-rs-core = { path = "../nest-rs-core" }
 # The `#[processor]` macro emits `::nest_rs_worker::*` paths and the test
 # implements `JobContext` directly.
 nest-rs-worker = { path = "../nest-rs-worker" }
+# Per-argument pipe on a `#[process]` job argument (`Piped<P, T>` / `Valid<T>`).
+nest-rs-pipes = { path = "../nest-rs-pipes" }
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true

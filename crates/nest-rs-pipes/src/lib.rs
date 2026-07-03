@@ -12,11 +12,15 @@
 
 mod global;
 mod pipe;
+mod piped;
 mod pipes;
+mod validate;
 
 pub use global::GlobalPipe;
 pub use pipe::{Pipe, PipeError};
+pub use piped::{Piped, Valid};
 pub use pipes::{
     Lowercase, Parse, ParseArray, ParseBool, ParseFloat, ParseInt, ParseUuid, ParseUuidV3,
     ParseUuidV4, ParseUuidV5, ParseUuidV7, ParseUuidVersion, Trim, Uppercase, ValidationPipe,
 };
+pub use validate::{MaybeValidateFallback, ValidateProbe};

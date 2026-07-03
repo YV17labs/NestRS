@@ -8,12 +8,21 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A pipe runs **between extraction and the handler**: the transport pulls
-a value out of the request (a path segment, a query param, a JSON body),
-hands it to the pipe, and the pipe either returns the transformed value
-or rejects with a `PipeError` the transport renders as a `400`.
+a value out of the request (a path segment, a query param, a JSON body,
+a GraphQL argument, a WS payload, a queued job), hands it to the pipe,
+and the pipe either returns the transformed value or rejects with a
+`PipeError` the transport renders as its native error.
 
-The trait lives in `nest-rs-pipes`, transport-agnostic. The HTTP binding
-ships as the `Valid<E>` and `Piped<P, E>` extractors in `nest-rs-http`.
+The trait lives in `nest-rs-pipes`, transport-agnostic, and binds **per
+argument on every transport**. Two forms, one surface:
+
+- **HTTP** wraps an *extractor*: `nest_rs_http::Piped<P, E>` /
+  `Valid<E>` run the pipe over what `E` extracts.
+- **GraphQL, WebSockets, and queues** deserialize a single typed value,
+  so there is no extractor to wrap: `nest_rs_pipes::Piped<P, T>` /
+  `Valid<T>` expose the wire type `T` and hand the handler the
+  transformed value. The transport macro (`#[resolver]`, `#[messages]`,
+  `#[processor]`) does the stripping and the call.
 
 ```rust
 pub trait Pipe {
@@ -62,11 +71,15 @@ your own:
 | `Trim`, `Lowercase`, `Uppercase` | `String → String` | Edge normalization |
 | `ValidationPipe<T>` | `T → T` (where `T: Validate`) | Run [validator](https://docs.rs/validator) attribute rules |
 
-A `PipeError` rejection becomes a JSON `400`:
+A `PipeError` rejection surfaces as the transport's native error —
+the handler body never runs:
 
-```json
-{ "statusCode": 400, "error": "Bad Request", "message": "must be a UUID v7" }
-```
+| Transport | A rejection becomes |
+|-----------|--------------------|
+| HTTP | JSON `400` (`{ "statusCode": 400, "error": "Bad Request", "message": "must be a UUID v7" }`) |
+| GraphQL | An error in the response's `errors` array |
+| WebSockets | An error frame on the socket |
+| Queue | A job error — the queue's retry/failure policy applies |
 
 `ValidationPipe<T>` attaches the structured field-level errors as
 `details`.
@@ -135,6 +148,46 @@ async fn get(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> Json<User> {
 it as a v7 UUID. A non-UUID string is `400` with `"must be a UUID v7"` —
 not a stringly-typed handler doing its own `parse::<Uuid>()`.
 
+## The same pipe beyond HTTP
+
+On GraphQL, WebSockets, and queues the argument *is* the wire value, so
+the binding is `nest_rs_pipes::Piped<P, T>` / `Valid<T>` — `T` is what
+appears on the wire (the SDL argument type, the WS payload, the job
+payload); the handler body sees `P::Out` through `into_inner()` /
+`Deref`, exactly as on HTTP.
+
+```rust
+// GraphQL — the SDL argument is `String`; the body sees it trimmed.
+#[query]
+#[public]
+async fn trimmed(&self, raw: Piped<Trim, String>) -> async_graphql::Result<String> {
+    Ok(raw.into_inner())
+}
+
+// GraphQL — validates the input object; the SDL argument is `NameInput`.
+#[query]
+#[public]
+async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> {
+    Ok(input.into_inner().name)
+}
+```
+
+```rust
+// WebSockets — the message payload is a `String`, piped before the handler.
+#[subscribe_message("trim")]
+async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
+    name.into_inner()
+}
+```
+
+```rust
+// Queue — the job payload is a `String`, piped after deserialization.
+#[process(queue = "signups", concurrency = 1, retries = 0)]
+async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
+    /* ... */
+}
+```
+
 ## Pipes vs `Bind`
 
 A pipe converts a *primitive* input — an ID string into a `Uuid`, a JSON
@@ -157,9 +210,10 @@ async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
 }
 ```
 
-`Bind` is HTTP-only (it depends on the data layer). `Pipe` is transport-
-agnostic — the same `ParseUuidV7` can bind in HTTP today and a GraphQL
-input tomorrow.
+`Bind` depends on the data layer (its GraphQL analog is `bind` — see
+[By-id binding](/security/authorization/by-id-binding/)). `Pipe` is
+transport-agnostic — the same `ParseUuidV7` binds identically on HTTP,
+GraphQL, WebSockets, and queues.
 
 ## Writing a pipe
 

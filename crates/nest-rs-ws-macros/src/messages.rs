@@ -18,6 +18,36 @@ use syn::{
 
 use nest_rs_codegen::{impl_self_ident, injected_method_with_layers, layer_inject_keys};
 
+/// Split a `#[subscribe_message]` payload argument into (type to deserialize
+/// from the wire, pipe info). `Some((Some(pipe), inner))` for `Piped<P, T>`,
+/// `Some((None, inner))` for `Valid<T>`, `None` for a plain payload deserialized
+/// as-is.
+fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
+    if let Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
+                let tys: Vec<&Type> = ab
+                    .args
+                    .iter()
+                    .filter_map(|a| match a {
+                        syn::GenericArgument::Type(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                if seg.ident == "Piped" && tys.len() == 2 {
+                    if let Type::Path(p) = tys[0] {
+                        return (tys[1].clone(), Some((Some(p.path.clone()), tys[1].clone())));
+                    }
+                }
+                if seg.ident == "Valid" && tys.len() == 1 {
+                    return (tys[0].clone(), Some((None, tys[0].clone())));
+                }
+            }
+        }
+    }
+    (ty.clone(), None)
+}
+
 use crate::attr::take_use_attr;
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -141,16 +171,45 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         let return_kind = classify_return(&method.sig.output);
 
         let deser = match payload_ty {
-            Some(ty) => quote! {
-                let __payload: #ty = match ::nest_rs_ws::serde_json::from_value(__data) {
-                    ::core::result::Result::Ok(__p) => __p,
-                    ::core::result::Result::Err(__e) => {
-                        return ::nest_rs_ws::WsReply::error(::std::format!(
-                            "invalid payload for `{}`: {}", #event, __e,
-                        ));
+            Some(ty) => {
+                // A `Piped<P, T>` / `Valid<T>` payload is a per-argument pipe:
+                // deserialize the wire value `T`, run the pipe, then hand the
+                // handler the carrier. A rejection replies with `WsReply::error`
+                // — the transport analog of the HTTP / GraphQL pipe forms.
+                let (deser_ty, pipe) = ws_pipe_binding(ty);
+                let wrap = match &pipe {
+                    None => quote! { let __payload = __deser; },
+                    Some((pipe_path, inner)) => {
+                        let apply = match pipe_path {
+                            Some(p) => {
+                                quote!(::nest_rs_pipes::Piped::<#p, #inner>::apply(__deser))
+                            }
+                            None => quote!(::nest_rs_pipes::Valid::<#inner>::apply(__deser)),
+                        };
+                        quote! {
+                            let __payload = match #apply {
+                                ::core::result::Result::Ok(__p) => __p,
+                                ::core::result::Result::Err(__e) => {
+                                    return ::nest_rs_ws::WsReply::error(::std::format!(
+                                        "invalid payload for `{}`: {}", #event, __e.message(),
+                                    ));
+                                }
+                            };
+                        }
                     }
                 };
-            },
+                quote! {
+                    let __deser: #deser_ty = match ::nest_rs_ws::serde_json::from_value(__data) {
+                        ::core::result::Result::Ok(__p) => __p,
+                        ::core::result::Result::Err(__e) => {
+                            return ::nest_rs_ws::WsReply::error(::std::format!(
+                                "invalid payload for `{}`: {}", #event, __e,
+                            ));
+                        }
+                    };
+                    #wrap
+                }
+            }
             None => quote! {},
         };
         let call = quote! {
@@ -277,7 +336,10 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                             let __ctx = ::nest_rs_core::Container::get_dyn::<
                                 dyn ::nest_rs_ws::SocketContext,
                             >(__container);
-                            let __ep = ::nest_rs_ws::gateway_endpoint(__gw, __server, __chains, __ctx);
+                            let __data_pipe = ::nest_rs_ws::resolve_ws_data_pipe(__container);
+                            let __ep = ::nest_rs_ws::gateway_endpoint(
+                                __gw, __server, __chains, __ctx, __data_pipe,
+                            );
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
                             __route.at(<#self_ty>::PATH, __ep)
                         },

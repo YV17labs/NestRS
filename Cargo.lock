@@ -2677,6 +2677,7 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-pipes",
  "nest-rs-testing",
  "poem",
  "serde",
@@ -2908,6 +2909,7 @@ dependencies = [
  "async-trait",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-worker",
  "serde",
@@ -3090,6 +3092,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-pipes",
  "nest-rs-ws-macros",
  "parking_lot",
  "poem",
@@ -3097,6 +3100,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "validator",
 ]
 
 [[package]]

@@ -255,7 +255,10 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
         ));
     }
     let unmasked = positional.iter().any(|p| p.is_ident("unmasked"));
-    let mut subject: Vec<Path> = positional.into_iter().filter(|p| !p.is_ident("unmasked")).collect();
+    let mut subject: Vec<Path> = positional
+        .into_iter()
+        .filter(|p| !p.is_ident("unmasked"))
+        .collect();
     // `Action, Entity` always; `Action` alone is allowed only with `bind`,
     // where the entity is derived from `Service::Entity` (never retyped).
     let (action, entity) = match (subject.len(), bind.is_some()) {
@@ -290,6 +293,63 @@ fn authorized_param_ident(sig: &Signature) -> Option<Ident> {
             _ => None,
         }
     })
+}
+
+/// A `#[query]`/`#[mutation]` parameter typed `Piped<P, T>` or `Valid<T>` — a
+/// per-argument pipe. The wrapper exposes the wire value type `T` in the
+/// parameter's place, runs the pipe (`P::transform` / validation), and hands the
+/// operation the `Piped`/`Valid` carrier — the GraphQL analog of the HTTP
+/// `Piped<P, E>` / `Valid<E>` extractors. A pipe transforms input only; it never
+/// decides authz (that stays the `#[authorize]` gate's job).
+struct PipedArg {
+    ident: Ident,
+    /// The pipe `P` in `Piped<P, T>`; `None` for `Valid<T>` (validation).
+    pipe: Option<Path>,
+    /// The wire value type `T` the operation exposes and the pipe consumes.
+    value_ty: Type,
+}
+
+/// Every `Piped<P, T>` / `Valid<T>` parameter of an operation, matched on the
+/// last path segment so a fully-qualified form is recognised too.
+fn piped_args(sig: &Signature) -> Vec<PipedArg> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| {
+            let FnArg::Typed(pt) = arg else { return None };
+            let syn::Pat::Ident(pi) = &*pt.pat else {
+                return None;
+            };
+            let Type::Path(tp) = &*pt.ty else { return None };
+            let seg = tp.path.segments.last()?;
+            let syn::PathArguments::AngleBracketed(ab) = &seg.arguments else {
+                return None;
+            };
+            let tys: Vec<&Type> = ab
+                .args
+                .iter()
+                .filter_map(|a| match a {
+                    syn::GenericArgument::Type(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            if seg.ident == "Piped" && tys.len() == 2 {
+                let Type::Path(p) = tys[0] else { return None };
+                Some(PipedArg {
+                    ident: pi.ident.clone(),
+                    pipe: Some(p.path.clone()),
+                    value_ty: tys[1].clone(),
+                })
+            } else if seg.ident == "Valid" && tys.len() == 1 {
+                Some(PipedArg {
+                    ident: pi.ident.clone(),
+                    pipe: None,
+                    value_ty: tys[0].clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// True when the method's return type's last path segment ends with `Result`
@@ -634,7 +694,12 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                         .into();
                     };
                     let id_ident = spec.id_arg.clone().unwrap_or_else(|| format_ident!("id"));
-                    Some((service.clone(), subject_ident, id_ident, spec.action.clone()))
+                    Some((
+                        service.clone(),
+                        subject_ident,
+                        id_ident,
+                        spec.action.clone(),
+                    ))
                 }
                 None => None,
             };
@@ -642,19 +707,36 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             // parameter (not a GraphQL `InputType`) is replaced by the `id`
             // string argument the SDL exposes; without `bind`, it is the
             // method's own.
-            let wrapper_sig = match &bind_info {
-                Some((_, subject_ident, id_ident, _)) => {
-                    let mut s = sig.clone();
-                    for input in s.inputs.iter_mut() {
-                        if let FnArg::Typed(pt) = input {
-                            if matches!(&*pt.pat, syn::Pat::Ident(pi) if pi.ident == *subject_ident) {
-                                *input = parse_quote!(#id_ident: ::std::string::String);
-                            }
+            // Per-argument pipes: `Piped<P, T>` / `Valid<T>` parameters. The
+            // wrapper exposes `T` on the wire, runs the pipe, and forwards the
+            // carrier — the resolver body only ever calls the service.
+            let piped = piped_args(&sig);
+            // The wrapper signature strips both bind and pipe wrappers from the
+            // wire: the `Authorized<E, A>` subject becomes the `id` string
+            // argument, and each `Piped<P, T>` / `Valid<T>` becomes its wire
+            // value type `T`. Everything else is the method's own.
+            let wrapper_sig = {
+                let mut s = sig.clone();
+                for input in s.inputs.iter_mut() {
+                    let FnArg::Typed(pt) = input else { continue };
+                    let Some(arg_ident) = (match &*pt.pat {
+                        syn::Pat::Ident(pi) => Some(pi.ident.clone()),
+                        _ => None,
+                    }) else {
+                        continue;
+                    };
+                    if let Some((_, subject_ident, id_ident, _)) = &bind_info {
+                        if arg_ident == *subject_ident {
+                            *input = parse_quote!(#id_ident: ::std::string::String);
+                            continue;
                         }
                     }
-                    s
+                    if let Some(pa) = piped.iter().find(|pa| pa.ident == arg_ident) {
+                        let ty = &pa.value_ty;
+                        *input = parse_quote!(#arg_ident: #ty);
+                    }
                 }
-                None => sig.clone(),
+                s
             };
             let arg_idents = match forwarded_arg_idents(&sig) {
                 Ok(idents) => idents,
@@ -664,13 +746,11 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             // locally-bound `__subject` proof when `bind` is set.
             let call_args: Vec<TokenStream2> = arg_idents
                 .iter()
-                .map(|ident| {
-                    match &bind_info {
-                        Some((_, subject_ident, _, _)) if ident == subject_ident => {
-                            quote!(__subject)
-                        }
-                        _ => quote!(#ident),
+                .map(|ident| match &bind_info {
+                    Some((_, subject_ident, _, _)) if ident == subject_ident => {
+                        quote!(__subject)
                     }
+                    _ => quote!(#ident),
                 })
                 .collect();
             let call = if sig.asyncness.is_some() {
@@ -715,7 +795,10 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             let authz_entity = |spec: &AuthorizeSpec| match &spec.entity {
                 Some(entity) => quote!(#entity),
                 None => {
-                    let service = spec.bind.as_ref().expect("entity-less authorize requires bind");
+                    let service = spec
+                        .bind
+                        .as_ref()
+                        .expect("entity-less authorize requires bind");
                     quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity)
                 }
             };
@@ -755,9 +838,26 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                 }
                 None => call,
             };
+            // Run each per-argument pipe over its extracted wire value, rebinding
+            // the parameter to the `Piped`/`Valid` carrier the body receives. A
+            // rejected pipe surfaces as an `async_graphql::Error` carrying the
+            // `PipeError` message. Runs after the class gate (a class-denied
+            // caller never runs a pipe), before the call.
+            let pipe_prelude = piped.iter().map(|pa| {
+                let ident = &pa.ident;
+                let ty = &pa.value_ty;
+                let apply = match &pa.pipe {
+                    Some(pipe) => quote!(::nest_rs_pipes::Piped::<#pipe, #ty>::apply(#ident)),
+                    None => quote!(::nest_rs_pipes::Valid::<#ty>::apply(#ident)),
+                };
+                quote! {
+                    let #ident = #apply.map_err(|__e|
+                        ::nest_rs_graphql::async_graphql::Error::new(__e.message().to_string()))?;
+                }
+            });
             let delegating = quote! {
                 #(#deleg_attrs)*
-                #gsig { #checks #gate #bind_prelude #body }
+                #gsig { #checks #gate #bind_prelude #(#pipe_prelude)* #body }
             };
             if is_query {
                 query_methods.push(delegating);

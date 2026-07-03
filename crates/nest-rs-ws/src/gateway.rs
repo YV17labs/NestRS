@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+use nest_rs_core::Container;
+use nest_rs_pipes::PipeError;
 use poem::web::websocket::{Message, WebSocket};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
@@ -37,17 +39,44 @@ pub trait Gateway: Send + Sync + 'static {
     }
 }
 
+/// A per-message data-pipe runner with the container already captured, so
+/// [`handle_text`] (which has no container) can fold the global pipes over a
+/// message's `data`. Built at mount by [`resolve_ws_data_pipe`].
+pub type WsDataFold = dyn Fn(&str, &mut serde_json::Value) -> Result<(), PipeError> + Send + Sync;
+
+/// Bridge slot for global pipes on a WS message's `data` — the per-message
+/// analog of HTTP's `transform_body`. `nest-rs-guards`' `use_pipes_global`
+/// provides a fn pointer that folds every registered global pipe's
+/// [`GlobalPipe::transform_ws_data`](nest_rs_pipes::GlobalPipe) over the data.
+/// Defined here (the gateway calls it), provided by guards (which owns the
+/// `PipeSpecs` registry) — the same seeded-fn-pointer pattern as the GraphQL
+/// `GraphqlVariablePipe`, since guards depends on this crate, not the reverse.
+pub struct WsDataPipe(pub fn(&Container, &str, &mut serde_json::Value) -> Result<(), PipeError>);
+
+/// Resolve the [`WsDataPipe`] bridge at gateway mount into a runner with the
+/// container captured. `None` when no global pipes are registered — the gateway
+/// then skips the fold entirely.
+pub fn resolve_ws_data_pipe(container: &Container) -> Option<Arc<WsDataFold>> {
+    let bridge = container.get::<WsDataPipe>()?;
+    let container = container.clone();
+    Some(Arc::new(
+        move |event: &str, data: &mut serde_json::Value| (bridge.0)(&container, event, data),
+    ))
+}
+
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     guards: EventLayerTable,
     ctx: Option<Arc<dyn SocketContext>>,
+    data_pipe: Option<Arc<WsDataFold>>,
 ) -> GatewayEndpoint<G, N> {
     GatewayEndpoint {
         gateway,
         server,
         guards: Arc::new(guards),
         ctx,
+        data_pipe,
     }
 }
 
@@ -59,6 +88,7 @@ pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     server: Arc<WsServer<N>>,
     guards: Arc<EventLayerTable>,
     ctx: Option<Arc<dyn SocketContext>>,
+    data_pipe: Option<Arc<WsDataFold>>,
 }
 
 impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
@@ -78,8 +108,11 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         let gateway = Arc::clone(&self.gateway);
         let server = Arc::clone(&self.server);
         let guards = Arc::clone(&self.guards);
+        let data_pipe = self.data_pipe.clone();
         Ok(ws
-            .on_upgrade(move |socket| serve_connection(gateway, server, guards, ambient, socket))
+            .on_upgrade(move |socket| {
+                serve_connection(gateway, server, guards, ambient, data_pipe, socket)
+            })
             .into_response())
     }
 }
@@ -93,6 +126,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     server: Arc<WsServer<N>>,
     guards: Arc<EventLayerTable>,
     ambient: Option<(Arc<dyn SocketContext>, Captured)>,
+    data_pipe: Option<Arc<WsDataFold>>,
     socket: poem::web::websocket::WebSocketStream,
 ) {
     let (mut sink, mut stream) = socket.split();
@@ -123,8 +157,15 @@ async fn serve_connection<G: Gateway, N: 'static>(
                     }
                     continue;
                 }
-                if let Some(reply) =
-                    handle_text(&*gateway, &guards, ambient.as_ref(), &client, &text).await
+                if let Some(reply) = handle_text(
+                    &*gateway,
+                    &guards,
+                    ambient.as_ref(),
+                    data_pipe.as_ref(),
+                    &client,
+                    &text,
+                )
+                .await
                 {
                     // Replies ride the same outbox as pushes so ordering with
                     // broadcasts the handler triggered is preserved. A full
@@ -160,6 +201,7 @@ async fn handle_text<G: Gateway>(
     gateway: &G,
     guards: &EventLayerTable,
     ambient: Option<&(Arc<dyn SocketContext>, Captured)>,
+    data_pipe: Option<&Arc<WsDataFold>>,
     client: &WsClient,
     text: &str,
 ) -> Option<String> {
@@ -167,13 +209,20 @@ async fn handle_text<G: Gateway>(
         Ok(envelope) => envelope,
         Err(_) => return Some(error_frame("error", "invalid envelope")),
     };
-    let WsEnvelope { event, data } = envelope;
+    let WsEnvelope { event, mut data } = envelope;
     // Bundle guard + dispatch so `around` wraps both — a guard reading
     // `current_ability()` / `current_executor()` sees the captured state.
     let event_ref = event.clone();
     let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
         if let Err(reason) = guards.check(client, &event_ref, &data).await {
             return WsReply::Error(reason);
+        }
+        // Global data pipes run after guards (which see the raw value), before
+        // dispatch — the per-message analog of HTTP running pipes after guards.
+        if let Some(pipe) = data_pipe
+            && let Err(err) = pipe(&event_ref, &mut data)
+        {
+            return WsReply::error(format!("invalid data for `{event_ref}`: {}", err.message()));
         }
         gateway.dispatch(client, &event_ref, data).await
     });

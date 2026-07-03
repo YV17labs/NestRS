@@ -61,9 +61,17 @@ async fn on_message(&self, msg: SendMessage) { /* ... */ }
 
 A malformed payload (wrong shape, missing fields) is treated as a
 dispatch error: the connection stays open, the client receives an error
-frame on the same event name (see below). Validate richer shapes with
-`#[derive(validator::Validate)]` and reject explicitly via the
-`Result`-returning form.
+frame on the same event name (see below). Richer checks bind a
+[pipe](/fundamentals/pipes/) on the payload argument: `Valid<T>` runs
+`validator` rules, `Piped<P, T>` names a custom transform — a rejection
+is an error frame, and the handler body never runs.
+
+```rust
+#[subscribe_message("trim")]
+async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
+    name.into_inner()
+}
+```
 
 A handler that takes no payload accepts `null` or a missing `data` key
 — the envelope defaults `data` to `null` on deserialize:

@@ -2692,6 +2692,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-graphql-macros",
  "nest-rs-http",
+ "nest-rs-pipes",
  "poem",
  "serde",
  "tokio",

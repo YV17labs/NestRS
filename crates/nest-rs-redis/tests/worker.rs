@@ -309,6 +309,51 @@ async fn payload_schema_drift_returns_err_without_panicking() {
     );
 }
 
+// ---- Per-argument pipe on a #[process] job argument ------------------------
+
+const PIPE_QUEUE: &str = "pipe-arg-test";
+
+static PIPE_SEEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[injectable]
+#[derive(Default)]
+struct PipeProc;
+
+#[processor]
+impl PipeProc {
+    // `Piped<Trim, String>`: the wire payload is a `String`; the handler body
+    // receives it already trimmed — the queue analog of the HTTP / GraphQL form.
+    #[process(queue = "pipe-arg-test", concurrency = 1, retries = 0)]
+    async fn handle(
+        &self,
+        name: nest_rs_pipes::Piped<nest_rs_pipes::Trim, String>,
+    ) -> anyhow::Result<()> {
+        *PIPE_SEEN.lock().unwrap() = Some(name.into_inner());
+        Ok(())
+    }
+}
+
+fn pipe_handler() -> nest_rs_queue::JobHandler {
+    nest_rs_core::inventory::iter::<ProcessMethod>()
+        .find(|m| m.queue == PIPE_QUEUE)
+        .expect("the #[processor] above submits a ProcessMethod for pipe-arg-test")
+        .handler
+}
+
+#[tokio::test]
+async fn a_piped_job_argument_runs_the_pipe_before_the_handler() {
+    *PIPE_SEEN.lock().unwrap() = None;
+    let payload = json!({ "v": WIRE_FORMAT_VERSION, "payload": "  hi  " });
+    pipe_handler()(payload, Container::builder().provide(PipeProc).build())
+        .await
+        .expect("the piped job processes");
+    assert_eq!(
+        PIPE_SEEN.lock().unwrap().as_deref(),
+        Some("hi"),
+        "the handler saw the trimmed value, not the raw payload",
+    );
+}
+
 // ---- Strict envelope detection (Bug X1 + X2) -------------------------------
 //
 // The envelope is `{ v: <int>, payload: <…> }` — exactly two keys, `v` a

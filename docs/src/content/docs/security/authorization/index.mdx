@@ -108,9 +108,11 @@ it and builds the `Ability`. Every handler downstream sees an ambient
    No matching grant ⇒ `1 = 0` ⇒ the query returns nothing. See
    [Row-level filtering](/security/authorization/row-level-filtering/).
 2. **`Bind<S, A>` — the by-id loader.**
-   `Service::access(id)` loads the row **unscoped**, then calls
-   `Ability::can(action, &model)`. Missing row ⇒ 404, present but
-   denied ⇒ 403. See [By-id binding](/security/authorization/by-id-binding/).
+   `Service::access(id)` loads the row **unscoped**, then re-checks
+   the same primary key filtered by `condition_for(action)` — the
+   decision is made in SQL, by the same predicate the list path
+   joins. Missing row ⇒ 404, present but denied ⇒ 403. See
+   [By-id binding](/security/authorization/by-id-binding/).
 3. **`Authorize<A, S>` — the response shaper.** After a 2xx, the
    shaper deserializes the body into `S::Model`, runs `Ability::mask`,
    then `retain_wire_keys` to strip back anything outside the wire

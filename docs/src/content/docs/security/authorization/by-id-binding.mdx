@@ -71,19 +71,26 @@ fails at request time with this 500.
 ## How `access` decides
 
 `Bind<S, A>` calls `S::access(action, id)` from the service. The
-default `CrudService::access` is:
+default `CrudService::access` is (simplified):
 
 ```rust
 async fn access(&self, action: Action, id: Uuid)
     -> Result<Access<Model>, DbErr>
 {
     let conn = Repo::<E>::conn()?;
-    let Some(model) = E::find_by_id(id).one(&conn).await? else {
+    // Unscoped live load: does the row exist at all?
+    let Some(model) = Repo::<E>::unscoped_by_id(id)
+        .filter(live_read_filter())
+        .one(&conn).await?
+    else {
         return Ok(Access::Missing);
     };
-    let allowed = current_ability()
-        .map(|ability| ability.can::<E>(action, &model))
-        .unwrap_or(false);
+    // Scoped re-load: is it inside the caller's grant for `action`?
+    let allowed = Repo::<E>::unscoped_by_id(id)
+        .filter(scope_for::<E>(action))
+        .filter(live_read_filter())
+        .one(&conn).await?
+        .is_some();
     if allowed {
         Ok(Access::Found(model))
     } else {
@@ -94,19 +101,20 @@ async fn access(&self, action: Action, id: Uuid)
 
 Two things to notice:
 
-1. **The load is unscoped.** `find_by_id(id).one(&conn)` reaches
-   every row in the table — no `condition_for` joined. That is what
-   lets the framework distinguish "missing" from "denied". A
+1. **The first load is unscoped.** It reaches every live row in the
+   table — no `condition_for` joined. That is what lets the framework
+   distinguish "missing" from "denied". A
    `Repo::scoped(Read).find_by_id(id)` would return `None` for both,
    collapsing them to 404 and hiding the policy decision.
-2. **The authorization is in-memory.** `Ability::can` runs the
-   typed `Predicate::matches` against the loaded model — same AST as
-   `condition_for`, so the SQL filter and the in-memory check cannot
-   diverge.
-
-`Ability::can` and `Ability::condition_for` evaluate the same
-predicate tree against the same `Value`s — the row a SQL filter
-accepts and the row the in-memory check accepts are bit-identical.
+2. **The authorization is decided in SQL.** The second lookup filters
+   the same primary key by `scope_for(action)` — the exact
+   `condition_for` the list path joins, evaluated by the same
+   database. One source of truth: the row a list query returns and
+   the row `access` grants cannot diverge. It is also what makes
+   [relational rules](/security/authorization/policies/#relational-scoping)
+   enforceable here — a `p.related` scope reaches through a join no
+   in-memory check could evaluate without loading the parent. The
+   cost is one extra primary-key lookup on the binding path.
 
 ## The `Access` outcome
 

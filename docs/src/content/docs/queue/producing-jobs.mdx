@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Pushing a job is a one-line call — `queue.of::<TranscodeDto>("audio").push(job).await?` — but
+Pushing a job is a one-line call — `queue.of::<TranscodeCommand>("audio").push(job).await?` — but
 *where* that line lives decides whether the feature stays auditable. The
 rule is the same one that holds `Repo` calls behind a service:
 controllers, resolvers, and gateways ask the service to enqueue. The
@@ -21,23 +21,26 @@ type that satisfies those bounds. No derive, no trait to write. The
 convention is to keep payloads small: a reference to the work, not the
 work itself.
 
-```rust title="crates/features/src/audio/dto.rs"
-use schemars::JsonSchema;
+```rust title="crates/features/src/audio/command.rs"
 use serde::{Deserialize, Serialize};
 
 pub const AUDIO_QUEUE: &str = "audio";
 
-#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
-pub struct TranscodeDto {
+/// Imperative payload for the `audio` queue — "transcode this file".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscodeCommand {
     pub file: String,
 }
 ```
 
-`JsonSchema` is here because the same payload is also the HTTP body
-that triggers the enqueue — one type, two transports. The producer and
-consumer agree on the payload by importing it from the same crate; the
-queue name (`AUDIO_QUEUE`) is the only stringly-typed coupling, and it
-stays private to the service.
+A queue payload is named for the boundary it crosses: an imperative
+"do X" handled by one processor is a **`Command`** (`command.rs` at the
+feature port); a published past-tense fact with potentially many
+consumers is an **`Event`** (`event.rs`). The HTTP body that triggers
+the enqueue is a *separate* `TranscodeDto` — each boundary speaks its
+own vocabulary. The producer and consumer agree on the payload by
+importing it from the same crate; the queue name (`AUDIO_QUEUE`) is
+the only stringly-typed coupling, and it stays private to the service.
 
 ## The service is the choke point
 
@@ -53,7 +56,7 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_redis::QueueConnection;
 
-use super::dto::{AUDIO_QUEUE, TranscodeDto};
+use super::command::{AUDIO_QUEUE, TranscodeCommand};
 
 #[injectable]
 pub struct AudioService {
@@ -64,8 +67,8 @@ pub struct AudioService {
 impl AudioService {
     pub async fn enqueue_transcode(&self, file: String) -> Result<()> {
         self.queue
-            .of::<TranscodeDto>(AUDIO_QUEUE)
-            .push(TranscodeDto { file: file.clone() })
+            .of::<TranscodeCommand>(AUDIO_QUEUE)
+            .push(TranscodeCommand { file: file.clone() })
             .await?;
         tracing::info!(target: "features::audio", %file, "enqueued transcode job");
         Ok(())
@@ -94,8 +97,9 @@ you `push_json` and the typed `push::<J>` blanket impl from
 
 ## The HTTP adapter
 
-The controller is a thin transport. It accepts the body, calls the
-service, returns the wire response — no queue knowledge of its own.
+The controller is a thin transport. It accepts a `TranscodeDto` — the
+REST body, a distinct type from the queue's `TranscodeCommand` — calls
+the service, returns the wire response. No queue knowledge of its own.
 
 ```rust title="crates/features/src/audio/http/controller.rs"
 use std::sync::Arc;
@@ -151,6 +155,8 @@ push side. The service is the contract; transports adapt.
 
 ## Reference
 
+- `crates/features/src/audio/command.rs` — `TranscodeCommand`,
+  `AUDIO_QUEUE`.
 - `crates/features/src/audio/service.rs` — `enqueue_transcode`.
 - `crates/features/src/audio/http/controller.rs` — the HTTP producer.
 - `crates/features/src/audio/schedule/producer.rs` — the scheduled

@@ -103,28 +103,34 @@ should not be filtered by a caller's ability because there is no
 caller. See [Threat model](/security/threat-model/) for what that
 buys you and what it does not.
 
-## No ambient ability = unscoped, not denied
+## No ambient ability: unscoped for workers, denied for requests
 
-```rust
-pub fn condition_for<E: EntityTrait>(&self, action: Action) -> Condition { /* ... */ }
-```
+Two paths reach `Repo::scoped(...)` without an ability, and they get
+opposite treatment. `Repo` tells them apart by the ambient executor's
+scope (`current_executor_scope()`):
 
-is called by `Repo::scoped(...)` only when the ability is present.
-Without an ability, the query runs as a plain `find()` against the
-pool — no `WHERE` is added. Two paths reach that state:
-
-- Worker jobs and cron ticks — system work, no caller, no filter.
-  Correct.
-- An HTTP handler whose controller imported neither `AuthzHttpModule`
-  nor a transport-specific authz module — the request runs without
-  an ability, and `Repo::scoped(...)` returns every row. **Incorrect**
-  — match every new controller with its authz module, and write a
-  [negative-path test](/testing/negative-path/) that pins the 403.
+- **Worker jobs and cron ticks** — system work, no caller, no filter.
+  The query runs unscoped. Correct.
+- **A request-scoped executor with no ability** — an HTTP handler
+  whose controller imported neither `AuthzHttpModule` nor a
+  transport-specific authz module. This **fails closed**: the filter
+  renders `1 = 0`, the query returns zero rows, and a `warn` is
+  emitted naming the entity and action. A missing authz module shows
+  up as an empty (and noisy) endpoint in the first manual test, never
+  as a cross-tenant leak. Match every new controller with its authz
+  module, and write a [negative-path test](/testing/negative-path/)
+  that pins the behavior.
 
 A public route uses `AbilityGuard` too: it builds an empty `Ability`
 for the visitor, so `Repo::scoped(Read)` returns nothing by default
 — visitor-rule policy belongs in `AbilityFactory`, not in the
 filter.
+
+The sanctioned ability-less reads (pre-authentication credential
+lookup, `CrudService::access`'s existence probe, signature-verified
+webhook ingest) stay inside `Repo` through `Repo::unscoped()` /
+`unscoped_by_id()` — an explicit, greppable opt-out of the row scope,
+never a raw `find()` around the choke point.
 
 ## SQL injection — not the threat
 

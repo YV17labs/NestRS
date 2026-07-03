@@ -116,9 +116,12 @@ pub enum Predicate<E: EntityTrait> {
     Always,
     Eq(E::Column, Value),
     In(E::Column, Vec<Value>),
+    Cmp(E::Column, CmpOp, Value),   // Ne / Lt / Lte / Gt / Gte
+    IsNull(E::Column, bool),        // IS NULL / IS NOT NULL
     And(Vec<Predicate<E>>),
     Or(Vec<Predicate<E>>),
     Not(Box<Predicate<E>>),
+    Related(RelatedPredicate),      // condition on a related entity
 }
 ```
 
@@ -139,15 +142,56 @@ ab.can(Action::Read, user::Entity).when(|p| {
 | Builder method | Variant | Use |
 |---------------|---------|-----|
 | `p.eq(col, value)` | `Eq` | Column equals value |
+| `p.ne(col, value)` | `Cmp` | Column differs from value |
+| `p.lt / p.lte / p.gt / p.gte(col, value)` | `Cmp` | Ordered comparison |
+| `p.is_null(col)` / `p.is_not_null(col)` | `IsNull` | Nullness test |
 | `p.is_in(col, [v, ...])` | `In` | Column in list |
 | `p.all([...])` | `And` | Every part matches |
 | `p.any([...])` | `Or` | At least one part matches |
 | `p.not(inner)` | `Not` | Negation |
+| `p.related::<R, _>(rel, \|r\| ...)` | `Related` | Condition on a related entity — see below |
 
 `Predicate::Always` is the default — a rule with no `.when` admits
 every row. An empty `p.any([])` matches nothing (SQL `FALSE`); an
 empty `p.all([])` matches every row (SQL `TRUE`). The same identities
 hold for the SQL lowering and the in-memory check.
+
+## Relational scoping
+
+Some entities carry no tenant column of their own — a `message`
+belongs to a conversation, and the conversation carries the `org_id`.
+`p.related` scopes `E` by a condition on a related entity `R`, reached
+through a variant of `E`'s SeaORM `Relation` enum; the closure builds
+the sub-condition with `R`'s own typed columns:
+
+```rust
+// `message` has no `org_id`; its tenant is the parent conversation's.
+ab.can(Action::Read, message::Entity).when(|p| {
+    p.related::<conversation::Entity, _>(
+        message::Relation::Conversation,
+        |c| c.eq(conversation::Column::OrgId, org_id),
+    )
+});
+```
+
+The SQL lowering is a semi-join: `belongs_to` / `has_one` becomes an
+uncorrelated `IN (subquery)`, `has_many` a correlated `EXISTS`. A
+relation's custom `on_condition` is folded into the subquery so the
+scope is never widened past the join.
+
+Two boot-time guards close the gap that type erasure opens — both
+panic at rule-definition time, never a silently-wrong filter:
+
+- the relation must point at `R` (its target table is checked);
+- the relation must be single-column (composite keys are unsupported;
+  denormalize the tenant key instead).
+
+One consequence for the read-back path: the in-memory check cannot
+traverse the relation without loading the parent, so row visibility
+for a relational rule is decided **in SQL** everywhere — including
+the by-id binding and create paths, which re-check against the same
+lowered condition (see
+[By-id binding](/security/authorization/by-id-binding/)).
 
 ## Field grants
 

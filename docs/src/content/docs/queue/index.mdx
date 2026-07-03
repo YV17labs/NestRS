@@ -42,7 +42,7 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_queue::processor;
 
-use crate::audio::{AudioService, TranscodeDto};
+use crate::audio::{AudioService, TranscodeCommand};
 
 #[injectable]
 pub struct AudioProcessor {
@@ -53,7 +53,7 @@ pub struct AudioProcessor {
 #[processor]
 impl AudioProcessor {
     #[process(queue = "audio", concurrency = 5, retries = 3)]
-    async fn transcode(&self, job: TranscodeDto) -> Result<()> {
+    async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.svc.transcode(&job.file).await
     }
 }
@@ -74,6 +74,11 @@ Adapters carry transport mechanics; the service carries intent.
   in-flight jobs, and gives an apalis retry budget. The job type is
   read from the method's second parameter.
 
+The job argument also binds a [pipe](/fundamentals/pipes/):
+`Piped<P, T>` / `Valid<T>` expose the wire payload `T`, run the pipe
+after deserialization, and hand the handler the transformed value — a
+rejection is a job error, so the queue's retry/failure policy applies.
+
 ## Several methods on the same provider
 
 The pattern the framework is built for: one `#[injectable]` declares
@@ -90,17 +95,17 @@ pub struct AudioProcessor {
 #[processor]
 impl AudioProcessor {
     #[process(queue = "audio", concurrency = 5, retries = 3)]
-    async fn transcode(&self, job: TranscodeDto) -> Result<()> {
+    async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.svc_audio.transcode(&job.file).await
     }
 
     #[process(queue = "audio.preview", concurrency = 10, retries = 1)]
-    async fn preview(&self, job: PreviewJob) -> Result<()> {
+    async fn preview(&self, job: PreviewCommand) -> Result<()> {
         self.svc_media.preview(&job.file).await
     }
 
     #[process(queue = "audio.cleanup")]
-    async fn cleanup(&self, job: CleanupJob) -> Result<()> {
+    async fn cleanup(&self, job: CleanupCommand) -> Result<()> {
         self.svc_media.cleanup(job.older_than).await
     }
 }

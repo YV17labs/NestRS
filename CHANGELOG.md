@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the public API is still stabilizing (`0.x`), the minor version carries
 both new features and breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **Per-argument pipes on every transport.** `Piped<P, T>` / `Valid<T>`
+  bind on GraphQL, WebSockets, and queue handlers (value-form carriers in
+  `nest-rs-pipes`, stripped by `#[resolver]` / `#[messages]` /
+  `#[processor]`); HTTP keeps its extractor forms. A rejection surfaces as
+  the transport's native error (GraphQL error, WS error frame, job error).
+- **Relational predicate scoping.** `p.related::<R, _>(relation, |r| ...)`
+  scopes an entity by a condition on a related entity through a typed
+  SeaORM relation — lowered to a semi-join (`IN` subquery / correlated
+  `EXISTS`), with boot-time guards on the relation target and key arity.
+- **Scalar predicate variants.** `p.ne` / `p.lt` / `p.lte` / `p.gt` /
+  `p.gte` (`Cmp`) and `p.is_null` / `p.is_not_null` (`IsNull`).
+- **Action-typed authorization proofs.** `Authorized<E, A>` carries the
+  action as a type parameter, with `bind_required::<S, A>` as the GraphQL
+  subject binder — a `Read` proof no longer passes where an `Update` proof
+  is required.
+- **Generic client-credentials grant helper** in `nest-rs-authn`.
+- **Selective `#[crud]` ops with segregated write traits.**
+  `ops = [list, get, delete]` synthesises exactly those; the write half
+  lives in opt-in `Creatable` / `Updatable` / `Deletable` traits, so a
+  read-only resource declares no placeholder input types.
+- **Generated list operations paginate by default**, with a hard
+  backstop on page size.
+- **`ServiceError` carries real 4xx variants** plus `Internal` — features
+  stop redefining plumbing errors.
+- **`resolve_unique_slug()`** for soft-deletable entities and a **`now()`**
+  timestamp helper in `nest-rs-seaorm`.
+- **Actor identity on the request span** — denials are attributable
+  without per-site threading.
+- `nestrs run db down [N]` reverts N migrations (default one step).
+
+### Changed
+
+- **Access and create authorization are decided in SQL.**
+  `CrudService::access` re-checks the primary key against
+  `condition_for(action)` in the database instead of an in-memory
+  `Ability::can` — one source of truth with the list filter, and what
+  makes relational rules enforceable on the by-id and create paths.
+- **GraphQL posture is mandatory and visible.** Every operation declares
+  `#[authorize(Action, Entity)]` (class gate + automatic response
+  masking) or `#[public]`; an operation without a posture does not
+  compile, and an `Authorized<E>` parameter is not accepted as a
+  standalone posture.
+- **Transfer objects are named by the boundary they cross** — REST
+  `Dto`, queue `Command` / `Event`, GraphQL `Input`; entity-derived
+  CRUD forms stay bare (`CreateUser`), with file-role placement to
+  match.
+- **Framework and product split into two Cargo workspaces** (root
+  `crates/nest-rs-*` vs `demo/`), the demo consuming the framework by
+  relative path.
+
+### Fixed
+
+- Boot fails with a named error on a duplicate controller prefix
+  (previously a panic).
+- `#[crud]` GraphQL operation names derive from the snake_case entity
+  name.
+- `#[public]` is rejected on WS message handlers; OAuth login input
+  hardened.
+
 ## [0.2.0] - 2026-06-10
 
 ### Added

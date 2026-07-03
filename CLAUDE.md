@@ -536,11 +536,13 @@ orm-agnostic `JobContext` (`WorkerDbContext`, auto-bound by
 `DatabaseModule`) — system work ⇒ no ability ⇒ unscoped, correct.
 A truly contextless path (shutdown hook) keeps an injected
 `Arc<DatabaseConnection>` — the only `Repo`-*less* bypass (no executor
-at all). Two ability-less paths stay **inside** `Repo` via
+at all). Three ability-less paths stay **inside** `Repo` via
 `Repo::unscoped()` / `unscoped_by_id()`: pre-authentication credential
-lookup (no principal yet ⇒ no ability) and `CrudService::access` (must
+lookup (no principal yet ⇒ no ability), `CrudService::access` (must
 distinguish `Denied` from `Missing`, so it filters by ability
-explicitly after the unscoped load). Every other read uses
+explicitly after the unscoped load), and signature-authenticated
+ingress (public webhook route — trust is the payload signature, no
+principal ⇒ no ability on a request executor). Every other read uses
 `scoped`/`all`/`find_by_id`, which apply the ambient ability `WHERE`.
 
 **`#[dataloader]` batch methods** live on the service, use `Repo`,
@@ -594,8 +596,15 @@ Tutorial feature exemplar: `crates/features/src/posts/`.
 - **`nest-rs-pipes`** — transport-agnostic, **one Pipe per file**,
   stateless (`transform(In) -> Result<Out, _>`, never a DI provider).
   Base set covers common cases (`Parse<T>`, `ParseUuid`,
-  `ValidationPipe<T>`, …); HTTP binds via `Valid<E>` / `Piped<P, E>`.
-  Reusable pipes are framework primitives — never define one in an app.
+  `ValidationPipe<T>`, …). Binds **per argument on all four
+  transports**, two forms by design (orphan rule): HTTP wraps an
+  extractor (`nest_rs_http::Piped<P, E>` / `Valid<E>`); GraphQL, WS
+  and queue wrap the wire value (`nest_rs_pipes::Piped<P, T>` /
+  `Valid<T>`, stripped by `#[resolver]`/`#[messages]`/`#[processor]`).
+  A rejection surfaces as the transport's native error (400 / GraphQL
+  error / WS error frame / job error). Global pipes exist on HTTP
+  only. Reusable pipes are framework primitives — never define one in
+  an app.
 - **`nest-rs-openapi`** — import `OpenApiModule`; self-mounts
   `GET /api-json` + offline Swagger UI at `GET /api`. Document
   **composed** from the route table. Schemas via **schemars**;

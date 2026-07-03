@@ -82,7 +82,7 @@ impl<E: EntityTrait> Repo<E> {
         E::find().filter(scope_for::<E>(action))
     }
 
-    /// A [`Select`] that **bypasses the ambient ability filter** — for the two
+    /// A [`Select`] that **bypasses the ambient ability filter** — for the three
     /// sanctioned ability-less query paths:
     ///
     /// 1. **Pre-authentication** credential lookup, which runs before any
@@ -92,10 +92,14 @@ impl<E: EntityTrait> Repo<E> {
     /// 2. **Access binding** (`CrudService::access`), which is deliberately
     ///    unscoped so a denied-but-existing row reports `Denied` rather than
     ///    `Missing`; the ability check is then applied explicitly per row.
+    /// 3. **Signature-authenticated ingress** (a public webhook endpoint):
+    ///    trust comes from a verified payload signature, not a principal, so
+    ///    the request executor carries no ability and the scoped path would
+    ///    fail closed exactly like the pre-authentication case.
     ///
     /// Still runs against the ambient [`Repo::conn`] executor, so it participates
     /// in the request transaction — only the row-level scope is dropped. Reach
-    /// for this **only** in those two cases; every other read must use
+    /// for this **only** in those three cases; every other read must use
     /// [`scoped`](Self::scoped).
     pub fn unscoped() -> Select<E> {
         E::find()

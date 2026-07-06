@@ -2695,6 +2695,7 @@ dependencies = [
  "nest-rs-pipes",
  "poem",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "validator",
@@ -3022,6 +3023,7 @@ name = "nest-rs-testing"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-exception-filters",
  "nest-rs-filters",
@@ -3064,6 +3066,7 @@ dependencies = [
  "futures-util",
  "nest-rs-core",
  "nest-rs-http",
+ "nest-rs-pipes",
  "nest-rs-ws-macros",
  "parking_lot",
  "poem",

@@ -1,5 +1,6 @@
 # Test recipes, exposed as `nestrs run test <kind>` (see `mod test` in the root
 # Justfile). Bare `nestrs run test` lists these — pick a kind to run.
+# (e2e loads the project's `.env` from the harness, so no env wiring here.)
 
 # Bare `nestrs run test` lists the kinds instead of running one.
 _default:
@@ -14,7 +15,7 @@ unit:
 e2e:
     cargo nextest run --workspace -E 'binary(e2e)'
 
-# Coverage on the full suite.
+# Coverage on the full suite (includes the e2e binary).
 cov:
     cargo llvm-cov nextest --workspace
 

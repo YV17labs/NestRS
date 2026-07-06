@@ -63,6 +63,8 @@ impl TestAppBuilder {
             // FIXME: Audit that the environment access only happens in single-threaded code.
             unsafe { std::env::set_var("NESTRS_ENV", "test") };
         }
+        // Every e2e boot (any transport) sees the project's own `.env`.
+        crate::env::load_project_env();
         Self {
             inner: App::builder(),
             http: None,

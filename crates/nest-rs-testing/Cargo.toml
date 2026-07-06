@@ -32,6 +32,8 @@ poem = { workspace = true, features = ["test"] }
 # A headless app drives non-HTTP transports on a cancellable background task.
 tokio.workspace = true
 tokio-util.workspace = true
+# Every e2e boot loads the project's `.env` via `load_project_env` — normal dep.
+nest-rs-config = { path = "../nest-rs-config" }
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
@@ -40,9 +42,8 @@ sea-orm-migration = { workspace = true, optional = true }
 [dev-dependencies]
 tokio.workspace = true
 # The config DI test boots a module wiring `ConfigModule::for_feature` and a
-# service injecting the loaded config; serde + validator back the `#[config]`
-# struct's derives.
-nest-rs-config = { path = "../nest-rs-config" }
+# service injecting the loaded config; `nest-rs-config` is already a normal
+# dependency. serde + validator back the `#[config]` struct's derives.
 serde.workspace = true
 validator.workspace = true
 # The pipes test (`tests/pipes.rs`) needs the `GlobalPipe` trait + a

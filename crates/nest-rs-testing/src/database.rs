@@ -8,6 +8,8 @@ use anyhow::{Result, anyhow};
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
 use sea_orm_migration::MigratorTrait;
 
+use crate::env::load_project_env;
+
 /// Fresh Postgres database created for one e2e run, migrated, then **dropped
 /// when this guard drops**. Seed `db.connection()` into a `TestApp` and the
 /// real connection short-circuits `DatabaseModule`'s `for_root` factory.
@@ -24,8 +26,13 @@ pub struct EphemeralDatabase {
 
 impl EphemeralDatabase {
     pub async fn create<M: MigratorTrait>() -> Result<Self> {
+        // The admin URL is read before any `App` boots, so load `.env` first.
+        load_project_env();
         let admin_url = std::env::var("NESTRS_DATABASE__URL").map_err(|_| {
-            anyhow!("NESTRS_DATABASE__URL must point at a reachable Postgres for e2e")
+            anyhow!(
+                "NESTRS_DATABASE__URL is unset and no `.env` was found above the test's working \
+                 directory — point it at a reachable Postgres for e2e"
+            )
         })?;
         Self::create_with::<M>(&admin_url).await
     }

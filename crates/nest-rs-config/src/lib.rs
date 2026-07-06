@@ -14,6 +14,7 @@ mod service;
 mod source;
 
 pub use config::{Config, Namespaced};
+pub use dotenv::load_cascade;
 pub use environment::Environment;
 pub use error::{ConfigError, Result};
 pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup};

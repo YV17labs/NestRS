@@ -21,7 +21,11 @@ pub(crate) fn ensure_env_loaded() {
     });
 }
 
-pub(crate) fn load_cascade(dir: &Path, env: Environment) {
+/// Load the `.env` cascade rooted at `dir` (set-if-absent — real env wins).
+/// Public for bootstrappers that need the environment before an `App` exists
+/// (the e2e harness); in-process, `ConfigModule` drives this via
+/// `ensure_env_loaded`.
+pub fn load_cascade(dir: &Path, env: Environment) {
     let e = env.as_str();
     // Most specific first: set-if-absent makes the first writer win, so this
     // order encodes the documented precedence.

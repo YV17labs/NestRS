@@ -9,6 +9,7 @@
 //! [`override_value`](TestAppBuilder::override_value).
 
 mod app;
+mod env;
 mod headless;
 
 #[cfg(feature = "orm")]
@@ -17,6 +18,7 @@ mod database;
 pub use database::EphemeralDatabase;
 
 pub use app::{TestApp, TestAppBuilder};
+pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
 
 pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};

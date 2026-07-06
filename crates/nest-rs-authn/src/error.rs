@@ -31,6 +31,23 @@ pub enum AuthError {
     /// Strategy-specific or configuration failures. The message is for logs, not the client body.
     #[error("authentication failed: {0}")]
     Failed(String),
+    /// The identity store was unreachable while authenticating — an
+    /// infrastructure failure, **not** a credential signal. Rendered as
+    /// **500** and logged at `error`; the message is for logs, never the
+    /// client body. Kept distinct from [`Failed`](Self::Failed) so a backend
+    /// outage during login is never reported to the caller as a 401.
+    #[error("authentication unavailable: {0}")]
+    Unavailable(String),
+}
+
+/// A credential mismatch is an authentication failure: it folds into
+/// [`AuthError::Failed`], carrying [`CredentialError`]'s opaque `"invalid
+/// credentials"` text for logs (the client still sees the constant
+/// `client_message`). One conversion so the wire string lives in a single place.
+impl From<CredentialError> for AuthError {
+    fn from(err: CredentialError) -> Self {
+        Self::Failed(err.to_string())
+    }
 }
 
 impl AuthError {
@@ -39,6 +56,7 @@ impl AuthError {
         match self {
             Self::Failed(_) => "authentication failed".into(),
             Self::MissingCredentials => "missing credentials".into(),
+            Self::Unavailable(_) => "authentication unavailable".into(),
             _ => "invalid token".into(),
         }
     }
@@ -46,13 +64,22 @@ impl AuthError {
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
+        let body = self.client_message();
+        // An infrastructure failure is a 500, logged at `error` — not a 401
+        // challenge; the caller cannot fix it by re-authenticating.
+        if let Self::Unavailable(ref detail) = self {
+            tracing::error!(target: "nest_rs::authn", detail = %detail, "authentication unavailable");
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(body);
+        }
         if let Self::Failed(ref detail) = self {
             tracing::warn!(target: "nest_rs::authn", detail = %detail, "authentication failed");
         }
         Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(header::WWW_AUTHENTICATE, "Bearer")
-            .body(self.client_message())
+            .body(body)
     }
 }
 
@@ -63,5 +90,27 @@ mod tests {
     #[test]
     fn credential_error_display_does_not_leak_detail() {
         assert_eq!(CredentialError.to_string(), "invalid credentials");
+    }
+
+    #[test]
+    fn unavailable_renders_500_and_no_bearer_challenge() {
+        let resp = AuthError::Unavailable("store unreachable".into()).into_response();
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "an infrastructure failure is a 500, not a 401",
+        );
+        assert!(
+            resp.headers().get(header::WWW_AUTHENTICATE).is_none(),
+            "a 500 must not send a Bearer challenge the caller cannot satisfy",
+        );
+    }
+
+    #[test]
+    fn unavailable_client_message_hides_the_detail() {
+        assert_eq!(
+            AuthError::Unavailable("connection refused at 10.0.0.1".into()).client_message(),
+            "authentication unavailable",
+        );
     }
 }

@@ -2,16 +2,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_authn::{CredentialError, burn_verify, hash_password, verify_password};
+use nest_rs_authn::{AuthError, CredentialError, burn_verify, hash_password, verify_password};
 use nest_rs_authz::Action;
 use nest_rs_core::{hooks, injectable};
 use nest_rs_graphql::dataloader;
 use nest_rs_seaorm::{
-    CreateModel, Creatable, CrudService, Deletable, Repo, ServiceError, Updatable, live_condition,
+    CreateModel, Creatable, CrudService, Deletable, Executor, Repo, ServiceError, Updatable,
+    live_condition,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
-    QueryFilter, Set,
+    QueryFilter, Set, SqlErr,
 };
 use uuid::Uuid;
 use validator::Validate;
@@ -53,19 +54,18 @@ impl UsersService {
         &self,
         email: &str,
         password: &str,
-    ) -> Result<entity::Model, CredentialError> {
+    ) -> Result<entity::Model, AuthError> {
         burn_verify(password);
-        let conn = Repo::<Users>::conn().map_err(|_| CredentialError)?;
+        let conn = Repo::<Users>::conn().map_err(|e| store_unavailable(email, e))?;
         // Pre-authentication: no principal exists yet, so no ability — the
         // sanctioned unscoped path (see `Repo::unscoped`). Routing through
         // `scoped` here would deny every row on a request executor.
-        let user = Repo::<Users>::unscoped()
-            .filter(entity::Column::Email.eq(email.to_owned()))
-            .filter(live_condition::<Users>())
-            .one(&conn)
+        let user = find_by_email(email, &conn)
             .await
-            .map_err(|_| CredentialError)?;
-        verify_credentials(email, user, password)
+            .map_err(|e| store_unavailable(email, e))?;
+        // The store was reachable: from here a failure is a genuine credential
+        // mismatch (opaque 401), never confused with the store being down (500).
+        verify_credentials(email, user, password).map_err(AuthError::from)
     }
 
     pub async fn register_with_password(
@@ -106,12 +106,12 @@ impl UsersService {
         org_id: Uuid,
     ) -> Result<entity::Model, ServiceError> {
         let conn = Repo::<Users>::conn()?;
-        if let Some(user) = Repo::<Users>::scoped(Action::Read)
-            .filter(live_condition::<Users>())
-            .filter(entity::Column::Email.eq(email.to_owned()))
-            .one(&conn)
-            .await?
-        {
+        // Pre-authentication: the OAuth callback resolves the caller before any
+        // principal (hence ability) exists, so this reads unscoped — the same
+        // sanctioned path as `authenticate`. Routing through `scoped` here would
+        // deny every row on the request executor, re-provision on every login,
+        // and trip the `UNIQUE(email)` constraint for every returning user.
+        if let Some(user) = find_by_email(email, &conn).await? {
             return Ok(user);
         }
         let active = prepare_new_user(
@@ -122,10 +122,44 @@ impl UsersService {
             org_id,
             None,
         )?;
-        let user = active.insert(&conn).await?;
-        tracing::info!(target: "features::users", id = %user.id, %org_id, "provisioned a user");
-        Ok(user)
+        match active.insert(&conn).await {
+            Ok(user) => {
+                tracing::info!(target: "features::users", id = %user.id, %org_id, "provisioned a user");
+                Ok(user)
+            }
+            // Lost a race with a concurrent first login for this email between
+            // the read above and this insert: the row now exists, so re-read it
+            // instead of failing the callback (read-then-insert TOCTOU).
+            Err(e) if is_unique_violation(&e) => {
+                find_by_email(email, &conn).await?.ok_or(ServiceError::Db(e))
+            }
+            Err(e) => Err(e.into()),
+        }
     }
+}
+
+/// Shared unscoped by-email lookup for the pre-authentication paths:
+/// [`UsersService::authenticate`], and both the initial read and the
+/// unique-violation re-read in [`UsersService::find_or_create`].
+async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Model>, DbErr> {
+    Repo::<Users>::unscoped()
+        .filter(live_condition::<Users>())
+        .filter(entity::Column::Email.eq(email.to_owned()))
+        .one(conn)
+        .await
+}
+
+fn is_unique_violation(err: &DbErr) -> bool {
+    matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
+}
+
+/// An `AuthError` that renders 500 (the identity store is unreachable), logged
+/// at `error` — the sanctioned response for a DB failure on a login path, kept
+/// separate from the opaque credential rejection so an outage is never reported
+/// to the caller as invalid credentials.
+fn store_unavailable(email: &str, err: DbErr) -> AuthError {
+    tracing::error!(target: "features::users", %email, error = %err, "credential lookup failed");
+    AuthError::Unavailable(err.to_string())
 }
 
 pub(crate) fn prepare_new_user(
@@ -135,9 +169,11 @@ pub(crate) fn prepare_new_user(
 ) -> Result<entity::ActiveModel, ServiceError> {
     input.validate()?;
     let password_hash = match password {
+        // A hashing failure is not a DB error: surface it as an internal 500
+        // (`ServiceError::Internal`) with the source kept for `tracing`.
         Some(plain) => Some(
             hash_password(plain)
-                .map_err(|_| ServiceError::Db(DbErr::Custom("password hashing failed".into())))?,
+                .map_err(|e| ServiceError::internal(format!("password hashing failed: {e}")))?,
         ),
         None => None,
     };
@@ -161,11 +197,20 @@ pub(crate) fn verify_credentials(
         return Err(CredentialError);
     };
 
-    if !verify_password(hash, password).unwrap_or(false) {
-        tracing::warn!(target: "features::users", %email, reason = "bad_password", "login failed");
-        return Err(CredentialError);
+    match verify_password(hash, password) {
+        Ok(true) => Ok(user),
+        Ok(false) => {
+            tracing::warn!(target: "features::users", %email, reason = "bad_password", "login failed");
+            Err(CredentialError)
+        }
+        // The stored hash is unparseable — an operator-visible data fault, not
+        // an ordinary wrong password. Stay opaque to the caller (still
+        // `CredentialError`) but log at `error` so the corruption is noticed.
+        Err(e) => {
+            tracing::error!(target: "features::users", %email, error = %e, reason = "unverifiable_hash", "login failed");
+            Err(CredentialError)
+        }
     }
-    Ok(user)
 }
 
 pub(crate) fn active_for_new_user(
@@ -449,13 +494,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authenticate_returns_credential_error_without_an_ambient_executor() {
+    async fn authenticate_surfaces_a_missing_executor_as_infrastructure_failure() {
         let svc = users_service_disconnected();
         let err = svc
             .authenticate("ada@example.com", "hunter2")
             .await
-            .expect_err("no executor ⇒ CredentialError");
-        assert_eq!(err.to_string(), "invalid credentials");
+            .expect_err("no executor ⇒ infrastructure failure, not a credential mismatch");
+        assert!(
+            matches!(err, AuthError::Unavailable(_)),
+            "a store-reach failure must not masquerade as invalid credentials: {err:?}",
+        );
     }
 
     #[tokio::test]

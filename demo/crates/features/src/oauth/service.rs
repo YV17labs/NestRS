@@ -108,7 +108,7 @@ impl OAuthService {
             .users_svc
             .authenticate(email, password)
             .await
-            .map_err(|_| TokenError::InvalidCredentials)?;
+            .map_err(token_error_from_auth)?;
         let roles = vec![role_from_db(&user.role)];
         self.issue(Some(user.id), user.org_id, roles)
     }
@@ -145,7 +145,10 @@ impl OAuthService {
                 self.config.default_org_id,
             )
             .await
-            .map_err(|err| AuthError::Failed(format!("identity resolution failed: {err}")))?;
+            .map_err(|err| {
+                tracing::error!(target: "features::oauth", error = %err, "identity resolution failed");
+                AuthError::Failed("identity resolution failed".into())
+            })?;
         Ok(Caller {
             user_id: user.id,
             org_id: user.org_id,
@@ -211,6 +214,17 @@ pub(crate) fn grant_client_credentials_with_jwt(
         TokenError::InvalidScope
     })?;
     issue_with_jwt(jwt_svc, None, client.payload, roles)
+}
+
+/// Translate an authentication outcome into the RFC 6749 token error: a store
+/// outage is a `server_error` (500), everything else on the password path is an
+/// opaque `invalid_credentials` (401) — the two are never conflated.
+fn token_error_from_auth(err: AuthError) -> TokenError {
+    if matches!(err, AuthError::Unavailable(_)) {
+        TokenError::Server(err.into())
+    } else {
+        TokenError::InvalidCredentials
+    }
 }
 
 #[cfg(test)]
@@ -488,6 +502,21 @@ mod tests {
             .authenticate_client("ghost", "s3cret")
             .expect_err("unknown id");
         assert!(err.to_string().contains("invalid client credentials"));
+    }
+
+    #[test]
+    fn token_error_from_auth_maps_a_store_outage_to_server_error_not_invalid_credentials() {
+        assert!(
+            matches!(
+                token_error_from_auth(AuthError::Unavailable("store down".into())),
+                TokenError::Server(_),
+            ),
+            "a store outage during login must be server_error (500), never invalid_credentials (401)",
+        );
+        assert!(matches!(
+            token_error_from_auth(AuthError::Failed("invalid credentials".into())),
+            TokenError::InvalidCredentials,
+        ));
     }
 
     #[test]

@@ -18,12 +18,18 @@ pub enum TokenError {
     /// `server_error`; the source stays attached for `tracing`.
     #[error("server_error")]
     Sign(#[source] anyhow::Error),
+    /// A backend dependency (e.g. the identity store) was unreachable while
+    /// resolving the grant — distinct from a credential rejection. `Display`
+    /// is the opaque RFC 6749 `server_error`; the source stays attached for
+    /// `tracing`.
+    #[error("server_error")]
+    Server(#[source] anyhow::Error),
 }
 
 impl ResponseError for TokenError {
     fn status(&self) -> StatusCode {
         match self {
-            TokenError::Sign(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            TokenError::Sign(_) | TokenError::Server(_) => StatusCode::INTERNAL_SERVER_ERROR,
             TokenError::InvalidCredentials => StatusCode::UNAUTHORIZED,
             _ => StatusCode::BAD_REQUEST,
         }
@@ -84,5 +90,13 @@ mod tests {
     fn sign_is_500() {
         let err = TokenError::Sign(anyhow::anyhow!("boom"));
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn server_is_500_with_the_source_kept_for_logs() {
+        let err = TokenError::Server(anyhow::anyhow!("identity store unreachable"));
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.to_string(), "server_error", "wire code stays opaque");
+        assert!(err.source().is_some(), "source preserved for tracing");
     }
 }

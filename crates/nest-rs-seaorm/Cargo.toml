@@ -13,8 +13,11 @@ description = "SeaORM integration for nestrs: the first-class implementation of 
 default = []
 # HTTP transport extractor: `Bind<S, A>` (poem extractor that loads + authorizes
 # through `CrudService::access`). Poem is already in the base deps; `uuid` is
-# pulled here because `Bind` validates UUID v7 path ids.
-http = ["dep:uuid", "dep:nest-rs-resource"]
+# pulled here because `Bind` validates UUID v7 path ids. `nest-rs-authz/http`
+# is forwarded because `src/http/shape.rs` uses `nest_rs_authz::http`; without
+# it, building this feature in isolation (or via `full`) fails to resolve that
+# module (it otherwise only compiles under workspace feature unification).
+http = ["dep:uuid", "dep:nest-rs-resource", "nest-rs-authz/http"]
 # GraphQL transport extractors: the `bind` resolver helper and `LoaderScope`
 # (the `BatchContext` that re-installs the request executor + ability around
 # each `#[dataloader]` batch).
@@ -71,3 +74,11 @@ async-graphql = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
+
+# The e2e suite imports feature-gated transport bridges: `DbContext` (`http`)
+# and `WsDataContext` (`ws`). Without this gate, a default-feature
+# `cargo test -p nest-rs-seaorm` fails to compile the test binary (E0432).
+# The `ws` module inside `tests/e2e/ws.rs` stays additionally `#[cfg]`-gated.
+[[test]]
+name = "e2e"
+required-features = ["http", "ws"]

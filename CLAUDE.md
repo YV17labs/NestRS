@@ -17,7 +17,7 @@ transactions, edge validation, discovery, lifecycle** — must be
 framework defect.
 
 Leverage = **procedural macros** (decorators as declarative in Rust as
-in TS). `crates/nestrs-*` = framework; `crates/features/` = product
+in TS). `crates/nest-rs-*` = framework; `crates/features/` = product
 vertical slices (port at the feature root + one adapter sub-folder per
 transport: `http/`, `graphql/`, `ws/`, `queue/`, `schedule/`, `mcp/`);
 `apps/<name>/` = `main.rs` + `module.rs` composing edges.
@@ -114,7 +114,7 @@ Three homes, within the **demo** workspace. Dividing rule:
 `demo/apps/<x>/` only when *this app's exposure decides something the
 feature can't generalize*.
 
-- **`crates/nestrs-*` — framework** (root workspace). Generic,
+- **`crates/nest-rs-*` — framework** (root workspace). Generic,
   product-agnostic. Never names a concrete `Claims`, entity, or policy
   — generic *over* them.
 - **`demo/crates/features/` — product features.** Hexagonal per slice: port
@@ -536,14 +536,16 @@ orm-agnostic `JobContext` (`WorkerDbContext`, auto-bound by
 `DatabaseModule`) — system work ⇒ no ability ⇒ unscoped, correct.
 A truly contextless path (shutdown hook) keeps an injected
 `Arc<DatabaseConnection>` — the only `Repo`-*less* bypass (no executor
-at all). Three ability-less paths stay **inside** `Repo` via
+at all). Two ability-less paths stay **inside** `Repo` via
 `Repo::unscoped()` / `unscoped_by_id()`: pre-authentication credential
-lookup (no principal yet ⇒ no ability), `CrudService::access` (must
+lookup (no principal yet ⇒ no ability) and `CrudService::access` (must
 distinguish `Denied` from `Missing`, so it filters by ability
-explicitly after the unscoped load), and signature-authenticated
-ingress (public webhook route — trust is the payload signature, no
-principal ⇒ no ability on a request executor). Every other read uses
-`scoped`/`all`/`find_by_id`, which apply the ambient ability `WHERE`.
+explicitly after the unscoped load). A third — signature-authenticated
+webhook ingress — is **reserved but unimplemented** (no webhook route or
+signature check exists; see `Repo::unscoped`'s doc for the bar a real one
+must clear before shipping a `#[public]` + `unscoped` webhook). Every
+other read uses `scoped`/`all`/`find_by_id`, which apply the ambient
+ability `WHERE`.
 
 **`#[dataloader]` batch methods** live on the service, use `Repo`,
 return `Result<HashMap<…>, E>` (infallible only when truly cannot
@@ -592,7 +594,7 @@ Tutorial feature exemplar: `crates/features/src/posts/`.
   `HttpModule::for_root(...)` in imports; no public
   `.transport(...)`. Every `HttpConfig` field settable via
   `NESTRS_HTTP__*` env **and** the pinned struct — framework-wide
-  **dual-path config rule** (applies to every `nestrs-*` module).
+  **dual-path config rule** (applies to every `nest-rs-*` module).
 - **`nest-rs-pipes`** — transport-agnostic, **one Pipe per file**,
   stateless (`transform(In) -> Result<Out, _>`, never a DI provider).
   Base set covers common cases (`Parse<T>`, `ParseUuid`,
@@ -843,6 +845,13 @@ no standalone generator, no CI drift-check.
 ## Hard "no" list
 
 - No external DI library.
+- **No renaming the umbrella crate.** The facade package stays **`nest-rs`**
+  and every sub-crate stays **`nest-rs-*`** (module paths are therefore
+  `nest_rs::*` / `nest_rs_*`, span targets `nest_rs::<concern>`). The
+  `nestrs` brand — the CLI binary, `NESTRS_*` env prefix, `nestrs.dev`,
+  `nestrs g` — deliberately differs from the crate prefix; that mismatch is
+  accepted, not a bug to "fix" by renaming. (Owner decision; supersedes the
+  pre-release audit's "publish the umbrella as `nestrs`" proposal.)
 - No collapsing the two workspaces. The framework (`crates/nest-rs-*`,
   root) and the product (`demo/` — apps + `features`/`migrations`/
   `seed`) stay split; the demo consumes the framework by relative path.
@@ -873,7 +882,7 @@ This file plus the **code** are the source of truth.
    before inventing.
 3. **`demo/apps/api/`** — reference app (REST + GraphQL + DB
    + authz); `module.rs` is canonical composition.
-4. **`crates/nestrs-<concern>/`** for whatever you touch.
+4. **`crates/nest-rs-<concern>/`** for whatever you touch.
 
 User-level IDE rules (e.g. "explain in French, code/comments in
 English") apply per session.

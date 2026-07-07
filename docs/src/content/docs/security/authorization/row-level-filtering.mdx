@@ -127,10 +127,14 @@ for the visitor, so `Repo::scoped(Read)` returns nothing by default
 filter.
 
 The sanctioned ability-less reads (pre-authentication credential
-lookup, `CrudService::access`'s existence probe, signature-verified
-webhook ingest) stay inside `Repo` through `Repo::unscoped()` /
-`unscoped_by_id()` — an explicit, greppable opt-out of the row scope,
-never a raw `find()` around the choke point.
+lookup, `CrudService::access`'s existence probe) stay inside `Repo`
+through `Repo::unscoped()` / `unscoped_by_id()` — an explicit, greppable
+opt-out of the row scope, never a raw `find()` around the choke point.
+A third such path — signature-verified webhook ingest — is **reserved
+but not yet implemented**; don't ship a `#[public]` + `Repo::unscoped`
+webhook until the framework provides the HMAC-verifying `Guard`
+exemplar (`subtle::ct_eq`, replay window, fail-closed secret, denial
+`warn!`).
 
 ## SQL injection — not the threat
 

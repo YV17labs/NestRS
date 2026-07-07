@@ -12,9 +12,51 @@
 //! Bring the fallback trait into scope at the call site for the resolution to
 //! work: `use nest_rs_pipes::MaybeValidateFallback as _;`.
 
-use validator::Validate;
+use validator::{Validate, ValidationErrors};
 
 use crate::PipeError;
+
+/// Turn a `validator` failure into a [`PipeError`] whose `details` carry the
+/// field-level errors **without** the echoed submitted value.
+///
+/// `validator` records the rejected input under `params.value` on every error.
+/// Returning it verbatim leaks the submitted field — a too-short password, a
+/// malformed token — into the response body and anything that captures it (a
+/// log, a cache, a proxy). Keep the field name, the `code`/`message`, and the
+/// constraint bounds (`min`/`max`) that make the message actionable; strip only
+/// the submitted value, at every nesting depth. Fail-secure: an unserializable
+/// error map collapses to `Null` rather than surfacing raw input. Shared by
+/// every validation entry point ([`ValidateProbe`] here,
+/// [`ValidationPipe`](crate::ValidationPipe) in `pipes/`) so no transport can
+/// echo the credential.
+pub(crate) fn validation_error(errors: ValidationErrors) -> PipeError {
+    let mut details = serde_json::to_value(errors).unwrap_or(serde_json::Value::Null);
+    redact_submitted_values(&mut details);
+    PipeError::with_details("validation failed", details)
+}
+
+/// Recursively drop every `params.value` from serialized `validator` errors —
+/// the reserved key under which `validator` echoes the rejected input. Nested
+/// (`#[validate(nested)]`) and list validations embed further error maps, so
+/// the walk descends through every object and array.
+fn redact_submitted_values(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::Object(params)) = map.get_mut("params") {
+                params.remove("value");
+            }
+            for nested in map.values_mut() {
+                redact_submitted_values(nested);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                redact_submitted_values(item);
+            }
+        }
+        _ => {}
+    }
+}
 
 /// Wraps a borrowed input so method resolution can pick the `Validate`-aware
 /// inherent method over the no-op trait fallback.
@@ -26,10 +68,7 @@ impl<T: Validate> ValidateProbe<'_, T> {
     pub fn maybe_validate(&self) -> Result<(), PipeError> {
         match self.0.validate() {
             Ok(()) => Ok(()),
-            Err(errors) => Err(PipeError::with_details(
-                "validation failed",
-                serde_json::to_value(errors).unwrap_or(serde_json::Value::Null),
-            )),
+            Err(errors) => Err(validation_error(errors)),
         }
     }
 }

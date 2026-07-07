@@ -80,6 +80,21 @@ impl HttpEndpointMeta {
         self.posture
     }
 
+    /// The self-mount's edge access decision is **implicit**: it is
+    /// [`Guarded`](EdgePosture::Guarded) — so it expects the transport to run
+    /// the global guard chain at its edge — but no global guard pool is active,
+    /// leaving that chain empty. The HTTP transport warns on these at boot, the
+    /// self-mount analog of the controller route's `access_is_implicit`.
+    ///
+    /// An [`Exempt`](EdgePosture::Exempt) self-mount gates in-band or is
+    /// deliberately public (the `#[public]` analog), so it is never implicit. A
+    /// gateway's own `#[use_guards]` live inside its opaque mount closure and
+    /// are invisible here, so a `true` prompts the developer to confirm the
+    /// edge is guarded on purpose — it is not proof the edge is wide open.
+    pub fn edge_access_is_implicit(&self, global_guards: bool) -> bool {
+        !global_guards && self.posture == EdgePosture::Guarded
+    }
+
     pub fn mount(&self, container: &Container, route: Route) -> Route {
         (self.mount)(container, route)
     }
@@ -117,5 +132,35 @@ impl SelfMountGuardWrap {
         endpoint: BoxEndpoint<'static, Response>,
     ) -> BoxEndpoint<'static, Response> {
         (self.0)(container, endpoint)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meta() -> HttpEndpointMeta {
+        HttpEndpointMeta::new("/ws", "ws", |_c, r| r)
+    }
+
+    #[test]
+    fn a_guarded_edge_is_implicit_only_without_a_global_pool() {
+        // Default posture is `Guarded`: it expects the global guard chain at
+        // its edge, so with no pool active its access is implicit; with a pool
+        // the transport shapes it and it is covered.
+        let m = meta();
+        assert_eq!(m.posture(), EdgePosture::Guarded);
+        assert!(m.edge_access_is_implicit(false));
+        assert!(!m.edge_access_is_implicit(true));
+    }
+
+    #[test]
+    fn an_exempt_edge_is_never_implicit() {
+        // `Exempt` gates in-band or is deliberately public (the `#[public]`
+        // analog), so it is never flagged regardless of the global pool.
+        let m = meta().exempt();
+        assert_eq!(m.posture(), EdgePosture::Exempt);
+        assert!(!m.edge_access_is_implicit(false));
+        assert!(!m.edge_access_is_implicit(true));
     }
 }

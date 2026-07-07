@@ -58,3 +58,6 @@ nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 tokio.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true

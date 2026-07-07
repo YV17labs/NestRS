@@ -9,7 +9,9 @@
 use std::any::TypeId;
 
 use nest_rs_core::Container;
+#[cfg(feature = "ws")]
 use nest_rs_ws::WsClient;
+#[cfg(feature = "ws")]
 use serde_json::Value;
 
 use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
@@ -80,6 +82,7 @@ pub async fn run_layered_graphql_chain(
 /// chain table inline (so pipe wiring belongs there). The trait method
 /// exists today for surface symmetry; wiring at the event-dispatcher
 /// level is queued.
+#[cfg(feature = "ws")]
 #[allow(clippy::too_many_arguments)]
 pub async fn run_layered_ws_chain(
     client: &WsClient,

@@ -50,7 +50,9 @@ pub fn current_executor_scope() -> Option<ExecutorScope> {
 
 /// Install `executor` without tagging a scope. Prefer the request/job
 /// variants at framework boundaries so authorization can distinguish the
-/// two paths.
+/// two paths. An untagged (unset) scope is treated as **fail-closed** by a
+/// scope-aware `Repo`: with no ambient ability it denies every row, exactly
+/// like a request — only [`with_job_executor`] grants unscoped reads.
 pub async fn with_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
     EXECUTOR.scope(executor, fut).await
 }

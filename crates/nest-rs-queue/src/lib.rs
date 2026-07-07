@@ -13,7 +13,6 @@
 //! the `QueueWorker` transport, the activation modules). A third-party
 //! `nestrs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
 //! directly — see this crate's README for the extension contract.
-
 mod consumer;
 mod inventory;
 mod processor;

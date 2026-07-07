@@ -398,4 +398,39 @@ mod tests {
             "details should name the failing field: {json}",
         );
     }
+
+    #[derive(Debug, Serialize, Deserialize, Validate)]
+    struct Login {
+        #[validate(length(min = 8))]
+        password: String,
+    }
+
+    #[tokio::test]
+    async fn valid_rejection_does_not_echo_the_submitted_value_in_the_400_body() {
+        // A credential-like field that fails a length rule must never come back
+        // in the 400 body — a logged, cached, or proxied response would
+        // otherwise leak exactly what was typed.
+        let payload = Login {
+            password: "hunter2".into(), // 7 chars — fails `min = 8`
+        };
+        let (req, mut body) = json_request(&payload);
+        let err = match Valid::<Json<Login>>::from_request(&req, &mut body).await {
+            Ok(_) => panic!("validation should have rejected"),
+            Err(e) => e,
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let text = std::str::from_utf8(&bytes).expect("utf8 body");
+        assert!(
+            !text.contains("hunter2"),
+            "the submitted value must not be echoed in the 400 body: {text}",
+        );
+        // The failing field is still named so the client knows what to fix.
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert!(
+            json.get("details").and_then(|d| d.get("password")).is_some(),
+            "details should still name the failing field: {json}",
+        );
+    }
 }

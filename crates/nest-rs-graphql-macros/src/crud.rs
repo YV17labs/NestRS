@@ -133,7 +133,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             },
             Paginate::Page => {
                 return Err(syn::Error::new(
-                    proc_macro2::Span::call_site(),
+                    cfg.paginate_span,
                     "#[crud] GraphQL list does not yet support `paginate = page` (offset); \
                      use `paginate = cursor` (the default) or `paginate = none`",
                 ));
@@ -269,4 +269,55 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #[::nest_rs_graphql::resolver]
         #item
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+    use syn::parse_quote;
+
+    use super::*;
+
+    // A `create` op listed without its `create = <Input>` type is a hard macro
+    // error — a write op is never silently dropped or exposed as a no-op
+    // mutation on the wire. (GraphQL analog of the same gate the HTTP `#[crud]`
+    // already tests.)
+    #[test]
+    fn create_op_without_input_type_fails_to_expand() {
+        let item: ItemImpl = parse_quote! { impl Things {} };
+        let err = crud(
+            quote! { service = svc, entity = E, output = Thing, ops = [create] },
+            item,
+        )
+        .expect_err("create without an input type must fail to expand");
+        assert!(err.to_string().contains("create"), "names the op: {}", err);
+    }
+
+    // The same gate for `update`.
+    #[test]
+    fn update_op_without_input_type_fails_to_expand() {
+        let item: ItemImpl = parse_quote! { impl Things {} };
+        let err = crud(
+            quote! { service = svc, entity = E, output = Thing, ops = [update] },
+            item,
+        )
+        .expect_err("update without an input type must fail to expand");
+        assert!(err.to_string().contains("update"), "names the op: {}", err);
+    }
+
+    // The valid form — a write op paired with its input type — expands and
+    // emits the operation.
+    #[test]
+    fn create_op_with_input_type_expands() {
+        let item: ItemImpl = parse_quote! { impl Things {} };
+        let out = crud(
+            quote! {
+                service = svc, entity = E, output = Thing, ops = [create], create = CreateThing
+            },
+            item,
+        )
+        .expect("create paired with its input type expands")
+        .to_string();
+        assert!(out.contains("create_thing"), "emits the create op: {out}");
+    }
 }

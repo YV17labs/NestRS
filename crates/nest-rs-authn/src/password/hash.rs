@@ -11,6 +11,7 @@ use thiserror::Error;
 static TIMING_DUMMY_HASH: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PasswordError {
     #[error("password hashing failed")]
     HashFailed,

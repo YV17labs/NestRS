@@ -8,7 +8,6 @@
 //!
 //! This crate never depends on `nestrs-core` or any other surface crate:
 //! emitted absolute-path tokens (`::nest_rs_core::*`) resolve at the call site.
-
 mod args;
 mod casing;
 mod crud;

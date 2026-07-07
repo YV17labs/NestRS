@@ -17,7 +17,11 @@ orm = ["dep:sea-orm", "dep:sea-orm-migration"]
 
 [dependencies]
 nest-rs-core.workspace = true
-nest-rs-guards.workspace = true
+# The `ws_gateway_guards` test drives `GuardAsWsMessageCheck` (guards' WS
+# message-guard path, feature-gated). Enabling `guards/ws` forwards `ws` to the
+# filter/interceptor layer crates too, so the cross-crate WS wiring test builds
+# under default features (not only `--all-features`).
+nest-rs-guards = { workspace = true, features = ["ws"] }
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-filters.workspace = true

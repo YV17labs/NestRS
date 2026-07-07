@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
@@ -115,7 +115,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             },
             Paginate::Page => {
                 return Err(syn::Error::new(
-                    Span::call_site(),
+                    cfg.paginate_span,
                     "#[crud] REST list does not yet support `paginate = page` (offset); \
                      use `paginate = cursor` (the default) or `paginate = none`",
                 ));

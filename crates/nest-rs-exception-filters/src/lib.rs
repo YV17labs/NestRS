@@ -54,7 +54,6 @@
 //!     .module::<AppModule>()
 //!     .build().await?.run().await
 //! ```
-
 mod builder;
 mod erased;
 mod exception;

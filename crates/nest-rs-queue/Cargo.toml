@@ -24,3 +24,6 @@ tokio-util.workspace = true
 # Re-exported for the `#[processor]` macro emission so the call site doesn't
 # need a direct `tracing` dependency for the unversioned-payload warning.
 tracing.workspace = true
+
+[lints]
+workspace = true

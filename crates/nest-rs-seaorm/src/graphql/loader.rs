@@ -45,3 +45,53 @@ impl GraphqlBatchContext for LoaderScope {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_authz::AbilityBuilder;
+
+    use super::*;
+    use crate::current_executor;
+
+    // `LoaderScope::spawner` snapshots the ambient executor + ability while the
+    // per-request loader is built, then re-installs both around each spawned
+    // batch — async-graphql runs every batch on a fresh task whose task-locals
+    // are empty, so without this a loader's `Repo` reads would run unscoped.
+    // Proven end-to-end by the api GraphQL relation e2e; pinned here without a
+    // DB by observing the ambient state *inside* a batch spawned from outside
+    // any scope.
+    #[tokio::test]
+    async fn spawner_reinstalls_the_snapshot_executor_and_ability_in_the_batch() {
+        let scope = LoaderScope {
+            db: Arc::new(DatabaseConnection::default()),
+        };
+        let ability = Arc::new(AbilityBuilder::new().build());
+
+        // Build the spawner *inside* the ability scope, exactly as async-graphql
+        // builds the per-request loader while the request's ability is live.
+        let spawner = with_ability(ability.clone(), async { scope.spawner() }).await;
+
+        // We are now outside any scope: a bare `tokio::spawn` batch would see
+        // empty task-locals — the exact hazard `LoaderScope` closes.
+        assert!(current_executor().is_none());
+        assert!(current_ability().is_none());
+
+        // The batch reports back the ambient state it observed once re-installed.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        spawner(Box::pin(async move {
+            let _ = tx.send((current_executor(), current_ability()));
+        }));
+        let (executor, seen_ability) = rx.await.expect("the batch future resolves");
+
+        assert!(
+            matches!(executor, Some(Executor::Pool(_))),
+            "the spawner re-installs a pool executor around the batch",
+        );
+        let seen_ability =
+            seen_ability.expect("the spawner re-installs the ability around the batch");
+        assert!(
+            Arc::ptr_eq(&seen_ability, &ability),
+            "the snapshot ability is re-installed, not a fresh one",
+        );
+    }
+}

@@ -1,6 +1,7 @@
 use crate::pipe::{Pipe, PipeError};
 
-/// Lowercase every character of a `String`.
+/// Full Unicode lowercasing via `str::to_lowercase`: locale-independent, and
+/// can change the string's length (e.g. 'İ' → "i̇") — not a per-char ASCII fold.
 pub struct Lowercase;
 
 impl Pipe for Lowercase {

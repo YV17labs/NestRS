@@ -16,8 +16,16 @@ http = ["dep:nest-rs-http"]
 config = ["dep:nest-rs-config"]
 database = ["dep:nest-rs-database"]
 seaorm = ["dep:nest-rs-seaorm", "database"]
-graphql = ["dep:nest-rs-graphql", "http"]
-ws = ["dep:nest-rs-ws", "http"]
+# `nest-rs-authz?/graphql` (weak dep feature): when an app pulls both `graphql`
+# and `authz` through the umbrella, activate authz's GraphQL binding — which
+# transitively turns on the `graphql` feature of the Layer System trait crates
+# (guards / filters / exception-filters / interceptors). No effect unless
+# `authz` is also enabled, so an HTTP-only build never compiles the GraphQL
+# stack via this edge.
+graphql = ["dep:nest-rs-graphql", "http", "nest-rs-authz?/graphql"]
+# Likewise for WS: the gateway reuses the HTTP guards, so authz's WS binding
+# lives behind its `http` feature (which forwards `nest-rs-guards/ws`).
+ws = ["dep:nest-rs-ws", "http", "nest-rs-authz?/http"]
 mcp = ["dep:nest-rs-mcp", "http"]
 queue = ["dep:nest-rs-queue"]
 redis = ["dep:nest-rs-redis", "queue"]
@@ -54,3 +62,6 @@ nest-rs-health = { workspace = true, optional = true }
 nest-rs-throttler = { workspace = true, optional = true }
 nest-rs-server-timing = { workspace = true, optional = true }
 nest-rs-testing = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -10,7 +10,7 @@ use nest_rs_seaorm::{DatabaseConfig, DbContext, current_executor};
 use poem::endpoint::make;
 use poem::http::{Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
-use sea_orm::Database;
+use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 
 async fn db() -> Arc<sea_orm::DatabaseConnection> {
     let url = std::env::var("NESTRS_DATABASE__URL")
@@ -68,4 +68,69 @@ async fn a_well_behaved_mutating_handler_keeps_its_status() {
 
     let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
     assert_eq!(status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
+    let conn = db().await;
+
+    // A committed scratch table on the pool, isolated from the request txn.
+    conn.execute_unprepared("DROP TABLE IF EXISTS mapped_rollback_probe")
+        .await
+        .expect("drop any leftover probe table");
+    conn.execute_unprepared("CREATE TABLE mapped_rollback_probe (id INT PRIMARY KEY)")
+        .await
+        .expect("create the probe table");
+
+    let ctx = DbContext::new(conn.clone(), config());
+
+    // A handler that writes inside the request transaction, then hands back a
+    // 2xx tagged `MappedError` — exactly what a route-site Filter emits after
+    // mapping the handler's `Err`. `DbContext` must roll back regardless of the
+    // success status: the mapping shapes the client answer, it does not bless
+    // the failed handler's writes.
+    let endpoint = make(|_req: Request| async {
+        let executor = current_executor().expect("the handler runs with an ambient executor");
+        let inserted = executor
+            .execute_unprepared("INSERT INTO mapped_rollback_probe (id) VALUES (1)")
+            .await
+            .expect("the insert runs inside the request transaction");
+        assert_eq!(
+            inserted.rows_affected(),
+            1,
+            "the write really lands inside the open transaction",
+        );
+
+        let mut resp = StatusCode::OK.into_response();
+        resp.extensions_mut().insert(nest_rs_core::MappedError);
+        resp
+    });
+
+    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the mapped success status is still returned to the client",
+    );
+
+    // The pool sees the committed, empty table: the tagged 2xx rolled the insert
+    // back rather than committing it behind a success status.
+    let remaining: i32 = conn
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT COUNT(*)::int AS n FROM mapped_rollback_probe",
+        ))
+        .await
+        .expect("count on the pool")
+        .expect("count returns a row")
+        .try_get("", "n")
+        .expect("read the count");
+    assert_eq!(
+        remaining, 0,
+        "a MappedError-tagged 2xx must roll back the handler's writes",
+    );
+
+    conn.execute_unprepared("DROP TABLE IF EXISTS mapped_rollback_probe")
+        .await
+        .expect("clean up the probe table");
 }

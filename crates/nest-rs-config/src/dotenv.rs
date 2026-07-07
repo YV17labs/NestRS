@@ -5,29 +5,41 @@
 //! ```
 //!
 //! `.env.local` is skipped under [`Environment::Test`] so tests stay hermetic.
-//! Set-if-absent — real env always wins; load is best-effort.
+//!
+//! The cascade is parsed once into an in-crate map (`dotenv_values`) that the
+//! config layer consults through `env_var` — the real process env always wins,
+//! dotenv only fills what the real env leaves unset. Resolving config therefore
+//! **never mutates the process environment**, so no `set_var` can race a
+//! concurrent `getenv` on a worker thread (`std::env::set_var` is `unsafe` and
+//! unsound under that race). The one path that still writes to the process env
+//! is `load_cascade` — an explicit, opt-in bootstrapper for callers that must
+//! expose dotenv values via raw `std::env::var` before any `ConfigService`
+//! exists (the e2e harness); the framework's live-runtime path never uses it.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::Once;
+use std::sync::OnceLock;
 
 use crate::environment::Environment;
 
-/// Once-per-process choke point all config reads route through.
-pub(crate) fn ensure_env_loaded() {
-    static LOADED: Once = Once::new();
-    LOADED.call_once(|| {
-        load_cascade(Path::new("."), Environment::from_env());
-    });
+/// The parsed `.env` cascade for the active [`Environment`], rooted at the
+/// current directory. Built once, lazily; side-effect-free (reads files only —
+/// **no** process-env mutation). Consulted by `env_var` as the fallback under
+/// the real process environment, so config lookups see dotenv values without
+/// `set_var`.
+pub(crate) fn dotenv_values() -> &'static HashMap<String, String> {
+    static VALUES: OnceLock<HashMap<String, String>> = OnceLock::new();
+    VALUES.get_or_init(|| cascade_map(Path::new("."), Environment::from_env()))
 }
 
-/// Load the `.env` cascade rooted at `dir` (set-if-absent — real env wins).
-/// Public for bootstrappers that need the environment before an `App` exists
-/// (the e2e harness); in-process, `ConfigModule` drives this via
-/// `ensure_env_loaded`.
-pub fn load_cascade(dir: &Path, env: Environment) {
+/// Parse the `.env` cascade rooted at `dir` into a map (most-specific file
+/// wins). Pure: reads files only, never touches the process environment and
+/// never consults the real env — real-env precedence is applied at read time by
+/// `env_var`.
+pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, String> {
     let e = env.as_str();
-    // Most specific first: set-if-absent makes the first writer win, so this
+    // Most specific first: `or_insert` makes the first writer win, so this
     // order encodes the documented precedence.
     let mut files = vec![format!(".env.{e}.local")];
     if env != Environment::Test {
@@ -36,12 +48,16 @@ pub fn load_cascade(dir: &Path, env: Environment) {
     files.push(format!(".env.{e}"));
     files.push(".env".to_owned());
 
+    let mut values = HashMap::new();
     for file in files {
-        load_file(&dir.join(file));
+        merge_file(&dir.join(file), &mut values);
     }
+    values
 }
 
-fn load_file(path: &Path) {
+/// Merge one `.env` file's assignments into `values` (set-if-absent — the
+/// first writer, i.e. the most specific file, wins).
+fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
     let Ok(contents) = fs::read_to_string(path) else {
         return;
     };
@@ -55,14 +71,37 @@ fn load_file(path: &Path) {
             continue;
         };
         let key = key.trim();
-        if key.is_empty() || std::env::var_os(key).is_some() {
+        if key.is_empty() {
             continue;
         }
-        // SAFETY: `ensure_env_loaded` is guarded by a `Once` and runs at boot
-        // (collect phase) before any worker is spawned — no other thread can
-        // be reading the environment yet, so the Edition 2024 `unsafe` is
-        // sound in this codebase.
-        unsafe { std::env::set_var(key, parse_value(value.trim())) };
+        values
+            .entry(key.to_owned())
+            .or_insert_with(|| parse_value(value.trim()));
+    }
+}
+
+/// Merge the `.env` cascade rooted at `dir` into the **process environment**
+/// (set-if-absent — real env wins). This is the only path that mutates the
+/// process env; it exists for bootstrappers that read dotenv values via raw
+/// `std::env::var` before an `App` (hence a `ConfigService`) exists — the e2e
+/// harness. In-process, the config layer never calls this: it reads
+/// `dotenv_values` through `env_var`, so a running app mutates nothing.
+pub fn load_cascade(dir: &Path, env: Environment) {
+    for (key, value) in cascade_map(dir, env) {
+        if std::env::var_os(&key).is_some() {
+            continue;
+        }
+        // SAFETY: `set_var` is unsound only when it races a concurrent `getenv`
+        // on another thread. This is NOT the live-runtime path — the
+        // framework's config reads go through `dotenv_values`/`env_var` and
+        // never reach here. The only in-repo caller is an explicit bootstrapper
+        // (the e2e harness) that invokes it during single-threaded setup,
+        // before spawning any task that reads the environment; the write
+        // therefore happens-before every later `getenv`. Any caller of this
+        // public function carries that same obligation.
+        // Sanctioned bootstrapper: the framework's one production env write.
+        #[allow(unsafe_code)]
+        unsafe { std::env::set_var(&key, value) };
     }
 }
 
@@ -167,7 +206,7 @@ mod tests {
     }
 
     // `parse_value` is the per-line parser shared by every cascade tier — pin
-    // each quoting variant directly so a future rewrite of `load_file`
+    // each quoting variant directly so a future rewrite of `merge_file`
     // doesn't silently change PEM-multiline support.
 
     #[test]
@@ -224,13 +263,13 @@ mod tests {
         assert_eq!(parse_value(r#"""#), r#"""#);
     }
 
-    // `load_file` exercises every parse-line branch (comment, empty,
+    // `merge_file` exercises every parse-line branch (comment, empty,
     // missing equal, `export` prefix, set-if-absent). Drive them all via
     // a temp file.
 
     #[test]
     #[allow(clippy::result_large_err)]
-    fn load_file_handles_comments_blank_lines_and_export_prefix() {
+    fn merge_file_handles_comments_blank_lines_and_export_prefix() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 ".env",
@@ -246,7 +285,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::result_large_err)]
-    fn load_file_skips_empty_key_and_lines_with_only_whitespace_key() {
+    fn merge_file_skips_empty_key_and_lines_with_only_whitespace_key() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 ".env",
@@ -262,7 +301,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::result_large_err)]
-    fn load_file_is_a_no_op_when_the_path_doesnt_exist() {
+    fn merge_file_is_a_no_op_when_the_path_doesnt_exist() {
         figment::Jail::expect_with(|jail| {
             // No `.env` files created — load_cascade walks all candidates and
             // every read fails silently. We mainly check that no panic
@@ -276,7 +315,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::result_large_err)]
-    fn load_file_expands_double_quoted_pem_style_value() {
+    fn merge_file_expands_double_quoted_pem_style_value() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 ".env",
@@ -287,6 +326,27 @@ mod tests {
                 std::env::var("PEM_KEY").unwrap(),
                 "-----BEGIN-----\nMIIB\n-----END-----",
             );
+            Ok(())
+        });
+    }
+
+    // `cascade_map` is the live-runtime path: it resolves file precedence into a
+    // map **without** mutating the process env. Pin both — most-specific file
+    // wins, and no `set_var` leaks the values into `std::env` (the whole point
+    // of the fix — the config layer reads this map, it does not merge it).
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn cascade_map_resolves_precedence_without_touching_process_env() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "MAP_A=base\nMAP_B=base")?;
+            jail.create_file(".env.development", "MAP_B=dev")?;
+            jail.create_file(".env.development.local", "MAP_B=dev_local")?;
+            let map = cascade_map(Path::new("."), Environment::Development);
+            assert_eq!(map.get("MAP_A").map(String::as_str), Some("base"));
+            assert_eq!(map.get("MAP_B").map(String::as_str), Some("dev_local"));
+            // The read path must not have written anything into the real env.
+            assert!(std::env::var("MAP_A").is_err());
+            assert!(std::env::var("MAP_B").is_err());
             Ok(())
         });
     }

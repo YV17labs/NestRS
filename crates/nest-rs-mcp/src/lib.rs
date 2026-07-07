@@ -6,7 +6,6 @@
 //! `endpoint()` factory that mounts under the HTTP server. Apps activate MCP
 //! by listing the `#[mcp]`-decorated provider — no `<Transport>Module`
 //! activation seam to import.
-
 mod allow_guard;
 mod deny_guard;
 mod endpoint;

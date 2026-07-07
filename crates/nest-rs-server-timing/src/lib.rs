@@ -5,7 +5,6 @@
 //! sub-step durations by pulling [`Timings`] out of request extensions.
 //!
 //! [Server-Timing]: https://www.w3.org/TR/server-timing/
-
 mod entry;
 mod format;
 mod interceptor;

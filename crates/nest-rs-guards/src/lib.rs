@@ -91,7 +91,6 @@
 //! the graphql/ws chain runners) that the other three trio members consume.
 //! Splitting it would mean duplicating the chain across crates or routing
 //! through a fifth — both worse than the asymmetry.
-
 mod builder;
 mod denial;
 pub mod dispatch;
@@ -109,16 +108,27 @@ pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 // Re-exported here for the historical import path used by the macros.
 pub use denial::Denial;
 pub use endpoint::{GuardEndpoint, GuardExt};
-pub use guard::{Guard, GuardAsWsMessageCheck};
+pub use guard::Guard;
+// The WS bridge the `#[messages]` macro wraps per-event guards in — only
+// exists (and is only needed) when the `ws` feature is on.
+#[cfg(feature = "ws")]
+pub use guard::GuardAsWsMessageCheck;
 // The dedup logic itself lives in `nest_rs_core::layer_chain` — the single
 // home every execution site (route shaper, transport pool folds, graphql/ws
 // in-band chains) composes through. Re-exported for macro-emitted code.
 pub use nest_rs_core::layer_chain;
 pub use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer};
-pub use nest_rs_interceptors::{GraphqlNext, WsNext};
+// The reserved continuation types live on `nest-rs-interceptors` behind the
+// matching transport feature; re-exported for the historical macro import path.
+#[cfg(feature = "graphql")]
+pub use nest_rs_interceptors::GraphqlNext;
+#[cfg(feature = "ws")]
+pub use nest_rs_interceptors::WsNext;
 pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
 // Re-export dispatch helpers for macro-emitted code.
-pub use dispatch::{RouteShaper, denial_to_http_response, run_layered_ws_chain};
+pub use dispatch::{RouteShaper, denial_to_http_response};
+#[cfg(feature = "ws")]
+pub use dispatch::run_layered_ws_chain;
 #[cfg(feature = "graphql")]
 pub use dispatch::{denial_to_graphql_error, run_layered_graphql_chain};

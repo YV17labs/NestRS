@@ -18,7 +18,6 @@
 //! // + GraphQL surface (requires `features = ["graphql"]` on `nest-rs-resource`).
 //! #[expose(name = "Item", service = super::service::ItemsService, graphql)]
 //! ```
-
 mod exposures;
 
 #[cfg(feature = "graphql")]

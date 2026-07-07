@@ -57,15 +57,27 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
                     .insert(Arc::new(AbilityBuilder::new().build()));
                 Ok(())
             }
-            None => Err(Denial::internal(
-                "AbilityGuard requires an authentication guard to run first",
-            )),
+            None => {
+                tracing::warn!(
+                    target: "nest_rs::authz",
+                    actor_type = std::any::type_name::<F::Actor>(),
+                    "ability guard denied: no authenticated actor and route is not public",
+                );
+                Err(Denial::internal(
+                    "AbilityGuard requires an authentication guard to run first",
+                ))
+            }
         }
     }
 
     #[cfg(feature = "graphql")]
     async fn check_graphql(&self, _ctx: &GraphqlContext<'_>) -> Result<(), Denial> {
         if current_ability().is_none() {
+            tracing::warn!(
+                target: "nest_rs::authz",
+                transport = "graphql",
+                "authorization denied: no ambient ability",
+            );
             return Err(Denial::unauthorized(
                 "no ambient ability — authentication did not run on the GraphQL operation",
             ));
@@ -76,10 +88,16 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     async fn check_ws_message(
         &self,
         _client: &WsClient,
-        _event: &str,
+        event: &str,
         _data: &Value,
     ) -> Result<(), Denial> {
         if current_ability().is_none() {
+            tracing::warn!(
+                target: "nest_rs::authz",
+                transport = "ws",
+                event = %event,
+                "authorization denied: no ambient ability",
+            );
             return Err(Denial::unauthorized(
                 "no ambient ability — WS connection did not authenticate",
             ));

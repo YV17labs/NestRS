@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CliError {
     #[error("path already exists: {}", .0.display())]
     AlreadyExists(PathBuf),

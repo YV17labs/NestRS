@@ -21,6 +21,9 @@
 //! [`run_layered_graphql_chain`] / [`run_layered_ws_chain`] at the start
 //! of every handler method.
 
+// The GraphQL / WS in-band chain runners live here; only compiled when at
+// least one of those transports is served.
+#[cfg(any(feature = "graphql", feature = "ws"))]
 mod chain;
 mod denial_convert;
 #[cfg(feature = "graphql")]
@@ -31,6 +34,7 @@ mod scoped_spec;
 
 #[cfg(feature = "graphql")]
 pub use chain::run_layered_graphql_chain;
+#[cfg(feature = "ws")]
 pub use chain::run_layered_ws_chain;
 #[cfg(feature = "graphql")]
 pub use denial_convert::denial_to_graphql_error;

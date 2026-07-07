@@ -15,6 +15,20 @@ pub trait JobContext: Send + Sync + 'static {
     /// inner future yields `()`; a job's own result is preserved across this
     /// seam by [`run_in_job_context`] so the trait stays free of the
     /// transport's result/error type.
+    ///
+    /// # Contract
+    ///
+    /// An impl **must** poll `inner` to completion before returning — normally
+    /// by `.await`ing it inside whatever ambient it installs (a `task_local!`
+    /// scope, a span, …). `inner` *is* the job: returning without driving it to
+    /// completion means the job never ran, and there is then no result to hand
+    /// back. [`run_in_job_context`] cannot synthesize one for an arbitrary
+    /// output type, so it treats a broken impl as a failure of **that single
+    /// job** — it logs an error on `nest_rs::queue` and unwinds. The unwind is
+    /// isolated by the transport's per-job boundary (the queue worker's
+    /// `CatchPanicLayer`, which turns it into a job abort; the scheduler's
+    /// per-job task), so one bad impl fails its own job while the worker keeps
+    /// consuming. A correct impl always awaits `inner`.
     fn scope<'a>(
         &'a self,
         inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
@@ -36,10 +50,28 @@ pub async fn run_in_job_context<T: Send>(
                 *slot = Some(fut.await);
             }))
             .await;
-            out.expect(
-                "JobContext::scope returned without driving the inner future to completion — \
-                 the impl must await `inner` before returning",
-            )
+            match out {
+                Some(value) => value,
+                // Broken `JobContext::scope` impl: it returned without ever
+                // driving `inner` to completion, so the job never ran and there
+                // is no `T` to return (a job's output cannot be synthesized for
+                // an arbitrary type). Fail *this* job, not the worker: record
+                // the contract violation, then unwind — the transport's per-job
+                // boundary (the queue worker's `CatchPanicLayer`, → job abort;
+                // the scheduler's per-job task) catches it, so the consumer
+                // loop keeps running instead of the whole worker going down.
+                None => {
+                    tracing::error!(
+                        target: "nest_rs::queue",
+                        job_context = ::std::any::type_name::<dyn JobContext>(),
+                        "job context returned without running the job to completion; failing this job",
+                    );
+                    panic!(
+                        "JobContext::scope contract violation: the impl must drive `inner` to \
+                         completion before returning (see the nest_rs::queue error event)"
+                    );
+                }
+            }
         }
     }
 }

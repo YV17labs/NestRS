@@ -1,8 +1,9 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::Container;
+use nest_rs_core::{Container, RequestScope};
 use nest_rs_pipes::PipeError;
 use poem::web::websocket::{Message, WebSocket};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
@@ -11,10 +12,11 @@ use crate::WsReply;
 
 /// Maximum UTF-8 bytes accepted for a single inbound text frame.
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+use crate::config::WsConfig;
 use crate::context::{BoxFuture, Captured, SocketContext};
 use crate::envelope::WsEnvelope;
 use crate::guard::EventLayerTable;
-use crate::server::{Registry, WsClient, WsServer};
+use crate::server::{ConnId, Registry, WsClient, WsServer};
 
 /// Per-connection message dispatcher a gateway implements. `#[messages]`
 /// emits the impl: `dispatch` matches the event name, deserializes the
@@ -105,15 +107,41 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             .ctx
             .as_ref()
             .map(|ctx| (ctx.clone(), ctx.capture(&req)));
+        // Resolve the socket-lifetime ceiling once per upgrade from the request
+        // scope the HTTP transport installs. A missing scope or unregistered
+        // `WsConfig` falls back to the (bounded) default — fail-secure, never a
+        // silently unbounded socket.
+        let max_lifetime = req
+            .extensions()
+            .get::<Arc<RequestScope>>()
+            .and_then(|scope| scope.root().get::<WsConfig>())
+            .unwrap_or_default()
+            .max_connection;
         let gateway = Arc::clone(&self.gateway);
         let server = Arc::clone(&self.server);
         let guards = Arc::clone(&self.guards);
         let data_pipe = self.data_pipe.clone();
         Ok(ws
             .on_upgrade(move |socket| {
-                serve_connection(gateway, server, guards, ambient, data_pipe, socket)
+                serve_connection(gateway, server, guards, ambient, data_pipe, max_lifetime, socket)
             })
             .into_response())
+    }
+}
+
+/// RAII cleanup for a connection's [`WsServer`] registry entry. Its `Drop`
+/// removes the connection, so the entry — and the outbox `Sender` it holds —
+/// cannot outlive the connection task even when gateway user code panics and
+/// unwinds past the normal disconnect path (which would otherwise leak a dead
+/// `Conn` holding a dead `Sender` in the registry map forever).
+struct RegistryGuard<N: 'static> {
+    server: Arc<WsServer<N>>,
+    conn_id: ConnId,
+}
+
+impl<N: 'static> Drop for RegistryGuard<N> {
+    fn drop(&mut self) {
+        self.server.disconnect(self.conn_id);
     }
 }
 
@@ -127,6 +155,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     guards: Arc<EventLayerTable>,
     ambient: Option<(Arc<dyn SocketContext>, Captured)>,
     data_pipe: Option<Arc<WsDataFold>>,
+    max_lifetime: Option<Duration>,
     socket: poem::web::websocket::WebSocketStream,
 ) {
     let (mut sink, mut stream) = socket.split();
@@ -141,55 +170,100 @@ async fn serve_connection<G: Gateway, N: 'static>(
     });
 
     let conn_id = server.connect(outbox.clone());
+    // RAII cleanup: remove this connection's registry entry (which holds its
+    // outbox `Sender`) on *every* exit path — including an unwind from
+    // panicking gateway user code, which would otherwise leak a dead `Conn`.
+    let registry_guard = RegistryGuard {
+        server: Arc::clone(&server),
+        conn_id,
+    };
     // Type-erase the registry so `N` never surfaces on `WsClient`.
     let registry: Arc<dyn Registry> = server.clone();
     let client = WsClient::new(conn_id, registry);
 
     gateway.on_connect(&client).await;
 
-    while let Some(message) = stream.next().await {
-        match message {
-            Ok(Message::Text(text)) => {
-                if text.len() > MAX_MESSAGE_BYTES {
-                    let frame = error_frame("error", "message too large");
-                    if outbox.try_send(frame).is_err() {
-                        break;
-                    }
-                    continue;
+    // Optional socket-lifetime ceiling. When it elapses the server closes the
+    // socket through the same path as a client `Close`, so a principal captured
+    // once at the upgrade cannot outlive the ceiling (bounding the stale-privilege
+    // window after token expiry/logout/revocation). `None` ⇒ unlimited, modeled
+    // as an inert `select!` arm so an unbounded socket runs exactly as before.
+    let mut lifetime = max_lifetime.map(|ttl| Box::pin(tokio::time::sleep(ttl)));
+
+    loop {
+        tokio::select! {
+            // Deadline arm: armed only when a ceiling is configured — otherwise
+            // a `pending()` future that never resolves, leaving the read loop
+            // untouched. The timer's deadline is absolute (set at connect), so
+            // losing the `select!` race does not reset it.
+            () = async {
+                match lifetime.as_mut() {
+                    Some(sleep) => sleep.as_mut().await,
+                    None => std::future::pending::<()>().await,
                 }
-                if let Some(reply) = handle_text(
-                    &*gateway,
-                    &guards,
-                    ambient.as_ref(),
-                    data_pipe.as_ref(),
-                    &client,
-                    &text,
-                )
-                .await
-                {
-                    // Replies ride the same outbox as pushes so ordering with
-                    // broadcasts the handler triggered is preserved. A full
-                    // outbox means the peer is not draining — disconnect it
-                    // rather than buffer without bound.
-                    if outbox.try_send(reply).is_err() {
-                        break;
-                    }
-                }
-            }
-            Ok(Message::Close(_)) => break,
-            Ok(_) => {}
-            Err(err) => {
-                tracing::debug!(target: "nest_rs::ws", error = %err, "websocket read error");
+            } => {
+                tracing::info!(
+                    target: "nest_rs::ws",
+                    conn_id,
+                    "closing socket: max lifetime reached",
+                );
                 break;
+            }
+            message = stream.next() => {
+                let Some(message) = message else { break };
+                match message {
+                    Ok(Message::Text(text)) => {
+                        if text.len() > MAX_MESSAGE_BYTES {
+                            let frame = error_frame("error", "message too large");
+                            if outbox.try_send(frame).is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                        if let Some(reply) = handle_text(
+                            &*gateway,
+                            &guards,
+                            ambient.as_ref(),
+                            data_pipe.as_ref(),
+                            &client,
+                            &text,
+                        )
+                        .await
+                        {
+                            // Replies ride the same outbox as pushes so ordering
+                            // with broadcasts the handler triggered is preserved.
+                            // A full outbox means the peer is not draining —
+                            // disconnect it rather than buffer without bound.
+                            if outbox.try_send(reply).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(Message::Close(_)) => break,
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::debug!(target: "nest_rs::ws", error = %err, "websocket read error");
+                        break;
+                    }
+                }
             }
         }
     }
 
-    // Fire `on_disconnect` while still registered, then drop.
+    // Fire `on_disconnect` while still registered, then drop the guard to
+    // remove the entry. Dropping it *before* awaiting the writer releases the
+    // registry's outbox `Sender` clone so the writer task observes the channel
+    // close; on an unwind the guard's `Drop` does the same cleanup.
     gateway.on_disconnect(&client).await;
-    server.disconnect(conn_id);
+    drop(registry_guard);
     drop(outbox);
-    let _ = writer.await;
+    // A `JoinError` from the writer means it panicked (it is never aborted);
+    // surface that rather than swallow it. A normal cancellation carries none.
+    if let Err(err) = writer.await {
+        if err.is_panic() {
+            tracing::warn!(target: "nest_rs::ws", error = %err, "writer task failed");
+        }
+    }
 }
 
 /// Per-message guards run **inside** a present [`SocketContext::around`], so

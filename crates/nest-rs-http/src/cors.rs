@@ -176,81 +176,52 @@ mod tests {
         assert!(err.contains("expose-list"), "must name the list: {err}");
     }
 
-    // `from_env` mutates real process env; serialize so two tests don't race.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn with_env<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // FIXME: env mutation is unsafe; serialized within this binary by the
-        // mutex above.
-        for (k, v) in vars {
-            match v {
-                Some(value) => unsafe { std::env::set_var(k, value) },
-                None => unsafe { std::env::remove_var(k) },
-            }
-        }
-        let out = f();
-        // Wipe after — never leak set vars to neighbouring tests.
-        for (k, _) in vars {
-            unsafe { std::env::remove_var(k) };
-        }
-        out
-    }
-
-    fn http_env() -> nest_rs_config::ConfigService {
-        nest_rs_config::ConfigService::for_namespace("http")
-    }
-
     #[test]
     fn from_env_returns_none_when_origins_unset() {
-        with_env(&[("NESTRS_HTTP__CORS_ORIGINS", None)], || {
-            let cfg = CorsConfig::from_env(&http_env()).expect("no error");
-            assert!(cfg.is_none(), "unset origins ⇒ CORS off");
-        });
+        let cfg = CorsConfig::from_env(&ConfigService::with_vars("http", [])).expect("no error");
+        assert!(cfg.is_none(), "unset origins ⇒ CORS off");
     }
 
     #[test]
     fn from_env_reads_origins_methods_headers_when_set() {
-        with_env(
-            &[
+        let service = ConfigService::with_vars(
+            "http",
+            [
                 (
                     "NESTRS_HTTP__CORS_ORIGINS",
-                    Some("https://a.example,https://b.example"),
+                    "https://a.example,https://b.example",
                 ),
-                ("NESTRS_HTTP__CORS_METHODS", Some("GET,POST")),
-                ("NESTRS_HTTP__CORS_HEADERS", Some("content-type")),
+                ("NESTRS_HTTP__CORS_METHODS", "GET,POST"),
+                ("NESTRS_HTTP__CORS_HEADERS", "content-type"),
             ],
-            || {
-                let cfg = CorsConfig::from_env(&http_env())
-                    .expect("no error")
-                    .expect("Some when origins set");
-                assert_eq!(
-                    cfg.origins,
-                    vec!["https://a.example".to_string(), "https://b.example".into()]
-                );
-                assert_eq!(cfg.methods, vec!["GET".to_string(), "POST".into()]);
-                assert_eq!(cfg.headers, vec!["content-type".to_string()]);
-                assert!(!cfg.credentials, "off by default");
-                assert!(cfg.max_age.is_none(), "off by default");
-            },
         );
+        let cfg = CorsConfig::from_env(&service)
+            .expect("no error")
+            .expect("Some when origins set");
+        assert_eq!(
+            cfg.origins,
+            vec!["https://a.example".to_string(), "https://b.example".into()]
+        );
+        assert_eq!(cfg.methods, vec!["GET".to_string(), "POST".into()]);
+        assert_eq!(cfg.headers, vec!["content-type".to_string()]);
+        assert!(!cfg.credentials, "off by default");
+        assert!(cfg.max_age.is_none(), "off by default");
     }
 
     #[test]
     fn from_env_reads_credentials_flag_and_max_age() {
-        with_env(
-            &[
-                ("NESTRS_HTTP__CORS_ORIGINS", Some("*")),
-                ("NESTRS_HTTP__CORS_CREDENTIALS", Some("true")),
-                ("NESTRS_HTTP__CORS_MAX_AGE", Some("600")),
+        let service = ConfigService::with_vars(
+            "http",
+            [
+                ("NESTRS_HTTP__CORS_ORIGINS", "*"),
+                ("NESTRS_HTTP__CORS_CREDENTIALS", "true"),
+                ("NESTRS_HTTP__CORS_MAX_AGE", "600"),
             ],
-            || {
-                let cfg = CorsConfig::from_env(&http_env())
-                    .expect("no error")
-                    .expect("Some");
-                assert!(cfg.credentials);
-                assert_eq!(cfg.max_age, Some(Duration::from_secs(600)));
-            },
         );
+        let cfg = CorsConfig::from_env(&service)
+            .expect("no error")
+            .expect("Some");
+        assert!(cfg.credentials);
+        assert_eq!(cfg.max_age, Some(Duration::from_secs(600)));
     }
 }

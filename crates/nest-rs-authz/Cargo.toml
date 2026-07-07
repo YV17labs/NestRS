@@ -17,10 +17,16 @@ default = []
 # `nest_rs_seaorm::Bind` (it must use the data layer). Also activates the
 # unified `nest_rs_guards::Guard` impl so `AbilityGuard` can be used both
 # per-route and globally via `App::builder().use_guards_global(...)`.
+# `AbilityGuard` implements the guard's `check_ws_message` entry (the WS
+# upgrade reuses the HTTP guards), so `nest-rs-guards/ws` is forwarded — that
+# feature exists only when the guard's WS method does, and it transitively
+# turns on the `ws` feature of the sibling layer crates (filters /
+# exception-filters / interceptors) so the whole Layer System lines up.
 http = [
     "dep:nest-rs-core",
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
+    "nest-rs-guards/ws",
     "dep:nest-rs-resource",
     "dep:nest-rs-ws",
     "dep:poem",
@@ -92,3 +98,6 @@ async-graphql.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 poem.workspace = true
+
+[lints]
+workspace = true

@@ -135,70 +135,35 @@ mod tests {
         );
     }
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn with_env<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (k, v) in vars {
-            match v {
-                Some(value) => unsafe { std::env::set_var(k, value) },
-                None => unsafe { std::env::remove_var(k) },
-            }
-        }
-        let out = f();
-        for (k, _) in vars {
-            unsafe { std::env::remove_var(k) };
-        }
-        out
-    }
-
     #[test]
     fn from_env_reads_url_and_pool_bounds() {
-        with_env(
-            &[
-                ("NESTRS_DATABASE__URL", Some("postgres://u@h/d")),
-                ("NESTRS_DATABASE__MAX_CONNECTIONS", Some("25")),
-                ("NESTRS_DATABASE__MIN_CONNECTIONS", Some("2")),
-                ("NESTRS_DATABASE__CONNECT_TIMEOUT_SECS", Some("12")),
-                ("NESTRS_DATABASE__SQLX_LOGGING", Some("true")),
-                (
-                    "NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS",
-                    Some("true"),
-                ),
+        let service = ConfigService::with_vars(
+            "database",
+            [
+                ("NESTRS_DATABASE__URL", "postgres://u@h/d"),
+                ("NESTRS_DATABASE__MAX_CONNECTIONS", "25"),
+                ("NESTRS_DATABASE__MIN_CONNECTIONS", "2"),
+                ("NESTRS_DATABASE__CONNECT_TIMEOUT_SECS", "12"),
+                ("NESTRS_DATABASE__SQLX_LOGGING", "true"),
+                ("NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS", "true"),
             ],
-            || {
-                let cfg = DatabaseConfig::from_env(&ConfigService::for_namespace("database"))
-                    .expect("ok");
-                assert_eq!(cfg.url, "postgres://u@h/d");
-                assert_eq!(cfg.max_connections, Some(25));
-                assert_eq!(cfg.min_connections, Some(2));
-                assert_eq!(cfg.connect_timeout_secs, Some(12));
-                assert!(cfg.sqlx_logging);
-                assert!(cfg.retry_serialization_conflicts);
-            },
         );
+        let cfg = DatabaseConfig::from_env(&service).expect("ok");
+        assert_eq!(cfg.url, "postgres://u@h/d");
+        assert_eq!(cfg.max_connections, Some(25));
+        assert_eq!(cfg.min_connections, Some(2));
+        assert_eq!(cfg.connect_timeout_secs, Some(12));
+        assert!(cfg.sqlx_logging);
+        assert!(cfg.retry_serialization_conflicts);
     }
 
     #[test]
     fn from_env_defaults_to_empty_url_and_no_bounds() {
-        with_env(
-            &[
-                ("NESTRS_DATABASE__URL", None),
-                ("NESTRS_DATABASE__MAX_CONNECTIONS", None),
-                ("NESTRS_DATABASE__MIN_CONNECTIONS", None),
-                ("NESTRS_DATABASE__CONNECT_TIMEOUT_SECS", None),
-                ("NESTRS_DATABASE__SQLX_LOGGING", None),
-                ("NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS", None),
-            ],
-            || {
-                let cfg = DatabaseConfig::from_env(&ConfigService::for_namespace("database"))
-                    .expect("ok");
-                // Empty URL ⇒ module-level `for_root` aborts with a clear message.
-                assert!(cfg.url.is_empty());
-                assert!(cfg.max_connections.is_none());
-                assert!(!cfg.sqlx_logging, "off by default — never noisy in prod");
-                assert!(!cfg.retry_serialization_conflicts, "retry off by default");
-            },
-        );
+        let cfg = DatabaseConfig::from_env(&ConfigService::with_vars("database", [])).expect("ok");
+        // Empty URL ⇒ module-level `for_root` aborts with a clear message.
+        assert!(cfg.url.is_empty());
+        assert!(cfg.max_connections.is_none());
+        assert!(!cfg.sqlx_logging, "off by default — never noisy in prod");
+        assert!(!cfg.retry_serialization_conflicts, "retry off by default");
     }
 }

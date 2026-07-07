@@ -54,8 +54,7 @@ impl OpenTelemetry {
     }
 
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
-        let filter =
-            EnvFilter::try_new(&config.log_filter).unwrap_or_else(|_| EnvFilter::new("info"));
+        let filter = parse_log_filter(&config.log_filter)?;
         let fmt_layer = console_layer(config.log_format, config.log_source_location);
 
         #[cfg(feature = "otlp")]
@@ -65,12 +64,13 @@ impl OpenTelemetry {
 
             // Bridge only when an exporter is present; otherwise it pays the
             // per-event cost just to drop the event.
-            let appender_layer = exporters.logger_provider.as_ref().map(|lp| {
-                let f = EnvFilter::try_new(&config.log_filter)
-                    .unwrap_or_else(|_| EnvFilter::new("info"));
-                opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp)
-                    .with_filter(f)
-            });
+            let appender_layer = match exporters.logger_provider.as_ref() {
+                Some(lp) => Some(
+                    opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp)
+                        .with_filter(parse_log_filter(&config.log_filter)?),
+                ),
+                None => None,
+            };
 
             Registry::default()
                 .with(filter)
@@ -117,6 +117,17 @@ impl OpenTelemetry {
             Ok(OpenTelemetry {})
         }
     }
+}
+
+/// Parse an `EnvFilter` directive string, mapping a rejection to a named,
+/// boot-aborting error instead of silently falling back to `info`. A
+/// set-but-unparseable filter is a config error, never a degraded default —
+/// same posture as every other `NESTRS_*` var (set-but-invalid ⇒ `Err`).
+fn parse_log_filter(spec: &str) -> Result<EnvFilter, OpenTelemetryError> {
+    EnvFilter::try_new(spec).map_err(|source| OpenTelemetryError::InvalidLogFilter {
+        value: spec.to_owned(),
+        source,
+    })
 }
 
 /// Boxed because `text` and `json` layers have distinct concrete types.
@@ -214,6 +225,30 @@ mod tests {
         // Second call hits the short-circuit branch.
         OpenTelemetry::init_for_tests();
         assert!(initialized());
+    }
+
+    #[test]
+    fn init_with_rejects_a_set_but_unparseable_log_filter() {
+        // `foo=notalevel` names a target with an invalid level — `EnvFilter`
+        // rejects it. The parse happens before any global-subscriber install,
+        // so this asserts the error without touching the `INITIALIZED` flag.
+        let config = OpenTelemetryConfig::new("svc").with_log_filter("foo=notalevel");
+        // `OpenTelemetry` has no `Debug` (its otlp providers don't), so match
+        // rather than `expect_err`. The `Ok` arm can't fire — the filter is
+        // definitively invalid, so no global subscriber is ever installed.
+        match OpenTelemetry::init_with(config) {
+            Err(OpenTelemetryError::InvalidLogFilter { value, .. }) => {
+                assert_eq!(value, "foo=notalevel", "the error must name the bad directive");
+            }
+            Err(other) => panic!("expected InvalidLogFilter, got {other:?}"),
+            Ok(_) => panic!("a set-but-unparseable filter must abort init, not degrade to `info`"),
+        }
+    }
+
+    #[test]
+    fn parse_log_filter_accepts_a_valid_directive() {
+        // The unset/default path still works — a valid filter parses cleanly.
+        assert!(parse_log_filter("debug,hyper=warn").is_ok());
     }
 
     #[test]

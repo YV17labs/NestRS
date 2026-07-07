@@ -4,12 +4,15 @@
 //! harness. One `#[test]` per scenario; the fixtures are tiny inline
 //! controllers, no product entities and no database.
 
-use nest_rs_core::{Layer, injectable, module};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use nest_rs_core::{HandlerMetadata, Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, guard};
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_http::{Ctx, Reflector, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::Request;
 use poem::http::StatusCode;
+use tokio::sync::Mutex;
 
 /// Denies every request with `403 Forbidden`.
 #[injectable]
@@ -162,47 +165,88 @@ async fn without_a_global_guard_the_same_routes_stay_open() {
 }
 
 // --- dedup across scopes ------------------------------------------------------
+//
+// Scope is a *declaration* concern: a guard named at several scopes belongs to
+// one pool, is deduplicated by `TypeId`, and executes **exactly once** per
+// request. A *denying* guard cannot prove "once" — a 403 looks identical whether
+// the guard ran one time or five. So these two tests use a *counting* guard that
+// increments a process-global counter and then admits: the response is always
+// `200` and the counter is the assertion surface, making the dedup real coverage
+// rather than a tautology. (The full seven-combination sweep lives in
+// `layer_pool.rs`; these keep the guards-file coverage honest.)
+
+/// One process-global counter shared by the two counting tests, so they are
+/// serialized behind [`GATE`] to keep their reads deterministic.
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+static GATE: Mutex<()> = Mutex::const_new(());
+
+/// Counts every execution, then admits — the count, not the status, is asserted.
+#[injectable]
+#[derive(Default)]
+struct CountingGuard;
+
+impl Layer for CountingGuard {}
+
+#[async_trait]
+impl Guard for CountingGuard {
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        COUNTER.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
 
 #[controller(path = "/dedup")]
-#[use_guards(DenyGuard)]
+#[use_guards(CountingGuard)]
 struct DedupController;
 
 #[routes]
 impl DedupController {
     #[get("/c-only")]
     async fn c_only(&self) -> &'static str {
-        "unreachable"
+        "ok"
     }
 
     #[get("/c-and-m")]
-    #[use_guards(DenyGuard)]
+    #[use_guards(CountingGuard)]
     async fn c_and_m(&self) -> &'static str {
-        "unreachable"
+        "ok"
     }
 }
 
-#[module(providers = [DenyGuard, DedupController])]
+#[module(providers = [CountingGuard, DedupController])]
 struct DedupModule;
 
 #[tokio::test]
 async fn the_same_guard_at_controller_and_method_scope_executes_once() {
-    // Mirror-test: both routes are protected by `DenyGuard`. The first
-    // declares it only at controller scope; the second also at method scope.
-    // Both must answer 403 — and if the dedup were broken the second would
-    // still answer 403 but the chain would log a doubled execution. We can't
-    // observe the doubled execution directly here, so we settle for a
-    // smoke-level check: both routes are protected, neither panics, and the
-    // chain composes (the test asserts behaviour, the `warn!` in
-    // `compose_chain` is the diagnostic for the dedup case).
+    let _gate = GATE.lock().await;
     let app = TestApp::for_module::<DedupModule>().await.expect("boots");
 
-    for path in ["/dedup/c-only", "/dedup/c-and-m"] {
-        app.http()
-            .get(path)
-            .send()
-            .await
-            .assert_status(StatusCode::FORBIDDEN);
-    }
+    // Controller scope only: one declaration, one execution.
+    COUNTER.store(0, Ordering::SeqCst);
+    app.http()
+        .get("/dedup/c-only")
+        .send()
+        .await
+        .assert_status_is_ok();
+    assert_eq!(
+        COUNTER.load(Ordering::SeqCst),
+        1,
+        "a controller-scope guard runs exactly once",
+    );
+
+    // Controller *and* method scope: two declarations of the same `TypeId`,
+    // deduped to a single execution. A broken dedup would count 2 here.
+    COUNTER.store(0, Ordering::SeqCst);
+    app.http()
+        .get("/dedup/c-and-m")
+        .send()
+        .await
+        .assert_status_is_ok();
+    assert_eq!(
+        COUNTER.load(Ordering::SeqCst),
+        1,
+        "the same guard at controller + method scope is deduped to one execution",
+    );
 }
 
 #[controller(path = "/g-dedup")]
@@ -211,33 +255,40 @@ struct GlobalDedupController;
 #[routes]
 impl GlobalDedupController {
     #[get("/redeclared")]
-    #[use_guards(DenyGuard)]
+    #[use_guards(CountingGuard)]
     async fn redeclared(&self) -> &'static str {
-        "unreachable"
+        "ok"
     }
 }
 
-#[module(providers = [DenyGuard, GlobalDedupController])]
+#[module(providers = [CountingGuard, GlobalDedupController])]
 struct GlobalDedupModule;
 
 #[tokio::test]
 async fn global_guard_redeclared_per_method_is_deduped_to_one_execution() {
-    // Global declares `DenyGuard`; the method re-declares it. The per-route
-    // shaper composes global + method and dedups by TypeId (broadest scope
-    // wins), so the guard runs once. It denies either way, so the route is
-    // still 403 — the test pins the shape.
+    let _gate = GATE.lock().await;
+    COUNTER.store(0, Ordering::SeqCst);
+
+    // Global declares `CountingGuard`; the method re-declares it. The per-route
+    // shaper composes global + method and dedups by `TypeId` (broadest scope
+    // wins), so the guard runs once — a broken dedup would count 2.
     let app = TestApp::builder()
         .module::<GlobalDedupModule>()
-        .use_guards_global([guard::<DenyGuard>()])
+        .use_guards_global([guard::<CountingGuard>()])
         .build()
         .await
-        .expect("boots");
+        .expect("boots with a global guard");
 
     app.http()
         .get("/g-dedup/redeclared")
         .send()
         .await
-        .assert_status(StatusCode::FORBIDDEN);
+        .assert_status_is_ok();
+    assert_eq!(
+        COUNTER.load(Ordering::SeqCst),
+        1,
+        "a guard declared global + method is deduped to one execution",
+    );
 }
 
 // --- ordering -----------------------------------------------------------------
@@ -269,4 +320,144 @@ async fn the_first_listed_guard_runs_before_the_second() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+// --- #[public] bypasses an active global guard --------------------------------
+//
+// A `#[public]` route attaches a `Public` marker to its route metadata. The
+// framework never skips a guard on its behalf — a guard *reads* the marker (via
+// `Reflector::is_public`) and decides what public means for it. `AuthGuard` uses
+// exactly this to let an anonymous request through a public route; here a
+// minimal guard distills that posture: admit when public, deny otherwise. The
+// global guard runs post-routing in the `RouteShaper`, so the marker is already
+// attached by the time it reads it.
+
+/// Denies every request *unless* the route is `#[public]`, in which case it
+/// admits with no principal — the `AuthGuard` posture, distilled.
+#[injectable]
+#[derive(Default)]
+struct PublicAwareGuard;
+
+impl Layer for PublicAwareGuard {}
+
+#[async_trait]
+impl Guard for PublicAwareGuard {
+    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
+        if Reflector::new(req).is_public() {
+            return Ok(());
+        }
+        Err(Denial::forbidden("forbidden"))
+    }
+}
+
+#[controller(path = "/pub")]
+struct PublicScope;
+
+#[routes]
+impl PublicScope {
+    // Handler fn names generate module-global types, so keep them unique across
+    // the file (`pub_*`); the URL paths stay `/open` and `/closed`.
+    #[get("/open")]
+    #[public]
+    async fn pub_open(&self) -> &'static str {
+        "ok"
+    }
+
+    #[get("/closed")]
+    async fn pub_closed(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(providers = [PublicAwareGuard, PublicScope])]
+struct PublicBypassModule;
+
+#[tokio::test]
+async fn a_public_route_bypasses_an_active_global_guard() {
+    let app = TestApp::builder()
+        .module::<PublicBypassModule>()
+        .use_guards_global([guard::<PublicAwareGuard>()])
+        .build()
+        .await
+        .expect("boots with a global guard");
+
+    // The global guard runs post-routing, reads `#[public]`, and admits — the
+    // public route answers 200 without a principal.
+    app.http().get("/pub/open").send().await.assert_status_is_ok();
+
+    // The sibling route carries no `#[public]`, so the same global guard denies.
+    app.http()
+        .get("/pub/closed")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+}
+
+// --- Ctx<T> round-trip: guard attaches, handler reads back --------------------
+//
+// A guard may attach request-scoped context (the authenticated principal is the
+// canonical case) by inserting it into the request extensions; a handler reads
+// it back with `Ctx<T>`. This pins that hand-off end-to-end.
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Principal(String);
+
+/// Reads `x-user` (defaulting to `anon`) and attaches it as a `Principal` for
+/// the handler to read back through `Ctx<Principal>`.
+#[injectable]
+#[derive(Default)]
+struct AttachPrincipalGuard;
+
+impl Layer for AttachPrincipalGuard {}
+
+#[async_trait]
+impl Guard for AttachPrincipalGuard {
+    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
+        let who = req
+            .headers()
+            .get("x-user")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("anon")
+            .to_owned();
+        req.extensions_mut().insert(Principal(who));
+        Ok(())
+    }
+}
+
+#[controller(path = "/ctx")]
+#[use_guards(AttachPrincipalGuard)]
+struct CtxScope;
+
+#[routes]
+impl CtxScope {
+    // `Ctx<Principal>` extracts the value the guard attached; its presence is
+    // what arms the round-trip — remove the guard and this rejects with 500.
+    #[get("/whoami")]
+    async fn whoami(&self, principal: Ctx<Principal>) -> String {
+        principal.into_inner().0
+    }
+}
+
+#[module(providers = [AttachPrincipalGuard, CtxScope])]
+struct CtxModule;
+
+#[tokio::test]
+async fn a_guard_attached_context_is_read_back_by_the_handler() {
+    let app = TestApp::for_module::<CtxModule>().await.expect("boots");
+
+    // The guard reads `x-user` and attaches it; the handler echoes what `Ctx`
+    // hands back — proving the value survived guard → handler.
+    let resp = app
+        .http()
+        .get("/ctx/whoami")
+        .header("x-user", "alice")
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    resp.assert_text("alice").await;
+
+    // Default branch: no header ⇒ the guard attaches `anon`, still round-tripped.
+    let anon = app.http().get("/ctx/whoami").send().await;
+    anon.assert_status_is_ok();
+    anon.assert_text("anon").await;
 }

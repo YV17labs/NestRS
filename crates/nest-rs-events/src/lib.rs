@@ -8,7 +8,6 @@
 //!
 //! Dispatch is in-process and awaited: every listener registered for the
 //! event type runs in registration order, each with its own clone.
-
 mod bus;
 mod inventory;
 mod module;

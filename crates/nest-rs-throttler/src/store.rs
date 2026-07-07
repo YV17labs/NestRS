@@ -2,9 +2,12 @@
 //! [`ThrottlerStore`] trait it implements (the extension seam for alternative
 //! backends like a Redis-backed sliding-window store).
 //!
-//! Keys are not evicted, so an unbounded set of distinct clients grows the map.
-//! Acceptable for the in-process default; a future Redis store would handle
-//! expiry natively.
+//! Each bucket carries its own window: [`InMemoryThrottler::hit`] evicts an
+//! entry only once **its own** window has elapsed (never the current caller's),
+//! so a hit on a short-window route can't purge a counter opened under a
+//! long-window one. A `MAX_KEYS` cap bounds the live set; beyond expiry the map
+//! is otherwise unbounded — acceptable for the in-process default, where a
+//! future Redis store would handle expiry natively.
 //!
 //! **Scope is per-process, by design.** The counter lives in this replica's
 //! memory, so N replicas of an app give a client up to N× the configured limit
@@ -56,6 +59,10 @@ pub trait ThrottlerStore: Send + Sync + 'static {
 struct Window {
     start: Instant,
     count: u32,
+    /// The window duration this bucket was opened under. Eviction and reset
+    /// compare against **this**, not the current caller's `limit.window`, so a
+    /// short-window route can't expire a long-window route's counter.
+    window: Duration,
 }
 
 pub struct InMemoryThrottler {
@@ -93,7 +100,10 @@ impl InMemoryThrottler {
     pub fn hit(&self, key: &str, limit: Throttle) -> Decision {
         let now = Instant::now();
         let mut windows = self.windows.lock();
-        windows.retain(|_, window| now.duration_since(window.start) < limit.window);
+        // Expire each bucket against **its own** window, not the current
+        // caller's — otherwise a hit on a short-window route purges counters
+        // opened under a long-window route (the cross-window eviction bypass).
+        windows.retain(|_, window| now.duration_since(window.start) < window.window);
         if !windows.contains_key(key)
             && windows.len() >= MAX_KEYS
             && let Some(oldest) = windows
@@ -106,10 +116,14 @@ impl InMemoryThrottler {
         let window = windows.entry(key.to_owned()).or_insert(Window {
             start: now,
             count: 0,
+            window: limit.window,
         });
-        if now.duration_since(window.start) >= limit.window {
+        if now.duration_since(window.start) >= window.window {
             window.start = now;
             window.count = 0;
+            // Adopt the current limit's window in case the route's limit changed
+            // since this bucket was opened.
+            window.window = limit.window;
         }
         window.count = window.count.saturating_add(1);
         if window.count > limit.limit || window.count == u32::MAX {
@@ -179,6 +193,7 @@ mod tests {
                 Window {
                     start: Instant::now(),
                     count: u32::MAX - 1,
+                    window: Duration::from_secs(60),
                 },
             );
         }
@@ -200,6 +215,48 @@ mod tests {
             throttler.windows.lock().get("k").unwrap().count,
             u32::MAX,
             "saturating_add caps at u32::MAX",
+        );
+    }
+
+    #[test]
+    fn a_short_window_hit_does_not_evict_a_long_window_bucket() {
+        // The cross-window eviction bypass: `retain` must expire each bucket
+        // against ITS OWN window, not the current caller's. Otherwise a client
+        // exhausts a strict long-window limit (e.g. /login 2/min), then pings a
+        // lenient short-window route once *its* window elapses — under the old
+        // code that hit's short `limit.window` purged EVERY bucket, silently
+        // resetting the strict counter.
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let long = Throttle::new(2, Duration::from_secs(60));
+        let short = Throttle::new(100, Duration::from_millis(10));
+
+        // Exhaust the long-window bucket.
+        assert!(throttler.hit("long", long).allowed);
+        assert!(throttler.hit("long", long).allowed);
+        assert!(
+            !throttler.hit("long", long).allowed,
+            "long-window bucket is now over its limit of 2",
+        );
+
+        // Use the short-window bucket, let ITS window elapse, then hit it again.
+        // That later hit is the eviction-trigger call: it must purge only the
+        // expired short bucket, never the still-live long one.
+        assert!(throttler.hit("short", short).allowed);
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(throttler.hit("short", short).allowed);
+
+        // The long-window bucket survived: still present, still at its exhausted
+        // count — so the client stays denied. The bypass is closed.
+        {
+            let windows = throttler.windows.lock();
+            let long_bucket = windows
+                .get("long")
+                .expect("long-window bucket must survive a short-window eviction pass");
+            assert_eq!(long_bucket.count, 3, "long-window counter was not reset");
+        }
+        assert!(
+            !throttler.hit("long", long).allowed,
+            "long-window limit still enforced after the short-window hit",
         );
     }
 

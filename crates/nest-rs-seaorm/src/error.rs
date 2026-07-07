@@ -24,6 +24,7 @@ use validator::ValidationErrors;
 /// from `Repo`/`validator`/masking; the business variants are constructed by
 /// services via [`ServiceError::invalid`] & friends.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum ServiceError {
     #[error(transparent)]
     Validation(#[from] ValidationErrors),

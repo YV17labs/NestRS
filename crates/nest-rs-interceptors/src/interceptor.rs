@@ -7,11 +7,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+#[cfg(feature = "graphql")]
 use nest_rs_graphql::async_graphql::{
     Context as GraphqlContext, ServerResult, Value as GraphqlValue,
 };
+#[cfg(feature = "ws")]
 use nest_rs_ws::WsClient;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
+#[cfg(feature = "ws")]
 use serde_json::Value as JsonValue;
 
 /// Wraps handler execution. An [`Interceptor`] sees the inputs before the
@@ -42,6 +45,8 @@ pub trait Interceptor: Layer {
     /// GraphQL per-resolver-call entry — a reserved seam, **not wired**
     /// today (no macro or dispatcher calls it). `next` resolves to the
     /// resolver's return value; the default just awaits it (no-op wrap).
+    /// Available with the `graphql` feature on this crate.
+    #[cfg(feature = "graphql")]
     async fn wrap_graphql<'a>(
         &self,
         _ctx: &GraphqlContext<'a>,
@@ -53,6 +58,8 @@ pub trait Interceptor: Layer {
     /// WS per-message entry — a reserved seam, **not wired** today (no
     /// macro or dispatcher calls it). `next` resolves to the handler's reply
     /// (an optional JSON value); the default just awaits it (no-op wrap).
+    /// Available with the `ws` feature on this crate.
+    #[cfg(feature = "ws")]
     async fn wrap_ws<'a>(
         &self,
         _client: &WsClient,
@@ -70,6 +77,7 @@ impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
         (**self).intercept(req, next).await
     }
 
+    #[cfg(feature = "graphql")]
     async fn wrap_graphql<'a>(
         &self,
         ctx: &GraphqlContext<'a>,
@@ -78,6 +86,7 @@ impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
         (**self).wrap_graphql(ctx, next).await
     }
 
+    #[cfg(feature = "ws")]
     async fn wrap_ws<'a>(
         &self,
         client: &WsClient,
@@ -113,11 +122,13 @@ impl<'a> Next<'a> {
 /// Continuation passed to [`Interceptor::wrap_graphql`]. `.await` invokes
 /// the next interceptor in the chain (or the resolver itself when this is
 /// the innermost wrap).
+#[cfg(feature = "graphql")]
 pub type GraphqlNext<'a> = Pin<Box<dyn Future<Output = ServerResult<GraphqlValue>> + Send + 'a>>;
 
 /// Continuation passed to [`Interceptor::wrap_ws`]. `.await` invokes the
 /// next interceptor in the chain (or the message handler itself when this
 /// is the innermost wrap).
+#[cfg(feature = "ws")]
 pub type WsNext<'a> =
     Pin<Box<dyn Future<Output = std::result::Result<Option<JsonValue>, String>> + Send + 'a>>;
 

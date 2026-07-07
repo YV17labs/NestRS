@@ -281,6 +281,15 @@ impl Transport for HttpTransport {
             .into_iter()
             .next()
             .map(|d| d.meta);
+        // A `Guarded` self-mount (a WS gateway upgrade) expects the transport
+        // to run the global guard chain at its edge; with no global guard pool
+        // that chain is empty — the self-mount analog of an implicitly-accessible
+        // controller route (the scan above). The gateway may still bind its own
+        // `#[use_guards]` inside its opaque mount closure, so this is a boot
+        // diagnostic to confirm the edge is guarded on purpose, not a
+        // fail-secure stop (the `Guarded` posture already gets the pool wrap
+        // below whenever one exists).
+        let mut unguarded_edges: Vec<String> = Vec::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
             tracing::info!(
                 target: "nest_rs::routes",
@@ -288,6 +297,9 @@ impl Transport for HttpTransport {
                 path = d.meta.path(),
                 "mounted endpoint",
             );
+            if d.meta.edge_access_is_implicit(global_guards) {
+                unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
+            }
             match (d.meta.posture(), &self_mount_guard) {
                 (EdgePosture::Guarded, Some(wrap)) => {
                     // Isolate this self-mount into a fresh sub-route, wrap it
@@ -305,6 +317,15 @@ impl Transport for HttpTransport {
                     route = d.meta.mount(container, route);
                 }
             }
+        }
+        if !unguarded_edges.is_empty() {
+            tracing::warn!(
+                target: "nest_rs::layers",
+                count = unguarded_edges.len(),
+                endpoints = unguarded_edges.join(", ").as_str(),
+                hint = "register a global guard pool or gate the gateway with #[use_guards]",
+                "unguarded self-mount edges detected",
+            );
         }
         // Fail-secure completeness check: every controller route is shaped
         // (its `RouteShaper` runs the global guard pool) and every self-mount

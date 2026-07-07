@@ -10,7 +10,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::error::ConfigError;
-use crate::source::{ConfigSource, EnvSource};
+use crate::source::{ConfigSource, EnvSource, MapSource};
 
 const PREFIX: &str = "NESTRS_";
 
@@ -34,6 +34,25 @@ impl ConfigService {
             namespace: namespace.to_ascii_uppercase(),
             source,
         }
+    }
+
+    /// Convenience over [`with_source`](Self::with_source) + [`MapSource`]: a
+    /// reader backed by an in-memory map of fully-qualified `NESTRS_<NS>__<KEY>`
+    /// vars. Resolves hermetically (no process env, no `.env`), so config tests
+    /// and fixtures need no `unsafe { std::env::set_var }`. An empty `vars`
+    /// yields all in-code defaults.
+    ///
+    /// ```
+    /// # use nest_rs_config::ConfigService;
+    /// let cfg = ConfigService::with_vars("app", [("NESTRS_APP__PORT", "8080")]);
+    /// assert_eq!(cfg.get("PORT").as_deref(), Some("8080"));
+    /// assert_eq!(cfg.get("MISSING"), None);
+    /// ```
+    pub fn with_vars<'a>(
+        namespace: &str,
+        vars: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Self {
+        Self::with_source(namespace, Arc::new(MapSource::from_iter(vars)))
     }
 
     /// The full `NESTRS_<NAMESPACE>__<KEY>` variable **name** (not its value)

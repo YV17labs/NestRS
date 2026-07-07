@@ -5,9 +5,12 @@ use std::error::Error as StdError;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+#[cfg(feature = "graphql")]
 use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
+#[cfg(feature = "ws")]
 use nest_rs_ws::WsClient;
 use poem::Response;
+#[cfg(feature = "ws")]
 use serde_json::Value as JsonValue;
 
 /// Catches a typed exception thrown by a handler and maps it to a
@@ -50,7 +53,8 @@ pub trait ExceptionFilter: Layer {
     /// Takes `&Self::Exception` (not by value like
     /// [`Self::catch`](Self::catch)) because async-graphql stores the
     /// underlying source as an `Arc<dyn Any + Send + Sync>`, which only
-    /// hands out references.
+    /// hands out references. Available with the `graphql` feature.
+    #[cfg(feature = "graphql")]
     async fn catch_graphql<'a>(
         &self,
         _ctx: &GraphqlContext<'a>,
@@ -69,7 +73,9 @@ pub trait ExceptionFilter: Layer {
     /// Takes `&Self::Exception` (not by value like
     /// [`Self::catch`](Self::catch)) because the WS dispatcher uses
     /// `anyhow::Error::downcast_ref` to keep the original error available
-    /// for any outer filter that does not match.
+    /// for any outer filter that does not match. Available with the `ws`
+    /// feature.
+    #[cfg(feature = "ws")]
     async fn catch_ws(
         &self,
         _client: &WsClient,

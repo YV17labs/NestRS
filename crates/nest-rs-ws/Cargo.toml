@@ -11,6 +11,9 @@ description = "WebSocket gateways for nestrs: the #[gateway]/#[subscribe_message
 
 [dependencies]
 nest-rs-core.workspace = true
+# `WsConfig` follows the framework dual-path config rule (`NESTRS_WS__*` env +
+# pinned struct via `WsModule::for_root`) — the socket-lifetime ceiling lives here.
+nest-rs-config.workspace = true
 # The gateway self-mounts as an HttpEndpointMeta (the upgrade is an HTTP GET),
 # so it rides the existing HTTP transport — reusing its guards, CORS, port and
 # TLS — rather than opening a second server.
@@ -34,10 +37,18 @@ tokio = { workspace = true }
 tracing.workspace = true
 # Connection registry lock — parking_lot for poison-free, panic-free locking.
 parking_lot.workspace = true
+# `#[derive(Validate)]` on `WsConfig` — the `Config` trait bounds it (empty
+# validation today, but the field maps are the framework's config contract).
+validator.workspace = true
 
 [dev-dependencies]
 # The `#[messages]` macro emits `::nest_rs_guards::*` for the Layer-System
 # chain (global + per-message guard dedup). nest-rs-guards depends on
-# nest-rs-ws at the lib level, so this stays a dev-only edge.
-nest-rs-guards = { path = "../nest-rs-guards" }
-validator.workspace = true
+# nest-rs-ws at the lib level, so this stays a dev-only edge. The `ws` feature
+# is needed for `GuardAsWsMessageCheck` in `tests/ws.rs` — without it, building
+# this crate in isolation (`cargo test -p nest-rs-ws`) fails to compile that
+# test (it only worked under workspace feature-unification before).
+nest-rs-guards = { path = "../nest-rs-guards", features = ["ws"] }
+
+[lints]
+workspace = true

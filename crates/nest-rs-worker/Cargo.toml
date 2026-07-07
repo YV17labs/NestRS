@@ -10,8 +10,15 @@ description = "Worker-execution primitives for nestrs — the ambient-context se
 
 
 [dependencies]
-# The trait surface is pure std (Future + Pin + Arc); no runtime dep. Tokio
-# only enters the picture in the test binaries, where it drives the seam.
+# The trait surface is pure std (Future + Pin + Arc); no async-runtime dep —
+# Tokio only enters the picture in the test binaries, where it drives the seam.
+# `tracing` is the one runtime dependency: a broken `JobContext::scope` impl
+# (one that returns without running the job) is surfaced as a structured error
+# event so the failure is diagnosable rather than a bare panic string.
+tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

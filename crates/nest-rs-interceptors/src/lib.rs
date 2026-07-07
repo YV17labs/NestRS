@@ -54,7 +54,6 @@
 //!     .module::<AppModule>()
 //!     .build().await?.run().await
 //! ```
-
 mod builder;
 mod ext;
 mod interceptor;
@@ -62,5 +61,9 @@ mod registry;
 
 pub use builder::AppBuilderInterceptorsExt;
 pub use ext::InterceptorExt;
-pub use interceptor::{GraphqlNext, Interceptor, InterceptorEndpoint, Next, WsNext};
+pub use interceptor::{Interceptor, InterceptorEndpoint, Next};
+#[cfg(feature = "graphql")]
+pub use interceptor::GraphqlNext;
+#[cfg(feature = "ws")]
+pub use interceptor::WsNext;
 pub use registry::{InterceptorSpec, InterceptorSpecs, interceptor};

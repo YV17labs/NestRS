@@ -13,7 +13,6 @@
 //! [`ReachableProviders`](::nest_rs_core::ReachableProviders), so an indicator
 //! whose provider lives in an unimported module compiles in but does not
 //! fire.
-
 mod controller;
 mod indicator;
 mod module;

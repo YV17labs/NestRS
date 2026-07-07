@@ -32,3 +32,6 @@ sea-orm.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
 validator.workspace = true
+
+[lints]
+workspace = true

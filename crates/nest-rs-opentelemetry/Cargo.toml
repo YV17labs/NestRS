@@ -63,3 +63,12 @@ opentelemetry-semantic-conventions = { workspace = true, optional = true }
 opentelemetry-appender-tracing = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+# `OpenTelemetryConfig::from_env` reads `NESTRS_OPENTELEMETRY__*` off the process
+# env; the tests isolate it with `figment::Jail`, matching how `nest-rs-config`
+# tests its env reads.
+figment = { workspace = true, features = ["test"] }
+
+[lints]
+workspace = true

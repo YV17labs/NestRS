@@ -3,6 +3,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// Names the offending variable so the misconfig is obvious at boot.
     #[error("invalid value for {var}: {message}")]

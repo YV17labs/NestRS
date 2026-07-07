@@ -1,5 +1,13 @@
 //! `OpenApiModule` — self-mounts `/api` (Swagger UI) + `/api-json` (the document)
 //! over the HTTP transport. Import it; no `main.rs` wiring.
+//!
+//! Both endpoints are **public** (`EdgePosture::Exempt`) — an enabled document is
+//! served to anyone. Gate it with [`OpenApiConfig::enabled`](crate::OpenApiConfig)
+//! (default `true` for local ergonomics): **production deployments should set
+//! `NESTRS_OPENAPI__ENABLED=false`** (or pin `OpenApiConfig { enabled: false, .. }`,
+//! or only import the module on an internal-facing app) so the schema is not
+//! published publicly. When disabled the module mounts neither endpoint and logs
+//! one boot event, so an imported-but-off module is never silently inert.
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
@@ -18,6 +26,10 @@ const SPEC_PATH: &str = "/api-json";
 /// Add to a `#[module(imports = [...])]` to expose `GET /api-json` (the OpenAPI
 /// 3.1 document) and `GET /api` (bundled Swagger UI). Wire it with
 /// `OpenApiModule::for_root()`; configuration loads from `NESTRS_OPENAPI__*`.
+///
+/// Both endpoints are public; set `NESTRS_OPENAPI__ENABLED=false` (or pin
+/// `OpenApiConfig { enabled: false, .. }`) to mount neither — see
+/// [`OpenApiConfig`].
 pub struct OpenApiModule;
 
 impl OpenApiModule {
@@ -49,6 +61,19 @@ impl DynamicModule for OpenApiSetup {
 }
 
 fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuilder {
+    // Disabled ⇒ mount neither endpoint (fail-secure for production, where the
+    // public document should not be exposed). Not a failure — an explicit,
+    // documented opt-out — so emit a boot event (never silently inert) and skip
+    // the self-mount by returning the builder untouched.
+    if !options.enabled {
+        tracing::info!(
+            target: "nest_rs::http",
+            docs_path = DOCS_PATH,
+            spec_path = SPEC_PATH,
+            "openapi documentation disabled",
+        );
+        return builder;
+    }
     builder.provide_meta(
         HttpEndpointMeta::new(DOCS_PATH, "openapi", move |container, route: Route| {
             let document = build_document(
@@ -71,4 +96,39 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
         })
         .exempt(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nest_rs_core::DiscoveryService;
+
+    // Count the self-mount edges `register` provided for the given `enabled`
+    // config. The disabled path must contribute zero — no public schema surface.
+    fn mount_count(enabled: bool) -> usize {
+        let builder = register(
+            ContainerBuilder::default(),
+            OpenApiConfig {
+                enabled,
+                ..OpenApiConfig::default()
+            },
+        );
+        DiscoveryService::new(&builder.snapshot())
+            .meta::<HttpEndpointMeta>()
+            .len()
+    }
+
+    #[test]
+    fn enabled_self_mounts_the_documentation_edge() {
+        assert_eq!(mount_count(true), 1, "enabled must self-mount the docs edge");
+    }
+
+    #[test]
+    fn disabled_self_mounts_nothing() {
+        assert_eq!(
+            mount_count(false),
+            0,
+            "disabled must mount neither /api nor /api-json — no public schema",
+        );
+    }
 }

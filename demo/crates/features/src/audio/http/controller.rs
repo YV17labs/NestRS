@@ -1,16 +1,18 @@
 use std::sync::Arc;
 
-use nest_rs_http::{controller, routes};
+use nest_rs_http::{Valid, controller, routes};
+use nest_rs_throttler::{Throttle, ThrottlerGuard};
 use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};
 
+use super::guard::TranscodeGuard;
 use crate::audio::{AudioService, TranscodeDto};
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
 
 #[controller(path = "/audio")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(ThrottlerGuard, AuthGuard, AuthzGuard, TranscodeGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,
@@ -19,15 +21,19 @@ pub struct AudioController {
 #[routes]
 impl AudioController {
     #[post("/transcode")]
+    #[meta(Throttle::per_minute(20))]
     #[api(
         summary = "Enqueue a transcode job for the worker to process",
         description = "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the \
                        shared `audio` queue; the separate worker deployable consumes it over \
-                       Redis (two apps exchanging, no RPC). Requires a bearer JWT.",
+                       Redis (two apps exchanging, no RPC). Requires a bearer JWT, is admin-only \
+                       (`Manage` on the caller's org, enforced by `TranscodeGuard`), rate-limited \
+                       by `ThrottlerGuard`, and its `file` is validated against a filename \
+                       allowlist that blocks path traversal.",
         tags("Audio")
     )]
-    async fn transcode(&self, body: Json<TranscodeDto>) -> Result<Json<TranscodeDto>> {
-        let job = body.0;
+    async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<Json<TranscodeDto>> {
+        let job = body.into_inner();
         self.svc
             .enqueue_transcode(job.file.clone())
             .await

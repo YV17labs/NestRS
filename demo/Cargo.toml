@@ -187,15 +187,15 @@ seed = { path = "crates/seed" }
 
 # Framework crates (consumed by relative path from the parent workspace).
 # Workspace keys, package names, and directory names are all `nest-rs-*` — the
-# canonical kebab-case form on crates.io. Each crate's `[lib] name = "nestrs_*"`
-# override keeps the Rust import path as `nestrs_*`, so app code still writes
-# `use nest_rs::prelude::*;` and proc-macros still emit `::nest_rs_core::*`.
+# canonical kebab-case form on crates.io. Cargo's default hyphen→underscore
+# mapping makes the Rust import path `nest_rs_*` (no `[lib] name` override
+# exists), so app code writes `use nest_rs::prelude::*;` and proc-macros emit
+# `::nest_rs_core::*`.
 nest-rs-core = { version = "0.2.0", path = "../crates/nest-rs-core" }
 nest-rs-authn = { version = "0.2.0", path = "../crates/nest-rs-authn" }
 nest-rs-throttler = { version = "0.2.0", path = "../crates/nest-rs-throttler" }
 nest-rs-config = { version = "0.2.0", path = "../crates/nest-rs-config" }
 nest-rs-config-macros = { version = "0.2.0", path = "../crates/nest-rs-config-macros" }
-nest-rs-storage = { version = "0.2.0", path = "../crates/nest-rs-storage" }
 nest-rs-events = { version = "0.2.0", path = "../crates/nest-rs-events" }
 nest-rs-events-macros = { version = "0.2.0", path = "../crates/nest-rs-events-macros" }
 nest-rs-authz = { version = "0.2.0", path = "../crates/nest-rs-authz" }

@@ -9,6 +9,7 @@ use nest_rs_redis::QueueModule;
 use nest_rs_schedule::ScheduleModule;
 use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
 use nest_rs_server_timing::ServerTimingModule;
+use nest_rs_throttler::ThrottlerModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 use features::authn::AuthnModule;
@@ -28,6 +29,7 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         ServerTimingModule,
         ScheduleModule,
         HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
+        ThrottlerModule::for_root(None),
         GraphqlModule::for_root(None),
         OpenApiModule::for_root(None),
         AuthnModule,

@@ -22,24 +22,6 @@ fn unique_tag() -> String {
     format!("probe-{}-{}", std::process::id(), nanos)
 }
 
-#[tokio::test]
-async fn worker_app_boots_and_consumes_through_the_queue_transport() {
-    let app = TestApp::builder()
-        .module::<WorkerModule>()
-        .build_headless()
-        .await
-        .expect("WorkerModule boots and connects to Redis");
-
-    let queue = app
-        .spawn_transport(QueueWorker::new())
-        .await
-        .expect("QueueWorker configures against the container");
-
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    queue.shutdown().await.expect("QueueWorker stops cleanly");
-}
-
 #[derive(Clone, Serialize, Deserialize)]
 struct ProbeCommand {
     tag: String,
@@ -69,7 +51,22 @@ impl ProbeConsumer {
 struct ProbeModule;
 
 #[tokio::test]
-async fn enqueued_job_is_processed_through_real_redis() {
+async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
+    // Boot the real app module — the mandated e2e check that `WorkerModule`
+    // composes and its `QueueWorker` transport spawns against live Redis.
+    let worker = TestApp::builder()
+        .module::<WorkerModule>()
+        .build_headless()
+        .await
+        .expect("WorkerModule boots and connects to Redis");
+    let worker_queue = worker
+        .spawn_transport(QueueWorker::new())
+        .await
+        .expect("WorkerModule's QueueWorker configures against Redis");
+
+    // Prove a job enqueued onto real Redis is actually consumed end-to-end. A
+    // synthetic probe consumer gives the otherwise side-effect-free pipeline an
+    // observable signal.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let _ = PROBE_TX.set(tx);
 
@@ -105,6 +102,10 @@ async fn enqueued_job_is_processed_through_real_redis() {
     .await;
 
     queue.shutdown().await.expect("QueueWorker stops cleanly");
+    worker_queue
+        .shutdown()
+        .await
+        .expect("WorkerModule's QueueWorker stops cleanly");
 
     assert!(
         matches!(saw_our_job, Ok(true)),

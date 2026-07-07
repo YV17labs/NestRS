@@ -20,6 +20,7 @@ nest-rs-queue.workspace = true
 nest-rs-redis.workspace = true
 nest-rs-schedule.workspace = true
 nest-rs-server-timing.workspace = true
+nest-rs-throttler.workspace = true
 nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 features.workspace = true
 poem.workspace = true

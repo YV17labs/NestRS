@@ -1,4 +1,5 @@
 mod controller;
+mod guard;
 mod module;
 
 pub use controller::AudioController;

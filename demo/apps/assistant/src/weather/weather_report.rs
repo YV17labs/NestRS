@@ -1,5 +1,5 @@
 #[derive(Debug)]
-pub struct WeatherReportDto {
+pub struct WeatherReport {
     pub temperature_c: f64,
     pub wind_speed_kmh: f64,
     pub wind_direction_deg: f64,

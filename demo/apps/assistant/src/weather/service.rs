@@ -3,25 +3,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use nest_rs_core::injectable;
 use serde::Deserialize;
-use thiserror::Error;
 
-use crate::weather::dtos::WeatherReportDto;
+use crate::weather::WeatherError;
+use crate::weather::weather_report::WeatherReport;
 
 const BASE_URL: &str = "https://api.open-meteo.com/v1/forecast";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Error)]
-pub enum WeatherError {
-    #[error("upstream weather provider returned an error: {0}")]
-    Upstream(#[from] reqwest::Error),
-
-    #[error("upstream weather provider returned no current_weather payload")]
-    MissingPayload,
-}
-
 #[async_trait]
-pub(crate) trait WeatherProvider: Send + Sync + 'static {
-    async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReportDto, WeatherError>;
+pub(crate) trait WeatherService: Send + Sync + 'static {
+    async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReport, WeatherError>;
 }
 
 #[injectable]
@@ -31,8 +22,8 @@ pub(in crate::weather) struct OpenMeteoClient {
 }
 
 #[async_trait]
-impl WeatherProvider for OpenMeteoClient {
-    async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReportDto, WeatherError> {
+impl WeatherService for OpenMeteoClient {
+    async fn current(&self, latitude: f64, longitude: f64) -> Result<WeatherReport, WeatherError> {
         tracing::debug!(target: "assistant::weather", latitude, longitude, "fetching current weather");
         let url =
             format!("{BASE_URL}?latitude={latitude}&longitude={longitude}&current_weather=true");
@@ -56,7 +47,7 @@ impl WeatherProvider for OpenMeteoClient {
             "fetched current weather"
         );
 
-        Ok(WeatherReportDto {
+        Ok(WeatherReport {
             temperature_c: current.temperature,
             wind_speed_kmh: current.windspeed,
             wind_direction_deg: current.winddirection,

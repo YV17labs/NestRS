@@ -1,11 +1,11 @@
 use nest_rs_core::module;
 use nest_rs_mcp::{AllowAllMcpGuard, McpOperationGuard};
 
-use crate::weather::service::{OpenMeteoClient, WeatherProvider};
+use crate::weather::service::{OpenMeteoClient, WeatherService};
 use crate::weather::tool::WeatherTool;
 
 #[module(providers = [
-    OpenMeteoClient as dyn WeatherProvider,
+    OpenMeteoClient as dyn WeatherService,
     AllowAllMcpGuard as dyn McpOperationGuard,
     WeatherTool,
 ])]
@@ -20,7 +20,7 @@ mod tests {
     #[test]
     fn registers_open_meteo_as_default_provider() {
         let container = WeatherModule::register(Container::builder()).build();
-        let provider: Option<Arc<dyn WeatherProvider>> = container.get_dyn();
+        let provider: Option<Arc<dyn WeatherService>> = container.get_dyn();
         assert!(provider.is_some());
     }
 }

@@ -192,6 +192,7 @@ dependencies = [
  "nest-rs-seaorm",
  "nest-rs-server-timing",
  "nest-rs-testing",
+ "nest-rs-throttler",
  "poem",
  "schemars",
  "sea-orm",
@@ -2842,6 +2843,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tracing",
  "validator",
 ]
 
@@ -3051,12 +3053,16 @@ dependencies = [
  "nest-rs-http",
  "parking_lot",
  "poem",
+ "tracing",
  "validator",
 ]
 
 [[package]]
 name = "nest-rs-worker"
 version = "0.2.0"
+dependencies = [
+ "tracing",
+]
 
 [[package]]
 name = "nest-rs-ws"
@@ -3064,6 +3070,7 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures-util",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-http",
  "nest-rs-pipes",
@@ -3074,6 +3081,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "validator",
 ]
 
 [[package]]

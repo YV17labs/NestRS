@@ -3,7 +3,7 @@ use serde::Deserialize;
 use validator::Validate;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Validate)]
-pub struct CoordsParamsDto {
+pub struct Coords {
     #[validate(range(min = -90.0, max = 90.0))]
     pub latitude: f64,
 

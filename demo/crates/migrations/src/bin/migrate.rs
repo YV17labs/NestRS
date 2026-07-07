@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use migrations::Migrator;
 use sea_orm_migration::MigratorTrait;
 use tracing_subscriber::EnvFilter;
@@ -16,10 +16,12 @@ async fn main() -> Result<()> {
         // Never `None` here — that reverts *every* migration and drops the
         // schema. Use `reset` for the full teardown.
         Some("down") => {
-            let steps = std::env::args()
-                .nth(2)
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(1);
+            // A provided `steps` argument that isn't a valid integer is a hard
+            // error — never silently fall back to reverting a single migration.
+            let steps: u32 = match std::env::args().nth(2) {
+                Some(arg) => arg.parse().context("steps must be a positive integer")?,
+                None => 1,
+            };
             Migrator::down(&conn, Some(steps)).await?
         }
         Some("fresh") => Migrator::fresh(&conn).await?,

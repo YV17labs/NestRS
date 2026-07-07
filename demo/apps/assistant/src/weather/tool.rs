@@ -6,14 +6,14 @@ use nest_rs_mcp::{
 };
 use validator::Validate;
 
-use crate::weather::dtos::CoordsParamsDto;
-use crate::weather::service::WeatherProvider;
+use crate::weather::coords::Coords;
+use crate::weather::service::WeatherService;
 
 #[mcp(path = "/mcp")]
 #[derive(Clone)]
 pub struct WeatherTool {
     #[inject]
-    weather: Arc<dyn WeatherProvider>,
+    svc: Arc<dyn WeatherService>,
 }
 
 #[tool_router]
@@ -21,14 +21,14 @@ impl WeatherTool {
     #[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
     async fn current_weather(
         &self,
-        Parameters(params): Parameters<CoordsParamsDto>,
+        Parameters(params): Parameters<Coords>,
     ) -> Result<CallToolResult, McpError> {
         params
             .validate()
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         let report = self
-            .weather
+            .svc
             .current(params.latitude, params.longitude)
             .await
             .map_err(internal)?;
@@ -61,14 +61,14 @@ mod tests {
     use nest_rs_core::Discoverable;
 
     use super::WeatherTool;
-    use crate::weather::service::WeatherProvider;
+    use crate::weather::service::WeatherService;
 
     #[test]
     fn mcp_tool_declares_its_injected_trait_dependency_for_the_access_graph() {
         assert!(WeatherTool::dependencies().is_empty());
         assert!(
-            WeatherTool::injected().contains(&TypeId::of::<Arc<dyn WeatherProvider>>()),
-            "the MCP tool's injected dyn WeatherProvider is recorded for the access graph",
+            WeatherTool::injected().contains(&TypeId::of::<Arc<dyn WeatherService>>()),
+            "the MCP tool's injected dyn WeatherService is recorded for the access graph",
         );
     }
 }

@@ -71,6 +71,7 @@
 //! dispatch — this is how `nest_rs_seaorm::ws` re-binds executor + ability
 //! per message without `nestrs-ws` depending on the ORM or authz.
 
+mod config;
 mod context;
 mod envelope;
 mod gateway;
@@ -78,13 +79,14 @@ mod guard;
 mod module;
 mod server;
 
+pub use config::WsConfig;
 pub use context::{BoxFuture, Captured, SocketContext};
 pub use envelope::{WsEnvelope, WsReply};
 pub use gateway::{
     Gateway, GatewayEndpoint, WsDataFold, WsDataPipe, gateway_endpoint, resolve_ws_data_pipe,
 };
 pub use guard::{EventLayerTable, WsMessageCheck};
-pub use module::WsModule;
+pub use module::{WsModule, WsSetup};
 pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
 // Re-exported so macro-generated code resolves these through the framework.

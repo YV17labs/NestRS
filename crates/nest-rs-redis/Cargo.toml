@@ -41,3 +41,6 @@ tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
 tower = "0.5"
+
+[lints]
+workspace = true

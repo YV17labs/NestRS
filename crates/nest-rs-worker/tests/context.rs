@@ -46,3 +46,27 @@ async fn runs_bare_without_a_context() {
         "with no context the job runs without any ambient"
     );
 }
+
+/// A contract-breaking impl: returns without ever driving `inner`, so the job
+/// never runs.
+struct BrokenContext;
+
+impl JobContext for BrokenContext {
+    fn scope<'a>(
+        &'a self,
+        _inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        // Drops `inner` on the floor instead of awaiting it.
+        Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "JobContext::scope contract violation")]
+async fn broken_context_that_skips_the_job_fails_that_job() {
+    // The broken impl fails *this* job — surfaced as a panic the transport's
+    // per-job boundary (CatchPanicLayer / per-job task) isolates, so the worker
+    // keeps consuming rather than the failure taking down the consumer loop.
+    let ctx: Arc<dyn JobContext> = Arc::new(BrokenContext);
+    let _ = run_in_job_context(Some(&ctx), async { 1u32 }).await;
+}

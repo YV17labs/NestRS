@@ -221,8 +221,8 @@ pub trait Creatable: CrudService {
     /// `can`) covers every predicate kind, including a **relational** Create
     /// grant whose scope lives on a parent row the in-memory check cannot
     /// reach — so a caller cannot create a child under an out-of-scope parent.
-    /// With no ambient ability (system/worker path) `scope_for` is unscoped, so
-    /// the insert stands, mirroring the read default on a pool executor.
+    /// On a worker/system (`Job`) executor with no ambient ability `scope_for`
+    /// is unscoped, so the insert stands, mirroring the read default there.
     async fn create(
         &self,
         input: Self::Create,
@@ -230,8 +230,7 @@ pub trait Creatable: CrudService {
         let entity = Self::entity_name();
         let conn = Repo::<Self::Entity>::conn()?;
         let model = input.into_active_model().insert(&conn).await?;
-        let in_scope = Repo::<Self::Entity>::unscoped()
-            .filter(scope_for::<Self::Entity>(Action::Create))
+        let in_scope = Repo::<Self::Entity>::scoped(Action::Create)
             .filter(pk_condition::<Self::Entity>(&model))
             .one(&conn)
             .await?

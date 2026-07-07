@@ -19,3 +19,6 @@ nest-rs-codegen.workspace = true
 # Validate a `cron(...)` string literal at macro-expansion time, so a bad
 # expression is a compile error rather than a boot-time surprise.
 croner.workspace = true
+
+[lints]
+workspace = true

@@ -4,8 +4,9 @@
 //! filtered by the caller's [`Ability`](nest_rs_authz::Ability): reads via
 //! `condition_for(Read)`, by-id writes via `condition_for(Update/Delete)` ANDed
 //! with the primary key — so a caller cannot mutate a row outside its scope
-//! even by id. Worker/system paths run unscoped (no ability ⇒ TRUE); a
-//! request-scoped executor without an ability denies every row (fail-closed).
+//! even by id. Only a worker/system (`Job`) executor runs unscoped (no ability
+//! ⇒ TRUE); every other path without an ability — request-scoped or untagged —
+//! denies every row (fail-closed).
 //! A call outside the executor scope errors rather than silently reaching a
 //! connection it does not have.
 
@@ -20,21 +21,27 @@ use sea_orm::{
 
 use crate::executor::{Executor, ExecutorScope, current_executor, current_executor_scope};
 
-/// Row-level filter for `action` on `E` from the ambient ability. Deny-all on a
-/// request-scoped executor without an ability; unscoped on worker/system paths.
+/// Row-level filter for `action` on `E` from the ambient ability. A worker/system
+/// (`Job`) executor is the sole unscoped path; every other path without an ability
+/// — request-scoped or untagged — denies all rows (fail-closed).
 pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
     match current_ability() {
         Some(ability) => ability.condition_for::<E>(action),
-        None if current_executor_scope() == Some(ExecutorScope::Request) => {
+        // No ambient ability. A tagged `Job` executor is the *sole* unscoped path
+        // (no principal ⇒ system work ⇒ `TRUE`). A request-scoped executor OR an
+        // untagged one (unset scope — e.g. a bare `with_executor` install) fails
+        // closed: an untagged executor must never silently read unscoped, so it
+        // denies exactly like a request. `Job` is the only unscoped tag.
+        None if current_executor_scope() == Some(ExecutorScope::Job) => Condition::all(),
+        None => {
             tracing::warn!(
                 target: "nest_rs::orm",
                 entity = std::any::type_name::<E>(),
                 ?action,
-                "no ambient Ability on a request-scoped executor — denying all rows",
+                "no ambient Ability outside a worker job — denying all rows",
             );
             Condition::all().add(Expr::cust("1 = 0"))
         }
-        None => Condition::all(),
     }
 }
 
@@ -82,8 +89,9 @@ impl<E: EntityTrait> Repo<E> {
         E::find().filter(scope_for::<E>(action))
     }
 
-    /// A [`Select`] that **bypasses the ambient ability filter** — for the three
-    /// sanctioned ability-less query paths:
+    /// A [`Select`] that **bypasses the ambient ability filter** — for the two
+    /// sanctioned ability-less query paths (a third is reserved but unbuilt —
+    /// see below):
     ///
     /// 1. **Pre-authentication** credential lookup, which runs before any
     ///    principal (hence any ability) exists — routing it through
@@ -92,14 +100,20 @@ impl<E: EntityTrait> Repo<E> {
     /// 2. **Access binding** (`CrudService::access`), which is deliberately
     ///    unscoped so a denied-but-existing row reports `Denied` rather than
     ///    `Missing`; the ability check is then applied explicitly per row.
-    /// 3. **Signature-authenticated ingress** (a public webhook endpoint):
-    ///    trust comes from a verified payload signature, not a principal, so
-    ///    the request executor carries no ability and the scoped path would
-    ///    fail closed exactly like the pre-authentication case.
+    ///
+    /// A third path — **signature-authenticated ingress** (a public webhook
+    /// endpoint trusting a verified payload signature, not a principal) — is
+    /// **reserved but NOT implemented**: no webhook route, signature check, or
+    /// webhook DB access exists in this codebase. Do **not** ship a `#[public]`
+    /// + `Repo::unscoped` webhook citing it. A correct implementation first
+    /// requires raw-body → HMAC-SHA256 verification in a `Guard`, a
+    /// constant-time compare (`subtle::ct_eq`), a replay window, fail-closed
+    /// secret handling, and a denial `warn!` — build that exemplar before
+    /// relying on this pattern.
     ///
     /// Still runs against the ambient [`Repo::conn`] executor, so it participates
     /// in the request transaction — only the row-level scope is dropped. Reach
-    /// for this **only** in those three cases; every other read must use
+    /// for this **only** in the two live cases above; every other read must use
     /// [`scoped`](Self::scoped).
     pub fn unscoped() -> Select<E> {
         E::find()
@@ -175,10 +189,10 @@ mod tests {
 
     use nest_rs_authz::{AbilityBuilder, with_ability};
     use sea_orm::sea_query::{Condition, Expr};
-    use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
+    use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait, Set};
 
     use super::*;
-    use crate::executor::{Executor, with_job_executor, with_request_executor};
+    use crate::executor::{Executor, with_executor, with_job_executor, with_request_executor};
     use crate::soft_delete::live_condition;
 
     mod widget {
@@ -251,11 +265,27 @@ mod tests {
     // the scope/e2e tests use, but here against a freshly-installed
     // task-local — no Postgres needed.
     #[tokio::test]
-    async fn no_ambient_state_renders_unscoped() {
+    async fn no_ambient_state_denies_by_default() {
         // Outside any executor scope: ambient ability is absent and scope is
-        // `None` (not `Request`), so the engine returns `TRUE`.
+        // `None` (untagged, not `Job`). Only a `Job` executor is unscoped, so an
+        // untagged path fails closed — the engine returns the deny-all clause.
         let s = sql(scope_for::<widget::Entity>(Action::Read));
-        assert!(!s.contains("1 = 0"), "no scope ⇒ unscoped: {s}");
+        assert!(s.contains("1 = 0"), "untagged ⇒ deny-all: {s}");
+    }
+
+    // The audited footgun: an executor installed *untagged* (a bare
+    // `with_executor`, scope left unset) with no ambient ability must fail
+    // closed, never read unscoped. `Job` is the only unscoped tag.
+    #[tokio::test]
+    async fn untagged_executor_without_ability_denies_all_rows() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_executor(pool, async {
+            // Sanity: the scope really is untagged (unset), not `Job`.
+            assert_eq!(current_executor_scope(), None);
+            let s = sql(scope_for::<widget::Entity>(Action::Read));
+            assert!(s.contains("1 = 0"), "untagged executor fails closed: {s}");
+        })
+        .await;
     }
 
     // A request-scoped executor with NO ambient ability must fail closed.
@@ -328,12 +358,13 @@ mod tests {
     }
 
     // `Repo::scoped` is the entry point for a custom query: a `Select<E>`
-    // already filtered by the ambient ability. Without a scope installed,
-    // the engine returns `TRUE`, so the rendered SQL has no `1 = 0` guard.
+    // already filtered by the ambient ability. With no scope installed (an
+    // untagged path, not a `Job`), the deny-all guard applies — a custom query
+    // built off `scoped` cannot accidentally read unscoped.
     #[tokio::test]
-    async fn scoped_renders_unscoped_outside_a_request() {
+    async fn scoped_denies_by_default_outside_a_job() {
         let s = select_sql(Repo::<widget::Entity>::scoped(Action::Read));
-        assert!(!s.contains("1 = 0"), "no scope ⇒ unscoped: {s}");
+        assert!(s.contains("1 = 0"), "untagged ⇒ deny-all: {s}");
     }
 
     // `Repo::scoped` inside a request scope without an ability must inherit
@@ -469,5 +500,79 @@ mod tests {
             s.contains("NULL"),
             "live filter must exclude tombstoned rows: {s}",
         );
+    }
+
+    // A by-id write ANDs the ambient ability's row condition with the primary
+    // key, so a caller cannot mutate a row outside its scope even by id.
+    // `Repo::update` builds exactly `Update::one(active).filter(scope_for(
+    // Update))`; rendered here (no DB) the WHERE must carry both the PK filter
+    // and the ability predicate, joined by AND. The live counterpart is the api
+    // suite's `writes_are_scoped_to_the_callers_ability`.
+    #[tokio::test]
+    async fn update_by_id_ands_the_pk_with_the_ability_scope() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Update, widget::Entity)
+            .when(|p| p.eq(widget::Column::OrgId, 91));
+        let ability = Arc::new(b.build());
+
+        with_request_executor(pool, async move {
+            with_ability(ability, async {
+                let mut active = widget::ActiveModel {
+                    id: Set(424242),
+                    ..Default::default()
+                };
+                active.name = Set("hacked".to_owned());
+                let s = Update::one(active)
+                    .validate()
+                    .expect("a PK-bearing active model validates")
+                    .filter(scope_for::<widget::Entity>(Action::Update))
+                    .build(DatabaseBackend::Postgres)
+                    .to_string();
+
+                assert!(s.contains("424242"), "the PK is in the WHERE: {s}");
+                assert!(s.contains("org_id"), "the ability scope is in the WHERE: {s}");
+                assert!(s.contains("91"), "the ability predicate value is applied: {s}");
+                assert!(s.contains("AND"), "the PK and the ability scope are ANDed: {s}");
+                assert!(!s.contains("1 = 0"), "a granted action is not denied: {s}");
+            })
+            .await;
+        })
+        .await;
+    }
+
+    // The delete-by-id analog: `Repo::delete` builds `Delete::one(model).filter(
+    // scope_for(Delete))`, and the rendered WHERE must AND the PK with the
+    // ability's `Delete` predicate — an out-of-scope delete touches no row.
+    #[tokio::test]
+    async fn delete_by_id_ands_the_pk_with_the_ability_scope() {
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Delete, widget::Entity)
+            .when(|p| p.eq(widget::Column::OrgId, 91));
+        let ability = Arc::new(b.build());
+
+        with_request_executor(pool, async move {
+            with_ability(ability, async {
+                let active = widget::ActiveModel {
+                    id: Set(424242),
+                    ..Default::default()
+                };
+                let s = Delete::one(active)
+                    .validate()
+                    .expect("a PK-bearing active model validates")
+                    .filter(scope_for::<widget::Entity>(Action::Delete))
+                    .build(DatabaseBackend::Postgres)
+                    .to_string();
+
+                assert!(s.contains("424242"), "the PK is in the WHERE: {s}");
+                assert!(s.contains("org_id"), "the ability scope is in the WHERE: {s}");
+                assert!(s.contains("91"), "the ability predicate value is applied: {s}");
+                assert!(s.contains("AND"), "the PK and the ability scope are ANDed: {s}");
+                assert!(!s.contains("1 = 0"), "a granted action is not denied: {s}");
+            })
+            .await;
+        })
+        .await;
     }
 }

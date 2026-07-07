@@ -7,6 +7,7 @@ use poem::error::ResponseError;
 use poem::http::StatusCode;
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum TokenError {
     #[error("unsupported_grant_type")]
     UnsupportedGrant,

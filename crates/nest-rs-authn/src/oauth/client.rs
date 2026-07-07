@@ -11,6 +11,7 @@ use oauth2::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use validator::Validate;
 
 use crate::error::AuthError;
@@ -123,7 +124,9 @@ impl OAuth2Client {
         code: &str,
     ) -> Result<String, AuthError> {
         let tx: Transaction = jwt.verify(transaction)?;
-        if tx.csrf != state {
+        // Constant-time compare (mirrors the client-credentials check); a length
+        // mismatch reads as "not equal" via `subtle`'s slice `ct_eq`.
+        if !bool::from(tx.csrf.as_bytes().ct_eq(state.as_bytes())) {
             tracing::warn!(
                 target: "nest_rs::authn",
                 reason = "csrf_state_mismatch",
@@ -271,5 +274,28 @@ mod tests {
                 .await,
             Err(AuthError::Failed(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn exchange_rejects_a_state_that_does_not_match() {
+        // A `state` differing from the signed transaction's csrf — here also of
+        // a different length — is rejected by the constant-time compare before
+        // any code exchange, so no network call is reached.
+        let jwt = jwt();
+        let client = OAuth2Client::new(valid_config()).expect("new accepts a valid config");
+        let transaction = jwt
+            .sign(&Transaction {
+                csrf: "the-signed-state".into(),
+                pkce: "verifier".into(),
+                exp: jwt.expiry(),
+            })
+            .expect("sign");
+
+        let err = client
+            .exchange(&jwt, &transaction, "forged", "the-code")
+            .await
+            .expect_err("a mismatched state is rejected");
+        assert!(matches!(err, AuthError::Failed(_)));
+        assert!(err.to_string().contains("state mismatch"));
     }
 }

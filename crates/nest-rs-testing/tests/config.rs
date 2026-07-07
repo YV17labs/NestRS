@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_config::{Config, ConfigModule, ConfigService, config};
+use nest_rs_config::{Config, ConfigModule, ConfigService, MapSource, config};
 use nest_rs_core::{injectable, module};
 use nest_rs_testing::TestApp;
 use validator::Validate;
@@ -46,14 +46,27 @@ impl DemoService {
 )]
 struct DemoModule;
 
-// One sequential test (two boots) so concurrent env mutation doesn't race.
-#[tokio::test]
-async fn for_feature_loads_injects_and_a_seed_overrides_the_environment() {
-    // FIXME: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("NESTRS_DEMOAPP__URL", "postgres://from-env/app") };
-    // FIXME: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("NESTRS_DEMOAPP__MAX_CONNECTIONS", "7") };
+// `from_env` reads its namespaced vars hermetically from a `MapSource` — no
+// process env, no `.env`, no `unsafe`. This is the config-read half of the
+// wiring; the module boot below covers load/inject/seed-override.
+#[test]
+fn from_env_maps_each_namespaced_var_from_its_source() {
+    let service = ConfigService::with_source(
+        "demoapp",
+        Arc::new(MapSource::from_iter([
+            ("NESTRS_DEMOAPP__URL", "postgres://from-env/app"),
+            ("NESTRS_DEMOAPP__MAX_CONNECTIONS", "7"),
+        ])),
+    );
+    let cfg = DemoConfig::from_env(&service).expect("reads from the source");
+    assert_eq!(cfg.url, "postgres://from-env/app");
+    assert_eq!(cfg.max_connections, 7);
+}
 
+#[tokio::test]
+async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
+    // No env set: the `for_feature` factory loads the in-code defaults and
+    // injects the config as `Arc<DemoConfig>`.
     let app = TestApp::builder()
         .module::<DemoModule>()
         .build_headless()
@@ -63,13 +76,14 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_environment() {
         .container()
         .get::<DemoService>()
         .expect("DemoService is registered");
-    assert_eq!(svc.url(), "postgres://from-env/app");
-    assert_eq!(svc.max_connections(), 7);
+    assert_eq!(svc.url(), "", "unset ⇒ the config's in-code default");
+    assert_eq!(svc.max_connections(), 10);
     assert!(
         app.container().get::<DemoConfig>().is_some(),
         "the loaded config is a factory output, present in the container"
     );
 
+    // A seeded config wins over the env-reading factory.
     let app = TestApp::builder()
         .module::<DemoModule>()
         .provide(DemoConfig {
@@ -80,11 +94,10 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_environment() {
         .await
         .expect("the seeded config boots");
     let svc = app.container().get::<DemoService>().unwrap();
-    assert_eq!(svc.url(), "postgres://seeded/app", "the seed wins over env");
+    assert_eq!(
+        svc.url(),
+        "postgres://seeded/app",
+        "the seed wins over the factory"
+    );
     assert_eq!(svc.max_connections(), 99);
-
-    // FIXME: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("NESTRS_DEMOAPP__URL") };
-    // FIXME: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("NESTRS_DEMOAPP__MAX_CONNECTIONS") };
 }

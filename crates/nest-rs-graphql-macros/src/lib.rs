@@ -4,7 +4,6 @@
 //! Mirrors the HTTP `#[controller]`/`#[routes]` split: `#[resolver]` on a
 //! struct = construction (DI); on its impl =
 //! `#[query]`/`#[mutation]`/`#[field_resolver]` orchestration.
-
 use proc_macro::TokenStream;
 
 mod crud;

@@ -295,6 +295,25 @@ fn authorized_param_ident(sig: &Signature) -> Option<Ident> {
     })
 }
 
+/// Grouping key for a `#[field_resolver]`'s parent type — its **last path
+/// segment**. Two spellings of one type (`User` and `crate::wire::User`) share
+/// a last segment, so their field resolvers merge into a single
+/// `#[ComplexObject]` block instead of splitting into two impls that then
+/// collide as an opaque `E0119` duplicate-impl error. Mirrors the last-segment
+/// matching in [`authorized_param_ident`]. A non-path type (rare for a wire
+/// parent) falls back to its full token string.
+fn field_parent_key(ty: &Type) -> String {
+    match ty {
+        Type::Path(tp) => tp
+            .path
+            .segments
+            .last()
+            .map(|seg| seg.ident.to_string())
+            .unwrap_or_else(|| quote!(#ty).to_string()),
+        _ => quote!(#ty).to_string(),
+    }
+}
+
 /// A `#[query]`/`#[mutation]` parameter typed `Piped<P, T>` or `Valid<T>` — a
 /// per-argument pipe. The wrapper exposes the wire value type `T` in the
 /// parameter's place, runs the pipe (`P::transform` / validation), and hands the
@@ -488,26 +507,35 @@ fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
 
 /// `#[resolver]` on the impl: split `#[query]`/`#[mutation]` methods into
 /// generated `#[Object]` roots and register them.
-fn resolver_impl(mut item: ItemImpl) -> TokenStream {
+fn resolver_impl(item: ItemImpl) -> TokenStream {
+    match resolver_impl_inner(item) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// The `#[resolver]`-on-impl expansion, returning `syn::Result<TokenStream2>`
+/// so its gates are unit-testable without the `proc_macro` bridge —
+/// `resolver_impl` is the thin `proc_macro::TokenStream` wrapper, the same
+/// `entry`/`crud` split `#[crud]` uses. The mandatory-posture check below is
+/// security-load-bearing: a `#[query]`/`#[mutation]` carrying neither
+/// `#[authorize(...)]` nor `#[public]` must be a compile error, never an
+/// ungated, unmasked operation.
+fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let self_ty = item.self_ty.clone();
 
-    let base = match impl_self_ident(&self_ty, "#[resolver]") {
-        Ok(base) => base,
-        Err(err) => return err.to_compile_error().into(),
-    };
+    let base = impl_self_ident(&self_ty, "#[resolver]")?;
 
     // Module-gating uses `TypeId::of::<Self>()` so `Self` must be `'static`.
     // Reject generics here for a friendly span — otherwise the user sees a
     // deep-in-macro `T: 'static` failure on the inventory submission.
     if !item.generics.params.is_empty() {
-        return syn::Error::new_spanned(
+        return Err(syn::Error::new_spanned(
             &item.generics,
             "`#[resolver] impl` must be on a concrete, `'static` self type — \
              generic and lifetime parameters are not supported (the resolver's \
              `TypeId` is its container key, which requires `'static`)",
-        )
-        .to_compile_error()
-        .into();
+        ));
     }
 
     // `#[use_guards(...)]` belongs on the struct (provider scope), uniform
@@ -516,13 +544,11 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
     // role for it (the struct-form parses and exposes it via
     // `__nestrs_resolver_guard_specs()`).
     if let Some(attr) = item.attrs.iter().find(|a| a.path().is_ident("use_guards")) {
-        return syn::Error::new_spanned(
+        return Err(syn::Error::new_spanned(
             attr,
             "put `#[use_guards(...)]` on the resolver's `struct`, not its `impl` block — \
              uniform with `#[controller]` and `#[gateway]`",
-        )
-        .to_compile_error()
-        .into();
+        ));
     }
 
     let query_obj = format_ident!("__{}Query", base);
@@ -554,22 +580,13 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
 
         let verb_attr = method.attrs.remove(idx);
 
-        let method_guards = match take_use_guards(&mut method.attrs) {
-            Ok(guards) => guards,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        let force_method_guards = match take_force_guards(&mut method.attrs) {
-            Ok(paths) => paths,
-            Err(err) => return err.to_compile_error().into(),
-        };
+        let method_guards = take_use_guards(&mut method.attrs)?;
+        let force_method_guards = take_force_guards(&mut method.attrs)?;
         // The operation's access posture: `#[authorize(Action, Entity)]`
         // (class gate + automatic response masking) or `#[public]`
         // (deliberately ungated). Exactly one is required on every
         // `#[query]`/`#[mutation]` — see the posture check below.
-        let authorize_spec = match take_authorize(&mut method.attrs) {
-            Ok(spec) => spec,
-            Err(err) => return err.to_compile_error().into(),
-        };
+        let authorize_spec = take_authorize(&mut method.attrs)?;
         let is_public = take_flag_attr(&mut method.attrs, "public");
         all_guard_paths.extend(method_guards.iter().cloned());
         all_guard_paths.extend(force_method_guards.iter().cloned());
@@ -595,34 +612,29 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             // no-op lie, so reject it (same stance as `#[public]` on a WS
             // `#[subscribe_message]`).
             if authorize_spec.is_some() || is_public {
-                return syn::Error::new_spanned(
+                return Err(syn::Error::new_spanned(
                     &method.sig.ident,
                     "a `#[field_resolver]` inherits the operation's access posture — \
                      `#[authorize(...)]`/`#[public]` belong on the root `#[query]`/`#[mutation]`; \
                      for an extra per-field gate bind `#[use_guards(...)]` here",
-                )
-                .to_compile_error()
-                .into();
+                ));
             }
             // Field resolvers gate per-row — they never replay the global
             // chain; only their own `#[use_guards]` apply.
             let field_label = format!("{}.{}", quote!(#self_ty), method_name);
-            let (parent_ty, deleg, deps) = match field_method(
+            let (parent_ty, deleg, deps) = field_method(
                 &self_ty,
                 &deleg_attrs,
                 &sig,
                 &method_guards,
                 &force_method_guards,
                 &field_label,
-            ) {
-                Ok(triple) => triple,
-                Err(err) => return err.to_compile_error().into(),
-            };
+            )?;
             field_dep_types.extend(deps);
-            let key = quote!(#parent_ty).to_string();
+            let key = field_parent_key(&parent_ty);
             match field_groups
                 .iter_mut()
-                .find(|(ty, _)| quote!(#ty).to_string() == key)
+                .find(|(ty, _)| field_parent_key(ty) == key)
             {
                 Some((_, methods)) => methods.push(deleg),
                 None => field_groups.push((parent_ty, vec![deleg])),
@@ -634,35 +646,29 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             // the gate's denial (and a masking failure) can surface.
             match (&authorize_spec, is_public) {
                 (Some(_), true) => {
-                    return syn::Error::new_spanned(
+                    return Err(syn::Error::new_spanned(
                         &method.sig.ident,
                         "`#[authorize(...)]` and `#[public]` contradict — an operation is \
                          gated or public, not both",
-                    )
-                    .to_compile_error()
-                    .into();
+                    ));
                 }
                 (Some(_), false) if !sig_returns_result(&method.sig) => {
-                    return syn::Error::new_spanned(
+                    return Err(syn::Error::new_spanned(
                         &method.sig.ident,
                         "`#[authorize(...)]` needs a `Result` return type so a denial (and a \
                          masking failure) can surface as a GraphQL error; a bare-return \
                          operation can only be `#[public]`",
-                    )
-                    .to_compile_error()
-                    .into();
+                    ));
                 }
                 (None, false) => {
-                    return syn::Error::new_spanned(
+                    return Err(syn::Error::new_spanned(
                         &method.sig.ident,
                         "every `#[query]`/`#[mutation]` declares its access posture: \
                          `#[authorize(Action, Entity)]` (class-level gate + automatic response \
                          masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` \
                          (no `#[authorize]` gate and no response mask — `#[use_guards]` \
                          guards still run)",
-                    )
-                    .to_compile_error()
-                    .into();
+                    ));
                 }
                 _ => {}
             }
@@ -683,15 +689,13 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
             {
                 Some((spec, service)) => {
                     let Some(subject_ident) = authorized_param_ident(&sig) else {
-                        return syn::Error::new_spanned(
+                        return Err(syn::Error::new_spanned(
                             &method_name,
                             "`#[authorize(Action, bind = Service)]` needs a parameter of type \
                              `Authorized<E, Action>` to receive the bound subject — the action in \
                              the type must match the one in the attribute (e.g. \
                              `#[authorize(Update, bind = FilesService)]` ⇒ `Authorized<FileEntity, Update>`)",
-                        )
-                        .to_compile_error()
-                        .into();
+                        ));
                     };
                     let id_ident = spec.id_arg.clone().unwrap_or_else(|| format_ident!("id"));
                     Some((
@@ -738,10 +742,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                 }
                 s
             };
-            let arg_idents = match forwarded_arg_idents(&sig) {
-                Ok(idents) => idents,
-                Err(err) => return err.to_compile_error().into(),
-            };
+            let arg_idents = forwarded_arg_idents(&sig)?;
             // Forward the original args, swapping the subject ident for the
             // locally-bound `__subject` proof when `bind` is set.
             let call_args: Vec<TokenStream2> = arg_idents
@@ -892,7 +893,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
     layer_keys.extend(layer_inject_keys(field_dep_types.iter()));
     let injected_method = injected_method_with_layers(&self_ty, &layer_keys);
 
-    quote! {
+    Ok(quote! {
         #item
 
         #query_block
@@ -908,8 +909,7 @@ fn resolver_impl(mut item: ItemImpl) -> TokenStream {
                 builder
             }
         }
-    }
-    .into()
+    })
 }
 
 /// Build a field resolver's `#[ComplexObject]` method. The inherent method's
@@ -1085,5 +1085,128 @@ fn root_object(
                 ) as ::std::boxed::Box<dyn ::nest_rs_graphql::GraphqlResolverObject>,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    // Every `#[query]`/`#[mutation]` must declare an access posture. This gate
+    // is security-load-bearing: an operation the developer forgot to think
+    // about must *not compile* rather than ship ungated and unmasked. A posture
+    // regression here would silently expose data, so the compile error is the
+    // guarantee — pinned by asserting the expansion fails and the diagnostic
+    // names the rule.
+    #[test]
+    fn query_without_posture_fails_to_expand() {
+        let item: ItemImpl = parse_quote! {
+            impl DemoResolver {
+                #[query]
+                async fn things(&self) -> ::std::vec::Vec<Thing> {
+                    ::std::vec::Vec::new()
+                }
+            }
+        };
+        let err = resolver_impl_inner(item)
+            .expect_err("a query with neither #[authorize] nor #[public] must fail to expand");
+        let msg = err.to_string();
+        assert!(msg.contains("posture"), "diagnostic names the posture rule: {msg}");
+        assert!(
+            msg.contains("#[authorize"),
+            "diagnostic points at #[authorize]: {msg}"
+        );
+        assert!(
+            msg.contains("#[public]"),
+            "diagnostic points at #[public]: {msg}"
+        );
+    }
+
+    // The same gate for a `#[mutation]` — a write operation with no posture is
+    // exactly the case that must never slip through.
+    #[test]
+    fn mutation_without_posture_fails_to_expand() {
+        let item: ItemImpl = parse_quote! {
+            impl DemoResolver {
+                #[mutation]
+                async fn make_thing(&self) -> ::nest_rs_graphql::async_graphql::Result<Thing> {
+                    ::core::result::Result::Ok(Thing)
+                }
+            }
+        };
+        let err = resolver_impl_inner(item)
+            .expect_err("a mutation with no declared posture must fail to expand");
+        assert!(err.to_string().contains("posture"), "{}", err);
+    }
+
+    // `#[public]` is a valid posture: the operation is deliberately ungated, so
+    // it expands.
+    #[test]
+    fn public_query_expands() {
+        let item: ItemImpl = parse_quote! {
+            impl DemoResolver {
+                #[query]
+                #[public]
+                async fn ping(&self) -> i32 {
+                    0
+                }
+            }
+        };
+        resolver_impl_inner(item).expect("a #[public] query expands");
+    }
+
+    // `#[authorize(Action, Entity)]` is the other valid posture (class gate +
+    // automatic response mask); it expands.
+    #[test]
+    fn authorized_query_expands() {
+        let item: ItemImpl = parse_quote! {
+            impl DemoResolver {
+                #[query]
+                #[authorize(::nest_rs_authz::Read, Thing)]
+                async fn thing(&self) -> ::nest_rs_graphql::async_graphql::Result<Thing> {
+                    ::core::result::Result::Ok(Thing)
+                }
+            }
+        };
+        resolver_impl_inner(item).expect("an #[authorize(...)] query expands");
+    }
+
+    // Declaring both postures is a contradiction — an operation is gated or
+    // public, never both.
+    #[test]
+    fn authorize_and_public_together_fail_to_expand() {
+        let item: ItemImpl = parse_quote! {
+            impl DemoResolver {
+                #[query]
+                #[authorize(::nest_rs_authz::Read, Thing)]
+                #[public]
+                async fn thing(&self) -> ::nest_rs_graphql::async_graphql::Result<Thing> {
+                    ::core::result::Result::Ok(Thing)
+                }
+            }
+        };
+        let err = resolver_impl_inner(item)
+            .expect_err("#[authorize] and #[public] together must fail to expand");
+        assert!(err.to_string().contains("contradict"), "{}", err);
+    }
+
+    // `#[authorize]` needs a `Result` return so a denial (or a masking failure)
+    // can surface as a GraphQL error — a bare-return authorized op is rejected.
+    #[test]
+    fn authorize_on_bare_return_fails_to_expand() {
+        let item: ItemImpl = parse_quote! {
+            impl DemoResolver {
+                #[query]
+                #[authorize(::nest_rs_authz::Read, Thing)]
+                async fn thing(&self) -> i32 {
+                    0
+                }
+            }
+        };
+        let err = resolver_impl_inner(item)
+            .expect_err("an #[authorize] op with a bare return must fail to expand");
+        assert!(err.to_string().contains("Result"), "{}", err);
     }
 }

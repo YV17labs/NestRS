@@ -82,3 +82,6 @@ nest-rs-health = { workspace = true, optional = true }
 [[test]]
 name = "e2e"
 required-features = ["http", "ws"]
+
+[lints]
+workspace = true

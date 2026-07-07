@@ -64,3 +64,56 @@ async fn hooks_run_per_phase_in_provider_method_order() {
     let log = LOG.lock().expect("log mutex is not poisoned").clone();
     assert_eq!(log, vec!["Alpha::a_init", "Beta::b_init", "Alpha::a_boot"]);
 }
+
+// --- init-hook failure aborts boot --------------------------------------------
+//
+// The init runner (`run_phase`) is sequential and aborts on the first error, so
+// a provider whose `#[on_module_init]` returns `Err` must fail `App::init` (and,
+// equivalently, `App::run` before it starts serving — nothing is listening yet).
+// The failing-*factory* case is pinned in
+// `nest-rs-core/src/app.rs::factory_error_aborts_build`; this covers the failing
+// *hook* case, through the real `#[hooks]` macro rather than a hand-written thunk.
+//
+// `FailingInit`'s hook lands in the same process-global inventory as `Alpha` /
+// `Beta`, but `#[hooks]` gates each hook on a `Container::get::<Provider>()`
+// probe, so booting `HooksModule` (which never lists `FailingInit`) skips it —
+// the test above stays green.
+
+#[injectable]
+struct FailingInit;
+
+#[hooks]
+impl FailingInit {
+    #[on_module_init]
+    async fn boom(&self) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("init exploded"))
+    }
+}
+
+#[module(providers = [FailingInit])]
+struct FailingInitModule;
+
+#[tokio::test]
+async fn a_failing_init_hook_aborts_boot() {
+    // The container builds fine — hooks run at `init`, not at `new`.
+    let app = App::new::<FailingInitModule>().expect("the container builds");
+
+    // `App` is not `Debug`, but `init` yields `Result<(), _>` (and `()` is
+    // `Debug`), so `expect_err` is available.
+    let err = app
+        .init()
+        .await
+        .expect_err("a failing init hook must abort boot");
+
+    // `run_phase` wraps the hook error with the hook's identity and phase, and
+    // `{:#}` walks the source chain down to the hook's own message.
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("FailingInit::boom"),
+        "the error names the failing hook: {msg}",
+    );
+    assert!(
+        msg.contains("init exploded"),
+        "the error surfaces the hook's own message: {msg}",
+    );
+}

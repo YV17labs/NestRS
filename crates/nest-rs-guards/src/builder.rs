@@ -19,6 +19,7 @@ use crate::dispatch::denial_to_http_response;
 use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::{FallbackOperationGuard, GraphqlVariablePipe};
+#[cfg(feature = "ws")]
 use nest_rs_ws::WsDataPipe;
 
 /// Adds `.use_guards_global(...)` to [`AppBuilder`].
@@ -65,6 +66,9 @@ impl AppBuilderGuardsExt for AppBuilder {
         //   unguarded. A registered bridge replaces the fallback (it runs
         //   the same guards itself — nothing runs twice).
         let active = !collected.is_empty();
+        // `builder` is only reassigned under `graphql` (the fallback op-guard);
+        // without that feature it stays bound once, so the `mut` is unused there.
+        #[cfg_attr(not(feature = "graphql"), allow(unused_mut))]
         let mut builder = self.provide(GuardSpecs(collected));
         #[cfg(feature = "graphql")]
         {
@@ -135,6 +139,7 @@ impl AppBuilderPipesExt for AppBuilder {
         // WS per-message data pipes (`transform_ws_data`). The gateway resolves
         // this bridge at mount (it has the container) and folds it over each
         // message's `data` after guards, before dispatch.
+        #[cfg(feature = "ws")]
         let builder = builder.provide(WsDataPipe(run_ws_data_pipes));
         builder.provide_meta(HttpBootCheck::new(|container| {
             let Some(specs) = container.get::<PipeSpecs>() else {
@@ -182,6 +187,7 @@ fn run_graphql_variable_pipes(
 /// The seed behind [`WsDataPipe`]: fold every registered global pipe's
 /// `transform_ws_data` over a message's `data`. Lives here (not in `nest-rs-ws`)
 /// because it reads the `PipeSpecs` registry this crate owns.
+#[cfg(feature = "ws")]
 fn run_ws_data_pipes(
     container: &nest_rs_core::Container,
     event: &str,
@@ -248,7 +254,9 @@ fn validate_order_by_name(specs: &[GuardSpec]) {
     }
 }
 
-#[cfg(test)]
+// Every test here exercises the WS data-pipe bridge, so the module is only
+// compiled when the `ws` feature is on.
+#[cfg(all(test, feature = "ws"))]
 mod tests {
     use super::*;
     use nest_rs_core::{Container, Layer};

@@ -8,9 +8,10 @@ use crate::config::Config;
 use crate::environment::Environment;
 
 /// Sole owner of config loading. List [`ConfigModule::for_root()`](Self::for_root)
-/// **first** in the root module's imports — it merges the `.env` cascade (real
-/// env vars always win) and registers `Arc<Environment>`, so every later
-/// [`Config`] load sees the merged environment.
+/// **first** in the root module's imports — it makes the `.env` cascade visible
+/// to config reads (real env vars always win; resolution goes through an
+/// in-crate map, so the process env is **never** mutated) and registers
+/// `Arc<Environment>`, so every later [`Config`] load sees dotenv values.
 pub struct ConfigModule;
 
 impl ConfigModule {
@@ -54,7 +55,10 @@ pub struct ConfigRootSetup;
 
 impl DynamicModule for ConfigRootSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        crate::dotenv::ensure_env_loaded();
+        // `Environment::from_env` reads `NESTRS_ENV` from the real process env;
+        // dotenv values reach config reads lazily via `env_var` (the in-crate
+        // map), so collect mutates no process state — no `set_var` on the boot
+        // path that a spawned worker's `getenv` could race.
         builder.provide(Environment::from_env())
     }
 }

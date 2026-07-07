@@ -1,5 +1,4 @@
 //! The `#[config]` decorator, re-exported by `nestrs-config`.
-
 use proc_macro::TokenStream;
 
 mod config;

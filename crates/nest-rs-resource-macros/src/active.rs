@@ -57,7 +57,7 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
     let setters: Vec<TokenStream2> = model
         .fields
         .iter()
-        .filter(|f| f.in_update)
+        .filter(|f| f.in_update && !f.is_pk)
         .map(|f| {
             let name = &f.ident;
             quote! { __am.#name = ::sea_orm::ActiveValue::Set(self.#name); }

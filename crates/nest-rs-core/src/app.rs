@@ -375,8 +375,15 @@ fn spawn_shutdown_signal(cancel: CancellationToken) {
         }
         #[cfg(not(unix))]
         {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!(target: "nest_rs::app", signal = "ctrl-c", "shutdown signal received");
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => {
+                    tracing::info!(target: "nest_rs::app", signal = "ctrl-c", "shutdown signal received")
+                }
+                Err(e) => {
+                    tracing::warn!(target: "nest_rs::app", error = %e, "failed to install ctrl-c handler");
+                    return;
+                }
+            }
         }
         cancel.cancel();
     });

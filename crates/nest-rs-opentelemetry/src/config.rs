@@ -247,116 +247,79 @@ mod tests {
         assert_eq!(LogFormat::default(), LogFormat::Text);
     }
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn with_env<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (k, v) in vars {
-            match v {
-                Some(value) => unsafe { std::env::set_var(k, value) },
-                None => unsafe { std::env::remove_var(k) },
-            }
-        }
-        let out = f();
-        for (k, _) in vars {
-            unsafe { std::env::remove_var(k) };
-        }
-        out
-    }
-
+    // `OpenTelemetryConfig::from_env` reads the `NESTRS_OPENTELEMETRY__*` keys
+    // straight off the process env via `env_var`, so the tests isolate the env
+    // with `figment::Jail` (the same approach `nest-rs-config` uses for its env
+    // reads) — hermetic and serialized, no `unsafe { set_var }`. Vars a test
+    // leaves unset are simply never `set_env`'d, exercising the default path.
     #[test]
     fn from_env_falls_back_to_defaults_for_every_optional_field() {
-        with_env(
-            &[
-                ("NESTRS_OPENTELEMETRY__SERVICE_NAME", None),
-                ("NESTRS_OPENTELEMETRY__SERVICE_VERSION", None),
-                ("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT", None),
-                ("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID", None),
-                ("NESTRS_OPENTELEMETRY__LOG_LEVEL", None),
-                ("NESTRS_OPENTELEMETRY__LOG_FORMAT", None),
-                ("NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION", None),
-                ("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT", None),
-                ("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", None),
-            ],
-            || {
-                let cfg = OpenTelemetryConfig::from_env("default-svc");
-                assert_eq!(cfg.service_name, "default-svc");
-                assert!(cfg.service_version.is_none());
-                assert!(cfg.deployment_environment.is_none());
-                assert!(cfg.service_instance_id.is_none());
-                assert!(cfg.otlp_endpoint.is_none());
-                assert_eq!(cfg.log_filter, "info");
-                assert_eq!(cfg.log_format, LogFormat::Text);
-                assert!(!cfg.log_source_location);
-                assert_eq!(cfg.trace_sample_ratio, 1.0);
-            },
-        );
+        figment::Jail::expect_with(|_| {
+            let cfg = OpenTelemetryConfig::from_env("default-svc");
+            assert_eq!(cfg.service_name, "default-svc");
+            assert!(cfg.service_version.is_none());
+            assert!(cfg.deployment_environment.is_none());
+            assert!(cfg.service_instance_id.is_none());
+            assert!(cfg.otlp_endpoint.is_none());
+            assert_eq!(cfg.log_filter, "info");
+            assert_eq!(cfg.log_format, LogFormat::Text);
+            assert!(!cfg.log_source_location);
+            assert_eq!(cfg.trace_sample_ratio, 1.0);
+            Ok(())
+        });
     }
 
     #[test]
     fn from_env_overrides_each_field_when_set() {
-        with_env(
-            &[
-                ("NESTRS_OPENTELEMETRY__SERVICE_NAME", Some("override-svc")),
-                ("NESTRS_OPENTELEMETRY__SERVICE_VERSION", Some("9.9.9")),
-                ("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT", Some("prod")),
-                (
-                    "NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID",
-                    Some("pinned-1"),
-                ),
-                ("NESTRS_OPENTELEMETRY__LOG_LEVEL", Some("debug,hyper=warn")),
-                ("NESTRS_OPENTELEMETRY__LOG_FORMAT", Some("json")),
-                ("NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION", Some("true")),
-                (
-                    "NESTRS_OPENTELEMETRY__OTLP_ENDPOINT",
-                    Some("http://otel:4318"),
-                ),
-                ("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("0.25")),
-            ],
-            || {
-                let cfg = OpenTelemetryConfig::from_env("default-svc");
-                assert_eq!(cfg.service_name, "override-svc");
-                assert_eq!(cfg.service_version.as_deref(), Some("9.9.9"));
-                assert_eq!(cfg.deployment_environment.as_deref(), Some("prod"));
-                assert_eq!(cfg.service_instance_id.as_deref(), Some("pinned-1"));
-                assert_eq!(cfg.log_filter, "debug,hyper=warn");
-                assert_eq!(cfg.log_format, LogFormat::Json);
-                assert!(cfg.log_source_location);
-                assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://otel:4318"));
-                assert!((cfg.trace_sample_ratio - 0.25).abs() < f64::EPSILON);
-            },
-        );
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_NAME", "override-svc");
+            jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_VERSION", "9.9.9");
+            jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT", "prod");
+            jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID", "pinned-1");
+            jail.set_env("NESTRS_OPENTELEMETRY__LOG_LEVEL", "debug,hyper=warn");
+            jail.set_env("NESTRS_OPENTELEMETRY__LOG_FORMAT", "json");
+            jail.set_env("NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION", "true");
+            jail.set_env("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT", "http://otel:4318");
+            jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "0.25");
+
+            let cfg = OpenTelemetryConfig::from_env("default-svc");
+            assert_eq!(cfg.service_name, "override-svc");
+            assert_eq!(cfg.service_version.as_deref(), Some("9.9.9"));
+            assert_eq!(cfg.deployment_environment.as_deref(), Some("prod"));
+            assert_eq!(cfg.service_instance_id.as_deref(), Some("pinned-1"));
+            assert_eq!(cfg.log_filter, "debug,hyper=warn");
+            assert_eq!(cfg.log_format, LogFormat::Json);
+            assert!(cfg.log_source_location);
+            assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://otel:4318"));
+            assert!((cfg.trace_sample_ratio - 0.25).abs() < f64::EPSILON);
+            Ok(())
+        });
     }
 
     #[test]
     fn from_env_clamps_ratio_outside_zero_to_one() {
-        with_env(
-            &[("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("2.5"))],
-            || {
-                assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 1.0);
-            },
-        );
-        with_env(
-            &[("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("-0.5"))],
-            || {
-                assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 0.0);
-            },
-        );
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "2.5");
+            assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 1.0);
+            Ok(())
+        });
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "-0.5");
+            assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 0.0);
+            Ok(())
+        });
     }
 
     #[test]
     fn from_env_ignores_unparseable_ratio_and_log_format() {
-        with_env(
-            &[
-                ("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", Some("not-a-number")),
-                ("NESTRS_OPENTELEMETRY__LOG_FORMAT", Some("console")),
-            ],
-            || {
-                // Both stick to defaults — never panic on bad input.
-                let cfg = OpenTelemetryConfig::from_env("svc");
-                assert_eq!(cfg.trace_sample_ratio, 1.0);
-                assert_eq!(cfg.log_format, LogFormat::Text);
-            },
-        );
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "not-a-number");
+            jail.set_env("NESTRS_OPENTELEMETRY__LOG_FORMAT", "console");
+            // Both stick to defaults — never panic on bad input.
+            let cfg = OpenTelemetryConfig::from_env("svc");
+            assert_eq!(cfg.trace_sample_ratio, 1.0);
+            assert_eq!(cfg.log_format, LogFormat::Text);
+            Ok(())
+        });
     }
 }

@@ -1,7 +1,7 @@
 //! Active runtime [`Environment`] — selects the `.env` cascade and branches
 //! code paths.
 
-use crate::source::env_var;
+use crate::source::real_env_var;
 
 /// Read from the reserved `NESTRS_ENV`. This is the one framework variable
 /// **outside** the `NESTRS_<DOMAIN>__<KEY>` scheme — it selects which `.env`
@@ -20,13 +20,21 @@ pub enum Environment {
 impl Environment {
     /// Call at the top of `main` before anything that reads the env outside the
     /// DI graph (e.g. `OpenTelemetry::init`). Idempotent with `ConfigModule::for_root`.
+    ///
+    /// Parses the `.env` cascade into the in-crate map now (side-effect-free —
+    /// no process-env mutation), so later `env_var` reads see dotenv values and
+    /// the one-time file-read cost is paid at startup rather than mid-request.
     pub fn init() -> Self {
-        crate::dotenv::ensure_env_loaded();
-        Self::from_env()
+        let env = Self::from_env();
+        let _ = crate::dotenv::dotenv_values();
+        env
     }
 
     pub fn from_env() -> Self {
-        match env_var("NESTRS_ENV").as_deref().map(str::trim) {
+        // `NESTRS_ENV` selects the cascade, so it must come from the real
+        // process env, never a `.env` file — read it without the dotenv
+        // fallback (which would also recurse through `dotenv_values`).
+        match real_env_var("NESTRS_ENV").as_deref().map(str::trim) {
             Some("production" | "prod") => Self::Production,
             Some("staging" | "stage") => Self::Staging,
             Some("test") => Self::Test,

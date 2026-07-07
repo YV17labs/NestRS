@@ -2,7 +2,6 @@
 //!
 //! An *attribute* (not a derive) so it composes with `#[sea_orm::model]`, which
 //! re-emits the struct and would double-expand a sibling derive.
-
 use proc_macro::TokenStream;
 
 mod active;

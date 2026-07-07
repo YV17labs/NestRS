@@ -1,13 +1,16 @@
 //! The unified [`Guard`] trait — extends [`Layer`] so guards plug into the
 //! Layer System (dedup-by-`TypeId`, declaration-order chain).
 
+#[cfg(feature = "ws")]
 use std::any::TypeId;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
 use nest_rs_http::poem::Request as HttpRequest;
+#[cfg(feature = "ws")]
 use nest_rs_ws::{WsClient, WsMessageCheck};
+#[cfg(feature = "ws")]
 use serde_json::Value;
 
 use crate::denial::Denial;
@@ -44,7 +47,9 @@ pub trait Guard: Layer {
         Ok(())
     }
 
-    /// WebSocket per-message entry. Default = no-op.
+    /// WebSocket per-message entry. Default = no-op. Available with the `ws`
+    /// feature on this crate.
+    #[cfg(feature = "ws")]
     async fn check_ws_message(
         &self,
         _client: &WsClient,
@@ -66,6 +71,7 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
         (**self).check_graphql(ctx).await
     }
 
+    #[cfg(feature = "ws")]
     async fn check_ws_message(
         &self,
         client: &WsClient,
@@ -80,12 +86,14 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
 /// [`WsMessageCheck`](nest_rs_ws::WsMessageCheck) interface — the bridge the
 /// `#[messages]` macro uses to put guards in the per-event chain table
 /// without nest-rs-ws depending on nest-rs-guards.
+#[cfg(feature = "ws")]
 pub struct GuardAsWsMessageCheck {
     inner: Arc<dyn Guard>,
     type_id: TypeId,
     name: &'static str,
 }
 
+#[cfg(feature = "ws")]
 impl GuardAsWsMessageCheck {
     pub fn new(inner: Arc<dyn Guard>, type_id: TypeId, name: &'static str) -> Self {
         Self {
@@ -96,6 +104,7 @@ impl GuardAsWsMessageCheck {
     }
 }
 
+#[cfg(feature = "ws")]
 #[async_trait]
 impl WsMessageCheck for GuardAsWsMessageCheck {
     async fn check(

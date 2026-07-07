@@ -23,8 +23,13 @@ nest-rs-guards.workspace = true
 nest-rs-http.workspace = true
 poem.workspace = true
 async-trait.workspace = true
+# A `429` denial is a security event — logged at `warn` on the `nest_rs::throttler` target.
+tracing.workspace = true
 # Window-map lock — poison-free locking on the rate-limit hot path.
 parking_lot.workspace = true
 # `ThrottlerModule::for_root` provides the throttler through the factory phase,
 # whose error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
+
+[lints]
+workspace = true

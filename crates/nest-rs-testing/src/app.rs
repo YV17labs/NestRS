@@ -61,6 +61,8 @@ impl TestAppBuilder {
         // explicit value wins (e.g. CI asserting prod behaviour).
         if std::env::var_os("NESTRS_ENV").is_none() {
             // FIXME: Audit that the environment access only happens in single-threaded code.
+            // Test-harness env setup on the (non-test) lib build: the sole sanctioned unsafe.
+            #[allow(unsafe_code)]
             unsafe { std::env::set_var("NESTRS_ENV", "test") };
         }
         // Every e2e boot (any transport) sees the project's own `.env`.

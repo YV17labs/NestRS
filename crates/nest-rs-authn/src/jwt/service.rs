@@ -122,12 +122,20 @@ impl JwtService {
         validation.validate_exp = true;
         validation.validate_nbf = true;
         validation.leeway = options.leeway.as_secs();
+        // `set_audience`/`set_issuer` only *compare* `aud`/`iss` when the token
+        // carries them — a signed token omitting the claim would pass despite the
+        // config promising it is mandatory. Add the claim to `required_spec_claims`
+        // so an omitting token fails closed.
         match &options.audience {
-            Some(aud) => validation.set_audience(&[aud.as_str()]),
+            Some(aud) => {
+                validation.set_audience(&[aud.as_str()]);
+                validation.required_spec_claims.insert("aud".to_owned());
+            }
             None => validation.validate_aud = false,
         }
         if let Some(iss) = &options.issuer {
             validation.set_issuer(&[iss.as_str()]);
+            validation.required_spec_claims.insert("iss".to_owned());
         }
 
         Ok(Self {

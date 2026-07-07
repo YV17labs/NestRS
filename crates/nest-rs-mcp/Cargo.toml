@@ -22,3 +22,6 @@ nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 poem = { workspace = true, features = ["test"] }
 tokio.workspace = true
+
+[lints]
+workspace = true

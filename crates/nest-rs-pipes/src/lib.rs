@@ -9,7 +9,6 @@
 //!   app. Declared with `App::builder().use_pipes_global(...)`. Runs after
 //!   Guards, before the handler — the [`LayerKind::Pipe`](nest_rs_core::LayerKind)
 //!   slot.
-
 mod global;
 mod pipe;
 mod piped;

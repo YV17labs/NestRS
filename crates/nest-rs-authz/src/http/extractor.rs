@@ -48,6 +48,12 @@ where
         if ability.can_class(A::ACTION, TypeId::of::<S>()) {
             Ok(Authorize(PhantomData))
         } else {
+            tracing::warn!(
+                target: "nest_rs::authz",
+                action = ?A::ACTION,
+                subject = std::any::type_name::<S>(),
+                "authorization denied",
+            );
             Err(Error::from_string("forbidden", StatusCode::FORBIDDEN))
         }
     }

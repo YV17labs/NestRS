@@ -15,10 +15,10 @@ impl<T: Validate> Pipe for ValidationPipe<T> {
     fn transform(input: T) -> Result<T, PipeError> {
         match input.validate() {
             Ok(()) => Ok(input),
-            Err(errors) => Err(PipeError::with_details(
-                "validation failed",
-                serde_json::to_value(errors).unwrap_or(serde_json::Value::Null),
-            )),
+            // Shared with the global `ValidateProbe` path so the submitted
+            // value (`params.value`) is stripped from the details on every
+            // transport — a rejected credential never echoes back.
+            Err(errors) => Err(crate::validate::validation_error(errors)),
         }
     }
 }
@@ -46,5 +46,32 @@ mod tests {
         };
         let err = ValidationPipe::<Signup>::transform(bad).unwrap_err();
         assert!(err.details().is_some());
+    }
+
+    #[test]
+    fn rejection_details_never_echo_the_submitted_value() {
+        // A too-short secret must not come back in the details — only the field
+        // name and the constraint bound survive, so the message stays
+        // actionable ("password: length min 8") without leaking what was typed.
+        #[derive(Debug, Validate)]
+        struct Login {
+            #[validate(length(min = 8))]
+            password: String,
+        }
+        let err = ValidationPipe::<Login>::transform(Login {
+            password: "hunter2".into(), // 7 chars — fails `min = 8`
+        })
+        .unwrap_err();
+        let details = err.details().expect("field details present");
+        let text = details.to_string();
+        assert!(
+            !text.contains("hunter2"),
+            "submitted value must not be echoed: {text}",
+        );
+        assert!(
+            details.get("password").is_some(),
+            "the failing field name is kept: {text}",
+        );
+        assert!(text.contains('8'), "the constraint bound is kept: {text}");
     }
 }

@@ -177,8 +177,18 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
     // `impl RelatedTo<#target> for Entity` blocks — coherence error E0119
     // with a span deep in the macro expansion. The inverse `has_many` lookup
     // on the target side can only consume one, so the second is ambiguous
-    // even if the FK loaders were both registered. Refuse it at parse time.
-    let mut seen_targets: Vec<(String, &Ident)> = Vec::new();
+    // even if the FK loaders were both registered. Refuse it at parse time —
+    // keyed by the target's module-qualified path, normalized so a leading
+    // `crate::`/`self::` anchor doesn't split one entity across two spellings
+    // (`orgs::Entity` vs `crate::orgs::Entity` collide here as a clear
+    // diagnostic instead of surfacing later as an opaque duplicate-impl
+    // `E0119`). NOTE: do *not* key by the last path segment — SeaORM entity
+    // types are all named `Entity` (`users::Entity`, `orgs::Entity`), so the
+    // last segment is always `Entity` and keying on it would false-positive
+    // every second `belongs_to`; the *module* path identifies the parent.
+    // Stored as `(key, full_spelling, field)` so an aliased collision can name
+    // both spellings.
+    let mut seen_targets: Vec<(String, String, &Ident)> = Vec::new();
     for field in &model.fields {
         if !field.read {
             continue;
@@ -186,17 +196,38 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
         let Some(RelationKind::BelongsTo { from, target, .. }) = &field.relation else {
             continue;
         };
-        let target_key = quote!(#target).to_string();
-        if let Some((_, prev)) = seen_targets.iter().find(|(k, _)| k == &target_key) {
+        let target_spelling = target
+            .segments
+            .iter()
+            .map(|seg| seg.ident.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        // Normalize away a redundant leading `crate::`/`self::` anchor so
+        // `crate::orgs::Entity` and `orgs::Entity` key alike, while
+        // `orgs::Entity` and `users::Entity` stay distinct.
+        let target_key = target_spelling
+            .strip_prefix("crate::")
+            .or_else(|| target_spelling.strip_prefix("self::"))
+            .unwrap_or(&target_spelling)
+            .to_owned();
+        if let Some((_, prev_spelling, prev_field)) =
+            seen_targets.iter().find(|(key, _, _)| key == &target_key)
+        {
+            // Same tail via two *different* spellings ⇒ name both, so the
+            // developer sees these are one entity reached by aliased paths.
+            let aliased = if prev_spelling == &target_spelling {
+                String::new()
+            } else {
+                format!(" (`{prev_spelling}` and `{target_spelling}` name the same entity)")
+            };
             return Err(syn::Error::new_spanned(
                 &field.ident,
                 format!(
-                    "two `belongs_to` relations targeting the same parent are not supported (clashes with `{}`); leave one unexposed (no `#[expose]`) and write a hand-rolled `#[field_resolver]`",
-                    prev,
+                    "two `belongs_to` relations targeting the same parent are not supported (clashes with `{prev_field}`){aliased}; leave one unexposed (no `#[expose]`) and write a hand-rolled `#[field_resolver]`",
                 ),
             ));
         }
-        seen_targets.push((target_key, &field.ident));
+        seen_targets.push((target_key, target_spelling, &field.ident));
 
         let fk_field = model.fields.iter().find(|f| &f.ident == from).ok_or_else(|| {
             syn::Error::new_spanned(

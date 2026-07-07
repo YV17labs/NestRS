@@ -19,3 +19,6 @@ validator.workspace = true
 uuid.workspace = true
 # `GlobalPipe` extends `nest_rs_core::Layer` for the Layer System.
 nest-rs-core.workspace = true
+
+[lints]
+workspace = true

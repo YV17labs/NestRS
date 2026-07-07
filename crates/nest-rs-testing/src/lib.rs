@@ -7,6 +7,7 @@
 //!
 //! Override providers with [`override_dyn`](TestAppBuilder::override_dyn) /
 //! [`override_value`](TestAppBuilder::override_value).
+#![cfg_attr(not(test), deny(unsafe_code))]
 
 mod app;
 mod env;

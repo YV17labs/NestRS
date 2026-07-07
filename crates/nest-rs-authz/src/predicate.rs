@@ -28,6 +28,12 @@ pub enum CmpOp {
 pub enum Predicate<E: EntityTrait> {
     #[default]
     Always,
+    /// Fail-closed sentinel: renders an always-false SQL condition (`1 = 0`)
+    /// and matches no row in memory. Produced when [`PredicateBuilder::related`]
+    /// rejects an invalid relation predicate (composite key or a relation not
+    /// pointing at `R`) — a developer misconfiguration denied gracefully at
+    /// runtime rather than panicking the request.
+    Deny,
     Eq(E::Column, Value),
     In(E::Column, Vec<Value>),
     /// Scalar comparison (`Ne`/`Lt`/`Lte`/`Gt`/`Gte`) on one of `E`'s own
@@ -74,12 +80,19 @@ impl RelatedPredicate {
     /// widened past the join.
     fn to_condition(&self) -> Condition {
         let def = &self.relation;
-        // v1 supports single-column keys only. A composite key is rejected at
-        // rule-definition time (see `PredicateBuilder::related`), so reaching
-        // here with one is a framework bug, not user input.
+        // v1 supports single-column keys only. A composite key is rejected in
+        // `PredicateBuilder::related` (which returns `Predicate::Deny` rather
+        // than building a `Related`), so this path is unreachable in practice;
+        // it stays as fail-closed defense-in-depth — deny every row rather than
+        // panic the request.
         let (Some(from_col), Some(to_col)) = (unary_iden(&def.from_col), unary_iden(&def.to_col))
         else {
-            panic!("relational authz filter reached a composite-key relation after validation");
+            tracing::error!(
+                target: "nest_rs::authz",
+                reason = "composite_key",
+                "invalid ability relation predicate — denying all rows",
+            );
+            return Condition::all().add(Expr::cust("1 = 0"));
         };
         let from_tbl = def.from_tbl.sea_orm_table().clone();
         let to_tbl = def.to_tbl.sea_orm_table().clone();
@@ -127,6 +140,10 @@ impl<E: EntityTrait> Predicate<E> {
     pub fn to_condition(&self) -> Condition {
         match self {
             Predicate::Always => Condition::all(),
+            // Fail-closed: `Condition::all().add(Expr::cust("1 = 0"))` is the
+            // same always-false clause `Repo::scope_for` renders on a denied
+            // request (`nest-rs-seaorm/src/repo.rs`).
+            Predicate::Deny => Condition::all().add(Expr::cust("1 = 0")),
             Predicate::Eq(col, value) => Condition::all().add(col.eq(value.clone())),
             Predicate::In(col, values) => Condition::all().add(col.is_in(values.clone())),
             Predicate::Cmp(col, op, value) => {
@@ -165,6 +182,8 @@ impl<E: EntityTrait> Predicate<E> {
     pub fn matches(&self, model: &E::Model) -> bool {
         match self {
             Predicate::Always => true,
+            // Fail-closed: a denied predicate accepts no row.
+            Predicate::Deny => false,
             Predicate::Eq(col, value) => &model.get(*col) == value,
             Predicate::In(col, values) => {
                 let actual = model.get(*col);
@@ -316,8 +335,12 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     /// });
     /// ```
     ///
-    /// Two boot-time guards close the gap that type erasure opens. Both panic at
-    /// rule-definition time (never a silently-wrong filter):
+    /// Two runtime checks close the gap that type erasure opens. `related()`
+    /// runs inside `AbilityFactory::define` — i.e. per authenticated request —
+    /// so a violation is rejected **gracefully**, never by panicking the
+    /// request: each check logs an `error!` (target `nest_rs::authz`) and
+    /// returns [`Predicate::Deny`], which renders an always-false condition so
+    /// no row leaks (fail-closed). Both cases are a developer misconfiguration:
     /// - the relation must point at `R` (its `to_tbl` must be `R`'s table);
     /// - the relation must be single-column (composite keys are unsupported in
     ///   v1).
@@ -328,19 +351,24 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     {
         let def = relation.def();
         let expected = R::default().table_ref();
-        assert!(
-            def.to_tbl.sea_orm_table() == expected.sea_orm_table(),
-            "related::<{}>() was given a relation pointing at {:?}, not R's table {:?}",
-            std::any::type_name::<R>(),
-            def.to_tbl.sea_orm_table(),
-            expected.sea_orm_table(),
-        );
-        assert!(
-            def.from_col.arity() == 1 && def.to_col.arity() == 1,
-            "related::<{}>() does not support composite-key relations (v1); \
-             use a single-column relation or denormalize the tenant key",
-            std::any::type_name::<R>(),
-        );
+        if def.to_tbl.sea_orm_table() != expected.sea_orm_table() {
+            tracing::error!(
+                target: "nest_rs::authz",
+                related = std::any::type_name::<R>(),
+                reason = "relation_table_mismatch",
+                "invalid ability relation predicate — denying all rows",
+            );
+            return Predicate::Deny;
+        }
+        if def.from_col.arity() != 1 || def.to_col.arity() != 1 {
+            tracing::error!(
+                target: "nest_rs::authz",
+                related = std::any::type_name::<R>(),
+                reason = "composite_key",
+                "invalid ability relation predicate — denying all rows",
+            );
+            return Predicate::Deny;
+        }
         let sub = build(PredicateBuilder::<R>::new());
         Predicate::Related(RelatedPredicate {
             relation: def,
@@ -710,12 +738,27 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "was given a relation pointing at")]
     fn related_rejects_a_relation_not_pointing_at_r() {
         // The relation targets `parent`, but R is declared as `child` — the
-        // boot-time guard must catch the mismatch type erasure would hide.
-        let _ = PredicateBuilder::<child::Entity>::new()
+        // mismatch type erasure would hide must be rejected fail-closed
+        // (deny-all), not panic the per-request `AbilityFactory::define`.
+        let p = PredicateBuilder::<child::Entity>::new()
             .related::<child::Entity, _>(child::Relation::Parent, |c| c.eq(child::Column::Id, 1));
+        assert!(matches!(p, Predicate::Deny));
+        let s = child_sql(&p);
+        assert!(
+            s.contains("1 = 0"),
+            "rejected relation must render always-false SQL: {s}"
+        );
+    }
+
+    #[test]
+    fn deny_matches_nothing_in_memory_and_renders_always_false_sql() {
+        let p: Predicate<widget::Entity> = Predicate::Deny;
+        assert!(!p.matches(&model(1, 7, "a")));
+        assert!(!p.matches(&model(99, 0, "")));
+        let s = sql(&p);
+        assert!(s.contains("1 = 0"), "Deny must render always-false SQL: {s}");
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub struct CredentialError;
 
 /// Why authentication did not establish an identity.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AuthError {
     #[error("missing credentials")]
     MissingCredentials,

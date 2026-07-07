@@ -8,9 +8,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+#[cfg(feature = "graphql")]
 use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
+#[cfg(feature = "ws")]
 use nest_rs_ws::WsClient;
 use poem::{Error, Response};
+#[cfg(feature = "ws")]
 use serde_json::Value as JsonValue;
 
 use crate::ExceptionFilter;
@@ -37,6 +40,8 @@ pub trait ExceptionFilterErased: Layer {
     /// GraphQL dispatch. Inspect `err.source()` for `Exception`; if it
     /// matches, call [`ExceptionFilter::catch_graphql`] and return the
     /// reshaped [`GraphqlError`]. Otherwise hand the error back unchanged.
+    /// Available with the `graphql` feature.
+    #[cfg(feature = "graphql")]
     async fn try_catch_graphql<'a>(
         &self,
         ctx: &GraphqlContext<'a>,
@@ -45,7 +50,9 @@ pub trait ExceptionFilterErased: Layer {
 
     /// WS dispatch. Inspect `err.downcast_ref::<Exception>()`; if it
     /// matches, call [`ExceptionFilter::catch_ws`] and return the reply
-    /// JSON. Otherwise hand the error back unchanged.
+    /// JSON. Otherwise hand the error back unchanged. Available with the
+    /// `ws` feature.
+    #[cfg(feature = "ws")]
     async fn try_catch_ws(
         &self,
         client: &WsClient,
@@ -74,6 +81,7 @@ where
         }
     }
 
+    #[cfg(feature = "graphql")]
     async fn try_catch_graphql<'a>(
         &self,
         ctx: &GraphqlContext<'a>,
@@ -94,6 +102,7 @@ where
         }
     }
 
+    #[cfg(feature = "ws")]
     async fn try_catch_ws(
         &self,
         client: &WsClient,
@@ -122,6 +131,7 @@ impl<T: ExceptionFilterErased + ?Sized> ExceptionFilterErased for Arc<T> {
         (**self).try_catch(err).await
     }
 
+    #[cfg(feature = "graphql")]
     async fn try_catch_graphql<'a>(
         &self,
         ctx: &GraphqlContext<'a>,
@@ -130,6 +140,7 @@ impl<T: ExceptionFilterErased + ?Sized> ExceptionFilterErased for Arc<T> {
         (**self).try_catch_graphql(ctx, err).await
     }
 
+    #[cfg(feature = "ws")]
     async fn try_catch_ws(
         &self,
         client: &WsClient,

@@ -8,6 +8,16 @@ repository.workspace = true
 homepage.workspace = true
 description = "Transport-spanning interceptors for nestrs — one Layer System sub-trait wrapping handler execution on HTTP, GraphQL, and WS, declared globally via `use_interceptors_global` or per-scope through `#[use_interceptors]`."
 
+[features]
+default = []
+# The reserved per-resolver `wrap_graphql` seam names async-graphql's native
+# context types. Gated so an HTTP-only interceptor consumer never compiles the
+# GraphQL stack; consumers that serve GraphQL turn it on through the trait
+# crates' own `graphql` feature (see `nest-rs-guards`).
+graphql = ["dep:nest-rs-graphql"]
+# The reserved per-message `wrap_ws` seam names `WsClient`. Gated likewise.
+ws = ["dep:nest-rs-ws"]
+
 [dependencies]
 async-trait.workspace = true
 poem.workspace = true
@@ -15,11 +25,16 @@ tracing.workspace = true
 serde_json.workspace = true
 nest-rs-core.workspace = true
 # Native context types for the cross-transport `wrap_graphql` / `wrap_ws`
-# methods. No cycle: nest-rs-http no longer depends on this crate (the
-# transport-level wrap goes through HttpInterceptorMeta + a wrap closure).
-nest-rs-graphql.workspace = true
-nest-rs-ws.workspace = true
+# methods (reserved seams). Optional + feature-gated so a pure-HTTP consumer
+# does not pull the GraphQL / WS stacks. No cycle: nest-rs-http no longer
+# depends on this crate (the transport-level wrap goes through
+# HttpInterceptorMeta + a wrap closure).
+nest-rs-graphql = { workspace = true, optional = true }
+nest-rs-ws = { workspace = true, optional = true }
 # `use_interceptors_global` attaches its transport-level wrap via
 # `HttpInterceptorMeta`. Safe direction (nest-rs-http depends on no
 # trait crate any more).
 nest-rs-http.workspace = true
+
+[lints]
+workspace = true

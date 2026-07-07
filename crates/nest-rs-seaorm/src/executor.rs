@@ -124,7 +124,9 @@ pub fn current_executor() -> Option<Executor> {
 
 /// Install `executor` without tagging a scope. Prefer the request/job
 /// variants at framework boundaries so authorization can distinguish the
-/// two paths.
+/// two paths. An untagged scope is fail-closed under `Repo` (deny-all with no
+/// ambient ability, exactly like a request); only [`with_job_executor`] is
+/// unscoped.
 pub async fn with_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
     nest_rs_database::with_executor(Arc::new(executor), fut).await
 }

@@ -15,7 +15,6 @@
 //! A `*Client` is a transient builder over an external API surface —
 //! [`OAuth2Client`] is constructed per flow (authorize → exchange → userinfo)
 //! and carries no shared state between callers.
-
 pub mod jwt;
 pub mod oauth;
 pub mod passport;

@@ -110,50 +110,19 @@ mod tests {
         assert_eq!(DEFAULT_PATH, "/graphql");
     }
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn with_env<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (k, v) in vars {
-            match v {
-                Some(value) => unsafe { std::env::set_var(k, value) },
-                None => unsafe { std::env::remove_var(k) },
-            }
-        }
-        let out = f();
-        for (k, _) in vars {
-            unsafe { std::env::remove_var(k) };
-        }
-        out
-    }
-
     #[test]
     fn from_env_falls_back_to_defaults_when_unset() {
-        with_env(
-            &[
-                ("NESTRS_GRAPHQL__PATH", None),
-                ("NESTRS_GRAPHQL__PLAYGROUND", None),
-                ("NESTRS_GRAPHQL__SCHEMA_PATH", None),
-                ("NESTRS_GRAPHQL__EMIT_SDL", None),
-                ("NESTRS_GRAPHQL__MAX_DEPTH", None),
-                ("NESTRS_GRAPHQL__MAX_COMPLEXITY", None),
-                ("NESTRS_GRAPHQL__DISABLE_INTROSPECTION", None),
-                ("NESTRS_GRAPHQL__MAX_BATCH_SIZE", None),
-            ],
-            || {
-                let cfg =
-                    GraphqlConfig::from_env(&ConfigService::for_namespace("graphql")).expect("ok");
-                let d = GraphqlConfig::default();
-                assert_eq!(cfg.path, d.path);
-                assert_eq!(cfg.playground, d.playground);
-                assert_eq!(cfg.schema_path, d.schema_path);
-                assert_eq!(cfg.emit_sdl, d.emit_sdl);
-                assert_eq!(cfg.max_depth, d.max_depth);
-                assert_eq!(cfg.max_complexity, d.max_complexity);
-                assert_eq!(cfg.disable_introspection, d.disable_introspection);
-                assert_eq!(cfg.max_batch_size, d.max_batch_size);
-            },
-        );
+        let cfg =
+            GraphqlConfig::from_env(&ConfigService::with_vars("graphql", [])).expect("ok");
+        let d = GraphqlConfig::default();
+        assert_eq!(cfg.path, d.path);
+        assert_eq!(cfg.playground, d.playground);
+        assert_eq!(cfg.schema_path, d.schema_path);
+        assert_eq!(cfg.emit_sdl, d.emit_sdl);
+        assert_eq!(cfg.max_depth, d.max_depth);
+        assert_eq!(cfg.max_complexity, d.max_complexity);
+        assert_eq!(cfg.disable_introspection, d.disable_introspection);
+        assert_eq!(cfg.max_batch_size, d.max_batch_size);
     }
 
     #[test]
@@ -186,25 +155,23 @@ mod tests {
 
     #[test]
     fn from_env_reads_each_field_when_set() {
-        with_env(
-            &[
-                ("NESTRS_GRAPHQL__PATH", Some("/api/graphql")),
-                ("NESTRS_GRAPHQL__PLAYGROUND", Some("true")),
-                ("NESTRS_GRAPHQL__SCHEMA_PATH", Some("./schema-out.graphql")),
-                ("NESTRS_GRAPHQL__EMIT_SDL", Some("true")),
-                ("NESTRS_GRAPHQL__MAX_DEPTH", Some("15")),
-                ("NESTRS_GRAPHQL__MAX_COMPLEXITY", Some("2000")),
+        let service = ConfigService::with_vars(
+            "graphql",
+            [
+                ("NESTRS_GRAPHQL__PATH", "/api/graphql"),
+                ("NESTRS_GRAPHQL__PLAYGROUND", "true"),
+                ("NESTRS_GRAPHQL__SCHEMA_PATH", "./schema-out.graphql"),
+                ("NESTRS_GRAPHQL__EMIT_SDL", "true"),
+                ("NESTRS_GRAPHQL__MAX_DEPTH", "15"),
+                ("NESTRS_GRAPHQL__MAX_COMPLEXITY", "2000"),
             ],
-            || {
-                let cfg =
-                    GraphqlConfig::from_env(&ConfigService::for_namespace("graphql")).expect("ok");
-                assert_eq!(cfg.path, "/api/graphql");
-                assert!(cfg.playground);
-                assert_eq!(cfg.schema_path, PathBuf::from("./schema-out.graphql"));
-                assert!(cfg.emit_sdl);
-                assert_eq!(cfg.max_depth, Some(15));
-                assert_eq!(cfg.max_complexity, Some(2000));
-            },
         );
+        let cfg = GraphqlConfig::from_env(&service).expect("ok");
+        assert_eq!(cfg.path, "/api/graphql");
+        assert!(cfg.playground);
+        assert_eq!(cfg.schema_path, PathBuf::from("./schema-out.graphql"));
+        assert!(cfg.emit_sdl);
+        assert_eq!(cfg.max_depth, Some(15));
+        assert_eq!(cfg.max_complexity, Some(2000));
     }
 }

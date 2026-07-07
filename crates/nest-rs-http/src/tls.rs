@@ -106,119 +106,73 @@ mod tests {
         assert!(debug.contains("128 bytes"), "cert length missing: {debug}");
     }
 
-    // Real env mutation; serialize so tests in this binary don't race.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn with_env<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (k, v) in vars {
-            match v {
-                Some(value) => unsafe { std::env::set_var(k, value) },
-                None => unsafe { std::env::remove_var(k) },
-            }
-        }
-        let out = f();
-        for (k, _) in vars {
-            unsafe { std::env::remove_var(k) };
-        }
-        out
-    }
+    // `TlsConfig::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
+    // framework-wide `env_var` shortcut (real process env + `.env` cascade), not
+    // a `ConfigService` — so a map-backed source can't feed it. Isolate the real
+    // env with `figment::Jail` (the same approach `nest-rs-config` uses for its
+    // own `env_var` tests), which needs no `unsafe` in this crate and reverts
+    // every mutation when the closure returns.
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn from_env_is_none_when_no_tls_vars_are_set() {
-        with_env(
-            &[
-                ("NESTRS_HTTP__TLS_CERT", None),
-                ("NESTRS_HTTP__TLS_KEY", None),
-                ("NESTRS_HTTP__TLS_CERT_FILE", None),
-                ("NESTRS_HTTP__TLS_KEY_FILE", None),
-            ],
-            || {
-                assert!(TlsConfig::from_env().expect("no error").is_none());
-            },
-        );
+        figment::Jail::expect_with(|_| {
+            assert!(TlsConfig::from_env().expect("no error").is_none());
+            Ok(())
+        });
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn from_env_reads_inline_pem_pair() {
-        with_env(
-            &[
-                ("NESTRS_HTTP__TLS_CERT", Some("--CERT--")),
-                ("NESTRS_HTTP__TLS_KEY", Some("--KEY--")),
-                ("NESTRS_HTTP__TLS_CERT_FILE", None),
-                ("NESTRS_HTTP__TLS_KEY_FILE", None),
-            ],
-            || {
-                let cfg = TlsConfig::from_env().expect("no error").expect("Some");
-                assert_eq!(cfg.cert, b"--CERT--");
-                assert_eq!(cfg.key, b"--KEY--");
-            },
-        );
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_HTTP__TLS_CERT", "--CERT--");
+            jail.set_env("NESTRS_HTTP__TLS_KEY", "--KEY--");
+            let cfg = TlsConfig::from_env().expect("no error").expect("Some");
+            assert_eq!(cfg.cert, b"--CERT--");
+            assert_eq!(cfg.key, b"--KEY--");
+            Ok(())
+        });
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn from_env_fails_when_only_cert_is_set() {
-        with_env(
-            &[
-                ("NESTRS_HTTP__TLS_CERT", Some("--CERT--")),
-                ("NESTRS_HTTP__TLS_KEY", None),
-                ("NESTRS_HTTP__TLS_CERT_FILE", None),
-                ("NESTRS_HTTP__TLS_KEY_FILE", None),
-            ],
-            || {
-                let err = TlsConfig::from_env().expect_err("half-config is rejected");
-                let msg = err.to_string();
-                assert!(msg.contains("KEY"), "must name the missing var: {msg}");
-            },
-        );
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_HTTP__TLS_CERT", "--CERT--");
+            let err = TlsConfig::from_env().expect_err("half-config is rejected");
+            let msg = err.to_string();
+            assert!(msg.contains("KEY"), "must name the missing var: {msg}");
+            Ok(())
+        });
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn from_env_fails_when_only_key_is_set() {
-        with_env(
-            &[
-                ("NESTRS_HTTP__TLS_CERT", None),
-                ("NESTRS_HTTP__TLS_KEY", Some("--KEY--")),
-                ("NESTRS_HTTP__TLS_CERT_FILE", None),
-                ("NESTRS_HTTP__TLS_KEY_FILE", None),
-            ],
-            || {
-                let err = TlsConfig::from_env().expect_err("half-config is rejected");
-                let msg = err.to_string();
-                assert!(msg.contains("CERT"), "must name the missing var: {msg}");
-            },
-        );
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_HTTP__TLS_KEY", "--KEY--");
+            let err = TlsConfig::from_env().expect_err("half-config is rejected");
+            let msg = err.to_string();
+            assert!(msg.contains("CERT"), "must name the missing var: {msg}");
+            Ok(())
+        });
     }
 
     #[test]
+    #[allow(clippy::result_large_err)]
     fn from_env_reads_file_variants_when_inline_unset() {
-        // Write two temp files we'll point the *_FILE vars at.
-        let dir = std::env::temp_dir().join(format!("nestrs-tls-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let cert_path = dir.join("cert.pem");
-        let key_path = dir.join("key.pem");
-        std::fs::write(&cert_path, b"file-cert-bytes").expect("write cert");
-        std::fs::write(&key_path, b"file-key-bytes").expect("write key");
-
-        with_env(
-            &[
-                ("NESTRS_HTTP__TLS_CERT", None),
-                ("NESTRS_HTTP__TLS_KEY", None),
-                (
-                    "NESTRS_HTTP__TLS_CERT_FILE",
-                    Some(cert_path.to_str().unwrap()),
-                ),
-                (
-                    "NESTRS_HTTP__TLS_KEY_FILE",
-                    Some(key_path.to_str().unwrap()),
-                ),
-            ],
-            || {
-                let cfg = TlsConfig::from_env().expect("no error").expect("Some");
-                assert_eq!(cfg.cert, b"file-cert-bytes");
-                assert_eq!(cfg.key, b"file-key-bytes");
-            },
-        );
-        let _ = std::fs::remove_dir_all(&dir);
+        figment::Jail::expect_with(|jail| {
+            // `Jail` runs in a fresh temp CWD; write the PEM files there and point
+            // the `_FILE` vars at them by relative path.
+            jail.create_file("cert.pem", "file-cert-bytes")?;
+            jail.create_file("key.pem", "file-key-bytes")?;
+            jail.set_env("NESTRS_HTTP__TLS_CERT_FILE", "cert.pem");
+            jail.set_env("NESTRS_HTTP__TLS_KEY_FILE", "key.pem");
+            let cfg = TlsConfig::from_env().expect("no error").expect("Some");
+            assert_eq!(cfg.cert, b"file-cert-bytes");
+            assert_eq!(cfg.key, b"file-key-bytes");
+            Ok(())
+        });
     }
 }

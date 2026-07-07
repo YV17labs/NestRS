@@ -145,7 +145,19 @@ impl<E> ContextEndpoint<E> {
             if let Err(err) = (bridge.0)(&self.container, &mut value) {
                 return Err(variable_pipe_error_response(&err));
             }
-            r.variables = serde_json::from_value(value).unwrap_or_default();
+            // A pipe may rewrite the variables into a shape that is no longer a
+            // GraphQL variables object (a bare array, scalar, or `null`).
+            // Deserialization back into `Variables` then fails — surface it as a
+            // variable-pipe error naming the failure rather than silently running
+            // the operation with no variables (`unwrap_or_default`).
+            r.variables = match serde_json::from_value(value) {
+                Ok(variables) => variables,
+                Err(err) => {
+                    return Err(variable_pipe_error_response(&nest_rs_pipes::PipeError::new(
+                        format!("variable pipe produced an invalid variables object: {err}"),
+                    )));
+                }
+            };
             Ok(r)
         };
         match batch {

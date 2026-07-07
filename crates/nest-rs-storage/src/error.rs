@@ -8,6 +8,7 @@ use thiserror::Error;
 
 /// A storage operation failure, tagged by the operation that produced it.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StorageError {
     /// The S3 client could not be built from the configured values.
     #[error("failed to initialize storage client")]

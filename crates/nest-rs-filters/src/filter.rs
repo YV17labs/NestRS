@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+#[cfg(feature = "graphql")]
 use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
+#[cfg(feature = "ws")]
 use nest_rs_ws::WsClient;
 use poem::http::{HeaderMap, Method, Uri};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
@@ -46,7 +48,8 @@ pub trait Filter: Layer {
     /// GraphQL per-resolver entry — a reserved seam, **not wired** today
     /// (no macro or dispatcher calls it; a global filter still covers the
     /// `/graphql` POST as a whole via its HTTP entry). Default returns
-    /// `error` unchanged (no-op).
+    /// `error` unchanged (no-op). Available with the `graphql` feature.
+    #[cfg(feature = "graphql")]
     async fn filter_graphql<'a>(
         &self,
         _ctx: &GraphqlContext<'a>,
@@ -57,7 +60,8 @@ pub trait Filter: Layer {
 
     /// WS per-message entry — a reserved seam, **not wired** today (no
     /// macro or dispatcher calls it). Default returns `error` unchanged
-    /// (no-op).
+    /// (no-op). Available with the `ws` feature.
+    #[cfg(feature = "ws")]
     async fn filter_ws(&self, _client: &WsClient, _event: &str, error: String) -> String {
         error
     }
@@ -69,6 +73,7 @@ impl<T: Filter + ?Sized> Filter for Arc<T> {
         (**self).filter(req, error).await
     }
 
+    #[cfg(feature = "graphql")]
     async fn filter_graphql<'a>(
         &self,
         ctx: &GraphqlContext<'a>,
@@ -77,6 +82,7 @@ impl<T: Filter + ?Sized> Filter for Arc<T> {
         (**self).filter_graphql(ctx, error).await
     }
 
+    #[cfg(feature = "ws")]
     async fn filter_ws(&self, client: &WsClient, event: &str, error: String) -> String {
         (**self).filter_ws(client, event, error).await
     }

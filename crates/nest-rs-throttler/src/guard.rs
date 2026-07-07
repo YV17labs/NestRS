@@ -6,7 +6,7 @@ use std::sync::Arc;
 use nest_rs_core::{HandlerMetadata, Layer, injectable};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::{Reflector, async_trait};
-use poem::Request;
+use poem::{PathPattern, Request};
 
 use crate::rate::Throttle;
 use crate::store::InMemoryThrottler;
@@ -33,12 +33,34 @@ impl Guard for ThrottlerGuard {
             .copied()
             .unwrap_or_else(|| self.throttler.default_limit());
 
-        let decision = self
-            .throttler
-            .hit(&client_key(req, self.throttler.trusted_proxies()), limit);
+        // Route-specific bucket. The window is per route (each route pins its
+        // own `#[meta(Throttle)]`), so the counter must be per route too —
+        // keying on IP alone lets every `ThrottlerGuard` route share one bucket,
+        // so hammering a lenient route drains a strict route's budget.
+        let ip = client_key(req, self.throttler.trusted_proxies());
+        // Prefer poem's matched-route *pattern* (`/users/:id`) so dynamic path
+        // segments don't fragment the bucket. Fall back to the raw path when no
+        // pattern was attached (e.g. a self-mounted endpoint) — correct for the
+        // static brute-force case (`/login`), at the cost of fragmenting dynamic
+        // paths into a bucket per concrete URL.
+        let route = req
+            .data::<PathPattern>()
+            .map(|pattern| pattern.0.as_ref())
+            .unwrap_or_else(|| req.uri().path());
+        // U+001F (unit separator) can appear in neither a route pattern nor an
+        // IP, so the composite key never collides across the join.
+        let key = format!("{route}\u{1f}{ip}");
+
+        let decision = self.throttler.hit(&key, limit);
         if decision.allowed {
             return Ok(());
         }
+        tracing::warn!(
+            target: "nest_rs::throttler",
+            key = %key,
+            retry_after = decision.retry_after.as_secs(),
+            "rate limit exceeded",
+        );
         Err(Denial::rate_limited(
             decision.retry_after.as_secs() as u32,
             "Too Many Requests",

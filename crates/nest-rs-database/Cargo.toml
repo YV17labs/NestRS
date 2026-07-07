@@ -12,3 +12,6 @@ description = "ORM-agnostic data-layer seam for nestrs: the ambient request/job 
 [dependencies]
 # The ambient executor + scope are carried in `tokio::task_local!`s.
 tokio.workspace = true
+
+[lints]
+workspace = true

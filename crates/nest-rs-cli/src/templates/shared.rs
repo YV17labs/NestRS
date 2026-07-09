@@ -39,6 +39,46 @@ seed:
 reset: fresh seed
 "#;
 
+/// `compose.yml` — Postgres + Redis for local development, shipped so a
+/// DB-backed feature works the moment you add one: `docker compose up -d`,
+/// then `nestrs run db up`. The committed `.env` points at these services on
+/// `localhost`. Delete it if your project never touches a database or a queue.
+pub const COMPOSE: &str = r#"# Local development services. Start them with:
+#
+#   docker compose up -d
+#
+# The committed `.env` points NESTRS_DATABASE__URL / NESTRS_QUEUE__URL at these
+# on localhost. `nestrs run db up` then applies your migrations.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: {{kebab}}
+      POSTGRES_PASSWORD: {{kebab}}
+      POSTGRES_DB: {{kebab}}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{kebab}}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+volumes:
+  pgdata:
+  redisdata:
+"#;
+
 pub const GITIGNORE: &str = r#"/target
 **/*.rs.bk
 
@@ -81,6 +121,12 @@ pub const ENV_WORKSPACE: &str = r#"# {{env_label}} — committed base config (`.
 #
 # HTTP listen ports live in each app's root `module.rs`
 # (`HttpConfig { port: …, ..Default::default() }`), not here.
+#
+# Postgres + Redis as `compose.yml` exposes them on localhost. Start them with
+# `docker compose up -d`, then `nestrs run db up`. An app only connects if it
+# imports DatabaseModule / a queue module, so these are inert for a plain HTTP app.
+NESTRS_DATABASE__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
+NESTRS_QUEUE__URL=redis://localhost:6379
 #
 # Precedence (highest first):
 #   real env  >  .env.<NESTRS_ENV>.local  >  .env.local  >  .env.<NESTRS_ENV>  >  .env

@@ -149,6 +149,7 @@ fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names) {
     s.create_if_missing(base.join("Justfile"), r.render(workspace::JUSTFILE));
     s.create_if_missing(base.join("test.just"), r.render(workspace::TEST_JUSTFILE));
     s.create_if_missing(base.join("db.just"), r.render(shared::DB_JUSTFILE));
+    s.create_if_missing(base.join("compose.yml"), r.render(shared::COMPOSE));
     s.create_if_missing(base.join(".gitignore"), r.render(shared::GITIGNORE));
     s.create_if_missing(base.join(".dockerignore"), r.render(shared::DOCKERIGNORE));
 }

@@ -11,6 +11,7 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "lint:docs": "node scripts/lint-docs.mjs",
     "astro": "astro"
   },
   "dependencies": {

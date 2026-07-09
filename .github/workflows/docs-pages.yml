@@ -38,6 +38,12 @@ jobs:
         run: npm ci
         working-directory: docs
 
+      - name: Lint docs prose & structure
+        # Baseline-gated (docs/scripts/lint-baseline.json): fails only on NEW dialect drift.
+        # As pages reach conformance the baseline shrinks; when empty it gates the whole corpus.
+        run: npm run lint:docs
+        working-directory: docs
+
       - name: Build site
         env:
           ASTRO_SITE: https://nestrs.dev

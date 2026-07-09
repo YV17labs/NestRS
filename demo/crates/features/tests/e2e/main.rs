@@ -1,6 +1,6 @@
 
 mod orgs;
 
-mod posts_http;
+mod posts;
 
 mod relational_authz;

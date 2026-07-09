@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use nest_rs_core::injectable;
 use nest_rs_graphql::{BoxFuture, GraphqlOperationGuard};
-use nest_rs_guards::{Denial, Guard, denial_to_http_response};
+use nest_rs_guards::{Guard, denial_to_http_response};
 use poem::{Request, Response};
 
 use crate::{Ability, with_ability};
@@ -25,25 +25,18 @@ pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
 impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
         Box::pin(async move {
-            self.auth.check_http(req).await.map_err(|denial: Denial| {
-                tracing::warn!(
-                    target: "nest_rs::authz",
-                    reason = denial.message(),
-                    "graphql authentication failed"
-                );
-                denial_to_http_response(denial)
-            })?;
+            // Each guard logs its own denial at the source layer — `AuthGuard`
+            // under `nest_rs::authn`, `AbilityGuard` under `nest_rs::authz` — so
+            // the bridge only maps the denial to a response (the event is said
+            // once, at its source).
+            self.auth
+                .check_http(req)
+                .await
+                .map_err(denial_to_http_response)?;
             self.ability
                 .check_http(req)
                 .await
-                .map_err(|denial: Denial| {
-                    tracing::warn!(
-                        target: "nest_rs::authz",
-                        reason = denial.message(),
-                        "graphql ability guard failed"
-                    );
-                    denial_to_http_response(denial)
-                })?;
+                .map_err(denial_to_http_response)?;
             Ok(())
         })
     }

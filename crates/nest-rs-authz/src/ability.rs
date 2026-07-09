@@ -110,7 +110,24 @@ impl Ability {
         E: EntityTrait,
         E::Model: serde::Serialize,
     {
-        let mut json = serde_json::to_value(model).unwrap_or(serde_json::Value::Null);
+        let mut json = match serde_json::to_value(model) {
+            Ok(json) => json,
+            // Practically unreachable for a SeaORM model, but fail *safe* (an
+            // empty body, never the unmasked model) and — unlike the previous
+            // silent `unwrap_or` — leave a queryable trace, matching the
+            // wire-mask paths. A hard fail-closed (500 / GraphQL error) would
+            // need `mask`'s signature to become `Result`, rippling through
+            // `mask_many` and both transports; logged `Null` is the surgical fix.
+            Err(err) => {
+                crate::wire_mask::warn_mask_failure(
+                    std::any::type_name::<E>(),
+                    action,
+                    "model did not serialize",
+                    &err,
+                );
+                return serde_json::Value::Null;
+            }
+        };
         if let FieldSet::Only(allowed) = self.permitted_fields::<E>(action, model)
             && let serde_json::Value::Object(map) = &mut json
         {

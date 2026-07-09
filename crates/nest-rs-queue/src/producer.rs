@@ -9,6 +9,7 @@
 use async_trait::async_trait;
 use serde::Serialize;
 
+use crate::error::QueueError;
 use crate::processor::Job;
 
 /// A queue backend, identified by name for boot diagnostics. The actual
@@ -32,16 +33,19 @@ pub trait QueueBackend: Send + Sync + 'static {
 #[async_trait]
 pub trait JobProducer: Send + Sync + 'static {
     /// Push a JSON-encoded job onto `queue`. The wire format is always JSON;
-    /// a backend may re-encode internally but must round-trip the payload.
-    async fn push_json(&self, queue: &str, payload: serde_json::Value) -> anyhow::Result<()>;
+    /// a backend may re-encode internally but must round-trip the payload. A
+    /// backend failure surfaces as [`QueueError::Backend`].
+    async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError>;
 }
 
 /// Typed-push convenience over any [`JobProducer`]. Lives as an extension trait
 /// so the producer trait stays object-safe (`Arc<dyn JobProducer>`).
 #[async_trait]
 pub trait JobProducerExt: JobProducer {
-    /// Serialize `job` to JSON and push it onto `queue`.
-    async fn push<J: Job + Serialize>(&self, queue: &str, job: J) -> anyhow::Result<()> {
+    /// Serialize `job` to JSON and push it onto `queue`. Fails with
+    /// [`QueueError::Serialize`] if the job won't serialize, else with whatever
+    /// [`push_json`](JobProducer::push_json) returns.
+    async fn push<J: Job + Serialize>(&self, queue: &str, job: J) -> Result<(), QueueError> {
         let value = serde_json::to_value(&job)?;
         self.push_json(queue, value).await
     }

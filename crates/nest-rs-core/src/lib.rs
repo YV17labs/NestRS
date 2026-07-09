@@ -31,7 +31,7 @@ pub use transport::{Transport, TransportContribution};
 // framework — apps never depend on `inventory` directly.
 pub use inventory;
 
-pub use nest_rs_macros::{hooks, module};
+pub use nest_rs_core_macros::{hooks, module};
 
 /// The provider decorator. Every `#[inject]` field must be an `Arc<T>` or
 /// `Arc<dyn Trait>` — a dependency is resolved from the container as a shared
@@ -47,4 +47,4 @@ pub use nest_rs_macros::{hooks, module};
 ///     dep: u32, // not an `Arc` — compile error
 /// }
 /// ```
-pub use nest_rs_macros::injectable;
+pub use nest_rs_core_macros::injectable;

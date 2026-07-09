@@ -24,7 +24,7 @@ cargo install --locked nest-rs-cli
 nestrs version
 ```
 
-Requires **Rust 1.95+** (edition 2024). That single install is all you need: the
+Requires **Rust 1.96+** (edition 2024). That single install is all you need: the
 first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
 toolchain it drives — `just`, `bacon`, `cargo-nextest` — once. Run **`nestrs
 doctor`** after install to check the Rust toolchain and list optional `NESTRS_*`
@@ -134,7 +134,7 @@ in `src/` (no `features` crate).
 </Tabs>
 
 Optional **`Dockerfile`** ships in **standalone** mode only.
-**`rust-toolchain.toml`** pins Rust 1.95 in both modes.
+**`rust-toolchain.toml`** pins Rust 1.96 in both modes.
 
 Templates — `--template` applies to **new monorepos** and **standalone** crates only.
 Every **workspace app** uses the same thin shell; the CLI scans existing
@@ -291,7 +291,7 @@ nestrs doctor
 
 Checks:
 
-- `rustc` ≥ 1.95 and `cargo` on `PATH`
+- `rustc` ≥ 1.96 and `cargo` on `PATH`
 - whether the current directory sits inside a nestrs workspace
 - optional env vars (`NESTRS_DATABASE__URL`, `NESTRS_QUEUE__URL`, …)
 

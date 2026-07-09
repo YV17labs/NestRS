@@ -2630,6 +2630,7 @@ dependencies = [
 name = "nest-rs-config-macros"
 version = "0.2.0"
 dependencies = [
+ "nest-rs-codegen",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -2642,12 +2643,22 @@ dependencies = [
  "anyhow",
  "async-trait",
  "inventory",
- "nest-rs-macros",
+ "nest-rs-core-macros",
  "parking_lot",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "nest-rs-core-macros"
+version = "0.2.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -2826,16 +2837,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nest-rs-macros"
-version = "0.2.0"
-dependencies = [
- "nest-rs-codegen",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "nest-rs-mcp"
 version = "0.2.0"
 dependencies = [
@@ -2844,6 +2845,7 @@ dependencies = [
  "poem",
  "rmcp",
  "schemars",
+ "tracing",
 ]
 
 [[package]]
@@ -2918,6 +2920,7 @@ dependencies = [
  "nest-rs-queue-macros",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio-util",
  "tracing",
 ]
@@ -2945,6 +2948,7 @@ dependencies = [
  "nest-rs-queue",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",

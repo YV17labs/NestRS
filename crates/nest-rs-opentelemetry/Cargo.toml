@@ -10,8 +10,8 @@ description = "OpenTelemetry for nestrs: logs, traces, metrics, W3C propagation,
 
 
 [features]
-# OTLP exporter is default so a dev who sets OTEL_EXPORTER_OTLP_ENDPOINT gets
-# traces out of the box. The HTTP interceptor is opt-in (`http`), not default:
+# OTLP exporter is default so a dev who sets NESTRS_OPENTELEMETRY__OTLP_ENDPOINT
+# gets traces out of the box. The HTTP interceptor is opt-in (`http`), not default:
 # an HTTP app adds `features = ["http"]`, while a headless app (a queue worker)
 # inherits the bare default and never compiles poem / nest-rs-http. (Opt-in, not
 # default-off, because a workspace member cannot disable an inherited default —

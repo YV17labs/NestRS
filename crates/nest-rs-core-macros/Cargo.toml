@@ -1,5 +1,5 @@
 [package]
-name = "nest-rs-macros"
+name = "nest-rs-core-macros"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

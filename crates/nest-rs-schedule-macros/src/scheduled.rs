@@ -11,7 +11,7 @@
 
 use std::str::FromStr;
 
-use nest_rs_codegen::impl_self_ident;
+use nest_rs_codegen::{impl_self_ident, require_str_lit};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -162,7 +162,7 @@ fn parse_cron(attr: &Attribute) -> syn::Result<TokenStream2> {
                         .map(ToString::to_string)
                         .unwrap_or_default();
                     if name == "tz" {
-                        tz = Some(as_str_lit(&meta.value, "tz")?);
+                        tz = Some(require_str_lit(&meta.value, "cron", "tz", "...")?);
                     } else {
                         return Err(syn::Error::new_spanned(
                             &meta.path,
@@ -201,20 +201,6 @@ fn validate_cron_literal(s: &LitStr) -> syn::Result<()> {
     croner::Cron::from_str(&s.value())
         .map(|_| ())
         .map_err(|e| syn::Error::new(s.span(), format!("invalid cron expression: {e}")))
-}
-
-fn as_str_lit(value: &Expr, key: &str) -> syn::Result<LitStr> {
-    if let Expr::Lit(ExprLit {
-        lit: Lit::Str(s), ..
-    }) = value
-    {
-        Ok(s.clone())
-    } else {
-        Err(syn::Error::new_spanned(
-            value,
-            format!("#[cron] `{key}` must be a string literal, e.g. `{key} = \"...\"`"),
-        ))
-    }
 }
 
 fn period_millis(lit: &LitStr) -> syn::Result<u64> {

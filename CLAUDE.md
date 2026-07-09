@@ -138,7 +138,7 @@ feature can't generalize*.
 | Path | Contents | Module struct |
 |---|---|---|
 | `users/` (root) | `entity.rs`, `service.rs`, `dto.rs` / `dtos/`, `error.rs`, `module.rs` | `UsersModule` (port) |
-| `users/http/` | `controller.rs`, `error.rs` | `UsersHttpModule` |
+| `users/http/` | `controller.rs` | `UsersHttpModule` |
 | `users/graphql/` | `resolver.rs` (field + root merged into `UsersResolver`) | `UsersGraphqlModule` |
 | `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `WsModule` too) |
 | `users/queue/` | `processor.rs` (payload `Command`/`Event` lives at the port) | `UsersQueueModule` |
@@ -359,7 +359,7 @@ handler, so one trait serves bearer and OAuth alike. Every
 -> Option<String>`): on success `AuthGuard` records `actor_id` onto the
 request span (pre-declared by the OTel interceptor), so every downstream
 event — denials included — is attributable without per-site threading. Standard
-resource-server: `JwtStrategy<C>` ships it; `features::authn::core`
+resource-server: `JwtStrategy<C>` ships it; `features::authn`'s `strategy.rs`
 writes `type AuthGuard = AuthGuard<JwtStrategy<Claims>>` once.
 **`JwtService`** is global infra (factory phase); symmetric secret or
 EdDSA key pair — a resource server holds **only the public key**
@@ -419,7 +419,9 @@ list it explicitly if other handlers need it.
 Two request-scoped `task_local!`s (singletons have no other way to
 read per-request state):
 
-- **executor** (`nest-rs-seaorm` `Executor`: pool or transaction);
+- **executor** (`task_local!` seam + `Executor` trait live in
+  `nest-rs-database`; `nest-rs-seaorm` supplies the concrete `Executor`:
+  pool or transaction);
 - **ability** (`nest-rs-authz` ambient `Arc<Ability>`).
 
 **Hard invariant: every data access goes through a service; a service
@@ -813,6 +815,20 @@ Wiring bugs don't surface in unit tests. Every app ships one
 live Postgres/Redis. For HTTP/GraphQL changes that's still not enough:
 run the binary, `curl` the affected endpoints, then **kill the
 server before returning control**.
+
+**The devcontainer provides the live backends — e2e infra is ALWAYS
+reachable here.** The recommended setup (`.devcontainer/`) runs Postgres
+(`postgres:5432`), Redis (`redis:6379`), and S3/rustfs (`rustfs:9000`);
+the `dev` service `depends_on` all three with `condition:
+service_healthy`, so they are up before you get a shell, and `demo/.env`
+already wires those compose hostnames. `nestrs run test e2e` (from
+`demo/`) runs against real infra; a root-workspace `cargo nextest`
+reaches the `nest-rs-seaorm` / `nest-rs-storage` e2e suites the same way.
+**An agent or audit must NEVER claim Postgres/Redis/S3 are unreachable
+and skip e2e on that basis** — that is a recurring, *false* assumption
+(owner-confirmed 2026-07-09). If a connection actually fails, that is a
+regression to report, not an environment limit: run the e2e suite and
+treat any failure as a real finding.
 
 ### THE test-layout norm — FINAL, do not reopen
 

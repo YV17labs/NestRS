@@ -4,9 +4,9 @@ use nest_rs_authz::Create;
 use nest_rs_authz::http::Authorize;
 use nest_rs_http::{Ctx, Valid, controller, crud};
 use poem::Result;
-use poem::http::StatusCode;
 use poem::web::Json;
 
+use super::guard::{PostAuthor, PostAuthorGuard};
 use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
@@ -28,6 +28,7 @@ pub struct PostsController {
 )]
 impl PostsController {
     #[post("/")]
+    #[use_guards(PostAuthorGuard)]
     #[api(
         summary = "Create a post in the caller's org",
         description = "Requires a bearer JWT with a subject. The org and author are taken from \
@@ -38,14 +39,12 @@ impl PostsController {
         &self,
         _authz: Authorize<Create, PostEntity>,
         auth: Ctx<Claims>,
+        author: Ctx<PostAuthor>,
         body: Valid<Json<CreatePost>>,
     ) -> Result<Json<Post>> {
-        let author_id = auth.sub.ok_or_else(|| {
-            poem::Error::from_string(
-                "a bearer token with a subject is required to create a post",
-                StatusCode::FORBIDDEN,
-            )
-        })?;
+        // `PostAuthorGuard` already verified the token carries a subject and
+        // attached it as `PostAuthor`; the org comes from the same token.
+        let PostAuthor(author_id) = *author;
         Ok(Json(
             self.svc
                 .create_in_org(body.into_inner(), auth.org_id, author_id)

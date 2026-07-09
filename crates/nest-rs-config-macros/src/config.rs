@@ -1,9 +1,10 @@
+use nest_rs_codegen::require_str_lit;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{Expr, ExprLit, ItemStruct, Lit, LitStr, MetaNameValue, Token, parse_macro_input};
+use syn::{ItemStruct, LitStr, MetaNameValue, Token, parse_macro_input};
 
 pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     let namespace = match parse_namespace(args.into()) {
@@ -41,7 +42,9 @@ fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
             .map(ToString::to_string)
             .unwrap_or_default();
         match key.as_str() {
-            "namespace" => namespace = Some(as_str_lit(&meta.value)?),
+            "namespace" => {
+                namespace = Some(require_str_lit(&meta.value, "config", "namespace", "database")?)
+            }
             other => {
                 return Err(syn::Error::new_spanned(
                     &meta.path,
@@ -59,20 +62,6 @@ fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
     })?;
     validate_namespace(&lit)?;
     Ok(lit)
-}
-
-fn as_str_lit(value: &Expr) -> syn::Result<LitStr> {
-    if let Expr::Lit(ExprLit {
-        lit: Lit::Str(s), ..
-    }) = value
-    {
-        Ok(s.clone())
-    } else {
-        Err(syn::Error::new_spanned(
-            value,
-            "#[config] `namespace` must be a string literal, e.g. `namespace = \"database\"`",
-        ))
-    }
 }
 
 /// Lowercase env-domain segment so it round-trips into `NESTRS_<DOMAIN>__`.

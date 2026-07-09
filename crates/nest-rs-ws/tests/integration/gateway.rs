@@ -1,6 +1,6 @@
 //! `#[messages]`-generated `Gateway::dispatch` — the return-type shape paths
 //! the macro picks (Unit / Value / `Result<(), E>` / `Result<T, E>`). The macro
-//! itself lives in `nestrs-ws-macros`; this file pins its observable behaviour.
+//! itself lives in `nest-rs-ws-macros`; this file pins its observable behaviour.
 
 use nest_rs_pipes::{Pipe, PipeError, Piped, Trim, Valid};
 use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};

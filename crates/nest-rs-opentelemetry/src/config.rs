@@ -2,7 +2,7 @@ use nest_rs_config::env_var;
 
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///
-/// Env vars under the `otel` domain
+/// Env vars under the `NESTRS_OPENTELEMETRY__` prefix
 /// (`NESTRS_OPENTELEMETRY__{LOG_LEVEL,LOG_FORMAT,LOG_SOURCE_LOCATION,SERVICE_NAME,
 /// SERVICE_VERSION,SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO}`).
 /// OTel exporter is wired only when `otlp_endpoint` is set; otherwise the

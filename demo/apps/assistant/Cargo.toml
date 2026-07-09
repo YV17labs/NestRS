@@ -26,3 +26,6 @@ reqwest.workspace = true
 [dev-dependencies]
 nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
 serde_json.workspace = true
+
+[lints]
+workspace = true

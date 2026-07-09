@@ -45,7 +45,7 @@ impl PostsService {
         active.org_id = Set(org_id);
         active.author_id = Set(author_id);
         let model = active.insert(&Repo::<Posts>::conn()?).await?;
-        tracing::info!(
+        tracing::debug!(
             target: "features::posts",
             id = %model.id,
             %org_id,

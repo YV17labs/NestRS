@@ -18,6 +18,9 @@ nest-rs-core.workspace = true
 nest-rs-queue-macros.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
+# Typed producer errors (`QueueError`) — the framework owns queue plumbing
+# errors so features never redefine them.
+thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio-util.workspace = true

@@ -16,8 +16,10 @@ use std::marker::PhantomData;
 use apalis::prelude::Storage;
 use apalis_redis::{Config, ConnectionManager, RedisStorage};
 use async_trait::async_trait;
-use nest_rs_queue::{Job, JobProducer, WIRE_FORMAT_VERSION};
+use nest_rs_queue::{Job, JobProducer, QueueError, WIRE_FORMAT_VERSION};
 use serde_json::json;
+
+use crate::error::ConnectionError;
 
 #[derive(Clone)]
 pub struct QueueConnection {
@@ -25,7 +27,7 @@ pub struct QueueConnection {
 }
 
 impl QueueConnection {
-    pub async fn connect(redis_url: &str) -> anyhow::Result<Self> {
+    pub async fn connect(redis_url: &str) -> Result<Self, ConnectionError> {
         let conn = apalis_redis::connect(redis_url).await?;
         Ok(Self { conn })
     }
@@ -71,12 +73,15 @@ pub struct Queue<J: Job> {
 }
 
 impl<J: Job> Queue<J> {
-    pub async fn push(&self, job: J) -> anyhow::Result<()> {
+    pub async fn push(&self, job: J) -> Result<(), QueueError> {
         let payload = serde_json::to_value(&job)?;
         // `push` takes `&mut self`; storage is a cheap clone of the connection
         // handle, so clone per call rather than force callers to hold it mut.
         let mut storage = self.storage.clone();
-        storage.push(envelope(payload)).await?;
+        storage
+            .push(envelope(payload))
+            .await
+            .map_err(QueueError::backend)?;
         Ok(())
     }
 }
@@ -86,9 +91,12 @@ impl<J: Job> Queue<J> {
 /// portable across backends.
 #[async_trait]
 impl JobProducer for QueueConnection {
-    async fn push_json(&self, queue: &str, payload: serde_json::Value) -> anyhow::Result<()> {
+    async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError> {
         let mut storage = self.value_storage(queue);
-        storage.push(envelope(payload)).await?;
+        storage
+            .push(envelope(payload))
+            .await
+            .map_err(QueueError::backend)?;
         Ok(())
     }
 }

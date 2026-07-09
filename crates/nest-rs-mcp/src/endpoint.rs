@@ -8,8 +8,8 @@ use rmcp::ServerHandler;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
-use crate::deny_guard::DenyAllMcpGuard;
 use crate::guard::McpOperationGuard;
+use crate::guards::DenyAllMcpGuard;
 
 /// `factory` runs on every new MCP session, so per-session state stays fresh.
 pub fn endpoint<F, H>(factory: F) -> impl IntoEndpoint
@@ -38,7 +38,16 @@ where
     // `McpOperationGuard` denies every request rather than serving the tool
     // surface unauthenticated. Both `endpoint` and the `#[mcp]` macro funnel
     // through here, so a missing guard can never silently open `/mcp`.
-    let guard = guard.unwrap_or_else(|| Arc::new(DenyAllMcpGuard));
+    let guard = guard.unwrap_or_else(|| {
+        // Say so once at boot — mirrors GraphQL's unguarded-schema warning so a
+        // deny-all endpoint born of a missing guard import is never silent.
+        tracing::warn!(
+            target: "nest_rs::mcp",
+            mode = "deny_all",
+            "no operation guard registered — mcp endpoint is deny-all",
+        );
+        Arc::new(DenyAllMcpGuard)
+    });
     Route::new().at("/", GuardedEndpoint { guard, inner })
 }
 

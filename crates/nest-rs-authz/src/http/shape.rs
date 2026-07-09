@@ -28,7 +28,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::extractor::Authorize;
-use crate::wire_mask::{MaskedWire, mask_wire_json};
+use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, with_ability};
 
 impl<A, S> RouteResponseShaper for Authorize<A, S>
@@ -83,14 +83,32 @@ where
 
     let bytes = match resp.take_body().into_bytes().await {
         Ok(bytes) => bytes,
-        Err(_) => return resp,
+        Err(err) => {
+            // The body is already consumed; there is nothing left to ship, so
+            // fail closed rather than return an empty 200.
+            warn_mask_failure(
+                std::any::type_name::<S>(),
+                action,
+                "response body could not be read",
+                &err,
+            );
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("response masking failed: could not read response body");
+        }
     };
 
     // Round-trip handler DTOs through `S::Model` for policy, then drop any
     // fields the wire shape never carried (e.g. `password_hash`).
     let wire: Value = match serde_json::from_slice(bytes.as_ref()) {
         Ok(wire) => wire,
-        Err(_) => {
+        Err(err) => {
+            warn_mask_failure(
+                std::any::type_name::<S>(),
+                action,
+                "response body was not valid JSON",
+                &err,
+            );
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("response masking failed: body was not valid JSON");
@@ -111,9 +129,25 @@ where
                 resp.set_body(out);
                 resp
             }
-            Err(_) => masking_failed(),
+            Err(err) => {
+                warn_mask_failure(
+                    std::any::type_name::<S>(),
+                    action,
+                    "masked body did not serialize",
+                    &err,
+                );
+                masking_failed()
+            }
         },
-        Err(_) => masking_failed(),
+        Err(err) => {
+            warn_mask_failure(
+                std::any::type_name::<S>(),
+                action,
+                "response body did not match the authorized subject type",
+                &err,
+            );
+            masking_failed()
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-# nest-rs-macros
+# nest-rs-core-macros
 
 Internal — surface-agnostic nestrs decorators (#[injectable], #[module], #[hooks]); re-exported by nest-rs-core, not a direct dependency.
 

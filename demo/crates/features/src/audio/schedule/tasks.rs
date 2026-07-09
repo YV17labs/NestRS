@@ -18,7 +18,8 @@ impl AudioTasks {
     #[every("5s")]
     async fn enqueue_transcode(&self) -> Result<()> {
         let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await
+        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await?;
+        Ok(())
     }
 
     #[after("3s")]

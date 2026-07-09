@@ -74,7 +74,7 @@ nestrs run fmt && nestrs run lint && nestrs run test unit
 ```
 
 Routing and wiring bugs don't surface in **unit** tests — the **e2e** tests
-catch most of them in `nestrs run test unit`. For **HTTP, GraphQL, or MCP changes** that is
+catch most of them in `nestrs run test e2e`. For **HTTP, GraphQL, or MCP changes** that is
 still not sufficient: start the app (`nestrs run dev <app>`), exercise the affected
 endpoints (`curl`, an MCP client, the GraphQL playground), and confirm the
 behaviour live (real socket and external services the in-process harness can't

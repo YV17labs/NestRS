@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::error::{CliError, CliResult};
 
-const MIN_RUST_VERSION: (u32, u32) = (1, 95);
+const MIN_RUST_VERSION: (u32, u32) = (1, 96);
 
 pub struct DoctorOptions {
     pub path: Option<PathBuf>,
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn parses_rustc_version() {
-        assert!(version_at_least("rustc 1.95.0 (abc 2025-01-01)", (1, 95)));
-        assert!(!version_at_least("rustc 1.94.0 (abc 2025-01-01)", (1, 95)));
+        assert!(version_at_least("rustc 1.96.0 (abc 2025-01-01)", (1, 96)));
+        assert!(!version_at_least("rustc 1.95.0 (abc 2025-01-01)", (1, 96)));
     }
 }

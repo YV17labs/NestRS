@@ -2,7 +2,7 @@
 
 use proc_macro2::TokenStream as TokenStream2;
 use syn::parse::{ParseStream, Parser};
-use syn::{Ident, LitStr, Token};
+use syn::{Expr, ExprLit, Ident, Lit, LitStr, Token};
 
 /// Parse a decorator's sole `<key> = "..."` string argument from its attribute
 /// tokens — `#[controller(path = "…")]`, `#[cron_job(every = "…")]`, etc. `key`
@@ -20,4 +20,25 @@ pub fn parse_named_str_arg(args: TokenStream2, key: &str, attr: &str) -> syn::Re
         input.parse()
     };
     parser.parse2(args)
+}
+
+/// Interpret an already-parsed attribute-argument value as a string literal,
+/// cloning it out — the value half of a `syn::MetaNameValue` you already hold,
+/// as opposed to [`parse_named_str_arg`], which parses the whole `key = "..."`.
+/// On a non-string value it errors (spanned at the value) with a message naming
+/// the decorator and key — ``#[{attr}] `{key}` must be a string literal, e.g.
+/// `{key} = "{example}"` `` — where `example` is the placeholder value shown in
+/// the hint (`"database"`, `"..."`).
+pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> syn::Result<LitStr> {
+    if let Expr::Lit(ExprLit {
+        lit: Lit::Str(s), ..
+    }) = value
+    {
+        Ok(s.clone())
+    } else {
+        Err(syn::Error::new_spanned(
+            value,
+            format!("#[{attr}] `{key}` must be a string literal, e.g. `{key} = \"{example}\"`"),
+        ))
+    }
 }

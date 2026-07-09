@@ -9,11 +9,12 @@ use anyhow::{Context, Result};
 use apalis::layers::ErrorHandlingLayer;
 use apalis::layers::catch_panic::CatchPanicLayer;
 use apalis::layers::retry::{RetryLayer, RetryPolicy};
-use apalis::prelude::{Data, Monitor, WorkerBuilder, WorkerFactoryFn};
+use apalis::prelude::{Attempt, Data, Monitor, TaskId, WorkerBuilder, WorkerFactoryFn};
 use async_trait::async_trait;
 use nest_rs_core::{Container, ReachableProviders, Transport, inventory};
 use nest_rs_queue::ProcessMethod;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::connection::QueueConnection;
 
@@ -128,6 +129,8 @@ fn build_worker(
     // — the ceiling on in-flight jobs — not a worker count.
     let storage = conn.consumer_storage(method.queue, method.concurrency);
     let handler = method.handler;
+    let queue_name = method.queue;
+    let processor_name = method.name;
     // CatchPanicLayer sits *inside* the retry/error-handling layers so a
     // panic inside the user `#[process]` method (a `Container::get` cycle,
     // an `unwrap` in user code, a panicking `Deserialize` impl, …) is
@@ -141,9 +144,45 @@ fn build_worker(
         .layer(CatchPanicLayer::new())
         .data(container)
         .backend(storage)
-        .build_fn(move |job: serde_json::Value, container: Data<Container>| {
-            let container = (*container).clone();
-            async move { handler(job, container).await }
-        });
+        .build_fn(
+            move |job: serde_json::Value,
+                  container: Data<Container>,
+                  task_id: TaskId,
+                  attempt: Attempt| {
+                let container = (*container).clone();
+                // One span per job attempt; `attempt` distinguishes retries of
+                // the same task_id. `.instrument` (not an entered guard held
+                // across `.await`) keeps the span current for the whole poll.
+                let span = tracing::info_span!(
+                    target: "nest_rs::queue",
+                    "process job",
+                    queue = queue_name,
+                    processor = processor_name,
+                    job_id = %task_id,
+                    attempt = attempt.current(),
+                );
+                async move {
+                    tracing::debug!(target: "nest_rs::queue", "job started");
+                    let started = ::std::time::Instant::now();
+                    let result = handler(job, container).await;
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+                    match &result {
+                        Ok(()) => tracing::info!(
+                            target: "nest_rs::queue",
+                            elapsed_ms,
+                            "job ok",
+                        ),
+                        Err(e) => tracing::warn!(
+                            target: "nest_rs::queue",
+                            elapsed_ms,
+                            error = %e,
+                            "job failed",
+                        ),
+                    }
+                    result
+                }
+                .instrument(span)
+            },
+        );
     monitor.register(worker)
 }

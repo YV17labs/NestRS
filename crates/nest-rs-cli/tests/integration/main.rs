@@ -62,7 +62,7 @@ fn new_standalone_hello_template() {
     assert!(app.join("src/main.rs").is_file());
     assert!(app.join("src/lib.rs").is_file());
     assert!(app.join("src/controller.rs").is_file());
-    assert!(app.join("tests/e2e.rs").is_file());
+    assert!(app.join("tests/e2e/main.rs").is_file());
     assert!(app.join("Cargo.toml").is_file());
     assert!(app.join("Dockerfile").is_file());
     assert!(app.join(".dockerignore").is_file());
@@ -128,7 +128,7 @@ fn new_workspace_greenfield() {
     // The default app and demo feature are both named `hello`.
     assert!(root.join("apps/hello/src/module.rs").is_file());
     assert!(!root.join("apps/hello/src/controller.rs").exists());
-    assert!(root.join("apps/hello/tests/e2e.rs").is_file());
+    assert!(root.join("apps/hello/tests/e2e/main.rs").is_file());
     assert!(root.join("Justfile").is_file());
     let justfile = fs::read_to_string(root.join("Justfile")).unwrap();
     assert!(justfile.contains("dev app=\"hello\""));
@@ -255,10 +255,13 @@ fn new_workspace_app_scaffold() {
     assert!(dir.path().join(".env.development").is_file());
     assert!(dir.path().join("Justfile").is_file());
     assert!(dir.path().join(".gitignore").is_file());
+    assert!(dir.path().join("compose.yml").is_file());
 
+    // The committed `.env` points at the compose services (T26): the DB URL is
+    // active so `nestrs run db up` works out of the box; the port stays code.
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
     assert!(!env.contains("NESTRS_HTTP__PORT"));
-    assert!(!env.contains("NESTRS_DATABASE__URL"));
+    assert!(env.contains("NESTRS_DATABASE__URL=postgres://"));
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
     assert!(module.contains("HttpConfig { port: 3000"));

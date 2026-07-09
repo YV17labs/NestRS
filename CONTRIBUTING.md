@@ -88,10 +88,11 @@ regenerate the committed SDL by running the dev server (see CLAUDE.md).
 2. **Keep it focused.** One logical change per PR. Unrelated cleanups belong in
    their own PR.
 3. **Add tests.** A bug fix gets a regression test; a feature gets coverage of
-   the new behaviour. **Apps**: one `tests/e2e.rs` (real Postgres, no mocks).
-   **Crates**: integration tests in a tree that **mirrors `src/`** (one
-   `tests/<short>.rs` entry, subpaths = modules — see CLAUDE.md and `nest-rs-authn`
-   as the reference). Prefer that over ad-hoc `tests/<behaviour>.rs` names.
+   the new behaviour. A test binary is always `tests/<suite>/main.rs` with
+   exactly two suite names: **`tests/integration/`** (in-process, submodules
+   **mirror `src/`** — see CLAUDE.md and `nest-rs-authn` as the reference) and
+   **`tests/e2e/`** (live infra, gated by `binary(e2e)`; apps boot their real
+   module against Postgres, no mocks). Never a flat `tests/<x>.rs`.
    Use `#[cfg(test)]` in `src/` only when tests must see private code; otherwise
    add `Type::new(...)` so integration tests can construct providers without boot.
 4. **Update the docs.** If you change behaviour, update the crate README, the

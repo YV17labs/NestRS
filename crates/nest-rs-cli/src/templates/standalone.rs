@@ -210,7 +210,7 @@ unit:
     cargo nextest run -E 'not binary(e2e)'
     cargo test --doc          # nextest skips doctests; run them too
 
-# e2e tests — your `tests/e2e.rs` bucket (boots the real app).
+# e2e tests — your `tests/e2e/main.rs` binary (boots the real app).
 e2e:
     cargo nextest run -E 'binary(e2e)'
 

@@ -299,7 +299,7 @@ unit:
     cargo nextest run --workspace -E 'not binary(e2e)'
     cargo test --workspace --doc          # nextest skips doctests; run them too
 
-# e2e tests — your `tests/e2e.rs` bucket (live Postgres/Redis if the app needs them).
+# e2e tests — your `tests/e2e/main.rs` binary (live Postgres/Redis if the app needs them).
 e2e:
     cargo nextest run --workspace -E 'binary(e2e)'
 

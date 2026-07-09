@@ -38,7 +38,7 @@ pub fn scaffold(
     queue_sources(&mut s, &root.join("src"), &r, template);
 
     if matches!(template, NewTemplate::Hello) {
-        s.create(root.join("tests/e2e.rs"), r.render(standalone::E2E));
+        s.create(root.join("tests/e2e/main.rs"), r.render(standalone::E2E));
     }
 
     let report = s.apply(dry_run)?;

@@ -232,7 +232,8 @@ directly.
 **Orchestrator pattern for per-method aggregation:** `#[routes]` scans
 verbs, `#[resolver]` scans `#[query]`/`#[mutation]`/`#[field_resolver]`,
 `#[scheduled]` scans `#[every]`/`#[cron]`/`#[after]`, `#[processor]`
-scans `#[process(queue, ...)]`, `#[hooks]` scans phase attrs. Host
+scans `#[process(queue, ...)]`, `#[listeners]` scans `#[on_event]`,
+`#[hooks]` scans phase attrs. Host
 struct owns the single `Discoverable`; each method submits its unit to
 link-time `inventory`. Use this pattern for any concern where one
 provider owns several units sharing the same `#[inject]` deps.
@@ -374,6 +375,7 @@ share `crates/features` and the DB, never RPC each other.
 | `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>` — **alias in `features`, not in `nest-rs-authz`**), `AuthzHttpModule` |
 | `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthGuard` (`ResolverGuard` marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
 | `authz/ws/` | `WsDataContext` as `dyn SocketContext` (re-seeds executor + ability per message), `AuthzWsModule` |
+| `authz/mcp/` | `AppMcpGuard` (`McpAbilityBridge<AuthGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `AuthzMcpModule` |
 
 No app-side `authz/` folder — bridges live with the rest of authz.
 
@@ -388,6 +390,7 @@ bring every layer they need).
 | HTTP | `#[controller]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct | `[<Feature>Module, AuthzHttpModule]` |
 | GraphQL | `#[resolver]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — mandatory: no posture ⇒ compile error | `[<Feature>Module, AuthzGraphqlModule]` |
 | WS | `#[gateway]` + `#[messages]` | `#[use_guards(AuthGuard, AuthzGuard)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
+| MCP | `#[mcp]` tool host (`tool.rs`) | `AppMcpGuard` registered as `dyn McpOperationGuard` (in-band per operation); **no guard registered ⇒ deny-all** (`DenyAllMcpGuard`) — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint | `[<Feature>Module, AuthzMcpModule]` |
 
 **Why GraphQL uses a marker but WS binds real guards.** HTTP guards run
 on `&mut Request` before the handler — they *are* the auth chain.
@@ -474,7 +477,8 @@ reading `#[public]` after routing (lazy executor = the planned fix).
 success: parse the wire JSON → build `Model` via `wire_to_model`
 (filling the **unexposed** columns the wire DTO omits from `impl
 WireModelDefaults for Entity` emitted by the macro) →
-`Ability::mask`/`mask_many` → **`retain_wire_keys`** (unrestricted
+`Ability::mask`/`mask_many` → **retain only the exposed wire keys**
+(`wire_mask.rs` `retain_static_keys`/`retain_body_keys` — unrestricted
 field grants can't leak unexposed columns). Handlers return the
 `#[expose]` output (e.g. `Json<User>`), not `Model`. Irreconcilable
 body ⇒ fail **closed** (HTTP `500`, GraphQL error). Reconstruction
@@ -635,6 +639,7 @@ Snake_case, no dotted variants.
 | Gateway (WS) | `gateway.rs` |
 | Processor (queue) | `processor.rs` |
 | Scheduled tasks (schedule) | `tasks.rs` |
+| Event listener host (events) — `#[listeners]` in an `events/` adapter folder; the event payload lives at the **producer's** port (`event.rs`) | `events/listener.rs` |
 | Tool (MCP) | `tool.rs` |
 | Entity (ORM + `#[expose]`) | `entity.rs` / `entities/` |
 | REST body (suffix `Dto`; one → `dto.rs`, 2+ → `dtos/<x>_dto.rs` + `mod.rs`) | `dto.rs` / `dtos/` |
@@ -664,6 +669,10 @@ Snake_case, no dotted variants.
     the port — `event.rs` / `events/`. A scaffolded job defaults to a
     `Command` (the common case); choose `Event` only when broadcasting a
     fact.
+  - **WS message payload** (the `data` of an envelope, either direction)
+    → **`Dto`** (`SendMessageDto`, `ChatMessageDto`), with the gateway's
+    feature — `dto.rs` / `dtos/`, same file rules as REST bodies. (Owner
+    decision 2026-07-07; the `live` app's `chat/dtos/` is the exemplar.)
   - **GraphQL input, hand-written** (transport-specific) → **`Input`**,
     in the `graphql/` adapter — `graphql/input.rs` / `graphql/inputs/`.
   - **GraphQL output** → the object type itself (bare name, or `Payload`
@@ -800,25 +809,47 @@ site > 0.5 s = defect.
 ## Testing — "done" means verified live
 
 Wiring bugs don't surface in unit tests. Every app ships one
-`apps/<app>/tests/e2e.rs` booting its real `AppModule` against live
-Postgres/Redis. For HTTP/GraphQL changes that's still not enough:
+`apps/<app>/tests/e2e/main.rs` booting its real `AppModule` against
+live Postgres/Redis. For HTTP/GraphQL changes that's still not enough:
 run the binary, `curl` the affected endpoints, then **kill the
 server before returning control**.
 
-**Three categories:**
+### THE test-layout norm — FINAL, do not reopen
 
-- **Unit** — `#[cfg(test)] mod tests` inside the file under test.
-  Home for pure-logic assertions; private-item access is the point.
-- **Integration** — `tests/*.rs` at the crate root, testing the
-  **public** API. Cargo compiles each as its own binary (normal).
-  Shared helpers in `tests/common/mod.rs` (the `mod.rs` form prevents
-  standalone compilation). No DB unless the crate owns persistence.
-- **E2E** — exactly one `apps/<app>/tests/e2e.rs` per app: real
-  `AppModule` against live Postgres/Redis.
+**Owner decision 2026-07-09, locked.** This norm has changed for the
+last time. Do not propose another layout, another suite name, or a
+migration back — a future finding that seems to justify one goes to the
+owner as a question, never as an edit. The whole point is that the
+layout question is *answered*, repo-wide, forever: no per-crate
+judgment call, nothing to decide when adding a test.
 
-Cross-crate framework wiring lives as integration tests in
-`nest-rs-testing` (access-graph rejection, hook ordering, transport
-contribution).
+1. **A test target is always a directory: `tests/<suite>/main.rs`.**
+   Even for one file's worth of tests. A flat `tests/<x>.rs` is
+   forbidden — Cargo silently compiles it as its own binary, which
+   escapes the nextest gates and relinks the crate once per file.
+2. **`<suite>` has exactly two legal values.**
+   - **`integration`** — the crate's **public** API in process. No DB,
+     no network, no live anything.
+   - **`e2e`** — needs live infra (Postgres/Redis/S3). Gated by the
+     nextest filter `binary(e2e)`, **never** `#[ignore]`. Apps boot
+     their real `AppModule`; a framework crate whose tests need a live
+     backend (`nest-rs-seaorm`, `nest-rs-storage`) uses the same suite
+     name — the gate is what keeps `unit` infra-free.
+3. **Inside the suite, the module tree mirrors `src/`.**
+   `tests/integration/jwt/service.rs` tests `src/jwt/service.rs`; no
+   `mod.rs` ceremony for single-file modules. `main.rs` stays thin —
+   `//!` doc + `mod` lines only. A tiny suite keeps its tests directly
+   in `main.rs` and grows submodules later; the path never changes.
+   One deliberate exception: `nest-rs-testing` (cross-crate wiring —
+   access-graph rejection, hook ordering, transport contribution)
+   organizes by concern, since the crate under test is the framework.
+4. **Unit tests are untouched by this norm** — `#[cfg(test)] mod tests`
+   inside the file under test; private-item access is the point.
+5. **The runner is nextest, through `nestrs run test`.** Merged suites
+   rely on nextest's process-per-test isolation; a bare `cargo test`
+   (threads sharing one process) is unsupported except `--doc`.
+6. **The CLI scaffold generates this norm** (`tests/e2e/main.rs`). A
+   scaffold change that emits any other layout is a defect.
 
 **The `test` recipe group** — defined in `test.just` (`mod test`), run
 through `nestrs run` (the single front door, which forwards to `just`).
@@ -860,6 +891,9 @@ no standalone generator, no CI drift-check.
 - No feature flags for capabilities that don't yet exist.
 - No backwards-compatibility shims (no public API to preserve yet).
 - No mocking the database in e2e tests.
+- No flat `tests/<x>.rs` files and no third test-suite name — a test
+  binary is always `tests/integration/main.rs` or `tests/e2e/main.rs`
+  (*THE test-layout norm*, locked 2026-07-09; do not reopen).
 - No umbrella module importing every edge of a feature.
 - No transport-level discovery without module-gating.
 - No two decorators that do the same thing — deprecate first.

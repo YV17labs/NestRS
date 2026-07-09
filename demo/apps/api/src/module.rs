@@ -14,6 +14,7 @@ use nest_rs_throttler::ThrottlerModule;
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 use features::authn::AuthnModule;
 use features::authz::{AuthzGraphqlModule, AuthzHttpModule};
+use features::notifications::NotificationsEventsModule;
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
 use features::posts::PostsHttpModule;
 use features::users::{UsersGraphqlModule, UsersHttpModule};
@@ -40,6 +41,7 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         UsersHttpModule,
         UsersGraphqlModule,
         PostsHttpModule,
+        NotificationsEventsModule,
         AudioHttpModule,
         AudioScheduleModule,
     ],

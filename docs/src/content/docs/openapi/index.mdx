@@ -96,7 +96,7 @@ async fn create(
     &self,
     _authz: Authorize<Create, UserEntity>,
     auth: Ctx<Claims>,
-    body: Valid<Json<CreateUserDto>>,
+    body: Valid<Json<CreateUser>>,
 ) -> Result<Json<User>> {
     Ok(Json(self.svc.create_in_org(body.into_inner(), auth.org_id).await?))
 }

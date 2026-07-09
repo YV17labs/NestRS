@@ -1,6 +1,6 @@
 ---
 title: Field resolvers
-description: Custom computed and composed fields on a wire type with #[field_resolver] — and the one ComplexObject rule to know.
+description: "Custom computed and composed fields on a wire type with #[field_resolver] — and the one ComplexObject rule to know."
 sidebar:
   order: 4
 ---
@@ -21,7 +21,7 @@ return is the field's value.
 
 ```rust title="src/users/resolver.rs"
 use async_graphql::SimpleObject;
-use nest_rs_graphql::{field_resolver, query, resolver};
+use nest_rs_graphql::resolver;
 
 #[derive(SimpleObject, Clone)]
 pub struct User {
@@ -66,7 +66,7 @@ Beyond `parent`, a `#[field_resolver]` accepts the same shapes a
 ```rust
 use std::sync::Arc;
 use async_graphql::{Context, Result, SimpleObject};
-use nest_rs_graphql::{field_resolver, query, resolver};
+use nest_rs_graphql::resolver;
 
 #[derive(SimpleObject, Clone)]
 pub struct User {
@@ -96,7 +96,7 @@ impl UsersResolver {
 ```
 
 If `avatar_for` does one DB call per parent, you have an N+1 — move
-the lookup behind a `#[dataloader]`. See [Dataloaders](/graphql/dataloader/).
+the lookup behind a `#[dataloader]`. See [Dataloaders](/database/dataloaders/).
 
 ## The single-`ComplexObject` rule
 
@@ -111,8 +111,8 @@ underlying impl — they collide at trait coherence.
 Concretely: an entity exposed with `#[expose(name = "User", service =
 …)]` that has a SeaORM relation field gets an auto-emitted
 `#[ComplexObject]` for `User` carrying the relation's field resolver.
-Writing a `#[field_resolver(parent = User)]` on the resolver impl will
-not compile alongside it.
+Writing another `#[field_resolver]` with a `parent: &User` argument on
+the resolver impl will not compile alongside it.
 
 You have three honest ways out:
 
@@ -156,12 +156,12 @@ type User {
 }
 ```
 
-## Where to go next
+## Going further
 
 - [Relations](/graphql/relations/) — auto-resolved fields for
   belongs-to / has-many; this is where the `ComplexObject` rule
   matters most.
-- [Dataloaders](/graphql/dataloader/) — batch the per-parent DB
+- [Dataloaders](/database/dataloaders/) — batch the per-parent DB
   call a `#[field_resolver]` would otherwise do N times.
 - [Errors](/graphql/errors/) — how a `Result<T, ServiceError>` lands
   on the wire.

@@ -29,7 +29,7 @@ cargo add nest-rs-mcp
 
 The fastest way to see the shape: one tool, one string in, one string out.
 
-```rust title="apps/assistant/src/hello/tool.rs"
+```rust title="src/hello/tool.rs"
 use nest_rs_mcp::{
     mcp, tool, tool_handler, tool_router,
     CallToolResult, Content, McpError, Parameters, ServerHandler,
@@ -63,10 +63,28 @@ impl HelloTool {
 impl ServerHandler for HelloTool {}
 ```
 
-That's a complete MCP server. List it in a module's `providers` and
+That's a complete MCP server — but a bare `#[mcp]` endpoint is **deny-all by
+default**: mounted without a `dyn McpOperationGuard`, it answers every request
+`401`, so a schema-added tool can never leak unauthenticated. A *deliberately*
+public tool has to say so, by binding `AllowAllMcpGuard`:
+
+```rust title="src/hello/module.rs"
+use nest_rs_core::module;
+use nest_rs_mcp::{AllowAllMcpGuard, McpOperationGuard};
+
+use crate::hello::tool::HelloTool;
+
+#[module(providers = [
+    HelloTool,
+    AllowAllMcpGuard as dyn McpOperationGuard,
+])]
+pub struct HelloModule;
+```
+
 `#[mcp(path = "/mcp")]` mounts it on the existing HTTP transport — same port,
 same CORS, no second server. An MCP client pointed at
-`http://localhost:3000/mcp` sees one tool called `hello` and can invoke it.
+`http://localhost:3003/mcp` sees one tool called `hello` and can invoke it. (To
+authenticate instead of opening it, see [Authorization](#authorization) below.)
 
 The three macros split the work:
 
@@ -86,21 +104,56 @@ $ nestrs run dev assistant
 ```
 
 ```text frame="terminal"
-2026-06-03T10:34:07.882Z  INFO nest_rs::http: bound 1 MCP server on 0.0.0.0:3000
+2026-06-03T10:34:07.882Z  INFO nest_rs::http: bound 1 MCP server on 0.0.0.0:3003
   POST /mcp → HelloTool (1 tool)
 ```
 
-Point an MCP-aware client at `http://localhost:3000/mcp`:
+Point an MCP-aware client at `http://localhost:3003/mcp`. With Claude Code, add
+it over the streamable-HTTP transport:
 
-```json title="claude_desktop_config.json"
-{
-  "mcpServers": {
-    "hello": {
-      "url": "http://localhost:3000/mcp"
-    }
-  }
-}
+```bash frame="terminal"
+$ claude mcp add --transport http hello http://localhost:3003/mcp
 ```
+
+Or explore the tool surface with the MCP Inspector — no client config needed:
+
+```bash frame="terminal"
+$ npx @modelcontextprotocol/inspector
+```
+
+## Authorization
+
+The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To
+authenticate instead — bearer JWT, ability, row-level filtering — import
+`AuthzMcpModule`, which binds
+[`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
+endpoint's `dyn McpOperationGuard` (mirroring `AuthzHttpModule`,
+`AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
+re-runs your `AuthGuard` + `AuthzGuard` chain on every MCP request and seeds the
+resulting `Ability` into the per-call context — the same guards HTTP and GraphQL
+run, nothing re-implemented per transport.
+
+```rust title="src/module.rs"
+#[module(
+    imports = [
+        HttpModule::for_root(None),
+        DatabaseModule::for_root(None),
+        AuthnModule,
+        AuthzMcpModule,
+    ],
+    providers = [HelloTool],
+)]
+pub struct AssistantModule;
+```
+
+With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
+endpoint's guard, so the deny-all default is replaced, not silenced. Tools then
+read the ambient ability the same way HTTP handlers do: through a service that
+goes through `Repo`, which applies the ability's row-level filter automatically.
+A tool that lists users gets only the users the caller is allowed to see — same
+policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
+[per-transport bridges](/security/authorization/per-transport-bridges/) page for
+the four-transport story.
 
 ## Multiple tools on one server
 
@@ -112,7 +165,7 @@ through `&self` — `#[inject]` once, every tool reuses it.
 #[derive(Clone)]
 pub struct WeatherTool {
     #[inject]
-    svc: Arc<dyn WeatherProvider>,
+    svc: Arc<dyn WeatherService>,
 }
 
 #[tool_router]
@@ -141,7 +194,7 @@ impl ServerHandler for WeatherTool {}
 ```
 
 The client now sees two tools — `current_temperature` and `forecast` — both
-sharing the injected `WeatherProvider`. The `description` is what the model
+sharing the injected `WeatherService`. The `description` is what the model
 reads to decide when to call each.
 
 ## A validated tool
@@ -150,30 +203,32 @@ Tool inputs are deserialized to a typed struct, so the schema the client reads
 is already typed. For extra checks beyond shape — ranges, enums, mutual
 exclusion — pair `serde` with `validator`:
 
-```rust title="apps/assistant/src/weather/dto.rs"
+```rust title="apps/assistant/src/weather/coords.rs"
+use nest_rs_mcp::schemars;
 use serde::Deserialize;
 use validator::Validate;
 
-#[derive(Deserialize, schemars::JsonSchema, Validate)]
-pub struct CoordsParams {
+#[derive(Debug, Deserialize, schemars::JsonSchema, Validate)]
+pub struct Coords {
     #[validate(range(min = -90.0, max = 90.0))]
     pub latitude: f64,
+
     #[validate(range(min = -180.0, max = 180.0))]
     pub longitude: f64,
 }
 ```
 
-```rust title="apps/assistant/src/weather/tool.rs"
-#[tool(description = "Return the current weather at the given GPS coordinates.")]
+```rust title="apps/assistant/src/weather/tool.rs (abridged)"
+#[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
 async fn current_weather(
     &self,
-    Parameters(params): Parameters<CoordsParams>,
+    Parameters(params): Parameters<Coords>,
 ) -> Result<CallToolResult, McpError> {
     params
         .validate()
         .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
-    let report = self.weather
+    let report = self.svc
         .current(params.latitude, params.longitude)
         .await
         .map_err(internal)?;
@@ -193,7 +248,7 @@ in the module's `providers` and each mounts on the HTTP transport independently
 — different tools, different injected dependencies, different authorization
 policy if you want one.
 
-```rust title="apps/assistant/src/module.rs"
+```rust title="src/module.rs"
 #[module(
     imports = [HttpModule::for_root(None), AuthzMcpModule],
     providers = [HelloTool, WeatherTool],
@@ -230,34 +285,6 @@ schema, ambient `Ability` honoured the same way.
   picks a template the client substitutes.
 </Aside>
 
-## Authorization
-
-A `#[mcp]` server inherits the HTTP transport's auth chain — bearer JWT,
-ability, the works. Add `AuthzMcpModule` to the app's imports, and the
-[`McpAbilityBridge`](/security/authorization/per-transport-bridges/) re-runs
-your `AuthGuard` chain on every MCP request and seeds the resulting
-`Ability` into the per-call context. Tools then read the ambient ability the
-same way HTTP handlers do — through a service that goes through `Repo`,
-which respects the ability's row-level filter automatically.
-
-```rust title="apps/assistant/src/module.rs"
-#[module(
-    imports = [
-        HttpModule::for_root(None),
-        DatabaseModule::for_root(None),
-        AuthnModule,
-        AuthzMcpModule,
-    ],
-    providers = [HelloTool],
-)]
-pub struct AssistantModule;
-```
-
-A tool that lists users gets only users the caller is allowed to see — same
-policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
-[per-transport bridges](/security/authorization/per-transport-bridges/) page for
-the four-transport story.
-
 ## Error handling
 
 `McpError` (re-exported as `nest_rs_mcp::McpError`, alias for rmcp's
@@ -288,7 +315,7 @@ custom-code constructor.
 
 ## Trait-based DI
 
-Injecting `Arc<dyn WeatherProvider>` keeps the concrete provider
+Injecting `Arc<dyn WeatherService>` keeps the concrete provider
 module-private — a test app can swap in a stub by overriding the provider via
 `AppBuilder::override_dyn`. Same hexagonal pattern as the rest of the
 framework: the tool depends on the trait, the impl lives behind the module,

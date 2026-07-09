@@ -17,17 +17,17 @@ every decorated method in the running app.
 
 ## A simple query
 
-```rust title="src/products/resolver.rs"
-use nest_rs_graphql::{query, resolver};
+```rust title="src/users/resolver.rs"
+use nest_rs_graphql::resolver;
 
 #[resolver]
-pub struct ProductsResolver;
+pub struct UsersResolver;
 
 #[resolver]
-impl ProductsResolver {
+impl UsersResolver {
     #[query]
     #[public]
-    async fn product_count(&self) -> i32 {
+    async fn user_count(&self) -> i32 {
         42
     }
 }
@@ -55,8 +55,8 @@ On the wire this reads as:
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/graphql \
     -H 'Content-Type: application/json' \
-    -d '{"query":"{ productCount }"}'
-{"data":{"productCount":42}}
+    -d '{"query":"{ userCount }"}'
+{"data":{"userCount":42}}
 ```
 
 The method name is camelCased; primitive returns map to their GraphQL
@@ -69,20 +69,20 @@ Add typed parameters and they become required GraphQL arguments;
 
 ```rust
 #[resolver]
-impl ProductsResolver {
+impl UsersResolver {
     #[query]
     #[public]
-    async fn product(&self, id: String, locale: Option<String>) -> String {
+    async fn label(&self, id: String, locale: Option<String>) -> String {
         let locale = locale.as_deref().unwrap_or("en");
-        format!("product {id} in {locale}")
+        format!("user {id} in {locale}")
     }
 }
 ```
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/graphql -d \
-    '{"query":"{ product(id: \"42\", locale: \"fr\") }"}'
-{"data":{"product":"product 42 in fr"}}
+    '{"query":"{ label(id: \"42\", locale: \"fr\") }"}'
+{"data":{"label":"user 42 in fr"}}
 ```
 
 Validation happens at deserialization: a missing required arg returns
@@ -96,6 +96,16 @@ rejection surfaces in the response's `errors` — the resolver body never
 runs.
 
 ```rust
+use async_graphql::InputObject;
+use nest_rs_pipes::Valid;
+use validator::Validate;
+
+#[derive(InputObject, Validate)]
+pub struct NameInput {
+    #[validate(length(min = 1))]
+    name: String,
+}
+
 #[query]
 #[public]
 async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> {
@@ -110,34 +120,34 @@ optionally an `InputObject` (input):
 
 ```rust
 use async_graphql::SimpleObject;
-use nest_rs_graphql::{query, resolver};
+use nest_rs_graphql::resolver;
 
 #[derive(SimpleObject)]
-pub struct Product {
+pub struct User {
     id: String,
     name: String,
-    price_cents: i32,
+    email: String,
 }
 
 #[resolver]
-pub struct ProductsResolver;
+pub struct UsersResolver;
 
 #[resolver]
-impl ProductsResolver {
+impl UsersResolver {
     #[query]
     #[public]
-    async fn product(&self, id: String) -> Product {
-        Product { id, name: "Widget".into(), price_cents: 1999 }
+    async fn user(&self, id: String) -> User {
+        User { id, name: "Ada".into(), email: "ada@example.com".into() }
     }
 }
 ```
 
-Every field of `Product` is queryable independently:
+Every field of `User` is queryable independently:
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/graphql -d \
-    '{"query":"{ product(id:\"1\") { name priceCents } }"}'
-{"data":{"product":{"name":"Widget","priceCents":1999}}}
+    '{"query":"{ user(id:\"1\") { name email } }"}'
+{"data":{"user":{"name":"Ada","email":"ada@example.com"}}}
 ```
 
 When you `#[expose]` an entity, the wire DTO is generated for you and
@@ -151,33 +161,33 @@ operation root.
 
 ```rust
 use async_graphql::{InputObject, SimpleObject};
-use nest_rs_graphql::{mutation, resolver};
+use nest_rs_graphql::resolver;
 
 #[derive(InputObject)]
-pub struct CreateProductDto {
+pub struct NewUserInput {
     name: String,
-    price_cents: i32,
+    email: String,
 }
 
 #[derive(SimpleObject)]
-pub struct Product {
+pub struct User {
     id: String,
     name: String,
-    price_cents: i32,
+    email: String,
 }
 
 #[resolver]
-pub struct ProductsResolver;
+pub struct UsersResolver;
 
 #[resolver]
-impl ProductsResolver {
+impl UsersResolver {
     #[mutation]
     #[public]
-    async fn create_product(&self, input: CreateProductDto) -> Product {
-        Product {
-            id: "p-001".into(),
+    async fn create_user(&self, input: NewUserInput) -> User {
+        User {
+            id: "u-001".into(),
             name: input.name,
-            price_cents: input.price_cents,
+            email: input.email,
         }
     }
 }
@@ -185,8 +195,8 @@ impl ProductsResolver {
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/graphql -d \
-    '{"query":"mutation { createProduct(input: {name: \"Gadget\", priceCents: 999}) { id name } }"}'
-{"data":{"createProduct":{"id":"p-001","name":"Gadget"}}}
+    '{"query":"mutation { createUser(input: {name: \"Ada\", email: \"ada@example.com\"}) { id name } }"}'
+{"data":{"createUser":{"id":"u-001","name":"Ada"}}}
 ```
 
 `InputObject` makes a struct usable as an argument type; `SimpleObject`
@@ -202,7 +212,7 @@ point to typed batch loaders.
 
 ```rust
 use async_graphql::{Context, Result};
-use nest_rs_graphql::{query, resolver};
+use nest_rs_graphql::resolver;
 
 #[resolver]
 pub struct ProfileResolver;
@@ -213,14 +223,14 @@ impl ProfileResolver {
     #[public]
     async fn me(&self, ctx: &Context<'_>) -> Result<String> {
         let claims = ctx.data::<crate::Claims>()?;
-        Ok(format!("you are {}", claims.subject))
+        Ok(format!("subject: {:?}", claims.sub))
     }
 }
 ```
 
 The principal type lands in `ctx` through `forward_principal!` —
 declared once per app, see [Security](/security/). On a public query
-the call simply returns an error; bind a `GraphqlAuthGuard` to refuse
+the call returns an error; bind a `GraphqlAuthGuard` to refuse
 anonymous traffic before the method runs.
 
 ## Returning a `Result`
@@ -234,11 +244,11 @@ use async_graphql::{Error, Result};
 
 #[query]
 #[public]
-async fn product(&self, id: String) -> Result<Product> {
+async fn user(&self, id: String) -> Result<User> {
     if id.is_empty() {
         return Err(Error::new("id must not be empty"));
     }
-    Ok(Product { id, name: "Widget".into(), price_cents: 1999 })
+    Ok(User { id, name: "Ada".into(), email: "ada@example.com".into() })
 }
 ```
 
@@ -250,30 +260,39 @@ on its own page: [Errors](/graphql/errors/).
 Reach the service through the resolver struct, then call into it —
 this is the same shape every adapter uses:
 
-```rust
+```rust title="src/users/graphql/resolver.rs"
 use std::sync::Arc;
-use async_graphql::Result;
+use async_graphql::{Context, Result};
 use nest_rs_authz::{Create, Read};
-use nest_rs_graphql::{mutation, query, resolver};
+use nest_rs_graphql::resolver;
+use nest_rs_seaorm::graphql::bind;
+
+use crate::Claims;
+use crate::authn::AuthGuard;
+use crate::authz::AuthzGuard;
+use crate::users::{CreateUser, Entity as UserEntity, User, UsersService};
 
 #[resolver]
-pub struct ProductsResolver {
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct UsersResolver {
     #[inject]
-    svc: Arc<crate::products::ProductsService>,
+    svc: Arc<UsersService>,
 }
 
 #[resolver]
-impl ProductsResolver {
+impl UsersResolver {
     #[query]
-    #[authorize(Read, ProductEntity)]
-    async fn product(&self, id: String) -> Result<Option<Product>> {
-        Ok(self.svc.find_by_id(&id).await?)
+    #[authorize(Read, UserEntity)]
+    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
+        Ok(bind::<UsersService, Read>(ctx, &id).await?.as_ref().map(User::from))
     }
 
     #[mutation]
-    #[authorize(Create, ProductEntity)]
-    async fn create_product(&self, input: CreateProductDto) -> Result<Product> {
-        Ok(self.svc.create(input).await?)
+    #[authorize(Create, UserEntity)]
+    async fn create_user(&self, ctx: &Context<'_>, input: CreateUser) -> Result<User> {
+        let actor = ctx.data::<Claims>()?;
+        let user = self.svc.create_in_org(input, actor.org_id).await?;
+        Ok(User::from(&user))
     }
 }
 ```
@@ -282,10 +301,14 @@ The service stays the single audited choke point to the database. The
 resolver only translates between the wire shape and the service —
 `#[authorize(Action, Entity)]` is each operation's access posture,
 gating the call against the ambient ability and masking the returned
-value automatically. See [Database / CRUD](/database/crud/) for the
-service contract.
+value automatically. The `#[use_guards(AuthGuard, AuthzGuard)]` binding
+on the struct is what runs authn + the ability chain per operation; its
+`AuthzGuard` marker is provided by `AuthzGraphqlModule`, which the
+feature's `UsersGraphqlModule` imports (omit it and boot fails naming
+the missing guard). See [Database / CRUD](/database/crud/) for the
+service contract and [Security](/security/) for the guard wiring.
 
-## Where to go next
+## Going further
 
 - [Field resolvers](/graphql/field-resolvers/) — add computed or
   composed fields to an output type.

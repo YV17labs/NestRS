@@ -1,127 +1,128 @@
 ---
 title: Policy tests
-description: Ability::mask, condition_for, and WireModelDefaults are policy code — a regression there is a silent data leak. Assert against them directly.
+description: "Ability::mask and condition_for are policy code — a regression is a silent data leak. Assert against them directly."
 sidebar:
   order: 6
 ---
 
-[`Ability::mask`](/security/authorization/response-masking/),
-[`Ability::condition_for`](/security/authorization/row-level-filtering/),
-and [`WireModelDefaults`](/security/authorization/response-masking/)
-are the policy code of a nestrs app — they decide which fields a
-caller sees and which rows the data layer accepts (through
-[`Repo`](/database/repo-and-executor/)). A regression there is a
-silent data leak; a happy-path e2e does not catch it.
+import { Aside } from '@astrojs/starlight/components';
 
-These are perfect [unit-test](/testing/unit/) targets: pure functions
-on policy types, no DI, no DB, microsecond runs.
+[`Ability::mask`](/security/authorization/response-masking/) and
+[`Ability::condition_for`](/security/authorization/row-level-filtering/)
+are the policy code of a nestrs app — they decide which fields a caller
+sees and which rows the data layer accepts (through
+[`Repo`](/database/repo-and-executor/)). A regression there is a silent
+data leak; a happy-path e2e does not catch it.
+
+These are ideal [unit-test](/testing/unit/) targets: pure functions on
+policy types, no DI, no DB, microsecond runs. The demo tests its ability
+directly — quote them as the model.
+
+## Build an ability from claims
+
+The tests reconstruct an `Ability` the way the guard does: an
+`AbilityBuilder`, the app policy's `define`, then `build`. Small
+role-shaped helpers keep each assertion to one line.
+
+```rust title="crates/features/src/authz/ability.rs (abridged)"
+use nest_rs_authz::{Ability, AbilityBuilder, FieldSet};
+use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
+
+fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {
+    let claims = Claims { sub: Some(Uuid::nil()), org_id, roles, exp: 0 };
+    let mut b = AbilityBuilder::new();
+    AppAbility.define(&claims, &mut b);
+    b.build()
+}
+
+fn admin(org_id: Uuid) -> Ability { ability_for(vec![Role::Admin], org_id) }
+fn member(org_id: Uuid) -> Ability { ability_for(vec![Role::User], org_id) }
+```
 
 ## Masking — every grant scenario
 
-For each entity with `#[expose]`, write one test per masking scenario
-the policy supports. The minimum: an admin sees everything an
-unrestricted grant allows, a self-call sees the self-visible fields, a
-stranger sees the public subset, and unexposed columns never
-escape.
+`mask::<E>(action, &model)` returns the wire JSON with disallowed keys
+**stripped** (not nulled). Assert the keys that must survive and the ones
+that must not — including columns with no `#[expose]`, which never reach
+the wire even under a full field grant.
 
-```rust title="crates/features/src/users/policy.rs"
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use uuid::Uuid;
-
-    fn fixture() -> users::Model {
-        users::Model {
-            id: Uuid::nil(),
-            email: "bob@example.com".into(),
-            name: "Bob".into(),
-            password_hash: "argon2id$…".into(),
-        }
-    }
-
-    #[test]
-    fn admin_sees_every_exposed_field() {
-        let masked = AppAbility::admin().mask(fixture()).expect("masked");
-        assert_eq!(masked.email, "bob@example.com");
-        assert_eq!(masked.name, "Bob");
-    }
-
-    #[test]
-    fn stranger_sees_only_the_public_subset() {
-        let masked = AppAbility::stranger().mask(fixture()).expect("masked");
-        assert_eq!(masked.name, "Bob");
-        assert!(masked.email.is_empty(), "email is private to strangers");
-    }
-
-    #[test]
-    fn unrestricted_grant_still_strips_unexposed_columns() {
-        let masked = AppAbility::admin().mask(fixture()).expect("masked");
-        assert!(
-            masked.password_hash.is_empty(),
-            "password_hash is unexposed (no #[expose]) — must never leak even with full field grant",
-        );
-    }
+```rust title="crates/features/src/authz/ability.rs (abridged)"
+#[test]
+fn member_mask_strips_admin_only_fields() {
+    let org = Uuid::now_v7();
+    let json = member(org).mask::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org));
+    let obj = json.as_object().expect("masked model is a JSON object");
+    assert!(obj.contains_key("id"));
+    assert!(obj.contains_key("name"));
+    assert!(!obj.contains_key("email"), "members must not see email");
 }
 ```
 
-The third test matters most. An admin gets every granted field, but an
-unexposed column (a password hash, an API secret — never carries
-`#[expose]`) must still be stripped on its way to the wire. A bug in
-`retain_wire_keys` leaks it. The test pins the contract.
+The stripped key matters most: masking **removes** the key rather than
+emitting `null`, so a field grant can never leak an admin-only column —
+or an unexposed one — by omission.
 
-## Ability conditions — every branch
+## Ability conditions — fail-closed by default
 
-`Ability::condition_for::<Entity>()` returns the SQL filter `Repo`
-applies on every read. A bug here scopes too narrowly (the feature
-looks broken) or too widely (data leak). One test per branch of the
-ability:
+`condition_for::<E>(action)` returns the SQL filter `Repo` applies to
+every read and by-id write. Render it with SeaORM's query builder and
+assert on the SQL. A granted action scopes by tenant; an **un**granted
+action pre-filters to nothing — the fail-closed `1 = 0`, not `TRUE`.
 
-```rust
+```rust title="crates/features/src/authz/ability.rs (abridged)"
 #[test]
-fn admin_condition_is_unscoped() {
-    let cond = AppAbility::admin().condition_for::<users::Entity>();
-    assert!(cond.is_always_true(), "admin reads every row");
+fn member_read_scopes_to_own_org() {
+    let org = Uuid::now_v7();
+    let sql = user::Entity::find()
+        .filter(member(org).condition_for::<user::Entity>(Action::Read))
+        .build(DatabaseBackend::Postgres)
+        .to_string();
+    assert!(sql.contains("org_id"), "member reads scope by org_id: {sql}");
 }
 
 #[test]
-fn member_condition_scopes_to_tenant() {
-    let tenant = Uuid::new_v4();
-    let cond = AppAbility::member(tenant).condition_for::<users::Entity>();
-    let sql = cond.to_sql_string();
-    assert!(sql.contains("tenant_id ="));
-    assert!(sql.contains(&tenant.to_string()));
-}
-
-#[test]
-fn no_ability_yields_unscoped() {
-    let cond = AppAbility::none().condition_for::<users::Entity>();
+fn member_cannot_delete_users() {
+    let org = Uuid::now_v7();
+    let sql = user::Entity::find()
+        .filter(member(org).condition_for::<user::Entity>(Action::Delete))
+        .build(DatabaseBackend::Postgres)
+        .to_string();
     assert!(
-        cond.is_always_true(),
-        "no ability ⇒ TRUE — system work runs unscoped, correct",
+        sql.contains("1 = 0"),
+        "no Delete grant for members ⇒ pre-filter matches nothing: {sql}",
     );
 }
 ```
 
-The last test pins a subtle invariant: `Repo` running without an
-ambient ability (a `#[scheduled]` job, a shutdown hook) returns every
-row — system work is unscoped by design. A future refactor that swaps
-the default to `FALSE` would silently break every background job; the
-test catches it the same day.
+The second test pins the invariant that makes the layer safe: **no grant
+means zero rows, never every row.** A refactor that flipped the default
+to `TRUE` would turn a missing grant into a full-table leak; this test
+catches it the same day. Pair it with `can::<E>(action, &model)` /
+`can_class(action, TypeId)` for the per-row and per-class decisions.
+
+<Aside type="caution">
+Do not confuse "no *grant*" with "no *ambient* ability". At the ability
+layer a missing grant is `1 = 0` (fail-closed). The unscoped case is a
+`Repo` running with **no ambient ability at all** — system work like a
+`#[scheduled]` job — which reads every row by design. That is a `Repo`
+concern, covered on [Repo & the ambient executor](/database/repo-and-executor/),
+not a property of `condition_for`.
+</Aside>
 
 ## What still belongs in e2e
 
-Policy unit tests prove the code is correct in isolation. The e2e
-proves it is actually wired in — that `Repo` reads through the ambient
-ability, that the shaper masks the response on the way out, that
-forgetting to import `AuthzHttpModule` fails the boot rather than
-silently allowing unscoped reads.
+Policy unit tests prove the code is correct in isolation. The
+[e2e negative path](/testing/negative-path/) proves it is wired in — that
+`Repo` reads through the ambient ability, the shaper masks the response
+on the way out, and forgetting to import `AuthzHttpModule` fails the boot
+rather than silently allowing unscoped reads.
 
-A balanced setup:
+- **Unit** — every branch of `mask`, `condition_for`, `can`. Fast, exhaustive.
+- **E2E negative path** — the wrong caller gets `403`, the masked response
+  excludes unexposed columns, a missing authz module fails the boot loudly.
 
-- **Unit** — every branch of `mask`, `condition_for`, and
-  `WireModelDefaults`. Fast, exhaustive.
-- **E2E negative path** — the wrong caller gets `403`, the masked
-  response excludes unexposed columns, a missing authz module
-  fails the boot loudly. See [negative-path](/testing/negative-path/).
+## Going further
 
-Together they cover both the policy *and* its wiring.
+- [Row-level filtering](/security/authorization/row-level-filtering/)
+- [Response masking](/security/authorization/response-masking/)
+- [Repo & the ambient executor](/database/repo-and-executor/)

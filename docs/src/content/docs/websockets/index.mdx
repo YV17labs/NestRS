@@ -102,7 +102,7 @@ The envelope you send is `{event, data}`; the server's reply rides the
 same shape on the same event name. From here, every other concern is a
 matter of adding one decorator.
 
-## Where to go next
+## Going further
 
 - [Messages](/websockets/messages/) — the envelope shape, the
   `Result`/`Err` return contract, payload validation, error frames.
@@ -123,6 +123,6 @@ matter of adding one decorator.
   the macro and runtime: `#[gateway]`, `#[messages]`,
   `#[subscribe_message]`, `#[on_connect]`, `#[on_disconnect]`,
   `WsClient`, `WsServer`, `WsModule`.
-- [`apps/live`](https://github.com/NestRS/NestRS/tree/main/apps/live) —
+- [`apps/live`](https://github.com/NestRS/NestRS/tree/main/demo/apps/live) —
   end-to-end real-time example (`ChatGateway`, `NotifyGateway`) used
   throughout these pages.

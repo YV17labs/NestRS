@@ -2,7 +2,7 @@
 title: Error handling
 description: "Catch typed errors, then map every other error to a response — typed catches via ExceptionFilter, unconditional mapping via Filter, defaults via ResponseError."
 sidebar:
-  order: 8
+  order: 9
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -23,7 +23,7 @@ framework tries them:
    error type; on GraphQL on
    [`async-graphql`](https://crates.io/crates/async-graphql)'s.
 
-Both `Filter` and `ExceptionFilter` are [`Layer`](/fundamentals/)
+Both `Filter` and `ExceptionFilter` are [`Layer`](/fundamentals/request-lifecycle/)
 sub-traits — one impl, three transports — and dedup by
 [`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html) across
 the global / controller / method scopes.
@@ -76,7 +76,7 @@ for these — the framework owns them once, every feature reuses them.
 use nest_rs_seaorm::ServiceError;
 
 impl UsersService {
-    pub async fn create(&self, input: CreateUserDto) -> Result<User, ServiceError> {
+    pub async fn create(&self, input: CreateUser) -> Result<User, ServiceError> {
         input.validate()?;                              // → ServiceError::Validation
         let row = active_for_new_user(input).insert(&Repo::<Users>::conn()?).await?;  // → ServiceError::Db
         Ok(User::from(&row))
@@ -84,7 +84,7 @@ impl UsersService {
 }
 
 #[post("/")]
-async fn create(&self, Valid(Json(input)): Valid<Json<CreateUserDto>>)
+async fn create(&self, Valid(Json(input)): Valid<Json<CreateUser>>)
     -> Result<Json<User>, ServiceError>
 {
     Ok(Json(self.svc.create(input).await?))
@@ -210,7 +210,7 @@ beside a verb.
 ## TypeId dedup — redeclaration is free
 
 Both `Filter` and `ExceptionFilter` are
-[`Layer`](/fundamentals/)s, so the dedup story matches every other
+[`Layer`](/fundamentals/request-lifecycle/)s, so the dedup story matches every other
 layer kind: a global declaration and a per-scope redeclaration collapse
 to one execution.
 
@@ -242,35 +242,7 @@ declaration only.
 
 ## Where filters sit in the chain
 
-`Filter` and `ExceptionFilter` are not the same slot — see
-[Guards / Ordering inside a route](/fundamentals/guards/#ordering-inside-a-route)
-for the full nesting diagram.
-
-**`Filter`** (`#[use_filters]`) wraps the handler endpoint. On the
-**success path** it is transparent — it delegates straight inward. On the
-**error path** it maps `poem::Error` to a `Response`. Per-route,
-inner → outer:
-
-```
-handler → ability shaper → per-route interceptors → per-route filters → RouteShaper → meta
-```
-
-So per-route `Filter` sits *inside* the `RouteShaper` guards. A guard
-denial never reaches it — guards short-circuit with a typed `Denial`
-before `next.run`.
-
-**Global** `Filter` (`use_filters_global`) wraps outside global guards
-and therefore sees errors from the whole inner tree — handler, guards,
-interceptors.
-
-**`ExceptionFilter`** does not use that endpoint wrap. It runs inside
-`RouteShaper` *after* `next.run` returns `Err`, attempting typed
-downcasts before the error bubbles to outer `Filter` wraps.
-
-**Error path (inner → outer):** handler `Err` → ability shaper →
-per-route interceptors → per-route `Filter` → `RouteShaper` exception
-filters → global `Filter` → global interceptors (post-handler, e.g.
-transaction commit).
+A route-site exception-filter sits closest to the handler (typed catch); global filters fold at the transport edge and see the whole inner tree. A mapped `Err` is tagged `MappedError` so `DbContext` still rolls back. The full family-by-family nesting is on [the request lifecycle](/fundamentals/request-lifecycle/#nesting-order).
 
 ## Choosing between the three seams
 

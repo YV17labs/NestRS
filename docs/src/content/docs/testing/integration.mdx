@@ -1,76 +1,76 @@
 ---
 title: Integration tests
-description: The crate's public API in process — tests/*.rs at the crate root, one binary per file, shared fixtures in tests/common/mod.rs.
+description: "The crate's public API in process — one binary at tests/integration/main.rs, submodules mirroring src/, shared fixtures alongside it."
 sidebar:
   order: 3
 ---
 
 A crate integration test exercises the crate's **public** API in
 process: it constructs types by hand, calls them, and asserts on the
-result. No app boot, no database unless the crate itself owns
-persistence.
+result. No app boot, no database, no network.
 
-## Cargo's model
+## One layout, two suite names
 
-[Cargo compiles each top-level `tests/*.rs` as its own integration test
-binary](https://doc.rust-lang.org/cargo/guide/tests.html#integration-tests).
-Subdirectories are **not** compiled as binaries — they hold modules a
-top-level entry file pulls in with `mod`. The standard layout:
+A test binary is **always** the directory form `tests/<suite>/main.rs`,
+and `<suite>` is one of exactly two canonical names:
+
+- **`integration`** — in-process tests of the public API (this page);
+- **`e2e`** — tests that need live infrastructure, gated by the
+  nextest `binary(e2e)` filter (see [End-to-end tests](/testing/e2e/)).
+
+Flat `tests/<x>.rs` files don't exist in this codebase: Cargo compiles
+each one as its **own** binary, so a suite scattered across sibling
+files escapes the `binary(e2e)` gate and relinks once per file. The
+directory form answers the layout question once, for every crate:
 
 ```text frame="none"
 crates/nest-rs-authn/
 ├── src/
-│   ├── error.rs
-│   ├── jwt/
-│   │   ├── config.rs
-│   │   └── service.rs
-│   └── password/
-│       └── hash.rs
+│   ├── jwt/…
+│   └── passport/…
 └── tests/
-    ├── jwt.rs              ← one binary, tests/jwt/*.rs modules under it
-    ├── jwt/
-    │   ├── config.rs
-    │   └── service.rs
-    ├── password.rs         ← another binary
-    └── common/
-        └── mod.rs          ← shared helpers, not its own binary
+    └── integration/        ← one binary named `integration`
+        ├── main.rs         ← mod common; mod jwt; mod passport;
+        ├── common/
+        │   └── mod.rs      ← shared helpers
+        ├── jwt/
+        │   ├── mod.rs      ← mod config; mod service;
+        │   ├── config.rs   ← tests src/jwt/config.rs
+        │   └── service.rs  ← tests src/jwt/service.rs
+        └── passport/…
 ```
 
-Each `tests/*.rs` is a normal Rust crate root: declare its modules with
-`mod`, pull in shared helpers from `tests/common/mod.rs`.
+`tests/integration/main.rs` is the crate root of the `integration`
+binary; `mod jwt;` resolves to `tests/integration/jwt/mod.rs`, and a
+single-file module needs no `mod.rs` (`mod smoke;` →
+`tests/integration/smoke.rs`). Nothing under `tests/integration/` is
+auto-discovered as a second binary.
 
-```rust title="crates/nest-rs-authn/tests/jwt.rs"
+Inside the suite, **the module tree mirrors `src/`** — the test for
+`src/jwt/service.rs` lives at `tests/integration/jwt/service.rs`.
+`main.rs` stays thin, like a `mod.rs`: a `//!` header plus `mod` lines.
+
+```rust title="crates/nest-rs-authn/tests/integration/main.rs"
 mod common;
 mod jwt;
+mod passport;
 ```
 
-## One file or many?
+A tiny suite keeps its tests directly in `main.rs` and grows submodules
+as the crate does — the path never changes.
 
-Cargo allows both — pick by build cost and harness coherence:
+## Shared helpers
 
-- **One file per concern cluster.** A binary per test file means Cargo
-  links the crate once per file; bundling related tests cuts link time.
-  Group tests that share setup (e.g. all JWT tests under `tests/jwt.rs`).
-- **Separate files for independent concerns.** A test suite that does
-  not share helpers with another belongs in its own binary, so a
-  rebuild of one does not relink the other.
-- **One file is fine for a small crate.** `tests/<crate-short>.rs` with
-  every module declared inside it is a reasonable default until the
-  build cost shows up.
+Helpers live **inside the suite directory**, next to `main.rs` — a
+plain file, since nothing under `tests/integration/` is compiled as a
+binary:
 
-## Shared helpers — `tests/common/mod.rs`
-
-The [official Rust idiom](https://doc.rust-lang.org/book/ch11-03-test-organization.html#submodules-in-integration-tests)
-for shared test helpers: put them in `tests/common/mod.rs`, not
-`tests/common.rs`. The `mod.rs` form keeps Cargo from compiling them as
-their own integration test binary.
-
-```rust title="crates/nest-rs-authn/tests/common/mod.rs"
-pub const DEV_PRIVATE_KEY: &str = include_str!("../fixtures/dev.key");
-pub const DEV_PUBLIC_KEY: &str = include_str!("../fixtures/dev.pub");
+```rust title="crates/nest-rs-authn/tests/integration/common.rs"
+pub const DEV_PRIVATE_KEY: &str = include_str!("fixtures/dev.key");
+pub const DEV_PUBLIC_KEY: &str = include_str!("fixtures/dev.pub");
 ```
 
-```rust title="crates/nest-rs-authn/tests/jwt/config.rs"
+```rust title="crates/nest-rs-authn/tests/integration/jwt/config.rs"
 use nest_rs_authn::{JwtConfig, JwtKey, JwtService};
 
 #[test]
@@ -89,16 +89,24 @@ fn into_options_selects_eddsa_from_key_pair() {
 
 ## Cross-crate framework wiring
 
-`crates/nest-rs-testing/tests/*.rs` is the home for harnesses that
-exercise framework wiring across crates — boot-time access-graph
-rejection, lifecycle hook ordering, transport contribution. One file
-per behaviour cluster, same Cargo conventions.
+`crates/nest-rs-testing/tests/integration/` is the home for harnesses
+that exercise framework wiring across crates — boot-time access-graph
+rejection, lifecycle hook ordering, transport contribution. Same
+layout; one module per behaviour cluster instead of a `src/` mirror,
+since the crate under test is the framework itself.
 
-## When a crate owns persistence
+## When a crate needs live infrastructure
 
-If the crate genuinely owns database access (e.g. `nest-rs-seaorm`, the
-SeaORM integration), a real Postgres via
-[`EphemeralDatabase`](/testing/e2e/#ephemeral-postgres) is fair game in
-its integration tests. A test that mocks the database to assert query
+If the crate genuinely owns a live backend (e.g. `nest-rs-seaorm`
+against Postgres, `nest-rs-storage` against an S3 server), those tests
+move to the crate's **`tests/e2e/main.rs`** suite — same directory
+form, gated out of `nestrs run test unit` by the `binary(e2e)` filter,
+never by `#[ignore]`. A test that mocks the database to assert query
 shape belongs deleted, not rewritten — the queries are exercised
 end-to-end against a real engine.
+
+## Going further
+
+- [End-to-end tests](/testing/e2e/) — boot the real AppModule against live Postgres.
+- [Unit tests](/testing/unit/) — pure logic next to the code, no DI boot.
+- [Testing](/testing/) — the three categories and the `test` recipe group.

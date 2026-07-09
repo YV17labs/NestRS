@@ -1,5 +1,5 @@
 ---
-title: By-id binding
+title: Route model binding
 description: Bind<S, A> turns a path id into the loaded, authorized model — 404 when the row is absent, 403 when it exists but the caller cannot see it.
 sidebar:
   order: 4
@@ -167,7 +167,7 @@ loaded row) and the `Repo::scoped(Delete)` filter inside
 Two layers, same predicate, the second catches what the first
 missed.
 
-## 404 leaks existence — sometimes you want that
+## Hide existence behind a 404 — sometimes you want that
 
 The framework's default — 403 when the row exists but is off-limits —
 is the right call for first-party APIs where org isolation is a

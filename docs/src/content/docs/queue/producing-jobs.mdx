@@ -51,6 +51,7 @@ know the queue name.
 
 ```rust title="crates/features/src/audio/service.rs"
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use nest_rs_core::injectable;
@@ -75,6 +76,8 @@ impl AudioService {
     }
 
     pub async fn transcode(&self, file: &str) -> Result<()> {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        tracing::info!(target: "features::audio", file, "transcoded");
         Ok(())
     }
 }
@@ -159,9 +162,15 @@ push side. The service is the contract; transports adapt.
   `AUDIO_QUEUE`.
 - `crates/features/src/audio/service.rs` — `enqueue_transcode`.
 - `crates/features/src/audio/http/controller.rs` — the HTTP producer.
-- `crates/features/src/audio/schedule/producer.rs` — the scheduled
+- `crates/features/src/audio/schedule/tasks.rs` — the scheduled
   producer (a timer that calls the same service).
 - `crates/nest-rs-redis/src/connection.rs` — `QueueConnection::of` and
   `Queue::push`.
 - `crates/nest-rs-queue/src/producer.rs` — `JobProducer`,
   `JobProducerExt`.
+
+## Going further
+
+- [Wiring](/queue/wiring/) — producer-only vs worker apps sharing a features crate.
+- [Retries and failure](/queue/retries-and-failure/) — what happens once a worker drains the job.
+- [Queue](/queue/) — the section landing and worker overview.

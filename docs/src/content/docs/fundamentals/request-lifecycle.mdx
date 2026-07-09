@@ -1,0 +1,114 @@
+---
+title: The request lifecycle
+description: "One pool per layer family, deduplicated by TypeId, run exactly once — how scope chooses where a guard, pipe, interceptor or filter executes."
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Five layer families wrap every request: **guards** (gate access), **pipes**
+(edge conversion), **interceptors** (cross-cutting, e.g. transactions),
+**filters** and **exception-filters** (error mapping). This page is the one
+place that explains how they compose — every other page links here instead of
+re-explaining it.
+
+## One pool per family
+
+Declaring a layer at any scope — **global** (`use_*_global`), **controller**
+(on the struct), or **handler** (beside the verb) — contributes to **one pool
+per family**, deduplicated by `TypeId` through a single `compose_chain`. The
+layer executes **exactly once per request**. Broadest scope wins;
+`#[force_guards]` is the opt-in to re-run.
+
+Scope never multiplies executions — it chooses the **execution site**. The
+teachable rule:
+
+> Global = around the whole HTTP process. Scoped = around your handler. Either
+> way, once.
+
+You can watch the dedup happen. Declare `AuthGuard` both globally
+(`use_guards_global`) and on a controller (`#[use_guards(AuthGuard, …)]`), and
+boot logs the redundant declaration it dropped — the guard still runs exactly
+once:
+
+```text
+DEBUG nest_rs::layers: redundant layer declaration deduped
+  layer="AuthGuard<JwtStrategy<Claims>>" kept="global" skipped="controller"
+  hint="broadest scope wins; use `#[force_*]` to re-run"
+```
+
+## Execution sites
+
+Each family runs at the site that matches its nature. The pool is the same; the
+site differs:
+
+| Family | Global scope | Controller / handler scope |
+|---|---|---|
+| Guard | `RouteShaper` (post-routing — reads `#[public]`) | same site |
+| Pipe | `RouteShaper` | `RouteShaper` |
+| ExceptionFilter | route site (closest to the handler) | route site |
+| Interceptor | transport edge (before auth — sees 404s, denials) | around the handler, inside guards |
+| Filter | transport edge | around the handler, inside guards |
+
+Global guards are **pooled** globally but **execute** post-routing at the
+`RouteShaper`, because a guard reads `#[public]` route data that only exists
+after routing — they do **not** run "before routing".
+
+Two ways to be transport-wide, deliberately distinct: `use_*_global` adds to
+the **pool** (TypeId-deduped against narrower scopes); `#[interceptor]` is
+**infrastructure** a module import auto-mounts at a fixed band (off the pool —
+`DbContext`, tracing, timing).
+
+## Nesting order
+
+Per route, innermost → outermost: **handler → ability shaper → exception-filter
+pool → scoped filters → scoped interceptors → `RouteShaper` (guard pool → pipe
+pool) → `#[meta]`/`#[public]` route data**. At the transport edge
+(innermost → outermost band): **routing → DbContext (−10) → global filter pool
+(50) → global interceptor pool (90) → infra `#[interceptor]` (100)**.
+
+Interceptors sit outside filters; exception-filters sit closest to the handler
+— at both sites. `Layer::priority` orders entries *within* a site, never across
+sites.
+
+## `#[public]` and `#[meta]`
+
+`#[public]` and `#[meta(EXPR)]` are not layers — they are **route metadata** a
+guard reads after routing. `#[public]` marks a route as anonymous-admissible
+(the guard admits it through); `#[meta]` attaches per-handler data a guard reads
+via `nest_rs_http::Reflector`. A denial is an `Ok(4xx)` response, never an
+`Err` — filters never see it; global interceptors do.
+
+## What fails at boot
+
+Wiring mistakes fail the boot with a named error, never a silent drop.
+
+If a provider injects a layer whose module the app never imported, the
+**access graph** fails the boot naming the exact fix:
+
+```text
+module access violation: `PostsController` (in module `PostsHttpModule`)
+depends on `AuthzGuard`, but `PostsHttpModule` imports no module that
+provides it. `AuthzGuard` is provided by `AuthzHttpModule` — add
+`AuthzHttpModule` to `#[module(imports = [...])]` of `PostsHttpModule`, or
+route the dependency through a module `PostsHttpModule` already imports.
+```
+
+A global layer spec that cannot resolve (its provider's module is not imported)
+fails the boot through `HttpBootCheck`, naming the type. An imperative
+self-mount under active global guards fails too, unless
+`fail_secure_strict = false` downgrades it to a warn (it defaults to `true`).
+
+<Aside type="caution">
+These are boot-time failures, by design. A missing guard module is a compile-
+then-boot break, not a request that silently runs unguarded. Fail-secure is the
+point: forgetting to wire authz cannot ship.
+</Aside>
+
+## Going further
+
+- [Guards](/fundamentals/guards/) — authoring a guard and reading its context.
+- [Error handling](/fundamentals/exception-filters/) — typed catches at the route site.
+- [Interceptors](/fundamentals/interceptors/) — cross-cutting infra and the pool.
+- [Authorization](/security/authorization/) — the guard chain in order.

@@ -28,9 +28,9 @@ the active-model semantics.
 
 ```rust title="crates/features/src/posts/service.rs"
 use nest_rs_core::injectable;
-use nest_rs_seaorm::CrudService;
+use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
 
-use super::entity::{CreatePostDto, Entity as Posts, UpdatePostDto};
+use super::entity::{CreatePost, Entity as Posts, UpdatePost};
 
 #[injectable]
 #[derive(Default)]
@@ -38,16 +38,28 @@ pub struct PostsService;
 
 impl CrudService for PostsService {
     type Entity = Posts;
-    type Create = CreatePostDto;
-    type Update = UpdatePostDto;
 }
+
+impl Creatable for PostsService {
+    type Create = CreatePost;
+}
+
+impl Updatable for PostsService {
+    type Update = UpdatePost;
+}
+
+impl Deletable for PostsService {}
 ```
 
 `#[injectable]` marks the struct as a provider — the container builds
-it once and shares it as `Arc<PostsService>`. The `CrudService` impl
-declares the entity and the inputs the controller needs. No custom
-methods yet: the generated `create` / `find_by_id` / `list` paths on
-the trait are enough for a bare CRUD feature.
+it once and shares it as `Arc<PostsService>`. `CrudService` carries the
+**read** half — it names the entity, and every resource implements it.
+Writes are **opt-in traits**: `Creatable` (`type Create`), `Updatable`
+(`type Update`), and `Deletable` — a resource implements each only when
+it genuinely offers that operation. A read-only projection implements
+`CrudService` alone and declares no write trait. No custom methods yet:
+the read half plus these three write impls give a bare CRUD feature its
+full surface.
 
 `Repo::<Posts>::conn()` reaches the ambient executor — the pool on safe
 routes, the transaction on mutating routes. You don't pass it in; the
@@ -70,15 +82,19 @@ pub struct PostsModule;
 A controller is a struct with `#[controller(path = ...)]` and a
 `#[crud(...)]` impl block that declares the entity. The macro generates
 every CRUD verb — `list`, `page`, `create`, `get`, `update`, `delete` —
-from the `CrudService` impl. You don't write handler bodies unless you
-need domain logic the trait doesn't cover.
+from the service's trait impls: the read verbs from `CrudService`, and
+each mutating verb only if the matching write trait is implemented.
+Naming `create = ...` without a `Creatable` impl is a build break, not
+a silent no-op — a forgotten write path fails to compile. You don't
+write handler bodies unless you need domain logic the trait doesn't
+cover.
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
 
 use nest_rs_http::{controller, crud};
 
-use crate::posts::{CreatePostDto, Entity as PostEntity, Post, PostsService, UpdatePostDto};
+use crate::posts::{CreatePost, Entity as PostEntity, Post, PostsService, UpdatePost};
 
 #[controller(path = "/posts")]
 pub struct PostsController {
@@ -90,8 +106,8 @@ pub struct PostsController {
     service = svc,
     entity = PostEntity,
     output = Post,
-    create = CreatePostDto,
-    update = UpdatePostDto,
+    create = CreatePost,
+    update = UpdatePost,
 )]
 impl PostsController {}
 ```
@@ -143,7 +159,7 @@ pub use service::PostsService;
 pub use http::{PostsController, PostsHttpModule};
 ```
 
-## Wire it into the app
+## Wire it in
 
 The app root now imports the feature's HTTP adapter — that's the only
 edit `apps/blog/` needs beyond the scaffold from page 1.
@@ -186,7 +202,7 @@ if other apps already occupy it when you ran `nestrs new blog`.
 
    ```bash frame="terminal"
    $ nestrs run dev blog
-   DEBUG nest_rs_http::transport: http transport listening addr=0.0.0.0:3005
+   DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
    ```
 
 2. The controller and the service compile, but you haven't wired a
@@ -208,11 +224,11 @@ Confirm the route table from the boot log: the `nest_rs::routes` target
 prints every mount on startup.
 
 ```text frame="terminal"
-INFO nest_rs::routes: GET    /posts
-INFO nest_rs::routes: POST   /posts
-INFO nest_rs::routes: GET    /posts/:id
-INFO nest_rs::routes: PATCH  /posts/:id
-INFO nest_rs::routes: DELETE /posts/:id
+INFO nest_rs::routes: mounted route controller=PostsController method=GET path=/posts
+INFO nest_rs::routes: mounted route controller=PostsController method=POST path=/posts
+INFO nest_rs::routes: mounted route controller=PostsController method=GET path=/posts/:id
+INFO nest_rs::routes: mounted route controller=PostsController method=PATCH path=/posts/:id
+INFO nest_rs::routes: mounted route controller=PostsController method=DELETE path=/posts/:id
 ```
 
 ## What you have now
@@ -222,4 +238,7 @@ INFO nest_rs::routes: DELETE /posts/:id
 - A `PostsHttpModule` mounted in the app — the boot log shows the
   routes.
 
-[Next: validate inputs at the boundary →](/tutorial/validation/)
+## Going further
+
+- [Validate inputs](/tutorial/validation/) — the next step: reject a bad body with a structured `400`.
+- [Controllers](/http/controllers/) — the reference page for `#[controller]` and `#[crud]`.

@@ -5,8 +5,6 @@ sidebar:
   order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 Importing `HttpModule::for_root(...)` in `AppModule.imports` attaches the
 HTTP transport at boot. Pass `None` to read every option from the
 environment, or pin `HttpConfig` in code:
@@ -38,7 +36,8 @@ pub struct ApiModule;
 ```
 
 Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
-no framework `Server` header.
+no framework `Server` header, a `2 MiB` request-body cap, a `30`-second
+request timeout, fail-secure boot on, and the default security headers on.
 
 ## `HttpConfig` fields
 
@@ -59,6 +58,11 @@ Real env always wins over the `.env` cascade.
 | `cors.credentials` | `NESTRS_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
 | `cors.max_age` | `NESTRS_HTTP__CORS_MAX_AGE` (seconds) | unset | `max_age: Some(Duration::from_secs(3600))` |
 | `server_header` | `NESTRS_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
+| `global_prefix` | `NESTRS_HTTP__GLOBAL_PREFIX` | unset ⇒ no prefix | `HttpConfig::default().with_global_prefix("/api")` |
+| `max_body_bytes` | `NESTRS_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
+| `request_timeout_secs` | `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (seconds) | `30` | `HttpConfig { request_timeout_secs: Some(15), ..Default::default() }` |
+| `fail_secure_strict` | `NESTRS_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
+| `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__FRAME_OPTIONS`, `__HSTS`, `__CONTENT_TYPE_OPTIONS` | on (safe values) | `HttpConfig { security_headers: SecurityHeadersConfig { enabled: false, ..Default::default() }, ..Default::default() }` |
 
 ## Serve HTTPS
 
@@ -144,41 +148,28 @@ is passed straight through to poem).
 
 Behind a reverse proxy that hands off a sub-path (`/api/*`), every
 controller can be mounted under one prefix without touching `path = "…"`
-on each:
+on each. Like every other field it follows the dual path — set it in the
+environment:
 
-```rust title="apps/api/src/main.rs"
-use nest_rs_core::App;
-use nest_rs_http::HttpTransport;
-use api::ApiModule;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    App::builder()
-        .module::<ApiModule>()
-        .transport(HttpTransport::new().global_prefix("/api"))
-        .build()
-        .await?
-        .run()
-        .await
-}
+```bash title=".env.production" frame="terminal"
+NESTRS_HTTP__GLOBAL_PREFIX=/api
 ```
 
-`HttpTransport::global_prefix("/api")` normalizes the input
-(`"api"`, `"/api"`, `"/api/"` all yield `Some("/api")`; empty / `"/"`
-collapse to no-op), then prepends it to every route at mount time —
-`#[get("/users")]` ends up at `GET /api/users`. The boot log and the
-OpenAPI document reflect the prefix.
+or pin it in code with `with_global_prefix`:
 
-<Aside type="caution">
-**Known limitation — imperative only, no env / `HttpConfig` field.** Today
-`global_prefix` is a builder call on `HttpTransport`. There is **no**
-`HttpConfig.global_prefix` field and **no** `NESTRS_HTTP__GLOBAL_PREFIX`
-env var; you cannot toggle it through the standard config dual path the
-rest of the framework uses. Apps that need it set the prefix in `main` and
-take the build-time hit on every deployment. A follow-up moves the prefix
-to `HttpConfig` so it lives in the same env/struct contract every other
-field follows.
-</Aside>
+```rust title="apps/api/src/module.rs"
+use nest_rs_http::{HttpConfig, HttpModule};
+
+#[module(imports = [
+    HttpModule::for_root(HttpConfig::default().with_global_prefix("/api")),
+])]
+pub struct ApiModule;
+```
+
+The prefix is normalized (`"api"`, `"/api"`, `"/api/"` all yield
+`Some("/api")`; empty / `"/"` collapse to no-op), then prepended to every
+route at mount time — `#[get("/users")]` ends up at `GET /api/users`. The
+boot log and the OpenAPI document reflect the prefix.
 
 ## Framework `Server:` header
 
@@ -200,6 +191,77 @@ HttpModule::for_root(HttpConfig {
 
 The value is sourced from the `nest-rs-http` crate's `CARGO_PKG_VERSION` at
 build time — it tracks the framework, not your app version.
+
+## Request-body size limit
+
+`RawBody` (and every extractor built on it) accepts at most
+`max_body_bytes` — `2 MiB` by default, so a runaway upload can't exhaust
+memory before a handler ever sees it. Raise or lower it globally:
+
+```bash title=".env.production" frame="terminal"
+NESTRS_HTTP__MAX_BODY_BYTES=4194304   # 4 MiB
+```
+
+A single route that needs a different cap overrides it per call with
+`RawBody::extract_with_limit`; the config value is the default for
+everything else.
+
+## Request timeout
+
+`request_timeout_secs` bounds how long one request may run. A handler
+that exceeds it is aborted and the client gets `504 Gateway Timeout`, so a
+slow or stuck request can't tie up a connection indefinitely. Default
+`30`; set `None` (env unset with the field pinned to `None`) to disable:
+
+```bash title=".env.production" frame="terminal"
+NESTRS_HTTP__REQUEST_TIMEOUT_SECS=15
+```
+
+## Default security headers
+
+On by default — a freshly-scaffolded app ships safe headers without having
+to remember them:
+
+- `X-Content-Type-Options: nosniff` — defeats MIME sniffing.
+- `X-Frame-Options: DENY` — no framing (clickjacking).
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` —
+  emitted **only when TLS is active** (HSTS over plain HTTP is
+  meaningless and a footgun on localhost).
+
+Every value is tunable through the dual path. Disable the whole set with
+the master switch, or drop one header by setting its value to an empty
+string:
+
+```bash title=".env" frame="terminal"
+NESTRS_HTTP__SECURITY_HEADERS=false          # all off
+NESTRS_HTTP__FRAME_OPTIONS=SAMEORIGIN        # override one value
+NESTRS_HTTP__HSTS=                           # empty ⇒ drop just HSTS
+```
+
+```rust
+use nest_rs_http::{HttpConfig, HttpModule, SecurityHeadersConfig};
+
+HttpModule::for_root(HttpConfig {
+    security_headers: SecurityHeadersConfig {
+        frame_options: Some("SAMEORIGIN".into()),
+        ..Default::default()
+    },
+    ..Default::default()
+});
+```
+
+## Fail-secure boot
+
+`fail_secure_strict` is `true` by default: when global guards are
+registered and an endpoint the transport can't shape (an imperative
+`mount(...)`) would bypass the guard pool, the boot **fails** naming the
+offending mount rather than silently serving it unguarded. Setting it to
+`false` downgrades that failure to a `warn` — a deliberate opt-out, not
+the default:
+
+```bash title=".env" frame="terminal"
+NESTRS_HTTP__FAIL_SECURE_STRICT=false
+```
 
 ## Going further
 

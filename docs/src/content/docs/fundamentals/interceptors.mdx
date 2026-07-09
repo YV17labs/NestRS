@@ -2,7 +2,7 @@
 title: Interceptors
 description: Wrap handler execution — install ambient state, observe, transform the response, in a single intercept(req, next) call.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -12,7 +12,7 @@ runs, holds the response after, and in between calls `next.run(req)` to
 delegate to whatever sits inside it (another interceptor, eventually the
 handler). One call, both sides of the boundary.
 
-`Interceptor` is a [`Layer`](/fundamentals/) sub-trait shipped by
+`Interceptor` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait shipped by
 [`nest-rs-interceptors`](https://crates.io/crates/nest-rs-interceptors).
 The HTTP continuation builds on [`poem`](https://crates.io/crates/poem)'s
 endpoint chain; the GraphQL one on
@@ -103,7 +103,7 @@ second's.
 
 ## TypeId dedup — redeclaration is free
 
-Like every other [`Layer`](/fundamentals/), an `Interceptor` declared
+Like every other [`Layer`](/fundamentals/request-lifecycle/), an `Interceptor` declared
 globally and redeclared on the controller or method runs **exactly
 once** per request — the transport-level `HttpInterceptorMeta` wrap
 carries the single execution, the inner wraps are skipped at mount
@@ -146,40 +146,9 @@ interceptor is auto-mounted, and every handler runs inside a transaction
 on a mutating verb, on the pool on a safe verb. No `#[use_interceptors]`
 on any controller.
 
-## The request-layer ordering
+## Where interceptors run in the chain
 
-Interceptors participate at two levels. The full picture — per-route
-nesting, global priority bands, `RouteShaper`, and where
-`#[use_filters]` vs `#[use_exception_filters]` sit — is on
-[Guards / Ordering inside a route](/fundamentals/guards/#ordering-inside-a-route).
-
-**Global interceptors** (including auto-mounted `DbContext`) wrap
-*outside* global guards. That's how the executor is visible when guards
-run:
-
-1. **`DbContext`** runs — opens a transaction for mutating verbs,
-   installs the executor in a `task_local!`, then calls `next.run(req)`.
-2. **Guards run inside it** — `AuthGuard` attaches `Claims`,
-   `AuthzGuard` builds `Ability`. Both see the same executor.
-3. **Handler runs** — `Repo::scoped(...)` reads both ambients.
-4. **Response returns** — `DbContext` commits on 2xx/3xx, rolls back
-   otherwise.
-
-**Per-route interceptors** (`#[use_interceptors]` on the controller or
-beside a verb) nest *inside* the `RouteShaper` guard chain — closer to
-the handler than the guards. A guard denial returns before those
-interceptors' pre-handler work runs.
-
-Per-route, inner → outer (from the `#[routes]` macro):
-
-```
-handler
-→ ability shaper
-→ per-route interceptors
-→ per-route filters (error path only)
-→ RouteShaper (guards + pipes)
-→ `#[meta]` / `#[public]` (route data)
-```
+Interceptors are pooled by `TypeId` and run **once per request**: a global interceptor folds at the transport edge (band 90, before auth — it sees 404s and denials); a scoped one wraps the handler inside the guards. Infra `#[interceptor]`s (`DbContext`, tracing) auto-mount off the pool at a fixed band. The full ordering across all five families is on [the request lifecycle](/fundamentals/request-lifecycle/#nesting-order).
 
 ## Common things an interceptor does
 

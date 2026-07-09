@@ -33,6 +33,11 @@ deep on each.
 
 ## Request layers
 
+- **[Shaper](/fundamentals/request-lifecycle/)** — a macro-emitted
+  wrapper the `#[routes]` expansion installs around a handler to shape
+  the request or response: `RouteShaper` runs guards and pipes on the
+  way in, the ability shaper runs masking on the way out. A shaper is
+  plumbing the framework writes, never a unit you declare.
 - **[Guard](/fundamentals/guards/)** — a pre-handler gate; returns
   `Ok(())` to let the request through or a typed `Denial` mapped to
   401/403/429, and may attach context the handler reads through
@@ -142,6 +147,16 @@ deep on each.
 
 ## Transports
 
+- **[Transport](/fundamentals/request-lifecycle/)** — an edge the app
+  serves on (HTTP, GraphQL, queue, schedule, MCP); each runs a
+  discovery sweep to find its decorated items and mounts only those
+  reachable from the running app's root. WebSockets is a *self-mount*,
+  not a transport of its own.
+- **[Self-mount](/websockets/)** — an edge that mounts onto
+  `HttpTransport` instead of being its own transport, inheriting its
+  port, CORS, and TLS: the WS `#[gateway]`, `/graphql`, MCP, and
+  OpenAPI all self-mount, each declaring an `EdgePosture` (`Guarded`
+  or `Exempt`) that decides how the global guard chain reaches it.
 - **[Controller (HTTP)](/http/controllers/)** — a struct marked with
   `#[controller(path = "...")]` that owns route methods declared in a
   `#[routes] impl` block.
@@ -169,6 +184,15 @@ deep on each.
 
 ## Other
 
+- **[Workload](/publish/)** — one deployable binary with one
+  operational job (the HTTP API, the WS server, the token issuer, the
+  queue worker). One product splits into several workloads that share
+  `crates/features` and the database but never RPC each other.
+- **[Standalone vs workspace](/cli/)** — the two shapes `nestrs new`
+  scaffolds: a *standalone* single-crate app, or a *workspace* monorepo
+  hosting several apps under `apps/<name>/` plus shared
+  `crates/features`. The workspace is the default once a product grows
+  past one workload.
 - **[Marker guard](/security/authorization/per-transport-bridges/)** —
   a unit guard with no logic that exists so the access graph can
   prove a transport's authz seam is wired; omitting the authz module

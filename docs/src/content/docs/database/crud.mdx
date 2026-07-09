@@ -1,6 +1,6 @@
 ---
 title: CRUD
-description: One #[crud] attribute on a controller or resolver — list, get, create, update, delete are generated, scoped, and masked, all going through the service.
+description: "One #[crud] attribute on a controller or resolver — list, get, create, update, delete are generated, scoped, and masked, all going through the service."
 sidebar:
   order: 5
 ---
@@ -24,7 +24,7 @@ use nest_rs_http::{controller, crud};
 
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::orgs::{CreateOrgDto, Entity as OrgEntity, Org, OrgsService, UpdateOrgDto};
+use crate::orgs::{CreateOrg, Entity as OrgEntity, Org, OrgsService, UpdateOrg};
 
 #[controller(path = "/orgs")]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -37,8 +37,8 @@ pub struct OrgsController {
     service = svc,
     entity = OrgEntity,
     output = Org,
-    create = CreateOrgDto,
-    update = UpdateOrgDto,
+    create = CreateOrg,
+    update = UpdateOrg,
 )]
 impl OrgsController {}
 ```
@@ -50,8 +50,8 @@ mounts:
 |----------|-------------|--------------------|-----------------------|------------------------|
 | `GET`    | `/orgs`     | `Read` on `Org`    | —                     | `Vec<Org>` + cursor    |
 | `GET`    | `/orgs/:id` | `Read` on `Org`    | —                     | `Org` (404/403)        |
-| `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrgDto`      | `Org`                  |
-| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrgDto`      | `Org` (404/403)        |
+| `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrg`         | `Org`                  |
+| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrg`         | `Org` (404/403)        |
 | `DELETE` | `/orgs/:id` | `Delete` on `Org`  | —                     | `204` (404/403)        |
 
 Every handler delegates to the same `OrgsService` instance, which goes through
@@ -63,24 +63,27 @@ the request's transaction, and `Ability` filters every row.
 ```rust
 #[crud(
     service = svc,        // the field on the struct holding Arc<…Service>
-    entity = OrgEntity,   // the SeaORM entity (used in authz Authorize<Action, Entity>)
+    entity = OrgEntity,   // the SeaORM entity (used in authz Authorize<A, S>)
     output = Org,         // the #[expose]-generated wire type returned by handlers
-    create = CreateOrgDto,
-    update = UpdateOrgDto,
+    create = CreateOrg,   // the bare entity-derived input (no `Dto` suffix)
+    update = UpdateOrg,
     paginate = cursor,    // optional — cursor is already the default; `none` opts out
-    readonly,             // optional — only list + get, no mutations
+    ops = [list, get, create, update, delete],  // optional — omit for all five
 )]
 impl OrgsController {}
 ```
 
 - `service` is the **field name** on the struct, not the type. Follow the
   framework convention: a single service is named `svc`, several are
-  `svc_<thing>`.
+  `<thing>_svc`.
 - `output` is the type the handler returns — typically the `#[expose]`
   output (`Org`), not the SeaORM `Model`. The shaper runs response masking
   on it.
 - `create` and `update` map to the `#[expose(input(create), input(update))]`
-  generated input types. Omit them with `readonly` for a read-only resource.
+  generated input types (bare `CreateOrg` / `UpdateOrg`, not `…Dto`). List only
+  the operations a resource has with `ops = [list, get]`; omit `ops` for all
+  five. A create/update op requires its input type **and** the service's
+  `Creatable`/`Updatable` impl, or the build fails — never a silent no-op.
 - `paginate` defaults to `cursor` — every generated list is keyset-paginated
   (next cursor in `x-next-cursor` on REST, `first`/`after` arguments on
   GraphQL). `paginate = none` opts out into the full collection (backstopped
@@ -103,8 +106,8 @@ pub struct UsersController {
     service = svc,
     entity = UserEntity,
     output = User,
-    create = CreateUserDto,
-    update = UpdateUserDto,
+    create = CreateUser,
+    update = UpdateUser,
 )]
 impl UsersController {
     #[post("/")]
@@ -113,7 +116,7 @@ impl UsersController {
         &self,
         _authz: Authorize<Create, UserEntity>,
         auth: Ctx<Claims>,
-        body: Valid<Json<CreateUserDto>>,
+        body: Valid<Json<CreateUser>>,
     ) -> Result<Json<User>> {
         Ok(Json(
             self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
@@ -149,13 +152,13 @@ pub struct UsersResolver {
     service = svc,
     entity = UserEntity,
     output = User,
-    create = CreateUserDto,
-    update = UpdateUserDto,
+    create = CreateUser,
+    update = UpdateUser,
 )]
 impl UsersResolver {
     #[mutation]
     #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUserDto) -> Result<User> {
+    async fn create_user(&self, ctx: &Context<'_>, input: CreateUser) -> Result<User> {
         let actor = ctx.data::<Claims>()?;
         let user = self.svc.create_in_org(input, actor.org_id).await?;
         Ok(User::from(&user))
@@ -185,27 +188,27 @@ other operation — a **visible `#[authorize(Action, Entity)]`** — then loads
 the row in the body with `bind_required`, which returns the
 `Authorized<E, A>` proof to hand straight to the service:
 
-```rust title="crates/features/src/artworks/graphql/resolver.rs"
-#[crud(service = svc, entity = ArtworkEntity, output = Artwork, /* … */)]
-impl ArtworksResolver {
+```rust title="crates/features/src/posts/graphql/resolver.rs"
+#[crud(service = svc, entity = PostEntity, output = Post, /* … */)]
+impl PostsResolver {
     #[mutation]
-    #[authorize(Update, ArtworkEntity)]
-    async fn publish_artwork(&self, ctx: &Context<'_>, id: String) -> Result<Artwork> {
-        let artwork = bind_required::<ArtworksService, Update>(ctx, &id).await?;
-        Ok(Artwork::from(&self.svc.publish(artwork).await?))
+    #[authorize(Update, PostEntity)]
+    async fn publish_post(&self, ctx: &Context<'_>, id: String) -> Result<Post> {
+        let post = bind_required::<PostsService, Update>(ctx, &id).await?;
+        Ok(Post::from(&self.svc.publish(post).await?))
     }
 }
 ```
 
 Two pieces, each with one job:
 
-- `#[authorize(Update, ArtworkEntity)]` is the **posture** — the class gate
+- `#[authorize(Update, PostEntity)]` is the **posture** — the class gate
   before the body and the response mask after it. This is the only thing
   that decides authorization, and it is greppable.
-- `bind_required::<ArtworksService, Update>(ctx, &id)` is the **binding** —
+- `bind_required::<PostsService, Update>(ctx, &id)` is the **binding** —
   it parses the id, runs the row-level access check for `Update` (404 on a
   missing row, `FORBIDDEN` on a denied one), and returns the loaded
-  `Authorized<ArtworkEntity, Update>`.
+  `Authorized<PostEntity, Update>`.
 
 The action lives **in the type**, so the proof is action-true: a service
 method that takes `Authorized<E, Update>` cannot be handed an
@@ -223,7 +226,7 @@ the `Authorized` proof are enforcement plumbing the decision flows into.
 </Aside>
 
 <Aside type="note">
-The `#[authorize(Update, bind = ArtworksService)]` form is a shorthand:
+The `#[authorize(Update, bind = PostsService)]` form is a shorthand:
 it keeps the posture explicit **and** binds the `Authorized<E, A>` subject
 for you (container-resolved service), so the body receives the proof
 without calling `bind_required` itself.
@@ -244,7 +247,7 @@ the `<T>Page` type the entity's `#[expose]` attribute emits when it
 declares `paginate`:
 
 ```rust
-#[expose(name = "Item", complex, paginate)]
+#[expose(name = "Post", complex, paginate)]
 ```
 
 See [Pagination](/database/pagination/) for both shapes end to end.
@@ -293,10 +296,10 @@ split this framework is built around.
 
 Opt in on the entity — never imposed on every table (join tables, lookups):
 
-```rust title="src/items/entity.rs"
+```rust title="src/posts/entity.rs"
 #[expose(
-    name = "Item",
-    service = super::service::ItemsService,
+    name = "Post",
+    service = super::service::PostsService,
     soft_delete,
     timestamps,
 )]
@@ -311,19 +314,23 @@ pub struct Model {
 }
 ```
 
-Activate on the service (one line — the framework cannot infer opt-in per
-service without specialization):
+Activate on the service. `CrudService` carries the **read** half plus
+`soft_delete_column`; the write half is opt-in — implement `Creatable`,
+`Updatable`, `Deletable` only for the operations the resource offers (the
+framework cannot infer opt-in per service without specialization):
 
-```rust title="src/items/service.rs"
-impl CrudService for ItemsService {
-    type Entity = Items;
-    type Create = CreateItemDto;
-    type Update = UpdateItemDto;
+```rust title="src/posts/service.rs"
+impl CrudService for PostsService {
+    type Entity = Posts;
 
     fn soft_delete_column() -> Option<entity::Column> {
         Some(entity::Column::DeletedAt)
     }
 }
+
+impl Creatable for PostsService { type Create = CreatePost; }
+impl Updatable for PostsService { type Update = UpdatePost; }
+impl Deletable for PostsService {}
 ```
 
 | Concern | Behaviour |
@@ -336,7 +343,7 @@ impl CrudService for ItemsService {
 Migration snippet (Postgres):
 
 ```sql
-ALTER TABLE item
+ALTER TABLE post
   ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   ADD COLUMN deleted_at TIMESTAMPTZ NULL;

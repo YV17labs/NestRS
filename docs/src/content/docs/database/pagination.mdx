@@ -21,15 +21,15 @@ half; the offset side is plain `LIMIT` + `OFFSET`.
 
 A `#[crud]` list — REST or GraphQL — is keyset-paginated out of the box:
 
-```rust title="src/items/http/controller.rs"
+```rust title="src/posts/http/controller.rs"
 #[crud(
     service = svc,
-    entity = ItemEntity,
-    output = Item,
-    create = CreateItemDto,
-    update = UpdateItemDto,
+    entity = PostEntity,
+    output = Post,
+    create = CreatePost,
+    update = UpdatePost,
 )]
-impl ItemsController {}
+impl PostsController {}
 ```
 
 No `paginate` knob needed — `paginate = cursor` is the default. The two
@@ -45,26 +45,26 @@ other values:
 
 For the offset envelope, one more flag lives on the entity:
 
-```rust title="src/items/entity.rs"
-#[expose(name = "Item", complex, paginate)]
+```rust title="src/posts/entity.rs"
+#[expose(name = "Post", complex, paginate)]
 ```
 
-On the entity, `paginate` emits the `ItemPage` envelope and the shared
+On the entity, `paginate` emits the `PostPage` envelope and the shared
 `PageArgs` input type — the wire types a hand-written offset operation
 serializes to.
 
 ## Keyset, the REST shape
 
-The generated `GET /items` returns a plain `Vec<Item>` body plus an
+The generated `GET /posts` returns a plain `Vec<Post>` body plus an
 `x-next-cursor` response header when more rows remain. The body stays a
 flat array so response masking works unchanged.
 
 ```bash
-curl -s '/items?first=20'
-# [ { "id": "...", "name": "..." }, ... ]
+curl -s '/posts?first=20'
+# [ { "id": "...", "title": "..." }, ... ]
 # x-next-cursor: 0193f1b2-...
 
-curl -s '/items?first=20&after=0193f1b2-...'
+curl -s '/posts?first=20&after=0193f1b2-...'
 # next page
 ```
 
@@ -79,28 +79,28 @@ plain list — the body stays maskable, exactly like REST:
 
 ```graphql
 query {
-  items(first: 20) {
+  posts(first: 20) {
     id
-    name
+    title
   }
 }
-# next page: items(first: 20, after: "<last id of the previous page>")
+# next page: posts(first: 20, after: "<last id of the previous page>")
 ```
 
-UUID-v7 keys are time-ordered, so the cursor is simply the previous
+UUID-v7 keys are time-ordered, so the cursor is just the previous
 page's last `id` — no opaque cursor type. An empty page means you reached
 the end.
 
 ## Offset, the hand-written envelope
 
 For an admin table that genuinely needs page numbers and a total, write
-the operation yourself against the `ItemPage` envelope and `PageArgs`
+the operation yourself against the `PostPage` envelope and `PageArgs`
 input that `#[expose(paginate)]` emits:
 
 ```graphql
 query {
-  itemsPage(args: { page: 1, perPage: 20 }) {
-    items { id name }
+  postsPage(args: { page: 1, perPage: 20 }) {
+    items { id title }
     total
     page
     perPage
@@ -112,7 +112,7 @@ query {
 ```
 
 `PageArgs` validates `page >= 1` and `1 <= per_page <= 100` at the
-boundary; `ItemPage::new(items, total, &args)` derives the page-count and
+boundary; `PostPage::new(items, total, &args)` derives the page-count and
 has-more flags so the math lives in one place.
 
 ## What `Page<M>` carries
@@ -138,21 +138,22 @@ after)`.
 
 ## A custom paginated query
 
-When the auto-emitted `page` does not match — say you want only items
-above a threshold — call `Repo::scoped` and the same cursor helpers:
+When the auto-emitted `page` does not match — say you want only one
+author's posts — call `Repo::scoped` and the same cursor helpers:
 
 ```rust
-impl ItemsService {
-    pub async fn page_in_stock(
+impl PostsService {
+    pub async fn page_by_author(
         &self,
+        author_id: Uuid,
         first: u64,
         after: Option<Uuid>,
-    ) -> Result<Page<Item>, ItemError> {
-        let conn = Repo::<Items>::conn()?;
+    ) -> Result<Page<Post>, ServiceError> {
+        let conn = Repo::<Posts>::conn()?;
         let limit = nest_rs_seaorm::page::clamp_page_size(first);
 
-        let mut cursor = Repo::<Items>::scoped(Action::Read)
-            .filter(entity::Column::Quantity.gt(0))
+        let mut cursor = Repo::<Posts>::scoped(Action::Read)
+            .filter(entity::Column::AuthorId.eq(author_id))
             .cursor_by(entity::Column::Id);
         if let Some(after) = after {
             cursor.after(after);
@@ -164,7 +165,7 @@ impl ItemsService {
         let next_cursor = has_more.then(|| rows.last()?.id);
 
         Ok(Page {
-            items: rows.iter().map(Item::from).collect(),
+            items: rows.iter().map(Post::from).collect(),
             next_cursor,
             has_more,
         })

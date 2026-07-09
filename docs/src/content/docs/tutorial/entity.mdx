@@ -1,6 +1,6 @@
 ---
 title: Declare the entity
-description: A Post entity with SeaORM columns and #[expose] — wire DTO, input types, JSON schema, all from one declaration.
+description: "A Post entity with SeaORM columns and #[expose] — wire DTO, input types, JSON schema, all from one declaration."
 sidebar:
   order: 3
 ---
@@ -87,8 +87,8 @@ The decorator translates one declaration into every wire surface:
 | Generated | What it is | Where it surfaces |
 |-----------|-----------|-------------------|
 | `Post` | The wire DTO — every `#[expose]`d column, no SeaORM internals and nothing left unexposed | HTTP responses, OpenAPI schema |
-| `CreatePostDto` | A struct holding fields marked `input(create)` | `POST /posts` body |
-| `UpdatePostDto` | A struct holding fields marked `input(update)` | `PATCH /posts/:id` body |
+| `CreatePost` | A struct holding fields marked `input(create)` | `POST /posts` body |
+| `UpdatePost` | A struct holding fields marked `input(update)` | `PATCH /posts/:id` body |
 
 `service = super::service::PostsService` tells the macro which service
 owns the entity. The path is required as soon as the entity declares an
@@ -103,8 +103,8 @@ Two patterns cover this entity; a third shows up when you copy
 | Attribute | Effect |
 |-----------|--------|
 | `#[expose]` | Bare — the field is read-only on the wire (appears in `Post`), but not in any input |
-| `#[expose(input(create, update), validate(length(min = 1)))]` | Field appears in `Post` (input implies read) and in `CreatePostDto` and `UpdatePostDto`, with the `validator` rule wired |
-| `#[expose(input(create))]` | Field appears in `Post` and only in `CreatePostDto` — common for fields that can be set but not edited |
+| `#[expose(input(create, update), validate(length(min = 1)))]` | Field appears in `Post` (input implies read) and in `CreatePost` and `UpdatePost`, with the `validator` rule wired |
+| `#[expose(input(create))]` | Field appears in `Post` and only in `CreatePost` — common for fields that can be set but not edited |
 | *(no `#[expose]`)* | Field is hidden from `Post` and from every input — the masker fills it back in from defaults so `Ability::mask` sees the whole row |
 
 Leaving a field unexposed matters once a feature carries server-side
@@ -161,14 +161,17 @@ $ nestrs run check
     Finished `dev` profile [unoptimized] target(s) in 1.42s
 ```
 
-The macro expanded, the entity compiled, and `Post` / `CreatePostDto`
-/ `UpdatePostDto` are now usable from the rest of the crate.
+The macro expanded, the entity compiled, and `Post` / `CreatePost`
+/ `UpdatePost` are now usable from the rest of the crate.
 
 ## What you have now
 
 - A `Post` SeaORM entity with `id`, `title`, `body`.
-- An auto-generated `Post` wire DTO and `CreatePostDto` /
-  `UpdatePostDto` input structs.
+- An auto-generated `Post` wire DTO and `CreatePost` /
+  `UpdatePost` input structs.
 - A `PostsModule` shell ready to declare its first provider.
 
-[Next: write the service and expose it over HTTP →](/tutorial/http/)
+## Going further
+
+- [Expose over HTTP](/tutorial/http/) — the next step: write the service and mount CRUD routes.
+- [Entities](/database/entities/) — the reference page for `#[expose]` columns and inputs.

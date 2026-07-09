@@ -88,9 +88,61 @@ umbrella crate is an optional shortcut; see [Packages](/packages/).
 </TabItem>
 </Tabs>
 
-## Next steps
+Hello World needs **nothing else** — no database, no containers, no config.
+Verify it, then look at what you got (bare `nestrs run` lists every recipe):
 
-- [The Publish workspace](/publish/) — the fictional product every example app tells.
+```bash frame="terminal"
+$ curl http://localhost:3000/
+Hello World
+```
+
+## What you just generated
+
+One thin controller over one service — the shape every feature follows:
+
+```rust title="src/controller.rs"
+use std::sync::Arc;
+
+use nest_rs_http::{controller, routes};
+
+use crate::service::HelloService;
+
+#[controller(path = "/")]
+pub struct HelloController {
+    #[inject]
+    svc: Arc<HelloService>,
+}
+
+#[routes]
+impl HelloController {
+    #[get("/")]
+    async fn hello(&self) -> String {
+        self.svc.greeting()
+    }
+}
+```
+
+## Make your first change
+
+Edit the greeting in `src/service.rs`, save, and `nestrs run dev` hot-reloads —
+then curl again:
+
+```rust title="src/service.rs"
+fn greeting(&self) -> String {
+    "Hello, NestRS".to_string()   // was "Hello World"
+}
+```
+
+```bash frame="terminal"
+$ curl http://localhost:3000/
+Hello, NestRS
+```
+
+That's the loop — edit, save, curl. Every reference section builds on it.
+
+## Going further
+
+- [Tutorial](/tutorial/) — add `apps/blog/` with `nestrs new blog` and build posts over HTTP.
+- [The demo apps (Publish)](/publish/) — the multi-tenant publishing platform all the reference apps build.
 - [CLI](/cli/) — scaffold apps, features, and transport adapters.
 - [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, interceptors, filters.
-- [Tutorials](/tutorial/) — add `apps/blog/` with `nestrs new blog` and build posts over HTTP.

@@ -1,6 +1,6 @@
 ---
 title: Unit tests
-description: Pure logic next to the code it exercises — #[cfg(test)] mod tests inside src/, Rust's standard home.
+description: "Pure logic next to the code it exercises — #[cfg(test)] mod tests inside src/, Rust's standard home."
 sidebar:
   order: 2
 ---
@@ -105,3 +105,9 @@ and integration tests where it lives behind the crate's public API.
 The same `#[cfg(test)] mod tests` shape carries
 [policy tests](/testing/policy/) — `Ability::mask` and
 `condition_for` are pure functions on policy types and belong here.
+
+## Going further
+
+- [Integration tests](/testing/integration/) — the crate's public API in process.
+- [Policy tests](/testing/policy/) — `Ability::mask` and `condition_for` as pure units.
+- [Testing](/testing/) — the three categories and the `test` recipe group.

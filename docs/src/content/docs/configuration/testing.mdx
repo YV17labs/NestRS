@@ -23,7 +23,7 @@ skipped, so a developer's personal secrets cannot leak in.
 matches a config registered via `ConfigModule::for_feature::<C>()`, the
 seed wins and the factory never runs.
 
-```rust title="apps/auth/tests/e2e.rs"
+```rust title="apps/auth/tests/e2e/main.rs"
 use nest_rs_testing::TestApp;
 use uuid::Uuid;
 
@@ -61,7 +61,7 @@ Every configurable module's `for_root` accepts a `pinned: Option<C>`:
 directly. This is the same pattern as `.provide()`, expressed at the
 module-import layer.
 
-```rust title="apps/api/tests/e2e.rs"
+```rust title="apps/api/tests/e2e/main.rs"
 use nest_rs_http::{HttpConfig, HttpModule};
 
 let app = TestApp::<ApiModule>::builder()

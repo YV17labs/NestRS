@@ -31,13 +31,13 @@ transaction object to thread through the call stack.
 executor, every read carries the ambient ability filter:
 
 ```rust
-Repo::<Items>::conn()?;                    // raw handle for a custom query
-Repo::<Items>::all().await?;               // every readable row
-Repo::<Items>::find_by_id(id).await?;      // None if absent OR out of scope
-Repo::<Items>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
-Repo::<Items>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
-Repo::<Items>::delete(model).await?;       // 0 rows if out of scope
-Repo::<Items>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
+Repo::<Posts>::conn()?;                    // raw handle for a custom query
+Repo::<Posts>::all().await?;               // every readable row
+Repo::<Posts>::find_by_id(id).await?;      // None if absent OR out of scope
+Repo::<Posts>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
+Repo::<Posts>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
+Repo::<Posts>::delete(model).await?;       // 0 rows if out of scope
+Repo::<Posts>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
 ```
 
 A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
@@ -65,8 +65,8 @@ an error naming the `DbContext` interceptor — a service called with no
 ambient executor is a wiring bug, not a silent miss.
 
 ```rust
-let conn = Repo::<Items>::conn()?;
-let row = Items::find().filter(Column::Name.eq(name)).one(&conn).await?;
+let conn = Repo::<Posts>::conn()?;
+let row = Posts::find().filter(Column::Title.eq(name)).one(&conn).await?;
 ```
 
 Three scopes coexist:

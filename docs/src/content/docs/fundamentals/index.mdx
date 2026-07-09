@@ -24,9 +24,9 @@ every binary leans on:
 - **Lifecycle** — the moments an app comes alive and winds down.
   `#[hooks]` tags async methods for the init and shutdown phases the
   framework drains in order. See [Lifecycle](/fundamentals/lifecycle/).
-- **Guards** — decide *who* gets through. `Guard::check(&mut Request)`
-  short-circuits the chain with a `Response` or attaches request-scoped
-  context the handler reads back via `Ctx<T>`.
+- **Guards** — decide *who* gets through. `Guard::check_http(&mut Request)`
+  returns `Err(Denial)` to short-circuit the chain, or attaches
+  request-scoped context the handler reads back via `Ctx<T>`.
 - **Pipes** — convert and validate input at the request boundary.
   Stateless transforms (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …)
   bound by HTTP through the `Valid<E>` / `Piped<P, E>` extractors.
@@ -139,13 +139,15 @@ repo.
 Comment the line that lists `BlogService` in `BlogModule`'s providers,
 then build:
 
+{/* TODO(step8-evidence): capture verbatim boot output from a real failing run */}
+
 ```text frame="terminal" "(needs BlogService)"
-Error: cannot register provider(s) — unreachable in graph:
-  - BlogController (needs BlogService)
+module `BlogModule`: cannot register provider(s) ["BlogController (needs BlogService)"] — each injects a dependency that neither this module's `providers` nor its `imports` registers; add the provider or import the module that exposes it
 ```
 
-The error names *what* is missing and *why* it cannot be resolved. The
-build does not start the HTTP transport when wiring is invalid.
+The error names *what* cannot be built (`BlogController`) and *why*
+(`needs BlogService`). Boot fails inside `build().await`, before the HTTP
+transport starts — never at the first request.
 
 ## Five ideas to remember
 
@@ -182,3 +184,10 @@ Handler types (controllers, resolvers, gateways, processors, MCP tools)
 are transport-specific — they live in their own categories
 ([HTTP](/http/), [GraphQL](/graphql/), [WebSockets](/websockets/),
 [Queue](/queue/), [MCP](/mcp/)).
+
+## Going further
+
+- [Modules](/fundamentals/modules/) — the composition unit and port + adapters layout.
+- [Providers](/fundamentals/providers/) — injectables, scopes, and the access graph.
+- [Request lifecycle](/fundamentals/request-lifecycle/) — how guards, pipes, and interceptors nest.
+- [Tutorial](/tutorial/) — build the composed `posts/` root in the repo.

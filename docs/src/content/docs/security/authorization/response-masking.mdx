@@ -56,8 +56,8 @@ The GraphQL analog is `#[authorize(Action, Entity)]` on a
 
 ## What you get
 
-- **Field masking.** Restricted fields become `null` (single objects) per
-  the ability's `.fields([...])` grants.
+- **Field masking.** Restricted keys are stripped from the object (their
+  key is removed, not set to `null`) per the ability's `.fields([...])` grants.
 - **Row dropping.** In collection responses, rows the caller cannot read
   drop out entirely.
 - **Two-layer defense.** The wire DTO decides what may *ever* ship
@@ -110,8 +110,8 @@ Each step has a defined failure mode:
   500. Fail closed — and the same for a failure on any array element,
   or a re-serialize failure.
 - **`Ability::mask` runs** — any row the caller cannot read drops
-  out (collection responses) or every restricted field becomes
-  `null`.
+  out (collection responses) and every restricted key is stripped from
+  the object (`map.retain` keeps only the permitted keys).
 - **`retain_wire_keys`** — strips back any field the wire DTO never
   carried.
 

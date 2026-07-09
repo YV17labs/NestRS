@@ -1,6 +1,6 @@
 ---
 title: Indicators
-description: Where indicators live, the framework-shipped ones, and how to write a custom check with #[indicators] and per-method probe attributes.
+description: "Where indicators live, the framework-shipped ones, and how to write a custom check with #[indicators] and per-method probe attributes."
 sidebar:
   order: 2
 ---
@@ -27,14 +27,14 @@ use crate::upstream::UpstreamClient;
 #[injectable]
 pub struct UpstreamHealthIndicator {
     #[inject]
-    svc: Arc<UpstreamClient>,
+    client: Arc<UpstreamClient>,
 }
 
 #[indicators]
 impl UpstreamHealthIndicator {
     #[readiness]
     async fn upstream(&self) -> anyhow::Result<()> {
-        self.svc.ping().await
+        self.client.ping().await
     }
 }
 ```

@@ -29,7 +29,7 @@ cargo add nest-rs-config
 The common case is three short blocks: a `#[config]` struct, a derived
 `Validate`, and a `from_env` that maps one line per variable.
 
-```rust title="src/items/config.rs"
+```rust title="src/posts/config.rs"
 use nest_rs_config::{config, Config, ConfigService};
 use validator::Validate;
 
@@ -100,19 +100,19 @@ prefix. Five methods, all sync.
 Empty strings count as unset, so `FOO=` in a `.env` file does not blank
 an in-code default.
 
-## Wire it into the app
+## Wire it in
 
 The wiring is two module imports. The feature owns its config; the root
 module imports `ConfigModule::for_root()` once.
 
-```rust title="src/items/module.rs"
+```rust title="src/posts/module.rs"
 use nest_rs_config::ConfigModule;
 use super::config::ItemsConfig;
-use super::service::ItemsService;
+use super::service::PostsService;
 
 #[module(
     imports = [ConfigModule::for_feature::<ItemsConfig>()],
-    providers = [ItemsService],
+    providers = [PostsService],
 )]
 pub struct ItemsModule;
 ```
@@ -142,15 +142,15 @@ pub struct AppModule;
 A consumer injects `Arc<ItemsConfig>` like any provider — the type is
 the token.
 
-```rust title="src/items/service.rs"
+```rust title="src/posts/service.rs"
 #[injectable]
-pub struct ItemsService {
+pub struct PostsService {
     #[inject]
     config: Arc<ItemsConfig>,
 }
 
-impl ItemsService {
-    pub async fn list(&self) -> Result<Vec<Item>, ServiceError> {
+impl PostsService {
+    pub async fn list(&self) -> Result<Vec<Post>, ServiceError> {
         let page = self.config.page_size;
         // ...
     }
@@ -182,140 +182,9 @@ becomes implicit (which vars exist? what are their types?). With
 - A reviewer reads the contract by reading ten lines, not by chasing
   serde attributes.
 
-## Advanced: hand-written `from_env` and custom validation
+## Advanced
 
-The derive covers per-field rules and `FromStr` covers scalar parsing.
-Two things push a config past them: a field carrying a **structured
-payload** (a JSON blob in one variable) and a **rule spanning the whole
-struct**. This is the real `IssuerConfig` from `features/oauth` (signs
-the OAuth clients accepted by `apps/auth`) — it needs both:
-
-```rust title="crates/features/src/oauth/config.rs"
-use nest_rs_config::{config, Config, ConfigError, ConfigService};
-use serde::Deserialize;
-use uuid::Uuid;
-use validator::{Validate, ValidationError, ValidationErrors};
-
-const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e);
-
-#[config(namespace = "issuer")]
-#[derive(Clone, Default)]
-pub struct IssuerConfig {
-    pub clients: Vec<RegisteredClient>,
-    pub default_org_id: Uuid,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct RegisteredClient {
-    pub client_id: String,
-    pub client_secret: String,
-    pub org_id: Uuid,
-    pub scopes: Vec<String>,
-}
-
-impl Validate for IssuerConfig {
-    fn validate(&self) -> Result<(), ValidationErrors> {
-        let mut errors = ValidationErrors::new();
-        if self.clients.is_empty() {
-            errors.add("clients", ValidationError::new("at_least_one_client"));
-        }
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
-    }
-}
-
-impl Config for IssuerConfig {
-    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
-        let clients = match env.get("CLIENTS") {
-            Some(raw) => serde_json::from_str(&raw)
-                .map_err(|e| ConfigError::parse(env.var_name("CLIENTS"), e.to_string()))?,
-            None => Vec::new(),
-        };
-        let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(DEFAULT_ORG);
-        Ok(Self { clients, default_org_id })
-    }
-}
-```
-
-- **`clients` is a JSON array in a single variable.** `env.get("CLIENTS")`
-  returns the raw string and `serde_json::from_str` does the structured
-  parse — mapping the failure through
-  `ConfigError::parse(env.var_name("CLIENTS"), …)` so the boot error
-  still names `NESTRS_ISSUER__CLIENTS`.
-- **"At least one client" is a struct-level rule**, so `impl Validate`
-  is written by hand, building the same `ValidationErrors` the derive
-  would. It runs after the load and aborts boot exactly like a derived
-  rule. Per-field rules stay on the derive, as in the lead example.
-
-Wiring and consumption do not change — the same `for_feature` import,
-the same `Arc<IssuerConfig>` injection:
-
-```rust title="crates/features/src/oauth/module.rs"
-use nest_rs_config::ConfigModule;
-use super::config::IssuerConfig;
-use super::service::OAuthFlow;
-
-#[module(
-    imports = [ConfigModule::for_feature::<IssuerConfig>(), UsersModule],
-    providers = [OAuthFlow],
-)]
-pub struct OAuthModule;
-```
-
-```rust title="apps/auth/src/module.rs"
-use nest_rs_config::ConfigModule;
-
-#[module(
-    imports = [
-        ConfigModule::for_root(),
-        OAuthHttpModule,
-    ],
-)]
-pub struct AuthModule;
-```
-
-```rust title="crates/features/src/oauth/service.rs"
-#[injectable]
-pub struct OAuthFlow {
-    #[inject]
-    config: Arc<IssuerConfig>,
-}
-
-impl OAuthFlow {
-    pub fn issue(&self, client_id: &str) -> Result<AccessTokenDto, AuthError> {
-        let client = self.config.clients
-            .iter()
-            .find(|c| c.client_id == client_id)
-            .ok_or(AuthError::UnknownClient)?;
-        // ...
-    }
-}
-```
-
-### Run it
-
-```bash frame="terminal"
-$ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","org_id":"...","scopes":["read"]}]' \
-  nestrs run dev auth
-2026-06-03T10:42:11Z INFO nest_rs::config: loaded issuer (2 fields)
-2026-06-03T10:42:11Z INFO nest_rs::http: bound 5 routes on 0.0.0.0:3000
-```
-
-A bad value fails the boot before any port opens:
-
-```bash frame="terminal"
-$ NESTRS_ISSUER__DEFAULT_ORG_ID=not-a-uuid nestrs run dev auth
-Error: configuration parse error
-  variable: NESTRS_ISSUER__DEFAULT_ORG_ID
-  reason  : invalid character at 1: expected hyphen
-```
-
-A failed validation runs after the load:
-
-```bash frame="terminal"
-$ nestrs run dev auth   # no clients configured
-Error: configuration validation failed for 'issuer'
-  - clients: at_least_one_client
-```
+Hand-writing `from_env` (for custom validation, or a field carrying a structured payload, or a rule spanning the whole struct) is covered on [Advanced configuration](/configuration/advanced/)  14 with the real `IssuerConfig` as the worked example.
 
 ## Going further
 

@@ -52,7 +52,7 @@ position without leaving the page.
 | `#[authorize]` | method | Access posture: gates the operation by ability (`Action`, `Entity`) and masks the response | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[public]` | method | Access posture: deliberately ungated operation — no gate, no mask | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[field_resolver]` | method | Custom field resolver on a wire type; takes no posture attribute | [Field resolvers](/graphql/field-resolvers/) |
-| `#[dataloader]` | impl block on service | Batches a method into a request-scoped DataLoader | [Dataloader](/graphql/dataloader/) |
+| `#[dataloader]` | impl block on service | Batches a method into a request-scoped DataLoader | [Dataloader](/database/dataloaders/) |
 
 ## WebSockets
 

@@ -91,7 +91,7 @@ impl Guard for ModeratedGuard {
         data: &Value,
     ) -> Result<(), Denial> {
         match data.get("author").and_then(Value::as_str) {
-            Some("banned") => Err(Denial::forbidden("author `banned` is not allowed")),
+            Some("banned") => Err(Denial::forbidden("author `banned` is not allowed to post")),
             _ => Ok(()),
         }
     }
@@ -105,7 +105,7 @@ Bind it beside the message it gates:
 impl ChatGateway {
     #[subscribe_message("message")]
     #[use_guards(ModeratedGuard)]
-    async fn on_message(&self, msg: SendMessage) {
+    async fn on_message(&self, msg: SendMessageDto) {
         self.svc.record(msg);
     }
 }
@@ -115,25 +115,26 @@ A denial surfaces as a wire-shaped error frame on the rejected event:
 
 ```text frame="terminal"
 > {"event":"message","data":{"author":"banned","text":"hi"}}
-< {"event":"message","data":{"error":"author `banned` is not allowed"}}
+< {"event":"message","data":{"error":"author `banned` is not allowed to post"}}
 ```
 
 The connection stays open; the client can fire other events.
 
 ## Mount-time dedup
 
-The `#[messages]` macro composes each event's guard chain at mount
-time: app-global guards first, then any listed on the gateway, then
-any on the message itself. Duplicates are removed by `TypeId`, so a
-guard listed both as a global and on a specific message runs **once**
-per dispatch — there is no cost to redeclaring on a provider. Per the
-[layers-declare-on-provider](/) rule, do redeclare: a feature crate
-moved to another app may not inherit the same globals.
+The `#[messages]` macro composes each event's per-message guard chain at mount
+time from **two** sources: app-global guards and the guards listed on the
+**message** itself. Guards bound on the gateway struct are **not** in this
+chain — they run once at the upgrade (`check_http`), never per message.
+Duplicates are removed by `TypeId`, so a guard registered globally and also
+listed on a specific message runs **once** per dispatch — there is no cost to
+redeclaring on a provider, and a feature crate moved to an app that doesn't
+share the same globals still carries its own.
 
 ```text
 ConnUpgrade ── check_http ── on_connect
                                   │
-                                  ├── Envelope ── check_ws_message (global ∪ gateway ∪ message, dedup) ── dispatch
+                                  ├── Envelope ── check_ws_message (global ∪ message, dedup) ── dispatch
                                   └── Envelope ── check_ws_message (...) ── dispatch
                                   └── on_disconnect ── close
 ```
@@ -183,5 +184,5 @@ GraphQL sibling bridges.
   the `check_http` / `check_graphql` / `check_ws_message` triple.
 - [`EventLayerTable`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-ws/src/guard.rs) —
   the per-gateway, per-event guard table the dispatcher iterates.
-- [`apps/live/src/chat/guard.rs`](https://github.com/NestRS/NestRS/blob/main/apps/live/src/chat/guard.rs) —
+- [`apps/live/src/chat/guard.rs`](https://github.com/NestRS/NestRS/blob/main/demo/apps/live/src/chat/guard.rs) —
   a per-message guard worked end to end.

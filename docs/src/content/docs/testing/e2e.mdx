@@ -5,18 +5,22 @@ sidebar:
   order: 4
 ---
 
+import { Aside } from '@astrojs/starlight/components';
+
 An end-to-end test boots the **real** top-level module in process,
 against a throwaway Postgres database, and drives the HTTP surface
 through the same [`poem`](https://crates.io/crates/poem) runtime
-production uses. Every app ships one, at `apps/<app>/tests/e2e.rs`.
-The happy path covered here pairs with
+production uses. Every app ships one, at `apps/<app>/tests/e2e/main.rs`
+— the same `tests/<suite>/main.rs` directory form as every test binary
+in the codebase (see [Integration tests](/testing/integration/) for the
+layout rule). The happy path covered here pairs with
 [negative-path tests](/testing/negative-path/) — auth refused,
 cross-tenant denied, rollback verified — for the bugs a 2xx round-trip
 never trips.
 
 ## A round-trip e2e test
 
-```rust title="apps/api/tests/e2e.rs"
+```rust title="apps/api/tests/e2e/main.rs"
 use nest_rs_authn::JwtConfig;
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use api::ApiModule;
@@ -71,27 +75,29 @@ regression fails this test, in this binary.
 
 ## Splitting a large suite
 
-Cargo compiles `apps/<app>/tests/e2e.rs` as one binary and treats
-subdirectories as modules. That seam grows the suite without going to
-multiple binaries: keep one top-level `e2e.rs`, declare modules under
-it, and share the `boot()` helper through `tests/e2e/common/mod.rs`.
+A small suite keeps its tests directly in `main.rs`. When it gets
+unwieldy, add sibling modules — the path never changes. Cargo
+auto-detects `tests/e2e/main.rs` as a single integration-test binary
+named `e2e`, and — unlike top-level `tests/*.rs` — it does **not**
+compile the sibling files under `tests/e2e/` as their own binaries. So
+the whole subtree links into one `e2e` binary that the nextest
+`binary(e2e)` gate still catches.
 
 ```text frame="none"
 apps/api/
 └── tests/
-    ├── e2e.rs
     └── e2e/
-        ├── common/
-        │   └── mod.rs       ← boot(), admin_token(), fixtures
+        ├── main.rs         ← the crate root: mod common; mod users; …
+        ├── common.rs       ← boot(), admin_token(), fixtures
         ├── users.rs
         ├── orgs.rs
         ├── auth.rs
         └── graphql.rs
 ```
 
-`tests/e2e.rs` becomes a flat index:
+`tests/e2e/main.rs` is a flat index:
 
-```rust title="apps/api/tests/e2e.rs"
+```rust title="apps/api/tests/e2e/main.rs"
 mod common;
 mod users;
 mod orgs;
@@ -122,11 +128,16 @@ async fn create_then_list_users() {
 }
 ```
 
-Rust's module rule: `mod common;` in `tests/e2e.rs` resolves to
-`tests/e2e/common/mod.rs` because the directory takes the entry file's
-stem. The `mod.rs` form on `common` matters — it's the
-[official Rust idiom](https://doc.rust-lang.org/book/ch11-03-test-organization.html#submodules-in-integration-tests)
-that prevents Cargo from compiling it as its own binary.
+Because `main.rs` is the crate root, `mod users;` resolves to a sibling
+`tests/e2e/users.rs` in the same directory — and `common.rs` needs no `mod.rs`
+trick, since nothing under `tests/e2e/` is auto-discovered as a binary.
+
+<Aside type="caution">
+Do **not** split with a top-level `tests/e2e.rs` plus `mod users;`. That `mod`
+resolves to a *sibling* `tests/users.rs`, which Cargo compiles as its own
+second integration-test binary — escaping the `binary(e2e)` gate and running
+unfiltered. The `tests/e2e/main.rs` directory form is what keeps it one binary.
+</Aside>
 
 Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
 
@@ -305,3 +316,9 @@ $ kill %1
 
 **Kill the server before returning control.** If you cannot run the
 binary, say so explicitly rather than claiming green.
+
+## Going further
+
+- [Negative-path tests](/testing/negative-path/) — the failure modes a 2xx round-trip never trips.
+- [Policy tests](/testing/policy/) — `Ability::mask` and `condition_for` as pure units.
+- [Publish demo](/publish/) — the exemplar apps these tests boot.

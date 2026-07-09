@@ -56,7 +56,7 @@ And a passing e2e suite:
 
 ```bash frame="terminal"
 $ nestrs run test e2e
-         PASS [   …] features::e2e posts_round_trip
+         PASS [   …] blog::e2e posts_round_trip
 ```
 
 ## What you should know going in
@@ -84,7 +84,7 @@ Rust 1.95+ is required. The database and testing pages need Postgres
   <LinkCard title="3. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts." />
   <LinkCard title="4. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />
   <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="DatabaseModule, migrations, transactional writes." />
-  <LinkCard title="6. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e.rs against an EphemeralDatabase." />
+  <LinkCard title="6. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e/main.rs against an EphemeralDatabase." />
 </CardGrid>
 
 <Aside type="note">
@@ -96,12 +96,14 @@ while building the minimal blog.
 
 <Aside type="tip">
 The tutorial feature exemplar in this repo is
-[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/posts)
+[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/posts)
 — compare your scaffolded `apps/blog/` as you go. The complex reference is
-[`apps/api/`](https://github.com/NestRS/NestRS/tree/main/apps/api)
+[`apps/api/`](https://github.com/NestRS/NestRS/tree/main/demo/apps/api)
 (auth, GraphQL, orgs, queue, and the rest).
 </Aside>
 
-## Ready?
+## Going further
 
-[Scaffold the app →](/tutorial/scaffold/)
+- [Scaffold the app](/tutorial/scaffold/) — the next step: add `apps/blog/` with `nestrs new blog`.
+- [Publish](/publish/) — the reference workspace this tutorial builds toward.
+- [Getting started](/getting-started/) — the workspace setup this tutorial assumes.

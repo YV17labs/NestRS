@@ -1,6 +1,6 @@
 ---
 title: Query limits
-description: Bound query depth and complexity at the schema level — two ceilings that catch the recursive bomb, the wide flat sweep, and the volumetric fanout before any resolver runs.
+description: Bound query depth and complexity at the schema level — two ceilings that catch the recursive bomb, the wide sweep, and volumetric fanout before a resolver runs.
 sidebar:
   order: 8
 ---
@@ -128,7 +128,7 @@ denial drops that to zero, so no fanout penalty is needed. That means
 `#[expose(complexity = …)]` overrides the auto-emitted factor:
 
 ```rust title="src/orgs/entity.rs"
-#[expose(name = "Org", service = …)]
+#[expose(name = "Org", service = …, graphql)]
 #[sea_orm::model]
 pub struct Model {
     #[expose]
@@ -156,7 +156,7 @@ Two shapes:
 The override applies to any exposed field, scalar or relation:
 
 ```rust title="cost an expensive computed scalar"
-#[expose(name = "Report", service = …)]
+#[expose(name = "Report", service = …, graphql)]
 pub struct Model {
     #[expose]
     pub id: Uuid,
@@ -255,3 +255,8 @@ for the full reference.
 - `crates/nest-rs-resource-macros/src/relations.rs` — the
   `default_has_many_complexity()` constant and the
   `#[expose(complexity = …)]` parsing.
+
+## Going further
+
+- [Configuration](/graphql/configuration/) — where `max_depth` and `max_complexity` are set.
+- [Relations](/graphql/relations/) — the auto-emitted `HasMany` complexity factor.

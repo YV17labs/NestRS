@@ -19,7 +19,7 @@ service result and the wire shape just works.
 
 ```rust
 use async_graphql::{Error, Result};
-use nest_rs_graphql::{query, resolver};
+use nest_rs_graphql::resolver;
 
 #[resolver]
 pub struct ItemsResolver;
@@ -106,7 +106,7 @@ A resolver propagates that into a GraphQL `Result<T>` with `?`:
 ```rust
 use async_graphql::Result;
 use nest_rs_authz::Read;
-use nest_rs_graphql::{query, resolver};
+use nest_rs_graphql::resolver;
 
 #[resolver]
 impl ItemsResolver {
@@ -201,11 +201,11 @@ rest. The framework does not need any code for this — return the
 `Result` from each `#[field_resolver]` and async-graphql does the
 gathering.
 
-## Where to go next
+## Going further
 
 - [Queries and mutations](/graphql/queries-mutations/) — the
   `Result<T>` return shape at the top level.
 - [Security](/security/) — the guard chain that decides
   `UNAUTHENTICATED` / `FORBIDDEN` before a resolver runs.
-- [Database / CRUD](/database/crud/) — the service contract that
+- [Database](/database/) — the service contract that
   emits `ServiceError`.

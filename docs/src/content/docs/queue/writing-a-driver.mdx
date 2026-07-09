@@ -1,6 +1,6 @@
 ---
 title: Writing a queue driver
-description: A backend-agnostic scaffold — the shape of a queue driver for any storage with a push and a receive, durable or ephemeral, with the framework's seams filled in and the storage-specific code marked as your own.
+description: "A backend-agnostic scaffold for a queue driver — the traits you implement, the inventory you drain, with storage-specific code marked as your own."
 sidebar:
   order: 6
 ---
@@ -27,7 +27,7 @@ is [`nest-rs-redis`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-r
 - Two `Module`s — one for the producer (apps that only enqueue),
   one for the worker (apps that consume).
 
-A driver lives in a `nestrs-<technology>` crate that depends on
+A driver lives in a `nest-rs-<technology>` crate that depends on
 `nest-rs-core`, `nest-rs-queue`, plus whatever your storage and runtime
 need. An app picks a driver by importing its module instead of
 `nest-rs-redis`.
@@ -102,39 +102,44 @@ and visibility timeouts wire up. Those are storage decisions.
 
 ```rust
 use async_trait::async_trait;
-use nest_rs_core::{Container, ReachableProviders, Transport, injectable, inventory};
+use nest_rs_core::{Container, ReachableProviders, Transport, inventory};
 use nest_rs_queue::ProcessMethod;
 use tokio_util::sync::CancellationToken;
 
-#[injectable]
 pub struct YourWorker {
-    // #[inject] YourConnection (or a separate consumer-side handle).
+    // `serve` takes only a cancellation token, so everything it needs is
+    // captured in `configure`: the reachable methods and the container.
+    methods: Vec<&'static ProcessMethod>,
+    container: Option<Container>,
 }
 
 #[async_trait]
 impl Transport for YourWorker {
-    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn serve(self: Box<Self>, container: Container, cancel: CancellationToken)
-        -> anyhow::Result<()>
-    {
+    async fn configure(&mut self, container: &Container) -> anyhow::Result<()> {
         // (1) Snapshot the inventory of #[process] methods. Filter by
         //     module reachability so a linked-but-unimported processor
-        //     is silently skipped — same property nest-rs-redis relies on.
+        //     is skipped with a boot `tracing::warn` — same property
+        //     nest-rs-redis relies on.
         let reachable = container.get::<ReachableProviders>();
-        let methods: Vec<&'static ProcessMethod> = inventory::iter::<ProcessMethod>()
+        self.methods = inventory::iter::<ProcessMethod>()
             .filter(|m| {
                 reachable
                     .as_ref()
                     .map_or(true, |r| r.0.contains(&(m.provider_type_id)()))
             })
             .collect();
+        self.container = Some(container.clone());
+        Ok(())
+    }
 
-        // (2) Group methods by queue name.
+    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+        let container = self
+            .container
+            .expect("configure runs before serve");
+
+        // (2) Group the reachable methods by queue name.
         let mut by_queue: /* HashMap<&'static str, Vec<&ProcessMethod>> */ = todo!();
-        for m in methods { /* by_queue.entry(m.queue).or_default().push(m); */ }
+        for m in &self.methods { /* by_queue.entry(m.queue).or_default().push(m); */ }
 
         // (3) For each queue, spawn a worker task that loops.
         //     Your code: replace `your_pop_from_queue(...)` with your
@@ -160,9 +165,10 @@ impl Transport for YourWorker {
                             //         to act on.
                             //     You only feed it the Value; the macro does the rest.
                             for method in &methods {
-                                let _ = (method.handler)(envelope.clone(), container.clone()).await;
-                                // (5) On Err, apply your retry/dead-letter policy
-                                //     here — storage-specific.
+                                let result = (method.handler)(envelope.clone(), container.clone()).await;
+                                // (5) On `result` being `Err`, apply your
+                                //     retry/dead-letter policy here — storage-specific.
+                                let _ = result;
                             }
                         }
                     }
@@ -220,7 +226,7 @@ impl Module for YourQueueWorkerModule {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "YourWorker",
-            build: |_| Ok(Box::new(YourWorker { /* ... */ })),
+            build: |_| Ok(Box::new(YourWorker { methods: Vec::new(), container: None })),
         })
     }
 }
@@ -284,3 +290,9 @@ the driver's README.
   the extension contract, the `ProcessMethod` registry, the envelope spec.
 - [Database driver](/database/writing-a-driver/) — the analogous scaffold
   for the data layer, same shape, same seams.
+
+## Going further
+
+- [Wiring](/queue/wiring/) — the producer/worker module split a driver plugs into.
+- [Retries and failure](/queue/retries-and-failure/) — the retry budget your driver owns.
+- [Database driver](/database/writing-a-driver/) — the analogous data-layer scaffold.

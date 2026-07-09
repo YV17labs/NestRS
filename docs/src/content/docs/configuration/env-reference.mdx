@@ -1,0 +1,76 @@
+---
+title: Env-var reference
+description: "Every NESTRS_* environment variable, by namespace — the dual-path rule means each one also has a pinned-struct field."
+sidebar:
+  order: 6
+---
+
+Every framework module reads its config from a namespaced env prefix
+**and** from a pinned struct — the framework-wide **dual-path rule**
+([Configuration](/configuration/#the-dual-path-rule)). The variable name is
+`NESTRS_<NAMESPACE>__<KEY>` (double underscore between namespace and key). This
+page lists the variables; each maps one-to-one to a field on the module's
+config struct, so anything here is also settable in code.
+
+## `http` — `NESTRS_HTTP__*`
+
+| Key | Meaning |
+|---|---|
+| `HOST` | listen address (default `0.0.0.0`) |
+| `PORT` | listen port |
+| `GLOBAL_PREFIX` | path prefix for every route (unset ⇒ none) |
+| `MAX_BODY_BYTES` | request body cap |
+| `REQUEST_TIMEOUT_SECS` | per-request timeout |
+| `FAIL_SECURE_STRICT` | fail boot (vs warn) on an unguarded self-mount under global guards — default `true` |
+| `SECURITY_HEADERS` | master switch for the secure-by-default response headers |
+| `HSTS` · `FRAME_OPTIONS` · `CONTENT_TYPE_OPTIONS` · `SERVER_HEADER` | individual security-header controls |
+
+## `database` — `NESTRS_DATABASE__*`
+
+| Key | Meaning |
+|---|---|
+| `URL` | Postgres connection string |
+| `SQLX_LOGGING` | log SQL statements |
+| `RETRY_SERIALIZATION_CONFLICTS` | retry on serialization failures |
+
+## `queue` — `NESTRS_QUEUE__*`
+
+| Key | Meaning |
+|---|---|
+| `URL` | Redis connection string |
+
+## `storage` — `NESTRS_STORAGE__*`
+
+| Key | Meaning |
+|---|---|
+| `ENDPOINT` | S3 endpoint (empty ⇒ real AWS S3) |
+| `REGION` | region |
+| `ACCESS_KEY` / `SECRET_KEY` | static credentials |
+| `BUCKET` | target bucket |
+| `FORCE_PATH_STYLE` | path-style vs virtual-hosted addressing |
+
+## `opentelemetry` — `NESTRS_OPENTELEMETRY__*`
+
+| Key | Meaning |
+|---|---|
+| `LOG_LEVEL` | tracing filter (e.g. `info`, `debug`) |
+| `LOG_FORMAT` | `json` (production) or `text` (dev) |
+| `LOG_SOURCE_LOCATION` | include file:line on each event |
+| `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export) |
+| `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
+
+## Other namespaces
+
+`graphql`, `openapi`, `ws`, `throttler`, and the `auth` app's `issuer` each read
+their own `NESTRS_<NAMESPACE>__*` keys — see the matching module page for the
+fields. The rule is uniform: the struct's field name uppercased is the key.
+
+## The `.env` cascade
+
+Values resolve highest-first: real env > `.env.<NESTRS_ENV>.local` > `.env.local`
+> `.env.<NESTRS_ENV>` > `.env`. See [the env cascade](/configuration/env-cascade/).
+
+## Going further
+
+- [Configuration](/configuration/) — the typed `#[config]` derive and dual-path rule.
+- [The env cascade](/configuration/env-cascade/) — layering and precedence.

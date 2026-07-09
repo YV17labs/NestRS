@@ -1,6 +1,6 @@
 ---
 title: Retries and failure
-description: What an Err from a #[process] method means — the apalis retry shape, panic handling, and the dead-letter story.
+description: "What an Err from a #[process] method means — the apalis retry shape, panic handling, and the dead-letter story."
 sidebar:
   order: 4
 ---
@@ -26,7 +26,7 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
   it; that's the end of its life.
 - `Err(e)` ⇒ the job goes back for another attempt. apalis tracks the
   attempt count, and after `retries` failures it's moved to the
-  queue's `failed_jobs` list.
+  queue's failed-jobs list (see [Where failed jobs go](#where-failed-jobs-go)).
 - A **panic** inside the method is caught by a `CatchPanicLayer` and
   converted to `Error::Abort`. The job ends up in the failed list, the
   worker keeps running — one bad job doesn't kill the queue's consumer.
@@ -67,7 +67,7 @@ impl AudioService {
                 Ok(()) => return Ok(()),
                 Err(e) if attempt < 5 => {
                     let delay = Duration::from_millis(100 * 2u64.pow(attempt));
-                    tracing::warn!(target: "features::audio", %file, attempt, "transcode failed; retrying");
+                    tracing::warn!(target: "features::audio", %file, attempt, error = %e, "transcode failed; retrying");
                     tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
@@ -147,7 +147,7 @@ decoded directly with a `tracing::warn` — so jobs left in Redis from a
 release before envelopes existed don't get stuck. New producers
 always wrap.
 
-## See also
+## Going further
 
 - [Observability](/queue/observability/) — what shows up in spans and
   logs when a job retries or fails.

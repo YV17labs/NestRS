@@ -40,15 +40,19 @@ cargo add nest-rs-storage
 from `NESTRS_STORAGE__*`) and registers `Storage` as a singleton
 provider. Import it where a feature needs storage:
 
-```rust title="crates/features/src/file_assets/module.rs"
+```rust title="src/media/module.rs"
 use nest_rs_core::module;
 use nest_rs_storage::StorageModule;
 
-use crate::file_assets::FileAssetsService;
+use crate::media::MediaService;
 
-#[module(imports = [StorageModule], providers = [FileAssetsService])]
-pub struct FileAssetsModule;
+#[module(imports = [StorageModule], providers = [MediaService])]
+pub struct MediaModule;
 ```
+
+The `media` slice below (a post **cover-image** upload) is the canonical
+storage shape. Titles show `src/…` because it is a sketch — a runnable
+version is planned for the Publish demo, not yet a checked-in file.
 
 ## Configuration
 
@@ -69,7 +73,7 @@ The canonical flow keeps bytes off the API. A handler injects `Storage`
 and returns a signed `PUT` URL; the client uploads straight to the
 object store; a later call reads the object's metadata to finalize.
 
-```rust title="crates/features/src/file_assets/service.rs"
+```rust title="src/media/service.rs"
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -77,21 +81,21 @@ use nest_rs_core::injectable;
 use nest_rs_storage::{Result, Storage};
 
 #[injectable]
-pub struct FileAssetsService {
+pub struct MediaService {
     #[inject]
     storage: Arc<Storage>,
 }
 
-impl FileAssetsService {
-    /// Hand the client a short-lived URL to PUT bytes to directly.
-    pub async fn request_upload(&self, key: &str) -> Result<String> {
+impl MediaService {
+    /// Hand the client a short-lived URL to PUT the cover image directly.
+    pub async fn request_cover_upload(&self, key: &str) -> Result<String> {
         self.storage.presign_put(key, Duration::from_secs(900)).await
     }
 
-    /// After the client uploads, read size back to finalize the record.
-    pub async fn confirm_upload(&self, key: &str) -> Result<i64> {
-        let info = self.storage.head(key).await?.expect("object present");
-        Ok(info.byte_size)
+    /// After the client uploads, read the size back to finalize the record.
+    /// `None` ⇒ the client never completed the upload.
+    pub async fn confirm_cover_upload(&self, key: &str) -> Result<Option<i64>> {
+        Ok(self.storage.head(key).await?.map(|info| info.byte_size))
     }
 }
 ```
@@ -139,6 +143,12 @@ GCS, Azure, the local filesystem, or in-memory is a builder change
 inside the crate — not an API change for the features that inject it.
 The S3 driver is the default because it also covers every S3-compatible
 server.
+
+## Going further
+
+- [Queue](/queue/) — background workers that read and transform stored objects.
+- [Database](/database/) — persist the record a presigned upload finalizes.
+- [Configuration](/configuration/) — the dual-path rule behind `StorageConfig`.
 
 ### Reference
 

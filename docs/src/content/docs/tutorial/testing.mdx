@@ -1,6 +1,6 @@
 ---
 title: Test it end to end
-description: A single tests/e2e.rs boots the real BlogModule against a throwaway database; nestrs run test e2e runs it; happy path and failure modes both asserted.
+description: A single tests/e2e/main.rs boots the real BlogModule against a throwaway database; nestrs run test e2e runs it; happy path and failure modes both asserted.
 sidebar:
   order: 7
 ---
@@ -14,9 +14,9 @@ by hand. By the end of this page, `nestrs run test e2e` runs it green, a
 wiring regression in any of the previous six steps fails this test,
 and the feature is locked down.
 
-## One test file per app
+## One e2e binary per app
 
-Every app ships one `tests/e2e.rs`. Cargo compiles it as a separate
+Every app ships one `tests/e2e/main.rs`. Cargo compiles it as a separate
 binary; nextest gates it through a binary filter, not `#[ignore]`.
 
 The crate driving this page is
@@ -48,7 +48,7 @@ including the access-graph check. The harness seeds the connection so
 the module never reaches a real network — no JWT seeding, because
 `blog` has no auth layer.
 
-```rust title="apps/blog/tests/e2e.rs"
+```rust title="apps/blog/tests/e2e/main.rs"
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use poem::http::StatusCode;
 use serde_json::json;
@@ -93,7 +93,7 @@ The shape of an e2e test: build the app, hit the route, read the
 response. Two requests, three assertions — enough to cover the entire
 wiring chain for a bare CRUD feature.
 
-```rust title="apps/blog/tests/e2e.rs"
+```rust title="apps/blog/tests/e2e/main.rs"
 #[tokio::test]
 async fn posts_round_trip() {
     let (_db, app) = boot().await;
@@ -124,7 +124,7 @@ transaction interceptor, and the service; the `GET /posts/:id` walks
 A happy-path test is half a test. Add one negative path — the same
 `400` you verified by hand on page 5.
 
-```rust title="apps/blog/tests/e2e.rs"
+```rust title="apps/blog/tests/e2e/main.rs"
 #[tokio::test]
 async fn create_with_empty_title_returns_400() {
     let (_db, app) = boot().await;
@@ -166,8 +166,8 @@ filter for the e2e file.
    $ nestrs run test e2e
    ────────────
         Starting 2 tests across 1 binary
-         PASS [   1.4s] features::e2e posts_round_trip
-         PASS [   0.8s] features::e2e create_with_empty_title_returns_400
+         PASS [   1.4s] blog::e2e posts_round_trip
+         PASS [   0.8s] blog::e2e create_with_empty_title_returns_400
    ```
 
 3. Run the rest of the workspace too — unit and integration tests
@@ -182,11 +182,11 @@ filter for the e2e file.
 `nestrs run test unit` and `nestrs run test e2e` are the two recipes you reach for day
 to day; `nestrs run test cov` adds coverage and `nestrs run test doc` runs the
 `///` examples. None of them use `#[ignore]` — gating is the nextest binary filter
-on `tests/e2e.rs`.
+on `tests/e2e/main.rs`.
 
 ## What you have now
 
-- A `tests/e2e.rs` booting the real `BlogModule` against a
+- A `tests/e2e/main.rs` booting the real `BlogModule` against a
   throwaway Postgres provisioned by testcontainers.
 - A happy-path test and a validation failure — enough to catch a
   wiring regression in any of the previous six pages.
@@ -202,5 +202,10 @@ to add the next bare feature.
 
 When you need auth, GraphQL, org scoping, and the full negative-path
 matrix, open [`api`](/publish/) and
-[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
+[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users)
 — same port-and-adapter layout, more layers on top.
+
+## Going further
+
+- [Authenticate and authorize](/tutorial/security/) — the next step: add guards, ability, and masking on `api`.
+- [E2E tests](/testing/e2e/) — the reference page for `TestApp` and `EphemeralDatabase`.

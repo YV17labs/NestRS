@@ -1,6 +1,6 @@
 ---
 title: Observability
-description: Span structure and fields the queue layer emits — what you see at info, debug, and error levels for every job.
+description: The span and events the queue worker emits per job — what you see at debug, info, and warn levels, and the boot lines that precede them.
 sidebar:
   order: 5
 ---
@@ -8,105 +8,90 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 Every queue event the framework emits targets `nest_rs::queue`. One
-target, every transport-layer log filterable by `RUST_LOG=nest_rs::queue=debug`,
-every span attaching the same structured fields. The service-level
-logs your `#[process]` method emits keep their own target (e.g.
-`features::audio`) — same convention as the rest of the framework.
+target, every worker-side log filterable by `RUST_LOG=nest_rs::queue=debug`,
+one span wrapping each job so its events share the same fields. The
+service-level logs your `#[process]` method emits keep their own target
+(e.g. `features::audio`) — same convention as the rest of the framework.
 
 ## Targets and levels
 
-| Target | What | Default level |
+| Target | What | Level |
 |---|---|---|
-| `nest_rs::queue` | Framework events: discovery, registration, job start/end, retries, fails. | `info` on success, `warn` on retry, `error` on terminal failure. |
+| `nest_rs::queue` | Boot registration, per-job span + events, skipped/unversioned warnings. | `debug` on job start, `info` on success, `warn` on failure. |
 | `nest_rs::transport` | Boot: `attached module-contributed transport transport=QueueWorker`. | `info`. |
 | `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
 
-The level guarantee from the project's posture: hot paths respect
-`RUST_LOG=info`. Per-job framework logs sit at `info` (one line per
-ack), `debug` lines exist for the dispatch path you only want under
-investigation. Failures are `warn`/`error` so they survive aggressive
-filtering.
+Hot paths respect `RUST_LOG=info`: `job started` sits at `debug`, so a
+worker at `info` logs one `job ok` line per successful ack and a
+`job failed` line per failed attempt — nothing per-poll noise.
 
-## Structured fields
+## The per-job span
 
-Every framework log carries the same field set so a downstream
-processor can group, count, or alert without parsing strings:
+The worker opens one span per job attempt, target `nest_rs::queue`,
+name `process job`. The handler runs inside it, so any `tracing` event
+your service emits — and the framework's own start/end events — are
+tagged with the span's fields:
 
-| Field | Type | Notes |
-|---|---|---|
-| `processor` | `&'static str` | The processor host name, e.g. `AudioProcessor::transcode`. |
-| `queue` | `&'static str` | The Redis queue name. |
-| `concurrency` | `usize` | Fetch buffer (the in-flight ceiling), present on boot lines. |
-| `retries` | `usize` | The configured budget, present on boot lines. |
-| `job_id` | `String` | apalis-assigned id, present on per-job lines. |
-| `attempt` | `u32` | Attempt counter (`1` on first try). |
-| `elapsed_ms` | `u64` | Wall time of the handler call. |
+| Field | Notes |
+|---|---|
+| `queue` | The Redis queue name. |
+| `processor` | The processor host name, e.g. `AudioProcessor::transcode`. |
+| `job_id` | The apalis `TaskId` for this job. |
+| `attempt` | The apalis attempt counter (`1` on the first try, higher on retries). |
 
-Prefer the structured form (`queue = %name`, `job_id = %id`) over
-formatted strings. The OTLP appender propagates them as span
-attributes.
-
-## What boot looks like
-
-```text frame="terminal"
-2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
-2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
-2026-06-03T10:18:41Z DEBUG nest_rs::queue: skipped #[process] method: provider unreachable from app's module tree processor=ReportJobs::weekly queue=reports
-```
-
-Two lines per active processor (one `attached`, one `registered`) plus
-one `debug` skip for each `#[process]` method that compiled in but
-wasn't imported into this app — useful to confirm a shared `features`
-crate isn't accidentally activating handlers the binary doesn't want.
-
-<Aside>
-The skip line is `debug`, intentional: producing one info-level entry
-per non-reachable method in a large workspace would drown the boot
-log. If a method you expected to run doesn't show up in the
-`registered` lines, drop to `nest_rs::queue=debug` once and the skip
-explains why.
-</Aside>
+`attempt` distinguishes retries of the same `job_id`. The OTLP appender
+from `nest-rs-opentelemetry` exports these as span attributes.
 
 ## What a job's life looks like
 
-A successful job, one info line at start, one at end:
+On success the worker emits `job started` at `debug` and `job ok` at
+`info` (carrying `elapsed_ms`, the wall time of the handler call):
 
 ```text frame="terminal"
-2026-06-03T10:18:46Z  INFO nest_rs::queue: job started processor=AudioProcessor::transcode queue=audio job_id=01HFEX… attempt=1
-2026-06-03T10:18:46Z  INFO features::audio: transcoded file=track-1717405126521.mp3
-2026-06-03T10:18:46Z  INFO nest_rs::queue: job ok processor=AudioProcessor::transcode queue=audio job_id=01HFEX… attempt=1 elapsed_ms=342
+DEBUG process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: nest_rs::queue: job started
+ INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: features::audio: transcoded file=track-1717405126521.mp3
+ INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: nest_rs::queue: job ok elapsed_ms=342
 ```
 
-A retried job:
+A failed attempt emits `job failed` at `warn`, carrying `elapsed_ms`
+and the `error`:
 
 ```text frame="terminal"
-2026-06-03T10:19:02Z  INFO nest_rs::queue: job started processor=AudioProcessor::transcode queue=audio job_id=01HFFA… attempt=1
-2026-06-03T10:19:02Z  WARN nest_rs::queue: job failed; retrying processor=AudioProcessor::transcode queue=audio job_id=01HFFA… attempt=1 elapsed_ms=12 error="connection refused"
-2026-06-03T10:19:02Z  INFO nest_rs::queue: job started processor=AudioProcessor::transcode queue=audio job_id=01HFFA… attempt=2
-2026-06-03T10:19:02Z  INFO nest_rs::queue: job ok processor=AudioProcessor::transcode queue=audio job_id=01HFFA… attempt=2 elapsed_ms=298
+DEBUG process job{queue=audio processor=AudioProcessor::transcode job_id=01HFFA… attempt=1}: nest_rs::queue: job started
+ WARN process job{queue=audio processor=AudioProcessor::transcode job_id=01HFFA… attempt=1}: nest_rs::queue: job failed elapsed_ms=12 error=connection refused
 ```
 
-A job that exhausts its budget:
+The `attempt` field on the span is how you correlate a retry: apalis
+re-runs the same `job_id` with `attempt=2`, opening a fresh `process
+job` span. There is no separate terminal line — the retry budget lives
+in the apalis `RetryLayer`; see [Retries and
+failure](/queue/retries-and-failure/) for the policy behind `attempt`.
+
+## What boot looks like
+
+Each active processor logs one `attached` line (from the transport) and
+one `registered queue processor` line carrying its `concurrency` and
+`retries` budget. A `#[process]` method that compiled in but whose
+provider isn't reachable from this app's module tree is skipped with a
+`warn`:
 
 ```text frame="terminal"
-2026-06-03T10:19:30Z  WARN nest_rs::queue: job failed; retrying processor=AudioProcessor::transcode queue=audio job_id=01HFFB… attempt=3 error="…"
-2026-06-03T10:19:30Z ERROR nest_rs::queue: job failed; budget exhausted processor=AudioProcessor::transcode queue=audio job_id=01HFFB… attempts=4 error="…"
+ INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
+ INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
+ WARN nest_rs::queue: skipped #[process] method: provider unreachable from app's module tree processor=ReportJobs::weekly queue=reports
 ```
 
-The `error` line is the one to alert on — the budget is gone, the job
-is now in apalis's failed list, no further attempt is coming on its
-own.
+The skip line is `warn` — a linked-but-unimported handler is usually a
+wiring mistake worth surfacing, and it confirms a shared `features`
+crate isn't accidentally activating handlers this binary doesn't want.
+See [Wiring the worker](/queue/wiring/) for the module-gating rule.
 
-## Span structure
-
-The worker opens one span per job, target `nest_rs::queue`, name
-`job`. The handler runs inside it, so any `tracing::info!` your
-service emits is automatically tagged with the job's `job_id`,
-`processor`, `queue`, `attempt`. The OTLP appender from
-`nest-rs-opentelemetry` exports them as span attributes — the
-[OpenTelemetry / traces](/opentelemetry/traces/) page covers
-attribute mapping. The corresponding log-to-OTLP path is in
-[OpenTelemetry / logs](/opentelemetry/logs/).
+<Aside type="caution">
+A legacy payload with no wire envelope logs `processed an unversioned
+job payload` at `warn` (fields `queue`, `hint`) before it runs. It
+still executes; drain the queue to clear pre-envelope jobs. A payload
+tagged with an *unsupported* version fails the job instead of warning.
+</Aside>
 
 ## Filtering recipes
 
@@ -114,18 +99,18 @@ attribute mapping. The corresponding log-to-OTLP path is in
 RUST_LOG=info,nest_rs::queue=debug nestrs run dev worker
 ```
 
-`info` everywhere, `debug` on the queue path: gives you the
-boot-time skip lines plus the per-job dispatch decisions without
-turning the rest of the framework loud.
+`info` everywhere, `debug` on the queue path: adds the `job started`
+line per poll on top of the `job ok` / `job failed` outcomes.
 
 ```bash
 RUST_LOG=nest_rs::queue=warn nestrs run dev worker
 ```
 
-Strictly retries and failures — useful for tailing a healthy worker
-where the only thing you care about is "did anything go wrong."
+Strictly failures, skips, and unversioned warnings — useful for tailing
+a healthy worker where the only thing you care about is "did anything go
+wrong."
 
-## See also
+## Going further
 
 - [OpenTelemetry](/opentelemetry/) — installing the OTLP appender so
   these spans and structured logs reach a backend.

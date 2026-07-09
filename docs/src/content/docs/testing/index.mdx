@@ -32,7 +32,7 @@ Three categories, Rust's standard model plus the app e2e:
 | `crates/<crate>/src/**.rs` (`#[cfg(test)]`) | In-file logic, private items | no |
 | `crates/<crate>/tests/*.rs` | Crate's public API | no |
 | `crates/nest-rs-testing/tests/*.rs` | Cross-crate framework wiring | tailored |
-| `apps/<app>/tests/e2e.rs` | The app's real top-level module | ✓ real |
+| `apps/<app>/tests/e2e/main.rs` | The app's real top-level module | ✓ real |
 
 ## Install
 
@@ -94,7 +94,7 @@ persistence. `nestrs run test e2e` covers the rest. The full suite is
 
 > A wiring bug does not surface in a unit test.
 
-- **Every app ships a `tests/e2e.rs`** booting its real top-level module —
+- **Every app ships a `tests/e2e/main.rs`** booting its real top-level module —
   it proves the route table, the DI graph, the access-graph check, the
   authn/authz layers, and the data path are all wired.
 - **HTTP/GraphQL changes** require `nestrs run dev <app>` + `curl` against the
@@ -107,8 +107,15 @@ persistence. `nestrs run test e2e` covers the rest. The full suite is
 
 - `crates/nest-rs-testing/` — `TestApp`, `TestAppBuilder`,
   `EphemeralDatabase`, the in-process HTTP client.
-- `apps/api/tests/e2e.rs` and `apps/auth/tests/e2e.rs` —
+- `apps/api/tests/e2e/main.rs` and `apps/auth/tests/e2e/main.rs` —
   the live baseline tests.
 - [The Rust Book, ch. 11.3](https://doc.rust-lang.org/book/ch11-03-test-organization.html)
   and [the Cargo Book on integration tests](https://doc.rust-lang.org/cargo/guide/tests.html)
   — the underlying conventions.
+
+## Going further
+
+- [Unit tests](/testing/unit/) — pure logic next to the code, no DI boot.
+- [Integration tests](/testing/integration/) — a crate's public API in process.
+- [End-to-end tests](/testing/e2e/) — the real AppModule against live Postgres.
+- [Publish demo](/publish/) — the exemplar apps these tests ship against.

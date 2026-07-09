@@ -1,6 +1,6 @@
 ---
-title: Throttler
-description: Per-route rate limiting — a guard, a default limit from env, per-handler overrides via #[meta(Throttle::…)].
+title: Rate limiting
+description: "Per-route rate limiting — a guard, a default limit from env, per-handler overrides via #[meta(Throttle::…)]."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -119,7 +119,7 @@ Direct exposure: leave `TRUSTED_PROXIES` empty.
 ```bash frame="terminal"
 $ for i in {1..11}; do
     curl -s -o /dev/null -w "%{http_code} retry=%{header.retry-after}s\n" \
-      -X POST http://localhost:8080/items -d '{...}'
+      -X POST http://localhost:3000/items -d '{...}'
   done
 200 retry=s
 200 retry=s

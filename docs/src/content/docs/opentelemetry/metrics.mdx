@@ -1,6 +1,6 @@
 ---
 title: Metrics
-description: Inject Arc<OpenTelemetryMeter> and build counters, histograms or gauges; metrics batch on a PeriodicReader and export through the same OTLP endpoint as the traces.
+description: "Inject Arc<OpenTelemetryMeter> and build counters, histograms or gauges; readings batch on a PeriodicReader and export through the same OTLP endpoint."
 sidebar:
   order: 4
 ---
@@ -15,34 +15,34 @@ dependency.
 
 ## A first counter
 
+Inject the meter, then build the instrument from it. `Arc<OpenTelemetryMeter>`
+derefs to the inner `Meter`; the meter caches instruments by name, so building
+the counter at the call site is cheap and needs no extra field.
+
 ```rust
-use nest_rs_core::injectable;
-use nest_rs_opentelemetry::OpenTelemetryMeter;
-use opentelemetry::metrics::Counter;
 use std::sync::Arc;
 
+use nest_rs_core::injectable;
+use nest_rs_opentelemetry::OpenTelemetryMeter;
+
 #[injectable]
-pub struct UsersService {
+pub struct SignupMetrics {
     #[inject]
     meter: Arc<OpenTelemetryMeter>,
-    created: Counter<u64>,
 }
 
-impl UsersService {
-    pub async fn create(&self, input: CreateUser) -> anyhow::Result<User> {
-        let user = self.repo.insert(input).await?;
-        self.created.add(1, &[]);
-        Ok(user)
+impl SignupMetrics {
+    /// Call this after a successful signup.
+    pub fn record_signup(&self) {
+        self.meter.u64_counter("users.created").build().add(1, &[]);
     }
 }
 ```
 
 Counters, histograms, gauges — anything the
-[`opentelemetry`](https://docs.rs/opentelemetry) meter exposes works.
-`Arc<OpenTelemetryMeter>` derefs to the inner `Meter`, so
-`self.meter.u64_counter("users.created").build()` is the canonical
-construction pattern when you want to build instruments lazily inside an
-`impl` block.
+[`opentelemetry`](https://docs.rs/opentelemetry) meter exposes works. Inject
+`Arc<OpenTelemetryMeter>` into the service that owns the event and build the
+instrument lazily inside the method, as above.
 
 ## Attributes
 
@@ -52,7 +52,7 @@ attributes — the metric's labels at the OTel/Prometheus boundary.
 ```rust
 use opentelemetry::KeyValue;
 
-self.created.add(1, &[
+self.meter.u64_counter("users.created").build().add(1, &[
     KeyValue::new("org_id", org_id.to_string()),
     KeyValue::new("source", "api"),
 ]);
@@ -86,3 +86,9 @@ These come from the
 [`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions)
 schema, so any backend that understands OTel semconv (Grafana Cloud, Honeycomb,
 Datadog OTLP, …) keys on them out of the box.
+
+## Going further
+
+- [Traces](/opentelemetry/traces/) — the per-request story metrics aggregate.
+- [Logs](/opentelemetry/logs/) — structured events on the same OTLP endpoint.
+- [OpenTelemetry](/opentelemetry/) — the meter provider and OTLP export.

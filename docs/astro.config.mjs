@@ -21,6 +21,12 @@ const ogImageAlt =
 export default defineConfig({
   site,
   base,
+  // One entry per moved/deleted/renamed page (audit §2.8.B). No 404 for a URL
+  // that ever shipped.
+  redirects: {
+    '/graphql/dataloader/': '/database/dataloaders/',
+    '/throttler/': '/rate-limiting/',
+  },
   // GFM tables/strikethrough/task-lists must be enabled for .mdx — Astro 6.4+
   // only wires remark-gfm when `gfm: true` (Starlight still uses @astrojs/mdx@5).
   markdown: {
@@ -118,6 +124,8 @@ export default defineConfig({
         baseUrl: 'https://github.com/NestRS/NestRS/edit/main/docs/',
       },
       lastUpdated: true,
+      // Nine doors (audit §2.4.11): a newcomer reads the group labels as a path.
+      // Within-section order is per-page frontmatter `sidebar.order`.
       sidebar: [
         {
           label: 'Start here',
@@ -125,17 +133,35 @@ export default defineConfig({
             { label: 'Introduction', slug: 'index' },
             { label: 'Why NestRS', slug: 'why' },
             { label: 'Getting started', slug: 'getting-started' },
-            { label: 'Packages', slug: 'packages' },
-            { label: 'The Publish workspace', slug: 'publish' },
             { label: 'CLI', slug: 'cli' },
+            { label: 'The demo apps (Publish)', slug: 'publish' },
           ],
         },
         { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
-        { label: 'Fundamentals', items: [{ autogenerate: { directory: 'fundamentals' } }] },
-        { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
-        { label: 'HTTP', items: [{ autogenerate: { directory: 'http' } }] },
-        { label: 'Database', items: [{ autogenerate: { directory: 'database' } }] },
-        { label: 'Storage', items: [{ autogenerate: { directory: 'storage' } }] },
+        {
+          label: 'Concepts',
+          items: [
+            { label: 'Fundamentals', items: [{ autogenerate: { directory: 'fundamentals' } }] },
+            { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
+          ],
+        },
+        {
+          label: 'Transports',
+          items: [
+            { label: 'HTTP', items: [{ autogenerate: { directory: 'http' } }] },
+            { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },
+            { label: 'WebSockets', items: [{ autogenerate: { directory: 'websockets' } }] },
+            { label: 'MCP', items: [{ autogenerate: { directory: 'mcp' } }] },
+            { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
+          ],
+        },
+        {
+          label: 'Data',
+          items: [
+            { label: 'Database', items: [{ autogenerate: { directory: 'database' } }] },
+            { label: 'File storage', items: [{ autogenerate: { directory: 'storage' } }] },
+          ],
+        },
         {
           label: 'Security',
           items: [
@@ -152,25 +178,32 @@ export default defineConfig({
             },
           ],
         },
-        { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },
-        { label: 'WebSockets', items: [{ autogenerate: { directory: 'websockets' } }] },
-        { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
-        { label: 'Queue', items: [{ autogenerate: { directory: 'queue' } }] },
-        { label: 'Schedule', items: [{ autogenerate: { directory: 'schedule' } }] },
-        { label: 'Events', items: [{ autogenerate: { directory: 'events' } }] },
-        { label: 'MCP', items: [{ autogenerate: { directory: 'mcp' } }] },
-        { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
         {
-          label: 'Observability',
+          label: 'Background work',
           items: [
-            { label: 'OpenTelemetry', items: [{ autogenerate: { directory: 'opentelemetry' } }] },
-            { label: 'Server-Timing', slug: 'server-timing' },
+            { label: 'Queue', items: [{ autogenerate: { directory: 'queue' } }] },
+            { label: 'Scheduling', items: [{ autogenerate: { directory: 'schedule' } }] },
+            { label: 'Events', items: [{ autogenerate: { directory: 'events' } }] },
           ],
         },
-        { label: 'Health', items: [{ autogenerate: { directory: 'health' } }] },
-        { label: 'Throttler', items: [{ autogenerate: { directory: 'throttler' } }] },
-        { label: 'Decorators', slug: 'decorators' },
-        { label: 'Glossary', slug: 'glossary' },
+        {
+          label: 'Operations',
+          items: [
+            { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
+            { label: 'OpenTelemetry', items: [{ autogenerate: { directory: 'opentelemetry' } }] },
+            { label: 'Server-Timing', slug: 'server-timing' },
+            { label: 'Health checks', items: [{ autogenerate: { directory: 'health' } }] },
+            { label: 'Rate limiting', items: [{ autogenerate: { directory: 'rate-limiting' } }] },
+          ],
+        },
+        {
+          label: 'Reference',
+          items: [
+            { label: 'Packages', slug: 'packages' },
+            { label: 'Decorator reference', slug: 'decorators' },
+            { label: 'Glossary', slug: 'glossary' },
+          ],
+        },
       ],
     }),
   ],

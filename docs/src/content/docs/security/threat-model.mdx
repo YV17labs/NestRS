@@ -1,8 +1,6 @@
 ---
 title: Threat model
 description: What each layer catches, what it doesn't, and where the framework defers to your deployment — honest, scoped.
-sidebar:
-  order: 2
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -26,7 +24,7 @@ back on you.
 | [`Repo::scoped`](/security/authorization/row-level-filtering/) | Scope leakage on every read — handler cannot forget the filter | Custom queries that ignore `Scope<E, A>` |
 | [`Bind<S, A>`](/security/authorization/by-id-binding/) | Cross-tenant by-id reads (403) and missing rows (404) | Handlers that fetch by id outside `Bind` and skip `access` |
 | [`Authorize` shaper](/security/authorization/response-masking/) | Leak of unexposed columns, field-restricted grants | A handler returning a hand-built `serde_json::Value` shape that does not match `Model` (500) |
-| [`ThrottlerGuard`](/throttler/) | Brute-force login, naïve enumeration scrapes | DDoS at network or HTTP layer (use a CDN / edge throttler) |
+| [`ThrottlerGuard`](/rate-limiting/) | Brute-force login, naïve enumeration scrapes | DDoS at network or HTTP layer (use a CDN / edge throttler) |
 
 ## What the framework does **not** do
 
@@ -120,4 +118,4 @@ the pattern.
 - [Security overview](/security/) — the concept map.
 - [Negative-path tests](/testing/negative-path/) — auth refused,
   cross-tenant denied, rollback verified.
-- [Throttler](/throttler/) — per-handler rate limiting.
+- [Throttler](/rate-limiting/) — per-handler rate limiting.

@@ -1,6 +1,6 @@
 ---
 title: Dataloaders
-description: Batch field fetches without N+1 — auto-emitted PK and FK loaders from #[expose], plus #[dataloader] for custom keys.
+description: "Batch field fetches without N+1 — auto-emitted PK and FK loaders from #[expose], plus #[dataloader] for custom keys."
 sidebar:
   order: 6
 ---
@@ -14,6 +14,16 @@ collected during that frame. NestRS builds on
 [async-graphql](https://async-graphql.github.io/async-graphql/) for the
 loader runtime; the framework auto-emits the loaders relations need and lets
 you write your own for custom keys.
+
+A naïve resolver loop runs one query per parent; a dataloader collapses the `N`
+to `1`:
+
+```text
+GET /graphql { orgs { name users { name } } }
+  └─ select * from org                                       # 1
+  └─ select * from "user" where org_id = ?   (per org)       # N   ← naïve
+  └─ select * from "user" where org_id in ($1, … $n)         # 1   ← dataloader
+```
 
 ## Most relations need no loader code
 
@@ -32,7 +42,7 @@ GraphQL field auto-resolved through a dataloader. The macro emits:
   matching loader and returns the related object.
 
 ```rust
-#[expose(name = "Item", service = super::service::ItemsService)]
+#[expose(name = "Post", service = super::service::PostsService)]
 #[sea_orm(table_name = "item")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
@@ -55,7 +65,7 @@ pub enum Relation {
 }
 ```
 
-From this, the GraphQL `Item.org` field resolves through a per-request
+From this, the GraphQL `Post.org` field resolves through a per-request
 dataloader. No `#[dataloader]` to write, no wiring on the resolver — and
 every batch runs through `Repo::scoped(Action::Read)`, so the ability filter
 applies row-level on related rows as on any other read.
@@ -77,24 +87,24 @@ auto-resolved relation on the same entity — pick one source per
 relation — `by_name`, `by_tag`, a denormalized lookup. The signature is
 fixed by the trait:
 
-```rust title="src/items/service.rs"
+```rust title="src/posts/service.rs"
 use std::collections::HashMap;
 use nest_rs_authz::Action;
 use nest_rs_graphql::dataloader;
 use nest_rs_seaorm::{Repo, ServiceError};
 
 #[dataloader]
-impl ItemsService {
+impl PostsService {
     async fn by_name(
         &self,
         names: &[String],
-    ) -> Result<HashMap<String, Vec<Item>>, ServiceError> {
+    ) -> Result<HashMap<String, Vec<Post>>, ServiceError> {
         if names.is_empty() {
             return Ok(HashMap::new());
         }
-        let rows = Repo::<Items>::scoped(Action::Read)
-            .filter(entity::Column::Name.is_in(names.iter().cloned()))
-            .all(&Repo::<Items>::conn()?)
+        let rows = Repo::<Posts>::scoped(Action::Read)
+            .filter(entity::Column::Title.is_in(names.iter().cloned()))
+            .all(&Repo::<Posts>::conn()?)
             .await?;
         Ok(group_by_name(names, rows))
     }
@@ -109,7 +119,7 @@ Three things make this honest:
 - **Result, not silent empty.** A DB error returns `Err(_)`. **Never**
   map a DB error to an empty `HashMap` — that turns a failure into a
   silent miss, the worst kind.
-- **`Repo::scoped(Read)`, not raw `Items::find()`.** The ability filter
+- **`Repo::scoped(Read)`, not raw `Posts::find()`.** The ability filter
   applies, so a batch on behalf of one caller never returns another
   tenant's rows.
 
@@ -122,8 +132,8 @@ async fn items_named(
     &self,
     ctx: &Context<'_>,
     name: String,
-) -> Result<Vec<Item>> {
-    let loader = ctx.data_unchecked::<DataLoader<ItemsServiceByName>>();
+) -> Result<Vec<Post>> {
+    let loader = ctx.data_unchecked::<DataLoader<PostsServiceByName>>();
     Ok(loader.load_one(name).await?.unwrap_or_default())
 }
 ```
@@ -132,12 +142,12 @@ async fn items_named(
 
 A loader for entity `A` lives on `A`'s service. A service that reaches
 into entity `B` (e.g. `OrdersService` returning items) **injects
-`Arc<ItemsService>` and calls its loader** — it does not write its own
+`Arc<PostsService>` and calls its loader** — it does not write its own
 loader against the `item` table.
 
 The FK loader is part of the **owner's** service, never the consumer's.
-A resolver returning `Item` from an order field uses the auto-emitted
-`ItemsServiceById`; the loader is the property of `ItemsService` and any
+A resolver returning `Post` from an order field uses the auto-emitted
+`PostsServiceById`; the loader is the property of `PostsService` and any
 new feature reaches it through the existing one.
 
 ## Batches run on a snapshot of the request context

@@ -175,16 +175,20 @@ Typical mistake — controller registered without importing the port:
 pub struct PostsHttpModule;
 ```
 
+{/* TODO(step8-evidence): capture verbatim boot output from a real failing run */}
+
 ```text frame="terminal"
-Error: module access violation:
-  `PostsController` (in module `PostsHttpModule`) depends on `PostsService`, but
-  `PostsHttpModule` imports no module that provides it. `PostsService` is
-  provided by `PostsModule` — add `PostsModule` to
-  `#[module(imports = [...])]` of `PostsHttpModule`.
+Error: module access violation: `PostsController` (in module
+  `PostsHttpModule`) depends on `PostsService`, but `PostsHttpModule`
+  imports no module that provides it. `PostsService` is provided by
+  `PostsModule` — add `PostsModule` to `#[module(imports = [...])]` of
+  `PostsHttpModule`, or route the dependency through a module
+  `PostsHttpModule` already imports.
 ```
 
-The message names the consumer, the missing type, and the module that
-owns it. Boot fails before HTTP listens — not on the first request.
+The message names the consumer, the missing type, the owning module, and
+both fixes — import the owner, or route through a module already imported.
+Boot fails before HTTP listens — not on the first request.
 
 The same check applies to layers bound with
 `#[use_guards(...)]` / `#[use_filters(...)]` /

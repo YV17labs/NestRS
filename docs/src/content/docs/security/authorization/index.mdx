@@ -199,9 +199,15 @@ controller with the transport's authz module, and write a
 - [By-id binding](/security/authorization/by-id-binding/) —
   `Bind<S, A>` and the 404/403 distinction.
 - [Response masking](/security/authorization/response-masking/) —
-  declare `Authorize<A, E>` and masking is automatic; the
+  declare `Authorize<A, S>` and masking is automatic; the
   `mask`/`retain_wire_keys`/`WireModelDefaults` pipeline is documented
   as internals (skip on a first pass).
 - [Per-transport bridges](/security/authorization/per-transport-bridges/)
   — how GraphQL, WS, and MCP re-establish the ambient ability
   (explanation — useful once you add a second transport, not before).
+
+## Going further
+
+- [Authentication](/security/authentication/) — how the principal the ability reads gets attached.
+- [Database](/database/) — the `Repo` layer the query pre-filter joins into.
+- [Security](/security/) — the wider posture authn and authz compose into.

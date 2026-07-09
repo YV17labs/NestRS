@@ -1,9 +1,11 @@
 ---
 title: Traces
-description: Every request, job and scheduled tick opens a span; W3C traceparent propagation, sampling, and the per-request HTTP interceptor stitch distributed traces together.
+description: "Every request, job and scheduled tick opens a span; W3C traceparent propagation, sampling, and the HTTP interceptor stitch distributed traces together."
 sidebar:
   order: 2
 ---
+
+import { Aside } from '@astrojs/starlight/components';
 
 Traces come from `tracing` spans. Because `OpenTelemetry::init` links
 [`tracing-opentelemetry`](https://crates.io/crates/tracing-opentelemetry) to
@@ -32,16 +34,25 @@ per crate.
 
 ```rust
 #[get("/{id}")]
+#[tracing::instrument(skip(self), fields(user_id = %id.0))]
 async fn read(&self, id: Path<Uuid>) -> Result<Json<User>> {
-    let _span = tracing::info_span!("users.read", user_id = %id.0).entered();
     let user = self.svc.find(id.0).await?;
     Ok(Json(user))
 }
 ```
 
-Use `info_span!` for the span itself, `tracing::info!` for an event inside it.
+`#[tracing::instrument]` opens a span that stays current for the *whole* async
+fn, across every `.await`. Inside it, use `tracing::info!` for an event.
 Always prefer `field = %value` to `format!("{}", value)` — structured fields
 serialize cleanly to OTLP and stay filterable in the backend.
+
+<Aside type="caution">
+Never hold an entered span guard across an `.await`
+(`let _g = span.enter(); something.await`). The guard is thread-local; when the
+future yields and resumes on another worker thread the span goes wrong. Use
+`#[tracing::instrument]` (above) or `future.instrument(span).await` instead —
+both scope the span to the future, not the thread.
+</Aside>
 
 ## W3C propagation
 
@@ -99,3 +110,9 @@ automatically — there's nothing else to mount. Per request it:
 The access event itself is covered in [Logs](/opentelemetry/logs/) — toggle
 it with `NESTRS_HTTP__ACCESS_LOG=false`; the OTel span still opens, so
 propagation and OTLP export keep working.
+
+## Going further
+
+- [Logs](/opentelemetry/logs/) — the access event and structured fields on the span.
+- [Metrics](/opentelemetry/metrics/) — the aggregate counterpart to spans.
+- [OpenTelemetry](/opentelemetry/) — sampling, propagation, and OTLP export.

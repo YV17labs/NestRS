@@ -38,11 +38,11 @@ pub struct ApiModule;
 Three routes appear at boot:
 
 ```bash frame="terminal"
-$ curl -s http://localhost:8080/health/live
+$ curl -s http://localhost:3000/health/live
 {"status":"up","info":{},"error":{},"details":{}}
-$ curl -s http://localhost:8080/health/ready
+$ curl -s http://localhost:3000/health/ready
 {"status":"up","info":{},"error":{},"details":{}}
-$ curl -s http://localhost:8080/health/startup
+$ curl -s http://localhost:3000/health/startup
 {"status":"up","info":{},"error":{},"details":{}}
 ```
 
@@ -72,7 +72,7 @@ Every probe returns the same body. `info` holds the up indicators,
 operator can grep one bucket without iterating a list.
 
 ```bash frame="terminal"
-$ curl -s http://localhost:8080/health/ready | jq
+$ curl -s http://localhost:3000/health/ready | jq
 {
   "status": "up",
   "info": {
@@ -91,9 +91,9 @@ When one indicator drops, the response moves to `503` and the
 indicator migrates from `info` to `error` with its stringified cause:
 
 ```bash frame="terminal"
-$ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/health/ready
+$ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/health/ready
 503
-$ curl -s http://localhost:8080/health/ready | jq
+$ curl -s http://localhost:3000/health/ready | jq
 {
   "status": "down",
   "info": { "db": { "name": "db", "status": "up" } },

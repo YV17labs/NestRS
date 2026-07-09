@@ -179,7 +179,7 @@ Be honest about the failure modes a retry cannot fix:
   `DbErr` from the service, which gets mapped to the appropriate HTTP
   status. Use `retry_on_conflict` at the service level instead.
 
-The split is deliberate. The interceptor handles the easy case
+The split is deliberate. The interceptor handles the common case
 transparently (open / commit / rollback); the service handles the hard case
 explicitly (replay the work against a fresh snapshot). One way to do each.
 

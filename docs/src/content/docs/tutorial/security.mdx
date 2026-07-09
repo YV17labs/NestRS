@@ -113,7 +113,7 @@ use poem::web::Json;
 use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUserDto, Entity as UserEntity, UpdateUserDto, User, UsersService};
+use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[controller(path = "/users")]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -129,9 +129,10 @@ impl UsersController {
         &self,
         _authz: Authorize<Create, UserEntity>,
         auth: Ctx<Claims>,
-        body: Valid<Json<CreateUserDto>>,
+        body: Valid<Json<CreateUser>>,
     ) -> Result<Json<User>> {
-        Ok(Json(self.svc.create_in_org(body.into_inner(), auth.org_id).await?))
+        let user = self.svc.create_in_org(body.into_inner(), auth.org_id).await?;
+        Ok(Json(User::from(&user)))
     }
 
     #[get("/:id")]
@@ -210,9 +211,12 @@ ability check. Three failure shapes:
 | The row exists but the ability refuses it | `403` |
 | The `:id` segment isn't a valid UUID | `400` |
 
-A `403` instead of `404` is deliberate — a `404` would leak the
-existence of the row. A `500` would mean the ambient ability didn't
-install; that's a wiring bug.
+Returning `403` (not `404`) when the row exists but the ability refuses
+it does reveal that the row exists — nestrs accepts that leak
+deliberately; see [by-id
+binding](/security/authorization/by-id-binding/) for when to collapse
+the `403` path into a `404`. A `500` would mean the ambient ability
+didn't install; that's a wiring bug.
 
 **Response masking on every body.** The masker runs after the handler
 returns. It reconstructs the full `User` model from the body, walks
@@ -253,4 +257,7 @@ never had to know.
 - `Bind<UsersService, Read>` on the by-id route — `403` on a denied
   row, `404` on a missing one, both without manual checks.
 
-[Next: mirror the feature on GraphQL →](/tutorial/graphql/)
+## Going further
+
+- [Mirror on GraphQL](/tutorial/graphql/) — the next step: expose the same feature through a resolver.
+- [Add login](/security/add-login/) — the reference page for issuing the JWT these guards verify.

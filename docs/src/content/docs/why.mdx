@@ -23,7 +23,7 @@ written slightly differently in two different files.
 <Aside>
   If you've used NestJS, the layout will feel familiar — modules,
   decorators, thin handlers, the same layer vocabulary. That's the
-  lineage we acknowledge here, and only here.
+  lineage we acknowledge.
 
   Underneath, it's a different machine. NestRS is built around Rust's
   type system, async runtime, and trait rules from day one — not
@@ -32,7 +32,8 @@ written slightly differently in two different files.
   data access) NestRS treats as framework defects: checked at compile
   time, enforced at boot, carried transparently at runtime.
 
-  Everywhere else in these docs, NestRS speaks for itself.
+  Beyond the lineage and the benchmark comparison, these docs let
+  NestRS speak for itself.
 </Aside>
 
 ## Why now
@@ -101,8 +102,12 @@ install a pool executor for the same code path.
 // Ambient executor — no per-method ceremony.
 impl UsersService {
     pub async fn rename(&self, id: Uuid, name: String) -> Result<User, ServiceError> {
-        let user = self.repo.find_by_id(id).await?;
-        self.repo.update(user, |m| m.name = name).await
+        let user = Repo::<Users>::find_by_id(id)
+            .await?
+            .ok_or_else(|| ServiceError::not_found("user"))?;
+        let mut active = user.into_active_model();
+        active.name = Set(name);
+        Ok(User::from(&Repo::<Users>::update(active).await?))
     }
 }
 ```
@@ -160,7 +165,7 @@ equivalent Node stack on identical hardware.
   enforces is static: types and module imports, checked at boot. There is no
   `resolve<T>()` you are expected to call from user code.
 
-## Where to go next
+## Going further
 
 - [Getting started](/getting-started/) — install, run an app, build your first feature.
 - [The Publish workspace](/publish/) — the fictional product every example app tells.

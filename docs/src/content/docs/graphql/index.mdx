@@ -29,7 +29,7 @@ cargo add nest-rs-graphql
 ## The minimal resolver
 
 ```rust title="src/greeting/resolver.rs"
-use nest_rs_graphql::{query, resolver};
+use nest_rs_graphql::resolver;
 
 #[resolver]
 pub struct GreetingResolver;
@@ -55,6 +55,12 @@ impl GreetingResolver {
   automatic response masking); a method with neither does not compile.
 - Arguments are mapped to GraphQL input arguments by serde. `Option<T>`
   becomes nullable.
+
+`#[query]`, `#[mutation]`, `#[field_resolver]`, `#[public]`,
+`#[authorize]` and `#[inject]` are **inner attributes** the `#[resolver]`
+macro consumes in place — there is nothing to import for them. Only
+`resolver` (and `crud` / `dataloader` on the pages that use them) comes
+from `nest_rs_graphql`.
 
 Mount the GraphQL transport once at the app root:
 
@@ -97,7 +103,7 @@ A resolver injects providers like any other struct:
 
 ```rust
 use std::sync::Arc;
-use nest_rs_graphql::{query, resolver};
+use nest_rs_graphql::resolver;
 use crate::greeting::service::GreetingService;
 
 #[resolver]
@@ -119,7 +125,7 @@ impl GreetingResolver {
 The container resolves `GreetingService` from the import tree. No
 container handle to thread, no factory to call.
 
-## Where to go next
+## In this section
 
 The GraphQL surface fans out from here. Each page covers one concern:
 
@@ -131,7 +137,7 @@ The GraphQL surface fans out from here. Each page covers one concern:
 - [Relations resolve themselves](/graphql/relations/) — declare a
   SeaORM relation, get a typed GraphQL field with a batched loader for
   free.
-- [Dataloaders](/graphql/dataloader/) — `#[dataloader]` on a service
+- [Dataloaders](/database/dataloaders/) — `#[dataloader]` on a service
   method for custom batched fetches, beyond what relations give you.
 - [Errors](/graphql/errors/) — `async_graphql::Error`, extensions,
   and mapping `ServiceError` to a GraphQL envelope.

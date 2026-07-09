@@ -1,8 +1,6 @@
 ---
 title: Packages
 description: Every opt-in crate the NestRS framework ships — grouped by concern, with Cargo names, umbrella features, and links to the docs.
-sidebar:
-  order: 3
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -36,6 +34,9 @@ slices.
 | [`nest-rs`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs) | *(always)* | Re-exports core + optional surface crates; `nest_rs::prelude` for the common case | [Getting started](/getting-started/) |
 | [`nest-rs-core`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-core) | *(via umbrella)* | DI container, `#[module]`, lifecycle hooks, boot-time access graph | [Fundamentals](/fundamentals/) |
 
+Default features: `http`, `config` — every other surface crate is opt-in via
+`features = [...]`.
+
 ## Transports
 
 Each transport is a module you import in `AppModule`. HTTP-shaped surfaces
@@ -57,7 +58,7 @@ Each transport is a module you import in `AppModule`. HTTP-shaped surfaces
 | [`nest-rs-database`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-database) | `database` | ORM-agnostic executor seam — ambient request/job context any driver implements | [Database](/database/) · [Writing a driver](/database/writing-a-driver/) |
 | [`nest-rs-seaorm`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-seaorm) | `seaorm` | First-class SeaORM integration — `DatabaseModule`, `Repo`, transactions, dataloaders | [Database](/database/) |
 | [`nest-rs-resource`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-resource) | *(direct dep)* | `#[expose]` — one entity declaration for GraphQL + OpenAPI + CRUD helpers | [CRUD](/database/crud/) · [Relations](/graphql/relations/) |
-| [`nest-rs-storage`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-storage) | `storage` | S3-compatible object storage — injectable `Storage`, presigned URLs, via `object_store` | [Storage](/storage/) |
+| [`nest-rs-storage`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-storage) | *(direct dep)* | S3-compatible object storage — injectable `Storage`, presigned URLs, via `object_store` | [Storage](/storage/) |
 
 ## Security
 
@@ -99,7 +100,7 @@ globally on `App::builder()` or per controller / resolver / gateway.
 |---|---|---|---|
 | [`nest-rs-config`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-config) | `config` | Namespaced env + file config bound to typed `#[config]` structs | [Configuration](/configuration/) |
 | [`nest-rs-health`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-health) | `health` | Kubernetes-style liveness / readiness / startup probes | [Health](/health/) |
-| [`nest-rs-throttler`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-throttler) | `throttler` | Per-route rate limiting via `ThrottlerGuard` | [Throttler](/throttler/) |
+| [`nest-rs-throttler`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-throttler) | `throttler` | Per-route rate limiting via `ThrottlerGuard` | [Throttler](/rate-limiting/) |
 | [`nest-rs-opentelemetry`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-opentelemetry) | `opentelemetry` | Logs, traces, metrics, W3C propagation, OTLP export | [OpenTelemetry](/opentelemetry/) |
 | [`nest-rs-server-timing`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-server-timing) | `server-timing` | W3C `Server-Timing` response header (independent of OTel) | [Server-Timing](/server-timing/) |
 
@@ -124,7 +125,7 @@ packages a deployable usually pulls in.
 | MCP assistant | `http`, `mcp`, `config`, `authn`, `authz` |
 | Token issuer | `http`, `config`, `seaorm`, `authn` |
 
-See [The Publish workspace](/publish/) for six real apps that follow these
+See [The Publish workspace](/publish/) for five real apps that follow these
 profiles.
 
 ## Not listed here
@@ -136,7 +137,7 @@ re-exports what you need. For a decorator index see
 
 **Your product's `features` crate** holds domain modules (entities, services,
 controllers per transport). It is workspace-local and not published to
-crates.io — copy [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users/)
+crates.io — copy [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users/)
 as the exemplar.
 
 ## Adding a crate to your app
@@ -176,3 +177,9 @@ nest-rs = { version = "0.2", features = ["http", "seaorm", "graphql"] }
 
 Same crates underneath; switch to per-crate dependencies when the app
 hardens.
+
+## Going further
+
+- [Getting started](/getting-started/) — scaffold an app and import the first crates.
+- [The Publish workspace](/publish/) — five apps that follow these binary profiles.
+- [Fundamentals](/fundamentals/) — the `nest-rs-core` container every crate wires into.

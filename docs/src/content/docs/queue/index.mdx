@@ -72,7 +72,7 @@ Adapters carry transport mechanics; the service carries intent.
 - **`#[process(queue, concurrency, retries)]`** binds the method to a
   Redis queue name (stringly-typed, the known cost), bounds the
   in-flight jobs, and gives an apalis retry budget. The job type is
-  read from the method's second parameter.
+  read from the method's first parameter after `&self`.
 
 The job argument also binds a [pipe](/fundamentals/pipes/):
 `Piped<P, T>` / `Valid<T>` expose the wire payload `T`, run the pipe
@@ -88,25 +88,25 @@ different concurrencies, same service:
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[injectable]
 pub struct AudioProcessor {
-    #[inject] svc_audio: Arc<AudioService>,
-    #[inject] svc_media: Arc<MediaService>,
+    #[inject] audio_svc: Arc<AudioService>,
+    #[inject] media_svc: Arc<MediaService>,
 }
 
 #[processor]
 impl AudioProcessor {
     #[process(queue = "audio", concurrency = 5, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-        self.svc_audio.transcode(&job.file).await
+        self.audio_svc.transcode(&job.file).await
     }
 
     #[process(queue = "audio.preview", concurrency = 10, retries = 1)]
     async fn preview(&self, job: PreviewCommand) -> Result<()> {
-        self.svc_media.preview(&job.file).await
+        self.media_svc.preview(&job.file).await
     }
 
     #[process(queue = "audio.cleanup")]
     async fn cleanup(&self, job: CleanupCommand) -> Result<()> {
-        self.svc_media.cleanup(job.older_than).await
+        self.media_svc.cleanup(job.older_than).await
     }
 }
 ```
@@ -138,20 +138,23 @@ Two modules, two roles:
   producer-only app does NOT import this.
 
 ```rust title="apps/worker/src/module.rs"
+use nest_rs_config::ConfigModule;
 use nest_rs_core::module;
 use nest_rs_redis::{QueueModule, QueueWorkerModule};
 
-use features::audio::{AudioModule, AudioQueueModule};
+use features::audio::AudioQueueModule;
 
 #[module(imports = [
     ConfigModule::for_root(),
     QueueModule::for_root(None),
     QueueWorkerModule,
-    AudioModule,
     AudioQueueModule,
 ])]
 pub struct WorkerModule;
 ```
+
+`AudioQueueModule` imports the `AudioModule` port itself, so the app
+lists only the adapter — registration is idempotent.
 
 `main` is the universal skeleton:
 
@@ -179,11 +182,14 @@ $ nestrs run dev worker
 ```
 
 ```text frame="terminal"
-2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
-2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
-2026-06-03T10:18:46Z  INFO features::audio: transcoded file=track-1717405126521.mp3
-2026-06-03T10:18:46Z  INFO nest_rs::queue: job ok queue=audio elapsed=342ms
+ INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
+ INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
+ INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: features::audio: transcoded file=track-1717405126521.mp3
+ INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: nest_rs::queue: job ok elapsed_ms=342
 ```
+
+The two `process job{…}` lines share the per-job span; see
+[Observability](/queue/observability/) for the full field set.
 
 ## Going further
 

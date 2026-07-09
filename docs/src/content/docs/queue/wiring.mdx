@@ -37,21 +37,20 @@ a clear error.
 
 ## The worker app
 
-The worker imports both modules plus the feature's port + queue
-adapter. That's it.
+The worker imports both queue modules plus the feature's queue adapter.
+That's it — `AudioQueueModule` pulls in the `AudioModule` port itself.
 
 ```rust title="apps/worker/src/module.rs"
 use nest_rs_config::ConfigModule;
 use nest_rs_core::module;
 use nest_rs_redis::{QueueModule, QueueWorkerModule};
 
-use features::audio::{AudioModule, AudioQueueModule};
+use features::audio::AudioQueueModule;
 
 #[module(imports = [
     ConfigModule::for_root(),
     QueueModule::for_root(None),
     QueueWorkerModule,
-    AudioModule,
     AudioQueueModule,
 ])]
 pub struct WorkerModule;
@@ -77,21 +76,20 @@ A producer-only binary imports `QueueModule::for_root(...)` and skips
 `QueueWorkerModule` entirely. It gets `Arc<QueueConnection>` to push
 with — and no worker spawn, no drained inventory, no apalis monitor.
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (abridged)"
 use nest_rs_config::ConfigModule;
 use nest_rs_core::module;
-use nest_rs_database::DatabaseModule;
 use nest_rs_http::HttpModule;
 use nest_rs_redis::QueueModule;
+use nest_rs_seaorm::DatabaseModule;
 
-use features::audio::{AudioHttpModule, AudioModule, AudioScheduleModule};
+use features::audio::{AudioHttpModule, AudioScheduleModule};
 
 #[module(imports = [
     ConfigModule::for_root(),
     HttpModule::for_root(None),
     DatabaseModule::for_root(None),
     QueueModule::for_root(None),
-    AudioModule,
     AudioHttpModule,
     AudioScheduleModule,
 ])]
@@ -135,9 +133,8 @@ injects something its module doesn't own or import transitively.
 
 ```text frame="terminal"
 $ nestrs run dev worker
-2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
-2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
-2026-06-03T10:18:41Z  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::preview queue=audio.preview concurrency=10 retries=1
+ INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
+ INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
 ```
 
 One `attached` line per transport, one `registered` line per
@@ -159,3 +156,9 @@ processor` lines — the worker side never wakes up.
   worker shapes side by side.
 - [fundamentals/modules](/fundamentals/modules/) — boot phases,
   imports, dynamic modules, the access graph.
+
+## Going further
+
+- [Producing jobs](/queue/producing-jobs/) — enqueue from a service.
+- [Retries and failure](/queue/retries-and-failure/) — the worker-side failure budget.
+- [Observability](/queue/observability/) — the boot and per-job lines this wiring emits.

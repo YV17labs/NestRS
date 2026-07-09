@@ -60,9 +60,11 @@ the body needs a custom shape (e.g. an error envelope with a `code`
 field).
 
 A feature owns one error type — usually the one it already returns from
-its service. The framework's plumbing errors (`nest_rs_seaorm::ServiceError`,
-`nest_rs_authn::AuthError` …) ship their own `ResponseError` impls, so
-service-layer `?` works without a feature-level conversion.
+its service. The framework's plumbing errors carry their own HTTP mapping:
+`nest_rs_seaorm::ServiceError` and the OAuth `nest_rs_authn::TokenError`
+ship `ResponseError` impls, so service-layer `?` works without a
+feature-level conversion. (`nest_rs_authn::AuthError` maps itself through
+`IntoResponse` instead — see [the table below](#framework-errors-carry-their-own-mapping).)
 
 ## Structured bodies with `ProblemDetails`
 
@@ -121,7 +123,7 @@ automatically; an absent `detail` or `instance` is omitted from the body
 |-----------|-----|
 | The error is a variant of a feature's own enum, used by ≥ 2 routes | `ResponseError` on the enum |
 | A one-off route raises a problem the enum doesn't model (e.g. a glue route checking a precondition) | `ProblemDetails` inline |
-| The service returns a framework error (`ServiceError`, `AuthError`, …) | Nothing — the framework's `ResponseError` impl already maps it |
+| The service returns a framework error (`ServiceError`, `TokenError`, `AuthError`, …) | Nothing — the framework's own mapping already renders it |
 | The body shape must match an external spec (CloudEvents, your own envelope) | Override `as_response` on the feature error's `ResponseError` impl |
 
 A feature's own error type is the canonical home. `ProblemDetails` is
@@ -129,15 +131,25 @@ the right tool for the leftovers — never the goal.
 
 ## Framework errors carry their own mapping
 
-Three of the framework's error types ship a `ResponseError` impl out of
-the box. They surface on `?` through any handler that calls a service
-without writing a single line of mapping code:
+The framework's error types carry their own HTTP mapping, so they surface
+on a handler that calls a service without a single line of conversion code:
 
-| Error | Source | Common statuses |
-|-------|--------|-----------------|
-| `nest_rs_seaorm::ServiceError` | Repo, CrudService, dataloader | `404` not found, `409` conflict, `500` else |
-| `nest_rs_authn::AuthError` | Strategy authentication | `401` unauthorized |
-| `nest_rs_authz::AbilityError` | Ability denial | `403` forbidden |
+| Error | Source | Renders as |
+|-------|--------|------------|
+| `nest_rs_seaorm::ServiceError` | Repo, CrudService, dataloader | `ResponseError` — `422` validation/invalid, `409` conflict, `403` forbidden, `404` not found, `500` else |
+| `nest_rs_authn::TokenError` | OAuth token endpoint | `ResponseError` — `400` bad grant/scope, `401` invalid credentials, `500` signing/backend |
+| `nest_rs_authn::AuthError` | Strategy authentication | `IntoResponse` — `401` challenge (`500` when the identity store is unavailable) |
+
+The two `ResponseError` types convert into `poem::Error`, so `?`
+propagates them through a `poem::Result` handler. `AuthError` implements
+`IntoResponse` rather than `ResponseError`: it is returned as a handler's
+own error type (`Result<T, AuthError>`), not `?`-propagated into a
+`poem::Result`.
+
+There is **no `AbilityError`** — an ability denial is not an error. It is
+a guard denial, returned as an `Ok(403)` response by `AuthzGuard`, so it
+never travels the `?`/`ResponseError` path at all (see
+[Guards](/fundamentals/guards/)).
 
 A feature only writes its own error enum for genuinely domain-specific
 wire contracts (a custom error code clients key on) or for security-opaque
@@ -149,6 +161,6 @@ framework's mapping.
 - [Error handling](/fundamentals/exception-filters/) — the wider story:
   `ExceptionFilter` for typed catches, `Filter` for unconditional
   mapping, `ResponseError` as the default.
-- [Responses](/http/responses/) — the success side, and the known
-  limitation when `#[http_code]` sits on a handler that may `Err`.
+- [Responses](/http/responses/) — the success side, and how `#[http_code]`
+  leaves a handler's `Err` status untouched.
 - [Controllers & routes](/http/controllers/) — the route table.

@@ -1,6 +1,6 @@
 ---
 title: Validate inputs
-description: Rules on the entity flow into #[crud]'s generated POST /posts — a malformed body becomes a structured 400 before the handler runs.
+description: "Rules on the entity flow into #[crud]'s generated POST /posts — a malformed body becomes a structured 400 before the handler runs."
 sidebar:
   order: 5
 ---
@@ -9,7 +9,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 You already wrote the validation rules on the entity — page 2. The
 `#[crud]` macro's generated `POST /posts` handler takes
-`Valid<Json<CreatePostDto>>`, so every request body is checked against
+`Valid<Json<CreatePost>>`, so every request body is checked against
 those rules before `PostsService::create` runs. By the end of this page,
 `curl` returns a structured `400` for an empty title and the service
 never sees the bad input.
@@ -24,7 +24,7 @@ body in `Valid<...>`:
 ```rust title="(expanded by #[crud] — you don't write this)"
 async fn create(
     &self,
-    __body: ::nest_rs_http::Valid<::poem::web::Json<CreatePostDto>>,
+    __body: ::nest_rs_http::Valid<::poem::web::Json<CreatePost>>,
 ) -> ::poem::Result<::poem::web::Json<Post>> {
     // delegates to CrudService::create
 }
@@ -32,7 +32,7 @@ async fn create(
 
 When you later override `create` on a richer feature — org id from a JWT,
 an explicit authz check — you keep the same extractor:
-`Valid<Json<CreatePostDto>>`. The
+`Valid<Json<CreatePost>>`. The
 [`users` controller in `api`](/tutorial/security/) is the
 reference override.
 
@@ -56,7 +56,7 @@ pub body: String,
 ```
 
 `#[expose]` carries the `validate(...)` attribute through to
-`CreatePostDto` and `UpdatePostDto`. No second declaration on the
+`CreatePost` and `UpdatePost`. No second declaration on the
 DTO; the entity is the single source.
 
 ## The bad-body response
@@ -117,16 +117,20 @@ form binds to. The handler never sees either.
 
 ## A custom rule with `#[validate(custom)]`
 
-When `validator`'s built-in rules aren't enough, point at a function:
+When `validator`'s built-in rules aren't enough, point the entity
+field's `validate(...)` at a function — no hand-written DTO, the rule
+rides through to `CreatePost` / `UpdatePost` exactly like the built-in
+ones:
 
-```rust
-#[derive(Deserialize, Validate)]
-pub struct CreatePostDto {
-    #[validate(length(min = 1), custom(function = "not_a_placeholder_title"))]
-    pub title: String,
-    pub body: String,
-}
+```rust title="crates/features/src/posts/entity.rs"
+#[expose(
+    input(create, update),
+    validate(length(min = 1), custom(function = "not_a_placeholder_title"))
+)]
+pub title: String,
+```
 
+```rust title="crates/features/src/posts/entity.rs"
 fn not_a_placeholder_title(title: &str) -> Result<(), validator::ValidationError> {
     if title.eq_ignore_ascii_case("todo") {
         return Err(validator::ValidationError::new("placeholder_title"));
@@ -147,4 +151,7 @@ The error `code` (`"placeholder_title"`) surfaces in `details.title[].code`
 - A pattern you carry forward: entity rules → generated or overridden
   handlers that take `Valid<Json<E>>`.
 
-[Next: persist through Postgres →](/tutorial/database/)
+## Going further
+
+- [Persist through Postgres](/tutorial/database/) — the next step: wire `DatabaseModule` and a migration.
+- [Pipes](/fundamentals/pipes/) — the reference page for `Valid<E>` and the pipe layer.

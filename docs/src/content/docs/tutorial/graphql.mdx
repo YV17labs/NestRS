@@ -40,7 +40,7 @@ use nest_rs_seaorm::graphql::bind;
 use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUserDto, Entity as UserEntity, UpdateUserDto, User, UsersService};
+use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[resolver]
 #[use_guards(AuthGuard, AuthzGuard)]
@@ -53,13 +53,13 @@ pub struct UsersResolver {
     service = svc,
     entity = UserEntity,
     output = User,
-    create = CreateUserDto,
-    update = UpdateUserDto,
+    create = CreateUser,
+    update = UpdateUser,
 )]
 impl UsersResolver {
     #[mutation]
     #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUserDto) -> Result<User> {
+    async fn create_user(&self, ctx: &Context<'_>, input: CreateUser) -> Result<User> {
         let actor = ctx.data::<Claims>()?;
         let user = self.svc.create_in_org(input, actor.org_id).await?;
         Ok(User::from(&user))
@@ -95,7 +95,7 @@ are different:
 
 | HTTP | GraphQL | Job |
 |------|---------|-----|
-| `Authorize<Create, E>` extractor | `#[authorize(Create, E)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
+| `Authorize<Create, users::Entity>` extractor | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
 | `Bind<UsersService, Read>` extractor | `bind::<UsersService, Read>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
 | `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the authz bridge seeded |
 
@@ -189,7 +189,7 @@ field resolver on the wire DTO. No `#[field_resolver]` to write, no
 `#[dataloader]` to call by hand.
 
 ```rust title="crates/features/src/users/entity.rs"
-#[expose(name = "User", service = super::service::UsersService)]
+#[expose(name = "User", service = super::service::UsersService, graphql)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 pub struct Model {
@@ -256,4 +256,8 @@ the SDL when you ask for it.
 - An auto-resolved `User.org` field that batches through a dataloader
   and respects the row-level scope.
 
-[Next: lock it down with an e2e test →](/tutorial/testing/)
+## Going further
+
+- [Tutorial overview](/tutorial/) — recap the full `posts` build, start to finish.
+- [GraphQL](/graphql/) — the reference page for resolvers, dataloaders, and the authz bridge.
+- [Publish](/publish/) — the reference workspace where this multi-transport feature ships.

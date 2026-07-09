@@ -2,7 +2,7 @@
 title: Pipes
 description: Stateless transforms at the request boundary — parse, normalize, validate before the handler runs.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -96,7 +96,7 @@ use serde::Deserialize;
 use validator::Validate;
 
 #[derive(Deserialize, Validate)]
-pub struct CreateUserDto {
+pub struct CreateUser {
     #[validate(email)]
     email: String,
     #[validate(length(min = 8))]
@@ -104,7 +104,7 @@ pub struct CreateUserDto {
 }
 
 #[post("/")]
-async fn create(&self, Valid(Json(input)): Valid<Json<CreateUserDto>>)
+async fn create(&self, Valid(Json(input)): Valid<Json<CreateUser>>)
     -> Result<Json<User>>
 {
     Ok(Json(self.svc.create(input).await?))

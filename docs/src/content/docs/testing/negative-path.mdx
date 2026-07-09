@@ -20,8 +20,10 @@ catch bugs the happy path can't:
 - **No auth → 401.** A controller missing
   `#[use_guards(AuthGuard, …)]` silently exposes the route — this test
   forces the regression to surface.
-- **Cross-tenant → 403, not 404 and not 500.** A 404 leaks existence;
-  a 500 means the authz scope did not install. Both are bugs.
+- **Cross-tenant → 403, not 500.** The framework's posture is an honest
+  `403`: the row exists but is off-limits, so `403` *confirms* existence by
+  design (see [route model binding](/security/authorization/by-id-binding/)).
+  A `500` means the authz scope never installed — that one is a bug.
 - **Malformed input → 400 with the wire error shape.** Confirms the
   pipe runs, the error mapping survives, and the body matches the
   client contract.
@@ -66,8 +68,9 @@ async fn create_with_expired_token_returns_401() {
 
 A caller authenticated as tenant A asking for tenant B's resource
 returns `403` — the row exists, the caller cannot see it. `404` would
-leak existence; `500` would mean `Ability::condition_for` never
-installed.
+*hide* existence instead (a stricter posture you opt into per
+[route model binding](/security/authorization/by-id-binding/)); `500`
+would mean `Ability::condition_for` never installed.
 
 ```rust
 #[tokio::test]
@@ -161,3 +164,9 @@ A small suite can interleave positives and negatives in one file
 instead — the split matters less than the coverage. What matters is
 that every endpoint with a mutation or scoped read has its four
 failure modes asserted somewhere.
+
+## Going further
+
+- [Policy tests](/testing/policy/) — `Ability::mask` and `condition_for` as pure units.
+- [Security](/security/) — the guards, abilities, and scoping these tests exercise.
+- [End-to-end tests](/testing/e2e/) — the happy paths these failure modes pair with.

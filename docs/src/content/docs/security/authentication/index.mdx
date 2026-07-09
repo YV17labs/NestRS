@@ -175,7 +175,7 @@ re-parse them:
 
 Both return `None` rather than erroring on missing/malformed headers
 — the strategy decides whether a missing credential is an `AuthError`
-or simply an anonymous request the guard lets through on a `#[public]`
+or an anonymous request the guard lets through on a `#[public]`
 route.
 
 ## Errors
@@ -208,3 +208,9 @@ shape of that path.
 
 Once the principal is on the request, the authorization layer takes
 over — see [Authorization](/security/authorization/).
+
+## Going further
+
+- [JWT](/security/authentication/jwt/) — verify a signed bearer token on a resource server.
+- [OAuth2](/security/authentication/oauth2/) — the authorization-code flow with PKCE.
+- [Authorization](/security/authorization/) — what the caller may do once identified.

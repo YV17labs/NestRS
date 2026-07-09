@@ -1,6 +1,6 @@
 ---
 title: Messages
-description: The JSON envelope, the #[subscribe_message] signature, and the Result/Err return contract that ships error frames.
+description: "The JSON envelope, the #[subscribe_message] signature, and the Result/Err return contract that ships error frames."
 sidebar:
   order: 2
 ---
@@ -27,8 +27,8 @@ envelope:
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
-    async fn on_message(&self, msg: SendMessage) -> ChatMessage {
-        self.room.record(msg)
+    async fn on_message(&self, msg: SendMessageDto) -> ChatMessageDto {
+        self.svc.record(msg)
     }
 }
 ```
@@ -50,13 +50,13 @@ calls `serde_json::from_value` under the hood:
 
 ```rust
 #[derive(serde::Deserialize)]
-struct SendMessage {
+struct SendMessageDto {
     author: String,
     text: String,
 }
 
 #[subscribe_message("message")]
-async fn on_message(&self, msg: SendMessage) { /* ... */ }
+async fn on_message(&self, msg: SendMessageDto) { /* ... */ }
 ```
 
 A malformed payload (wrong shape, missing fields) is treated as a
@@ -78,8 +78,8 @@ A handler that takes no payload accepts `null` or a missing `data` key
 
 ```rust
 #[subscribe_message("history")]
-async fn history(&self) -> Vec<ChatMessage> {
-    self.room.history()
+async fn history(&self) -> Vec<ChatMessageDto> {
+    self.svc.history()
 }
 ```
 
@@ -103,7 +103,7 @@ the reply behavior:
 The error frame is shaped like any other envelope:
 
 ```json
-{ "event": "message", "data": { "error": "author `banned` is not allowed to post" } }
+{ "event": "send", "data": { "error": "text must not be empty" } }
 ```
 
 The string comes from `e.to_string()` — i.e. the `Display` impl of your
@@ -129,7 +129,7 @@ no reply to the sender:
 
 ```rust
 #[subscribe_message("typing")]
-async fn typing(&self, msg: SendMessage, client: &WsClient) {
+async fn typing(&self, msg: SendMessageDto, client: &WsClient) {
     let _ = client.broadcast("typing", &msg);
 }
 ```
@@ -144,7 +144,7 @@ event:
 ```rust
 #[subscribe_message("presence")]
 async fn presence(&self) -> usize {
-    self.room.present()
+    self.svc.present()
 }
 ```
 
@@ -171,11 +171,11 @@ enum SendError {
 }
 
 #[subscribe_message("send")]
-async fn send(&self, msg: SendMessage) -> Result<ChatMessage, SendError> {
+async fn send(&self, msg: SendMessageDto) -> Result<ChatMessageDto, SendError> {
     if msg.text.is_empty() {
         return Err(SendError::Empty);
     }
-    Ok(self.room.record(msg))
+    Ok(self.svc.record(msg))
 }
 ```
 

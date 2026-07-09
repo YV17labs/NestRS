@@ -164,7 +164,7 @@ your deployment terminates TLS at a load balancer, the LB must strip and
 rewrite those headers so only its own value reaches the app.
 
 Trusted-proxy validation (peer ∈ allow-list before honoring
-`X-Forwarded-For`) lives in the [throttler](/throttler/), not here — the
+`X-Forwarded-For`) lives in the [throttler](/rate-limiting/), not here — the
 throttler is the one place where the spoofable header is consumed for a
 behavioural decision.
 </Aside>

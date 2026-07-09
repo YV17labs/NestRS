@@ -23,7 +23,7 @@ relation cannot leak across orgs.
 use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 
-#[expose(name = "User", service = super::service::UsersService)]
+#[expose(name = "User", service = super::service::UsersService, graphql)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(table_name = "user")]
@@ -43,7 +43,7 @@ pub struct Model {
 ```
 
 ```rust title="src/orgs/entity.rs"
-#[expose(name = "Org", service = super::service::OrgsService)]
+#[expose(name = "Org", service = super::service::OrgsService, graphql)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(table_name = "org")]
@@ -119,9 +119,10 @@ relation glue handles the rest.
 Every relation batch runs through `Repo::<Entity>::scoped(Action::Read)`
 against the ambient `Ability`. A user without read access to `Org`
 asking for `user.org { name }` gets `null` for that field, not an
-error — the row simply does not pass the filter. A WS or GraphQL
-request without an `Ability` filter gets unscoped reads, correct for
-system jobs.
+error — the row does not pass the filter. A guarded GraphQL
+request always carries an `Ability` (the guard seeds it per operation);
+the ability-less unscoped path is the worker/queue side, not a request
+transport — see [Repo and executor](/database/repo-and-executor/).
 
 This is the killer property: turning a per-row leak into a wire-level
 omission needs no controller code and no manual `if` in the resolver.
@@ -154,7 +155,7 @@ off for that field only. The relation stays declared at the ORM level
 with cursor pagination, or a filtered subset.
 
 ```rust
-#[expose(name = "Org", service = …)]
+#[expose(name = "Org", service = …, graphql)]
 #[sea_orm::model]
 pub struct Model {
     #[expose]
@@ -183,7 +184,7 @@ When the unexposed relation opens the slot, write the replacement on the resolve
 
 ```rust title="src/orgs/graphql/resolver.rs"
 use async_graphql::{Context, Result, connection::*};
-use nest_rs_graphql::{field_resolver, resolver};
+use nest_rs_graphql::resolver;
 
 use crate::orgs::Org;
 use crate::users::User;
@@ -233,14 +234,13 @@ Composite primary keys and duplicate loader targets are refused at compile time
 (not a cryptic `E0119`). See `crates/nest-rs-resource-macros/src/relations.rs`
 for the diagnostics.
 
-## Where to go next
+## Going further
 
-- [Dataloaders](/graphql/dataloader/) — write a custom batch loader
+- [Dataloaders](/database/dataloaders/) — write a custom batch loader
   (`by_name`, `by_tag`, denormalized lookups) when the auto-emitted
-  PK + FK loaders don't fit. Cross-link to
-  [Database / Dataloaders](/database/dataloaders/).
+  PK + FK loaders don't fit.
 - [Field resolvers](/graphql/field-resolvers/) — the
   leave-it-unexposed escape hatch, and the single-`ComplexObject` rule
   in detail.
-- [Database / CRUD](/database/crud/) — the service contract every
+- [Database](/database/) — the service contract every
   loader (auto-emitted or hand-rolled) routes through.

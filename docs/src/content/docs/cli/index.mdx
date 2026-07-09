@@ -1,8 +1,6 @@
 ---
 title: CLI
 description: Install the nestrs binary, scaffold projects, generate features, and verify your toolchain.
-sidebar:
-  order: 4
 ---
 
 import { Aside, Steps, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -97,7 +95,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
         - lib.rs
         - main.rs
         - module.rs
-      - tests/e2e.rs
+      - tests/e2e/main.rs
 </FileTree>
 
 **Grow the workspace** (from the workspace root or any sub-folder):
@@ -129,7 +127,7 @@ in `src/` (no `features` crate).
     - service.rs
     - module.rs
     - main.rs
-  - tests/e2e.rs
+  - tests/e2e/main.rs
 </FileTree>
 
 </TabItem>
@@ -278,15 +276,12 @@ pub struct ApiModule;
 
 `g resource` emits a self-contained, unauthenticated slice so it compiles in any
 workspace. For auth-protected CRUD, copy the `#[crud]` + guard wiring from
-[`orgs/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/orgs)
-or [`users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
-and import the matching `Authz<Transport>Module`.
-
-<Aside type="tip">
-  Before inventing a second layout, open
-  [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
-  side by side with what the generator emitted.
-</Aside>
+[`orgs/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/orgs)
+or [`users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users)
+and import the matching `Authz<Transport>Module`. Before inventing a second
+layout, open
+[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users)
+side by side with what the generator emitted.
 
 ## Doctor
 
@@ -306,7 +301,7 @@ Use it after install and before running DB- or Redis-backed apps.
 
 ```bash
 nestrs version
-# → NestRS 0.1.0
+# → NestRS x.y.z
 
 nestrs about
 # → version, tagline, docs, repository, license, author
@@ -347,11 +342,13 @@ nestrs update --from-path
 Every generator accepts **`--dry-run`** and **`-p <path>`**.
 Aliases: **`nestrs g`** = **`nestrs generate`**.
 
-## What's next
+## Roadmap
 
 Planned generators (see [Roadmap](https://github.com/NestRS/NestRS/blob/main/ROADMAP.md)):
 migration scaffold and `nestrs info` (route/module scan).
 
-- [Getting started](/getting-started/) — first run after `nestrs new`
-- [Tutorial](/tutorial/) — build `posts` in `apps/blog/` (HTTP only)
-- [Fundamentals / Modules](/fundamentals/modules/) — how root modules compose features
+## Going further
+
+- [Getting started](/getting-started/) — first run after `nestrs new`.
+- [Tutorial](/tutorial/) — build `posts` in `apps/blog/`, HTTP only.
+- [Fundamentals / Modules](/fundamentals/modules/) — how root modules compose features.

@@ -62,7 +62,7 @@ A second check: the response body. With the indicator's module
 imported, the indicator's name appears under `details` on its probe:
 
 ```bash frame="terminal"
-$ curl -s http://localhost:8080/health/ready | jq '.details | keys'
+$ curl -s http://localhost:3000/health/ready | jq '.details | keys'
 [ "db", "upstream" ]
 ```
 

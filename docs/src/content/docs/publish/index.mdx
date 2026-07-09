@@ -1,8 +1,6 @@
 ---
 title: The Publish workspace
-description: One fictional product — a multi-tenant publishing platform — told through six apps that share features and never call each other over RPC.
-sidebar:
-  order: 4
+description: One fictional product — a multi-tenant publishing platform — told through five apps that share features and never call each other over RPC.
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -61,12 +59,12 @@ Three entry points — two learning paths (CLI) and one hosted reference (this r
 
 <Aside type="tip">
 The fullest running composition is
-[`apps/api/`](https://github.com/NestRS/NestRS/tree/main/apps/api)
+[`apps/api/`](https://github.com/NestRS/NestRS/tree/main/demo/apps/api)
 (users, orgs, audio, schedule, queue producer). The tutorial feature exemplar
 lives in
-[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/posts).
+[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/posts).
 Copy
-[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
+[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users)
 before inventing a second pattern.
 </Aside>
 
@@ -81,9 +79,9 @@ before inventing a second pattern.
 | `audio` | Media attachments + queue/schedule hooks |
 | `authn` / `authz` | JWT verification and row-level policy — `api`, not the tutorial blog |
 
-## Where to go next
+## Going further
 
 - [Issuer and resource server](/security/authentication/issuer-and-resource-server/) —
   why auth is a separate binary.
 - [Build a feature end to end](/tutorial/) — scaffold your own `apps/blog/`.
-- [E2E testing](/testing/e2e/) — every Publish app ships `tests/e2e.rs`.
+- [E2E testing](/testing/e2e/) — every Publish app ships `tests/e2e/main.rs`.

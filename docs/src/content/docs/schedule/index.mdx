@@ -30,7 +30,7 @@ A regular `#[injectable]` service with one decorated method. The `#[scheduled]`
 attribute marks the impl block; `#[every("5s")]` marks the method as a
 recurring job.
 
-```rust title="crates/features/src/audio/schedule/producer.rs"
+```rust title="crates/features/src/audio/schedule/tasks.rs (abridged)"
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -76,8 +76,10 @@ This is the pattern the framework is built for. A single `#[injectable]`
 owns the deps once, and as many decorated methods as you need share them.
 Mix triggers freely:
 
-```rust title="crates/features/src/audio/schedule/producer.rs"
+```rust title="crates/features/src/audio/schedule/tasks.rs (abridged)"
 use nest_rs_schedule::{scheduled, CronExpression};
+
+use crate::audio::AUDIO_QUEUE;
 
 #[injectable]
 pub struct AudioTasks {
@@ -89,21 +91,27 @@ pub struct AudioTasks {
 impl AudioTasks {
     #[every("5s")]
     async fn enqueue_transcode(&self) -> Result<()> {
-        self.svc.enqueue_transcode(next_file_name()).await
+        let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await
     }
 
     #[after("3s")]
     async fn warmup_on_boot(&self) -> Result<()> {
         tracing::info!(
             target: "features::audio",
-            "audio producer warmup — pipeline is ready to enqueue",
+            phase = "warmup",
+            "audio pipeline ready to enqueue",
         );
         Ok(())
     }
 
     #[cron(CronExpression::EVERY_MINUTE)]
     async fn heartbeat(&self) -> Result<()> {
-        tracing::info!(target: "features::audio", "audio producer heartbeat");
+        tracing::info!(
+            target: "features::audio",
+            queue = AUDIO_QUEUE,
+            "audio producer heartbeat",
+        );
         Ok(())
     }
 }
@@ -142,7 +150,7 @@ The provider goes in its feature module like any other `#[injectable]`:
 ```rust title="crates/features/src/audio/schedule/module.rs"
 use nest_rs_core::module;
 
-use super::producer::AudioTasks;
+use super::tasks::AudioTasks;
 use crate::audio::AudioModule;
 
 #[module(imports = [AudioModule], providers = [AudioTasks])]
@@ -200,22 +208,29 @@ from the app's module tree.
 ```bash frame="terminal"
 $ nestrs run dev api
 …
-2026-06-03T10:18:41Z  INFO nest_rs::transport: attached module-contributed transport transport=Scheduler
-2026-06-03T10:18:41Z  INFO nest_rs::schedule: scheduled job (interval) job=AudioTasks::enqueue_transcode interval_ms=5000
-2026-06-03T10:18:41Z  INFO nest_rs::schedule: scheduled job (one-shot) job=AudioTasks::warmup_on_boot delay_ms=3000
-2026-06-03T10:18:41Z  INFO nest_rs::schedule: scheduled job (cron)     job=AudioTasks::heartbeat timezone=UTC
-2026-06-03T10:18:44Z  INFO features::audio: audio producer warmup — pipeline is ready to enqueue
-2026-06-03T10:18:46Z  INFO features::audio: scheduled transcode job file=track-1717405126521.mp3
-2026-06-03T10:19:00Z  INFO features::audio: audio producer heartbeat
+ INFO nest_rs::transport: attached module-contributed transport transport=Scheduler
+ INFO nest_rs::schedule: scheduled job (interval) provider=AudioTasks method=enqueue_transcode interval_ms=5000
+ INFO nest_rs::schedule: scheduled job (one-shot) provider=AudioTasks method=warmup_on_boot delay_ms=3000
+ INFO nest_rs::schedule: scheduled job (cron) provider=AudioTasks method=heartbeat timezone=UTC
+ INFO features::audio: audio pipeline ready to enqueue phase=warmup
+ INFO features::audio: enqueued transcode job file=track-1717405126521.mp3
+ INFO features::audio: audio producer heartbeat queue=audio
 ```
 
-A bad trigger fails the boot:
+The scheduler logs one line per job at boot, then stays quiet on a
+successful tick — the service logs are what you see running. A failed run
+adds one `scheduled job failed` line at `error`; the schedule keeps
+ticking.
+
+A bad cron **literal** never reaches boot — it fails `cargo build`:
 
 ```bash frame="terminal"
-$ nestrs run dev worker
-Error: invalid cron expression for job 'AudioTasks::heartbeat'
-  expression : "every monday"
-  reason     : missing seconds field
+$ nestrs run dev api
+error: invalid cron expression: Invalid pattern: Pattern must have between 5 and 7 fields.
+  --> crates/features/src/audio/schedule/tasks.rs:35:12
+   |
+35 |     #[cron("every monday")]
+   |            ^^^^^^^^^^^^^^^
 ```
 
 ## The ambient data context
@@ -229,7 +244,7 @@ are unscoped, correct for system work).
 #[injectable]
 pub struct CleanupTasks {
     #[inject]
-    svc: Arc<ItemsService>,
+    svc: Arc<PostsService>,
 }
 
 #[scheduled]
@@ -247,12 +262,12 @@ Just importing `DatabaseModule` is enough — no manual connection plumbing.
 
 - [Queue](/queue/) — pair a scheduled producer with a durable consumer
   for distributed work.
-- [OpenTelemetry](/opentelemetry/) — every job span is targeted on
-  `nest_rs::schedule`; structured fields (`job`, `ran_for`) are
-  automatic.
+- [OpenTelemetry](/opentelemetry/) — every schedule event is targeted on
+  `nest_rs::schedule`, carrying `provider` and `method` fields (plus
+  `interval_ms` / `delay_ms` / `timezone` on the boot lines).
 
 ### Reference
 
-- `crates/features/src/audio/schedule/producer.rs` — the canonical multi-method exemplar.
+- `crates/features/src/audio/schedule/tasks.rs` — the canonical multi-method exemplar.
 - `crates/nest-rs-schedule/` — `#[scheduled]`, `ScheduleModule`,
   `Scheduler`, `CronExpression`, `Trigger`.

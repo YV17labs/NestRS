@@ -1,6 +1,6 @@
 ---
 title: Logs
-description: tracing::info! and friends flow to the console and to OTel logs with structured fields, configurable level per layer, and JSON for prod.
+description: "The tracing log macros flow to the console and to OTel logs with structured fields, a configurable level per layer, and JSON for prod."
 sidebar:
   order: 3
 ---
@@ -109,3 +109,9 @@ bridge is skipped — it pays a small per-event cost just to drop the event,
 which is not worth paying when console-only logging is the goal. When the
 endpoint is set, every `tracing` event becomes an OTel log record with the
 same target, level, fields and `trace_id`.
+
+## Going further
+
+- [Traces](/opentelemetry/traces/) — the spans logs correlate against.
+- [Metrics](/opentelemetry/metrics/) — the aggregate counterpart to logs.
+- [OpenTelemetry](/opentelemetry/) — the appender and OTLP export.

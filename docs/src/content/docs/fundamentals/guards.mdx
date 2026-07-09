@@ -2,7 +2,7 @@
 title: Guards
 description: "Pre-handler gates — decide whether a request runs, attach context, and declare once across HTTP, GraphQL, and WS."
 sidebar:
-  order: 5
+  order: 6
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
@@ -38,7 +38,7 @@ A guard runs *before* the handler. It sees the request first and either
 lets it through (`Ok(())`) or short-circuits with a typed `Denial` the
 framework maps to 401 / 403 / 429. One trait, three transports — the same
 `#[injectable]` impl is reachable from HTTP, GraphQL, and WS through the
-[Layer System](/fundamentals/).
+[the request lifecycle](/fundamentals/request-lifecycle/).
 
 `Guard` ships in
 [`nest-rs-guards`](https://crates.io/crates/nest-rs-guards). It extends
@@ -207,7 +207,7 @@ from the same provider — declare once, choose *where* it runs.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_guards_global([guard::<AuthGuard>()])` in `main` | Transport-level interceptor + per-route shaper |
+| **Global** | `App::builder().use_guards_global([guard::<AuthGuard>()])` in `main` | Per-route shaper, post-routing (self-mount edge for gateways) |
 | **Controller / Resolver / Gateway** | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct | Container, at mount |
 | **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | Container, at mount |
 
@@ -235,88 +235,9 @@ flowchart TB
   H --> R[handler]
 ```
 
-## Ordering inside a route
+## Where guards run in the chain
 
-Two levels stack: **per-route** nesting from `#[routes]`, then **global**
-wraps around the whole HTTP tree at transport configure time. Lists
-below read **inner → outer** (closest to the handler first). On an
-**inbound** request the outer side runs first.
-
-### Per-route nesting
-
-The `#[routes]` macro builds each handler inside-out:
-
-```
-handler
-→ ability shaper (`Authorize`, when declared)
-→ per-route interceptors (`#[use_interceptors]`)
-→ per-route filters (`#[use_filters]` — error path only)
-→ RouteShaper (guards + body pipes; exception filters on error)
-→ `#[meta]` / `#[public]` (route data — read by `Reflector`, not executed)
-```
-
-Inside `RouteShaper`, guards run on the way in (declaration order),
-then JSON body pipes, then `next.run` delegates inward. If the handler
-returns `Err`, **exception filters** (`#[use_exception_filters]`) run
-there — typed downcasts, separate from `#[use_filters]`.
-
-**Inbound (per-route, outer → inner):** RouteShaper guards/pipes →
-per-route filters\* → per-route interceptors → ability shaper → handler
-
-\*`Filter` passes through on success; it only maps on the error path.
-
-### Global wraps
-
-The HTTP transport folds three priority bands around the assembled route
-tree:
-
-```
-(assembled routes)
-→ global guards (`use_guards_global`)
-→ global filters (`use_filters_global` — error path only)
-→ global interceptors (`use_interceptors_global`, `DbContext`, …)
-```
-
-**Inbound (global, outer → inner):** global interceptors → global guards
-→ route tree.
-
-Global **filters** sit outside global **guards** (they see errors from
-the whole inner tree). Per-route **guards** in `RouteShaper` sit
-*outside* per-route **filters** — a guard denial returns before the
-inner chain runs.
-
-### Why `DbContext` wraps the guards
-
-1. **`DbContext`** (global interceptor) installs the executor, then calls
-   `next.run(req)`.
-2. **Guards run inside it** — `AuthGuard` attaches `Claims`, `AuthzGuard`
-   builds the ambient `Ability`. Both see the same executor.
-3. **Handler runs** — `Repo` reads both ambients.
-4. **Response returns** — `DbContext` commits on 2xx/3xx, rolls back
-   otherwise.
-
-<Aside>
-**Controller- and handler-bound interceptors** sit *inside* the
-`RouteShaper` guards, not outside them. A guard denial short-circuits
-before those interceptors' pre-handler work runs.
-</Aside>
-
-```mermaid
-flowchart TB
-  subgraph global["Global (outer → inner on request)"]
-    GI[interceptors]
-    GF["filters (error path)"]
-    GG[guards]
-  end
-  subgraph route["Per-route"]
-    RS["RouteShaper<br/>guards · pipes · exception filters"]
-    PF["filters (error path)"]
-    PI[interceptors]
-    AS[ability shaper]
-    H[handler]
-  end
-  GI --> GG --> RS --> PF --> PI --> AS --> H
-```
+Guards are pooled by `TypeId` and execute **once per request**, post-routing at the `RouteShaper` — so a global guard still reads `#[public]` route data, and a guard denial short-circuits before the route's interceptors run. The full family-by-family nesting (guards vs pipes vs interceptors vs filters, and why `DbContext` wraps the guards) lives on [the request lifecycle](/fundamentals/request-lifecycle/).
 
 ## Attach context and route metadata
 
@@ -357,9 +278,9 @@ attaches a typed payload; `Reflector` reads it inside the guard:
 async fn audit(&self) -> &'static str { "ok" }
 ```
 
-`#[meta(...)]` only reaches guards at controller or per-handler scope. A
-global guard runs before routing resolves a handler, so the reflector
-finds nothing.
+Because the global pool runs post-routing at the `RouteShaper` (above), a
+global guard reads `#[meta(...)]` too — the route data is attached before
+the chain runs, exactly as it is for `#[public]` below.
 
 `#[public]` uses the same channel. The framework does **not** act on it —
 each guard decides what "public" means (`AuthGuard` may authenticate when
@@ -408,7 +329,7 @@ flowchart TB
   MAIN["main: use_guards_global([AuthGuard, AuthzGuard])"]
   PC["PostsController: #[use_guards(AuthGuard, AuthzGuard)]"]
   MAIN -. "dedup — runs once" .-> RUN[per-request chain]
-  PC -. "warn at boot, zero extra cost" .-> RUN
+  PC -. "debug at boot, zero extra cost" .-> RUN
 ```
 
 ## HTTP, GraphQL, and WebSockets
@@ -419,7 +340,8 @@ through the global chain.
 
 Each transport method runs at a different seam:
 
-- `check_http` — on `&mut HttpRequest` before routing.
+- `check_http` — on `&mut HttpRequest`, post-routing at the route site
+  (before the handler, so it can read `#[public]` route data).
 - `check_graphql` — inside the resolver's per-operation chain (context
   is read-only).
 - `check_ws_message` — once per inbound message, after the connection

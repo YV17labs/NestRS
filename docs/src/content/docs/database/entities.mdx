@@ -1,6 +1,6 @@
 ---
 title: Entities
-description: The entity is the wire contract. One #[expose]d SeaORM model emits the DTO, the create/update inputs, the JSON schema, the relation loaders, and the lifecycle behaviour — opt-in, fail-secure, no hand-written DTO to drift.
+description: "The entity is the wire contract. One #[expose]d SeaORM model emits the DTO, inputs, JSON schema, relation loaders, and lifecycle — opt-in, fail-secure."
 sidebar:
   order: 2
 ---
@@ -19,13 +19,11 @@ sync — a column reaches a transport only when it carries `#[expose]`,
 and silence means hidden. That is the deliberate posture: a column a
 later migration adds never leaks by omission.
 
-<Aside type="tip">
 Building your first entity? Start with the
 [tutorial walkthrough](/tutorial/entity/) — it grows a minimal `Post`
 step by step. This page is the **reference**: every header flag, every
 field attribute, relations, validation, lifecycle, and the columns we
 recommend on every entity.
-</Aside>
 
 ## Anatomy
 
@@ -138,8 +136,8 @@ transport.
 | Field attribute | On the wire | In inputs |
 |---|---|---|
 | `#[expose]` | yes (read-only) | no |
-| `#[expose(input(create))]` | yes | `CreateDto` only |
-| `#[expose(input(update))]` | yes | `UpdateDto` only |
+| `#[expose(input(create))]` | yes | `Create<Name>` only |
+| `#[expose(input(update))]` | yes | `Update<Name>` only |
 | `#[expose(input(create, update))]` | yes | both |
 | *(no `#[expose]`)* | **hidden** | no |
 
@@ -158,17 +156,21 @@ Response masking reconstructs the full row from the wire body to apply
 macro provides one for the trivial scalar types (`String`, `Option`,
 `bool`, numbers). A hidden column of a type it can't default — `Uuid`,
 a timestamp, `Decimal`, a custom enum — needs a hand-written
-`impl WireModelDefaults`, or boot fails naming the missing impl. A
-column an ability rule predicates on is therefore best left **exposed**.
+`impl WireModelDefaults`, or the crate fails to **compile**, naming the
+missing impl. A column an ability rule predicates on is therefore best left
+**exposed**.
 See [Response masking](/security/authorization/response-masking/).
 </Aside>
 
 ## Write side — inputs and validation
 
 `input(create)` / `input(update)` place a field in the generated
-`Create<Name>Input` / `Update<Name>Input` structs. `validate(...)`
-attaches a [`validator`](https://docs.rs/validator) rule, re-emitted
-verbatim onto the input field:
+`Create<Name>` / `Update<Name>` structs. These entity-derived inputs are
+**bare** — no `Dto` or `Input` suffix — because one struct serves the
+service (`type Create`), the REST body, and the GraphQL input at once, so no
+single boundary suffix fits. `validate(...)` attaches a
+[`validator`](https://docs.rs/validator) rule, re-emitted verbatim onto the
+input field:
 
 ```rust
 #[expose(input(create, update), validate(length(min = 1)))]
@@ -180,16 +182,14 @@ pub email: String,
 ```
 
 The input structs derive `Validate`. Validation runs at the HTTP edge
-when the handler binds the body through `Valid<Json<CreateDto>>` —
+when the handler binds the body through `Valid<Json<CreatePost>>` —
 the service never sees an invalid input. The full rule set
 (`length`, `email`, `range`, `url`, custom validators, …) is the
 `validator` crate's; see its docs for the catalogue.
 
-<Aside type="caution">
 A **relation** field cannot carry `input(...)` — only scalar columns
 are writable. Set the foreign-key column (`org_id`) as the input, not
 the relation (`org`).
-</Aside>
 
 ## Relations
 
@@ -262,10 +262,13 @@ SeaORM-level behaviour:
   `created_at` on insert and `updated_at` on every save with
   `chrono::Utc::now().fixed_offset()`.
 - **`soft_delete`** emits `impl SoftDeletable for Entity` (declaring
-  the `deleted_at` column). `CrudService` deletes by setting the
-  tombstone, and reads AND `deleted_at IS NULL` onto every query so a
-  soft-deleted row is invisible — in lists, by-id loads, and relation
-  batches alike.
+  the `deleted_at` column). This is only **half** the wiring: the entity
+  flag makes the column addressable, but the service must also override
+  `soft_delete_column()` to return it (default `None` ⇒ hard delete). With
+  both halves in place, `CrudService` deletes by setting the tombstone and
+  ANDs `deleted_at IS NULL` onto every read so a soft-deleted row is
+  invisible — in lists, by-id loads, and relation batches alike. See
+  [CRUD](/database/crud/#soft-delete-and-timestamps) for the service side.
 
 <Aside type="caution">
 SeaORM requires exactly **one** `ActiveModelBehavior` per entity. The

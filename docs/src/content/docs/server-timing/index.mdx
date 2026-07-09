@@ -37,7 +37,7 @@ Every response now carries a `Server-Timing` header. The minimum,
 unstructured form is one entry:
 
 ```bash frame="terminal"
-$ curl -i http://localhost:8080/items | grep -i server-timing
+$ curl -i http://localhost:3000/items | grep -i server-timing
 server-timing: total;dur=12.34
 ```
 
@@ -61,7 +61,7 @@ use poem::Request;
 #[controller(path = "/items")]
 pub struct ItemsController {
     #[inject]
-    svc: Arc<ItemsService>,
+    svc: Arc<PostsService>,
 }
 
 #[routes]
@@ -84,7 +84,7 @@ impl ItemsController {
 ```
 
 ```bash frame="terminal"
-$ curl -i http://localhost:8080/items | grep -i server-timing
+$ curl -i http://localhost:3000/items | grep -i server-timing
 server-timing: db;dur=7.82, render;dur=0.41;desc="wire transform", total;dur=8.96
 ```
 

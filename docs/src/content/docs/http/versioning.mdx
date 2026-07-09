@@ -1,6 +1,6 @@
 ---
 title: Versioning
-description: URI versioning — #[controller(version = "1")] mounts under /v1; one source of truth across the served path, the boot log, and OpenAPI.
+description: "URI versioning — #[controller(version = \"1\")] mounts under /v1; one source of truth across the served path, the boot log, and OpenAPI."
 sidebar:
   order: 7
 ---
@@ -18,7 +18,7 @@ use nest_rs_http::{controller, routes};
 #[controller(path = "/items", version = "1")]
 pub struct ItemsV1Controller {
     #[inject]
-    svc: Arc<ItemsService>,
+    svc: Arc<PostsService>,
 }
 
 #[routes]

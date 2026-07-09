@@ -19,7 +19,7 @@ thin apps under `apps/*`. Run every command from **your** workspace root
 fresh one). This repository hosts **Publish** only — use
 [`nestrs new blog`](/cli/#add-an-app-to-an-existing-workspace) to create
 `apps/blog/`; compare your tree with the tutorial feature exemplar in
-[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/posts).
+[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/posts).
 </Aside>
 
 ## Create the app
@@ -117,7 +117,7 @@ if other apps already exist in the workspace.
 
 `BlogModule` has no `providers = [...]` list. A root module composes
 feature modules and lets each own its providers — the
-[reference root](https://github.com/NestRS/NestRS/blob/main/apps/api/src/module.rs)
+[reference root](https://github.com/NestRS/NestRS/blob/main/demo/apps/api/src/module.rs)
 carries only `imports`.
 
 ```rust title="apps/blog/src/main.rs"
@@ -145,7 +145,7 @@ async fn main() -> Result<()> {
 `App::builder()` runs the four boot phases — seeds, collect, factories,
 register — verifies the access graph, then `.run()` blocks on the
 transports. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
-for the e2e test on page 8) and a stub `tests/e2e.rs`.
+for the e2e test on page 8) and a stub `tests/e2e/main.rs`.
 
 ## Run it again
 
@@ -157,7 +157,7 @@ for the e2e test on page 8) and a stub `tests/e2e.rs`.
    $ nestrs run dev blog
        Compiling blog v0.1.0
         Running `target/debug/blog`
-   DEBUG nest_rs_http::transport: http transport listening addr=0.0.0.0:3001
+   DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
    ```
 
    The log line shows the port from your `module.rs`.
@@ -165,7 +165,7 @@ for the e2e test on page 8) and a stub `tests/e2e.rs`.
 2. In another terminal:
 
    ```bash frame="terminal"
-   $ curl -i http://localhost:3001/
+   $ curl -i http://localhost:3005/
    HTTP/1.1 404 Not Found
    ```
 
@@ -188,4 +188,7 @@ page fills.
 - A running binary returning `404` on the root route — proof the framework
   boots end to end.
 
-[Next: declare the `User` entity →](/tutorial/entity/)
+## Going further
+
+- [Declare the entity](/tutorial/entity/) — the next step: define the `Post` entity with `#[expose]`.
+- [CLI](/cli/) — the reference for `nestrs new` and the rest of the CLI surface.

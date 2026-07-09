@@ -62,8 +62,8 @@ point — see [Per-transport bridges](/security/authorization/per-transport-brid
   `403` — see [By-id binding](/security/authorization/by-id-binding/).
 - **Every response is masked.** The
   [`Authorize` shaper](/security/authorization/response-masking/) runs
-  after a 2xx handler: fields the caller cannot read become `null`, and
-  `retain_wire_keys` strips back anything outside the wire DTO so an
+  after a 2xx handler: fields the caller cannot read are stripped from
+  the body, and `retain_wire_keys` drops anything outside the wire DTO so an
   unrestricted grant cannot leak an unexposed column.
 
 The wiring sketch for an app that serves all three transports:
@@ -120,5 +120,5 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
   needed for your first feature).
 - [Guards](/fundamentals/guards/) — the primitive every security layer
   builds on.
-- [Throttler](/throttler/) — rate limiting as a guard, composes with
+- [Throttler](/rate-limiting/) — rate limiting as a guard, composes with
   `AuthGuard`.

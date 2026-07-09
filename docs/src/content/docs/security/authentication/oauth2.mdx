@@ -19,7 +19,7 @@ configured against the provider via `OAuth2Config`. Profile mapping
 stays in your app's [`Strategy`](/security/authentication/) so the
 client itself never sees your principal type.
 
-## Wiring it up
+## Wire it in
 
 `OAuth2Module::for_root(None)` registers an `OAuth2Client` as global
 infrastructure, configured via `NESTRS_AUTHN__*` env vars. Pin the

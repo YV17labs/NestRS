@@ -1,6 +1,6 @@
 ---
 title: Writing a database driver
-description: A backend-agnostic scaffold — the shape of a driver for any store with a handle and an optional transaction concept, SQL or NoSQL, with the framework's seams filled in and the store-specific code marked as your own.
+description: "A backend-agnostic scaffold — the shape of a driver for any store with a handle and an optional transaction, SQL or NoSQL, with the framework seams filled in."
 sidebar:
   order: 11
 ---
@@ -25,7 +25,7 @@ read it once when a placeholder is unclear.
 - A request interceptor that wraps mutating handlers in a transaction.
 - A `JobContext` that installs the non-transactional handle for worker paths.
 
-A driver lives in a `nestrs-<technology>` crate that depends on
+A driver lives in a `nest-rs-<technology>` crate that depends on
 `nest-rs-core`, `nest-rs-database`, `nest-rs-http`, `nest-rs-worker`, plus
 whatever your store needs. The app picks a driver by importing its module instead of
 `nest-rs-seaorm`.
@@ -265,3 +265,9 @@ access graph and module wiring, structured observability under
 - [`crates/nest-rs-redis/`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-redis) —
   an analogous worker-side integration on the queue runtime, for a second
   read on the `JobContext` pattern.
+
+## Going further
+
+- [Repo and executor](/database/repo-and-executor/) — the executor and task-local your driver installs.
+- [Transactions](/database/transactions/) — the commit/rollback boundary the interceptor drives.
+- [Database](/database/) — the module an app imports to pick a driver.

@@ -15,13 +15,14 @@ nest-rs-core.workspace = true
 nest-rs-worker.workspace = true
 nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "ws"] }
 nest-rs-authn.workspace = true
-nest-rs-authz = { workspace = true, features = ["http", "graphql"] }
+nest-rs-authz = { workspace = true, features = ["http", "graphql", "mcp"] }
 nest-rs-config.workspace = true
 nest-rs-events.workspace = true
 nest-rs-graphql.workspace = true
 nest-rs-guards = { workspace = true, features = ["graphql"] }
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
+nest-rs-mcp.workspace = true
 nest-rs-queue.workspace = true
 nest-rs-redis.workspace = true
 nest-rs-schedule.workspace = true

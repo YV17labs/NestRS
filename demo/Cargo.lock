@@ -1463,10 +1463,12 @@ dependencies = [
  "nest-rs-authz",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-events",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-mcp",
  "nest-rs-opentelemetry",
  "nest-rs-queue",
  "nest-rs-redis",
@@ -2593,6 +2595,7 @@ dependencies = [
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-mcp",
  "nest-rs-resource",
  "nest-rs-ws",
  "poem",
@@ -2652,6 +2655,27 @@ name = "nest-rs-database"
 version = "0.2.0"
 dependencies = [
  "tokio",
+]
+
+[[package]]
+name = "nest-rs-events"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "nest-rs-core",
+ "nest-rs-events-macros",
+ "parking_lot",
+ "tracing",
+]
+
+[[package]]
+name = "nest-rs-events-macros"
+version = "0.2.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]

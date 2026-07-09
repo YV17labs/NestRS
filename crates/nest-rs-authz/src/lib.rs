@@ -9,7 +9,7 @@
 //!
 //! Bindings: [`http`], [`graphql`], [`mcp`]. The data-coupled bindings
 //! (`Bind`, the GraphQL `bind` helper, `LoaderScope`, `WsDataContext`) live in
-//! `nestrs-seaorm` so the engine stays free of a data-layer dependency.
+//! `nest-rs-seaorm` so the engine stays free of a data-layer dependency.
 mod ability;
 mod action;
 mod builder;

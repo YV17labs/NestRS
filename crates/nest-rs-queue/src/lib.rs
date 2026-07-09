@@ -1,17 +1,17 @@
 //! The open queue contract for nestrs.
 //!
-//! `nestrs-queue` defines **what every queue backend must agree on**: the
+//! `nest-rs-queue` defines **what every queue backend must agree on**: the
 //! [`Job`] marker, the [`Processor`] trait, the [`ProcessMethod`] inventory
 //! entry the `#[processor]` macro submits, and the three pluggable seams a
 //! backend implements — [`QueueBackend`], [`JobProducer`], [`JobConsumer`].
 //!
 //! The first-class backend is **Redis** (via apalis-redis), shipped as
-//! `nestrs-redis`. Application code keeps writing `nest_rs_queue::*` for the
+//! `nest-rs-redis`. Application code keeps writing `nest_rs_queue::*` for the
 //! abstractions — the `#[processor]` macro, `Job`, `Processor`,
 //! `ProcessMethod`, `JobProducer` — and reaches for `nest_rs_redis::*` only
 //! when it needs the Redis-specific types (the `QueueConnection` producer,
 //! the `QueueWorker` transport, the activation modules). A third-party
-//! `nestrs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
+//! `nest-rs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
 //! directly — see this crate's README for the extension contract.
 mod consumer;
 mod inventory;
@@ -36,7 +36,7 @@ pub use async_trait::async_trait;
 // crate re-exports both the macro and `serde_json` — keeping the macro free
 // of any backend dependency and letting the call site reach the macro
 // through `nest_rs_queue::processor` regardless of which backend integration
-// (nestrs-redis, …) the app imports.
+// (nest-rs-redis, …) the app imports.
 #[doc(hidden)]
 pub use serde_json;
 

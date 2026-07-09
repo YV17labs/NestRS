@@ -46,7 +46,7 @@ pub fn schema_of<T: schemars::JsonSchema>(
 }
 
 /// Declarative description of a handler in a controller — verb/path/name plus
-/// the OpenAPI facets `#[routes]` extracts, so a doc generator (nestrs-openapi)
+/// the OpenAPI facets `#[routes]` extracts, so a doc generator (nest-rs-openapi)
 /// builds a spec from discovery alone.
 #[derive(Clone)]
 pub struct HttpRouteMeta {

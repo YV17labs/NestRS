@@ -1,4 +1,4 @@
-//! GraphQL decorator macros, re-exported by `nestrs-graphql`. Generated code
+//! GraphQL decorator macros, re-exported by `nest-rs-graphql`. Generated code
 //! uses absolute paths, so this crate does not depend on the surface crate.
 //!
 //! Mirrors the HTTP `#[controller]`/`#[routes]` split: `#[resolver]` on a

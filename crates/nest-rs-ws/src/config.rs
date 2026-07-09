@@ -10,7 +10,7 @@
 //! window: the server closes the socket when it elapses, forcing a fresh upgrade
 //! (and with it a fresh authn/authz check).
 //!
-//! Dual-path like every `nestrs-*` config: settable via `NESTRS_WS__*` env vars
+//! Dual-path like every `nest-rs-*` config: settable via `NESTRS_WS__*` env vars
 //! (`NESTRS_WS__MAX_CONNECTION_SECS`) **and** the pinned struct passed to
 //! [`WsModule::for_root`](crate::WsModule::for_root). `0` (env) / `None` (struct)
 //! means **unlimited** — the pre-ceiling behaviour, kept opt-in preservable.

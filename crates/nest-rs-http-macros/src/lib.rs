@@ -1,4 +1,4 @@
-//! HTTP attribute macros, re-exported by `nestrs-http`. Generated code uses
+//! HTTP attribute macros, re-exported by `nest-rs-http`. Generated code uses
 //! absolute paths (`::nest_rs_http::*`, `::poem::*`, `::nest_rs_core::*`), so
 //! this crate has no dependency on its surface crate — they resolve at the
 //! call site.

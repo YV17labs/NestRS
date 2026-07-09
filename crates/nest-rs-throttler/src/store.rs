@@ -34,7 +34,7 @@ pub struct Decision {
 
 /// Contract a rate-limit backend fulfils so a [`crate::ThrottlerGuard`]-style
 /// guard can interrogate it. The in-process [`InMemoryThrottler`] is the
-/// default impl; a third-party crate (e.g. `nestrs-throttler-redis`) ships an
+/// default impl; a third-party crate (e.g. `nest-rs-throttler-redis`) ships an
 /// alternative implementor plus its own module + guard that injects the
 /// implementor.
 ///

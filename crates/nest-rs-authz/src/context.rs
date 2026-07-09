@@ -4,7 +4,7 @@
 //! row-level filtering needs the caller's `Ability` reachable from inside a
 //! service method without threading it through every signature. A task-local
 //! bridges that: the HTTP surface installs it for the duration of the handler;
-//! `nestrs-seaorm`'s `Repo` reads it back. Outside a request the task-local
+//! `nest-rs-seaorm`'s `Repo` reads it back. Outside a request the task-local
 //! is unset and [`current_ability`] returns `None` (an unscoped query).
 
 use std::future::Future;

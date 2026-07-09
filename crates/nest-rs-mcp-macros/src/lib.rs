@@ -1,4 +1,4 @@
-//! `#[mcp]` decorator, re-exported by `nestrs-mcp`. Emits absolute-path tokens.
+//! `#[mcp]` decorator, re-exported by `nest-rs-mcp`. Emits absolute-path tokens.
 use proc_macro::TokenStream;
 
 mod mcp;

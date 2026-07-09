@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(params[1]["name"], "id");
     }
 
-    // Building an `HttpRouteMeta` from outside `nestrs-http` is awkward —
+    // Building an `HttpRouteMeta` from outside `nest-rs-http` is awkward —
     // build a minimal one via `Default` if possible, else thread real values.
     fn generator() -> SchemaGenerator {
         let mut settings = SchemaSettings::draft2020_12();

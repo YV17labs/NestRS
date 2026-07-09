@@ -42,7 +42,7 @@ mod tests {
     use crate::ConfigError;
 
     // Hand-written impl: the macro emits ::nest_rs_config::Config which a crate
-    // cannot resolve against itself. End-to-end wiring is covered in nestrs-testing.
+    // cannot resolve against itself. End-to-end wiring is covered in nest-rs-testing.
     #[derive(Clone, Validate, PartialEq, Debug)]
     struct DbCfg {
         url: String,

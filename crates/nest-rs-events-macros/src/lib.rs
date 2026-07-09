@@ -1,4 +1,4 @@
-//! The `#[listeners]` decorator macro, re-exported by `nestrs-events`.
+//! The `#[listeners]` decorator macro, re-exported by `nest-rs-events`.
 use proc_macro::TokenStream;
 
 mod listeners;

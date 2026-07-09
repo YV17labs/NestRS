@@ -1,4 +1,4 @@
-//! The `#[scheduled]` decorator, re-exported by `nestrs-schedule`.
+//! The `#[scheduled]` decorator, re-exported by `nest-rs-schedule`.
 use proc_macro::TokenStream;
 
 mod scheduled;

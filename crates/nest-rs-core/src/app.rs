@@ -396,7 +396,7 @@ mod tests {
     struct Config(u32);
     struct Doubled(u32);
 
-    // The `#[module]` macro lives in `nestrs-macros`, so this crate's tests
+    // The `#[module]` macro lives in `nest-rs-macros`, so this crate's tests
     // hand-write the trait impl.
     struct DoublerModule;
     impl Module for DoublerModule {

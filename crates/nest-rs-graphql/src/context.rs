@@ -33,7 +33,7 @@ inventory::collect!(GraphqlContextSeed);
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Per-operation guard the GraphQL endpoint runs around every request — the
-/// resolver-side analog of HTTP's `RouteResponseShaper`. `nestrs-graphql` only
+/// resolver-side analog of HTTP's `RouteResponseShaper`. `nest-rs-graphql` only
 /// defines this seam; `nest_rs_authz::graphql`'s `GraphqlAbilityBridge`
 /// implements it to authenticate and install the caller's ambient `Ability`
 /// for the operation's duration.

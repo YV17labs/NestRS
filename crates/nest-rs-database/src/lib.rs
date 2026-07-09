@@ -1,6 +1,6 @@
 //! ORM-agnostic seam for the request/job data layer.
 //!
-//! `nestrs-database` ships **only the seam**: the [`Executor`] trait, the
+//! `nest-rs-database` ships **only the seam**: the [`Executor`] trait, the
 //! [`ExecutorScope`] tag, and the `tokio::task_local!` plumbing
 //! ([`with_request_executor`], [`with_job_executor`], [`current_executor`],
 //! [`current_executor_scope`]) that carries "the request's current handle
@@ -9,14 +9,14 @@
 //! through `nest_rs_worker::JobContext`, which a worker transport
 //! (`#[scheduled]`, `#[processor]`) resolves before each job.
 //!
-//! The first-class implementation is `nestrs-seaorm` (SeaORM): it ships
+//! The first-class implementation is `nest-rs-seaorm` (SeaORM): it ships
 //! `Repo` (row-level filter), `CrudService`, `Bind`, the HTTP mask
 //! shaper, and `DatabaseModule` (the request interceptor that opens the
 //! transaction). Those pieces are SeaORM-specific by design — the
 //! leverage comes from binding tightly to the ORM's query/model types.
-//! A future third-party `nestrs-<other-orm>` crate (sqlx, diesel,
+//! A future third-party `nest-rs-<other-orm>` crate (sqlx, diesel,
 //! prisma-client-rust, mongo, …) can plug a different engine into the
-//! same ambient seam without touching `nestrs-core` or any feature code.
+//! same ambient seam without touching `nest-rs-core` or any feature code.
 //!
 //! ## Extension contract
 //!

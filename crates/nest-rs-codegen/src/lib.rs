@@ -1,12 +1,12 @@
 //! Shared token-building helpers for nestrs decorator macros.
 //!
 //! Proc-macro crates can only export macros, so the logic every decorator
-//! shares lives here (a plain library crate) and each `nestrs-*-macros` crate
+//! shares lives here (a plain library crate) and each `nest-rs-*-macros` crate
 //! depends on it. New decorators should reuse the helpers below — and add
 //! new ones here rather than in a `*-macros` crate, so third-party decorators
 //! can use them too.
 //!
-//! This crate never depends on `nestrs-core` or any other surface crate:
+//! This crate never depends on `nest-rs-core` or any other surface crate:
 //! emitted absolute-path tokens (`::nest_rs_core::*`) resolve at the call site.
 mod args;
 mod casing;

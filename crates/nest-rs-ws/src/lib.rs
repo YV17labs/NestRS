@@ -69,7 +69,7 @@
 //! handler runs. The [`SocketContext`] seam captures opaque per-connection
 //! state from the post-guard upgrade request and re-installs it around each
 //! dispatch — this is how `nest_rs_seaorm::ws` re-binds executor + ability
-//! per message without `nestrs-ws` depending on the ORM or authz.
+//! per message without `nest-rs-ws` depending on the ORM or authz.
 
 mod config;
 mod context;

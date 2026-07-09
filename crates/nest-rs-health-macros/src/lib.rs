@@ -1,4 +1,4 @@
-//! The `#[indicators]` decorator, re-exported by `nestrs-health`.
+//! The `#[indicators]` decorator, re-exported by `nest-rs-health`.
 use proc_macro::TokenStream;
 
 mod indicators;

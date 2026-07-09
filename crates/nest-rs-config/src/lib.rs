@@ -23,6 +23,6 @@ pub use service::ConfigService;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
-/// injectable [`Config`]. Re-exported from `nestrs-config-macros` so apps write
+/// injectable [`Config`]. Re-exported from `nest-rs-config-macros` so apps write
 /// `nest_rs_config::config`.
 pub use nest_rs_config_macros::config;

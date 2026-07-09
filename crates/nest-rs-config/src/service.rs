@@ -1,7 +1,7 @@
 //! Framework env-var scheme `NESTRS_<DOMAIN>__<KEY>` and the typed
 //! [`ConfigService`] reader handed to a config's `from_env`.
 //!
-//! Domain = owning crate's name with the `nestrs-` prefix stripped. A crate
+//! Domain = owning crate's name with the `nest-rs-` prefix stripped. A crate
 //! maps **its own** domain; sibling vars may only be borrowed via an
 //! **explicit fallback** in a `from_env` (own > borrowed > code default), since
 //! the `.env` cascade is merged once before any `from_env` runs.

@@ -1,4 +1,4 @@
-//! Pool ping wired through `nestrs-health`'s indicator registry.
+//! Pool ping wired through `nest-rs-health`'s indicator registry.
 //!
 //! Import [`DatabaseHealthModule`] alongside `nest_rs_health::HealthModule` to
 //! gate `GET /health/ready` (and `/startup`) on a round-trip to the database.

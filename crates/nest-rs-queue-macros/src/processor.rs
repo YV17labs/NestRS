@@ -1,7 +1,7 @@
 //! `#[processor]` — orchestrator on a provider's `impl` block. Walks the
 //! methods; for each one tagged with `#[process(queue = …, concurrency, retries)]`
 //! emits a type-erased handler `fn` and a `ProcessMethod` inventory submission
-//! the active queue backend (e.g. Redis via `nestrs-redis`) drains at boot.
+//! the active queue backend (e.g. Redis via `nest-rs-redis`) drains at boot.
 //!
 //! Like `#[scheduled]`, this does NOT emit `Discoverable` for the host
 //! struct — the user's own `#[injectable]` owns it. Inventory is the seam.
@@ -12,7 +12,7 @@
 //! is to `::nest_rs_queue::*` (the abstractions crate, which also re-exports
 //! this macro and `serde_json`), so the call site reaches the macro and the
 //! emission targets through the same import root regardless of which
-//! backend integration (nestrs-redis, …) is wired in.
+//! backend integration (nest-rs-redis, …) is wired in.
 
 use nest_rs_codegen::{impl_self_ident, snake_case};
 use proc_macro::TokenStream;

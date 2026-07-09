@@ -17,7 +17,7 @@ pub struct HealthModule;
 // Stash the assembled container on `HealthService` so its `probe()` can
 // resolve indicator providers at request time. The `EventsModule` uses the
 // same lifecycle-hook seam to wire its discovered handlers — see
-// `crates/nestrs-events/src/module.rs`.
+// `crates/nest-rs-events/src/module.rs`.
 // Infra hook self-gates inside `install_container` (no-op when the service is
 // absent), so it opts out of the inert-hook warn with `present: |_| true`.
 nest_rs_core::inventory::submit! {

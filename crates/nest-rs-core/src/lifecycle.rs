@@ -128,7 +128,7 @@ mod tests {
         }
     }
 
-    // `#[hooks]` lives in `nestrs-macros`, so this test hand-writes the thunk.
+    // `#[hooks]` lives in `nest-rs-macros`, so this test hand-writes the thunk.
     fn run_touch(container: &Container) -> HookFuture<'_> {
         Box::pin(async move {
             match container.get::<Probe>() {

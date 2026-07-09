@@ -1,5 +1,5 @@
 //! Local copy of the HTTP decorators' attribute helpers, so this crate stays
-//! free of any dep on `nestrs-http-macros`.
+//! free of any dep on `nest-rs-http-macros`.
 
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Expr, Lit, LitStr, Path, Token};

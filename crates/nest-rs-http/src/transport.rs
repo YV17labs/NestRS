@@ -23,7 +23,7 @@ type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
 type NamedMount = (String, MountFn);
 
 /// Join a controller prefix with a route path the way poem's nesting does:
-/// `("/health", "/live") -> "/health/live"`. Public so `nestrs-openapi`
+/// `("/health", "/live") -> "/health/live"`. Public so `nest-rs-openapi`
 /// composes paths identically to how this transport mounts them — the served
 /// path and the documented path must not drift.
 pub fn join_path(prefix: &str, rest: &str) -> String {
@@ -471,7 +471,7 @@ impl Transport for HttpTransport {
 mod tests {
     use super::*;
 
-    // `join_path` is the single source of truth shared with `nestrs-openapi`
+    // `join_path` is the single source of truth shared with `nest-rs-openapi`
     // and the boot route log — a drift here means the served path and the
     // documented path disagree, so the cases are exhaustive on purpose.
     #[test]

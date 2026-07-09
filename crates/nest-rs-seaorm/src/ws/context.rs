@@ -2,7 +2,7 @@
 //!
 //! The gateway's connection loop runs after the upgrade unwinds, so the ORM
 //! executor and authz ability the HTTP request installed are gone by the time
-//! a message handler runs. This implements `nestrs-ws`'s [`SocketContext`] seam
+//! a message handler runs. This implements `nest-rs-ws`'s [`SocketContext`] seam
 //! to re-install both around each dispatch. The connection-level guards
 //! (`AuthGuard` + `AbilityGuard`) attach the ability to the upgrade request;
 //! this bridge captures it once and re-installs it per message — it does **not**

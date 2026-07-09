@@ -3,7 +3,7 @@
 //! Every queue backend implements [`QueueBackend`] (the boot identity used by
 //! diagnostics) and exposes a [`JobProducer`] surface so any feature can
 //! enqueue without naming the backend. The first-class backend is `apalis-redis`
-//! (shipped as `nestrs-queue`); third-party backends provide their own
+//! (shipped as `nest-rs-queue`); third-party backends provide their own
 //! `*Module` that registers a `JobProducer` in the container the same way.
 
 use async_trait::async_trait;

@@ -1,6 +1,6 @@
 //! Redis-backed queue integration for nestrs — the first-class backend
 //! that plugs into the abstractions defined by
-//! [`nestrs-queue`](::nest_rs_queue) (the [`Job`] marker, the [`Processor`]
+//! [`nest-rs-queue`](::nest_rs_queue) (the [`Job`] marker, the [`Processor`]
 //! trait, the [`ProcessMethod`] inventory the `#[processor]` macro feeds).
 //!
 //! Built on apalis-redis: durable, distributed queues with retries. The
@@ -18,7 +18,7 @@
 //!
 //! Connection is async, seeded at the composition root as a factory — apalis
 //! types never leak into apps. Swapping storage means writing a different
-//! `nestrs-<storage>` crate against the same `nestrs-queue` abstractions;
+//! `nest-rs-<storage>` crate against the same `nest-rs-queue` abstractions;
 //! the macro and application code stay unchanged.
 //!
 //! ## Future expansion

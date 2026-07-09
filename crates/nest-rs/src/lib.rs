@@ -2,7 +2,7 @@
 //! application can write a single `use nest_rs::prelude::*;` instead of a
 //! handful of per-crate imports.
 //!
-//! The per-crate split (`nestrs-core`, `nestrs-http`, …) stays the public,
+//! The per-crate split (`nest-rs-core`, `nest-rs-http`, …) stays the public,
 //! versioned source of truth. This crate adds no API of its own — it only
 //! collects what already exists behind Cargo features, with one feature per
 //! surface so an app pays only for what it uses.

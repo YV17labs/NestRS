@@ -8,7 +8,7 @@
 //! methods (not object-safe); forwarding via a variant restores a single
 //! `&Executor` that drives any SeaORM query.
 //!
-//! The task-local plumbing itself lives in `nestrs-database`; this module
+//! The task-local plumbing itself lives in `nest-rs-database`; this module
 //! re-exports it with SeaORM-typed convenience signatures so existing
 //! callers see no change.
 //!

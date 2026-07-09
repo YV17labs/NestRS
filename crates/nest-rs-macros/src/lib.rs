@@ -1,5 +1,5 @@
 //! Surface-agnostic nestrs decorators (`#[injectable]`, `#[hooks]`,
-//! `#[module]`), re-exported by `nestrs-core`. Each `#[proc_macro_attribute]`
+//! `#[module]`), re-exported by `nest-rs-core`. Each `#[proc_macro_attribute]`
 //! entry below is a thin delegation to its implementation module.
 use proc_macro::TokenStream;
 

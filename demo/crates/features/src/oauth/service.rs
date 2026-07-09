@@ -180,7 +180,7 @@ pub(crate) fn issue_with_jwt(
     let access_token = jwt_svc
         .sign(&claims)
         .map_err(|e| TokenError::Sign(e.into()))?;
-    tracing::info!(
+    tracing::debug!(
         target: "features::oauth",
         ?sub,
         %org_id,

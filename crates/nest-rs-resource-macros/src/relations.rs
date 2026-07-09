@@ -383,11 +383,27 @@ fn emit_belongs_to_method(
         ) -> ::nest_rs_resource::graphql::async_graphql::Result<
             ::core::option::Option<<#target as ::nest_rs_resource::PkLoadable>::Wire>,
         > {
-            let __loader = __ctx.data_unchecked::<
-                ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
-                    <#target as ::nest_rs_resource::PkLoadable>::Loader,
-                >,
-            >();
+            // `data_opt` + error, never `data_unchecked` (which panics): an
+            // unseeded loader — its owner service's module is unreachable from
+            // this app — degrades to a GraphQL error naming the relation, not a
+            // request-time panic. Boot already warns (`warn_unreachable_loaders`).
+            let __loader = __ctx
+                .data_opt::<
+                    ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
+                        <#target as ::nest_rs_resource::PkLoadable>::Loader,
+                    >,
+                >()
+                .ok_or_else(|| {
+                    ::nest_rs_resource::graphql::async_graphql::Error::new(::std::format!(
+                        "relation `{}` is exposed but its dataloader `{}` is not seeded — the module providing it is not imported by (or reachable from) this app",
+                        ::core::stringify!(#name),
+                        ::core::any::type_name::<
+                            ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
+                                <#target as ::nest_rs_resource::PkLoadable>::Loader,
+                            >,
+                        >(),
+                    ))
+                })?;
             let __key = #key_expr;
             ::core::result::Result::Ok(__loader.load_one(__key).await?)
         }
@@ -425,11 +441,27 @@ fn emit_has_many_method(
         ) -> ::nest_rs_resource::graphql::async_graphql::Result<
             ::std::vec::Vec<<#target as ::nest_rs_resource::RelatedTo<Entity>>::Wire>,
         > {
-            let __loader = __ctx.data_unchecked::<
-                ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
-                    <#target as ::nest_rs_resource::RelatedTo<Entity>>::Loader,
-                >,
-            >();
+            // `data_opt` + error, never `data_unchecked` (which panics): an
+            // unseeded loader — its owner service's module is unreachable from
+            // this app — degrades to a GraphQL error naming the relation, not a
+            // request-time panic. Boot already warns (`warn_unreachable_loaders`).
+            let __loader = __ctx
+                .data_opt::<
+                    ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
+                        <#target as ::nest_rs_resource::RelatedTo<Entity>>::Loader,
+                    >,
+                >()
+                .ok_or_else(|| {
+                    ::nest_rs_resource::graphql::async_graphql::Error::new(::std::format!(
+                        "relation `{}` is exposed but its dataloader `{}` is not seeded — the module providing it is not imported by (or reachable from) this app",
+                        ::core::stringify!(#name),
+                        ::core::any::type_name::<
+                            ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
+                                <#target as ::nest_rs_resource::RelatedTo<Entity>>::Loader,
+                            >,
+                        >(),
+                    ))
+                })?;
             let __key = #key_expr;
             ::core::result::Result::Ok(
                 __loader.load_one(__key).await?.unwrap_or_default(),

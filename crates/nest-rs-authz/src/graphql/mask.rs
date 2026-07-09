@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::ability;
-use crate::wire_mask::{MaskedWire, mask_wire_json};
+use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker};
 
 /// Mask a resolver's already-built wire value through the ambient ability —
@@ -38,16 +38,38 @@ where
     O: Serialize + DeserializeOwned,
 {
     let ability = ability(ctx)?;
-    let wire = serde_json::to_value(&value)
-        .map_err(|err| Error::new(format!("response masking failed: {err}")))?;
-    match mask_wire_json::<E>(&ability, A::ACTION, &wire) {
+    let action = A::ACTION;
+    let wire = serde_json::to_value(&value).map_err(|err| {
+        warn_mask_failure(
+            std::any::type_name::<E>(),
+            action,
+            "resolver value did not serialize",
+            &err,
+        );
+        Error::new(format!("response masking failed: {err}"))
+    })?;
+    match mask_wire_json::<E>(&ability, action, &wire) {
         Ok(MaskedWire::Passthrough) => Ok(value),
-        Ok(MaskedWire::Masked(masked)) => serde_json::from_value(masked).map_err(|_| {
+        Ok(MaskedWire::Masked(masked)) => serde_json::from_value(masked).map_err(|err| {
+            warn_mask_failure(
+                std::any::type_name::<E>(),
+                action,
+                "masked value did not match the authorized subject type",
+                &err,
+            );
             Error::new("response masking failed: value did not match the authorized subject type")
         }),
-        Err(_) => Err(Error::new(
-            "response masking failed: value did not match the authorized subject type",
-        )),
+        Err(err) => {
+            warn_mask_failure(
+                std::any::type_name::<E>(),
+                action,
+                "value could not be reconciled with the subject model",
+                &err,
+            );
+            Err(Error::new(
+                "response masking failed: value did not match the authorized subject type",
+            ))
+        }
     }
 }
 
@@ -59,8 +81,15 @@ where
     O: DeserializeOwned,
 {
     let masked = ability.mask::<E>(action, model);
-    serde_json::from_value(masked)
-        .map_err(|err| Error::new(format!("response masking failed: {err}")))
+    serde_json::from_value(masked).map_err(|err| {
+        warn_mask_failure(
+            std::any::type_name::<E>(),
+            action,
+            "masked model did not match the output type",
+            &err,
+        );
+        Error::new(format!("response masking failed: {err}"))
+    })
 }
 
 /// Read the ambient ability and mask `model` into `O`.

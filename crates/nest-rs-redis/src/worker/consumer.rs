@@ -162,7 +162,11 @@ fn build_worker(
                     attempt = attempt.current(),
                 );
                 async move {
-                    tracing::debug!(target: "nest_rs::queue", "job started");
+                    tracing::debug!(
+                        target: "nest_rs::queue",
+                        attempt = attempt.current(),
+                        "job started",
+                    );
                     let started = ::std::time::Instant::now();
                     let result = handler(job, container).await;
                     let elapsed_ms = started.elapsed().as_millis() as u64;

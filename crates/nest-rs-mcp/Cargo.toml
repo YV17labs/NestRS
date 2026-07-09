@@ -15,6 +15,9 @@ nest-rs-mcp-macros.workspace = true
 poem.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
+# Deny-all fallback and its boot warning log a security misconfig through
+# the framework's tracing (span target `nest_rs::mcp`).
+tracing.workspace = true
 
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }

@@ -11,7 +11,7 @@ description = "Core building blocks (DI container, module trait, lifecycle, acce
 
 [dependencies]
 thiserror.workspace = true
-nest-rs-macros.workspace = true
+nest-rs-core-macros.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true

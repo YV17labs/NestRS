@@ -1,13 +1,13 @@
 //! Pool ping wired through `nest-rs-health`'s indicator registry.
 //!
-//! Import [`DatabaseHealthModule`] alongside `nest_rs_health::HealthModule` to
-//! gate `GET /health/ready` (and `/startup`) on a round-trip to the database.
-//! The indicator runs `DatabaseConnection::ping`, so an unreachable DB drops
-//! the readiness probe to `503` until the connection comes back.
+//! [`DbHealthIndicator`] runs `DatabaseConnection::ping` on the readiness and
+//! startup probes, so an unreachable DB drops those probes to `503` until the
+//! connection comes back. [`DatabaseHealthModule`](super::DatabaseHealthModule)
+//! is the import seam that registers it.
 
 use std::sync::Arc;
 
-use nest_rs_core::{injectable, module};
+use nest_rs_core::injectable;
 use nest_rs_health::indicators;
 use sea_orm::DatabaseConnection;
 
@@ -29,6 +29,3 @@ impl DbHealthIndicator {
         self.db.ping().await
     }
 }
-
-#[module(providers = [DbHealthIndicator])]
-pub struct DatabaseHealthModule;

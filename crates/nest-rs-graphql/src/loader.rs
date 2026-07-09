@@ -65,7 +65,39 @@ pub(crate) struct LoaderExtensionFactory {
 
 impl LoaderExtensionFactory {
     pub(crate) fn new(container: Container) -> Self {
+        warn_unreachable_loaders(&container);
         Self { container }
+    }
+}
+
+/// Boot-time visibility for the "linked but unreachable" case: a
+/// `#[dataloader]` links into the binary but its owner service's module is not
+/// imported by (or reachable from) this app's root. Such a loader is skipped
+/// per request in `LoaderExtension::prepare_request` — seeding it would panic
+/// on `container.get::<Owner>()` — so the skip must not be silent, per the
+/// "linked but unreachable ⇒ boot `tracing::warn`" norm. Emitted once, at
+/// schema build (`LoaderExtensionFactory::new`), not per request.
+///
+/// [`GraphqlLoaderRegistration`] carries only the owner's `TypeId`, not a name,
+/// so this reports the count; the per-relation name lands in the query-time
+/// resolver error (`nest-rs-resource-macros` emits `data_opt` + a named error,
+/// not the panicking `data_unchecked`).
+fn warn_unreachable_loaders(container: &Container) {
+    // No gate seeded (a hand-rolled container in a test): `prepare_request`
+    // already warns once and skips every loader — nothing to add at boot.
+    let Some(reachable) = container.get::<ReachableProviders>() else {
+        return;
+    };
+    let skipped = inventory::iter::<GraphqlLoaderRegistration>()
+        .filter(|reg| !reachable.0.contains(&(reg.owner_type_id)()))
+        .count();
+    if skipped > 0 {
+        tracing::warn!(
+            target: "nest_rs::graphql",
+            count = skipped,
+            hint = "import the modules that provide these loaders; relation fields backed by them error at query time",
+            "dataloaders linked but unreachable",
+        );
     }
 }
 
@@ -104,6 +136,10 @@ impl Extension for LoaderExtension {
         };
         for reg in inventory::iter::<GraphqlLoaderRegistration>() {
             if !reachable.0.contains(&(reg.owner_type_id)()) {
+                // Owner module unreachable: seeding would panic on
+                // `container.get::<Owner>()`, so skip per request (fail-closed).
+                // Not silent — the linked-but-unreachable set is surfaced once
+                // at boot by `warn_unreachable_loaders`.
                 continue;
             }
             request = (reg.seed)(&self.container, request);

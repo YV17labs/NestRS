@@ -124,7 +124,7 @@ reqwest client is the right pick, the upstream-recommended pairing.
   exporters for traces / metrics / logs, and bridges `tracing` events into OTel
   logs. Without it, the subscriber stays a pure `tracing-subscriber` setup —
   useful for a tiny binary that should not link the OTel SDK.
-- **`http`** — pulls `poem` + `nest-rs-http` + `nest-rs-middleware` so the
+- **`http`** — pulls `poem` + `nest-rs-http` + `nest-rs-interceptors` so the
   per-request HTTP interceptor compiles. A headless app (a queue worker) uses
   `otlp` **without** `http` and stays free of the HTTP transport. Requires
   `otlp` — the interceptor reads the trace id off the OTel span.

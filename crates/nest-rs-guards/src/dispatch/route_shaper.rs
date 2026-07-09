@@ -208,8 +208,12 @@ async fn apply_body_pipes(
             ));
         }
         Err(err) => {
+            // The body is already consumed and cannot be restored — continuing
+            // would run the handler against an empty body with every global
+            // pipe skipped. Fail the request instead, exactly as the sibling
+            // body readers do (`nest_rs_http` `RawBody` / `Piped`).
             tracing::warn!(target: "nest_rs::layers", error = %err, "global pipe: failed to read body");
-            return Ok(());
+            return Err(err.into());
         }
     };
     if bytes.is_empty() {
@@ -236,7 +240,7 @@ async fn apply_body_pipes(
             let resp = Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .content_type("application/json")
-                .body(serde_json::to_vec(&body).unwrap_or_default());
+                .body(serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec()));
             return Err(nest_rs_http::poem::Error::from_response(resp));
         }
     }

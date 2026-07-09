@@ -89,7 +89,7 @@ impl App {
         for contribution in DiscoveryService::new(&container).meta::<TransportContribution>() {
             let transport = (contribution.meta.build)(&container)?;
             tracing::info!(
-                target: "nest_rs::transport",
+                target: "nest_rs::app",
                 transport = contribution.meta.name,
                 "attached module-contributed transport",
             );
@@ -396,7 +396,7 @@ mod tests {
     struct Config(u32);
     struct Doubled(u32);
 
-    // The `#[module]` macro lives in `nest-rs-macros`, so this crate's tests
+    // The `#[module]` macro lives in `nest-rs-core-macros`, so this crate's tests
     // hand-write the trait impl.
     struct DoublerModule;
     impl Module for DoublerModule {

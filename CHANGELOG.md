@@ -133,7 +133,7 @@ validation, discovery, lifecycle).
   ambient executor/transaction `task_local!`s, route-model binding, and
   auto-resolved GraphQL relations from `#[expose]`.
 - **Supporting crates.** Pipes, events, health, throttler, config,
-  opentelemetry, and the `nestrs` umbrella crate (`use nestrs::prelude::*`).
+  opentelemetry, and the `nest-rs` umbrella crate (`use nest_rs::prelude::*`).
 - **`nest-rs-*` naming alignment** across directories, packages, and imports;
   framework-owned error types.
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on

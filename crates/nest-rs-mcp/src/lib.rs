@@ -6,13 +6,12 @@
 //! `endpoint()` factory that mounts under the HTTP server. Apps activate MCP
 //! by listing the `#[mcp]`-decorated provider — no `<Transport>Module`
 //! activation seam to import.
-mod allow_guard;
-mod deny_guard;
 mod endpoint;
 mod guard;
+mod guards;
 
-pub use allow_guard::AllowAllMcpGuard;
 pub use endpoint::{endpoint, endpoint_with_guard};
+pub use guards::AllowAllMcpGuard;
 pub use guard::{BoxFuture, McpOperationGuard};
 
 pub use rmcp::handler::server::router::tool::ToolRouter;

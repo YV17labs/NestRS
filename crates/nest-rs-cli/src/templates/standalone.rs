@@ -7,7 +7,7 @@ pub const CARGO: &str = r#"[package]
 name = "{{kebab}}"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.96"
 
 # Own workspace root — scaffold works even inside another repo's tree.
 [workspace]
@@ -147,7 +147,7 @@ pub const DOCKERFILE: &str = r#"# syntax=docker/dockerfile:1.7
 #
 # Multi-stage: compile in Rust slim, run on distroless nonroot.
 
-ARG RUST_VERSION=1.95
+ARG RUST_VERSION=1.96
 
 FROM rust:${RUST_VERSION}-slim-trixie AS builder
 WORKDIR /app

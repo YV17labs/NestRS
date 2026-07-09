@@ -9,10 +9,11 @@
 //! cargo nextest run -p nest-rs-storage -E 'binary(e2e)'
 //! ```
 //!
-//! Config comes from `StorageConfig::default()`, which targets the dev
+//! Config starts from `StorageConfig::default()`, which targets the dev
 //! container's RustFS (`http://rustfs:9000`, `nestrs`/`nestrs`, bucket
-//! `nestrs`, path-style). Override via `NESTRS_STORAGE__*` is not used here so
-//! the test is self-contained.
+//! `nestrs`, path-style). The endpoint honors the documented
+//! `NESTRS_STORAGE__ENDPOINT` override so the round-trip can point at a server
+//! outside the dev container; unset, it falls back to the default.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +21,13 @@ use std::time::Duration;
 use nest_rs_storage::{Storage, StorageConfig};
 
 fn storage() -> Storage {
-    Storage::new(Arc::new(StorageConfig::default()))
+    let mut config = StorageConfig::default();
+    // Honor the documented `NESTRS_STORAGE__ENDPOINT` override; the default
+    // (dev-container RustFS) stands when it is unset.
+    if let Ok(endpoint) = std::env::var("NESTRS_STORAGE__ENDPOINT") {
+        config.endpoint = endpoint;
+    }
+    Storage::new(Arc::new(config))
 }
 
 /// Best-effort bucket creation: a presigned PUT on the bucket root is an S3

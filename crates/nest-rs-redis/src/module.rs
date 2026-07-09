@@ -32,7 +32,9 @@ impl DynamicModule for QueueSetup {
             let config = container
                 .get::<QueueConfig>()
                 .expect("QueueConfig is resolved by ConfigModule::provide_feature");
-            QueueConnection::connect(&config.url).await
+            // `?` lifts the typed `ConnectionError` into the factory's `anyhow`
+            // boundary (the composition-root error channel).
+            Ok(QueueConnection::connect(&config.url).await?)
         })
     }
 }

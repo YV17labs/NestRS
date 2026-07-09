@@ -34,10 +34,12 @@
 
 mod config;
 mod connection;
+mod error;
 mod module;
 mod worker;
 
 pub use config::QueueConfig;
 pub use connection::{Queue, QueueConnection};
+pub use error::ConnectionError;
 pub use module::{QueueModule, QueueSetup};
 pub use worker::{QueueWorker, QueueWorkerModule};

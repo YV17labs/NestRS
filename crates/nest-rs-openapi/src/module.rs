@@ -67,7 +67,7 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
     // the self-mount by returning the builder untouched.
     if !options.enabled {
         tracing::info!(
-            target: "nest_rs::http",
+            target: "nest_rs::routes",
             docs_path = DOCS_PATH,
             spec_path = SPEC_PATH,
             "openapi documentation disabled",

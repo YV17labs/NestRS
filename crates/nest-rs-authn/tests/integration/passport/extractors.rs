@@ -1,4 +1,4 @@
-//! Covers `src/passport/credentials.rs`.
+//! Covers `src/passport/extractors.rs`.
 
 use base64::Engine as _;
 use nest_rs_authn::{basic_credentials, bearer_token};

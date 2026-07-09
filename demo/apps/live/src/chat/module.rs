@@ -4,9 +4,9 @@ use nest_rs_ws::WsModule;
 
 use crate::chat::gateway::ChatGateway;
 use crate::chat::guard::ModeratedGuard;
-use crate::chat::service::RoomService;
+use crate::chat::service::ChatService;
 
-#[module(imports = [WsModule, AuthnModule], providers = [RoomService, ModeratedGuard, ChatGateway])]
+#[module(imports = [WsModule, AuthnModule], providers = [ChatService, ModeratedGuard, ChatGateway])]
 pub struct ChatModule;
 
 #[cfg(test)]
@@ -17,11 +17,11 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn registers_room_service() {
+    fn registers_chat_service() {
         let jwt = JwtService::new(JwtOptions::new("test-only-hs256-secret-at-least-32-bytes"))
             .expect("32+ byte HS256 secret");
         let container = ChatModule::register(Container::builder().provide(jwt)).build();
-        let room: Option<Arc<RoomService>> = container.get();
-        assert!(room.is_some());
+        let svc: Option<Arc<ChatService>> = container.get();
+        assert!(svc.is_some());
     }
 }

@@ -241,7 +241,7 @@ pub trait Creatable: CrudService {
                 entity,
                 id = ?model_pk::<Self::Entity>(&model),
                 action = ?Action::Create,
-                "create denied — row outside the caller's scope",
+                "access denied — row outside the caller's scope",
             );
             return Err(DbErr::RecordNotInserted);
         }
@@ -282,7 +282,7 @@ pub trait Updatable: CrudService {
                     entity,
                     ?id,
                     action = ?Action::Update,
-                    "update denied — row outside the caller's scope",
+                    "access denied — row outside the caller's scope",
                 );
                 Err(DbErr::RecordNotUpdated)
             }
@@ -321,7 +321,7 @@ pub trait Deletable: CrudService {
                         entity,
                         ?id,
                         action = ?Action::Delete,
-                        "soft-delete denied — row outside the caller's scope",
+                        "access denied — row outside the caller's scope",
                     );
                     Err(out_of_scope())
                 }
@@ -335,7 +335,7 @@ pub trait Deletable: CrudService {
                         entity,
                         ?id,
                         action = ?Action::Delete,
-                        "delete denied — row outside the caller's scope",
+                        "access denied — row outside the caller's scope",
                     );
                     return Err(out_of_scope());
                 }

@@ -66,6 +66,7 @@ impl Interceptor for OpenTelemetryHttp {
             let user_agent = user_agent(&req).unwrap_or_default();
 
             let span = tracing::info_span!(
+                target: "nest_rs::http",
                 "http.request",
                 otel.kind = "server",
                 http.request.method = %method,

@@ -14,11 +14,13 @@
 //! `nest-rs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
 //! directly — see this crate's README for the extension contract.
 mod consumer;
+mod error;
 mod inventory;
 mod processor;
 mod producer;
 
 pub use consumer::JobConsumer;
+pub use error::QueueError;
 pub use inventory::{JobHandler, ProcessMethod, ProcessorMeta, WIRE_FORMAT_VERSION};
 pub use processor::{FromContainer, Job, Processor};
 pub use producer::{JobProducer, JobProducerExt, QueueBackend};

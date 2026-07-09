@@ -39,8 +39,7 @@ framework that only **documents** the same concerns.
   string shared between the producer and its `#[processor]`, and a dataloader's
   generated loader type (`UsersServiceByName`) is found by naming convention; a typo
   surfaces at runtime or as a cryptic type error. Typed queue handles and a clearer
-  loader-type surface would move both to compile time (a guard-order lint — authn
-  before authz — is the same class of guardrail).
+  loader-type surface would move both to compile time.
 
 ## Next — completing shipped features
 
@@ -61,8 +60,7 @@ Known, deliberate gaps in features that already ship:
   fine at small N, a DoS waiting at large N), and a `via = "..."` override for
   HasMany so non-conventional FK columns work without falling back to a manual
   `#[field_resolver]`. Adopter backlog landed: HTTP-only `#[expose]`, opt-in
-  `soft_delete`/`timestamps`, relation-graph diagnostics, guard naming doc
-  ([FRAMEWORK-CORRECTIONS.md](FRAMEWORK-CORRECTIONS.md)).
+  `soft_delete`/`timestamps`, relation-graph diagnostics, and a guard-naming doc.
 - **API versioning strategies** — header- and media-type-based selection
   (which need request-time dispatch); URI versioning (`#[controller(version =
   "1")]`) already ships.
@@ -88,9 +86,9 @@ The verdict on what is **not** worth reproducing is in *Not on the roadmap*.
 
 Landed with the first `0.1.0` crates.io release and the alpha docs push:
 
-- **crates.io publishing** — every `nest-rs-*` framework crate is on
-  [crates.io](https://crates.io/crates/nest-rs); `apps/` and product crates stay
-  `publish = false`.
+- **crates.io publishing** — every publishable `nest-rs-*` framework crate is on
+  [crates.io](https://crates.io/crates/nest-rs); `apps/` and product crates — plus
+  `nest-rs-storage`, held out of the first release — stay `publish = false`.
 - **Release automation** — versions move in **lockstep** (one number for the whole
   workspace, centralised in `[workspace.package]`). Push a `v*.*.*` tag and
   `.github/workflows/publish.yml` runs `cargo publish --workspace` in dependency
@@ -105,7 +103,7 @@ Landed with the first `0.1.0` crates.io release and the alpha docs push:
   (HTTP, GraphQL, security, database, queue, events, MCP, health, OpenTelemetry,
   testing, …). Published on every push to `main` via
   `.github/workflows/docs-pages.yml`.
-- **Reference apps** — the **Publish** workspace under `apps/`
+- **Reference apps** — the **Publish** workspace under `demo/apps/`
   (`auth`, `api`, `assistant`, `live`,
   `worker`), plus a multi-binary Docker image and a dev container
   with Postgres and Redis. Simple hello/blog layouts are CLI-scaffolded
@@ -114,10 +112,10 @@ Landed with the first `0.1.0` crates.io release and the alpha docs push:
   (description + links to [nestrs.dev](https://nestrs.dev) and GitHub);
   extension-point contracts live in the docs site.
 - **Scaffolding CLI** — **`nest-rs-cli`** / binary **`nestrs`**: `nestrs new`
-  (standalone + `--in-workspace`), `nestrs g feature` (port + optional `--http`),
-  the `g resource` / `http` / `graphql` / `ws` / `queue` / `schedule` / `mcp`
-  generators, and `nestrs doctor` all ship in the workspace; crates.io with the
-  next lockstep release.
+  (workspace by default, `--standalone` for a single crate), `nestrs g feature`
+  (transport-agnostic port), the `g resource` / `http` / `graphql` / `ws` /
+  `queue` / `schedule` / `mcp` generators, and `nestrs doctor` all ship in the
+  workspace; crates.io with the next lockstep release.
 
 ## Next — project & release infrastructure
 
@@ -133,8 +131,7 @@ companion, and an example app, which a repo-per-crate split would make impossibl
   tests exercise live Postgres and Redis, so CI provisions both as service
   containers. It publishes nothing — its only artifact is a green/red signal.
 - **Scaffolding CLI — remaining generators** — the shipped `nestrs g` surface
-  (see *Shipped*) still lacks `resolver`, `entity`, migrations, and a `nestrs info`
-  command.
+  (see *Shipped*) still lacks `entity`, migrations, and a `nestrs info` command.
 
 ## Later — deferred
 

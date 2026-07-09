@@ -26,8 +26,8 @@ read it once when a placeholder is unclear.
 - A `JobContext` that installs the non-transactional handle for worker paths.
 
 A driver lives in a `nest-rs-<technology>` crate that depends on
-`nest-rs-core`, `nest-rs-database`, `nest-rs-http`, `nest-rs-worker`, plus
-whatever your store needs. The app picks a driver by importing its module instead of
+`nest-rs-core`, `nest-rs-database`, `nest-rs-http`, `nest-rs-interceptors`,
+`nest-rs-worker`, plus whatever your store needs. The app picks a driver by importing its module instead of
 `nest-rs-seaorm`.
 
 ## Step 1 — The Executor enum
@@ -75,7 +75,7 @@ five places you write store-specific code.
 use std::sync::Arc;
 use async_trait::async_trait;
 use nest_rs_core::injectable;
-use nest_rs_middleware::{Interceptor, Next};
+use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use tokio::sync::Mutex;

@@ -1,6 +1,6 @@
 //! Covers `src/passport/`.
 
-mod credentials;
+mod extractors;
 mod guard;
 mod strategies;
 mod strategy;

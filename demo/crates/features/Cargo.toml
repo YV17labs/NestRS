@@ -58,3 +58,6 @@ async-graphql.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
 migrations = { workspace = true }
+
+[lints]
+workspace = true

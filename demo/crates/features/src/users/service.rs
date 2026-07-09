@@ -84,7 +84,7 @@ impl UsersService {
             Some(password),
         )?;
         let user = active.insert(&Repo::<Users>::conn()?).await?;
-        tracing::info!(target: "features::users", id = %user.id, %org_id, "user registered with password");
+        tracing::debug!(target: "features::users", id = %user.id, %org_id, "user registered with password");
         Ok(User::from(&user))
     }
 
@@ -95,7 +95,7 @@ impl UsersService {
     ) -> Result<entity::Model, ServiceError> {
         let active = prepare_new_user(input, org_id, None)?;
         let user = active.insert(&Repo::<Users>::conn()?).await?;
-        tracing::info!(target: "features::users", id = %user.id, %org_id, "user created");
+        tracing::debug!(target: "features::users", id = %user.id, %org_id, "user created");
         Ok(user)
     }
 
@@ -124,7 +124,7 @@ impl UsersService {
         )?;
         match active.insert(&conn).await {
             Ok(user) => {
-                tracing::info!(target: "features::users", id = %user.id, %org_id, "provisioned a user");
+                tracing::debug!(target: "features::users", id = %user.id, %org_id, "provisioned a user");
                 Ok(user)
             }
             // Lost a race with a concurrent first login for this email between
@@ -233,7 +233,7 @@ impl UsersService {
         if names.is_empty() {
             return Ok(HashMap::new());
         }
-        tracing::debug!(target: "nest_rs::loader", count = names.len(), "loading users by name");
+        tracing::debug!(target: "features::users", count = names.len(), "loading users by name");
         let rows = Repo::<Users>::scoped(Action::Read)
             .filter(live_condition::<Users>())
             .filter(entity::Column::Name.is_in(names.iter().cloned()))
@@ -248,7 +248,7 @@ impl UsersService {
     #[on_application_shutdown]
     async fn report(&self) -> Result<()> {
         let count = Users::find().count(self.db.as_ref()).await?;
-        tracing::info!(target: "features::users", count, "users present at shutdown");
+        tracing::debug!(target: "features::users", count, "users present at shutdown");
         Ok(())
     }
 }

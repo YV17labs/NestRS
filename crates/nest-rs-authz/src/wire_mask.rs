@@ -16,6 +16,26 @@ use serde_json::Value;
 
 use crate::{Ability, Action};
 
+/// One place for the fail-closed masking warn, so every branch — HTTP, GraphQL,
+/// and the ambient [`Ability::mask`] — emits the identical queryable event
+/// (`target: "nest_rs::authz"`, same keys) instead of hand-copying it. A
+/// fail-closed branch that forgets to log is then the visible omission.
+pub(crate) fn warn_mask_failure(
+    entity: &'static str,
+    action: Action,
+    reason: &'static str,
+    err: &dyn std::fmt::Display,
+) {
+    tracing::warn!(
+        target: "nest_rs::authz",
+        entity,
+        action = ?action,
+        reason,
+        error = %err,
+        "response masking failed",
+    );
+}
+
 /// Outcome of masking one wire JSON value.
 pub(crate) enum MaskedWire {
     /// An object or array body, masked and strained — ship this instead.

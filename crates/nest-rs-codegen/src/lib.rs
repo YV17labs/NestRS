@@ -14,7 +14,7 @@ mod crud;
 mod inject;
 mod ty;
 
-pub use args::parse_named_str_arg;
+pub use args::{parse_named_str_arg, require_str_lit};
 pub use casing::{pascal_case, snake_case};
 pub use crud::{CrudConfig, Paginate, parse_crud_args, singular_of};
 pub use inject::{

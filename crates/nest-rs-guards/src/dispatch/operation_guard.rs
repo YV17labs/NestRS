@@ -50,13 +50,10 @@ impl GraphqlOperationGuard for GlobalPoolOperationGuard {
         Box::pin(async move {
             for entry in &self.chain {
                 if let Err(denial) = entry.layer.check_http(req).await {
-                    tracing::warn!(
-                        target: "nest_rs::layers",
-                        guard = entry.name,
-                        path = %req.uri().path(),
-                        reason = denial.message(),
-                        "graphql operation denied by the global guard pool",
-                    );
+                    // The denial is logged once at its source guard
+                    // (`AuthGuard`/`AuthzGuard`); re-warning here would emit the
+                    // same event twice. HTTP's `RouteShaper` doesn't re-log a
+                    // pooled denial either — match it.
                     return Err(denial_to_http_response(denial));
                 }
             }

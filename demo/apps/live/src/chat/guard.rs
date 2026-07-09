@@ -14,11 +14,20 @@ impl Guard for ModeratedGuard {
     async fn check_ws_message(
         &self,
         _client: &WsClient,
-        _event: &str,
+        event: &str,
         data: &Value,
     ) -> Result<(), Denial> {
         match data.get("author").and_then(Value::as_str) {
-            Some("banned") => Err(Denial::forbidden("author `banned` is not allowed to post")),
+            Some(author @ "banned") => {
+                tracing::warn!(
+                    target: "live::chat",
+                    action = "post",
+                    subject = event,
+                    author,
+                    "message denied: author is not allowed to post",
+                );
+                Err(Denial::forbidden("author `banned` is not allowed to post"))
+            }
             _ => Ok(()),
         }
     }

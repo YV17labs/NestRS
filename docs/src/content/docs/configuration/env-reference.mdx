@@ -24,12 +24,23 @@ config struct, so anything here is also settable in code.
 | `FAIL_SECURE_STRICT` | fail boot (vs warn) on an unguarded self-mount under global guards — default `true` |
 | `SECURITY_HEADERS` | master switch for the secure-by-default response headers |
 | `HSTS` · `FRAME_OPTIONS` · `CONTENT_TYPE_OPTIONS` · `SERVER_HEADER` | individual security-header controls |
+| `TLS_CERT` / `TLS_KEY` | PEM cert + key for HTTPS (inline); `TLS_CERT_FILE` / `TLS_KEY_FILE` read from a path instead. Unset ⇒ plain HTTP |
+| `CORS_ORIGINS` | comma-separated allowed origins; unset ⇒ no CORS layer |
+| `CORS_METHODS` | comma-separated allowed request methods |
+| `CORS_HEADERS` | comma-separated allowed request headers |
+| `CORS_EXPOSED` | comma-separated response headers exposed to the browser |
+| `CORS_CREDENTIALS` | allow credentialed requests — default `false` |
+| `CORS_MAX_AGE` | preflight cache lifetime in seconds |
+| `ACCESS_LOG` | emit one access-log event per request — default `true` (read by `nest-rs-opentelemetry`) |
 
 ## `database` — `NESTRS_DATABASE__*`
 
 | Key | Meaning |
 |---|---|
 | `URL` | Postgres connection string |
+| `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
+| `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
+| `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds |
 | `SQLX_LOGGING` | log SQL statements |
 | `RETRY_SERIALIZATION_CONFLICTS` | retry on serialization failures |
 
@@ -53,11 +64,29 @@ config struct, so anything here is also settable in code.
 
 | Key | Meaning |
 |---|---|
+| `SERVICE_NAME` | service name; overrides the name passed to `OpenTelemetry::init` |
 | `LOG_LEVEL` | tracing filter (e.g. `info`, `debug`) |
 | `LOG_FORMAT` | `json` (production) or `text` (dev) |
 | `LOG_SOURCE_LOCATION` | include file:line on each event |
 | `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export) |
+| `SAMPLE_RATIO` | trace sampling ratio, `0.0`–`1.0` (default `1.0`) |
 | `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
+
+## `authn` — `NESTRS_AUTHN__*`
+
+JWT key material and validation for `nest-rs-authn`. A resource server sets only
+the verification side (`SECRET` **or** `PUBLIC_KEY`); the issuer app also sets the
+signing side.
+
+| Key | Meaning |
+|---|---|
+| `SECRET` | HS256 shared secret (≥ 32 bytes) — signs and verifies |
+| `PRIVATE_KEY` | EdDSA private key (PEM) — issuer only, to sign |
+| `PUBLIC_KEY` | EdDSA public key (PEM) — to verify |
+| `ISSUER` | expected `iss` claim (unset ⇒ no issuer check) |
+| `AUDIENCE` | expected `aud` claim (unset ⇒ no audience check) |
+| `LEEWAY_SECS` | clock-skew leeway in seconds (default `30`) |
+| `EXPIRES_IN_SECS` | minted-token lifetime in seconds (default `3600`) |
 
 ## Other namespaces
 

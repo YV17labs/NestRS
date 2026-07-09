@@ -305,7 +305,24 @@ async fn handle_text<G: Gateway>(
         None => inner.await,
     };
     match reply {
-        WsReply::Reply(data) => serde_json::to_string(&WsEnvelope { event, data }).ok(),
+        WsReply::Reply(data) => {
+            let envelope = WsEnvelope { event, data };
+            match serde_json::to_string(&envelope) {
+                Ok(frame) => Some(frame),
+                Err(err) => {
+                    // A reply that cannot be re-serialized would otherwise vanish
+                    // silently; log it and degrade to an error frame, mirroring
+                    // `error_frame`'s own fallback rather than dropping the reply.
+                    tracing::warn!(
+                        target: "nest_rs::ws",
+                        event = %envelope.event,
+                        error = %err,
+                        "failed to serialize reply",
+                    );
+                    Some(error_frame(&envelope.event, "internal error"))
+                }
+            }
+        }
         WsReply::None => None,
         WsReply::Error(message) => Some(error_frame(&event, &message)),
     }

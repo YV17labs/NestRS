@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use nest_rs_ws::{WsClient, gateway, messages};
+use nest_rs_ws::{WsClient, gateway, messages, serde_json};
 
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::guard::ModeratedGuard;
-use crate::chat::service::RoomService;
+use crate::chat::service::ChatService;
 use features::authn::AuthGuard;
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthGuard)]
 pub struct ChatGateway {
     #[inject]
-    svc: Arc<RoomService>,
+    svc: Arc<ChatService>,
 }
 
 #[messages]
@@ -29,8 +29,9 @@ impl ChatGateway {
 
     #[subscribe_message("message")]
     #[use_guards(ModeratedGuard)]
-    async fn on_message(&self, message: SendMessageDto) {
-        self.svc.record(message);
+    async fn on_message(&self, message: SendMessageDto) -> Result<(), serde_json::Error> {
+        self.svc.record(message)?;
+        Ok(())
     }
 
     #[subscribe_message("history")]
@@ -58,11 +59,11 @@ mod tests {
     use nest_rs_core::Discoverable;
 
     use super::ChatGateway;
-    use crate::chat::service::RoomService;
+    use crate::chat::service::ChatService;
 
     #[test]
     fn gateway_declares_its_injected_dependency_for_the_access_graph() {
         assert!(ChatGateway::dependencies().is_empty());
-        assert!(ChatGateway::injected().contains(&TypeId::of::<RoomService>()));
+        assert!(ChatGateway::injected().contains(&TypeId::of::<ChatService>()));
     }
 }

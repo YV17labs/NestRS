@@ -9,6 +9,8 @@ use nest_rs_throttler::ThrottlerModule;
 
 use features::oauth::OAuthHttpModule;
 
+use crate::social::SocialModule;
+
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -20,6 +22,7 @@ use features::oauth::OAuthHttpModule;
         AuthnModule::for_root(None),
         OAuth2Module::for_root(None),
         OAuthHttpModule,
+        SocialModule,
     ],
 )]
 pub struct AuthModule;

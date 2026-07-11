@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use async_graphql::{BatchRequest, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
-use nest_rs_core::{Container, ReachableProviders};
+use nest_rs_core::{Container, ReachableProviders, RequestScope};
 use poem::http::StatusCode;
 use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, Response, Result};
 
@@ -29,6 +29,27 @@ pub struct GraphqlContextSeed {
 }
 
 inventory::collect!(GraphqlContextSeed);
+
+// Framework-level seed (always fires): forward the per-request `RequestScope`
+// installed by the HTTP `RequestScopeEndpoint` (outermost over the whole route
+// tree, so a `/graphql` request already carries it) into the async-graphql
+// context. Resolvers then reach request-scoped providers via
+// [`crate::Scoped<T>`]. Absent (a hand-rolled executor in a test, or a non-HTTP
+// mount) ⇒ the request is forwarded untouched.
+//
+// Caveat: this reaches resolver bodies only. A `#[dataloader]` batch runs
+// off-task (its own spawned future) where this context does not propagate —
+// batches re-establish ambient state through their own `GraphqlBatchContext`
+// seam, not `Scoped<T>`.
+inventory::submit! {
+    GraphqlContextSeed {
+        owner_type_id: || None,
+        seed: |req, _container, gql| match req.extensions().get::<Arc<RequestScope>>() {
+            Some(scope) => gql.data(Arc::clone(scope)),
+            None => gql,
+        },
+    }
+}
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

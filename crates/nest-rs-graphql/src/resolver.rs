@@ -166,6 +166,47 @@ fn merge_type_info<T: OutputType>(
     })
 }
 
+/// Compile-time canary for the pinned async-graphql registry API.
+///
+/// `merge_type_info` above constructs a `MetaType::Object { .. }` with an
+/// **exhaustive** field list; that literal already breaks the build if a field
+/// is *removed* or *renamed* upstream. This destructure closes the other half:
+/// it matches every field with **no `..` rest pattern**, so an *added* field
+/// also fails compilation right here rather than being silently ignored.
+///
+/// The workspace pins `async-graphql = "=7.2.1"` precisely so this stays in
+/// lockstep. If this block stops compiling after a bump, the registry shape
+/// changed — do all of:
+///   1. update the `MetaType::Object { .. }` literal in `merge_type_info`,
+///   2. mirror the new/removed field in the destructure below,
+///   3. re-pin `async-graphql`/`async-graphql-poem` in the root `Cargo.toml`,
+///   4. run the SDL snapshot test (`tests/integration/sdl_snapshot.rs`) and
+///      review the schema diff.
+const _: () = {
+    #[allow(dead_code)]
+    fn metatype_object_field_canary(ty: MetaType) {
+        if let MetaType::Object {
+            name: _,
+            description: _,
+            fields: _,
+            cache_control: _,
+            extends: _,
+            shareable: _,
+            resolvable: _,
+            keys: _,
+            visible: _,
+            inaccessible: _,
+            interface_object: _,
+            tags: _,
+            is_subscription: _,
+            rust_typename: _,
+            directive_invocations: _,
+            requires_scopes: _,
+        } = ty
+        {}
+    }
+};
+
 macro_rules! discovered_root {
     ($name:ident, $kind:expr_2021, $type_name:literal) => {
         pub(crate) struct $name {

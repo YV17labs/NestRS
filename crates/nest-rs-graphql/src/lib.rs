@@ -7,6 +7,25 @@
 //! The roots merge fields from the registry at runtime (not a compile-time
 //! `MergedObject` tuple) — the bridge to async-graphql's static
 //! `Schema<Q, M, S>`.
+//!
+//! # Pinned async-graphql version
+//!
+//! [`resolver`] reads async-graphql's public-but-internal registry API: it
+//! spells out an exhaustive `MetaType::Object { .. }` literal and relies on
+//! `remove_unused_types` behaviour. The workspace therefore pins the *exact*
+//! version (`async-graphql = "=7.2.1"` in the root `Cargo.toml`) and guards it
+//! in three layers — a compile-time field canary and the exhaustive literal
+//! (both in `resolver.rs`) plus the `tests/integration/sdl_snapshot.rs`
+//! snapshot test that catches behavioural drift that still compiles.
+//!
+//! **Bump procedure** (when raising the pin):
+//! 1. bump the `=7.2.x` pin for `async-graphql` **and** `async-graphql-poem`
+//!    in the root `Cargo.toml`;
+//! 2. fix the compile-time canary in `resolver.rs` (and the matching
+//!    `MetaType::Object` literal) until the crate compiles again;
+//! 3. run the SDL snapshot test (`cargo nextest run -p nest-rs-graphql`);
+//! 4. review the SDL diff — an intended change means updating the committed
+//!    snapshot; an unexpected one is a regression in the composed schema.
 
 mod config;
 mod context;
@@ -14,6 +33,7 @@ mod guard;
 mod loader;
 mod module;
 mod resolver;
+mod scope;
 
 pub use config::GraphqlConfig;
 pub use context::GraphqlContextSeed;
@@ -29,6 +49,10 @@ pub use loader::{GraphqlBatchContext, GraphqlBatchFuture, GraphqlBatchSpawner};
 pub use loader::{GraphqlLoaderRegistration, batch_spawner};
 pub use module::{GraphqlModule, GraphqlSetup};
 pub use resolver::{GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration};
+/// Resolver-side accessor for `#[injectable(scope = request)]` providers — the
+/// GraphQL mirror of `nest_rs_http::Scoped<T>`. Reachable in resolver bodies,
+/// **not** inside `#[dataloader]` batch closures (those run off-task).
+pub use scope::Scoped;
 
 pub use async_graphql;
 pub use async_graphql_poem;

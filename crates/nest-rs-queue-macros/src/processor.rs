@@ -66,6 +66,39 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
         // handler receives the carrier. Matches the HTTP / GraphQL forms.
         let (deser_ty, job_wrap) = pipe_binding(&job_ty);
 
+        // The queue name is either a raw string literal (legacy form) or a
+        // `QueueName` type path (`#[process(queue = AudioQueue)]`). The type
+        // form yields `<Q as QueueName>::NAME` — a `&'static str` const usable
+        // everywhere the literal was — and additionally asserts, at compile
+        // time, that the method's wire payload is exactly `<Q as
+        // QueueName>::Job`. A mismatch is an error naming both types.
+        let queue_str: TokenStream2 = match &queue {
+            QueueId::Literal(s) => quote!(#s),
+            QueueId::Type(ty) => {
+                let ty: &Type = ty;
+                quote!(<#ty as ::nest_rs_queue::QueueName>::NAME)
+            }
+        };
+        let queue_assert: TokenStream2 = match &queue {
+            QueueId::Literal(_) => quote!(),
+            QueueId::Type(ty) => {
+                let ty: &Type = ty;
+                quote! {
+                const _: () = {
+                    // Requires `<#ty as QueueName>::Job == #deser_ty`; a
+                    // mismatch fails here naming both the queue's `Job` and the
+                    // handler's argument type.
+                    fn __nestrs_assert_queue_job<__Q>()
+                    where
+                        __Q: ::nest_rs_queue::QueueName<Job = #deser_ty>,
+                    {
+                    }
+                    let _ = __nestrs_assert_queue_job::<#ty>;
+                };
+                }
+            }
+        };
+
         let method_ident = method.sig.ident.clone();
         let method_name = method_ident.to_string();
         let qualified_name = format!("{provider_name}::{method_name}");
@@ -82,6 +115,8 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
         let retries_lit = LitInt::new(&retries.to_string(), proc_macro2::Span::call_site());
 
         emissions.push(quote! {
+            #queue_assert
+
             #[doc(hidden)]
             #[allow(non_snake_case)]
             fn #handler_ident(
@@ -154,7 +189,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                                      the producer is from a newer release; either roll back \
                                      this consumer or wait for the producer to drain",
                                     __v,
-                                    #queue,
+                                    #queue_str,
                                 )
                             } else {
                                 ::std::format!(
@@ -162,7 +197,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                                      the producer is from an older release; either drain \
                                      the queue or pin the consumer at version {0}",
                                     __v,
-                                    #queue,
+                                    #queue_str,
                                 )
                             };
                             return ::std::result::Result::Err(::std::boxed::Box::<
@@ -175,7 +210,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                     } else {
                         ::nest_rs_queue::tracing::warn!(
                             target: "nest_rs::queue",
-                            queue = #queue,
+                            queue = #queue_str,
                             hint = "producer predates the wire envelope; drain the queue to clear legacy jobs",
                             "processed an unversioned job payload",
                         );
@@ -188,7 +223,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                                 dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
                             >::from(::std::format!(
                                 "failed to deserialize job for queue `{}`: {e}",
-                                #queue,
+                                #queue_str,
                             )));
                         }
                     };
@@ -223,7 +258,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_queue::ProcessMethod {
                     name: #qualified_name,
-                    queue: #queue,
+                    queue: #queue_str,
                     concurrency: #concurrency_lit,
                     retries: #retries_lit,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
@@ -285,50 +320,69 @@ fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
             dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
         >::from(__e.message().to_string())
     };
-    if let Type::Path(tp) = job_ty {
-        if let Some(seg) = tp.path.segments.last() {
-            if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                let tys: Vec<&Type> = ab
-                    .args
-                    .iter()
-                    .filter_map(|a| match a {
-                        syn::GenericArgument::Type(t) => Some(t),
-                        _ => None,
-                    })
-                    .collect();
-                if seg.ident == "Piped" && tys.len() == 2 {
-                    let (pipe, inner) = (tys[0], tys[1]);
-                    return (
-                        inner.clone(),
-                        quote! {
-                            ::nest_rs_pipes::Piped::<#pipe, #inner>::apply(__deser).map_err(#box_err)?
-                        },
-                    );
-                }
-                if seg.ident == "Valid" && tys.len() == 1 {
-                    let inner = tys[0];
-                    return (
-                        inner.clone(),
-                        quote! {
-                            ::nest_rs_pipes::Valid::<#inner>::apply(__deser).map_err(#box_err)?
-                        },
-                    );
-                }
-            }
+    if let Type::Path(tp) = job_ty
+        && let Some(seg) = tp.path.segments.last()
+        && let syn::PathArguments::AngleBracketed(ab) = &seg.arguments
+    {
+        let tys: Vec<&Type> = ab
+            .args
+            .iter()
+            .filter_map(|a| match a {
+                syn::GenericArgument::Type(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        if seg.ident == "Piped" && tys.len() == 2 {
+            let (pipe, inner) = (tys[0], tys[1]);
+            return (
+                inner.clone(),
+                quote! {
+                    ::nest_rs_pipes::Piped::<#pipe, #inner>::apply(__deser).map_err(#box_err)?
+                },
+            );
+        }
+        if seg.ident == "Valid" && tys.len() == 1 {
+            let inner = tys[0];
+            return (
+                inner.clone(),
+                quote! {
+                    ::nest_rs_pipes::Valid::<#inner>::apply(__deser).map_err(#box_err)?
+                },
+            );
         }
     }
     (job_ty.clone(), quote!(__deser))
 }
 
+/// How a `#[process]` names its queue: the legacy raw string, or a `QueueName`
+/// type path (`#[process(queue = AudioQueue)]`) that links the name and payload
+/// type to the shared handle at the feature port.
+enum QueueId {
+    Literal(LitStr),
+    // Boxed: `syn::Type` is a large enum, so an unboxed variant would bloat
+    // every `QueueId` to its size (clippy::large_enum_variant).
+    Type(Box<Type>),
+}
+
+impl Parse for QueueId {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        if input.peek(LitStr) {
+            Ok(QueueId::Literal(input.parse()?))
+        } else {
+            Ok(QueueId::Type(Box::new(input.parse()?)))
+        }
+    }
+}
+
 struct ProcessArgs {
-    queue: LitStr,
+    queue: QueueId,
     concurrency: usize,
     retries: usize,
 }
 
 impl Parse for ProcessArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut queue: Option<LitStr> = None;
+        let mut queue: Option<QueueId> = None;
         let mut concurrency: usize = 1;
         let mut retries: usize = 0;
 
@@ -357,7 +411,7 @@ impl Parse for ProcessArgs {
         let queue = queue.ok_or_else(|| {
             syn::Error::new(
                 input.span(),
-                "#[process] requires a `queue = \"...\"` argument",
+                "#[process] requires a `queue = \"...\"` (or `queue = <QueueName type>`) argument",
             )
         })?;
 

@@ -2,13 +2,11 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::{injectable, module};
-use nest_rs_queue::processor;
+use nest_rs_queue::{JobProducerExt, processor, queue};
 use nest_rs_redis::{QueueConfig, QueueConnection, QueueModule, QueueWorker};
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 use worker::WorkerModule;
-
-const PROBE_QUEUE: &str = "nestrs-e2e-probe";
 
 fn redis_url() -> String {
     std::env::var("NESTRS_QUEUE__URL").unwrap_or_else(|_| "redis://127.0.0.1/".into())
@@ -27,6 +25,11 @@ struct ProbeCommand {
     tag: String,
 }
 
+// Typed handle: the producer's `push_to::<ProbeQueue>` and the consumer's
+// `#[process(queue = ProbeQueue)]` share this one name + payload type.
+#[queue(name = "nestrs-e2e-probe", job = ProbeCommand)]
+struct ProbeQueue;
+
 static PROBE_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<String>> = OnceLock::new();
 
 #[injectable]
@@ -35,7 +38,7 @@ struct ProbeConsumer;
 
 #[processor]
 impl ProbeConsumer {
-    #[process(queue = "nestrs-e2e-probe", concurrency = 1, retries = 0)]
+    #[process(queue = ProbeQueue, concurrency = 1, retries = 0)]
     async fn handle(&self, job: ProbeCommand) -> anyhow::Result<()> {
         if let Some(tx) = PROBE_TX.get() {
             let _ = tx.send(job.tag);
@@ -86,8 +89,7 @@ async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
         .container()
         .get::<QueueConnection>()
         .expect("QueueModule seeded the shared QueueConnection");
-    conn.of::<ProbeCommand>(PROBE_QUEUE)
-        .push(ProbeCommand { tag: tag.clone() })
+    conn.push_to::<ProbeQueue>(ProbeCommand { tag: tag.clone() })
         .await
         .expect("enqueue onto the probe queue");
 

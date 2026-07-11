@@ -7,7 +7,7 @@ pub mod http;
 pub mod queue;
 pub mod schedule;
 
-pub use command::{AUDIO_QUEUE, TranscodeCommand};
+pub use command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
 pub use dto::TranscodeDto;
 pub use module::AudioModule;
 pub use service::AudioService;

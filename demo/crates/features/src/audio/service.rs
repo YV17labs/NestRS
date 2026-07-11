@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::injectable;
-use nest_rs_queue::QueueError;
+use nest_rs_queue::{JobProducerExt, QueueError};
 use nest_rs_redis::QueueConnection;
 
-use super::command::{AUDIO_QUEUE, TranscodeCommand};
+use super::command::{AudioQueue, TranscodeCommand};
 
 #[injectable]
 pub struct AudioService {
@@ -19,8 +19,7 @@ impl AudioService {
     /// [`QueueError`] rather than a feature-local error.
     pub async fn enqueue_transcode(&self, file: String) -> Result<(), QueueError> {
         self.queue
-            .of::<TranscodeCommand>(AUDIO_QUEUE)
-            .push(TranscodeCommand { file: file.clone() })
+            .push_to::<AudioQueue>(TranscodeCommand { file: file.clone() })
             .await?;
         tracing::debug!(target: "features::audio", file, "enqueued transcode job");
         Ok(())

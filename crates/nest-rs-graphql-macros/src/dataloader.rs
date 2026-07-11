@@ -70,6 +70,17 @@ fn dataloader_for_method(
         "{loader_name}: no provider registered for `{}`",
         quote!(#self_ty)
     );
+    // Doc on the generated struct so the correct hand-typed name is
+    // discoverable at the use site (a wrong name is already a type error; this
+    // makes the right one obvious). Naming convention: `{Owner}{PascalMethod}`.
+    let loader_doc = format!(
+        "Auto-generated DataLoader for `{base}::{method_name}`, emitted by \
+         `#[dataloader]`. Its name follows the framework convention \
+         `{{Owner}}{{PascalMethod}}` — owner struct + PascalCase method — so \
+         this loader is `{loader_name}`. Reference it by exactly that name from \
+         a relation or a `#[field_resolver]`. Each batch runs `{base}::{method_name}` \
+         through `Repo` (ability-scoped, per request)."
+    );
 
     let call = if sig.asyncness.is_some() {
         quote! { self.0.#method_name(__keys).await }
@@ -85,6 +96,7 @@ fn dataloader_for_method(
     };
 
     Ok(quote! {
+        #[doc = #loader_doc]
         pub struct #loader_name(::std::sync::Arc<#self_ty>);
 
         impl #loader_name {

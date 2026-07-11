@@ -110,8 +110,17 @@ subtle = "2"
 
 # GraphQL. `dataloader` gives us async-graphql's batching loader, surfaced via
 # the `#[dataloader]` decorator to kill field-resolver N+1s.
-async-graphql = { version = "7", features = ["dataloader"] }
-async-graphql-poem = "7"
+#
+# EXACT pin, not a caret range: `nest-rs-graphql/src/resolver.rs` reads
+# async-graphql's public-but-internal registry API — it spells out the whole
+# `MetaType::Object { .. }` literal and relies on `remove_unused_types`
+# behaviour. A minor bump can silently add/rename a field or change that
+# behaviour, so the version is frozen and guarded in three layers (compile-time
+# canary + exhaustive literal + SDL snapshot test, all in that file/crate). On
+# bump, follow the procedure in the `nest-rs-graphql` crate `//!` doc: bump this
+# pin, fix the canary, run the SDL snapshot test, review the SDL diff.
+async-graphql = { version = "=7.2.1", features = ["dataloader"] }
+async-graphql-poem = "=7.2.1"
 # Link-time registry: each `#[resolver]` submits its query/mutation objects so
 # the schema composes itself at boot with no central list.
 inventory = "0.3"

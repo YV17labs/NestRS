@@ -153,6 +153,24 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// (so import order is irrelevant) and seeded into the GraphQL context, read
 /// by a `#[field_resolver]` as `&DataLoader<…>`.
 ///
+/// # Generated loader names
+///
+/// The loader type is named **`{Owner}{PascalMethod}`** — the owning struct's
+/// name followed by the method name in PascalCase. A hand-typed wrong name is
+/// already a compile error (the type doesn't exist); this table makes the
+/// correct name discoverable so you don't guess. Each generated struct also
+/// carries a doc comment stating what it is and which method it came from.
+///
+/// | Owner struct | `#[dataloader]` method | Generated loader |
+/// |---|---|---|
+/// | `UsersService` | `by_id` | `UsersServiceById` |
+/// | `UsersService` | `by_org_id` | `UsersServiceByOrgId` |
+/// | `PostsService` | `author` | `PostsServiceAuthor` |
+///
+/// Reference the loader by exactly that name from the `#[field_resolver]`
+/// (or auto-resolved relation) that reads it:
+/// `ctx.data_unchecked::<DataLoader<UsersServiceById>>()`.
+///
 /// # Expands to
 ///
 /// Per method, a `<Owner><Name>` newtype implementing async-graphql's

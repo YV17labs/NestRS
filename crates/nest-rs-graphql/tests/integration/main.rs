@@ -7,3 +7,5 @@ mod layer_pool;
 mod limits;
 mod pipe;
 mod resolver;
+mod scope;
+mod sdl_snapshot;

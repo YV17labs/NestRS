@@ -253,12 +253,10 @@ Consumers inject `Arc<dyn PostsService>`, never `PostsServiceImpl`. There
 is **no `exports = [...]`** list — Rust visibility plus the
 `as dyn Trait` binding is the encapsulation primitive.
 
-<Aside>
 When you do not need to hide the impl, register `PostsService` directly
 in `PostsModule` — as in the snippets above. The trait pattern is optional:
 use it when a second feature needs the port without coupling to your
 concrete type.
-</Aside>
 
 ## The runtime escape hatch
 

@@ -9,7 +9,7 @@ use nest_rs_http::{Reflector, async_trait};
 use poem::{PathPattern, Request};
 
 use crate::rate::Throttle;
-use crate::store::InMemoryThrottler;
+use crate::store::ThrottlerStore;
 
 /// Bind per route with `#[use_guards(ThrottlerGuard)]`. Reads the route's
 /// `#[meta(Throttle::...)]` via the [`Reflector`], falling back to the module
@@ -17,10 +17,15 @@ use crate::store::InMemoryThrottler;
 ///
 /// Must be a per-route guard, not a global one: a global guard runs before
 /// routing, so the route's `#[meta(Throttle)]` is not yet attached.
+///
+/// Injects the store as `Arc<dyn ThrottlerStore>`, so **one** guard serves
+/// every backend: [`InMemoryThrottler`](crate::InMemoryThrottler) by default,
+/// or a shared store (Redis) when its module is imported instead. The store
+/// binding is what an app swaps — never the guard.
 #[injectable]
 pub struct ThrottlerGuard {
     #[inject]
-    throttler: Arc<InMemoryThrottler>,
+    throttler: Arc<dyn ThrottlerStore>,
 }
 
 impl Layer for ThrottlerGuard {}

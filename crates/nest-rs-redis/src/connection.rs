@@ -21,6 +21,12 @@ use serde_json::json;
 
 use crate::error::ConnectionError;
 
+/// The app's shared Redis connection — queue-flavoured by history, not
+/// queue-only. It is seeded once by [`QueueModule`](crate::QueueModule) and
+/// injected by producers; other Redis-backed features enabled on this crate
+/// (the `throttler` rate-limit store, a future cache/locks) reuse the very same
+/// multiplexed handle via [`manager`](Self::manager) instead of opening a
+/// second connection.
 #[derive(Clone)]
 pub struct QueueConnection {
     conn: ConnectionManager,
@@ -30,6 +36,21 @@ impl QueueConnection {
     pub async fn connect(redis_url: &str) -> Result<Self, ConnectionError> {
         let conn = apalis_redis::connect(redis_url).await?;
         Ok(Self { conn })
+    }
+
+    /// A cheap clone of the multiplexed connection handle, shared with
+    /// non-queue Redis features enabled on this crate (rate-limit store, cache,
+    /// distributed locks). `ConnectionManager` is `Clone` and every clone talks
+    /// over the one underlying connection, so this is the reuse seam — no second
+    /// connect.
+    ///
+    /// **Do not run blocking commands on it** (`BLPOP`, `BRPOP`, `WAIT`, a
+    /// `SUBSCRIBE` that parks the socket): the handle multiplexes every caller
+    /// over a single connection, so a blocking command would stall all other
+    /// users. Non-blocking, atomic operations (a `Script`, `INCR`, `GET`/`SET`)
+    /// are the intended traffic.
+    pub fn manager(&self) -> ConnectionManager {
+        self.conn.clone()
     }
 
     /// Typed producer handle. `J` is the job type the consumer expects; the

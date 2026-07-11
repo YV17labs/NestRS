@@ -32,6 +32,24 @@ tokio-util.workspace = true
 tracing.workspace = true
 apalis = { workspace = true, features = ["retry", "timeout", "catch-panic"] }
 apalis-redis.workspace = true
+# `throttler` feature only: the shared `dyn ThrottlerStore` seam + config types
+# reused verbatim (the guard is transport-agnostic; only the backing store
+# changes). `redis` (same 0.32 line apalis-redis pins, so one connection type)
+# runs the atomic fixed-window Lua script over `QueueConnection::manager()`.
+nest-rs-throttler = { workspace = true, optional = true }
+redis = { version = "0.32", optional = true, default-features = false, features = [
+    "aio",
+    "connection-manager",
+    "script",
+    "tokio-comp",
+] }
+
+[features]
+# A second Redis use — a cross-process rate-limit store — as a feature on this
+# one integration home, per the crate's future-expansion note. Off by default:
+# producer/consumer apps that never rate-limit pull neither `redis` nor
+# `nest-rs-throttler`.
+throttler = ["dep:nest-rs-throttler", "dep:redis"]
 
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }

@@ -23,10 +23,12 @@
 //!
 //! ## Future expansion
 //!
-//! If Redis grows a second nestrs use (cache, pub/sub, distributed locks),
-//! this crate adds matching Cargo feature flags rather than spawning a
+//! When Redis grows a second nestrs use (cache, pub/sub, distributed locks),
+//! this crate adds a matching Cargo feature flag rather than spawning a
 //! sibling crate — Redis is one external dependency, this is its one
-//! integration home.
+//! integration home. The first such feature is **`throttler`**: a
+//! cross-process [`RedisThrottler`] rate-limit store backing the
+//! `nest-rs-throttler` guard over the shared [`QueueConnection`].
 //!
 //! [`Job`]: ::nest_rs_queue::Job
 //! [`Processor`]: ::nest_rs_queue::Processor
@@ -36,10 +38,14 @@ mod config;
 mod connection;
 mod error;
 mod module;
+#[cfg(feature = "throttler")]
+mod throttler;
 mod worker;
 
 pub use config::QueueConfig;
 pub use connection::{Queue, QueueConnection};
 pub use error::ConnectionError;
 pub use module::{QueueModule, QueueSetup};
+#[cfg(feature = "throttler")]
+pub use throttler::{RedisThrottler, RedisThrottlerModule, RedisThrottlerSetup};
 pub use worker::{QueueWorker, QueueWorkerModule};

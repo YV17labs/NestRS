@@ -259,10 +259,10 @@ async fn serve_connection<G: Gateway, N: 'static>(
     drop(outbox);
     // A `JoinError` from the writer means it panicked (it is never aborted);
     // surface that rather than swallow it. A normal cancellation carries none.
-    if let Err(err) = writer.await {
-        if err.is_panic() {
-            tracing::warn!(target: "nest_rs::ws", error = %err, "writer task failed");
-        }
+    if let Err(err) = writer.await
+        && err.is_panic()
+    {
+        tracing::warn!(target: "nest_rs::ws", error = %err, "writer task failed");
     }
 }
 

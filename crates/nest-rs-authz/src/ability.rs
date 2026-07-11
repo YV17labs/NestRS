@@ -10,6 +10,29 @@ use sea_orm::sea_query::{Condition, Expr};
 use crate::action::Action;
 use crate::predicate::Predicate;
 
+/// One place for the fail-closed masking warn, so every branch — HTTP, GraphQL,
+/// and the ambient [`Ability::mask`] — emits the identical queryable event
+/// (`target: "nest_rs::authz"`, same keys) instead of hand-copying it. A
+/// fail-closed branch that forgets to log is then the visible omission. Lives
+/// here (always compiled) rather than in `wire_mask` (gated behind the
+/// `http`/`graphql` transports) so the ambient `Ability::mask` can reach it in
+/// a feature-less build.
+pub(crate) fn warn_mask_failure(
+    entity: &'static str,
+    action: Action,
+    reason: &'static str,
+    err: &dyn std::fmt::Display,
+) {
+    tracing::warn!(
+        target: "nest_rs::authz",
+        entity,
+        action = ?action,
+        reason,
+        error = %err,
+        "response masking failed",
+    );
+}
+
 /// Which fields of a subject may be read back in the response.
 #[derive(Default)]
 pub enum FieldSet {
@@ -119,7 +142,7 @@ impl Ability {
             // need `mask`'s signature to become `Result`, rippling through
             // `mask_many` and both transports; logged `Null` is the surgical fix.
             Err(err) => {
-                crate::wire_mask::warn_mask_failure(
+                warn_mask_failure(
                     std::any::type_name::<E>(),
                     action,
                     "model did not serialize",

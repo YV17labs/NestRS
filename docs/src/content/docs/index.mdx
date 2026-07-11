@@ -164,6 +164,10 @@ hardware — illustrates framework overhead, not a domain-heavy API.
 
 ## One domain, several workloads
 
+**Microservice scaling without the distributed-systems tax.** Each app ships as
+one static native binary sharing a single domain model — you split how it
+*deploys and scales*, not the code it's built from.
+
 A **workload** is one deployable binary with one operational job — HTTP API,
 WebSocket gateway, queue worker, MCP server, and so on. NestRS supports
 **several workloads for the same product** in either layout:

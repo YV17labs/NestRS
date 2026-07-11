@@ -23,26 +23,23 @@ use nest_rs_codegen::{impl_self_ident, injected_method_with_layers, layer_inject
 /// `Some((None, inner))` for `Valid<T>`, `None` for a plain payload deserialized
 /// as-is.
 fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
-    if let Type::Path(tp) = ty {
-        if let Some(seg) = tp.path.segments.last() {
-            if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                let tys: Vec<&Type> = ab
-                    .args
-                    .iter()
-                    .filter_map(|a| match a {
-                        syn::GenericArgument::Type(t) => Some(t),
-                        _ => None,
-                    })
-                    .collect();
-                if seg.ident == "Piped" && tys.len() == 2 {
-                    if let Type::Path(p) = tys[0] {
-                        return (tys[1].clone(), Some((Some(p.path.clone()), tys[1].clone())));
-                    }
-                }
-                if seg.ident == "Valid" && tys.len() == 1 {
-                    return (tys[0].clone(), Some((None, tys[0].clone())));
-                }
-            }
+    if let Type::Path(tp) = ty
+        && let Some(seg) = tp.path.segments.last()
+        && let syn::PathArguments::AngleBracketed(ab) = &seg.arguments
+    {
+        let tys: Vec<&Type> = ab
+            .args
+            .iter()
+            .filter_map(|a| match a {
+                syn::GenericArgument::Type(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        if seg.ident == "Piped" && tys.len() == 2 && let Type::Path(p) = tys[0] {
+            return (tys[1].clone(), Some((Some(p.path.clone()), tys[1].clone())));
+        }
+        if seg.ident == "Valid" && tys.len() == 1 {
+            return (tys[0].clone(), Some((None, tys[0].clone())));
         }
     }
     (ty.clone(), None)

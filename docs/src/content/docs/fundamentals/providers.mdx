@@ -146,8 +146,22 @@ async fn trace(&self, log: Scoped<RequestLogger>) -> String {
 }
 ```
 
-HTTP installs a fresh request scope per call. GraphQL and MCP are
-singleton-only for request scope today.
+HTTP, GraphQL, and MCP each install a fresh request scope per call
+(one per request for HTTP, one per operation for GraphQL and MCP).
+Within a scope, request-scoped providers are cached and shared; across
+scopes, fresh instances are built. GraphQL resolvers reach them with
+`nest_rs_graphql::Scoped<T>` (from the async-graphql `&Context`), MCP
+tools with `nest_rs_mcp::Scoped<T>` — the same shape as HTTP's
+`Scoped<T>`. A request-scoped provider may itself inject another
+request-scoped provider (both share the per-request cache); a cycle
+panics at resolution with the named chain.
+
+<Aside type="caution">
+A `#[dataloader]` batch closure runs **off-task** (a spawned future),
+so a request-scoped provider is not reachable inside batch
+computation — batches re-establish ambient state through their own
+`BatchContext` seam.
+</Aside>
 
 **Transient** — rebuild on every `Scoped<T>` / `get::<T>()` extraction.
 Use for throw-away per-call state (a fresh correlation id, a one-shot

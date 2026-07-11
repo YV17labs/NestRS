@@ -18,12 +18,14 @@ mod error;
 mod inventory;
 mod processor;
 mod producer;
+mod queue_name;
 
 pub use consumer::JobConsumer;
 pub use error::QueueError;
 pub use inventory::{JobHandler, ProcessMethod, ProcessorMeta, WIRE_FORMAT_VERSION};
 pub use processor::{FromContainer, Job, Processor};
 pub use producer::{JobProducer, JobProducerExt, QueueBackend};
+pub use queue_name::QueueName;
 
 // Re-export `async_trait` so backends and macros don't need to depend on it
 // directly to implement the async traits this crate defines.
@@ -48,4 +50,4 @@ pub use serde_json;
 #[doc(hidden)]
 pub use tracing;
 
-pub use nest_rs_queue_macros::processor;
+pub use nest_rs_queue_macros::{processor, queue};

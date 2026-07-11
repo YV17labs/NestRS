@@ -4,7 +4,7 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_queue::processor;
 
-use crate::audio::{AudioService, TranscodeCommand};
+use crate::audio::{AudioQueue, AudioService, TranscodeCommand};
 
 #[injectable]
 pub struct AudioProcessor {
@@ -14,7 +14,7 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = "audio", concurrency = 5, retries = 3)]
+    #[process(queue = AudioQueue, concurrency = 5, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.svc.transcode(&job.file).await;
         Ok(())

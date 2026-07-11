@@ -2845,6 +2845,7 @@ dependencies = [
  "poem",
  "rmcp",
  "schemars",
+ "tokio",
  "tracing",
 ]
 

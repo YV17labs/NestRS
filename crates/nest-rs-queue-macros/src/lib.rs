@@ -5,6 +5,7 @@
 use proc_macro::TokenStream;
 
 mod processor;
+mod queue;
 
 /// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
 /// tagged with `#[process(queue = "...", concurrency, retries)]` becomes a
@@ -14,6 +15,15 @@ mod processor;
 /// queues, different concurrencies) sharing the same `#[inject]`
 /// dependencies — pooling related queue handlers on one service keeps
 /// shared state (clients, repositories) in one place.
+///
+/// The `queue` is named either by a raw string literal (legacy form) or by a
+/// [`QueueName`](nest_rs_queue::QueueName) **type** — the preferred form,
+/// declared with [`queue`](macro@crate::queue) at the feature port:
+/// `#[process(queue = AudioQueue)]`. The type form reads
+/// `<AudioQueue as QueueName>::NAME` into the inventory entry **and** asserts,
+/// at compile time, that this method's job argument is
+/// `<AudioQueue as QueueName>::Job` — a mismatch is a build error naming both
+/// types, not a job that silently never drains.
 ///
 /// Per-method attributes (exactly one `#[process]` per method):
 ///
@@ -52,4 +62,30 @@ mod processor;
 #[proc_macro_attribute]
 pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     processor::processor(args, input)
+}
+
+/// Stamp a unit struct with a compile-time queue identity — its wire name and
+/// the [`Job`](nest_rs_queue::Job) payload it carries — by implementing
+/// `QueueName`. Lives beside the payload at the feature port; both the producer
+/// (`push_to::<Q>`) and the consumer (`#[process(queue = Q)]`) name the type,
+/// so a typo'd name or a mismatched payload is a compile error, not a job that
+/// silently never drains.
+///
+/// ```ignore
+/// #[queue(name = "audio", job = TranscodeCommand)]
+/// pub struct AudioQueue;
+/// ```
+///
+/// # Expands to
+///
+/// ```ignore
+/// pub struct AudioQueue;
+/// impl ::nest_rs_queue::QueueName for AudioQueue {
+///     const NAME: &'static str = "audio";
+///     type Job = TranscodeCommand;
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
+    queue::queue(args, input)
 }

@@ -6,7 +6,8 @@ use syn::{Ident, ItemStruct, Token, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
-    from_container_method, injected_method, optional_dependencies_method,
+    from_container_method, from_scope_method, injected_keyed_method, injected_method,
+    optional_dependencies_method,
 };
 
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -21,6 +22,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
         dep_keys,
         dep_names,
         opt_keys,
+        keyed_dep_keys,
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
@@ -29,7 +31,14 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
+    // Only a request-scoped provider needs the scope-aware constructor; emitting
+    // it elsewhere would reference `RequestScope` for no reason.
+    let from_scope = match scope {
+        InjectableScope::Request => from_scope_method(&ctor),
+        InjectableScope::Singleton | InjectableScope::Transient => TokenStream2::new(),
+    };
     let injected = injected_method(&dep_keys);
+    let injected_keyed = injected_keyed_method(&keyed_dep_keys);
 
     // Request-scoped and transient: lazy build, no register-phase ordering deps,
     // each registers a factory not a value. `injected` is still reported for
@@ -57,8 +66,8 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
                 fn register(
                     builder: ::nest_rs_core::ContainerBuilder,
                 ) -> ::nest_rs_core::ContainerBuilder {
-                    builder.provide_scoped::<Self, _>(|__container| {
-                        Self::from_container(__container)
+                    builder.provide_scoped::<Self, _>(|__scope| {
+                        Self::from_scope(__scope)
                     })
                 }
             },
@@ -84,6 +93,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container
+            #from_scope
         }
 
         impl #impl_generics ::nest_rs_core::Discoverable for #name #ty_generics #where_clause {
@@ -91,6 +101,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
             #dependency_names
             #optional_dependencies
             #injected
+            #injected_keyed
 
             #register_fn
         }

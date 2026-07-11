@@ -8,6 +8,7 @@ mod fail_secure_boot;
 mod guards;
 mod http;
 mod interceptors;
+mod keyed_providers;
 mod layer_pool;
 mod lifecycle_hooks;
 mod pipes;

@@ -7,12 +7,73 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::RequestScope;
+use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
+
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
-/// Builds a fresh instance of a request-scoped provider from the (singleton)
-/// root container, invoked once per request by a
-/// [`RequestScope`](crate::RequestScope).
-pub(crate) type ScopedFactory = Arc<dyn Fn(&Container) -> AnyArc + Send + Sync>;
+/// The identity a singleton provider registers under: a `TypeId` optionally
+/// disambiguated by a `name`. `name: None` is the default, bare registration —
+/// every non-keyed `provide*`/`get*` path keys with `None`, so existing code
+/// behaves exactly as before. `name: Some(_)` is a **keyed** provider
+/// ([`ContainerBuilder::provide_keyed`]), letting several instances of the same
+/// concrete type coexist in the flat container (two `OAuth2Client`s, one per
+/// upstream provider).
+///
+/// Keying is singleton-only: request-scoped and transient factories, and the
+/// metadata index, stay bare `TypeId`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ProviderKey {
+    pub type_id: TypeId,
+    pub name: Option<&'static str>,
+}
+
+impl ProviderKey {
+    /// The bare (unkeyed) identity for a concrete type — the default path.
+    pub fn typed<T: Any>() -> Self {
+        Self {
+            type_id: TypeId::of::<T>(),
+            name: None,
+        }
+    }
+
+    /// A keyed identity for a concrete type.
+    pub fn named<T: Any>(name: &'static str) -> Self {
+        Self {
+            type_id: TypeId::of::<T>(),
+            name: Some(name),
+        }
+    }
+
+    /// The bare identity for a raw `TypeId` — used internally where the type is
+    /// only available as a `TypeId` (trait-object bindings keyed by
+    /// `TypeId::of::<Arc<dyn Trait>>()`, the register-phase `contains` check).
+    pub fn of(type_id: TypeId) -> Self {
+        Self {
+            type_id,
+            name: None,
+        }
+    }
+}
+
+/// A keyed `#[inject(key = "…")]` dependency reported by
+/// [`Discoverable::injected_keyed`](crate::Discoverable::injected_keyed): the
+/// container [`ProviderKey`] used to match it against the global keyed set,
+/// plus the injected type's name so a boot failure can name both the type and
+/// the key.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyedDependency {
+    pub key: ProviderKey,
+    pub type_name: &'static str,
+}
+
+/// Builds a fresh instance of a request-scoped provider, invoked once per
+/// request by a [`RequestScope`](crate::RequestScope). The factory receives the
+/// scope (not the bare root [`Container`]) so a request-scoped provider may
+/// depend on **another** request-scoped provider and share its per-request
+/// instance; singleton deps still resolve because the scope forwards them to
+/// the root.
+pub(crate) type ScopedFactory = Arc<dyn Fn(&RequestScope) -> AnyArc + Send + Sync>;
 
 /// Builds a fresh instance of a transient provider on every resolution.
 /// Emitted by `#[injectable(scope = transient)]`.
@@ -20,14 +81,12 @@ pub(crate) type TransientFactory = Arc<dyn Fn(&Container) -> AnyArc + Send + Syn
 
 thread_local! {
     /// Re-entrancy guard for transient resolution: a transient provider that
-    /// (transitively) injects itself would loop forever. We catch the cycle on
-    /// the second entry for the same `TypeId` and panic with a clear message
-    /// that names every type on the cycle path.
-    ///
-    /// The `&'static str` companion is the type name captured at push time so
-    /// the panic diagnostic can render the full chain (`A → B → A`), not just
-    /// the type currently being built.
-    static TRANSIENT_BUILDING: RefCell<Vec<(TypeId, &'static str)>> = const { RefCell::new(Vec::new()) };
+    /// (transitively) injects itself would loop forever. The shared
+    /// [`CycleGuard`] catches the cycle on the second entry for the same
+    /// `TypeId` and renders the chain for a clear panic. Kept a transient-only
+    /// stack so a legitimate concurrent resolution of the same transient on
+    /// another thread is never mistaken for a cycle.
+    static TRANSIENT_BUILDING: BuildStack = const { RefCell::new(Vec::new()) };
 }
 
 /// A registration applied once a factory has produced its value, so factory
@@ -45,7 +104,7 @@ pub(crate) struct MetaEntry {
 
 #[derive(Clone, Default)]
 pub struct Container {
-    providers: Arc<HashMap<TypeId, AnyArc>>,
+    providers: Arc<HashMap<ProviderKey, AnyArc>>,
     metadata: Arc<HashMap<TypeId, Vec<MetaEntry>>>,
     scoped: Arc<HashMap<TypeId, ScopedFactory>>,
     transient: Arc<HashMap<TypeId, TransientFactory>>,
@@ -72,7 +131,17 @@ impl Container {
             return any.downcast::<T>().ok();
         }
         self.providers
-            .get(&id)
+            .get(&ProviderKey::of(id))
+            .and_then(|any| any.clone().downcast::<T>().ok())
+    }
+
+    /// Resolve a **keyed** singleton registered via
+    /// [`ContainerBuilder::provide_keyed`]. `None` if no provider was registered
+    /// under `(T, name)`. Keyed providers are singletons only — there is no
+    /// keyed transient or request-scoped resolution.
+    pub fn get_keyed<T: Any + Send + Sync>(&self, name: &'static str) -> Option<Arc<T>> {
+        self.providers
+            .get(&ProviderKey::named::<T>(name))
             .and_then(|any| any.clone().downcast::<T>().ok())
     }
 
@@ -81,7 +150,7 @@ impl Container {
     /// [`get`](Self::get).
     pub fn get_dyn<T: ?Sized + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.providers
-            .get(&TypeId::of::<Arc<T>>())
+            .get(&ProviderKey::of(TypeId::of::<Arc<T>>()))
             .and_then(|any| any.clone().downcast::<Arc<T>>().ok())
             .map(|outer| (*outer).clone())
     }
@@ -95,63 +164,12 @@ impl Container {
     }
 }
 
-/// RAII drop guard for the transient re-entrancy stack: pushes on construction,
-/// pops on drop (including panic unwind). Without this, a panicking factory
-/// would leave the entry permanently on the thread-local stack, poisoning
-/// every later resolution of the same transient on that thread with a spurious
-/// cycle diagnostic.
-struct TransientGuard {
-    id: TypeId,
-}
-
-/// Signals the cycle detection at `push` time, carrying the rendered chain
-/// (`A → B → A`) so the caller can panic with the full path, not just the
-/// outer type. Stays an internal recoverable signal so the public API still
-/// panics with a clear diagnostic.
-struct TransientCycle {
-    chain: String,
-}
-
-impl TransientGuard {
-    fn push(id: TypeId, type_name: &'static str) -> Result<Self, TransientCycle> {
-        TRANSIENT_BUILDING.with(|stack| {
-            let mut s = stack.borrow_mut();
-            if let Some(start) = s.iter().position(|(sid, _)| *sid == id) {
-                // The cycle path is every entry from the first occurrence up
-                // to the top of the stack, plus the offender being re-entered.
-                let mut names: Vec<&'static str> = s[start..].iter().map(|(_, n)| *n).collect();
-                names.push(type_name);
-                let chain = names.join(" → ");
-                return Err(TransientCycle { chain });
-            }
-            s.push((id, type_name));
-            Ok(())
-        })?;
-        Ok(Self { id })
-    }
-}
-
-impl Drop for TransientGuard {
-    fn drop(&mut self) {
-        // `rposition` + `swap_remove` rather than `pop`: even though transient
-        // resolution on a single thread is sequential, this stays correct if a
-        // future change ever interleaves entries on the same thread (e.g. a
-        // factory recursing into a *different* transient).
-        TRANSIENT_BUILDING.with(|stack| {
-            let mut s = stack.borrow_mut();
-            if let Some(pos) = s.iter().rposition(|(sid, _)| *sid == self.id) {
-                s.swap_remove(pos);
-            }
-        });
-    }
-}
-
 /// Resolve a transient provider with re-entrancy detection. A transient that
 /// (transitively) injects itself would recurse forever; we catch the second
 /// entry for the same `TypeId` and panic with a chain naming every type on
 /// the cycle.
 ///
-/// The push/pop pairing is panic-safe via [`TransientGuard`]: a factory that
+/// The push/pop pairing is panic-safe via [`CycleGuard`]: a factory that
 /// panics still pops the stack as the guard unwinds.
 fn build_transient(
     id: TypeId,
@@ -159,7 +177,7 @@ fn build_transient(
     factory: &TransientFactory,
     container: &Container,
 ) -> AnyArc {
-    let _guard = TransientGuard::push(id, type_name).unwrap_or_else(|TransientCycle { chain }| {
+    let _guard = CycleGuard::push(&TRANSIENT_BUILDING, id, type_name).unwrap_or_else(|Cycle { chain }| {
         panic!(
             "transient provider cycle: {chain} — break the cycle by injecting `Arc<dyn Trait>` or picking a different scope"
         )
@@ -171,7 +189,7 @@ fn build_transient(
 
 #[derive(Default)]
 pub struct ContainerBuilder {
-    providers: HashMap<TypeId, AnyArc>,
+    providers: HashMap<ProviderKey, AnyArc>,
     metadata: HashMap<TypeId, Vec<MetaEntry>>,
     /// Idempotency for the register phase — a diamond import registers once.
     registered_modules: HashSet<TypeId>,
@@ -189,17 +207,42 @@ pub struct ContainerBuilder {
 impl ContainerBuilder {
     /// Register a value, wrapped in `Arc` internally.
     pub fn provide<T: Any + Send + Sync>(mut self, value: T) -> Self {
-        self.warn_if_replacing(TypeId::of::<T>(), std::any::type_name::<T>());
+        self.warn_if_replacing(ProviderKey::typed::<T>(), std::any::type_name::<T>());
         self.warn_if_cross_kind_singleton(TypeId::of::<T>(), std::any::type_name::<T>());
-        self.providers.insert(TypeId::of::<T>(), Arc::new(value));
+        self.providers.insert(ProviderKey::typed::<T>(), Arc::new(value));
         self
     }
 
     /// Register an already-shared `Arc<T>`.
     pub fn provide_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
-        self.warn_if_replacing(TypeId::of::<T>(), std::any::type_name::<T>());
+        self.warn_if_replacing(ProviderKey::typed::<T>(), std::any::type_name::<T>());
         self.warn_if_cross_kind_singleton(TypeId::of::<T>(), std::any::type_name::<T>());
-        self.providers.insert(TypeId::of::<T>(), value);
+        self.providers.insert(ProviderKey::typed::<T>(), value);
+        self
+    }
+
+    /// Register a **keyed** singleton — a second instance of `T` under a
+    /// distinct `name`, resolvable with [`Container::get_keyed`] or an
+    /// `#[inject(key = "…")]` field. Lets several instances of one concrete
+    /// type coexist in the flat container without a newtype wrapper.
+    ///
+    /// Keyed providers are singletons only. Registering twice under the same
+    /// `(T, name)` warns and last-write-wins, mirroring [`provide`](Self::provide).
+    pub fn provide_keyed<T: Any + Send + Sync>(mut self, name: &'static str, value: T) -> Self {
+        self.warn_if_replacing(ProviderKey::named::<T>(name), std::any::type_name::<T>());
+        self.providers
+            .insert(ProviderKey::named::<T>(name), Arc::new(value));
+        self
+    }
+
+    /// [`provide_keyed`](Self::provide_keyed) for an already-shared `Arc<T>`.
+    pub fn provide_keyed_arc<T: Any + Send + Sync>(
+        mut self,
+        name: &'static str,
+        value: Arc<T>,
+    ) -> Self {
+        self.warn_if_replacing(ProviderKey::named::<T>(name), std::any::type_name::<T>());
+        self.providers.insert(ProviderKey::named::<T>(name), value);
         self
     }
 
@@ -207,7 +250,7 @@ impl ContainerBuilder {
     /// intentional swap path used by
     /// [`AppBuilder::override_value`](crate::AppBuilder::override_value).
     pub(crate) fn replace<T: Any + Send + Sync>(mut self, value: T) -> Self {
-        self.providers.insert(TypeId::of::<T>(), Arc::new(value));
+        self.providers.insert(ProviderKey::typed::<T>(), Arc::new(value));
         self
     }
 
@@ -215,19 +258,22 @@ impl ContainerBuilder {
     /// override warning — the intentional swap path used by
     /// [`AppBuilder::override_provider`](crate::AppBuilder::override_provider).
     pub(crate) fn replace_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
-        self.providers.insert(TypeId::of::<T>(), value);
+        self.providers.insert(ProviderKey::typed::<T>(), value);
         self
     }
 
     /// Warn when a concrete-type registration silently replaces an earlier
     /// one — usually two modules registering the same type by mistake.
     /// Trait-object bindings ([`provide_dyn`](Self::provide_dyn)) are exempt:
-    /// last-binding-wins is their documented override mechanism.
-    fn warn_if_replacing(&self, id: TypeId, type_name: &'static str) {
-        if self.providers.contains_key(&id) {
+    /// last-binding-wins is their documented override mechanism. Keyed
+    /// providers ([`provide_keyed`](Self::provide_keyed)) share this path,
+    /// scoped to their `(TypeId, name)` slot.
+    fn warn_if_replacing(&self, key: ProviderKey, type_name: &'static str) {
+        if self.providers.contains_key(&key) {
             tracing::warn!(
                 target: "nest_rs::container",
                 provider = type_name,
+                key = key.name,
                 "provider override",
             );
         }
@@ -254,7 +300,7 @@ impl ContainerBuilder {
     /// the same `TypeId`. Resolution now silently returns the transient
     /// build, leaving the singleton state unreachable.
     fn warn_if_cross_kind_transient(&self, id: TypeId, type_name: &'static str) {
-        if self.providers.contains_key(&id) {
+        if self.providers.contains_key(&ProviderKey::of(id)) {
             tracing::warn!(
                 target: "nest_rs::container",
                 provider = type_name,
@@ -269,7 +315,7 @@ impl ContainerBuilder {
     /// `Arc` is sized and retrievable via the trait's `TypeId`.
     pub fn provide_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.providers
-            .insert(TypeId::of::<Arc<T>>(), Arc::new(value));
+            .insert(ProviderKey::of(TypeId::of::<Arc<T>>()), Arc::new(value));
         self
     }
 
@@ -302,7 +348,7 @@ impl ContainerBuilder {
     /// Whether a provider for `id` has already been registered. Lets `#[module]`
     /// register providers in any order by checking dependencies against this.
     pub fn contains(&self, id: TypeId) -> bool {
-        self.providers.contains_key(&id)
+        self.providers.contains_key(&ProviderKey::of(id))
     }
 
     /// Record that a module of type `id` is being registered. Returns `true`
@@ -342,13 +388,15 @@ impl ContainerBuilder {
     /// each request, cached by a [`RequestScope`](crate::RequestScope).
     ///
     /// Emitted by `#[injectable(scope = request)]`. The factory resolves
-    /// dependencies from the (singleton) root container, so a request-scoped
-    /// provider may depend on singletons but not on other request-scoped
-    /// providers.
+    /// dependencies through the [`RequestScope`](crate::RequestScope), so a
+    /// request-scoped provider may depend on singletons **and** on other
+    /// request-scoped providers (which it shares with the rest of the request).
+    /// The reverse — a singleton depending on a request-scoped provider — stays
+    /// structurally impossible (singletons are built before any request exists).
     pub fn provide_scoped<T, F>(mut self, factory: F) -> Self
     where
         T: Any + Send + Sync,
-        F: Fn(&Container) -> T + Send + Sync + 'static,
+        F: Fn(&RequestScope) -> T + Send + Sync + 'static,
     {
         let id = TypeId::of::<T>();
         if self.scoped.contains_key(&id) {
@@ -361,7 +409,7 @@ impl ContainerBuilder {
         }
         self.scoped.insert(
             id,
-            Arc::new(move |container| Arc::new(factory(container)) as AnyArc),
+            Arc::new(move |scope| Arc::new(factory(scope)) as AnyArc),
         );
         self
     }
@@ -404,7 +452,23 @@ impl ContainerBuilder {
     /// after the factory phase to form the **global** set (seeds + factory
     /// outputs) for the access-graph check.
     pub(crate) fn provider_ids(&self) -> HashSet<TypeId> {
-        self.providers.keys().copied().collect()
+        self.providers
+            .keys()
+            .filter(|k| k.name.is_none())
+            .map(|k| k.type_id)
+            .collect()
+    }
+
+    /// Keyed provider identities registered so far. Snapshotted alongside
+    /// [`provider_ids`](Self::provider_ids) after the factory phase to form the
+    /// **global keyed** set for the access-graph keyed check — a keyed
+    /// dependency is legal when a seed or factory output supplies it.
+    pub(crate) fn keyed_provider_keys(&self) -> HashSet<ProviderKey> {
+        self.providers
+            .keys()
+            .filter(|k| k.name.is_some())
+            .copied()
+            .collect()
     }
 
     pub fn build(self) -> Container {
@@ -475,6 +539,81 @@ mod tests {
         let container = Container::builder().provide_arc(shared.clone()).build();
         let resolved: Arc<Counter> = container.get().unwrap();
         assert!(Arc::ptr_eq(&shared, &resolved));
+    }
+
+    #[test]
+    fn keyed_providers_of_the_same_type_coexist() {
+        // Two instances of one concrete type, disambiguated by key, live in the
+        // flat container at once — the whole point of `provide_keyed`.
+        let container = Container::builder()
+            .provide_keyed("github", Greeter("gh"))
+            .provide_keyed("google", Greeter("goog"))
+            .build();
+        assert_eq!(container.get_keyed::<Greeter>("github").unwrap().0, "gh");
+        assert_eq!(container.get_keyed::<Greeter>("google").unwrap().0, "goog");
+    }
+
+    #[test]
+    fn keyed_and_bare_of_the_same_type_are_distinct_slots() {
+        // A bare `provide` and a keyed `provide_keyed` of the same type do not
+        // collide: `None` and `Some(name)` are separate `ProviderKey`s.
+        let container = Container::builder()
+            .provide(Greeter("bare"))
+            .provide_keyed("github", Greeter("gh"))
+            .build();
+        assert_eq!(container.get::<Greeter>().unwrap().0, "bare");
+        assert_eq!(container.get_keyed::<Greeter>("github").unwrap().0, "gh");
+        // A bare `get` never sees a keyed slot, and vice versa.
+        assert!(container.get_keyed::<Greeter>("google").is_none());
+    }
+
+    #[test]
+    fn missing_keyed_provider_returns_none() {
+        let container = Container::builder()
+            .provide_keyed("github", Greeter("gh"))
+            .build();
+        assert!(container.get_keyed::<Greeter>("google").is_none());
+        assert!(container.get_keyed::<Counter>("github").is_none());
+    }
+
+    #[test]
+    fn keyed_provider_arc_preserves_the_same_instance() {
+        let shared = Arc::new(Counter(7));
+        let container = Container::builder()
+            .provide_keyed_arc("primary", shared.clone())
+            .build();
+        let resolved: Arc<Counter> = container.get_keyed("primary").unwrap();
+        assert!(Arc::ptr_eq(&shared, &resolved));
+    }
+
+    #[test]
+    fn keyed_override_keeps_the_last_value_and_warns() {
+        let logs = capture_warns(|| {
+            let container = Container::builder()
+                .provide_keyed("github", Counter(1))
+                .provide_keyed("github", Counter(2))
+                .build();
+            assert_eq!(container.get_keyed::<Counter>("github").unwrap().0, 2);
+        });
+        assert!(
+            logs.contains("provider override"),
+            "a same-(type, key) re-registration must warn: {logs}",
+        );
+    }
+
+    #[test]
+    fn keyed_collision_is_scoped_to_the_same_key() {
+        // Distinct keys of the same type never warn — they are different slots.
+        let logs = capture_warns(|| {
+            let _ = Container::builder()
+                .provide_keyed("github", Counter(1))
+                .provide_keyed("google", Counter(2))
+                .build();
+        });
+        assert!(
+            !logs.contains("provider override"),
+            "distinct keys must not be treated as an override: {logs}",
+        );
     }
 
     #[test]

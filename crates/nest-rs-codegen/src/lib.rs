@@ -19,8 +19,9 @@ pub use casing::{pascal_case, snake_case};
 pub use crud::{CrudConfig, Paginate, parse_crud_args, singular_of};
 pub use inject::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
-    forwarded_arg_idents, forwarded_idents, from_container_method, injected_keys_expr,
-    injected_keys_with_layers, injected_method, injected_method_with_layers, layer_inject_keys,
-    optional_dependencies_method,
+    forwarded_arg_idents, forwarded_idents, from_container_method, from_scope_method,
+    injected_keyed_method,
+    injected_keys_expr, injected_keys_with_layers, injected_method, injected_method_with_layers,
+    layer_inject_keys, optional_dependencies_method,
 };
 pub use ty::{impl_self_ident, nth_generic_type};

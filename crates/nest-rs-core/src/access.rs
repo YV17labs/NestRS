@@ -25,6 +25,8 @@ use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
+use crate::container::{KeyedDependency, ProviderKey};
+
 /// One provider declared in a module's `providers = [...]`, recorded by the
 /// `#[module]` macro for the access-graph check.
 pub struct ProviderDescriptor {
@@ -33,9 +35,12 @@ pub struct ProviderDescriptor {
     /// `TypeId::of::<Concrete>()` for an `#[injectable]`, or
     /// `TypeId::of::<Arc<dyn Trait>>()` for a `Foo as dyn Trait` binding.
     pub provides: fn() -> TypeId,
-    /// `TypeId` of each `#[inject]` field plus each attribute-referenced layer
-    /// (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`).
+    /// `TypeId` of each bare `#[inject]` field plus each attribute-referenced
+    /// layer (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`).
     pub injects: fn() -> Vec<TypeId>,
+    /// Each **keyed** `#[inject(key = "…")]` field, validated against the
+    /// global keyed set. Empty for providers with no keyed dependency.
+    pub injects_keyed: fn() -> Vec<KeyedDependency>,
 }
 
 /// Per-module descriptor submitted to the link-time registry by `#[module]`.
@@ -76,6 +81,27 @@ pub struct AccessGraphError {
     pub consumer: &'static str,
     pub dependency: &'static str,
     pub owner: &'static str,
+}
+
+/// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider
+/// registered as global infrastructure (a seed or a factory output). Raised at
+/// boot by the keyed pass of the access-graph validation. Unlike a bare
+/// dependency — deferred to the register-phase fixpoint when genuinely missing —
+/// a keyed dependency is validated here so the failure is a clean boot error
+/// naming **both** the type and the key, not a `get_keyed(...).expect(...)`
+/// panic during construction.
+#[derive(Debug, Error)]
+#[error(
+    "keyed dependency unreachable: `{consumer}` (in module `{module}`) injects `{type_name}` \
+     keyed `{key}`, but no keyed provider for that (type, key) is registered. Register it as \
+     global infrastructure — `App::builder().provide_keyed::<{type_name}>(\"{key}\", …)` or a \
+     `ContainerBuilder::provide_keyed`/factory in a module reachable from the root."
+)]
+pub struct KeyedDependencyError {
+    pub module: &'static str,
+    pub consumer: &'static str,
+    pub type_name: &'static str,
+    pub key: &'static str,
 }
 
 /// Marker the schema-composing layer registers when an app actually composes
@@ -149,6 +175,45 @@ pub fn validate_access_graph(
                         owner,
                     });
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate the **keyed** access graph: every reachable provider's
+/// `#[inject(key = "…")]` dependency must be supplied by the global keyed set
+/// (seeds + factory outputs). Keyed providers are configured imperatively, so
+/// there is no per-module keyed declaration to reach through — a keyed
+/// dependency is legal only when globally provided, and an unmet one is a clean
+/// boot error naming type and key rather than a construction-time panic.
+///
+/// Pure over its inputs. Runs after [`validate_access_graph`] at boot.
+pub fn validate_keyed_access_graph(
+    descriptors: &[&ModuleDescriptor],
+    roots: &[TypeId],
+    global_keyed: &HashSet<ProviderKey>,
+) -> Result<(), KeyedDependencyError> {
+    let by_id: HashMap<TypeId, &ModuleDescriptor> =
+        descriptors.iter().map(|d| ((d.module)(), *d)).collect();
+
+    for module_id in reachable(roots, &by_id) {
+        let Some(desc) = by_id.get(&module_id) else {
+            continue;
+        };
+        for p in desc.providers {
+            for dep in (p.injects_keyed)() {
+                if global_keyed.contains(&dep.key) {
+                    continue;
+                }
+                return Err(KeyedDependencyError {
+                    module: desc.name,
+                    consumer: p.name,
+                    type_name: dep.type_name,
+                    // A keyed dependency always carries a name; fall back
+                    // defensively rather than unwrap on a framework path.
+                    key: dep.key.name.unwrap_or("<unnamed>"),
+                });
             }
         }
     }
@@ -242,6 +307,16 @@ pub(crate) fn validate_from_inventory(
     validate_access_graph(&descriptors, roots, global)
 }
 
+/// Boot-time keyed pass over the link-time module registry — the
+/// [`validate_keyed_access_graph`] counterpart of [`validate_from_inventory`].
+pub(crate) fn validate_keyed_from_inventory(
+    roots: &[TypeId],
+    global_keyed: &HashSet<ProviderKey>,
+) -> Result<(), KeyedDependencyError> {
+    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+    validate_keyed_access_graph(&descriptors, roots, global_keyed)
+}
+
 /// Boot-time equivalent of [`unreachable_resolvers`] against the link-time
 /// registry; backs the default `warn` and the opt-in strict-mode boot error.
 pub(crate) fn unreachable_resolvers_from_inventory(roots: &[TypeId]) -> Vec<&'static str> {
@@ -295,6 +370,10 @@ mod tests {
         Vec::new()
     }
 
+    fn no_keyed_deps() -> Vec<KeyedDependency> {
+        Vec::new()
+    }
+
     fn users_deps() -> Vec<TypeId> {
         vec![TypeId::of::<Db>()]
     }
@@ -312,6 +391,7 @@ mod tests {
                 name: "UsersService",
                 provides: || TypeId::of::<UsersService>(),
                 injects: users_deps,
+                injects_keyed: no_keyed_deps,
             }],
         }
     }
@@ -345,11 +425,13 @@ mod tests {
                     name: "AppAbility",
                     provides: || TypeId::of::<UsersService>(),
                     injects: no_deps,
+                    injects_keyed: no_keyed_deps,
                 },
                 ProviderDescriptor {
                     name: "AppGuard",
                     provides: || TypeId::of::<AppGuard>(),
                     injects: billing_deps,
+                    injects_keyed: no_keyed_deps,
                 },
             ],
         };
@@ -368,6 +450,7 @@ mod tests {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
+                injects_keyed: no_keyed_deps,
             }],
         };
         let app = ModuleDescriptor {
@@ -395,6 +478,7 @@ mod tests {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
+                injects_keyed: no_keyed_deps,
             }],
         };
         let app = ModuleDescriptor {
@@ -430,6 +514,7 @@ mod tests {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
+                injects_keyed: no_keyed_deps,
             }],
         };
         let app = ModuleDescriptor {
@@ -469,6 +554,7 @@ mod tests {
                 name: "OrgsResolver",
                 provides: || TypeId::of::<OrgsResolver>(),
                 injects: no_deps,
+                injects_keyed: no_keyed_deps,
             }],
         };
         let keys = reachable_provider_ids(&[&app], &[TypeId::of::<AppMod>()], &HashSet::new());
@@ -501,6 +587,7 @@ mod tests {
                 name: "OrgsResolver",
                 provides: || TypeId::of::<OrgsResolver>(),
                 injects: no_deps,
+                injects_keyed: no_keyed_deps,
             }],
         };
         let app = ModuleDescriptor {
@@ -531,5 +618,73 @@ mod tests {
         };
         let keys = reachable_provider_ids(&[&app], &[TypeId::of::<AppMod>()], &global());
         assert!(keys.contains(&TypeId::of::<Db>()));
+    }
+
+    // A stand-in for the keyed `OAuth2Client` case: one concrete type injected
+    // twice, disambiguated by key.
+    struct OAuth2Client;
+
+    fn github_dep() -> Vec<KeyedDependency> {
+        vec![KeyedDependency {
+            key: ProviderKey::named::<OAuth2Client>("github"),
+            type_name: "OAuth2Client",
+        }]
+    }
+
+    fn keyed_consumer_module() -> ModuleDescriptor {
+        ModuleDescriptor {
+            module: || TypeId::of::<UsersMod>(),
+            name: "UsersModule",
+            imports: &[],
+            providers: &[ProviderDescriptor {
+                name: "SocialLoginService",
+                provides: || TypeId::of::<UsersService>(),
+                injects: no_deps,
+                injects_keyed: github_dep,
+            }],
+        }
+    }
+
+    #[test]
+    fn keyed_dependency_supplied_globally_passes() {
+        let users = keyed_consumer_module();
+        let global_keyed =
+            HashSet::from([ProviderKey::named::<OAuth2Client>("github")]);
+        validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
+            .expect("a globally-seeded keyed provider satisfies the keyed dependency");
+    }
+
+    #[test]
+    fn unmet_keyed_dependency_is_rejected_naming_type_and_key() {
+        let users = keyed_consumer_module();
+        let err = validate_keyed_access_graph(
+            &[&users],
+            &[TypeId::of::<UsersMod>()],
+            &HashSet::new(),
+        )
+        .expect_err("a keyed dependency with no keyed provider must fail");
+        assert_eq!(err.consumer, "SocialLoginService");
+        assert_eq!(err.module, "UsersModule");
+        assert_eq!(err.type_name, "OAuth2Client");
+        assert_eq!(err.key, "github");
+        let msg = err.to_string();
+        assert!(msg.contains("OAuth2Client"), "names the type: {msg}");
+        assert!(msg.contains("github"), "names the key: {msg}");
+    }
+
+    #[test]
+    fn wrong_key_does_not_satisfy_a_keyed_dependency() {
+        // Only the exact `(type, key)` counts — a different key of the same
+        // type leaves the dependency unmet.
+        let users = keyed_consumer_module();
+        let global_keyed =
+            HashSet::from([ProviderKey::named::<OAuth2Client>("google")]);
+        let err = validate_keyed_access_graph(
+            &[&users],
+            &[TypeId::of::<UsersMod>()],
+            &global_keyed,
+        )
+        .expect_err("the `google` key must not satisfy a `github` dependency");
+        assert_eq!(err.key, "github");
     }
 }

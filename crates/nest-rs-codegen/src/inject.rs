@@ -20,6 +20,12 @@ pub struct InjectableBody {
     /// — optionals must not gate the register fixpoint, but are still used to
     /// order a consumer after an optional provider the same module supplies.
     pub opt_keys: Vec<TokenStream2>,
+    /// One `::nest_rs_core::KeyedDependency { … }` expression per
+    /// `#[inject(key = "…")]` field, for the access-graph keyed check. Kept
+    /// apart from `dep_keys`: a keyed dependency resolves via `get_keyed`, is
+    /// excluded from the register-phase fixpoint, and is validated against the
+    /// global keyed set rather than the module import closure.
+    pub keyed_dep_keys: Vec<TokenStream2>,
 }
 
 /// Strip `#[inject]` attributes from `item`'s fields and build its
@@ -35,6 +41,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             dep_keys: Vec::new(),
             dep_names: Vec::new(),
             opt_keys: Vec::new(),
+            keyed_dep_keys: Vec::new(),
         }),
         Fields::Named(fields) => {
             let mut has_inject = false;
@@ -42,6 +49,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             let mut dep_keys = Vec::new();
             let mut dep_names = Vec::new();
             let mut opt_keys = Vec::new();
+            let mut keyed_dep_keys = Vec::new();
 
             for field in fields.named.iter_mut() {
                 let field_name = field.ident.clone().expect("named field has an ident");
@@ -52,10 +60,54 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                     });
                     continue;
                 };
-                field.attrs.remove(idx);
+                let inject_attr = field.attrs.remove(idx);
                 has_inject = true;
 
                 let field_ty = &field.ty;
+
+                // A keyed `#[inject(key = "…")]` field resolves a keyed
+                // singleton via `get_keyed`. Singleton-only, concrete `Arc<T>`
+                // only — a key on an `Option<…>` or `Arc<dyn Trait>` field is a
+                // compile error (no keyed optional/dyn resolution exists).
+                if let Some(key) = parse_inject_key(&inject_attr)? {
+                    if nth_generic_type(field_ty, "Option", 0).is_some() {
+                        return Err(syn::Error::new_spanned(
+                            field_ty,
+                            "#[inject(key = \"…\")] does not support `Option<…>` — a keyed \
+                             dependency is a required singleton",
+                        ));
+                    }
+                    let Some(inner_ty) = arc_inner(field_ty) else {
+                        return Err(syn::Error::new_spanned(
+                            field_ty,
+                            "#[inject(key = \"…\")] requires an `Arc<T>` field",
+                        ));
+                    };
+                    if matches!(inner_ty, syn::Type::TraitObject(_)) {
+                        return Err(syn::Error::new_spanned(
+                            field_ty,
+                            "#[inject(key = \"…\")] does not support `Arc<dyn Trait>` — keyed \
+                             providers are concrete singletons",
+                        ));
+                    }
+                    let msg = format!(
+                        "{}.{}: no keyed provider registered for key `{}`",
+                        item.ident,
+                        field_name,
+                        key.value()
+                    );
+                    field_inits.push(quote! {
+                        #field_name: container.get_keyed(#key).expect(#msg)
+                    });
+                    let label = type_label(inner_ty);
+                    keyed_dep_keys.push(quote! {
+                        ::nest_rs_core::KeyedDependency {
+                            key: ::nest_rs_core::ProviderKey::named::<#inner_ty>(#key),
+                            type_name: #label,
+                        }
+                    });
+                    continue;
+                }
 
                 // Optional `#[inject] Option<Arc<…>>`: lenient resolution,
                 // out of `dependencies`/`injected` so a missing provider
@@ -120,6 +172,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 dep_keys,
                 dep_names,
                 opt_keys,
+                keyed_dep_keys,
             })
         }
         Fields::Unnamed(_) => Err(syn::Error::new_spanned(
@@ -129,10 +182,57 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
     }
 }
 
+/// Parse the optional `key = "…"` argument of an `#[inject]` attribute.
+/// `#[inject]` (bare) yields `None`; `#[inject(key = "github")]` yields the
+/// literal. Any other argument is a spanned compile error.
+fn parse_inject_key(attr: &syn::Attribute) -> syn::Result<Option<syn::LitStr>> {
+    if matches!(attr.meta, syn::Meta::Path(_)) {
+        return Ok(None);
+    }
+    let mut key: Option<syn::LitStr> = None;
+    attr.parse_nested_meta(|meta| {
+        if meta.path.is_ident("key") {
+            key = Some(meta.value()?.parse()?);
+            Ok(())
+        } else {
+            Err(meta.error("unknown #[inject] argument (expected `key = \"…\"`)"))
+        }
+    })?;
+    Ok(key)
+}
+
+/// `Discoverable::injected_keyed` — one `KeyedDependency` per
+/// `#[inject(key = "…")]` field, for the access-graph keyed check.
+pub fn injected_keyed_method(keyed_dep_keys: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        fn injected_keyed() -> ::std::vec::Vec<::nest_rs_core::KeyedDependency> {
+            ::std::vec![ #(#keyed_dep_keys),* ]
+        }
+    }
+}
+
 /// The `from_container` constructor emitted by every decorator macro.
 pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {
         pub fn from_container(container: &::nest_rs_core::Container) -> Self {
+            let _ = container;
+            #ctor
+        }
+    }
+}
+
+/// The scope-aware constructor emitted by `#[injectable(scope = request)]`.
+/// Identical body to [`from_container_method`], but the parameter is a
+/// `&RequestScope` — so a `#[inject]` dep that is itself request-scoped
+/// resolves through the per-request cache (and is shared with the rest of the
+/// request), while singleton / keyed / `dyn` deps forward to the root. The
+/// binding is named `container` so the shared `ctor` tokens
+/// (`container.get()`, `container.get_dyn()`, `container.get_keyed()`) compile
+/// unchanged against [`RequestScope`](nest_rs_core::RequestScope)'s matching
+/// resolution methods.
+pub fn from_scope_method(ctor: &TokenStream2) -> TokenStream2 {
+    quote! {
+        pub fn from_scope(container: &::nest_rs_core::RequestScope) -> Self {
             let _ = container;
             #ctor
         }

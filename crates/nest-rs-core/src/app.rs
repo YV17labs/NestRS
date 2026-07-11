@@ -10,8 +10,10 @@ use tokio_util::sync::CancellationToken;
 use crate::access::{
     ReachableProviders, ResolverSchemaActive, UnreachableResolversError,
     reachable_provider_ids_from_inventory, unreachable_resolvers_from_inventory,
-    validate_from_inventory, warn_unreachable_resolvers_from_inventory,
+    validate_from_inventory, validate_keyed_from_inventory,
+    warn_unreachable_resolvers_from_inventory,
 };
+use crate::container::ProviderKey;
 use crate::container::{Container, ContainerBuilder, Registrar};
 use crate::discovery::DiscoveryService;
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
@@ -37,6 +39,9 @@ impl App {
         // front regardless of seed ordering.
         let global: HashSet<TypeId> = HashSet::from([TypeId::of::<ReachableProviders>()]);
         validate_from_inventory(&roots, &global)?;
+        // Keyed providers are configured imperatively; the sync path seeds none
+        // up front, so any keyed dependency here is genuinely unmet.
+        validate_keyed_from_inventory(&roots, &HashSet::new())?;
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder.provide(ReachableProviders(reachable));
         let container = builder.build();
@@ -209,6 +214,27 @@ impl AppBuilder {
         self
     }
 
+    /// Seed a **keyed** singleton, resolvable with an `#[inject(key = "…")]`
+    /// field or [`Container::get_keyed`](crate::Container::get_keyed). Several
+    /// instances of one concrete type coexist, one per `name` — the composition
+    /// root is where keyed providers are configured (they are imperative by
+    /// nature). A keyed seed is global infrastructure for the access graph, so
+    /// any provider reachable from the root may inject it.
+    pub fn provide_keyed<T: Any + Send + Sync>(mut self, name: &'static str, value: T) -> Self {
+        self.builder = self.builder.provide_keyed(name, value);
+        self
+    }
+
+    /// [`provide_keyed`](Self::provide_keyed) for an already-shared `Arc<T>`.
+    pub fn provide_keyed_arc<T: Any + Send + Sync>(
+        mut self,
+        name: &'static str,
+        value: Arc<T>,
+    ) -> Self {
+        self.builder = self.builder.provide_keyed_arc(name, value);
+        self
+    }
+
     /// Seed module-less metadata of type `M` (the [`ContainerBuilder::provide_meta`]
     /// shortcut at the app root). Used by global builder extensions —
     /// `use_guards_global`, `use_interceptors_global`, etc. — that need to
@@ -327,6 +353,9 @@ impl AppBuilder {
         // front regardless of seed ordering.
         let mut global = builder.provider_ids();
         global.insert(TypeId::of::<ReachableProviders>());
+        // The keyed global set: keyed seeds + keyed factory outputs, snapshotted
+        // before modules register (same timing as the bare global set).
+        let global_keyed: HashSet<ProviderKey> = builder.keyed_provider_keys();
         for hooks in &modules {
             builder = (hooks.register)(builder);
         }
@@ -337,6 +366,7 @@ impl AppBuilder {
 
         let roots: Vec<TypeId> = modules.iter().map(|h| h.type_id).collect();
         validate_from_inventory(&roots, &global)?;
+        validate_keyed_from_inventory(&roots, &global_keyed)?;
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder.provide(ReachableProviders(reachable));
         if builder.contains(TypeId::of::<ResolverSchemaActive>()) {

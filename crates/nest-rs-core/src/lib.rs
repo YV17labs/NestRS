@@ -1,6 +1,7 @@
 pub mod access;
 pub mod app;
 pub mod container;
+pub(crate) mod cycle_guard;
 pub mod discoverable;
 pub mod discovery;
 pub mod layer;
@@ -12,11 +13,12 @@ pub mod request_scope;
 pub mod transport;
 
 pub use access::{
-    AccessGraphError, ModuleDescriptor, ProviderDescriptor, ReachableProviders, ResolverDescriptor,
-    ResolverSchemaActive, UnreachableResolversError,
+    AccessGraphError, KeyedDependencyError, ModuleDescriptor, ProviderDescriptor,
+    ReachableProviders, ResolverDescriptor, ResolverSchemaActive, UnreachableResolversError,
+    validate_keyed_access_graph,
 };
 pub use app::{App, AppBuilder};
-pub use container::{Container, ContainerBuilder};
+pub use container::{Container, ContainerBuilder, KeyedDependency, ProviderKey};
 pub use discoverable::Discoverable;
 pub use discovery::{AccessGraphSnapshot, Discovered, DiscoveryService};
 pub use layer::{Layer, LayerKind, LayerSite};

@@ -1,6 +1,6 @@
 use std::any::TypeId;
 
-use crate::container::ContainerBuilder;
+use crate::container::{ContainerBuilder, KeyedDependency};
 
 /// Anything a `#[module]` can pull in via `providers = [...]`.
 ///
@@ -21,6 +21,16 @@ pub trait Discoverable {
     /// check. Reported regardless of build timing, so the contract governs
     /// transport-built logic too.
     fn injected() -> Vec<TypeId> {
+        Vec::new()
+    }
+
+    /// [`ProviderKey`] of each **keyed** `#[inject(key = "…")]` dependency,
+    /// recorded for the access-graph keyed check. Kept apart from
+    /// [`injected`](Discoverable::injected) — a keyed dependency is validated
+    /// against the global keyed set (seeds + factory outputs), and its boot
+    /// error names both the type and the key. Empty for providers with no keyed
+    /// dependency (the default).
+    fn injected_keyed() -> Vec<KeyedDependency> {
         Vec::new()
     }
 

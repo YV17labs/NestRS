@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use nest_rs_core::RequestScope;
 use poem::endpoint::TowerCompatExt;
 use poem::{Endpoint, IntoEndpoint, Request, Response, Result, Route};
 use rmcp::ServerHandler;
@@ -64,6 +65,15 @@ where
 
     async fn call(&self, mut req: Request) -> Result<Self::Output> {
         self.guard.before(&mut req).await?;
-        self.inner.call(req).await
+        // Install the per-operation request scope (forwarded from the HTTP
+        // extensions by `RequestScopeEndpoint`, which wraps the whole route
+        // tree) as a task-local for the duration of the call, so tool methods
+        // reach request-scoped providers via `nest_rs_mcp::Scoped<T>`. Absent
+        // (no `RequestScopeEndpoint` in front) ⇒ run without a scope; a tool's
+        // `Scoped::from_context` then surfaces the wiring error.
+        match req.extensions().get::<Arc<RequestScope>>().cloned() {
+            Some(scope) => crate::scope::with_request_scope(scope, self.inner.call(req)).await,
+            None => self.inner.call(req).await,
+        }
     }
 }

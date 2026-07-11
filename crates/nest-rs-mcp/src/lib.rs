@@ -9,10 +9,14 @@
 mod endpoint;
 mod guard;
 mod guards;
+mod scope;
 
 pub use endpoint::{endpoint, endpoint_with_guard};
 pub use guards::AllowAllMcpGuard;
 pub use guard::{BoxFuture, McpOperationGuard};
+/// Per-operation accessor for `#[injectable(scope = request)]` providers inside
+/// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
+pub use scope::Scoped;
 
 pub use rmcp::handler::server::router::tool::ToolRouter;
 pub use rmcp::handler::server::wrapper::Parameters;

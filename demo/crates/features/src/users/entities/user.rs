@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[expose(
     name = "User",
-    service = super::service::UsersService,
+    service = super::super::service::UsersService,
     graphql,
     soft_delete,
     timestamps

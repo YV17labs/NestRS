@@ -26,7 +26,7 @@ pub use error::{AuthError, CredentialError};
 pub use jwt::{AuthnModule, AuthnSetup, JwtConfig, JwtKey, JwtOptions, JwtService};
 pub use oauth::{
     AuthenticatedClient, Authorization, OAuth2Client, OAuth2Config, OAuth2Module, OAuth2Setup,
-    RegisteredClient, TokenError, authenticate_against_registry,
+    RegisteredClient, TokenError, TokenSet, authenticate_against_registry,
 };
 pub use passport::{
     AuthGuard, JwtStrategy, PrincipalIdentity, Strategy, basic_credentials, bearer_token,

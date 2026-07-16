@@ -177,6 +177,11 @@ impl TestAppBuilder {
         let app = self.inner.build().await?;
         let mut transport = self.http.unwrap_or_default();
         transport.configure(app.container()).await?;
+        // Drive the same startup the server performs (`App::run` configures the
+        // transport, then runs the init phases). Without this, modules whose
+        // wiring lands in `OnApplicationBootstrap` — health indicators, the
+        // social provider registry — stay unpopulated under the test harness.
+        app.init().await?;
         let endpoint = transport
             .take_endpoint()
             .expect("HttpTransport::configure populates the endpoint");

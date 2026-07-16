@@ -26,6 +26,25 @@ pub struct Authorization {
     pub transaction: String,
 }
 
+/// Outcome of the Authorization-Code exchange.
+///
+/// `#[non_exhaustive]`: downstream provider crates (`nest-rs-social` and
+/// third-party providers) match on these fields, so adding one later — a new
+/// standard token field — must not break them. Construct via the field
+/// initializers inside this crate only; consumers read.
+///
+/// The base flow populates `access_token` (and `refresh_token` when the
+/// provider returns one). `id_token` stays `None` for the standard resource
+/// path: an OIDC provider that reads identity from the id_token overrides
+/// `SocialProvider::exchange` (e.g. Apple, which has no userinfo endpoint) and
+/// fills it there — the base client does not parse OIDC extra fields.
+#[non_exhaustive]
+pub struct TokenSet {
+    pub access_token: String,
+    pub id_token: Option<String>,
+    pub refresh_token: Option<String>,
+}
+
 /// Carried as a [`JwtService`]-signed cookie so the client cannot forge it.
 #[derive(Serialize, Deserialize)]
 struct Transaction {
@@ -48,6 +67,10 @@ impl OAuth2Client {
             .map_err(|err| AuthError::Failed(format!("invalid OAuth2 config: {err}")))?;
         let http = oauth2::reqwest::ClientBuilder::new()
             .redirect(oauth2::reqwest::redirect::Policy::none())
+            // A client-wide UA so every outbound request carries it uniformly —
+            // some provider APIs (GitHub) reject requests without one, and the
+            // token exchange uses this same client.
+            .user_agent("nestrs")
             .build()
             .map_err(|e| AuthError::Failed(e.to_string()))?;
         Ok(Self { config, http })
@@ -114,7 +137,7 @@ impl OAuth2Client {
     }
 
     /// Complete the flow: validate the provider's `state` against the signed
-    /// `transaction`, then trade `code` for an access token. CSRF check runs
+    /// `transaction`, then trade `code` for a [`TokenSet`]. CSRF check runs
     /// before the exchange — never the other way around.
     pub async fn exchange(
         &self,
@@ -122,7 +145,7 @@ impl OAuth2Client {
         transaction: &str,
         state: &str,
         code: &str,
-    ) -> Result<String, AuthError> {
+    ) -> Result<TokenSet, AuthError> {
         let tx: Transaction = jwt.verify(transaction)?;
         // Constant-time compare (mirrors the client-credentials check); a length
         // mismatch reads as "not equal" via `subtle`'s slice `ct_eq`.
@@ -140,16 +163,26 @@ impl OAuth2Client {
             .request_async(&self.http)
             .await
             .map_err(|e| AuthError::Failed(e.to_string()))?;
-        Ok(token.access_token().secret().clone())
+        Ok(TokenSet {
+            access_token: token.access_token().secret().clone(),
+            id_token: None,
+            refresh_token: token.refresh_token().map(|t| t.secret().clone()),
+        })
     }
 
-    /// Fetch the caller's profile, deserialized into the app's
-    /// provider-specific shape; mapping it to the app's principal is the
-    /// Passport strategy's job.
-    pub async fn userinfo<T: DeserializeOwned>(&self, access_token: &str) -> Result<T, AuthError> {
+    /// Authenticated `GET` against an arbitrary provider endpoint, deserialized
+    /// into `T`. The generalization of [`userinfo`](Self::userinfo): a provider
+    /// whose profile needs a second call (GitHub's verified-emails endpoint)
+    /// reuses this so it inherits the redirect-refusing, anti-SSRF HTTP client
+    /// built in [`new`](Self::new) instead of standing up its own reqwest.
+    pub async fn fetch<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        access_token: &str,
+    ) -> Result<T, AuthError> {
         let body = self
             .http
-            .get(&self.config.userinfo_url)
+            .get(url)
             .bearer_auth(access_token)
             .send()
             .await
@@ -160,6 +193,13 @@ impl OAuth2Client {
             .await
             .map_err(|e| AuthError::Failed(e.to_string()))?;
         serde_json::from_str(&body).map_err(|e| AuthError::Failed(e.to_string()))
+    }
+
+    /// Fetch the caller's profile from the configured `userinfo_url`,
+    /// deserialized into the app's provider-specific shape; mapping it to the
+    /// app's principal is the Passport strategy's job.
+    pub async fn userinfo<T: DeserializeOwned>(&self, access_token: &str) -> Result<T, AuthError> {
+        self.fetch(&self.config.userinfo_url, access_token).await
     }
 }
 
@@ -291,10 +331,14 @@ mod tests {
             })
             .expect("sign");
 
-        let err = client
+        // `TokenSet` is intentionally not `Debug` (it carries tokens), so match
+        // rather than `expect_err`.
+        let Err(err) = client
             .exchange(&jwt, &transaction, "forged", "the-code")
             .await
-            .expect_err("a mismatched state is rejected");
+        else {
+            panic!("a mismatched state is rejected");
+        };
         assert!(matches!(err, AuthError::Failed(_)));
         assert!(err.to_string().contains("state mismatch"));
     }

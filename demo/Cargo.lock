@@ -607,6 +607,7 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-opentelemetry",
  "nest-rs-seaorm",
+ "nest-rs-social",
  "nest-rs-testing",
  "nest-rs-throttler",
  "poem",
@@ -1475,6 +1476,7 @@ dependencies = [
  "nest-rs-resource",
  "nest-rs-schedule",
  "nest-rs-seaorm",
+ "nest-rs-social",
  "nest-rs-testing",
  "nest-rs-throttler",
  "nest-rs-worker",
@@ -3047,6 +3049,20 @@ dependencies = [
  "nest-rs-interceptors",
  "parking_lot",
  "poem",
+]
+
+[[package]]
+name = "nest-rs-social"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "nest-rs-authn",
+ "nest-rs-config",
+ "nest-rs-core",
+ "serde",
+ "serde_json",
+ "tracing",
+ "validator",
 ]
 
 [[package]]

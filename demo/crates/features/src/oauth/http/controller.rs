@@ -8,7 +8,7 @@ use nest_rs_authn::OAuth2Client;
 use nest_rs_http::{Ctx, Valid, controller, routes};
 use nest_rs_throttler::{Throttle, ThrottlerGuard};
 use poem::http::{StatusCode, header};
-use poem::web::{Form, Json};
+use poem::web::{Form, Json, Path};
 use poem::{Request, Response, Result};
 
 pub(crate) const TRANSACTION_COOKIE: &str = "oauth_tx";
@@ -38,16 +38,21 @@ impl OAuthController {
         )?))
     }
 
-    #[get("/authorize")]
+    #[get("/social/:provider/authorize")]
     #[public]
+    #[use_guards(ThrottlerGuard)]
+    #[meta(Throttle::per_minute(10))]
     #[api(
-        summary = "OAuth2 authorization endpoint — redirects to the provider",
+        summary = "Social login — redirects to the named provider",
         tags("OAuth2")
     )]
-    async fn authorize(&self, req: &Request) -> Result<Response> {
+    async fn social_authorize(&self, provider: Path<String>, req: &Request) -> Result<Response> {
+        // Unknown provider ⇒ 404 (the registry does not know the key); an
+        // otherwise-valid provider whose flow errors ⇒ 500.
         let authorization = self
             .svc
-            .authorize()
+            .authorize(&provider.0)
+            .ok_or_else(|| poem::Error::from_status(StatusCode::NOT_FOUND))?
             .map_err(poem::error::InternalServerError)?;
         let secure = cookie_secure(req);
         Ok(Response::builder()
@@ -64,14 +69,18 @@ impl OAuthController {
             .finish())
     }
 
-    #[get("/callback")]
-    #[public]
-    #[use_guards(OAuthGuard)]
+    // Not `#[public]`: `OAuthGuard` is authoritative here — the code/state/
+    // cookie *are* the authentication. Marking the route public would make the
+    // guard lenient (a forged callback would fall through to the handler with
+    // no `Caller` ⇒ 500 instead of a 401 denial).
+    #[get("/social/:provider/callback")]
+    #[use_guards(ThrottlerGuard, OAuthGuard)]
+    #[meta(Throttle::per_minute(10))]
     #[api(
-        summary = "OAuth2 redirect URI — issues this app's token",
+        summary = "Social login redirect URI — issues this app's token",
         tags("OAuth2")
     )]
-    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
+    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
         Ok(Json(self.svc.issue(
             Some(caller.user_id),
             caller.org_id,

@@ -29,6 +29,12 @@ impl Strategy for OAuthStrategy {
     type Principal = Caller;
 
     async fn authenticate(&self, req: &mut Request) -> Result<Caller, AuthError> {
+        // The provider key is the `:provider` route segment (the code/state
+        // still ride the query string). Owned so it outlives the later borrows.
+        let provider = req
+            .raw_path_param("provider")
+            .ok_or_else(|| AuthError::Failed("OAuth callback missing provider".into()))?
+            .to_owned();
         let query: CallbackQuery = req.params().unwrap_or_default();
         let code = query
             .code
@@ -38,7 +44,9 @@ impl Strategy for OAuthStrategy {
             .ok_or_else(|| AuthError::Failed("OAuth callback missing state".into()))?;
         let transaction = transaction_cookie(req)
             .ok_or_else(|| AuthError::Failed("OAuth transaction cookie missing".into()))?;
-        self.svc.resolve_caller(&transaction, &state, &code).await
+        self.svc
+            .resolve_caller(&provider, &transaction, &state, &code)
+            .await
     }
 }
 

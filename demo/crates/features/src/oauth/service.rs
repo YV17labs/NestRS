@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use nest_rs_authn::{
-    AuthError, Authorization, JwtService, OAuth2Client, TokenError, authenticate_against_registry,
+    AuthError, Authorization, JwtService, TokenError, authenticate_against_registry,
 };
 use nest_rs_core::injectable;
-use serde::Deserialize;
+use nest_rs_social::{SocialProfile, SocialProviders};
 use uuid::Uuid;
 
 use super::config::IssuerConfig;
 use super::dtos::AccessTokenDto;
 use super::scope::{role_from_db, roles_for_scope};
-use crate::users::UsersService;
+use crate::users::{SocialIdentity, UsersService};
 use crate::{Claims, Role};
 
 #[derive(Debug, Clone)]
@@ -31,44 +31,12 @@ impl nest_rs_authn::PrincipalIdentity for Caller {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct OAuthProfile {
-    id: i64,
-    #[serde(default)]
-    login: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    email: Option<String>,
-}
-
-impl OAuthProfile {
-    fn email(&self) -> String {
-        self.email
-            .clone()
-            .filter(|email| !email.is_empty())
-            .unwrap_or_else(|| format!("{}@users.noreply.github.com", self.handle()))
-    }
-
-    fn handle(&self) -> String {
-        self.login.clone().unwrap_or_else(|| self.id.to_string())
-    }
-
-    fn display_name(&self) -> String {
-        self.name
-            .clone()
-            .filter(|name| !name.is_empty())
-            .or_else(|| self.login.clone())
-            .unwrap_or_else(|| format!("user-{}", self.id))
-    }
-}
-
 #[injectable]
 pub struct OAuthService {
     #[inject]
     jwt_svc: Arc<JwtService>,
     #[inject]
-    oauth: Arc<OAuth2Client>,
+    providers: Arc<SocialProviders>,
     #[inject]
     users_svc: Arc<UsersService>,
     #[inject]
@@ -78,13 +46,13 @@ pub struct OAuthService {
 impl OAuthService {
     pub fn new(
         jwt_svc: Arc<JwtService>,
-        oauth: Arc<OAuth2Client>,
+        providers: Arc<SocialProviders>,
         users_svc: Arc<UsersService>,
         config: Arc<IssuerConfig>,
     ) -> Self {
         Self {
             jwt_svc,
-            oauth,
+            providers,
             users_svc,
             config,
         }
@@ -122,33 +90,38 @@ impl OAuthService {
         grant_client_credentials_with_jwt(&self.jwt_svc, grant_type, scope, client)
     }
 
-    pub fn authorize(&self) -> Result<Authorization, AuthError> {
-        self.oauth.authorize(&self.jwt_svc)
+    /// Begin the redirect leg for a named social provider, or `None` when the
+    /// key is unknown (the controller maps that to a 404). The provider's
+    /// trait method — not `client()` — is the flow's front door on every leg.
+    pub fn authorize(&self, provider: &str) -> Option<Result<Authorization, AuthError>> {
+        let provider = self.providers.get(provider)?;
+        Some(provider.authorize(&self.jwt_svc))
     }
 
+    /// Complete the callback for a named provider: exchange the code, fetch the
+    /// profile, resolve it to a local user via the `(provider, subject)`
+    /// identity, and build the [`Caller`]. Token issuance stays in
+    /// [`issue`](Self::issue) — one choke point.
     pub async fn resolve_caller(
         &self,
+        provider: &str,
         transaction: &str,
         state: &str,
         code: &str,
     ) -> Result<Caller, AuthError> {
-        let access_token = self
-            .oauth
-            .exchange(&self.jwt_svc, transaction, state, code)
-            .await?;
-        let profile: OAuthProfile = self.oauth.userinfo(&access_token).await?;
+        let provider = self
+            .providers
+            .get(provider)
+            .ok_or_else(|| AuthError::Failed("unknown social provider".into()))?;
+
+        let tokens = provider.exchange(&self.jwt_svc, transaction, state, code).await?;
+        let profile: SocialProfile = provider.profile(&tokens).await?;
+
         let user = self
             .users_svc
-            .find_or_create(
-                &profile.email(),
-                &profile.display_name(),
-                self.config.default_org_id,
-            )
-            .await
-            .map_err(|err| {
-                tracing::error!(target: "features::oauth", error = %err, "identity resolution failed");
-                AuthError::Failed("identity resolution failed".into())
-            })?;
+            .resolve_social_identity(&social_identity(profile), self.config.default_org_id)
+            .await?;
+
         Ok(Caller {
             user_id: user.id,
             org_id: user.org_id,
@@ -162,6 +135,19 @@ impl OAuthService {
         client_secret: &str,
     ) -> Result<AuthenticatedClient, AuthError> {
         authenticate_against_registry(&self.config.clients, client_id, client_secret)
+    }
+}
+
+/// Map the framework's [`SocialProfile`] onto the users feature's own
+/// [`SocialIdentity`] input contract — the users feature does not depend on
+/// `nest-rs-social`.
+fn social_identity(profile: SocialProfile) -> SocialIdentity {
+    SocialIdentity {
+        provider: profile.provider,
+        subject: profile.subject,
+        email: profile.email,
+        email_verified: profile.email_verified,
+        name: profile.name,
     }
 }
 
@@ -230,50 +216,6 @@ fn token_error_from_auth(err: AuthError) -> TokenError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn profile(login: Option<&str>, name: Option<&str>, email: Option<&str>) -> OAuthProfile {
-        OAuthProfile {
-            id: 42,
-            login: login.map(str::to_owned),
-            name: name.map(str::to_owned),
-            email: email.map(str::to_owned),
-        }
-    }
-
-    #[test]
-    fn email_uses_provider_email_when_present() {
-        let p = profile(Some("ada"), None, Some("ada@example.com"));
-        assert_eq!(p.email(), "ada@example.com");
-    }
-
-    #[test]
-    fn email_falls_back_to_noreply_when_provider_email_missing() {
-        let p = profile(Some("ada"), None, None);
-        assert_eq!(p.email(), "ada@users.noreply.github.com");
-    }
-
-    #[test]
-    fn email_falls_back_to_noreply_when_provider_email_blank() {
-        let p = profile(Some("ada"), None, Some(""));
-        assert_eq!(p.email(), "ada@users.noreply.github.com");
-    }
-
-    #[test]
-    fn handle_falls_back_to_numeric_id_when_login_missing() {
-        let p = profile(None, None, None);
-        assert_eq!(p.handle(), "42");
-    }
-
-    #[test]
-    fn display_name_prefers_name_then_login_then_synthesised() {
-        assert_eq!(
-            profile(Some("ada"), Some("Ada Lovelace"), None).display_name(),
-            "Ada Lovelace"
-        );
-        assert_eq!(profile(Some("ada"), None, None).display_name(), "ada");
-        assert_eq!(profile(Some("ada"), Some(""), None).display_name(), "ada");
-        assert_eq!(profile(None, None, None).display_name(), "user-42");
-    }
 
     use nest_rs_authn::{JwtOptions, JwtService};
     use std::time::Duration;
@@ -384,13 +326,9 @@ mod tests {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["user", "admin"]);
         let org = client.payload;
-        let token = grant_client_credentials_with_jwt(
-            &jwt_svc,
-            "client_credentials",
-            Some("user"),
-            &client,
-        )
-        .expect("happy path");
+        let token =
+            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", Some("user"), &client)
+                .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
         let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
         assert!(
@@ -400,7 +338,8 @@ mod tests {
         assert_eq!(claims.org_id, org);
     }
 
-    use nest_rs_authn::{OAuth2Client, OAuth2Config, RegisteredClient};
+    use nest_rs_authn::RegisteredClient;
+    use nest_rs_social::SocialProviders;
     use sea_orm::DatabaseConnection;
 
     use crate::users::UsersService;
@@ -409,21 +348,11 @@ mod tests {
         Arc::new(UsersService::new(Arc::new(DatabaseConnection::default())))
     }
 
-    fn complete_oauth_config() -> OAuth2Config {
-        OAuth2Config {
-            client_id: "id".into(),
-            client_secret: "secret".into(),
-            auth_url: "https://auth.example/oauth/authorize".into(),
-            token_url: "https://auth.example/oauth/token".into(),
-            redirect_url: "https://app.example/oauth/callback".into(),
-            userinfo_url: "https://auth.example/oauth/userinfo".into(),
-            scopes: vec!["read".into()],
-        }
-    }
-
     fn oauth_service(ttl: Duration) -> OAuthService {
         let jwt_svc = Arc::new(jwt_with_ttl(ttl));
-        let oauth = Arc::new(OAuth2Client::new(complete_oauth_config()).expect("client"));
+        // An empty registry: the grant/issue/authenticate paths tested here do
+        // not dispatch on a provider (the redirect + callback legs are e2e).
+        let providers = Arc::new(SocialProviders::default());
         let config = Arc::new(IssuerConfig {
             clients: vec![RegisteredClient {
                 client_id: "ci".into(),
@@ -433,7 +362,7 @@ mod tests {
             }],
             default_org_id: Uuid::now_v7(),
         });
-        OAuthService::new(jwt_svc, oauth, users_service_disconnected(), config)
+        OAuthService::new(jwt_svc, providers, users_service_disconnected(), config)
     }
 
     #[test]
@@ -475,15 +404,12 @@ mod tests {
     }
 
     #[test]
-    fn oauth_service_authorize_builds_a_redirect_to_the_provider() {
+    fn oauth_service_authorize_returns_none_for_an_unknown_provider() {
         let svc = oauth_service(Duration::from_secs(60));
-        let auth = svc.authorize().expect("authorize");
         assert!(
-            auth.url.starts_with("https://auth.example/oauth/authorize"),
-            "redirect must hit the configured provider, got {}",
-            auth.url,
+            svc.authorize("github").is_none(),
+            "an empty registry knows no provider ⇒ None ⇒ 404",
         );
-        assert!(!auth.transaction.is_empty());
     }
 
     #[test]

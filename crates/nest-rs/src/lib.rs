@@ -47,6 +47,9 @@ pub use nest_rs_authn as authn;
 #[cfg(feature = "authz")]
 pub use nest_rs_authz as authz;
 
+#[cfg(feature = "social")]
+pub use nest_rs_social as social;
+
 #[cfg(feature = "opentelemetry")]
 pub use nest_rs_opentelemetry as opentelemetry;
 

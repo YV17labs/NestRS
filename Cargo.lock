@@ -2499,6 +2499,7 @@ dependencies = [
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
+ "nest-rs-social",
  "nest-rs-testing",
  "nest-rs-throttler",
  "nest-rs-ws",
@@ -3026,6 +3027,21 @@ dependencies = [
  "nest-rs-interceptors",
  "parking_lot",
  "poem",
+]
+
+[[package]]
+name = "nest-rs-social"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "nest-rs-authn",
+ "nest-rs-config",
+ "nest-rs-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "validator",
 ]
 
 [[package]]

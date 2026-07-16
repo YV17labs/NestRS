@@ -27,7 +27,10 @@ schemars.workspace = true
 validator.workspace = true
 
 [dev-dependencies]
-nest-rs-seaorm.workspace = true
+# Path-only, never `.workspace = true`: `nest-rs-seaorm` depends back on this
+# crate, so a versioned dev-edge would form a member cycle no publish order can
+# satisfy. Cargo strips a versionless dev-dep from the published manifest.
+nest-rs-seaorm = { path = "../nest-rs-seaorm" }
 sea-orm.workspace = true
 uuid.workspace = true
 async-trait.workspace = true

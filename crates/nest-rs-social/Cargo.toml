@@ -21,8 +21,6 @@ anyhow.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-nest-rs-core.workspace = true
-nest-rs-authn.workspace = true
 
 [lints]
 workspace = true

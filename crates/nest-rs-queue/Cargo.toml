@@ -32,7 +32,7 @@ tracing.workspace = true
 # The `#[processor]` macro emits absolute `::nest_rs_worker::*` paths, so the
 # integration test that exercises a typed `#[process]` handler needs the worker
 # crate in scope.
-nest-rs-worker.workspace = true
+nest-rs-worker = { path = "../nest-rs-worker" }
 tokio.workspace = true
 serde.workspace = true
 

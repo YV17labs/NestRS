@@ -157,11 +157,14 @@ impl<E> ContextEndpoint<E> {
     /// Run the registered global pipes over each operation's variables when a
     /// [`GraphqlVariablePipe`] bridge is provided (`use_pipes_global`). No
     /// bridge ⇒ untouched. A pipe rejection returns a GraphQL error response.
-    fn pipe_variables(&self, batch: BatchRequest) -> std::result::Result<BatchRequest, Response> {
+    fn pipe_variables(
+        &self,
+        batch: BatchRequest,
+    ) -> std::result::Result<BatchRequest, Box<Response>> {
         let Some(bridge) = self.container.get::<GraphqlVariablePipe>() else {
             return Ok(batch);
         };
-        let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Response> {
+        let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Box<Response>> {
             let mut value = serde_json::to_value(&r.variables).unwrap_or(serde_json::Value::Null);
             if let Err(err) = (bridge.0)(&self.container, &mut value) {
                 return Err(variable_pipe_error_response(&err));
@@ -213,16 +216,18 @@ impl<E> ContextEndpoint<E> {
 /// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
 /// with an `errors` array, the GraphQL wire convention (matching how a resolver
 /// error surfaces), with any field-level `details` under `extensions`.
-fn variable_pipe_error_response(err: &nest_rs_pipes::PipeError) -> Response {
+fn variable_pipe_error_response(err: &nest_rs_pipes::PipeError) -> Box<Response> {
     let mut error = serde_json::json!({ "message": err.message() });
     if let Some(details) = err.details() {
         error["extensions"] = serde_json::json!({ "details": details });
     }
     let body = serde_json::json!({ "data": serde_json::Value::Null, "errors": [error] });
-    Response::builder()
-        .status(StatusCode::OK)
-        .content_type("application/json")
-        .body(serde_json::to_vec(&body).unwrap_or_default())
+    Box::new(
+        Response::builder()
+            .status(StatusCode::OK)
+            .content_type("application/json")
+            .body(serde_json::to_vec(&body).unwrap_or_default()),
+    )
 }
 
 impl<E: Executor> Endpoint for ContextEndpoint<E> {
@@ -242,7 +247,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
         // A rejection short-circuits with a GraphQL error response.
         let batch = match self.pipe_variables(batch) {
             Ok(batch) => batch,
-            Err(resp) => return Ok(resp),
+            Err(resp) => return Ok(*resp),
         };
         let batch = match batch {
             BatchRequest::Single(r) => BatchRequest::Single(self.seed(&req, r)),

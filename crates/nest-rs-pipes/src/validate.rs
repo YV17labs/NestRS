@@ -90,10 +90,6 @@ impl<T> MaybeValidateFallback for ValidateProbe<'_, T> {
 mod tests {
     use super::*;
 
-    // The fallback trait must be in scope for the call to resolve — exactly what
-    // the transport macros emit (`use MaybeValidateFallback as _;`).
-    use super::MaybeValidateFallback as _;
-
     #[derive(Validate)]
     struct Guarded {
         #[validate(length(min = 1))]

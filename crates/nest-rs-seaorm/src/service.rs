@@ -63,7 +63,9 @@ pub struct Authorized<E: EntityTrait, A: ActionMarker>(E::Model, PhantomData<fn(
 impl<E: EntityTrait, A: ActionMarker> Authorized<E, A> {
     /// Mint the proof. **Crate-private on purpose**: only the binding seams that
     /// pass through [`CrudService::access`] may construct it, which is what makes
-    /// the type a guarantee rather than a label.
+    /// the type a guarantee rather than a label. Those seams are the `http` and
+    /// `graphql` bridges, hence the gate: with neither, nothing may mint a proof.
+    #[cfg(any(feature = "http", feature = "graphql"))]
     pub(crate) fn new(model: E::Model) -> Self {
         Self(model, PhantomData)
     }

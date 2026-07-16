@@ -153,6 +153,9 @@ impl OpenTelemetryConfig {
 }
 
 #[cfg(test)]
+// The `figment::Jail::expect_with` closures below return `figment::Result`, so
+// the large `Err` variant is figment's type, not ours — nothing to box here.
+#[allow(clippy::result_large_err)]
 mod tests {
     use super::*;
 

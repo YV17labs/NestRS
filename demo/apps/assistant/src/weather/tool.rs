@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use nest_rs_mcp::mcp;
 use nest_rs_mcp::{
-    CallToolResult, Content, McpError, Parameters, ServerHandler, tool, tool_handler, tool_router,
+    CallToolResult, ContentBlock, McpError, Parameters, ServerHandler, tool, tool_handler,
+    tool_router,
 };
 use validator::Validate;
 
@@ -42,7 +43,7 @@ impl WeatherTool {
             report.observed_at,
         );
 
-        Ok(CallToolResult::success(vec![Content::text(summary)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
     }
 }
 

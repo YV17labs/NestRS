@@ -1,6 +1,6 @@
 # Security Policy
 
-NestRS is in alpha, but security reports are taken seriously at any stage.
+Security reports are taken seriously at any stage.
 
 ## Reporting a vulnerability
 

@@ -1,6 +1,5 @@
 # Roadmap
 
-NestRS is in **alpha** — the foundations are in place and the API still shifts.
 This is a *direction, not a dated commitment*; priorities move with what the
 community needs. The sections below are ordered by **priority** — correctness and
 parity work first; `Later` holds what is explicitly deferred.
@@ -11,7 +10,7 @@ Want to shape it? Open a
 The authoritative record of *what was decided and why* is
 [CLAUDE.md](CLAUDE.md); this file tracks *what's next*.
 
-## Now — stabilising the alpha
+## Now — stabilising the API
 
 - Settle the public API of the core crates so early adopters stop chasing
   breaking changes.
@@ -84,7 +83,7 @@ The verdict on what is **not** worth reproducing is in *Not on the roadmap*.
 
 ## Shipped — project & release infrastructure
 
-Landed with the first `0.1.0` crates.io release and the alpha docs push:
+Landed with the first `0.1.0` crates.io release and the first docs push:
 
 - **crates.io publishing** — every publishable `nest-rs-*` framework crate is on
   [crates.io](https://crates.io/crates/nest-rs); `apps/` and product crates — plus
@@ -125,7 +124,7 @@ stays a **single monorepo** (the model every multi-crate Rust framework uses —
 companion, and an example app, which a repo-per-crate split would make impossible.
 
 - **Polish the `docs/` site** — CI-verified code snippets, the Basics → All options
-  tier split per section, and keeping pages aligned as the API shifts during alpha.
+  tier split per section, and keeping pages aligned as the API shifts.
 - **Continuous integration** — one workflow on every PR that gates merges:
   `fmt --check`, `clippy -D warnings`, `build`, and `test --workspace`. The e2e
   tests exercise live Postgres and Redis, so CI provisions both as service

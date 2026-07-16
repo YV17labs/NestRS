@@ -149,7 +149,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # MCP server SDK + JSON Schema derive used by tool parameters.
 # schemars must match rmcp's re-exported version so the derive resolves to the
 # same trait rmcp::handler::server::wrapper::Parameters expects.
-rmcp = { version = "1.7", features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
 # `uuid1` adds the `JsonSchema` impl for `uuid::Uuid` so UUID-typed DTO fields can
 # be documented (and typed at the edge) rather than passed around as strings.
 schemars = { version = "1", features = ["uuid1"] }

@@ -20,7 +20,7 @@ pub use scope::Scoped;
 
 pub use rmcp::handler::server::router::tool::ToolRouter;
 pub use rmcp::handler::server::wrapper::Parameters;
-pub use rmcp::model::{CallToolResult, Content};
+pub use rmcp::model::{CallToolResult, ContentBlock};
 pub use rmcp::{ErrorData as McpError, ServerHandler, schemars, tool, tool_handler, tool_router};
 
 pub use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;

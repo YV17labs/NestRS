@@ -49,7 +49,7 @@ pub enum Predicate<E: EntityTrait> {
     /// Scope `E` by a condition on a *related* entity reached through a typed
     /// SeaORM relation. Type-erased over the related entity (see
     /// [`RelatedPredicate`]).
-    Related(RelatedPredicate),
+    Related(Box<RelatedPredicate>),
 }
 
 /// A condition that scopes `E` by a sub-condition on a *related* entity `R`,
@@ -370,10 +370,10 @@ impl<E: EntityTrait> PredicateBuilder<E> {
             return Predicate::Deny;
         }
         let sub = build(PredicateBuilder::<R>::new());
-        Predicate::Related(RelatedPredicate {
+        Predicate::Related(Box::new(RelatedPredicate {
             relation: def,
             sub_condition: sub.to_condition(),
-        })
+        }))
     }
 }
 

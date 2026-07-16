@@ -209,7 +209,8 @@ impl ContainerBuilder {
     pub fn provide<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.warn_if_replacing(ProviderKey::typed::<T>(), std::any::type_name::<T>());
         self.warn_if_cross_kind_singleton(TypeId::of::<T>(), std::any::type_name::<T>());
-        self.providers.insert(ProviderKey::typed::<T>(), Arc::new(value));
+        self.providers
+            .insert(ProviderKey::typed::<T>(), Arc::new(value));
         self
     }
 
@@ -250,7 +251,8 @@ impl ContainerBuilder {
     /// intentional swap path used by
     /// [`AppBuilder::override_value`](crate::AppBuilder::override_value).
     pub(crate) fn replace<T: Any + Send + Sync>(mut self, value: T) -> Self {
-        self.providers.insert(ProviderKey::typed::<T>(), Arc::new(value));
+        self.providers
+            .insert(ProviderKey::typed::<T>(), Arc::new(value));
         self
     }
 

@@ -174,9 +174,11 @@ impl<E> ContextEndpoint<E> {
             r.variables = match serde_json::from_value(value) {
                 Ok(variables) => variables,
                 Err(err) => {
-                    return Err(variable_pipe_error_response(&nest_rs_pipes::PipeError::new(
-                        format!("variable pipe produced an invalid variables object: {err}"),
-                    )));
+                    return Err(variable_pipe_error_response(
+                        &nest_rs_pipes::PipeError::new(format!(
+                            "variable pipe produced an invalid variables object: {err}"
+                        )),
+                    ));
                 }
             };
             Ok(r)

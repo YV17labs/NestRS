@@ -35,7 +35,10 @@ fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
                 _ => None,
             })
             .collect();
-        if seg.ident == "Piped" && tys.len() == 2 && let Type::Path(p) = tys[0] {
+        if seg.ident == "Piped"
+            && tys.len() == 2
+            && let Type::Path(p) = tys[0]
+        {
             return (tys[1].clone(), Some((Some(p.path.clone()), tys[1].clone())));
         }
         if seg.ident == "Valid" && tys.len() == 1 {

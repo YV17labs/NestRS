@@ -43,7 +43,12 @@ fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
             .unwrap_or_default();
         match key.as_str() {
             "namespace" => {
-                namespace = Some(require_str_lit(&meta.value, "config", "namespace", "database")?)
+                namespace = Some(require_str_lit(
+                    &meta.value,
+                    "config",
+                    "namespace",
+                    "database",
+                )?)
             }
             other => {
                 return Err(syn::Error::new_spanned(

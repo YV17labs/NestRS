@@ -238,7 +238,10 @@ mod tests {
         // definitively invalid, so no global subscriber is ever installed.
         match OpenTelemetry::init_with(config) {
             Err(OpenTelemetryError::InvalidLogFilter { value, .. }) => {
-                assert_eq!(value, "foo=notalevel", "the error must name the bad directive");
+                assert_eq!(
+                    value, "foo=notalevel",
+                    "the error must name the bad directive"
+                );
             }
             Err(other) => panic!("expected InvalidLogFilter, got {other:?}"),
             Ok(_) => panic!("a set-but-unparseable filter must abort init, not degrade to `info`"),

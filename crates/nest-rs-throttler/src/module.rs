@@ -48,7 +48,8 @@ impl DynamicModule for ThrottlerSetup {
                 .get::<ThrottlerConfig>()
                 .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
             let (default, trusted_proxies) = resolve(&config)?;
-            Ok(Arc::new(InMemoryThrottler::new(default, trusted_proxies)) as Arc<dyn ThrottlerStore>)
+            Ok(Arc::new(InMemoryThrottler::new(default, trusted_proxies))
+                as Arc<dyn ThrottlerStore>)
         })
     }
 }
@@ -58,7 +59,10 @@ impl DynamicModule for ThrottlerSetup {
 /// in-memory and Redis modules resolve config identically. A bad IP aborts the
 /// boot naming the variable — never a silent skip.
 pub fn resolve(config: &ThrottlerConfig) -> anyhow::Result<(Throttle, Vec<IpAddr>)> {
-    Ok((throttle_from(config), parse_trusted_proxies(&config.trusted_proxies)?))
+    Ok((
+        throttle_from(config),
+        parse_trusted_proxies(&config.trusted_proxies)?,
+    ))
 }
 
 fn throttle_from(config: &ThrottlerConfig) -> Throttle {

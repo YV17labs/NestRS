@@ -12,8 +12,14 @@ fn both_first_party_providers_submit_a_registry_entry() {
     let keys: Vec<&str> = nest_rs_core::inventory::iter::<SocialProviderEntry>()
         .map(|entry| entry.key)
         .collect();
-    assert!(keys.contains(&"github"), "github entry must be linked: {keys:?}");
-    assert!(keys.contains(&"google"), "google entry must be linked: {keys:?}");
+    assert!(
+        keys.contains(&"github"),
+        "github entry must be linked: {keys:?}"
+    );
+    assert!(
+        keys.contains(&"google"),
+        "google entry must be linked: {keys:?}"
+    );
 }
 
 /// A provider that keeps the default `authorize`/`exchange` and implements only
@@ -59,7 +65,9 @@ fn default_authorize_delegates_to_the_configured_client() {
         .expect("the trait default drives the shared flow through client()");
 
     assert!(
-        authorization.url.starts_with("https://provider.example/authorize"),
+        authorization
+            .url
+            .starts_with("https://provider.example/authorize"),
         "redirect must hit the client's configured provider, got {}",
         authorization.url,
     );

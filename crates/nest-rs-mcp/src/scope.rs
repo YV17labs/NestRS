@@ -64,13 +64,15 @@ impl<T: Send + Sync + 'static> Scoped<T> {
     /// Resolve `T` from the operation's request scope, installed by the MCP
     /// endpoint as a task-local for the duration of the call.
     pub fn from_context() -> Result<Self, McpError> {
-        let resolved = MCP_REQUEST_SCOPE.try_with(|scope| scope.get::<T>()).map_err(|_| {
-            McpError::internal_error(
-                "request scope not installed — the MCP endpoint installs it per operation"
-                    .to_string(),
-                None,
-            )
-        })?;
+        let resolved = MCP_REQUEST_SCOPE
+            .try_with(|scope| scope.get::<T>())
+            .map_err(|_| {
+                McpError::internal_error(
+                    "request scope not installed — the MCP endpoint installs it per operation"
+                        .to_string(),
+                    None,
+                )
+            })?;
         match resolved {
             Some(value) => Ok(Scoped(value)),
             None => Err(McpError::internal_error(
@@ -122,11 +124,17 @@ mod tests {
     async fn separate_operations_build_distinct_instances() {
         let container = scoped_container();
         let first = with_request_scope(Arc::new(RequestScope::new(container.clone())), async {
-            Scoped::<Probe>::from_context().expect("scope installed").0.0
+            Scoped::<Probe>::from_context()
+                .expect("scope installed")
+                .0
+                .0
         })
         .await;
         let second = with_request_scope(Arc::new(RequestScope::new(container)), async {
-            Scoped::<Probe>::from_context().expect("scope installed").0.0
+            Scoped::<Probe>::from_context()
+                .expect("scope installed")
+                .0
+                .0
         })
         .await;
         assert_ne!(

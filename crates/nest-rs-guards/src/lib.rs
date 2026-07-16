@@ -127,8 +127,8 @@ pub use nest_rs_interceptors::WsNext;
 pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
 // Re-export dispatch helpers for macro-emitted code.
-pub use dispatch::{RouteShaper, denial_to_http_response};
 #[cfg(feature = "ws")]
 pub use dispatch::run_layered_ws_chain;
+pub use dispatch::{RouteShaper, denial_to_http_response};
 #[cfg(feature = "graphql")]
 pub use dispatch::{denial_to_graphql_error, run_layered_graphql_chain};

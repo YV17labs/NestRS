@@ -148,7 +148,10 @@ mod tests {
         let u = user(None, None, None);
         assert_eq!(u.id.to_string(), "42");
         let display = u.name.clone().or_else(|| u.login.clone());
-        assert!(display.is_none(), "no name/login ⇒ let the consumer synthesize");
+        assert!(
+            display.is_none(),
+            "no name/login ⇒ let the consumer synthesize"
+        );
     }
 
     #[test]

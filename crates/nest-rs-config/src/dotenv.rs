@@ -101,7 +101,9 @@ pub fn load_cascade(dir: &Path, env: Environment) {
         // public function carries that same obligation.
         // Sanctioned bootstrapper: the framework's one production env write.
         #[allow(unsafe_code)]
-        unsafe { std::env::set_var(&key, value) };
+        unsafe {
+            std::env::set_var(&key, value)
+        };
     }
 }
 

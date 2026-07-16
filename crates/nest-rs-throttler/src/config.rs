@@ -31,8 +31,8 @@ mod tests {
 
     #[test]
     fn defaults_when_no_env_set() {
-        let cfg =
-            ThrottlerConfig::from_env(&ConfigService::with_vars("throttler", [])).expect("no error");
+        let cfg = ThrottlerConfig::from_env(&ConfigService::with_vars("throttler", []))
+            .expect("no error");
         assert!(cfg.limit.is_none(), "unset ⇒ module default applies later");
         assert!(cfg.window_secs.is_none());
         assert!(cfg.trusted_proxies.is_empty());

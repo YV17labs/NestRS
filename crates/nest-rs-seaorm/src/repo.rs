@@ -531,9 +531,18 @@ mod tests {
                     .to_string();
 
                 assert!(s.contains("424242"), "the PK is in the WHERE: {s}");
-                assert!(s.contains("org_id"), "the ability scope is in the WHERE: {s}");
-                assert!(s.contains("91"), "the ability predicate value is applied: {s}");
-                assert!(s.contains("AND"), "the PK and the ability scope are ANDed: {s}");
+                assert!(
+                    s.contains("org_id"),
+                    "the ability scope is in the WHERE: {s}"
+                );
+                assert!(
+                    s.contains("91"),
+                    "the ability predicate value is applied: {s}"
+                );
+                assert!(
+                    s.contains("AND"),
+                    "the PK and the ability scope are ANDed: {s}"
+                );
                 assert!(!s.contains("1 = 0"), "a granted action is not denied: {s}");
             })
             .await;
@@ -566,9 +575,18 @@ mod tests {
                     .to_string();
 
                 assert!(s.contains("424242"), "the PK is in the WHERE: {s}");
-                assert!(s.contains("org_id"), "the ability scope is in the WHERE: {s}");
-                assert!(s.contains("91"), "the ability predicate value is applied: {s}");
-                assert!(s.contains("AND"), "the PK and the ability scope are ANDed: {s}");
+                assert!(
+                    s.contains("org_id"),
+                    "the ability scope is in the WHERE: {s}"
+                );
+                assert!(
+                    s.contains("91"),
+                    "the ability predicate value is applied: {s}"
+                );
+                assert!(
+                    s.contains("AND"),
+                    "the PK and the ability scope are ANDed: {s}"
+                );
                 assert!(!s.contains("1 = 0"), "a granted action is not denied: {s}");
             })
             .await;

@@ -82,7 +82,12 @@ async fn push_to_routes_by_the_typed_handle() {
 async fn push_dynamic_name_still_works_as_the_escape_hatch() {
     let producer = RecordingProducer::default();
     producer
-        .push("dynamic-name", TranscodeCommand { file: "x.wav".into() })
+        .push(
+            "dynamic-name",
+            TranscodeCommand {
+                file: "x.wav".into(),
+            },
+        )
         .await
         .expect("dynamic push succeeds");
     let pushed = producer.pushed.lock().expect("lock").clone();

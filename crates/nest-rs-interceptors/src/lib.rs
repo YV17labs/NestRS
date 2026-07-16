@@ -61,9 +61,9 @@ mod registry;
 
 pub use builder::AppBuilderInterceptorsExt;
 pub use ext::InterceptorExt;
-pub use interceptor::{Interceptor, InterceptorEndpoint, Next};
 #[cfg(feature = "graphql")]
 pub use interceptor::GraphqlNext;
 #[cfg(feature = "ws")]
 pub use interceptor::WsNext;
+pub use interceptor::{Interceptor, InterceptorEndpoint, Next};
 pub use registry::{InterceptorSpec, InterceptorSpecs, interceptor};

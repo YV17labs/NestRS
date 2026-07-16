@@ -120,7 +120,11 @@ mod tests {
 
     #[test]
     fn enabled_self_mounts_the_documentation_edge() {
-        assert_eq!(mount_count(true), 1, "enabled must self-mount the docs edge");
+        assert_eq!(
+            mount_count(true),
+            1,
+            "enabled must self-mount the docs edge"
+        );
     }
 
     #[test]

@@ -1,4 +1,3 @@
-
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_opentelemetry::OpenTelemetryModule;

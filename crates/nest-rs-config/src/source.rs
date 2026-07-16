@@ -39,9 +39,7 @@ fn env_var_from(name: &str, dotenv: &HashMap<String, String>) -> Option<String> 
         // as unset, and do not fall back. An explicit real-env entry shadows
         // the cascade, matching the set-if-absent semantics of `load_cascade`.
         Ok(_) | Err(env::VarError::NotUnicode(_)) => None,
-        Err(env::VarError::NotPresent) => {
-            dotenv.get(name).filter(|v| !v.is_empty()).cloned()
-        }
+        Err(env::VarError::NotPresent) => dotenv.get(name).filter(|v| !v.is_empty()).cloned(),
     }
 }
 

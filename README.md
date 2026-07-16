@@ -9,14 +9,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/built%20with-Rust-CE412B?logo=rust&logoColor=white" alt="Built with Rust">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
-  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 </p>
-
-> [!NOTE]
-> **Alpha — under active development.** The API still shifts and rough edges
-> remain, so it is not production-ready yet. Stars and early feedback are very
-> welcome.
 
 ## Documentation
 

@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-authn"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2591,7 +2591,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-authz"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-core",
  "nest-rs-graphql",
@@ -2610,7 +2610,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-codegen"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2619,7 +2619,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-config"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "nest-rs-config-macros",
@@ -2630,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-config-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2640,7 +2640,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-core-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2665,14 +2665,14 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-database"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "nest-rs-events"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "nest-rs-core",
@@ -2683,7 +2683,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-events-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2693,7 +2693,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-exception-filters"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2707,7 +2707,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-filters"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -2720,7 +2720,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-graphql"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-graphql",
  "async-graphql-poem",
@@ -2741,7 +2741,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-graphql-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-guards"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -2769,7 +2769,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-health"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "nest-rs-core",
@@ -2785,7 +2785,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-health-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2795,7 +2795,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-http"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-http-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2826,7 +2826,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-interceptors"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -2840,7 +2840,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-core",
  "nest-rs-mcp-macros",
@@ -2853,7 +2853,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-mcp-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2863,7 +2863,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-openapi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-config",
  "nest-rs-core",
@@ -2878,7 +2878,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-opentelemetry"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2904,7 +2904,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-pipes"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-core",
  "serde_json",
@@ -2915,7 +2915,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-queue"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2930,7 +2930,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-queue-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2940,7 +2940,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-redis"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "apalis",
@@ -2960,7 +2960,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-resource"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-graphql",
  "nest-rs-graphql",
@@ -2974,7 +2974,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-resource-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -2984,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-schedule"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3001,7 +3001,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-schedule-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "croner",
  "nest-rs-codegen",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-seaorm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-graphql",
@@ -3041,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-server-timing"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -3053,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-social"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "nest-rs-authn",
@@ -3067,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-testing"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "nest-rs-config",
@@ -3088,7 +3088,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-throttler"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3104,14 +3104,14 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-worker"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "nest-rs-ws"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -3131,7 +3131,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-ws-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",

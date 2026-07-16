@@ -7,10 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the public API is still stabilizing (`0.x`), the minor version carries
 both new features and breaking changes.
 
-## [Unreleased]
+## [0.3.0] - 2026-07-16
 
 ### Added
 
+- **Social login with an open provider contract.** The new
+  `nest-rs-social` crate makes social login a first-class capability.
+  `SocialProvider` is flow-owning — `authorize` / `exchange` default to
+  the shared PKCE/CSRF flow, so a standard provider implements only
+  `profile`, while a deviating one (Apple's ES256 client secret)
+  overrides a step without changing the trait. Ships first-party GitHub
+  and Google; a third party publishes their own provider as an
+  independent crate through the same seam. Discovery is link-time and
+  module-gated: an unimported provider stays inert with a boot warn, and
+  a duplicate or disagreeing key fails boot rather than silently
+  shadowing a login provider. Identity keys on the provider's stable
+  `(provider, subject)` pair, not the email, so a user who changes their
+  provider email keeps their account.
+- **Keyed providers.** `#[inject(key = "…")]` fields and `provide_keyed`
+  let several instances of one concrete type coexist under a
+  `ProviderKey`. The access graph validates each keyed dependency
+  against the global keyed set at boot, naming both type and key on
+  failure. Used by the keyed OAuth clients behind social login.
+- **Request-scoped providers inside GraphQL and MCP handlers.**
+  `nest_rs_graphql::Scoped<T>` and `nest_rs_mcp::Scoped<T>` resolve an
+  `#[injectable(scope = request)]` provider from inside a resolver or
+  tool body, falling through to singletons — so both transports share
+  the per-request resolution model HTTP already had.
+- **Type-safe queue identity.** `#[queue(name = "…", job = …)]` declares
+  a `QueueName` unit struct carrying both the wire name and the job
+  type. Both sides name the type (`push_to::<Q>`,
+  `#[process(queue = Q)]`) and the macro asserts the process method's
+  job argument matches, so a typo is a compile error instead of a job
+  that silently never drains. The stringly-typed form still works.
+- **Redis-backed throttler.** `RedisThrottler` puts the fixed-window
+  counter in Redis so N replicas share one budget per client instead of
+  N× the limit. The window advances in a single atomic Lua script (one
+  round-trip, no check-then-act race) and fails closed on a backend
+  outage.
 - **Per-argument pipes on every transport.** `Piped<P, T>` / `Valid<T>`
   bind on GraphQL, WebSockets, and queue handlers (value-form carriers in
   `nest-rs-pipes`, stripped by `#[resolver]` / `#[messages]` /
@@ -39,10 +73,40 @@ both new features and breaking changes.
   timestamp helper in `nest-rs-seaorm`.
 - **Actor identity on the request span** — denials are attributable
   without per-site threading.
+- **Per-job spans and start/ok/fail events** in the Redis queue
+  consumer.
+- **`#[non_exhaustive]` on the eight public error enums**, so a new
+  variant is no longer a breaking change, and compiler-enforced
+  unsafe-freedom via `[workspace.lints] unsafe_code = "forbid"`, opted
+  into workspace-wide with three documented exceptions.
+- **Bounded WebSocket connection lifetime** (`WsConfig`, default 4h)
+  and an OpenAPI enable toggle.
+- **`nest-rs-testing` auto-loads the project `.env`** for e2e, so every
+  boot sees the same URLs the app does — no duplicated test env file.
 - `nestrs run db down [N]` reverts N migrations (default one step).
+- `nestrs new` ships a `compose.yml` in the workspace scaffold.
 
 ### Changed
 
+- **Minimum supported Rust is now 1.96** (was 1.95), pinned explicitly
+  in `rust-toolchain.toml` and the workspace `rust-version`.
+- **`nest-rs-macros` is renamed `nest-rs-core-macros`.** Apps consuming
+  the framework through the `nest-rs` umbrella are unaffected; a direct
+  dependency on the old name must be repointed.
+- **`async-graphql` is pinned to `=7.2.1`** (exact, not caret): the
+  resolver codegen spells out a public-but-internal registry literal
+  that a minor bump can silently change. Guarded by a compile-time
+  canary and an SDL snapshot test; the bump procedure lives in the
+  crate docs.
+- **`ConfigService::var` is renamed `var_name`** — it returns the
+  variable's name, not its value, and shadowed the meaning of
+  `std::env::var`.
+- **`nest-rs-config` no longer mutates the process environment** on the
+  live path — it reads an in-crate `.env` map, with the real
+  environment winning.
+- **Transport dependencies are feature-gated** (interceptors, filters,
+  exception-filters, guards) so an HTTP-only app skips the GraphQL and
+  WebSocket stacks.
 - **Access and create authorization are decided in SQL.**
   `CrudService::access` re-checks the primary key against
   `condition_for(action)` in the database instead of an in-memory
@@ -63,12 +127,33 @@ both new features and breaking changes.
 
 ### Fixed
 
+- **Security: a pre-release audit pass across the framework.** All authz
+  denials log at `warn`; a throttler brute-force bypass is closed
+  (per-bucket window + route-scoped key); JWT `aud`/`iss` are enforced;
+  a failed predicate fail-closes to `Deny` instead of panicking per
+  request; OAuth state compares in constant time; submitted values are
+  stripped from validation-error responses; masked responses are
+  retained by a static expose set.
+- **Login separates store outages from credential mismatches.** Every
+  `DbErr` on the login path used to map to an invalid-credentials 401,
+  hiding outages and locking out returning OAuth users. Store failures
+  now surface as `AuthError::Unavailable` (500, logged at `error`),
+  kept distinct from the opaque credential rejection.
 - Boot fails with a named error on a duplicate controller prefix
   (previously a panic).
+- Lifecycle hooks whose provider is unreachable are surfaced at boot
+  instead of silently never running.
 - `#[crud]` GraphQL operation names derive from the snake_case entity
   name.
 - `#[public]` is rejected on WS message handlers; OAuth login input
   hardened.
+
+### Documentation
+
+- Content overhaul: a linear onboarding journey, a request-lifecycle
+  page, corrected decorator docs with macro expansion sketches, and a
+  new Entities reference page.
+- Shipped `STYLE.md`, page templates, and a docs lint gate.
 
 ## [0.2.0] - 2026-06-10
 
@@ -139,5 +224,6 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
+[0.3.0]: https://github.com/NestRS/NestRS/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/NestRS/NestRS/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NestRS/NestRS/releases/tag/v0.1.0

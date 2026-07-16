@@ -49,6 +49,8 @@ impl Guard for TranscodeGuard {
             subject = std::any::type_name::<OrgEntity>(),
             "transcode denied: caller lacks the admin capability",
         );
-        Err(Denial::forbidden("transcoding requires the admin capability"))
+        Err(Denial::forbidden(
+            "transcoding requires the admin capability",
+        ))
     }
 }

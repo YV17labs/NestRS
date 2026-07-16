@@ -7,7 +7,7 @@ use nest_rs_authz::Action;
 use nest_rs_core::{hooks, injectable};
 use nest_rs_graphql::dataloader;
 use nest_rs_seaorm::{
-    CreateModel, Creatable, CrudService, Deletable, Executor, Repo, ServiceError, Updatable,
+    Creatable, CreateModel, CrudService, Deletable, Executor, Repo, ServiceError, Updatable,
     live_condition,
 };
 use sea_orm::{
@@ -121,7 +121,8 @@ impl UsersService {
         identity: &SocialIdentity,
         default_org_id: Uuid,
     ) -> Result<entity::Model, AuthError> {
-        let conn = Repo::<Users>::conn().map_err(|e| social_store_unavailable(identity.provider, e))?;
+        let conn =
+            Repo::<Users>::conn().map_err(|e| social_store_unavailable(identity.provider, e))?;
 
         // 1. Known identity.
         if let Some(user) = self.find_by_identity(identity, &conn).await? {
@@ -775,7 +776,10 @@ mod tests {
             email_verified: true,
             ..unverified
         };
-        assert!(blank.verified_email().is_none(), "a blank email is not verified-usable");
+        assert!(
+            blank.verified_email().is_none(),
+            "a blank email is not verified-usable"
+        );
     }
 
     #[test]

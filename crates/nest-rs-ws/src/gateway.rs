@@ -123,7 +123,15 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         let data_pipe = self.data_pipe.clone();
         Ok(ws
             .on_upgrade(move |socket| {
-                serve_connection(gateway, server, guards, ambient, data_pipe, max_lifetime, socket)
+                serve_connection(
+                    gateway,
+                    server,
+                    guards,
+                    ambient,
+                    data_pipe,
+                    max_lifetime,
+                    socket,
+                )
             })
             .into_response())
     }

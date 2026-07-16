@@ -73,9 +73,8 @@ mod tests {
 
     #[test]
     fn verified_email_passes_through_as_verified() {
-        let info = parse(
-            r#"{"sub":"1","email":"ada@example.com","email_verified":true,"name":"Ada"}"#,
-        );
+        let info =
+            parse(r#"{"sub":"1","email":"ada@example.com","email_verified":true,"name":"Ada"}"#);
         let profile = SocialProfile::new(GoogleSocialProvider::KEY, info.sub)
             .with_email(info.email, info.email_verified)
             .with_name(info.name);
@@ -87,9 +86,12 @@ mod tests {
     #[test]
     fn unverified_email_is_reported_unverified() {
         let info = parse(r#"{"sub":"2","email":"eve@example.com","email_verified":false}"#);
-        let profile =
-            SocialProfile::new(GoogleSocialProvider::KEY, info.sub).with_email(info.email, info.email_verified);
-        assert!(!profile.email_verified, "an unverified google email must never link");
+        let profile = SocialProfile::new(GoogleSocialProvider::KEY, info.sub)
+            .with_email(info.email, info.email_verified);
+        assert!(
+            !profile.email_verified,
+            "an unverified google email must never link"
+        );
     }
 
     #[test]

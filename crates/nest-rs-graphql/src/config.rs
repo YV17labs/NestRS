@@ -112,8 +112,7 @@ mod tests {
 
     #[test]
     fn from_env_falls_back_to_defaults_when_unset() {
-        let cfg =
-            GraphqlConfig::from_env(&ConfigService::with_vars("graphql", [])).expect("ok");
+        let cfg = GraphqlConfig::from_env(&ConfigService::with_vars("graphql", [])).expect("ok");
         let d = GraphqlConfig::default();
         assert_eq!(cfg.path, d.path);
         assert_eq!(cfg.playground, d.playground);

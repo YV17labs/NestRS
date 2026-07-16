@@ -383,7 +383,11 @@ async fn a_public_route_bypasses_an_active_global_guard() {
 
     // The global guard runs post-routing, reads `#[public]`, and admits — the
     // public route answers 200 without a principal.
-    app.http().get("/pub/open").send().await.assert_status_is_ok();
+    app.http()
+        .get("/pub/open")
+        .send()
+        .await
+        .assert_status_is_ok();
 
     // The sibling route carries no `#[public]`, so the same global guard denies.
     app.http()

@@ -648,8 +648,7 @@ mod tests {
     #[test]
     fn keyed_dependency_supplied_globally_passes() {
         let users = keyed_consumer_module();
-        let global_keyed =
-            HashSet::from([ProviderKey::named::<OAuth2Client>("github")]);
+        let global_keyed = HashSet::from([ProviderKey::named::<OAuth2Client>("github")]);
         validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
             .expect("a globally-seeded keyed provider satisfies the keyed dependency");
     }
@@ -657,12 +656,9 @@ mod tests {
     #[test]
     fn unmet_keyed_dependency_is_rejected_naming_type_and_key() {
         let users = keyed_consumer_module();
-        let err = validate_keyed_access_graph(
-            &[&users],
-            &[TypeId::of::<UsersMod>()],
-            &HashSet::new(),
-        )
-        .expect_err("a keyed dependency with no keyed provider must fail");
+        let err =
+            validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &HashSet::new())
+                .expect_err("a keyed dependency with no keyed provider must fail");
         assert_eq!(err.consumer, "SocialLoginService");
         assert_eq!(err.module, "UsersModule");
         assert_eq!(err.type_name, "OAuth2Client");
@@ -677,14 +673,10 @@ mod tests {
         // Only the exact `(type, key)` counts — a different key of the same
         // type leaves the dependency unmet.
         let users = keyed_consumer_module();
-        let global_keyed =
-            HashSet::from([ProviderKey::named::<OAuth2Client>("google")]);
-        let err = validate_keyed_access_graph(
-            &[&users],
-            &[TypeId::of::<UsersMod>()],
-            &global_keyed,
-        )
-        .expect_err("the `google` key must not satisfy a `github` dependency");
+        let global_keyed = HashSet::from([ProviderKey::named::<OAuth2Client>("google")]);
+        let err =
+            validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
+                .expect_err("the `google` key must not satisfy a `github` dependency");
         assert_eq!(err.key, "github");
     }
 }

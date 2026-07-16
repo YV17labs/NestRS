@@ -758,7 +758,10 @@ mod tests {
         assert!(!p.matches(&model(1, 7, "a")));
         assert!(!p.matches(&model(99, 0, "")));
         let s = sql(&p);
-        assert!(s.contains("1 = 0"), "Deny must render always-false SQL: {s}");
+        assert!(
+            s.contains("1 = 0"),
+            "Deny must render always-false SQL: {s}"
+        );
     }
 
     #[test]

@@ -25,7 +25,10 @@ impl GoogleSocialConfig {
 
     fn scopes_or_default(&self) -> Vec<String> {
         if self.scopes.is_empty() {
-            Self::DEFAULT_SCOPES.iter().map(|s| (*s).to_owned()).collect()
+            Self::DEFAULT_SCOPES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect()
         } else {
             self.scopes.clone()
         }

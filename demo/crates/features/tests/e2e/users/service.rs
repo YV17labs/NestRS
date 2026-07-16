@@ -60,7 +60,11 @@ fn github(subject: &str, email: &str, verified: bool) -> SocialIdentity {
 }
 
 /// Run a `SELECT COUNT(*) AS n …` and read the count back.
-async fn count(conn: &DatabaseConnection, sql: &str, values: impl IntoIterator<Item = Value>) -> i64 {
+async fn count(
+    conn: &DatabaseConnection,
+    sql: &str,
+    values: impl IntoIterator<Item = Value>,
+) -> i64 {
     let stmt = Statement::from_sql_and_values(conn.get_database_backend(), sql, values);
     conn.query_one_raw(stmt)
         .await
@@ -74,16 +78,26 @@ async fn identity_count(conn: &DatabaseConnection, provider: &str, subject: &str
     count(
         conn,
         "SELECT COUNT(*) AS n FROM user_identity WHERE provider = $1 AND subject = $2",
-        [Value::from(provider.to_owned()), Value::from(subject.to_owned())],
+        [
+            Value::from(provider.to_owned()),
+            Value::from(subject.to_owned()),
+        ],
     )
     .await
 }
 
-async fn identity_user_id(conn: &DatabaseConnection, provider: &str, subject: &str) -> Option<Uuid> {
+async fn identity_user_id(
+    conn: &DatabaseConnection,
+    provider: &str,
+    subject: &str,
+) -> Option<Uuid> {
     let stmt = Statement::from_sql_and_values(
         conn.get_database_backend(),
         "SELECT user_id FROM user_identity WHERE provider = $1 AND subject = $2",
-        [Value::from(provider.to_owned()), Value::from(subject.to_owned())],
+        [
+            Value::from(provider.to_owned()),
+            Value::from(subject.to_owned()),
+        ],
     );
     conn.query_one_raw(stmt)
         .await
@@ -135,7 +149,10 @@ async fn a_known_identity_wins_over_a_drifted_email() {
             resolved.id, created.id,
             "the (provider, subject) identity wins over the drifted email",
         );
-        assert_ne!(resolved.id, bob, "the drifted email must not resolve to Bob");
+        assert_ne!(
+            resolved.id, bob,
+            "the drifted email must not resolve to Bob"
+        );
         assert_eq!(
             identity_count(conn.as_ref(), "github", "42").await,
             1,

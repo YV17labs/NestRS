@@ -63,7 +63,9 @@ impl TestAppBuilder {
             // FIXME: Audit that the environment access only happens in single-threaded code.
             // Test-harness env setup on the (non-test) lib build: the sole sanctioned unsafe.
             #[allow(unsafe_code)]
-            unsafe { std::env::set_var("NESTRS_ENV", "test") };
+            unsafe {
+                std::env::set_var("NESTRS_ENV", "test")
+            };
         }
         // Every e2e boot (any transport) sees the project's own `.env`.
         crate::env::load_project_env();

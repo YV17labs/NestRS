@@ -429,7 +429,9 @@ mod tests {
         // The failing field is still named so the client knows what to fix.
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert!(
-            json.get("details").and_then(|d| d.get("password")).is_some(),
+            json.get("details")
+                .and_then(|d| d.get("password"))
+                .is_some(),
             "details should still name the failing field: {json}",
         );
     }

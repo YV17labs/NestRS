@@ -183,9 +183,15 @@ mod tests {
         let builds = Arc::new(AtomicU32::new(0));
         let builds_factory = builds.clone();
         let container = Container::builder()
-            .provide_scoped::<Inner, _>(move |_| Inner(builds_factory.fetch_add(1, Ordering::SeqCst)))
+            .provide_scoped::<Inner, _>(move |_| {
+                Inner(builds_factory.fetch_add(1, Ordering::SeqCst))
+            })
             .provide_scoped::<Outer, _>(|scope| {
-                Outer(scope.get::<Inner>().expect("scoped dep resolves through the scope"))
+                Outer(
+                    scope
+                        .get::<Inner>()
+                        .expect("scoped dep resolves through the scope"),
+                )
             })
             .build();
         let scope = RequestScope::new(container);
@@ -210,7 +216,9 @@ mod tests {
         let builds = Arc::new(AtomicU32::new(0));
         let builds_factory = builds.clone();
         let container = Container::builder()
-            .provide_scoped::<Inner, _>(move |_| Inner(builds_factory.fetch_add(1, Ordering::SeqCst)))
+            .provide_scoped::<Inner, _>(move |_| {
+                Inner(builds_factory.fetch_add(1, Ordering::SeqCst))
+            })
             .build();
 
         let scope_a = RequestScope::new(container.clone());

@@ -191,8 +191,14 @@ mod tests {
             panic!("two providers under one key must fail boot");
         };
         let msg = err.to_string();
-        assert!(msg.contains("duplicate social provider key `github`"), "{msg}");
-        assert!(msg.contains("OtherGithubSocialProvider"), "names both types: {msg}");
+        assert!(
+            msg.contains("duplicate social provider key `github`"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("OtherGithubSocialProvider"),
+            "names both types: {msg}"
+        );
     }
 
     #[test]
@@ -204,7 +210,10 @@ mod tests {
         };
         let msg = err.to_string();
         assert!(msg.contains("key mismatch"), "{msg}");
-        assert!(msg.contains("gitlab"), "names the provider's reported key: {msg}");
+        assert!(
+            msg.contains("gitlab"),
+            "names the provider's reported key: {msg}"
+        );
     }
 
     #[test]
@@ -217,8 +226,13 @@ mod tests {
             .provide(ReachableProviders(std::collections::HashSet::new()))
             .build();
         let providers = SocialProviders::default();
-        providers.install(&container).expect("install succeeds with an empty set");
-        assert!(providers.keys().is_empty(), "unreachable providers must be absent");
+        providers
+            .install(&container)
+            .expect("install succeeds with an empty set");
+        assert!(
+            providers.keys().is_empty(),
+            "unreachable providers must be absent"
+        );
         assert!(providers.get("github").is_none());
     }
 }

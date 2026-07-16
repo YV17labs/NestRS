@@ -1113,7 +1113,10 @@ mod tests {
         let err = resolver_impl_inner(item)
             .expect_err("a query with neither #[authorize] nor #[public] must fail to expand");
         let msg = err.to_string();
-        assert!(msg.contains("posture"), "diagnostic names the posture rule: {msg}");
+        assert!(
+            msg.contains("posture"),
+            "diagnostic names the posture rule: {msg}"
+        );
         assert!(
             msg.contains("#[authorize"),
             "diagnostic points at #[authorize]: {msg}"

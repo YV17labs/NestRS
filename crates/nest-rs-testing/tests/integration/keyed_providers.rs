@@ -87,5 +87,9 @@ async fn a_seeded_keyed_provider_satisfies_the_boot_and_resolves() {
         .container()
         .get::<EagerKeyedService>()
         .expect("the eager consumer is built");
-    assert_eq!(svc.label(), "gh", "the keyed client resolves to the seeded instance");
+    assert_eq!(
+        svc.label(),
+        "gh",
+        "the keyed client resolves to the seeded instance"
+    );
 }

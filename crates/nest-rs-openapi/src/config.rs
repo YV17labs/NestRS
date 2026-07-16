@@ -67,8 +67,7 @@ mod tests {
 
     #[test]
     fn from_env_falls_back_to_defaults_when_unset() {
-        let cfg =
-            OpenApiConfig::from_env(&ConfigService::with_vars("openapi", [])).expect("ok");
+        let cfg = OpenApiConfig::from_env(&ConfigService::with_vars("openapi", [])).expect("ok");
         let d = OpenApiConfig::default();
         assert_eq!(cfg.enabled, d.enabled);
         assert_eq!(cfg.title, d.title);

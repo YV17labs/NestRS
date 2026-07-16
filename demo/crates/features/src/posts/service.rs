@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use nest_rs_core::injectable;
 use nest_rs_events::EventBus;
-use nest_rs_seaorm::{CreateModel, Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
+use nest_rs_seaorm::{
+    Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
+};
 use sea_orm::ActiveModelTrait;
 use sea_orm::Set;
 use uuid::Uuid;

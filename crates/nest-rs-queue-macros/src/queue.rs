@@ -68,7 +68,10 @@ impl Parse for QueueArgs {
         }
 
         let name = name.ok_or_else(|| {
-            syn::Error::new(input.span(), "#[queue] requires a `name = \"...\"` argument")
+            syn::Error::new(
+                input.span(),
+                "#[queue] requires a `name = \"...\"` argument",
+            )
         })?;
         let job = job.ok_or_else(|| {
             syn::Error::new(

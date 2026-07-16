@@ -114,7 +114,9 @@ impl OAuthService {
             .get(provider)
             .ok_or_else(|| AuthError::Failed("unknown social provider".into()))?;
 
-        let tokens = provider.exchange(&self.jwt_svc, transaction, state, code).await?;
+        let tokens = provider
+            .exchange(&self.jwt_svc, transaction, state, code)
+            .await?;
         let profile: SocialProfile = provider.profile(&tokens).await?;
 
         let user = self
@@ -326,9 +328,13 @@ mod tests {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["user", "admin"]);
         let org = client.payload;
-        let token =
-            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", Some("user"), &client)
-                .expect("happy path");
+        let token = grant_client_credentials_with_jwt(
+            &jwt_svc,
+            "client_credentials",
+            Some("user"),
+            &client,
+        )
+        .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
         let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
         assert!(

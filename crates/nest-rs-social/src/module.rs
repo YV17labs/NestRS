@@ -27,9 +27,7 @@ nest_rs_core::inventory::submit! {
     }
 }
 
-fn install(
-    container: &Container,
-) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+fn install(container: &Container) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
         match container.get::<SocialProviders>() {
             Some(providers) => providers.install(container),

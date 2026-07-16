@@ -60,7 +60,9 @@ mod tests {
     #[test]
     fn plain_audio_filename_passes() {
         dto("podcast-episode_01.mp3").validate().expect("valid");
-        dto("song.FLAC").validate().expect("extension is case-insensitive");
+        dto("song.FLAC")
+            .validate()
+            .expect("extension is case-insensitive");
     }
 
     #[test]

@@ -117,16 +117,20 @@ The framework generates a fresh PKCE pair per flow
 The provider redirects to `redirect_url` with `state` and `code`
 query parameters. `exchange` verifies the cookie's signature,
 compares its CSRF state to the query string, and only then trades
-the code for an access token:
+the code for a `TokenSet`:
 
 ```rust
-let access_token = self.client.exchange(
+let tokens = self.client.exchange(
     &self.jwt,
     &transaction_cookie,
     state_from_query,
     code_from_query,
 ).await?;
 ```
+
+`TokenSet` carries the `access_token` (and a `refresh_token` /
+`id_token` when the provider returns one), so an OIDC provider can read
+identity from the id_token rather than a userinfo call.
 
 The CSRF check runs **before** the exchange — never the other way
 around. A mismatched state returns `AuthError::Failed("OAuth state
@@ -146,7 +150,7 @@ struct GoogleUser {
     name: String,
 }
 
-let profile: GoogleUser = self.client.userinfo(&access_token).await?;
+let profile: GoogleUser = self.client.userinfo(&tokens.access_token).await?;
 ```
 
 Mapping the provider profile into your principal (looking the user up
@@ -199,6 +203,9 @@ Native and SPA apps that cannot keep a `client_secret` should use the
 
 ## Going further
 
+- [Social login](/security/authentication/social-login/) — mount
+  GitHub/Google (or your own provider) over this client through an open,
+  discovered provider contract.
 - [JWT](/security/authentication/jwt/) — the access token your callback issues.
 - [Authentication](/security/authentication/) — the `Strategy` trait
   the callback runs.

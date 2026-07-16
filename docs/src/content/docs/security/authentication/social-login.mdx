@@ -1,0 +1,136 @@
+---
+title: Social login
+description: Open provider contract — mount GitHub/Google with a module import, or publish your own provider as an independent crate through the same discovery seam.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Social login is an open provider contract. The framework ships the
+`SocialProvider` trait, an inventory-based registry, and first-party
+GitHub and Google providers; a deployment activates the ones it wants
+by importing their modules. A third party publishes a new provider as
+its own crate through the same seam — no fork, no framework change.
+
+```rust
+#[module(
+    imports = [
+        OAuthHttpModule,
+        GithubSocialProviderModule::default(),
+        GoogleSocialProviderModule::default(),
+    ],
+)]
+pub struct AuthModule;
+```
+
+The provider set is a composition decision: drop `GithubSocialProviderModule`
+and its routes return `404` with a boot `warn` naming the now-inert
+entry — nothing else changes.
+
+## Wire it in
+
+Each provider reads its credentials from the dual-path config
+(`NESTRS_SOCIAL__<PROVIDER>__*` env **or** a pinned struct). Only the
+client id, secret, and redirect URL are deployment config — the
+auth/token/userinfo endpoints are provider constants, and scopes
+default to each provider's canonical login set.
+
+```bash
+NESTRS_SOCIAL__GITHUB__CLIENT_ID=…
+NESTRS_SOCIAL__GITHUB__CLIENT_SECRET=…
+NESTRS_SOCIAL__GITHUB__REDIRECT_URL=https://auth.example/social/github/callback
+```
+
+Invalid or missing config fails boot naming the provider, so a
+misconfigured deployment never starts serving a broken login.
+
+## The request flow
+
+Two HTTP legs, both dispatched by the `:provider` path segment:
+
+- `GET /social/:provider/authorize` — begins the redirect. Returns a
+  `302` to the provider with the PKCE/CSRF transaction in a signed,
+  short-lived cookie. Unknown provider ⇒ `404`.
+- `GET /social/:provider/callback` — the redirect URI. `OAuthGuard`
+  validates the `state` against the cookie, exchanges the code, fetches
+  the profile, resolves it to a local user, and issues this app's token.
+  A forged callback is a `401` denial.
+
+Both legs run through the shared authorization-code flow — the same
+PKCE and stateless-CSRF machinery documented in
+[OAuth2](/security/authentication/oauth2/). A provider only supplies
+the piece that is genuinely provider-specific: how to read the profile.
+
+<Aside type="note">
+Identity is keyed on the provider's stable `(provider, subject)` pair,
+not the email — a user who changes their provider email keeps their
+account. A verified email may link a new provider to an existing
+account; an unverified one never does.
+</Aside>
+
+## Write your own provider
+
+A provider is real code — the profile shape, and any provider quirk —
+behind a public trait, discovered at link time. Four steps.
+
+**1. Implement the trait.** `authorize` and `exchange` default to the
+shared flow, so a standard provider writes only `profile`:
+
+```rust
+impl SocialProvider for AcmeProvider {
+    fn key(&self) -> &'static str { "acme" }
+    fn client(&self) -> &OAuth2Client { &self.client }
+
+    fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
+        Box::pin(async move {
+            let me: AcmeUser = self.client.fetch("https://api.acme.dev/me", &tokens.access_token).await?;
+            Ok(SocialProfile::new("acme", me.id.to_string())
+                .with_email(me.email, me.email_verified)
+                .with_name(me.name))
+        })
+    }
+}
+```
+
+A provider whose protocol deviates — a per-request signed client
+secret, or identity carried in the `TokenSet`'s id_token instead of a
+userinfo endpoint — overrides `exchange` too. The trait does not
+change.
+
+**2. Build it from config** in a `DynamicModule`, mirroring the
+first-party providers: a collect-phase factory reads the config, calls
+`OAuth2Client::new`, and provides the provider.
+
+**3. Submit the registry entry** so discovery finds it:
+
+```rust
+nest_rs_core::inventory::submit! {
+    SocialProviderEntry {
+        key: "acme",
+        provider_type_id: || std::any::TypeId::of::<AcmeProvider>(),
+        provider_type_name: || std::any::type_name::<AcmeProvider>(),
+        resolve: |c| c.get::<AcmeProvider>().map(|p| p as Arc<dyn SocialProvider>),
+    }
+}
+```
+
+**4. Import the module** in the app. An unimported provider module is
+inert by design — its entry is linked but skipped, and the registry
+logs a `warn` so leftover code never disappears silently.
+
+## Configuration
+
+Per provider, under `NESTRS_SOCIAL__<PROVIDER>__`: `CLIENT_ID`,
+`CLIENT_SECRET`, `REDIRECT_URL`, and optional `SCOPES` (a comma list;
+defaults to the provider's login set). The secret is secret-shaped —
+keep it out of committed config.
+
+## Going further
+
+- [OAuth2](/security/authentication/oauth2/) — the shared
+  authorization-code client every provider composes.
+- [Issuer and resource server](/security/authentication/issuer-and-resource-server/) —
+  where the token this flow issues is verified.
+- [Providers](/fundamentals/providers/) — keyed injection, the tool for
+  static compile-time roles (distinct from the open provider set here).

@@ -277,6 +277,23 @@ prefer `#[inject]` so refactors stay checked at boot.
   `PostsHttpModule`, same as on the Modules page.
 </Aside>
 
+## Keyed providers — static roles
+
+When several instances of **one** type coexist and differ only by config
+— a primary and a replica `DatabaseConnection`, two cache pools — give
+each a compile-time key instead of a wrapper type. Register with
+`provide_keyed("primary", …)` and inject with `#[inject(key = "primary")]`;
+the access graph validates a keyed dependency exactly like a bare one, so
+a missing key fails boot naming the type and the key.
+
+Keyed injection is for **static, compile-time-known roles**. It is the
+opposite case from an **open, extensible set** discovered at runtime — a
+plugin registry, the social-login providers — where the members are not
+known in advance and each carries real per-member code. Those use the
+inventory-discovery seam (a public trait + `inventory::submit!`), not a
+key; see [social login](/security/authentication/social-login/) for the
+canonical example.
+
 ## Going further
 
 - [Modules](/fundamentals/modules/) — where providers are listed and

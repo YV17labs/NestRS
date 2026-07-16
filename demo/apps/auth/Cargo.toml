@@ -11,6 +11,7 @@ nest-rs-authz.workspace = true
 nest-rs-config.workspace = true
 nest-rs-seaorm.workspace = true
 nest-rs-health.workspace = true
+nest-rs-social.workspace = true
 nest-rs-http.workspace = true
 nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 nest-rs-throttler.workspace = true

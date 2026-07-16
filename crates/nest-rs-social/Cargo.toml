@@ -1,0 +1,28 @@
+[package]
+name = "nest-rs-social"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Open social-login provider contract for nestrs: a flow-owning SocialProvider trait, inventory-based registry, and first-party GitHub/Google providers. Third-party providers plug in as independent crates through the same public seam."
+
+
+[dependencies]
+nest-rs-core.workspace = true
+nest-rs-authn.workspace = true
+nest-rs-config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+validator.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+nest-rs-core.workspace = true
+nest-rs-authn.workspace = true
+
+[lints]
+workspace = true

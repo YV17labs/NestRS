@@ -1,4 +1,10 @@
 //! [`OAuth2Module`] — wires a configured [`OAuth2Client`](super::OAuth2Client) as global infrastructure.
+//!
+//! For **social login** (mounting GitHub/Google or a custom provider behind an
+//! open, discovered provider contract), reach for `nest-rs-social` instead —
+//! its providers compose this `OAuth2Client` as their shared flow. This module
+//! stays for wiring a single OAuth2 client as generic infrastructure (e.g.
+//! non-login API access).
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};

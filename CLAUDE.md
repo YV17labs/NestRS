@@ -617,6 +617,23 @@ Tutorial feature exemplar: `crates/features/src/posts/`.
   `GET /api-json` + offline Swagger UI at `GET /api`. Document
   **composed** from the route table. Schemas via **schemars**;
   `#[api(...)]` enriches an op.
+- **`nest-rs-social`** — open social-login provider contract.
+  **Flow-owning** `SocialProvider` trait: `authorize`/`exchange` default
+  to the shared PKCE/CSRF flow (through `nest-rs-authn`'s `OAuth2Client`,
+  whose `exchange` now yields a `TokenSet`), so a standard provider
+  implements only `profile`; a non-standard one (Apple's ES256 secret,
+  id_token identity) overrides a step **without changing the trait**.
+  Registry (`SocialProviders`) is inventory-discovered and module-gated
+  via `ReachableProviders` — an unimported provider is inert (boot
+  `warn`); a duplicate key, or a registry key disagreeing with the
+  provider's own `key()`, **fails boot**. Ships first-party GitHub +
+  Google; **third-party provider crates are encouraged through the same
+  public seam** (the passport-strategy model — real per-provider code,
+  discovered, not a config-only newtype). Keyed injection
+  (`#[inject(key)]`) stays the tool for **static, compile-time roles**
+  (primary/replica pools). **This extension-crate posture — a public
+  behavioral contract + inventory discovery — is the template for any
+  future open-ended library in the repo.**
 - **`nest-rs-ws`** — **not a `Transport`**: WS upgrade is an HTTP
   GET, so `#[gateway(path = "/ws")]` self-mounts on `HttpTransport`
   (inherits port/CORS/TLS). `#[messages]` orchestrates

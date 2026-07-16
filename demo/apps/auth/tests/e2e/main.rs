@@ -1,7 +1,8 @@
 use auth::{AuthModule, IssuerConfig, RegisteredClient};
 use base64::Engine as _;
 use features::{Claims, Role};
-use nest_rs_authn::{JwtConfig, JwtOptions, JwtService, OAuth2Config, hash_password};
+use nest_rs_authn::{JwtConfig, JwtOptions, JwtService, hash_password};
+use nest_rs_social::{GithubSocialConfig, GoogleSocialConfig};
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use poem::http::StatusCode;
 use sea_orm::sea_query::{OnConflict, Query};
@@ -39,14 +40,19 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             ..Default::default()
         })
-        .provide(OAuth2Config {
-            client_id: "demo-client-id".into(),
-            client_secret: "demo-client-secret".into(),
-            auth_url: "https://github.com/login/oauth/authorize".into(),
-            token_url: "https://github.com/login/oauth/access_token".into(),
-            userinfo_url: "https://api.github.com/user".into(),
-            redirect_url: "http://localhost:3001/callback".into(),
-            scopes: vec!["read:user".into()],
+        // Seed the social provider configs (a seed wins over the env-reading
+        // factory), so the e2e boot resolves without live credentials.
+        .provide(GithubSocialConfig {
+            client_id: "demo-github-client-id".into(),
+            client_secret: "demo-github-client-secret".into(),
+            redirect_url: "http://localhost:3001/social/github/callback".into(),
+            scopes: vec![],
+        })
+        .provide(GoogleSocialConfig {
+            client_id: "demo-google-client-id".into(),
+            client_secret: "demo-google-client-secret".into(),
+            redirect_url: "http://localhost:3001/social/google/callback".into(),
+            scopes: vec![],
         })
         .provide(IssuerConfig {
             clients: vec![
@@ -237,12 +243,43 @@ async fn token_endpoint_derives_the_org_from_the_authenticated_client() {
 }
 
 #[tokio::test]
-async fn the_oauth_authorize_endpoint_redirects_to_the_provider() {
+async fn the_social_authorize_endpoint_redirects_to_the_provider() {
     let (_db, app) = boot().await;
-    let resp = app.http().get("/authorize").send().await;
+    let resp = app.http().get("/social/github/authorize").send().await;
     resp.assert_status(StatusCode::FOUND);
     resp.assert_header_exist("location");
     resp.assert_header_exist("set-cookie");
+    // The redirect targets the configured GitHub provider.
+    let location = resp.0.headers().get("location").expect("location header");
+    assert!(
+        location
+            .to_str()
+            .expect("ascii location")
+            .starts_with("https://github.com/login/oauth/authorize"),
+        "redirect must hit GitHub, got {location:?}",
+    );
+}
+
+#[tokio::test]
+async fn a_configured_provider_that_is_not_imported_is_unknown() {
+    // Only github + google are imported; an unregistered key is a 404.
+    let (_db, app) = boot().await;
+    app.http()
+        .get("/social/gitlab/authorize")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_social_callback_rejects_a_forged_state() {
+    // No transaction cookie ⇒ the CSRF binding is absent ⇒ the guard denies.
+    let (_db, app) = boot().await;
+    app.http()
+        .get("/social/github/callback?code=abc&state=forged")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

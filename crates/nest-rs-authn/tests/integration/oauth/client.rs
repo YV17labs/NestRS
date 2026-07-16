@@ -42,9 +42,13 @@ async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
     let jwt = jwt();
     let auth = client().authorize(&jwt).expect("authorize");
 
-    let err = client()
+    // `TokenSet` is intentionally not `Debug` (it carries tokens), so match
+    // rather than `expect_err`.
+    let Err(err) = client()
         .exchange(&jwt, &auth.transaction, "not-the-csrf", "some-code")
         .await
-        .expect_err("state mismatch is rejected");
+    else {
+        panic!("state mismatch is rejected");
+    };
     assert!(matches!(err, AuthError::Failed(_)));
 }

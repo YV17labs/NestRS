@@ -7,7 +7,7 @@ mod config;
 mod error;
 mod module;
 
-pub use client::{Authorization, OAuth2Client};
+pub use client::{Authorization, OAuth2Client, TokenSet};
 pub use client_credentials::{
     AuthenticatedClient, RegisteredClient, authenticate_against_registry,
 };

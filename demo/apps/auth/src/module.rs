@@ -1,15 +1,14 @@
-use nest_rs_authn::{AuthnModule, OAuth2Module};
+use nest_rs_authn::AuthnModule;
 use nest_rs_config::ConfigModule;
 use nest_rs_core::module;
 use nest_rs_health::HealthModule;
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_opentelemetry::OpenTelemetryModule;
 use nest_rs_seaorm::DatabaseModule;
+use nest_rs_social::{GithubSocialProviderModule, GoogleSocialProviderModule};
 use nest_rs_throttler::ThrottlerModule;
 
 use features::oauth::OAuthHttpModule;
-
-use crate::social::SocialModule;
 
 #[module(
     imports = [
@@ -20,9 +19,9 @@ use crate::social::SocialModule;
         HealthModule,
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
         AuthnModule::for_root(None),
-        OAuth2Module::for_root(None),
         OAuthHttpModule,
-        SocialModule,
+        GithubSocialProviderModule::default(),
+        GoogleSocialProviderModule::default(),
     ],
 )]
 pub struct AuthModule;

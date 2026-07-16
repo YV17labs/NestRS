@@ -37,7 +37,7 @@ poem = { workspace = true, features = ["test"] }
 tokio.workspace = true
 tokio-util.workspace = true
 # Every e2e boot loads the project's `.env` via `load_project_env` — normal dep.
-nest-rs-config = { path = "../nest-rs-config" }
+nest-rs-config.workspace = true
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }

@@ -104,12 +104,12 @@ impl<E: EntityTrait> Repo<E> {
     /// A third path — **signature-authenticated ingress** (a public webhook
     /// endpoint trusting a verified payload signature, not a principal) — is
     /// **reserved but NOT implemented**: no webhook route, signature check, or
-    /// webhook DB access exists in this codebase. Do **not** ship a `#[public]`
-    /// + `Repo::unscoped` webhook citing it. A correct implementation first
-    /// requires raw-body → HMAC-SHA256 verification in a `Guard`, a
-    /// constant-time compare (`subtle::ct_eq`), a replay window, fail-closed
-    /// secret handling, and a denial `warn!` — build that exemplar before
-    /// relying on this pattern.
+    /// webhook DB access exists in this codebase. Do **not** ship a
+    /// `#[public]` + `Repo::unscoped` webhook citing it. A correct
+    /// implementation first requires raw-body → HMAC-SHA256 verification in a
+    /// `Guard`, a constant-time compare (`subtle::ct_eq`), a replay window,
+    /// fail-closed secret handling, and a denial `warn!` — build that exemplar
+    /// before relying on this pattern.
     ///
     /// Still runs against the ambient [`Repo::conn`] executor, so it participates
     /// in the request transaction — only the row-level scope is dropped. Reach

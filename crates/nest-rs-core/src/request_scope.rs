@@ -230,6 +230,7 @@ mod tests {
             !Arc::ptr_eq(&a, &b),
             "two requests must not share a request-scoped instance",
         );
+        assert_eq!((a.0, b.0), (0, 1), "each request gets its own build");
         assert_eq!(builds.load(Ordering::SeqCst), 2);
     }
 

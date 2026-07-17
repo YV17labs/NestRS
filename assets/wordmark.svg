@@ -46,6 +46,6 @@
 <text x="256" y="548" text-anchor="middle"
       font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
       font-size="112" font-weight="700" letter-spacing="-2">
-  <tspan fill="#111111">Nest</tspan><tspan fill="url(#grad)">RS</tspan>
+  <tspan fill="#111111" stroke="#ff7a59" stroke-width="1.5" stroke-opacity="0.4" stroke-linejoin="round" paint-order="stroke">Nest</tspan><tspan fill="url(#grad)">RS</tspan>
 </text>
 </svg>

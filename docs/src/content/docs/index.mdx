@@ -1,6 +1,6 @@
 ---
-title: Scalable Rust backend apps with native performance
-description: Scalable Rust backend apps with native performance.
+title: NestRS — multi-tenant isolation you cannot forget
+description: A Rust backend framework where row-level filtering, masking, and transactions are structural — transparent, non-optional, verified at boot.
 template: splash
 head:
   - tag: meta
@@ -11,8 +11,8 @@ hero:
   title: |
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
-    <span class="hero-lead">Scalable Rust backend apps with <span class="lead-accent">native performance.</span></span>
-    <span class="hero-sub">For teams shipping structured Rust backends — especially if NestJS shaped how you think about modules. Write a controller, a service, a module; the decorators carry the rest — security, transactions, validation, wiring. The same app runs at <strong>~25×</strong> the throughput and <strong>~20×</strong> less RAM than an equivalent Node service, on the same hardware.</span>
+    <span class="hero-lead">Multi-tenant isolation you <span class="lead-accent">cannot forget.</span></span>
+    <span class="hero-sub">Row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. For teams shipping structured Rust backends, especially if NestJS shaped how you think about modules: you write a controller, a service, a module; the decorators carry security and wiring. And it stays lean — the full auth + authz + row-level + masking pipeline serves <strong>~23k req/s</strong> at <strong>p99 &lt; 4.5 ms</strong> in <strong>~32 MB</strong> of RAM, Postgres included.</span>
     <span class="hero-stack">
       <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
       <span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>

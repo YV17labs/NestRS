@@ -40,6 +40,54 @@ import Bench from '../../components/Bench.astro';
 import HelloCodeTabs from '../../components/HelloCodeTabs.astro';
 import TerminalSession from '../../components/TerminalSession.astro';
 
+## The part you cannot forget
+
+<div class="nestrs-reveal not-content">
+
+This CRUD resource is authenticated, tenant-scoped, transactional, and
+field-masked. The `impl` block is empty on purpose: the two guards declare the
+posture, `#[crud]` generates the five routes, and one ability does the rest.
+
+```rust title="crates/features/src/orgs/http/controller.rs (abridged)"
+#[controller(path = "/orgs")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct OrgsController {
+    #[inject]
+    svc: Arc<OrgsService>,
+}
+
+#[crud(service = svc, entity = OrgEntity, output = Org,
+       create = CreateOrg, update = UpdateOrg)]
+impl OrgsController {}
+```
+
+The policy lives in one place. A member reads their own org, and sees only the
+fields the ability grants:
+
+```rust title="crates/features/src/authz/ability.rs (abridged)"
+ab.can(Action::Read, user::Entity)
+    .when(|p| p.eq(user::Column::OrgId, actor.org_id))
+    .fields([user::Column::Id, user::Column::Name]);
+```
+
+Same route, same handler — the caller's token decides the rows and the fields:
+
+<TerminalSession
+  label="Two tokens, one route"
+  lines={[
+    { kind: 'input', text: 'curl :3002/users -H "authorization: Bearer $ADMIN"   # admin' },
+    { kind: 'response', text: '[{ "id": "…ac00", "name": "Acme Admin", "email": "admin@acme.test", … }, …]' },
+    { kind: 'input', text: 'curl :3002/users -H "authorization: Bearer $MEMBER"  # plain member' },
+    { kind: 'response', text: '[{ "id": "…ac00", "name": "Acme Admin" }, …]   # email masked, org-scoped' },
+    { kind: 'input', text: 'curl -o /dev/null -w "%{http_code}" :3002/users/<globex-id> -H "…$MEMBER"' },
+    { kind: 'response', text: '403   # cross-tenant read refused, decided by the framework' },
+  ]}
+/>
+
+**[See it live — the security checkpoint →](/tutorial/checkpoint/)**
+
+</div>
+
 ## A complete service, one app
 
 <div class="nestrs-reveal not-content">

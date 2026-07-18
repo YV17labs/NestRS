@@ -12,6 +12,8 @@
 /// carries no stable identity (an anonymous or machine principal without
 /// a subject).
 pub trait PrincipalIdentity {
+    /// The principal's stable audit id, or `None` for an anonymous/machine
+    /// principal with no subject.
     fn actor_id(&self) -> Option<String>;
 }
 

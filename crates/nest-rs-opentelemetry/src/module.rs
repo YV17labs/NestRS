@@ -41,6 +41,10 @@ impl Module for OpenTelemetryModule {
     }
 }
 
+/// Injectable wrapper over the global OTel [`Meter`](opentelemetry::metrics::Meter),
+/// registered by [`OpenTelemetryModule`] under the `otlp` feature so feature
+/// services can create instruments without reaching for the global directly.
+/// Derefs to the inner meter.
 #[cfg(feature = "otlp")]
 pub struct OpenTelemetryMeter(pub opentelemetry::metrics::Meter);
 

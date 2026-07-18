@@ -16,9 +16,14 @@ use crate::error::AuthError;
 /// (deserialized from the `payload` field next to the credentials).
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct RegisteredClient<P> {
+    /// The client's public identifier, matched in constant time.
     pub client_id: String,
+    /// The client's shared secret, matched in constant time.
     pub client_secret: String,
+    /// Scopes granted to this client, copied onto the authenticated principal.
     pub scopes: Vec<String>,
+    /// App-defined per-client data (tenant id, role set, …) carried onto the
+    /// principal — nest-rs never inspects it.
     pub payload: P,
 }
 
@@ -27,7 +32,10 @@ pub struct RegisteredClient<P> {
 /// — the `payload` carries whatever the app logs and authorizes on.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedClient<P> {
+    /// The matched client's app-defined payload — what the app logs and
+    /// authorizes on.
     pub payload: P,
+    /// The matched client's granted scopes.
     pub scopes: Vec<String>,
 }
 

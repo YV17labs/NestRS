@@ -7,6 +7,7 @@
 //! [`OpenTelemetryModule`] activates the HTTP interceptor: `traceparent` propagation,
 //! per-request span, status recording, `X-Trace-Id` response header, and one
 //! access event per request (gated by `NESTRS_HTTP__ACCESS_LOG`).
+#![warn(missing_docs)]
 
 #[cfg(feature = "http")]
 mod access_log;

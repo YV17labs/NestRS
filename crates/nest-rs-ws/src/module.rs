@@ -12,6 +12,9 @@ use nest_rs_core::{ContainerBuilder, DynamicModule, Module, module};
 use crate::config::WsConfig;
 use crate::server::WsServer;
 
+/// DI module that provides the [`WsServer`] connection registry and resolves
+/// [`WsConfig`]. Import it wherever a gateway broadcasts or a service pushes to
+/// clients; see the module docs.
 #[module(imports = [ConfigModule::for_feature::<WsConfig>()], providers = [WsServer])]
 pub struct WsModule;
 

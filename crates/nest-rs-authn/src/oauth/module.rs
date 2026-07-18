@@ -11,9 +11,14 @@ use nest_rs_core::{ContainerBuilder, DynamicModule};
 
 use crate::oauth::{OAuth2Client, OAuth2Config};
 
+/// DI module that provides a single configured [`OAuth2Client`] as global
+/// infrastructure. For social login, prefer `nest-rs-social`; this is for a lone
+/// OAuth2 client (e.g. non-login API access). See the module docs.
 pub struct OAuth2Module;
 
 impl OAuth2Module {
+    /// `None` ⇒ load [`OAuth2Config`] from `NESTRS_AUTHN__*`; `Some(cfg)` pins
+    /// it in code. Either way the [`OAuth2Client`] factory is registered.
     pub fn for_root(config: impl Into<Option<OAuth2Config>>) -> OAuth2Setup {
         OAuth2Setup {
             pinned: config.into(),
@@ -21,6 +26,8 @@ impl OAuth2Module {
     }
 }
 
+/// [`DynamicModule`] returned by [`OAuth2Module::for_root`]: provides the config
+/// (pinned or env-loaded), then queues the [`OAuth2Client`] factory.
 pub struct OAuth2Setup {
     pinned: Option<OAuth2Config>,
 }

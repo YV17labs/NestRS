@@ -4,12 +4,18 @@ use serde::{Deserialize, Serialize};
 /// rides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsEnvelope {
+    /// The message's event name — how the dispatcher routes to a handler and
+    /// how a reply is labelled on the wire.
     pub event: String,
+    /// The handler payload. Defaults to `null` when the frame omits `data`, so
+    /// an argument-less event decodes without an explicit field.
     #[serde(default)]
     pub data: serde_json::Value,
 }
 
 impl WsEnvelope {
+    /// Serialize `data` into the `{ event, data }` wire frame for a given event
+    /// name.
     pub fn encode<T: Serialize>(event: &str, data: &T) -> Result<String, serde_json::Error> {
         serde_json::to_string(&WsEnvelope {
             event: event.to_string(),
@@ -20,8 +26,11 @@ impl WsEnvelope {
 
 /// Dispatch outcome the connection loop turns into a frame (or silence).
 pub enum WsReply {
+    /// Send this value back on the request's event name.
     Reply(serde_json::Value),
+    /// Send nothing — the handler returned `()` or chose to stay silent.
     None,
+    /// Send an error frame `{ event, data: { error } }` and log a `warn`.
     Error(String),
 }
 
@@ -34,10 +43,13 @@ impl WsReply {
         }
     }
 
+    /// Build an [`Error`](WsReply::Error) reply from an arbitrary message.
     pub fn error(message: impl Into<String>) -> WsReply {
         WsReply::Error(message.into())
     }
 
+    /// The reply for an event with no registered handler — names the offending
+    /// event so a client can tell a typo from an auth failure.
     pub fn unknown(event: &str) -> WsReply {
         WsReply::Error(format!("unknown event `{event}`"))
     }

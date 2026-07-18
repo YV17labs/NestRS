@@ -53,6 +53,10 @@ impl OpenTelemetry {
         mark_initialized();
     }
 
+    /// Install the subscriber from an explicit [`OpenTelemetryConfig`] (the
+    /// programmatic path; [`init`](Self::init) is the env-driven wrapper).
+    /// Returns the flush guard that must outlive `main`, or an error that
+    /// aborts boot on an unparseable filter or a failed exporter build.
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
         let filter = parse_log_filter(&config.log_filter)?;
         let fmt_layer = console_layer(config.log_format, config.log_source_location);

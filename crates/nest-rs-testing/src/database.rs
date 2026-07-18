@@ -25,6 +25,9 @@ pub struct EphemeralDatabase {
 }
 
 impl EphemeralDatabase {
+    /// Create and migrate a fresh database, taking the admin URL from
+    /// `NESTRS_DATABASE__URL` (loading the project `.env` first). The usual
+    /// entry point; errors if the URL is unset.
     pub async fn create<M: MigratorTrait>() -> Result<Self> {
         // The admin URL is read before any `App` boots, so load `.env` first.
         load_project_env();
@@ -37,6 +40,9 @@ impl EphemeralDatabase {
         Self::create_with::<M>(&admin_url).await
     }
 
+    /// Create and migrate a fresh database against an explicit admin URL, for
+    /// callers that resolve the connection string themselves rather than via
+    /// the environment.
     pub async fn create_with<M: MigratorTrait>(admin_url: &str) -> Result<Self> {
         let admin = Database::connect(admin_url).await?;
         let name = unique_name();
@@ -64,10 +70,14 @@ impl EphemeralDatabase {
         })
     }
 
+    /// The live connection to the ephemeral database — seed this into a
+    /// [`TestApp`] to short-circuit `DatabaseModule`'s `for_root` factory.
     pub fn connection(&self) -> Arc<DatabaseConnection> {
         self.connection.clone()
     }
 
+    /// The full connection URL of the ephemeral database (admin URL with the
+    /// database name swapped in), for callers wiring their own pool.
     pub fn url(&self) -> &str {
         &self.url
     }

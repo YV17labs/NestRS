@@ -10,11 +10,14 @@ use thiserror::Error;
 
 static TIMING_DUMMY_HASH: OnceLock<String> = OnceLock::new();
 
+/// Failure from the Argon2id hashing helpers.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PasswordError {
+    /// Argon2 could not produce a hash (e.g. an internal/parameter error).
     #[error("password hashing failed")]
     HashFailed,
+    /// A stored hash string could not be parsed — corrupt or wrong format.
     #[error("stored password hash is invalid")]
     InvalidHash,
 }

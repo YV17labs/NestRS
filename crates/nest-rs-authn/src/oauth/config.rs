@@ -4,21 +4,32 @@ use nest_rs_config::{Config, ConfigService, config};
 use validator::Validate;
 
 // No `Debug`: `client_secret` must not leak through a derived format.
+/// Env-driven OAuth2 provider endpoints (namespace `authn`). Every URL/credential
+/// field is required (`length(min = 1)`), so an unconfigured app fails boot
+/// loudly rather than running a broken flow. No `Debug`: `client_secret` must
+/// not leak through a format.
 #[config(namespace = "authn")]
 #[derive(Clone, Default, Validate)]
 pub struct OAuth2Config {
+    /// The registered OAuth2 client id.
     #[validate(length(min = 1))]
     pub client_id: String,
+    /// The registered OAuth2 client secret.
     #[validate(length(min = 1))]
     pub client_secret: String,
+    /// Provider authorization endpoint (where the user is redirected to consent).
     #[validate(length(min = 1))]
     pub auth_url: String,
+    /// Provider token endpoint (where the auth code is exchanged for tokens).
     #[validate(length(min = 1))]
     pub token_url: String,
+    /// This app's callback URL the provider redirects back to.
     #[validate(length(min = 1))]
     pub redirect_url: String,
+    /// Provider userinfo endpoint used to fetch the caller's profile.
     #[validate(length(min = 1))]
     pub userinfo_url: String,
+    /// Scopes requested at authorization; empty by default.
     pub scopes: Vec<String>,
 }
 

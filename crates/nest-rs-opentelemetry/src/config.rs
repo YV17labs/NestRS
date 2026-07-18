@@ -9,14 +9,24 @@ use nest_rs_config::env_var;
 /// subscriber stays console-only.
 #[derive(Clone, Debug)]
 pub struct OpenTelemetryConfig {
+    /// `service.name` on every span, metric and log — the primary axis a
+    /// backend groups telemetry by. Required (the one non-optional field);
+    /// defaults to the value passed to [`new`](Self::new).
     pub service_name: String,
+    /// `service.version` resource attribute (e.g. the crate version or git
+    /// SHA). `None` omits the attribute entirely rather than emitting a blank.
     pub service_version: Option<String>,
+    /// `deployment.environment` resource attribute (`prod`, `staging`, …) so a
+    /// backend can partition otherwise-identical services. `None` omits it.
     pub deployment_environment: Option<String>,
     /// Defaults to a fresh UUID v7 per process so restarts get distinct
     /// identities in the backend.
     pub service_instance_id: Option<String>,
     /// `EnvFilter` syntax; applied to console layer and OTel log appender.
     pub log_filter: String,
+    /// Console output shape: human-readable [`Text`](LogFormat::Text) in dev,
+    /// machine-parseable [`Json`](LogFormat::Json) in prod. Defaults by build
+    /// profile (see [`new`](Self::new)); the OTLP appender is unaffected.
     pub log_format: LogFormat,
     /// Append the emitting `file:line` to every console event. Useful in dev
     /// to locate a log's origin; off by default (adds width to every line and
@@ -30,10 +40,15 @@ pub struct OpenTelemetryConfig {
     pub trace_sample_ratio: f64,
 }
 
+/// Shape of the console log layer's output.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LogFormat {
+    /// Human-readable pretty-print for local development. The default in debug
+    /// builds; pinning it is what keeps default apps readable at the terminal.
     #[default]
     Text,
+    /// One JSON object per event for log aggregators. The default in release
+    /// builds so a deployed app is machine-parseable without extra config.
     Json,
 }
 
@@ -61,6 +76,10 @@ pub(crate) fn parse_bool(raw: &str) -> Option<bool> {
 }
 
 impl OpenTelemetryConfig {
+    /// Config with framework defaults and the given `service.name`. `log_format`
+    /// is chosen by build profile (Text in debug, Json in release); everything
+    /// else is off/absent. The builder `with_*` methods and [`from_env`](Self::from_env)
+    /// layer on top.
     pub fn new(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),
@@ -116,36 +135,45 @@ impl OpenTelemetryConfig {
         cfg
     }
 
+    /// Override the `EnvFilter` directive string (e.g. `"debug,hyper=warn"`).
     pub fn with_log_filter(mut self, filter: impl Into<String>) -> Self {
         self.log_filter = filter.into();
         self
     }
 
+    /// Pin the console [`LogFormat`], overriding the build-profile default.
     pub fn with_log_format(mut self, format: LogFormat) -> Self {
         self.log_format = format;
         self
     }
 
+    /// Toggle appending `file:line` to each console event (off by default).
     pub fn with_log_source_location(mut self, enabled: bool) -> Self {
         self.log_source_location = enabled;
         self
     }
 
+    /// Set the OTLP base endpoint, which is what enables the exporter — absent
+    /// an endpoint the subscriber stays console-only.
     pub fn with_otlp_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.otlp_endpoint = Some(endpoint.into());
         self
     }
 
+    /// Set the `service.version` resource attribute.
     pub fn with_service_version(mut self, version: impl Into<String>) -> Self {
         self.service_version = Some(version.into());
         self
     }
 
+    /// Set the `deployment.environment` resource attribute.
     pub fn with_deployment_environment(mut self, env: impl Into<String>) -> Self {
         self.deployment_environment = Some(env.into());
         self
     }
 
+    /// Set the trace sample ratio; the value is clamped into `[0.0, 1.0]` so a
+    /// bad caller can't disable sampling logic outright.
     pub fn with_trace_sample_ratio(mut self, ratio: f64) -> Self {
         self.trace_sample_ratio = ratio.clamp(0.0, 1.0);
         self

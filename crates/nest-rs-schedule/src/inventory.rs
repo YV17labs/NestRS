@@ -39,7 +39,11 @@ pub struct CronJobMeta {
     pub provider: &'static str,
     /// The scheduled method, e.g. `"heartbeat"`.
     pub method: &'static str,
+    /// When this job fires — resolved from the method's `#[every]` / `#[cron]`
+    /// / `#[after]` attribute.
     pub trigger: Trigger,
+    /// The closure the scheduler invokes on each tick — resolves the provider
+    /// and calls the method.
     pub run: RunFn,
 }
 
@@ -55,7 +59,10 @@ pub struct ScheduledMethod {
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so an
     /// unreachable provider's jobs do not fire.
     pub provider_type_id: fn() -> TypeId,
+    /// When this job fires — the parsed `#[every]` / `#[cron]` / `#[after]`
+    /// trigger, copied to the synthesized [`CronJobMeta`].
     pub trigger: Trigger,
+    /// The closure the scheduler invokes on each tick.
     pub run: RunFn,
 }
 

@@ -6,13 +6,18 @@
 use poem::error::ResponseError;
 use poem::http::StatusCode;
 
+/// Token-endpoint failure. Each `Display` is the exact RFC 6749 wire code a
+/// client reads, so the variant names map to the spec, not to internal detail.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TokenError {
+    /// The requested `grant_type` is not one this endpoint serves (400).
     #[error("unsupported_grant_type")]
     UnsupportedGrant,
+    /// The requested scope is unknown or not permitted for this client (400).
     #[error("invalid_scope")]
     InvalidScope,
+    /// The presented client credentials did not authenticate (401).
     #[error("invalid_credentials")]
     InvalidCredentials,
     /// Internal signing failure. `Display` is the opaque RFC 6749

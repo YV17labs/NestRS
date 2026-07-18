@@ -20,24 +20,32 @@ use crate::headless::HeadlessApp;
 
 type TestEndpoint = BoxEndpoint<'static, Response>;
 
+/// A booted app plus a `poem` [`TestClient`] over its mounted endpoint — the
+/// default e2e entry point. Drive every HTTP-borne surface (REST, GraphQL,
+/// OpenAPI, MCP) through [`http`](Self::http) without binding a socket.
 pub struct TestApp {
     app: App,
     client: TestClient<TestEndpoint>,
 }
 
 impl TestApp {
+    /// Start a [`TestAppBuilder`] to register modules and override providers.
     pub fn builder() -> TestAppBuilder {
         TestAppBuilder::new()
     }
 
+    /// Shorthand for booting a single root module with defaults — no overrides,
+    /// no extra transport config.
     pub async fn for_module<M: Module + 'static>() -> Result<TestApp> {
         TestAppBuilder::new().module::<M>().build().await
     }
 
+    /// The HTTP test client for issuing requests against the mounted routes.
     pub fn http(&self) -> &TestClient<TestEndpoint> {
         &self.client
     }
 
+    /// The DI [`Container`], for resolving providers directly in assertions.
     pub fn container(&self) -> &Container {
         self.app.container()
     }
@@ -49,6 +57,9 @@ impl TestApp {
     }
 }
 
+/// Builder for a [`TestApp`]: mirrors [`AppBuilder`]'s registration surface and
+/// adds test-only provider overrides. Defaults `NESTRS_ENV=test` (hermetic) and
+/// loads the project `.env` cascade so e2e picks up the devcontainer hostnames.
 pub struct TestAppBuilder {
     inner: AppBuilder,
     http: Option<HttpTransport>,
@@ -76,26 +87,35 @@ impl TestAppBuilder {
         }
     }
 
+    /// Register a root module, exactly as [`AppBuilder::module`].
     pub fn module<M: Module + 'static>(mut self) -> Self {
         self.inner = self.inner.module::<M>();
         self
     }
 
+    /// Seed a runtime value as a singleton provider (the `main`-supplied seed
+    /// path), exactly as [`AppBuilder::provide`].
     pub fn provide<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.inner = self.inner.provide(value);
         self
     }
 
+    /// Seed a pre-shared `Arc<T>` as a singleton, exactly as
+    /// [`AppBuilder::provide_arc`].
     pub fn provide_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
         self.inner = self.inner.provide_arc(value);
         self
     }
 
+    /// Seed a trait object under its `dyn Trait` type, exactly as
+    /// [`AppBuilder::provide_dyn`].
     pub fn provide_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.inner = self.inner.provide_dyn(value);
         self
     }
 
+    /// Register an async factory whose output is injectable, exactly as
+    /// [`AppBuilder::provide_factory`].
     pub fn provide_factory<T, F, Fut>(mut self, factory: F) -> Self
     where
         T: Any + Send + Sync,
@@ -106,11 +126,16 @@ impl TestAppBuilder {
         self
     }
 
+    /// Replace a concrete provider with a test double by value — the standard
+    /// way to swap a real dependency for a fake before boot. Never use it to
+    /// mock the database (a hard no for e2e).
     pub fn override_value<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.inner = self.inner.override_value(value);
         self
     }
 
+    /// Replace a `dyn Trait` provider with a test double behind an `Arc`, for
+    /// impls consumers inject as `Arc<dyn Trait>`.
     pub fn override_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.inner = self.inner.override_dyn(value);
         self
@@ -125,6 +150,8 @@ impl TestAppBuilder {
         self
     }
 
+    /// Supply a pre-configured [`HttpTransport`] instead of the default — e.g.
+    /// to set a non-default `HttpConfig` the test asserts against.
     pub fn http(mut self, transport: HttpTransport) -> Self {
         self.http = Some(transport);
         self
@@ -176,6 +203,9 @@ impl TestAppBuilder {
         self
     }
 
+    /// Run the four-phase build, configure the HTTP transport, run the init
+    /// phases (so bootstrap-time wiring like health indicators and the social
+    /// registry populate), and hand back a ready [`TestApp`].
     pub async fn build(self) -> Result<TestApp> {
         let app = self.inner.build().await?;
         let mut transport = self.http.unwrap_or_default();

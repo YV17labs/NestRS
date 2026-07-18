@@ -11,6 +11,12 @@ both new features and breaking changes.
 
 ### Added
 
+- **`nestrs g migration <name>`** scaffolds a SeaORM migration and
+  registers it in **both** `crates/migrations/src/lib.rs` and
+  `migrator.rs` — the `migrator.rs` vec is regenerated from the module
+  list, so the two registrations can never drift (the one you forget by
+  hand is the one that silently never runs).
+
 - **`nestrs g resource --guarded`** scaffolds the hardened `#[crud]` +
   guards form (the `orgs/` shape) instead of the unguarded stub, for a
   workspace that already provides `AuthGuard` / `AuthzGuard` /

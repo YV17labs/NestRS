@@ -2546,6 +2546,7 @@ name = "nest-rs-cli"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "tempfile",
  "thiserror 2.0.18",

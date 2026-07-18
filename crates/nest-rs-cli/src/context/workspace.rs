@@ -70,6 +70,22 @@ impl NestrsWorkspace {
         self.root.join("apps")
     }
 
+    /// `crates/migrations/src` — the SeaORM migration crate's source dir.
+    pub fn migrations_root(&self) -> PathBuf {
+        self.root.join("crates/migrations/src")
+    }
+
+    /// The migration crate's `lib.rs` (the `mod m…;` registry).
+    pub fn migrations_lib(&self) -> PathBuf {
+        self.migrations_root().join("lib.rs")
+    }
+
+    /// The migration crate's `migrator.rs` (the `MigratorTrait` vec — regenerated
+    /// from the `lib.rs` module list so both registrations always agree).
+    pub fn migrations_migrator(&self) -> PathBuf {
+        self.migrations_root().join("migrator.rs")
+    }
+
     pub fn feature_root(&self, snake: &str) -> PathBuf {
         self.features_root().join(snake)
     }

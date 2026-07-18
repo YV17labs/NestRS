@@ -318,6 +318,80 @@ fn generate_resource_creates_crud_slice_and_deps() {
     assert!(lib.contains("pub mod posts;"));
 }
 
+fn write_fake_migrations_crate(root: &Path) {
+    let dir = root.join("crates/migrations/src");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("lib.rs"),
+        "mod m20260101_000000_init;\nmod migrator;\n\npub use migrator::Migrator;\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("migrator.rs"),
+        "use sea_orm_migration::prelude::*;\n\nuse super::{\n    m20260101_000000_init,\n};\n\npub struct Migrator;\n",
+    )
+    .unwrap();
+    fs::write(dir.join("m20260101_000000_init.rs"), "// init\n").unwrap();
+}
+
+#[test]
+fn generate_migration_registers_in_both_lib_and_migrator() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+
+    run_ok(
+        dir.path(),
+        &[
+            "g",
+            "migration",
+            "create_widget",
+            "-p",
+            dir.path().to_str().unwrap(),
+        ],
+    );
+
+    let mig = dir.path().join("crates/migrations/src");
+    // The generated file: m<date>_<seq>_create_widget.rs (date is today).
+    let generated: Vec<_> = fs::read_dir(&mig)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with("_create_widget.rs"))
+        .collect();
+    assert_eq!(
+        generated.len(),
+        1,
+        "one migration file created: {generated:?}"
+    );
+    let stem = generated[0].trim_end_matches(".rs").to_string();
+
+    // Registered in BOTH lib.rs and migrator.rs — the whole point.
+    let lib = fs::read_to_string(mig.join("lib.rs")).unwrap();
+    assert!(lib.contains(&format!("mod {stem};")), "lib.rs: {lib}");
+
+    let migrator = fs::read_to_string(mig.join("migrator.rs")).unwrap();
+    // The new stem appears twice (the `use super::` import and the `Box::new`
+    // vec entry) regardless of how rustfmt wrapped the file.
+    assert!(
+        migrator.matches(&stem).count() >= 2,
+        "migrator must import and box the new migration: {migrator}"
+    );
+    assert!(
+        migrator.contains(&format!("Box::new({stem}::Migration)")),
+        "migrator vec: {migrator}"
+    );
+    // The pre-existing migration survives the regeneration.
+    assert!(
+        migrator.contains("Box::new(m20260101_000000_init::Migration)"),
+        "migrator kept init: {migrator}"
+    );
+    assert!(
+        migrator.contains("pub async fn migrate"),
+        "migrator has migrate fn"
+    );
+}
+
 #[test]
 fn generate_resource_guarded_emits_the_crud_and_guards_form() {
     let dir = tempfile::tempdir().unwrap();

@@ -161,6 +161,8 @@ pub enum GenerateCommand {
     Feature(GenTarget),
     /// A DB-backed CRUD slice (entity + CrudService + HTTP adapter).
     Resource(ResourceTarget),
+    /// A SeaORM migration, registered in both lib.rs and migrator.rs.
+    Migration(GenTarget),
     /// Add an HTTP controller adapter to an existing feature.
     Http(GenTarget),
     /// Add a GraphQL resolver adapter to an existing feature.
@@ -240,6 +242,11 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
             path: t.target.path,
             dry_run: t.target.dry_run,
             guarded: t.guarded,
+        }),
+        Migration(t) => commands::run_migration(commands::MigrationOptions {
+            name: t.name,
+            path: t.path,
+            dry_run: t.dry_run,
         }),
         Http(t) => adapter(Transport::Http, t),
         Graphql(t) => adapter(Transport::Graphql, t),

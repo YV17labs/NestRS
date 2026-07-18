@@ -2,6 +2,7 @@ use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs_core::injectable;
 
 use crate::Claims;
+use crate::notifications as notification;
 use crate::orgs as org;
 use crate::posts as post;
 use crate::users as user;
@@ -24,6 +25,8 @@ impl AbilityFactory for AppAbility {
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id));
             ab.can(Action::Manage, post::Entity)
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id));
+            ab.can(Action::Read, notification::Entity)
+                .when(|p| p.eq(notification::Column::OrgId, actor.org_id));
         } else {
             ab.can(Action::Read, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id))
@@ -36,6 +39,8 @@ impl AbilityFactory for AppAbility {
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id));
             ab.can(Action::Create, post::Entity)
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id));
+            ab.can(Action::Read, notification::Entity)
+                .when(|p| p.eq(notification::Column::OrgId, actor.org_id));
         }
     }
 }
@@ -94,6 +99,15 @@ mod tests {
             created_at: now,
             updated_at: now,
             deleted_at: None,
+        }
+    }
+
+    fn notification_model(id: Uuid, org_id: Uuid) -> notification::Model {
+        notification::Model {
+            id,
+            org_id,
+            message: "Post \"Hello\" was published".into(),
+            created_at: chrono::Utc::now().fixed_offset(),
         }
     }
 
@@ -228,6 +242,44 @@ mod tests {
             Action::Delete,
             &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
         ));
+    }
+
+    #[test]
+    fn notifications_are_read_scoped_to_the_callers_org_for_both_roles() {
+        let org = Uuid::now_v7();
+        let other = Uuid::now_v7();
+        for ab in [admin(org), member(org)] {
+            assert!(ab.can::<notification::Entity>(
+                Action::Read,
+                &notification_model(Uuid::now_v7(), org)
+            ));
+            assert!(
+                !ab.can::<notification::Entity>(
+                    Action::Read,
+                    &notification_model(Uuid::now_v7(), other)
+                ),
+                "a notification in another org must not be readable",
+            );
+        }
+    }
+
+    #[test]
+    fn notifications_are_never_writable_over_the_wire() {
+        let org = Uuid::now_v7();
+        // The resource is read-only: no role holds any write grant on it, so the
+        // pre-filter for a write action matches nothing (fail-closed).
+        for ab in [admin(org), member(org)] {
+            for action in [Action::Create, Action::Update, Action::Delete] {
+                let sql = notification::Entity::find()
+                    .filter(ab.condition_for::<notification::Entity>(action))
+                    .build(DatabaseBackend::Postgres)
+                    .to_string();
+                assert!(
+                    sql.contains("1 = 0"),
+                    "no {action:?} grant on notifications ⇒ pre-filter matches nothing: {sql}",
+                );
+            }
+        }
     }
 
     #[test]

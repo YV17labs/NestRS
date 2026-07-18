@@ -1,10 +1,14 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use api::ApiModule;
+use features::notifications::NotificationsQueueModule;
 use features::{Claims, Role};
 use nest_rs_authn::{JwtConfig, JwtOptions, JwtService};
 use nest_rs_authz::{AbilityBuilder, Action, with_ability};
-use nest_rs_seaorm::{Executor, Repo, with_executor};
+use nest_rs_core::module;
+use nest_rs_redis::{QueueModule, QueueWorker, QueueWorkerModule};
+use nest_rs_seaorm::{DatabaseModule, Executor, Repo, with_executor};
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
@@ -1265,4 +1269,131 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
             .string(),
         "PUBLISHED",
     );
+}
+
+/// The real worker path, booted in-process against the **same** ephemeral DB the
+/// api uses: `DatabaseModule` auto-binds the `WorkerDbContext` that gives each
+/// job a pool executor, and `NotificationsQueueModule` registers the processor
+/// that drains the `notifications` queue. Mirrors the inline module the worker
+/// e2e defines to exercise its own consumer.
+#[module(
+    imports = [
+        DatabaseModule::for_root(None),
+        QueueModule::for_root(None),
+        QueueWorkerModule,
+        NotificationsQueueModule,
+    ],
+)]
+struct NotificationsWorkerHarness;
+
+/// End-to-end proof of task A7's magic moment: publishing a post over GraphQL
+/// emits `PostPublishedEvent`; the listener enqueues a `NotifyCommand` (no DB —
+/// it has no request context); the worker consumes it and persists a
+/// `Notification`; and `GET /notifications` returns it, row-level scoped so
+/// org B never sees org A's notification.
+#[tokio::test]
+async fn publishing_a_post_notifies_the_org_through_the_worker() {
+    let (db, app) = boot().await;
+
+    // Boot the real worker on the same ephemeral DB + real Redis, and start its
+    // queue transport so it drains `notifications`.
+    let worker = TestApp::builder()
+        .module::<NotificationsWorkerHarness>()
+        .provide_arc(db.connection())
+        .build_headless()
+        .await
+        .expect("the notifications worker boots against the ephemeral DB and Redis");
+    let worker_queue = worker
+        .spawn_transport(QueueWorker::new())
+        .await
+        .expect("the worker's QueueWorker drains the notifications queue");
+
+    // Two orgs; an author (with a `sub`) in org A to satisfy the post author FK.
+    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org_a = create_org(&app, &bootstrap, "NotifyAcme").await;
+    let org_b = create_org(&app, &bootstrap, "NotifyGlobex").await;
+    let admin_a = format!("Bearer {}", token_for(&org_a, "admin").await);
+    let admin_b = format!("Bearer {}", token_for(&org_b, "admin").await);
+    let author_id =
+        Uuid::parse_str(&create_user(&app, &admin_a, "Author", "author@notify.test").await)
+            .expect("valid user uuid");
+    let author_a = format!(
+        "Bearer {}",
+        token_with_sub(&org_a, "admin", author_id).await
+    );
+
+    let post_a = create_post(&app, &author_a, "Launch", "Big news").await;
+
+    // Count org A's notifications through the read resource.
+    let notification_count = |bearer: String| {
+        let app = &app;
+        async move {
+            let listed = app
+                .http()
+                .get("/notifications")
+                .header(header::AUTHORIZATION, &bearer)
+                .send()
+                .await;
+            listed.assert_status_is_ok();
+            listed.json().await.value().array().iter().count()
+        }
+    };
+
+    // Publish (re-publishing defensively: a stray competing worker on shared
+    // Redis could steal a single message) and poll until the worker persists.
+    let mut seen = false;
+    'outer: for _ in 0..5 {
+        let publish = json!({ "query": format!("mutation {{ publishPost(id: \"{post_a}\") {{ id status }} }}") });
+        app.http()
+            .post("/graphql")
+            .header(header::AUTHORIZATION, &author_a)
+            .body_json(&publish)
+            .send()
+            .await
+            .assert_status_is_ok();
+
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if notification_count(admin_a.clone()).await >= 1 {
+                seen = true;
+                break 'outer;
+            }
+        }
+    }
+    assert!(
+        seen,
+        "the worker persisted a notification for org A that GET /notifications returns",
+    );
+
+    // Row-level scope: org B sees none of org A's notifications.
+    assert_eq!(
+        notification_count(admin_b).await,
+        0,
+        "org B must not see org A's notification",
+    );
+
+    // And the message is the one the listener produced from the publish event.
+    let a_list = app
+        .http()
+        .get("/notifications")
+        .header(header::AUTHORIZATION, &admin_a)
+        .send()
+        .await;
+    a_list.assert_status_is_ok();
+    let a_body = a_list.json().await;
+    let messages: Vec<String> = a_body
+        .value()
+        .array()
+        .iter()
+        .map(|n| n.object().get("message").string().to_owned())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.contains("Launch")),
+        "the persisted notification names the published post: {messages:?}",
+    );
+
+    worker_queue
+        .shutdown()
+        .await
+        .expect("the worker's QueueWorker stops cleanly");
 }

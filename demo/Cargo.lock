@@ -6265,6 +6265,7 @@ dependencies = [
  "nest-rs-opentelemetry",
  "nest-rs-queue",
  "nest-rs-redis",
+ "nest-rs-seaorm",
  "nest-rs-testing",
  "nest-rs-worker",
  "serde",

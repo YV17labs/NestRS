@@ -445,6 +445,26 @@ impl Transport for HttpTransport {
             .map_to_response()
             .boxed();
 
+        // Transport-edge error boundary — the outermost wrap, so it normalizes
+        // whatever escapes the whole stack. Any `>= 400` response poem rendered
+        // as raw `text/plain` (an unmounted-route 404, a 413, a 405, an
+        // extractor's bad-path-id 400, a timeout 504) is lifted onto the single
+        // RFC-9457 `application/problem+json` envelope; a response already in
+        // `problem+json` (a `ServiceError`, a `ProblemDetails`, a guard denial,
+        // a domain exception filter) passes through untouched. `map_to_response`
+        // on the route tree collapses handler/extractor `Err`s into `Ok`
+        // responses before here, so the seam inspects the response, not `Err`.
+        endpoint = endpoint
+            .around(|ep, req| async move {
+                let resp = match ep.call(req).await {
+                    Ok(resp) => resp,
+                    Err(err) => err.into_response(),
+                };
+                Ok(crate::problem::normalize_error_response(resp).await)
+            })
+            .map_to_response()
+            .boxed();
+
         self.endpoint = Some(endpoint);
         Ok(())
     }

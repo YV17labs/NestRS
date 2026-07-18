@@ -9,6 +9,25 @@ both new features and breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **One error format at the HTTP boundary — RFC 9457
+  `application/problem+json` everywhere.** Three shapes previously
+  coexisted: the NestJS-style `{statusCode, error, message, details}`
+  validation body, bare-text framework/service errors, and poem's
+  plain-text transport errors (an unmounted-route `404`, a `413`). All
+  now render as `ProblemDetails` (`type`/`title`/`status`, optional
+  `detail`). Field-level validation errors ride as the RFC-9457
+  **extension member** `errors`; `ServiceError`, guard denials
+  (401/403/429, `Retry-After` preserved) and pipe rejections all map to
+  the same envelope. `HttpTransport` installs a transport-edge boundary
+  (`nest_rs_http::normalize_error_response`) that lifts any leftover
+  raw plain-text error onto `problem+json` — a `Filter`/`ExceptionFilter`
+  mapping (tagged `MappedError`) or a deliberately-typed body is left
+  untouched, and internal (`5xx`) detail is dropped so no driver message
+  reaches the wire. New `ProblemDetails::from_status` /
+  `with_extension`.
+
 ### Added
 
 - **`nestrs g migration <name>`** scaffolds a SeaORM migration and

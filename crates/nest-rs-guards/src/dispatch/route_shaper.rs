@@ -11,7 +11,6 @@ use std::any::TypeId;
 use async_trait::async_trait;
 use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
 use nest_rs_core::{Container, Layer};
-use nest_rs_http::poem::http::StatusCode;
 use nest_rs_http::poem::{Body, Request, Response, Result};
 use nest_rs_interceptors::{Interceptor, Next};
 use nest_rs_pipes::GlobalPipe;
@@ -232,19 +231,15 @@ async fn apply_body_pipes(
     };
     for entry in pipes {
         if let Err(err) = entry.layer.transform_body(&mut value) {
-            let mut body = serde_json::json!({
-                "statusCode": 400,
-                "error": "Bad Request",
-                "message": err.message(),
-            });
+            // One error format at the edge: a `400` RFC-9457
+            // `application/problem+json` (`ProblemDetails`) — the pipe message
+            // as `detail`, field-level errors as an `errors` extension member.
+            let mut problem =
+                nest_rs_http::ProblemDetails::bad_request().with_detail(err.message().to_owned());
             if let Some(details) = err.into_details() {
-                body["details"] = details;
+                problem = problem.with_extension("errors", details);
             }
-            let resp = Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .content_type("application/json")
-                .body(serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec()));
-            return Err(nest_rs_http::poem::Error::from_response(resp));
+            return Err(nest_rs_http::poem::Error::from(problem));
         }
     }
     let rewritten = serde_json::to_vec(&value).unwrap_or_default();

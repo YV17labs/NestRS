@@ -136,9 +136,16 @@ on a handler that calls a service without a single line of conversion code:
 
 | Error | Source | Renders as |
 |-------|--------|------------|
-| `nest_rs_seaorm::ServiceError` | Repo, CrudService, dataloader | `ResponseError` — `422` validation/invalid, `409` conflict, `403` forbidden, `404` not found, `500` else |
+| `nest_rs_seaorm::ServiceError` | Repo, CrudService, dataloader | `problem+json` — `422` validation/invalid, `409` conflict, `403` forbidden, `404` not found, `500` else (validation field errors ride as `errors`) |
 | `nest_rs_authn::TokenError` | OAuth token endpoint | `ResponseError` — `400` bad grant/scope, `401` invalid credentials, `500` signing/backend |
 | `nest_rs_authn::AuthError` | Strategy authentication | `IntoResponse` — `401` challenge (`500` when the identity store is unavailable) |
+
+Every error the HTTP transport renders — a handler's `ServiceError`, an
+inline `ProblemDetails`, a validation rejection, and even a raw router
+error (an unmounted-route `404`, a `413` over the body cap) — comes back
+as one `application/problem+json` body. The transport lifts any leftover
+plain-text error onto the RFC 9457 envelope at its edge; internal (`5xx`)
+detail is dropped so a driver or panic message never reaches the wire.
 
 The two `ResponseError` types convert into `poem::Error`, so `?`
 propagates them through a `poem::Result` handler. `AuthError` implements

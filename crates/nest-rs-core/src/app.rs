@@ -47,7 +47,7 @@ impl App {
     /// [`AccessGraphError`](crate::AccessGraphError), a dependency no module
     /// provides returns [`MissingDependencyError`](crate::MissingDependencyError),
     /// a doubly-registered type returns
-    /// [`DuplicateProviderError`](crate::DuplicateProviderError). The register
+    /// [`DuplicateProviderError`]. The register
     /// phase defers a missing dependency to the access-graph check rather than
     /// panicking ahead of it; only a true provider cycle (invisible to the
     /// graph) still panics.

@@ -63,7 +63,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// module/application init and shutdown phases.
 ///
 /// Each method tagged with a phase attribute is invoked by
-/// [`App`](nest_rs_core::App):
+/// `App`:
 ///
 /// - `#[on_module_init]` / `#[on_application_bootstrap]` — after wiring,
 ///   before serving. An error aborts boot.
@@ -110,8 +110,8 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// `#[module(imports = [...], providers = [...])]`.
 ///
-/// `imports` is either a type (a static [`Module`](nest_rs_core::Module)) or a
-/// call expression (a configured [`DynamicModule`](nest_rs_core::DynamicModule)
+/// `imports` is either a type (a static `Module`) or a
+/// call expression (a configured `DynamicModule`
 /// built at its import site). `providers` lists what this module
 /// declares.
 ///
@@ -132,7 +132,7 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 /// plus a link-time `ModuleDescriptor` for the access graph. Illustrative
 /// sketch:
 ///
-/// ```ignore
+/// ```text
 /// struct AppModule;                                  // the item, unchanged
 ///
 /// impl ::nest_rs_core::Module for AppModule {

@@ -27,7 +27,7 @@
 //! this crate adds a matching Cargo feature flag rather than spawning a
 //! sibling crate — Redis is one external dependency, this is its one
 //! integration home. The first such feature is **`throttler`**: a
-//! cross-process [`RedisThrottler`] rate-limit store backing the
+//! cross-process `RedisThrottler` rate-limit store backing the
 //! `nest-rs-throttler` guard over the shared [`QueueConnection`].
 //!
 //! [`Job`]: ::nest_rs_queue::Job

@@ -2,7 +2,7 @@
 //!
 //! [`DatabaseModule`] is a [`DynamicModule`](nest_rs_core::DynamicModule) that
 //! builds the pool in the collect phase and registers it as a
-//! `sea_orm::DatabaseConnection`. Importing it also installs the [`DbContext`]
+//! `sea_orm::DatabaseConnection`. Importing it also installs the `DbContext`
 //! request interceptor, which binds each request to an ambient [`Executor`] —
 //! the pool for a safe method, a transaction for a mutating one. Services then
 //! query through [`Repo`] instead of holding a connection: every call runs on

@@ -7,7 +7,7 @@
 //! `sea_orm::Condition` for row-level filtering), and `mask` (strip
 //! disallowed instances + fields from a response).
 //!
-//! Bindings: [`http`], [`graphql`], [`mcp`]. The data-coupled bindings
+//! Bindings: `http`, `graphql`, `mcp`. The data-coupled bindings
 //! (`Bind`, the GraphQL `bind` helper, `LoaderScope`, `WsDataContext`) live in
 //! `nest-rs-seaorm` so the engine stays free of a data-layer dependency.
 mod ability;

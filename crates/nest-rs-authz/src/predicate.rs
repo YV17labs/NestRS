@@ -54,7 +54,7 @@ pub enum Predicate<E: EntityTrait> {
     Not(Box<Predicate<E>>),
     /// Scope `E` by a condition on a *related* entity reached through a typed
     /// SeaORM relation. Type-erased over the related entity (see
-    /// [`RelatedPredicate`]).
+    /// `RelatedPredicate`).
     Related(Box<RelatedPredicate>),
 }
 

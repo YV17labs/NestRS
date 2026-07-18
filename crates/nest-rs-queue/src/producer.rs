@@ -21,7 +21,7 @@ use crate::queue_name::QueueName;
 /// 1. seeds an `Arc<dyn JobProducer>` in the container (so any service can
 ///    inject it generically), and
 /// 2. contributes a `Transport` whose `serve` runs the backend's
-///    [`JobConsumer`] driver.
+///    [`JobConsumer`](crate::consumer::JobConsumer) driver.
 pub trait QueueBackend: Send + Sync + 'static {
     /// Stable display name (e.g. `"apalis-redis"`, `"sqs"`, `"in-memory"`).
     /// Logged at boot when the consumer attaches.

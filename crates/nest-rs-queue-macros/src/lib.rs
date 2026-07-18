@@ -17,7 +17,7 @@ mod queue;
 /// shared state (clients, repositories) in one place.
 ///
 /// The `queue` is named either by a raw string literal (legacy form) or by a
-/// [`QueueName`](nest_rs_queue::QueueName) **type** — the preferred form,
+/// `QueueName` **type** — the preferred form,
 /// declared with [`queue`](macro@crate::queue) at the feature port:
 /// `#[process(queue = AudioQueue)]`. The type form reads
 /// `<AudioQueue as QueueName>::NAME` into the inventory entry **and** asserts,
@@ -47,7 +47,7 @@ mod queue;
 /// submitted to the link-time inventory. No `Discoverable` — the host's own
 /// `#[injectable]` owns it.
 ///
-/// ```ignore
+/// ```text
 /// impl AudioProcessor { /* unchanged */ }
 /// fn __nestrs_process_handler_audio_processor_transcode(payload, container) -> Pin<Box<dyn Future<…>>> { /* … */ }
 /// ::nest_rs_core::inventory::submit! {
@@ -65,7 +65,7 @@ pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Stamp a unit struct with a compile-time queue identity — its wire name and
-/// the [`Job`](nest_rs_queue::Job) payload it carries — by implementing
+/// the `Job` payload it carries — by implementing
 /// `QueueName`. Lives beside the payload at the feature port; both the producer
 /// (`push_to::<Q>`) and the consumer (`#[process(queue = Q)]`) name the type,
 /// so a typo'd name or a mismatched payload is a compile error, not a job that

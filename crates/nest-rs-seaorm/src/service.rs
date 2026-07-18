@@ -42,7 +42,7 @@ pub enum Access<M> {
 
 /// Proof that the wrapped row was produced by an **authorized** load — the
 /// ambient ability granted action `A` on it through [`CrudService::access`], the
-/// single gateway every `Bind` / [`bind_required`](crate::graphql::bind_required)
+/// single gateway every `Bind` / `bind_required`
 /// funnels through.
 ///
 /// The action is carried in the type, not just the binding site: an

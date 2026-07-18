@@ -55,7 +55,7 @@ pub struct GeneratedOps<'a> {
 }
 
 pub struct CrudConfig {
-    /// Field holding the entity's [`CrudService`] — every generated op
+    /// Field holding the entity's `CrudService` — every generated op
     /// delegates to it so controllers/resolvers never touch `Repo` directly.
     pub service: Ident,
     pub entity: Path,

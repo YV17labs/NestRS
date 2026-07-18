@@ -43,7 +43,7 @@ pub fn clamp_page_size(first: u64) -> u64 {
 
 /// Hard backstop on `CrudService::list`: no unpaginated read returns more
 /// rows than this, ever — a capped result logs a `warn` naming the entity.
-/// Deliberately far above [`clamp_page_size`]'s window: the cap is a safety
+/// Deliberately far above `clamp_page_size`'s window: the cap is a safety
 /// net for "small, finite collection" callers, not a page size. A collection
 /// that can grow past it must paginate (`CrudService::page`).
 pub const LIST_CAP: u64 = 1_000;

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the public API is still stabilizing (`0.x`), the minor version carries
 both new features and breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- **Auto-resolved `has_many` relations are memory-bounded.** An
+  `#[expose]`d `has_many` field's dataloader previously loaded *every*
+  child of a parent (`.all()` with no `LIMIT`), so a relation with large
+  fanout (`Org.posts` over millions of rows) could pull an unbounded
+  result set into memory. The generated FK loader now caps its batch
+  query at `RELATION_LOAD_CAP × keys` and truncates each parent's bucket
+  to `RELATION_LOAD_CAP` (100), logging a `warn` when it does. A relation
+  that legitimately exceeds the cap should be a paginated
+  `#[field_resolver]`, not an auto-resolved list.
+
 ## [0.3.0] - 2026-07-16
 
 ### Added

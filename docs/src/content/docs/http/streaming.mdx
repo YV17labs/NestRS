@@ -11,7 +11,7 @@ memory, or a live Server-Sent Events feed the browser reads with
 untouched, so any poem response type works — no wrapper, no schema
 requirement.
 
-```rust title="crates/features/src/audio/http/controller.rs" {6-8}
+```rust title="crates/features/src/audio/http/controller.rs (abridged)" {6-8}
 #[get("/download")]
 async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
     let file = query.into_inner().file;
@@ -38,7 +38,7 @@ server without ever sitting whole in process memory.
 Return `poem::web::sse::SSE` for a long-lived `text/event-stream`. Each
 item the stream yields is an `Event`; the browser reconnects on drop.
 
-```rust title="crates/features/src/audio/http/controller.rs"
+```rust title="crates/features/src/audio/http/controller.rs (abridged)"
 #[get("/events")]
 async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SSE {
     let stream = /* a Stream<Item = Event> polling the job */;

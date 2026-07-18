@@ -1399,7 +1399,7 @@
           "Audio"
         ],
         "summary": "Upload an audio file directly as multipart/form-data",
-        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part; the server streams the part into object storage and returns the object key plus a presigned GET URL. The part's filename is validated against the same anti-traversal allowlist as the presigned path. Requires a bearer JWT and the admin capability.",
+        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part; the server buffers the part and stores it, then returns the object key plus a presigned GET URL. The part's filename is validated against the same anti-traversal allowlist as the presigned path. Requires a bearer JWT and the admin capability.",
         "security": [
           {
             "bearerAuth": []
@@ -1613,6 +1613,28 @@
   },
   "components": {
     "schemas": {
+      "PageParams": {
+        "type": "object",
+        "properties": {
+          "first": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "description": "Requested page size; defaults to 20 and is clamped to `1..=100`."
+          },
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start."
+          }
+        },
+        "description": "The `?first=&after=` cursor query. An unparsable `after` is ignored — paging\nfrom the start, never an error."
+      },
       "CreateOrg": {
         "type": "object",
         "properties": {

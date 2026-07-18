@@ -1,7 +1,7 @@
 //! Assemble an OpenAPI 3.1 document from the discovered HTTP controllers.
 
 use nest_rs_core::{Container, DiscoveryService};
-use nest_rs_http::{HttpControllerMeta, HttpRouteMeta, join_path};
+use nest_rs_http::{GlobalGuardsActive, HttpControllerMeta, HttpRouteMeta, join_path};
 use schemars::SchemaGenerator;
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
@@ -26,12 +26,18 @@ pub fn build_document(
     settings.definitions_path = "/components/schemas".into();
     let mut generator = settings.into_generator();
 
+    // A global guard pool (`use_guards_global`) covers every non-public route
+    // even when no controller declares `#[use_guards]`, so the security scheme
+    // and auth error responses must reflect it — mirroring how the transport
+    // decides a route is implicitly guarded.
+    let global_guards = container.get::<GlobalGuardsActive>().is_some();
+
     let mut paths: Map<String, Value> = Map::new();
     for controller in discovery.meta::<HttpControllerMeta>() {
         let prefix = controller.meta.effective_prefix();
         for route in &controller.meta.routes {
             let full = join_path(&prefix, route.path);
-            let operation = operation_object(route, &full, &mut generator);
+            let operation = operation_object(route, &full, &mut generator, global_guards);
             let item = paths
                 .entry(openapi_path(&full))
                 .or_insert_with(|| Value::Object(Map::new()));
@@ -89,10 +95,18 @@ fn problem_details_schema() -> Value {
     })
 }
 
+/// Whether a route demands a bearer token in the document: it declares a
+/// controller/method guard, or a global guard pool covers it — and it is not
+/// `#[public]`.
+fn route_is_guarded(route: &HttpRouteMeta, global_guards: bool) -> bool {
+    (route.scoped_guarded || global_guards) && !route.public
+}
+
 fn operation_object(
     route: &HttpRouteMeta,
     full_path: &str,
     generator: &mut SchemaGenerator,
+    global_guards: bool,
 ) -> Value {
     let mut op = Map::new();
     op.insert("operationId".into(), json!(route.handler));
@@ -121,7 +135,7 @@ fn operation_object(
     }
 
     // A guarded, non-public route demands a bearer token.
-    if route.scoped_guarded && !route.public {
+    if route_is_guarded(route, global_guards) {
         op.insert("security".into(), json!([{ "bearerAuth": [] }]));
     }
 
@@ -135,7 +149,7 @@ fn operation_object(
         );
     }
     responses.insert("200".into(), Value::Object(ok));
-    for (status, title) in error_statuses(route, full_path) {
+    for (status, title) in error_statuses(route, full_path, global_guards) {
         responses.insert(status.into(), problem_response(title));
     }
     op.insert("responses".into(), Value::Object(responses));
@@ -144,21 +158,28 @@ fn operation_object(
 }
 
 /// Path parameters typed from the handler's `Path<T>` extractor: the `i`-th
-/// `:name` segment gets the schema of `path_params[i]`. When the handler binds
-/// its id another way (`Bind<_, _>` leaves `path_params` empty), fall back to a
-/// `string`/`format: uuid` guess for an id-like segment.
+/// `:name` segment gets the schema of `path_params[i]`. Positional typing is
+/// only applied when every segment has a matching `Path<T>` component; a handler
+/// that binds some segments another way (`Bind<_, _>`, leaving fewer
+/// `path_params` than segments) would misalign, so all segments fall back to the
+/// `string`/`format: uuid` guess for an id-like name.
 fn typed_path_parameters(
     path: &str,
     path_params: &[nest_rs_http::SchemaFn],
     generator: &mut SchemaGenerator,
 ) -> Vec<Value> {
-    path.split('/')
+    let names: Vec<&str> = path
+        .split('/')
         .filter_map(|seg| seg.strip_prefix(':'))
+        .collect();
+    let positional = path_params.len() == names.len();
+    names
+        .iter()
         .enumerate()
         .map(|(i, name)| {
-            let schema = match path_params.get(i) {
+            let schema = match positional.then(|| path_params.get(i)).flatten() {
                 Some(schema_fn) => schema_fn(generator).to_value(),
-                None if name == "id" || name.ends_with("_id") => {
+                None if *name == "id" || name.ends_with("_id") => {
                     json!({ "type": "string", "format": "uuid" })
                 }
                 None => json!({ "type": "string" }),
@@ -174,17 +195,16 @@ fn typed_path_parameters(
 /// is an optional query parameter.
 fn expand_query_params(
     query_params: &[nest_rs_http::SchemaFn],
-    _generator: &mut SchemaGenerator,
+    generator: &mut SchemaGenerator,
 ) -> Vec<Value> {
     let mut out = Vec::new();
     for schema_fn in query_params {
         // A named struct (`PageParams`) yields a `$ref`, not inline properties.
-        // Build it in a throwaway generator and resolve the ref against that
-        // generator's definitions so we get the object with its `properties`.
-        let mut sub = SchemaSettings::draft2020_12().into_generator();
-        let schema = schema_fn(&mut sub).to_value();
-        let defs = sub.take_definitions(true);
-        let object = resolve_ref(&schema, &defs);
+        // Build it against the *shared* generator so any nested struct/enum a
+        // property references lands in the document's `components/schemas` — a
+        // throwaway generator would drop those, leaving a dangling `$ref`.
+        let schema = schema_fn(generator).to_value();
+        let object = resolve_ref(&schema, generator.definitions());
         let required: Vec<&str> = object
             .get("required")
             .and_then(Value::as_array)
@@ -219,12 +239,16 @@ fn resolve_ref(schema: &Value, defs: &Map<String, Value>) -> Value {
 /// The error responses an operation can actually produce, as `(status, title)`.
 /// Honest per route: auth codes only on a guarded route, `404` only where a
 /// path binds an id, `409` only on a `#[crud]` write, `422` only with a body.
-fn error_statuses(route: &HttpRouteMeta, full_path: &str) -> Vec<(&'static str, &'static str)> {
+fn error_statuses(
+    route: &HttpRouteMeta,
+    full_path: &str,
+    global_guards: bool,
+) -> Vec<(&'static str, &'static str)> {
     let mut out = Vec::new();
     if route.request_body.is_some() {
         out.push(("422", "Unprocessable Content"));
     }
-    if route.scoped_guarded && !route.public {
+    if route_is_guarded(route, global_guards) {
         out.push(("401", "Unauthorized"));
         out.push(("403", "Forbidden"));
     }
@@ -361,7 +385,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("get_health", "/health");
         r.tags = &["health"];
-        let op = operation_object(&r, "/health", &mut g);
+        let op = operation_object(&r, "/health", &mut g, false);
         assert_eq!(op["operationId"], "get_health");
         assert_eq!(op["tags"][0], "health");
     }
@@ -369,7 +393,7 @@ mod tests {
     #[test]
     fn operation_object_skips_optional_metadata_when_absent() {
         let mut g = generator();
-        let op = operation_object(&route("h", "/h"), "/h", &mut g);
+        let op = operation_object(&route("h", "/h"), "/h", &mut g, false);
         let obj = op.as_object().unwrap();
         assert!(!obj.contains_key("summary"));
         assert!(!obj.contains_key("description"));
@@ -383,7 +407,7 @@ mod tests {
         let mut r = route("h", "/h");
         r.summary = Some("Quick");
         r.description = Some("Full prose");
-        let op = operation_object(&r, "/h", &mut g);
+        let op = operation_object(&r, "/h", &mut g, false);
         assert_eq!(op["summary"], "Quick");
         assert_eq!(op["description"], "Full prose");
     }
@@ -392,7 +416,7 @@ mod tests {
     fn operation_object_inlines_parameters_when_path_has_any() {
         let mut g = generator();
         let r = route("get_user", "/users/:id");
-        let op = operation_object(&r, "/users/:id", &mut g);
+        let op = operation_object(&r, "/users/:id", &mut g, false);
         assert!(op["parameters"].is_array());
         assert_eq!(op["parameters"][0]["name"], "id");
     }
@@ -402,7 +426,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("create_user", "/users");
         r.request_body = Some(schema_for_dummy);
-        let op = operation_object(&r, "/users", &mut g);
+        let op = operation_object(&r, "/users", &mut g, false);
         assert_eq!(op["requestBody"]["required"], true);
         assert!(op["requestBody"]["content"]["application/json"]["schema"].is_object());
     }
@@ -410,7 +434,7 @@ mod tests {
     #[test]
     fn operation_object_always_emits_a_200_response_with_description() {
         let mut g = generator();
-        let op = operation_object(&route("h", "/h"), "/h", &mut g);
+        let op = operation_object(&route("h", "/h"), "/h", &mut g, false);
         assert_eq!(op["responses"]["200"]["description"], "OK");
         // No `response` fn → no content block on 200.
         assert!(op["responses"]["200"].get("content").is_none());
@@ -421,8 +445,30 @@ mod tests {
         let mut g = generator();
         let mut r = route("get_user", "/users/:id");
         r.response = Some(schema_for_dummy);
-        let op = operation_object(&r, "/users/:id", &mut g);
+        let op = operation_object(&r, "/users/:id", &mut g, false);
         assert!(op["responses"]["200"]["content"]["application/json"]["schema"].is_object());
+    }
+
+    #[test]
+    fn a_global_guard_pool_marks_an_otherwise_unguarded_route_as_secured() {
+        // scoped_guarded=false, public=false: no controller/method guard, but a
+        // `use_guards_global` pool covers it — the document must reflect that.
+        let mut g = generator();
+        let r = route("list", "/users");
+        let op = operation_object(&r, "/users", &mut g, true);
+        assert_eq!(op["security"][0]["bearerAuth"], json!([]));
+        assert!(op["responses"].get("401").is_some());
+        assert!(op["responses"].get("403").is_some());
+    }
+
+    #[test]
+    fn a_public_route_stays_unsecured_even_under_a_global_guard_pool() {
+        let mut g = generator();
+        let mut r = route("health", "/health");
+        r.public = true;
+        let op = operation_object(&r, "/health", &mut g, true);
+        assert!(op.get("security").is_none());
+        assert!(op["responses"].get("401").is_none());
     }
 
     #[test]

@@ -53,7 +53,7 @@ pub struct HttpConfig {
     /// under TLS). On by default; tune via `NESTRS_HTTP__SECURITY_HEADERS`,
     /// `__FRAME_OPTIONS`, `__HSTS`, `__CONTENT_TYPE_OPTIONS`.
     pub security_headers: SecurityHeadersConfig,
-    /// Negotiate response compression (gzip / deflate / brotli) from the
+    /// Negotiate response compression (gzip / deflate / brotli / zstd) from the
     /// request's `Accept-Encoding`. Off by default — leave it to the reverse
     /// proxy in most deployments; flip on with `NESTRS_HTTP__COMPRESSION=true`
     /// when the app terminates responses directly.

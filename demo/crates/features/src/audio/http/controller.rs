@@ -77,8 +77,8 @@ impl AudioController {
     #[api(
         summary = "Upload an audio file directly as multipart/form-data",
         description = "The single-round-trip alternative to the presigned flow: the client posts a \
-                       `multipart/form-data` body with a `file` part; the server streams the part \
-                       into object storage and returns the object key plus a presigned GET URL. The \
+                       `multipart/form-data` body with a `file` part; the server buffers the part \
+                       and stores it, then returns the object key plus a presigned GET URL. The \
                        part's filename is validated against the same anti-traversal allowlist as \
                        the presigned path. Requires a bearer JWT and the admin capability.",
         tags("Audio")
@@ -165,16 +165,27 @@ impl AudioController {
                 if attempt >= 20 {
                     return None;
                 }
-                let ready = svc.result_ready(&file).await.unwrap_or(false);
-                let state = if ready { "ready" } else { "pending" };
-                let event =
+                let event = |state: &str| {
                     Event::message(format!("{{\"state\":\"{state}\",\"attempt\":{attempt}}}"))
-                        .event_type("transcode");
-                if ready {
-                    Some((event, u32::MAX))
-                } else {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                    Some((event, attempt + 1))
+                        .event_type("transcode")
+                };
+                match svc.result_ready(&file).await {
+                    Ok(true) => Some((event("ready"), u32::MAX)),
+                    Ok(false) => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        Some((event("pending"), attempt + 1))
+                    }
+                    // A storage failure is surfaced as a terminal `error` event,
+                    // never masqueraded as `pending` — the client sees the fault.
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "features::audio",
+                            file = %file,
+                            error = %e,
+                            "transcode status poll failed",
+                        );
+                        Some((event("error"), u32::MAX))
+                    }
                 }
             }
         });

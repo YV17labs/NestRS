@@ -264,9 +264,15 @@ pub async fn normalize_error_response(resp: Response) -> Response {
     let mut response = problem.as_response();
     // Carry the original response's headers across — the new body owns
     // content-type / content-length, everything else (auth challenges, rate
-    // limits) survives.
+    // limits) survives. Content/transfer-encoding are dropped too: the
+    // replacement body is fresh and uncompressed, so a stale `Content-Encoding`
+    // copied from a compressed original would make the client fail to decode it.
     for (name, value) in parts.headers.iter() {
-        if name == header::CONTENT_TYPE || name == header::CONTENT_LENGTH {
+        if name == header::CONTENT_TYPE
+            || name == header::CONTENT_LENGTH
+            || name == header::CONTENT_ENCODING
+            || name == header::TRANSFER_ENCODING
+        {
             continue;
         }
         response.headers_mut().append(name.clone(), value.clone());
@@ -527,6 +533,36 @@ mod tests {
             resp.headers().get("WWW-Authenticate").map(|v| v.as_bytes()),
             Some(b"Bearer".as_slice()),
             "an auth challenge header must survive normalization",
+        );
+    }
+
+    #[tokio::test]
+    async fn normalize_drops_a_stale_content_encoding_from_the_original() {
+        // The compression layer sits inside this boundary, so a raw error it
+        // already stamped `Content-Encoding: gzip` must not carry that header
+        // onto the fresh, uncompressed problem+json body — else the client
+        // fails to decode it (ERR_CONTENT_DECODING_FAILED).
+        let raw = Response::builder()
+            .status(StatusCode::GATEWAY_TIMEOUT)
+            .header(header::CONTENT_ENCODING, "gzip")
+            .header(header::TRANSFER_ENCODING, "chunked")
+            .content_type("text/plain")
+            .body("upstream timed out");
+        let resp = normalize_error_response(raw).await;
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .map(|v| v.as_bytes()),
+            Some(b"application/problem+json".as_slice()),
+        );
+        assert!(
+            resp.headers().get(header::CONTENT_ENCODING).is_none(),
+            "a stale Content-Encoding must not survive onto the rewritten body",
+        );
+        assert!(
+            resp.headers().get(header::TRANSFER_ENCODING).is_none(),
+            "a stale Transfer-Encoding must not survive onto the rewritten body",
         );
     }
 

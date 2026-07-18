@@ -5,9 +5,10 @@ use uuid::Uuid;
 
 use crate::factories::{org, user};
 
-pub const WELCOME: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_b001);
-const ACME_DRAFT: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_b002);
-const GLOBEX_LAUNCH: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_b003);
+// UUID **v7** sentinels (version `7`, variant `8`) — see `org.rs`.
+pub const WELCOME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_b001);
+const ACME_DRAFT: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_b002);
+const GLOBEX_LAUNCH: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_b003);
 
 const DEMO: [(Uuid, Uuid, Uuid, &str, &str); 3] = [
     (

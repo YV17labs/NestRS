@@ -15,11 +15,13 @@ migrate with a seed for a clean slate.
 
 One factory per table, each a `seed(db)` function that inserts its demo rows
 and returns how many landed. Organizations use fixed UUIDs so other factories
-— and tests — can reference them by constant:
+— and tests — can reference them by constant. The ids are UUID **v7** (version
+nibble `7`, variant `8`): the `Bind` / `#[crud]` by-id routes reject any
+non-v7 path id, so a seeded row has to be v7 to be reachable by id.
 
 ```rust title="crates/seed/src/factories/org.rs"
-pub const ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e);
-pub const GLOBEX: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_61b3);
+pub const ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
+pub const GLOBEX: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_61b3);
 
 const DEMO_ORGS: [(Uuid, &str); 2] = [(ACME, "Acme"), (GLOBEX, "Globex")];
 
@@ -43,21 +45,25 @@ fixed ids — `user::ACME_AUTHOR` is the author of Acme posts — and conflict o
 the unique `email`:
 
 ```rust title="crates/seed/src/factories/user.rs"
-pub const ACME_AUTHOR: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac01);
+pub const ACME_AUTHOR: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac01);
 
-const DEMO: [(Uuid, Uuid, &str, &str); 5] = [
-    (ACME_AUTHOR, org::ACME, "Acme Author", "acme-user-1@example.test"),
+// (id, org, name, email, role, password_hash) — an admin plus members per org.
+const DEMO: [(Uuid, Uuid, &str, &str, &str, Option<&str>); 7] = [
+    (ACME_AUTHOR, org::ACME, "Acme Author", "acme-user-1@example.test", "user", Some(DEMO_PASSWORD_HASH)),
     // ...
 ];
 
 // INSERT ... ON CONFLICT (email) DO NOTHING.
 ```
 
+The password hash is a **pre-computed** argon2id PHC constant, not a fresh hash
+per run — re-hashing would emit a new salt each time and break idempotency.
+
 Posts hang off the org and author constants. `post::WELCOME` is a stable id
 for the first Acme article:
 
 ```rust title="crates/seed/src/factories/post.rs"
-pub const WELCOME: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_b001);
+pub const WELCOME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_b001);
 
 const DEMO: [(Uuid, Uuid, Uuid, &str, &str); 3] = [
     (

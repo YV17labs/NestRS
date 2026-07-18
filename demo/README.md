@@ -68,6 +68,46 @@ once first (or `nestrs run db reset` to also load demo users). `assistant` and
 The richest reference is `api`. Read it before inventing a second pattern —
 copy it to start a new feature.
 
+## Demo accounts
+
+`nestrs run db reset` seeds two tenants (Acme, Globex), each with an admin and
+members. Every account below shares the password **`publish-demo`**:
+
+| Email | Org | Role |
+|-------|-----|------|
+| `admin@acme.test` | Acme | admin |
+| `acme-user-1@example.test` | Acme | user |
+| `admin@globex.test` | Globex | admin |
+| `globex-user-1@example.test` | Globex | user |
+
+## The magic moment (three curls)
+
+With `nestrs run db reset` done and both `auth` (3001) and `api` (3002) running,
+watch row-level filtering and field masking with nothing but curl:
+
+```bash
+# 1. Sign in as the Acme admin, capture the token.
+ADMIN=$(curl -s localhost:3001/login -H 'content-type: application/json' \
+  -d '{"email":"admin@acme.test","password":"publish-demo"}' | jq -r .access_token)
+
+# 2. Admin sees every Acme user — emails included, and only Acme rows.
+curl -s localhost:3002/users -H "authorization: Bearer $ADMIN" | jq
+
+# 3. A plain member: same query, but `email` is masked out of every row.
+MEMBER=$(curl -s localhost:3001/login -H 'content-type: application/json' \
+  -d '{"email":"acme-user-1@example.test","password":"publish-demo"}' | jq -r .access_token)
+curl -s localhost:3002/users -H "authorization: Bearer $MEMBER" | jq
+
+# 4. Cross-tenant read is refused — a member's token cannot reach another org
+#    (403). The admin here deliberately manages every publication, so the
+#    isolation boundary is shown with the plain member from step 3.
+curl -s -o /dev/null -w '%{http_code}\n' \
+  localhost:3002/orgs/00000000-0000-7000-8000-0000000061b3 \
+  -H "authorization: Bearer $MEMBER"
+```
+
+The handler never checks the tenant or the role — the framework carries it.
+
 ## Docker
 
 The multi-stage [`Dockerfile`](Dockerfile) builds **every app binary** into a

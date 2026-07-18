@@ -3,7 +3,9 @@ use nest_rs_config::{Config, ConfigError, ConfigService, config};
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
 
-const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e);
+// The seeded Acme org (a UUID v7 — see `demo/crates/seed`): a social login
+// with no explicit org lands in a real, reachable tenant.
+const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
 #[config(namespace = "issuer")]
 #[derive(Clone, Default)]
@@ -78,7 +80,7 @@ mod tests {
     fn default_org_constant_does_not_drift() {
         assert_eq!(
             DEFAULT_ORG,
-            Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_ac3e),
+            Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e),
         );
     }
 }

@@ -35,7 +35,7 @@ pub trait Discoverable {
         Vec::new()
     }
 
-    /// [`ProviderKey`] of each **keyed** `#[inject(key = "…")]` dependency,
+    /// [`ProviderKey`](crate::ProviderKey) of each **keyed** `#[inject(key = "…")]` dependency,
     /// recorded for the access-graph keyed check. Kept apart from
     /// [`injected`](Discoverable::injected) — a keyed dependency is validated
     /// against the global keyed set (seeds + factory outputs), and its boot

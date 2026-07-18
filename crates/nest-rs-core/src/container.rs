@@ -68,7 +68,7 @@ pub struct KeyedDependency {
 }
 
 /// Builds a fresh instance of a request-scoped provider, invoked once per
-/// request by a [`RequestScope`](crate::RequestScope). The factory receives the
+/// request by a [`RequestScope`]. The factory receives the
 /// scope (not the bare root [`Container`]) so a request-scoped provider may
 /// depend on **another** request-scoped provider and share its per-request
 /// instance; singleton deps still resolve because the scope forwards them to
@@ -387,10 +387,10 @@ impl ContainerBuilder {
     }
 
     /// Register a request-scoped provider: `factory` builds a fresh `T` for
-    /// each request, cached by a [`RequestScope`](crate::RequestScope).
+    /// each request, cached by a [`RequestScope`].
     ///
     /// Emitted by `#[injectable(scope = request)]`. The factory resolves
-    /// dependencies through the [`RequestScope`](crate::RequestScope), so a
+    /// dependencies through the [`RequestScope`], so a
     /// request-scoped provider may depend on singletons **and** on other
     /// request-scoped providers (which it shares with the rest of the request).
     /// The reverse — a singleton depending on a request-scoped provider — stays
@@ -417,7 +417,7 @@ impl ContainerBuilder {
     }
 
     /// Register a transient provider: `factory` builds a fresh `T` every time
-    /// `Container::get::<T>()` (or a [`RequestScope`](crate::RequestScope))
+    /// `Container::get::<T>()` (or a [`RequestScope`])
     /// resolves it. There is no caching — same scope, multiple resolutions,
     /// different instances.
     ///

@@ -132,6 +132,8 @@ export default defineConfig({
           items: [
             { label: 'Introduction', slug: 'index' },
             { label: 'Why NestRS', slug: 'why' },
+            { label: 'Why not axum?', slug: 'why-not-axum' },
+            { label: 'Coming from NestJS', slug: 'coming-from-nestjs' },
             { label: 'Getting started', slug: 'getting-started' },
             { label: 'CLI', slug: 'cli' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
@@ -167,6 +169,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'security' },
             { label: 'Add login + protect a route', slug: 'security/add-login' },
+            { label: 'Multi-tenant SaaS in production', slug: 'security/multi-tenant-saas' },
             { label: 'Threat model', slug: 'security/threat-model' },
             {
               label: 'Authentication',

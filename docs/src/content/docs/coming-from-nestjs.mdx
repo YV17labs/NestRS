@@ -1,0 +1,155 @@
+---
+title: Coming from NestJS
+description: Map your NestJS reflexes onto NestRS decorators, and see what runs differently underneath.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+If NestJS shaped how you think about backends, most of NestRS will read like
+home. You still write a module, a service, a thin controller, and let
+decorators carry the wiring. This page maps the vocabulary you already know
+onto its NestRS equivalent, then shows where the machine underneath diverges.
+
+```rust
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[routes]
+impl UsersController {
+    #[get("/:id")]
+    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+        Json(User::from(&*user))
+    }
+}
+```
+
+A `@Controller('users')` with an injected service and a `@Get(':id')` — the
+shape survives the port to Rust. The decorators changed spelling, not meaning.
+
+## The equivalence table
+
+Each row is a reflex you already have on the left and its NestRS spelling on
+the right. The layer vocabulary — module, provider, controller, guard,
+resolver — carries across intact.
+
+| NestJS | NestRS |
+|---|---|
+| `@Module({ imports, providers })` | `#[module(imports = [...], providers = [...])]` |
+| `@Injectable()` | `#[injectable]` |
+| `@Controller('users')` | `#[controller(path = "/users")]` |
+| `@Get()` / `@Post()` methods | `#[get("/")]` / `#[post("/")]` in a `#[routes] impl` |
+| `CanActivate` guard | `Guard` trait (`check_http`) + `#[use_guards(...)]` |
+| DTO + `class-validator` | entity `#[expose]` + `validate(...)` (the `validator` crate) |
+| `@Inject('TOKEN')` provider token | inject `Arc<dyn Trait>`, provider listed `as dyn Trait` |
+| `@UseGuards(...)` | `#[use_guards(...)]` |
+| `@Resolver()` operation | `#[resolver]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
+| Runtime DI resolution | access graph checked at boot, with a named error |
+
+The rows are close, but two of them carry a design change worth reading in
+full: provider visibility and when wiring is verified.
+
+## No exports array
+
+In NestJS a provider is private to its module until you add it to `exports`,
+and a consumer imports the whole module to reach it. NestRS has no per-module
+export list. A provider becomes shareable by exposing a `pub trait` and binding
+it in the module's `providers` as `SomeProvider as dyn Trait`; a consumer then
+injects `Arc<dyn Trait>`.
+
+Visibility is Rust's job. The container is flat, and the orphan and coherence
+rules already decide what a crate can name. Adding an `exports` list on top of
+that would be a second, redundant gate, so there is not one.
+
+## Wiring is checked at boot, not on the first request
+
+NestJS resolves the dependency graph as the app instantiates, and a bad wire
+often surfaces as a `Cannot resolve dependency` the first time a route runs.
+NestRS records every module's imports and every provider's dependencies at
+compile time. At startup, `App::build()` walks that graph.
+
+A provider that injects something its module cannot reach fails startup with an
+error naming the missing dependency and the fix — never a runtime resolution
+error minutes after deploy. The reflex to test-request an endpoint just to
+confirm it wired up does not carry over; if it built, it wired.
+
+<Aside type="note">
+  This is [property 5 in *Why NestRS*](/why/#5-wiring-verified-at-boot). The
+  access graph and the exact boot error live on
+  [Providers](/fundamentals/providers/).
+</Aside>
+
+## Security is structural, not per-decorator discipline
+
+In NestJS, authorization is a habit: you remember to add `@UseGuards` and a
+policy check on each route, and a forgotten one is a silent hole. NestRS moves
+the guarantee into composition. Once a feature imports the database and authz
+modules, every read through the data layer is filtered, every mutating write is
+gated, and every response body is masked.
+
+A feature does not opt in to authz per handler. It opts out by not importing
+the modules. You still bind guards explicitly with `#[use_guards(...)]`, and
+every posture stays greppable as one `#[authorize]` or `#[public]` site — but
+forgetting the filter on a query is a category error the framework prevents,
+not a review catch.
+
+## No runtime reflection
+
+NestJS reads decorator metadata through `reflect-metadata` at runtime, and some
+behavior is shaped by configuration the process reads on boot. NestRS
+decorators are attribute macros: they expand to plain Rust during compilation.
+There is no metadata registry to query at runtime and no `.env`-driven
+reflection deciding what a decorator means. What the macro emitted is what runs.
+
+## Side by side
+
+The same slice — a users controller with an injected service and one guarded
+route — written both ways. The NestJS sketch first:
+
+```ts
+@Controller('users')
+@UseGuards(AuthGuard, AuthzGuard)
+export class UsersController {
+  constructor(private readonly svc: UsersService) {}
+
+  @Get(':id')
+  async get(@Param('id') id: string): Promise<User> {
+    return this.svc.findInOrg(id);
+  }
+}
+```
+
+And the NestRS equivalent. The guard binding, the injected service, and the
+route decorator all have a direct counterpart; the `Bind` parameter loads the
+authorized row for the caller's org through the service:
+
+```rust
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[routes]
+impl UsersController {
+    #[get("/:id")]
+    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+        Json(User::from(&*user))
+    }
+}
+```
+
+The org scoping is not an argument you thread through by hand. The guard
+established the principal, and `Bind` resolves the id to a row the caller is
+authorized to read — outside the caller's org is a 403, absent is a 404.
+
+## Going further
+
+- [Why NestRS](/why/) — the thesis and the six structural properties behind it.
+- [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, filters.
+- [Providers](/fundamentals/providers/) — the access graph, checked at boot.
+- [Getting started](/getting-started/) — scaffold and run your first app.

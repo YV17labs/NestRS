@@ -103,7 +103,12 @@ regenerate the committed SDL by running the dev server (see CLAUDE.md).
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 
-CI runs format, lint, and the test suite. PRs must be green before review.
+There is no test CI: the *Definition of done* is enforced locally, by you,
+before every PR. Run `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all --check`, and `cargo nextest run --workspace` (plus the
+`demo/` equivalents via `nestrs run` when you touch the product) and paste the
+output in your PR description. A PR that has not passed them locally is not
+ready for review.
 
 ### Commit messages
 

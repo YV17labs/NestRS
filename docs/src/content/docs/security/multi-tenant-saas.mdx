@@ -1,0 +1,175 @@
+---
+title: Multi-tenant SaaS in production
+description: What tenant isolation the framework guarantees, the escape hatches that bypass it, and the review checklist that keeps them honest.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+If you sell one deployment to many tenants, one leaked row is a breach.
+This page states what the framework isolates for you, names the exact
+places that bypass it, and gives you a checklist to audit before you
+trust it. The guarantees are strong; the escape hatches are real and
+deliberate — you should know both.
+
+Isolation starts where every request enters: bind the two guards on the
+controller, and the caller's org scope flows through every layer below.
+
+```rust title="crates/features/src/users/http/controller.rs"
+#[controller(path = "/users")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+```
+
+## The guarantee
+
+Once the authz modules are imported, the caller's ambient `Ability` is
+non-optional. It does three things on every request, without a
+per-handler opt-in:
+
+- **Pre-filters every read.** `Repo` joins the ability's predicate into
+  the SQL `WHERE`, so a member querying posts gets `org_id =
+  $caller_org_id` appended.
+- **Gates every by-id write.** A denied-but-existing row updates zero
+  rows and returns `403`, not the row.
+- **Masks every response field.** Fields the caller cannot read are
+  stripped from the body before it leaves the process.
+
+One predicate AST is interpreted twice — as SQL and in memory — so the
+rows a query returns and the rows the masker keeps cannot diverge. The
+mechanics live on one canonical page:
+[Row-level filtering](/security/authorization/row-level-filtering/).
+This page does not re-derive them; it covers what happens at the edges
+of that guarantee.
+
+## The escape hatches
+
+The framework does not pretend the choke point is inescapable. Three
+paths reach the database around the ambient scope. Each exists for a
+reason, and each is a place a reviewer must look.
+
+### 1. `Repo::conn()` and injected `Arc<DatabaseConnection>`
+
+`Repo::conn()` is `pub`. It hands you the ambient executor for a custom
+query. A `find()` against it that skips `scope_for` runs **unfiltered**:
+
+```rust
+// Escape hatch: an unfiltered read across every tenant. A review trigger.
+let every_post = posts::Entity::find()
+    .all(&Repo::<posts::Entity>::conn()?)
+    .await?;
+```
+
+An injected `Arc<DatabaseConnection>` goes one step further — it has no
+executor and no ability at all, the sanctioned bypass for a truly
+contextless path such as a shutdown hook:
+
+```rust
+#[injectable]
+pub struct SessionReaper {
+    #[inject]
+    db: Arc<DatabaseConnection>, // no executor, no ability — fully unscoped
+}
+```
+
+Both are deliberate seams for system-level work, not the default path.
+Feature code that reaches for either owes a comment saying why the scope
+does not apply, and a reviewer who confirms it.
+
+### 2. Worker and queue jobs run unscoped by definition
+
+A `#[processor]` runs on a pool executor with **no ambient ability and
+no per-job transaction**. There is no caller, so there is no scope to
+inherit. That is correct for system work — and it means each processor
+is a tenant boundary you re-establish by hand.
+
+The pattern: carry the tenant id in the job payload, then filter on it
+yourself. The ambient row filter is a no-op here, so the `org_id`
+predicate is yours to add.
+
+```rust title="crates/features/src/posts/queue/processor.rs"
+#[processor]
+impl PostsProcessor {
+    #[process("posts.publish")]
+    async fn publish(&self, job: PublishJob) -> Result<(), JobError> {
+        // No ambient ability — scope explicitly from the payload.
+        let post = posts::Entity::find_by_id(job.post_id)
+            .filter(posts::Column::OrgId.eq(job.org_id))
+            .one(&Repo::<posts::Entity>::conn()?)
+            .await?;
+        // ...
+        Ok(())
+    }
+}
+```
+
+This is by design, not a defect. But it must be said plainly: the
+compiler does not remind you to filter inside a processor. A job that
+loads by id alone crosses tenants.
+
+### 3. The Postgres RLS backstop
+
+For the highest-assurance deployments, add a defense-in-depth layer the
+application cannot bypass: a Postgres Row-Level Security policy keyed on
+`tenant_id`. Even an accidental unfiltered query — a stray `conn()`
+`find()`, a processor that forgot its `org_id` predicate — returns
+nothing, because the database itself refuses the rows.
+
+```sql
+ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation ON posts
+  USING (org_id = current_setting('app.current_org')::uuid);
+```
+
+You set `app.current_org` per connection from the authenticated org id.
+This is belt-and-suspenders: the application-layer filter is the primary
+control, and RLS is the floor under it. Frame it as insurance for the
+tenants who demand it, not a substitute for the guards above.
+
+## Review checklist
+
+Run this before a tenant-facing release. Each step is one `grep` or one
+read:
+
+1. **Grep for `Repo::conn()`** in feature code. Confirm each call site
+   is a sanctioned unfiltered read, not a forgotten scope.
+2. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
+   Each injection should be a contextless path (a hook), never a request
+   handler.
+3. **Confirm every `#[processor]` re-scopes.** Trace the tenant id from
+   the job payload into the query. A load-by-id with no `org_id`
+   predicate is the bug.
+4. **Confirm every controller carries `#[use_guards(AuthGuard,
+   AuthzGuard)]`.** A missing binding fails closed to empty results, but
+   a [negative-path test](/testing/negative-path/) pins it.
+5. **Confirm RLS policies exist** on tenant tables if you enabled the
+   backstop. A table with RLS disabled is a silent gap in the floor.
+
+<Aside type="caution">
+The most probable failure is not a missing guard — the framework makes
+that loud. It is a logic bug in your `AbilityFactory` (wrong `org_id`
+scope, a grant on the wrong subject). No escape-hatch audit catches
+that. Pin the matrix with unit tests against `Ability::can` and
+`Ability::condition_for`.
+</Aside>
+
+## Limits
+
+Isolation of rows and fields is the framework's job. Everything a
+production tenant boundary also depends on remains yours: key management,
+token revocation, TLS, and DDoS defense at the edge. The
+[Threat model](/security/threat-model/) lists what each layer catches
+and where the responsibility falls back on your deployment. Read it
+before you go live.
+
+## Going further
+
+- [Row-level filtering](/security/authorization/row-level-filtering/) —
+  how the ambient ability joins into every read.
+- [Threat model](/security/threat-model/) — what the layers cover and
+  what stays your responsibility.
+- [Repo and executor](/database/repo-and-executor/) — the choke point
+  the escape hatches step around.

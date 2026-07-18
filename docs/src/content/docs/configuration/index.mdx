@@ -33,15 +33,15 @@ The common case is three short blocks: a `#[config]` struct, a derived
 use nest_rs_config::{config, Config, ConfigService};
 use validator::Validate;
 
-#[config(namespace = "items")]
+#[config(namespace = "posts")]
 #[derive(Clone, Validate)]
-pub struct ItemsConfig {
+pub struct PostsConfig {
     #[validate(range(min = 1, max = 500))]
     pub page_size: u32,
     pub cache_enabled: bool,
 }
 
-impl Config for ItemsConfig {
+impl Config for PostsConfig {
     fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
         Ok(Self {
             page_size: env.parse("PAGE_SIZE")?.unwrap_or(50),
@@ -53,8 +53,8 @@ impl Config for ItemsConfig {
 
 Three pieces do the heavy lifting:
 
-- **`#[config(namespace = "items")]`** binds the struct to the
-  `NESTRS_ITEMS__*` scheme. The macro wires the `Namespaced` trait — no
+- **`#[config(namespace = "posts")]`** binds the struct to the
+  `NESTRS_POSTS__*` scheme. The macro wires the `Namespaced` trait — no
   manual constant to write.
 - **`impl Config { fn from_env(env: &ConfigService) }`** is the
   hand-written contract: one line per variable. A reviewer reading this
@@ -107,14 +107,14 @@ module imports `ConfigModule::for_root()` once.
 
 ```rust title="src/posts/module.rs"
 use nest_rs_config::ConfigModule;
-use super::config::ItemsConfig;
+use super::config::PostsConfig;
 use super::service::PostsService;
 
 #[module(
-    imports = [ConfigModule::for_feature::<ItemsConfig>()],
+    imports = [ConfigModule::for_feature::<PostsConfig>()],
     providers = [PostsService],
 )]
-pub struct ItemsModule;
+pub struct PostsModule;
 ```
 
 ```rust title="src/module.rs"
@@ -123,7 +123,7 @@ use nest_rs_config::ConfigModule;
 #[module(
     imports = [
         ConfigModule::for_root(),
-        ItemsHttpModule,
+        PostsHttpModule,
     ],
 )]
 pub struct AppModule;
@@ -139,14 +139,14 @@ pub struct AppModule;
 
 ## Inject it
 
-A consumer injects `Arc<ItemsConfig>` like any provider — the type is
+A consumer injects `Arc<PostsConfig>` like any provider — the type is
 the token.
 
 ```rust title="src/posts/service.rs"
 #[injectable]
 pub struct PostsService {
     #[inject]
-    config: Arc<ItemsConfig>,
+    config: Arc<PostsConfig>,
 }
 
 impl PostsService {
@@ -162,8 +162,8 @@ impl PostsService {
 A bad value fails the boot before any port opens:
 
 ```bash frame="terminal"
-$ NESTRS_ITEMS__PAGE_SIZE=lots nestrs run dev api
-Error: invalid value for NESTRS_ITEMS__PAGE_SIZE: invalid digit found in string
+$ NESTRS_POSTS__PAGE_SIZE=lots nestrs run dev api
+Error: invalid value for NESTRS_POSTS__PAGE_SIZE: invalid digit found in string
 ```
 
 A violated `#[validate]` rule aborts the same way after the load,
@@ -184,7 +184,7 @@ becomes implicit (which vars exist? what are their types?). With
 
 ## Advanced
 
-Hand-writing `from_env` (for custom validation, or a field carrying a structured payload, or a rule spanning the whole struct) is covered on [Advanced configuration](/configuration/advanced/)  14 with the real `IssuerConfig` as the worked example.
+Hand-writing `from_env` (for custom validation, or a field carrying a structured payload, or a rule spanning the whole struct) is covered on [Advanced configuration](/configuration/advanced/) with the real `IssuerConfig` as the worked example.
 
 ## Going further
 

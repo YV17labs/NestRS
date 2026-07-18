@@ -65,7 +65,7 @@ mod tests {
         let scope = LoaderScope {
             db: Arc::new(DatabaseConnection::default()),
         };
-        let ability = Arc::new(AbilityBuilder::new().build());
+        let ability = Arc::new(AbilityBuilder::new().build().expect("valid test ability"));
 
         // Build the spawner *inside* the ability scope, exactly as async-graphql
         // builds the per-request loader while the request's ability is live.

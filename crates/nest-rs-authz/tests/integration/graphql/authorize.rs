@@ -72,7 +72,8 @@ impl Guard for AbilityInjector {
             b.can(Action::Read, widget::Entity)
                 .when(|p| p.eq(widget::Column::Id, 1));
         }
-        req.extensions_mut().insert(Arc::new(b.build()));
+        req.extensions_mut()
+            .insert(Arc::new(b.build().expect("valid test ability")));
         Ok(())
     }
 }

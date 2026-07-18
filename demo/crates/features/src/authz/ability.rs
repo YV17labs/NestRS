@@ -60,7 +60,7 @@ mod tests {
         };
         let mut b = AbilityBuilder::new();
         AppAbility.define(&claims, &mut b);
-        b.build()
+        b.build().expect("valid test ability")
     }
 
     fn admin(org_id: Uuid) -> Ability {

@@ -11,6 +11,17 @@ both new features and breaking changes.
 
 ### Fixed
 
+- **A malformed relational rule fails ability construction instead of
+  going fail-open.** `PredicateBuilder::related` rejects an invalid
+  relation (composite key, or a relation not pointing at the declared
+  related entity) with the `Deny` sentinel. In a `cannot(...)` that
+  sentinel lowered to `1 = 0` and combined as `grant AND NOT(1 = 0)` —
+  i.e. the restriction evaporated (fail-*open*). `AbilityBuilder::build`
+  now returns `Result<Ability, MalformedRuleError>` and fails naming the
+  faulty rule; the HTTP ability guard denies the request (fail-closed)
+  when construction fails. A malformed grant, previously a silent
+  deny-all, is surfaced the same way.
+
 - **A scoped/transient provider's missing dependency fails the boot,
   not the first request.** The access graph only flagged *cross-module*
   reaches; a request-scoped or transient provider whose dependency was

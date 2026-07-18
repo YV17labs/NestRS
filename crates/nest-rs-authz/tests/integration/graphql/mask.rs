@@ -108,7 +108,8 @@ impl Guard for AbilityInjector {
             }
             _ => {}
         }
-        req.extensions_mut().insert(Arc::new(b.build()));
+        req.extensions_mut()
+            .insert(Arc::new(b.build().expect("valid test ability")));
         Ok(())
     }
 }

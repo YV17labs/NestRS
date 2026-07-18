@@ -21,7 +21,7 @@ async fn seed_org(conn: &sea_orm::DatabaseConnection, id: Uuid, name: &str) {
 fn read_all_ability() -> Arc<Ability> {
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, Entity);
-    Arc::new(b.build())
+    Arc::new(b.build().expect("valid test ability"))
 }
 
 #[tokio::test]
@@ -59,7 +59,7 @@ async fn access_hides_out_of_scope_orgs() {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, Entity)
             .when(move |p| p.eq(Column::Id, allowed));
-        b.build()
+        b.build().expect("valid test ability")
     });
 
     with_request_executor(Executor::Pool((*db.connection()).clone()), async {

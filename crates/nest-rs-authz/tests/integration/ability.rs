@@ -48,7 +48,7 @@ fn ability(org_id: i32, admin: bool) -> Ability {
         b.can(Action::Manage, widget::Entity)
             .when(|p| p.eq(widget::Column::OrgId, org_id));
     }
-    b.build()
+    b.build().expect("valid test ability")
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn permitted_fields_restricts_to_listed_columns() {
     b.can(Action::Read, widget::Entity)
         .when(|p| p.eq(widget::Column::OrgId, 7))
         .fields([widget::Column::Id, widget::Column::Name]);
-    let ability = b.build();
+    let ability = b.build().expect("valid test ability");
 
     match ability.permitted_fields::<widget::Entity>(Action::Read, &model(7)) {
         FieldSet::Only(cols) => {
@@ -119,7 +119,7 @@ fn mask_strips_unpermitted_fields_from_the_body() {
     b.can(Action::Read, widget::Entity)
         .when(|p| p.eq(widget::Column::OrgId, 7))
         .fields([widget::Column::Id, widget::Column::Name]);
-    let ability = b.build();
+    let ability = b.build().expect("valid test ability");
 
     let json = ability.mask::<widget::Entity>(Action::Read, &model(7));
     let obj = json.as_object().expect("masked model is a JSON object");

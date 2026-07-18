@@ -76,7 +76,8 @@ impl Guard for AbilityInjector {
                 .when(|p| p.eq(widget::Column::Id, 1))
                 .fields([widget::Column::Name]);
         }
-        req.extensions_mut().insert(Arc::new(b.build()));
+        req.extensions_mut()
+            .insert(Arc::new(b.build().expect("valid test ability")));
         Ok(())
     }
 }
@@ -92,7 +93,8 @@ impl Guard for ListAbilityInjector {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
-        req.extensions_mut().insert(Arc::new(b.build()));
+        req.extensions_mut()
+            .insert(Arc::new(b.build().expect("valid test ability")));
         Ok(())
     }
 }

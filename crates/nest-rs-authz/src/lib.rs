@@ -21,7 +21,7 @@ mod subject;
 #[cfg(any(feature = "http", feature = "graphql"))]
 mod wire_mask;
 
-pub use ability::{Ability, FieldSet};
+pub use ability::{Ability, FieldSet, MalformedRuleError};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, RuleSpec};
 pub use context::{current_ability, with_ability};

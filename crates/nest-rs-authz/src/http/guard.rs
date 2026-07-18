@@ -43,8 +43,22 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             Some(actor) => {
                 let mut builder = AbilityBuilder::new();
                 self.factory.define(&actor, &mut builder);
-                req.extensions_mut().insert(Arc::new(builder.build()));
-                Ok(())
+                // A malformed rule fails construction (fail-closed): deny the
+                // request rather than install an ability whose denial evaporates.
+                match builder.build() {
+                    Ok(ability) => {
+                        req.extensions_mut().insert(Arc::new(ability));
+                        Ok(())
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            target: "nest_rs::authz",
+                            error = %err,
+                            "ability construction failed — denying the request",
+                        );
+                        Err(Denial::internal("authorization rules are misconfigured"))
+                    }
+                }
             }
             None if Reflector::new(req).is_public() => {
                 // `#[public]`: no authenticated actor expected. Attach an
@@ -52,9 +66,10 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
                 // something to install, and visitor-scope reads end up
                 // empty by default. A dev that wants visitor *rules*
                 // grants them explicitly in their `AbilityFactory`'s
-                // visitor branch — out of scope here.
+                // visitor branch — out of scope here. An empty builder has no
+                // rules, so it never fails; fall back to a deny-all ability.
                 req.extensions_mut()
-                    .insert(Arc::new(AbilityBuilder::new().build()));
+                    .insert(Arc::new(AbilityBuilder::new().build().unwrap_or_default()));
                 Ok(())
             }
             None => {
@@ -142,7 +157,8 @@ mod tests {
     #[tokio::test]
     async fn ws_message_with_ambient_ability_passes() {
         let client = WsClient::for_test();
-        let ability: Arc<Ability> = Arc::new(AbilityBuilder::new().build());
+        let ability: Arc<Ability> =
+            Arc::new(AbilityBuilder::new().build().expect("empty ability builds"));
         with_ability(ability, async {
             guard()
                 .check_ws_message(&client, "ping", &Value::Null)

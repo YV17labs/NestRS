@@ -40,7 +40,7 @@ fn ability() -> Arc<Ability> {
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, widget::Entity)
         .when(|p| p.eq(widget::Column::Id, 1));
-    Arc::new(b.build())
+    Arc::new(b.build().expect("valid test ability"))
 }
 
 #[tokio::test]

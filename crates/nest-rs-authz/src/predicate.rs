@@ -28,11 +28,17 @@ pub enum CmpOp {
 pub enum Predicate<E: EntityTrait> {
     #[default]
     Always,
-    /// Fail-closed sentinel: renders an always-false SQL condition (`1 = 0`)
+    /// Malformation sentinel: renders an always-false SQL condition (`1 = 0`)
     /// and matches no row in memory. Produced when [`PredicateBuilder::related`]
     /// rejects an invalid relation predicate (composite key or a relation not
-    /// pointing at `R`) — a developer misconfiguration denied gracefully at
-    /// runtime rather than panicking the request.
+    /// pointing at `R`). A rule carrying this sentinel fails
+    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build) with a
+    /// [`MalformedRuleError`](crate::MalformedRuleError) — the misconfiguration
+    /// surfaces loudly at ability construction. This matters most on the
+    /// *denial* side: a `cannot(...)` lowering to `1 = 0` would combine as
+    /// `grant AND NOT(1 = 0)`, i.e. fail-*open*; failing construction closes
+    /// that hole. On the grant side the same sentinel is fail-closed (deny-all),
+    /// but a silent developer error is still worth surfacing.
     Deny,
     Eq(E::Column, Value),
     In(E::Column, Vec<Value>),
@@ -337,10 +343,12 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     ///
     /// Two runtime checks close the gap that type erasure opens. `related()`
     /// runs inside `AbilityFactory::define` — i.e. per authenticated request —
-    /// so a violation is rejected **gracefully**, never by panicking the
-    /// request: each check logs an `error!` (target `nest_rs::authz`) and
-    /// returns [`Predicate::Deny`], which renders an always-false condition so
-    /// no row leaks (fail-closed). Both cases are a developer misconfiguration:
+    /// so a violation never panics the request: each check logs an `error!`
+    /// (target `nest_rs::authz`) and returns [`Predicate::Deny`]. A rule that
+    /// carries that sentinel then fails
+    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build), so the
+    /// misconfiguration is rejected loudly rather than silently going fail-open
+    /// on the denial side. Both cases are a developer misconfiguration:
     /// - the relation must point at `R` (its `to_tbl` must be `R`'s table);
     /// - the relation must be single-column (composite keys are unsupported in
     ///   v1).

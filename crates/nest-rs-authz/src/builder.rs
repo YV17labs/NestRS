@@ -8,13 +8,18 @@ use std::any::TypeId;
 
 use sea_orm::{EntityTrait, IdenStatic};
 
-use crate::ability::{Ability, FieldSet, Rule};
+use crate::ability::{Ability, FieldSet, MalformedRuleError, Rule};
 use crate::action::Action;
 use crate::predicate::{Predicate, PredicateBuilder};
 
 #[derive(Default)]
 pub struct AbilityBuilder {
     ability: Ability,
+    /// Rules whose relation predicate was rejected (the [`Predicate::Deny`]
+    /// sentinel). Collected as rules commit so [`build`](Self::build) can fail
+    /// the construction instead of letting a malformed denial silently go
+    /// fail-open. Empty in the overwhelmingly common valid case.
+    malformed: Vec<MalformedRuleError>,
 }
 
 impl AbilityBuilder {
@@ -40,8 +45,15 @@ impl AbilityBuilder {
         RuleSpec::new(self, action, true)
     }
 
-    pub fn build(self) -> Ability {
-        self.ability
+    /// Finalize the rule set. Fails with [`MalformedRuleError`] if any rule's
+    /// relation predicate was rejected as malformed — a misconfiguration that,
+    /// on the denial side, would otherwise combine fail-*open*. A valid rule set
+    /// (the common case) always succeeds.
+    pub fn build(mut self) -> Result<Ability, MalformedRuleError> {
+        match self.malformed.drain(..).next() {
+            Some(err) => Err(err),
+            None => Ok(self.ability),
+        }
     }
 }
 
@@ -94,6 +106,16 @@ where
     E::Column: Send + Sync + 'static,
 {
     fn drop(&mut self) {
+        // A `Deny` predicate only ever comes from a rejected `related(...)`; a
+        // denial that carries it is the fail-open case, a grant the silent one.
+        // Record it so `build` fails naming the rule, before it can be consumed.
+        if matches!(self.predicate, Predicate::Deny) {
+            self.builder.malformed.push(MalformedRuleError {
+                action: self.action,
+                subject: std::any::type_name::<E>(),
+                kind: if self.inverted { "denial" } else { "grant" },
+            });
+        }
         let condition = self.predicate.to_condition();
         let predicate = std::mem::take(&mut self.predicate);
         let fields = std::mem::take(&mut self.fields);

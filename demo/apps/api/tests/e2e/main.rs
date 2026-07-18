@@ -345,7 +345,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
         let mut b = AbilityBuilder::new();
         b.can(Action::Manage, user_row::Entity)
             .when(move |p| p.eq(user_row::Column::OrgId, org_b_id));
-        b.build()
+        b.build().expect("valid test ability")
     });
     let (update, delete) = with_executor(
         Executor::Pool((*conn).clone()),

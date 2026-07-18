@@ -135,7 +135,7 @@ fn items_in_org(org: Uuid) -> Arc<Ability> {
             c.eq(container::Column::OrgId, org)
         })
     });
-    Arc::new(b.build())
+    Arc::new(b.build().expect("valid test ability"))
 }
 
 #[tokio::test]

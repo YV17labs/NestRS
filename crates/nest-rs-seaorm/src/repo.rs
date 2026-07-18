@@ -318,7 +318,7 @@ mod tests {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity)
             .when(|p| p.eq(widget::Column::OrgId, 7));
-        let ability = Arc::new(b.build());
+        let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
             with_ability(ability, async {
@@ -387,7 +387,7 @@ mod tests {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
-        let ability = Arc::new(b.build());
+        let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
             with_ability(ability, async {
@@ -415,7 +415,7 @@ mod tests {
             .when(|p| p.eq(widget::Column::OrgId, 3));
         b.can(Action::Delete, widget::Entity)
             .when(|p| p.eq(widget::Column::OrgId, 4));
-        let ability = Arc::new(b.build());
+        let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
             with_ability(ability, async {
@@ -449,7 +449,7 @@ mod tests {
         let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
-        let ability = Arc::new(b.build());
+        let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
             with_ability(ability, async {
@@ -514,7 +514,7 @@ mod tests {
         let mut b = AbilityBuilder::new();
         b.can(Action::Update, widget::Entity)
             .when(|p| p.eq(widget::Column::OrgId, 91));
-        let ability = Arc::new(b.build());
+        let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
             with_ability(ability, async {
@@ -559,7 +559,7 @@ mod tests {
         let mut b = AbilityBuilder::new();
         b.can(Action::Delete, widget::Entity)
             .when(|p| p.eq(widget::Column::OrgId, 91));
-        let ability = Arc::new(b.build());
+        let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
             with_ability(ability, async {

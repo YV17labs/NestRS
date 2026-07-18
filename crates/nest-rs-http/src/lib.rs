@@ -37,7 +37,7 @@ pub use endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
 pub use module::{HttpModule, HttpSetup};
 pub use pipe::{IntoInner, Piped, Valid};
-pub use problem::ProblemDetails;
+pub use problem::{ProblemDetails, normalize_error_response};
 pub use raw_body::{RawBody, RawBodyLimit};
 pub use reflector::Reflector;
 pub use scope::{RequestScopeEndpoint, Scoped};

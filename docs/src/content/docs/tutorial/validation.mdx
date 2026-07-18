@@ -63,33 +63,36 @@ DTO; the entity is the single source.
 
 ## The bad-body response
 
-A malformed body comes back as a JSON `400` with the structured field
-errors `validator` produces:
+A malformed body comes back as an RFC 9457 `application/problem+json`
+`400` with the structured field errors `validator` produces riding as an
+`errors` extension member:
 
 ```bash frame="terminal"
 $ curl -i -X POST http://localhost:3005/posts \
     -H 'Content-Type: application/json' \
     -d '{"title":"","body":"World"}'
 HTTP/1.1 400 Bad Request
-content-type: application/json
+content-type: application/problem+json
 
 {
-  "statusCode": 400,
-  "error": "Bad Request",
-  "message": "validation failed",
-  "details": {
+  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.400",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "validation failed",
+  "errors": {
     "title": [{ "code": "length", "params": { "min": 1, "value": "" } }]
   }
 }
 ```
 
-The failing field surfaces in `details`. The client can render per-field
-messages from `details.<field>[].code` without parsing the human message.
+The failing field surfaces in `errors`. The client can render per-field
+messages from `errors.<field>[].code` without parsing the human message.
 
 <Aside type="tip">
-The shape is stable: `statusCode`, `error`, `message`, `details`. A
-test against the `details.<field>[0].code` value catches a regression
-to a different validator without locking the message string.
+The shape is stable RFC 9457: `type`, `title`, `status`, `detail`, plus
+the `errors` extension member. A test against the
+`errors.<field>[0].code` value catches a regression to a different
+validator without locking the message string.
 </Aside>
 
 ## The good-body path is unchanged

@@ -60,6 +60,9 @@ chrono.workspace = true
 # `PageParams` (the `?first&after` cursor query) derives `Deserialize` so the
 # generated `#[crud]` list handler can read it with poem's `Query<…>`.
 serde.workspace = true
+# `ServiceError`'s RFC-9457 `problem+json` rendering serializes `validator`
+# field errors into an `errors` extension member.
+serde_json.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true

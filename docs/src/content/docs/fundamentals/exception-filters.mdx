@@ -258,10 +258,11 @@ when the behaviour follows a concrete error type across many routes; a
 
 ## A small filter-only case: validation envelopes
 
-The framework's pipe error renderer already returns:
+The framework's pipe error renderer already returns an RFC 9457
+`application/problem+json` body:
 
 ```json
-{ "statusCode": 400, "error": "Bad Request", "message": "...", "details": { /* ... */ } }
+{ "type": "…#status.400", "title": "Bad Request", "status": 400, "detail": "…", "errors": { /* ... */ } }
 ```
 
 If your API uses a different envelope (`{ ok: false, error: { ... } }`),

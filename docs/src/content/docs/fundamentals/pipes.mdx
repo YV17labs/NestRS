@@ -76,13 +76,13 @@ the handler body never runs:
 
 | Transport | A rejection becomes |
 |-----------|--------------------|
-| HTTP | JSON `400` (`{ "statusCode": 400, "error": "Bad Request", "message": "must be a UUID v7" }`) |
+| HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7" }`) |
 | GraphQL | An error in the response's `errors` array |
 | WebSockets | An error frame on the socket |
 | Queue | A job error — the queue's retry/failure policy applies |
 
-`ValidationPipe<T>` attaches the structured field-level errors as
-`details`.
+`ValidationPipe<T>` attaches the structured field-level errors as an
+`errors` extension member.
 
 ## Validation at the HTTP edge
 
@@ -112,14 +112,15 @@ async fn create(&self, Valid(Json(input)): Valid<Json<CreateUser>>)
 ```
 
 A malformed JSON body is `400` before the pipe runs. A well-formed body
-that fails validation is `400` with:
+that fails validation is an RFC 9457 `problem+json` `400` with:
 
 ```json
 {
-  "statusCode": 400,
-  "error": "Bad Request",
-  "message": "validation failed",
-  "details": {
+  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.400",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "validation failed",
+  "errors": {
     "email": [{ "code": "email", "message": null, "params": { /* ... */ } }],
     "password": [{ "code": "length", "params": { "min": 8 } }]
   }

@@ -92,8 +92,10 @@ impl ServiceError {
 
 #[cfg(feature = "http")]
 mod http {
+    use nest_rs_http::ProblemDetails;
     use poem::error::ResponseError;
     use poem::http::StatusCode;
+    use poem::{IntoResponse, Response};
 
     use super::ServiceError;
 
@@ -110,6 +112,23 @@ mod http {
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
             }
+        }
+
+        /// Render the failure as the single RFC-9457 `application/problem+json`
+        /// envelope. `Display` (the wire-safe string — a constant for the opaque
+        /// 5xx variants, the authored message for the 4xx business variants) is
+        /// the `detail`, so a `DbErr`/internal message never reaches the wire;
+        /// `Validation` additionally carries its field errors as an `errors`
+        /// extension member.
+        fn as_response(&self) -> Response {
+            let status = self.status();
+            let mut problem = ProblemDetails::from_status(status).with_detail(self.to_string());
+            if let ServiceError::Validation(errs) = self {
+                if let Ok(fields) = serde_json::to_value(errs) {
+                    problem = problem.with_extension("errors", fields);
+                }
+            }
+            problem.into_response()
         }
     }
 
@@ -141,6 +160,63 @@ mod http {
             assert_eq!(
                 ServiceError::internal("x").status(),
                 StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
+
+        async fn body_json(err: ServiceError) -> (StatusCode, Option<String>, serde_json::Value) {
+            let resp = err.as_response();
+            let status = resp.status();
+            let ct = resp
+                .headers()
+                .get(poem::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            let bytes = resp.into_body().into_bytes().await.expect("body");
+            (
+                status,
+                ct,
+                serde_json::from_slice(&bytes).expect("problem json"),
+            )
+        }
+
+        #[tokio::test]
+        async fn conflict_renders_problem_json_with_the_client_message() {
+            let (status, ct, body) =
+                body_json(ServiceError::conflict("insufficient credit balance")).await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(ct.as_deref(), Some("application/problem+json"));
+            assert_eq!(body["status"], 409);
+            assert_eq!(body["title"], "Conflict");
+            assert_eq!(body["detail"], "insufficient credit balance");
+        }
+
+        #[tokio::test]
+        async fn db_error_renders_a_500_problem_without_leaking_the_driver_detail() {
+            let (status, ct, body) = body_json(ServiceError::Db(sea_orm::DbErr::Custom(
+                "SELECT password_hash FROM user".into(),
+            )))
+            .await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(ct.as_deref(), Some("application/problem+json"));
+            assert_eq!(body["status"], 500);
+            // Only the constant wire string — never the SQL that leaked schema.
+            assert_eq!(body["detail"], "database error");
+            assert!(
+                !body.to_string().contains("password_hash"),
+                "the driver message must not reach the wire: {body}",
+            );
+        }
+
+        #[tokio::test]
+        async fn validation_rides_field_errors_as_an_extension_member() {
+            let mut errs = validator::ValidationErrors::new();
+            errs.add("email", validator::ValidationError::new("not_an_email"));
+            let (status, ct, body) = body_json(ServiceError::Validation(errs)).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(ct.as_deref(), Some("application/problem+json"));
+            assert!(
+                body.get("errors").and_then(|e| e.get("email")).is_some(),
+                "field errors ride as the `errors` extension member: {body}",
             );
         }
     }

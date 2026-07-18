@@ -5,8 +5,9 @@
 //! - [`Valid<E>`] (e.g. `Valid<Json<T>>`) validates with `validator::Validate`.
 //! - [`Piped<P, E>`] applies pipe `P` to what `E` produced.
 //!
-//! Both reject with a JSON `400` carrying the [`PipeError`]'s message and any
-//! structured `details`.
+//! Both reject with an RFC-9457 `application/problem+json` `400`
+//! ([`ProblemDetails`]) carrying the [`PipeError`]'s message as `detail` and
+//! any field-level errors as an `errors` extension member.
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -17,10 +18,10 @@ use nest_rs_pipes::{Pipe, PipeError, ValidationPipe};
 use poem::error::ReadBodyError;
 use poem::http::StatusCode;
 use poem::web::{Json, Path, Query};
-use poem::{Body, Error, FromRequest, Request, RequestBody, Response, Result};
+use poem::{Body, Error, FromRequest, Request, RequestBody, Result};
 use validator::Validate;
 
-use crate::{RawBody, RawBodyLimit};
+use crate::{ProblemDetails, RawBody, RawBodyLimit};
 
 /// Owned-unwrap for poem extractors, so a pipe can take the value they carry
 /// without cloning.
@@ -53,20 +54,14 @@ impl<T> IntoInner for Query<T> {
 }
 
 fn reject(err: PipeError) -> Error {
-    let mut body = serde_json::json!({
-        "statusCode": 400,
-        "error": "Bad Request",
-        "message": err.message(),
-    });
+    // One error format at the edge: a `400` RFC-9457 `application/problem+json`
+    // (`ProblemDetails`), with the pipe message as `detail` and any field-level
+    // validation errors riding as an `errors` extension member.
+    let mut problem = ProblemDetails::bad_request().with_detail(err.message().to_owned());
     if let Some(details) = err.into_details() {
-        body["details"] = details;
+        problem = problem.with_extension("errors", details);
     }
-    Error::from_response(
-        Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .content_type("application/json")
-            .body(serde_json::to_vec(&body).unwrap_or_default()),
-    )
+    Error::from(problem)
 }
 
 /// Extract `E` and unwrap it to its inner value. The inner future is erased to
@@ -182,21 +177,30 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn reject_emits_a_400_json_body_with_the_message() {
+    async fn reject_emits_a_problem_json_400_with_the_message() {
         let err = PipeError::new("not a uuid");
         let resp = reject(err).into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers()
+                .get(poem::http::header::CONTENT_TYPE)
+                .map(|v| v.as_bytes()),
+            Some(b"application/problem+json".as_slice()),
+        );
 
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(json["statusCode"], 400);
-        assert_eq!(json["error"], "Bad Request");
-        assert_eq!(json["message"], "not a uuid");
-        assert!(json.get("details").is_none(), "no details on a plain error");
+        assert_eq!(json["status"], 400);
+        assert_eq!(json["title"], "Bad Request");
+        assert_eq!(json["detail"], "not a uuid");
+        assert!(
+            json.get("errors").is_none(),
+            "no errors on a plain rejection"
+        );
     }
 
     #[tokio::test]
-    async fn reject_carries_structured_details_when_present() {
+    async fn reject_carries_field_errors_as_an_extension_member() {
         let err = PipeError::with_details(
             "validation failed",
             serde_json::json!({ "email": ["not an email"] }),
@@ -206,8 +210,9 @@ mod tests {
 
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(json["message"], "validation failed");
-        assert_eq!(json["details"]["email"][0], "not an email");
+        assert_eq!(json["detail"], "validation failed");
+        // Field errors ride as the `errors` RFC-9457 extension member.
+        assert_eq!(json["errors"]["email"][0], "not an email");
     }
 
     // `IntoInner` is the owned-unwrap shim. The three impls are
@@ -333,7 +338,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(json["message"], "nope");
+        assert_eq!(json["detail"], "nope");
     }
 
     #[tokio::test]
@@ -395,11 +400,12 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(json["statusCode"], 400);
-        // The field-level details surface under the offending field name.
+        assert_eq!(json["status"], 400);
+        // The field-level errors surface under the offending field name in the
+        // `errors` extension member.
         assert!(
-            json.get("details").and_then(|d| d.get("msg")).is_some(),
-            "details should name the failing field: {json}",
+            json.get("errors").and_then(|d| d.get("msg")).is_some(),
+            "errors should name the failing field: {json}",
         );
     }
 
@@ -433,10 +439,8 @@ mod tests {
         // The failing field is still named so the client knows what to fix.
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert!(
-            json.get("details")
-                .and_then(|d| d.get("password"))
-                .is_some(),
-            "details should still name the failing field: {json}",
+            json.get("errors").and_then(|d| d.get("password")).is_some(),
+            "errors should still name the failing field: {json}",
         );
     }
 }

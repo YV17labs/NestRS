@@ -24,6 +24,17 @@ pub trait Discoverable {
         Vec::new()
     }
 
+    /// Human-readable label for each [`injected`](Discoverable::injected)
+    /// entry, in the same order, so the access graph can name a dependency no
+    /// module provides — a lazily-built provider's missing dependency is a clean
+    /// boot error naming both the provider and the dependency, not a
+    /// `get(...).expect(...)` panic at first resolution. May be shorter than
+    /// `injected()` (a provider that does not emit names falls back to a
+    /// placeholder); never longer.
+    fn injected_names() -> Vec<&'static str> {
+        Vec::new()
+    }
+
     /// [`ProviderKey`] of each **keyed** `#[inject(key = "…")]` dependency,
     /// recorded for the access-graph keyed check. Kept apart from
     /// [`injected`](Discoverable::injected) — a keyed dependency is validated

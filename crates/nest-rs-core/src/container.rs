@@ -461,6 +461,22 @@ impl ContainerBuilder {
             .collect()
     }
 
+    /// Every unkeyed `TypeId` resolvable from this builder — singleton values
+    /// **plus** request-scoped and transient factories. Used by the access-graph
+    /// missing-dependency check to tolerate a dependency provided imperatively
+    /// (a hand-written `impl Module`) or by a lazy factory: those never appear in
+    /// the declarative `providers = [...]` graph, so the check must consult the
+    /// actual registered set before declaring a dependency unmet.
+    pub(crate) fn registered_ids(&self) -> HashSet<TypeId> {
+        self.providers
+            .keys()
+            .filter(|k| k.name.is_none())
+            .map(|k| k.type_id)
+            .chain(self.scoped.keys().copied())
+            .chain(self.transient.keys().copied())
+            .collect()
+    }
+
     /// Keyed provider identities registered so far. Snapshotted alongside
     /// [`provider_ids`](Self::provider_ids) after the factory phase to form the
     /// **global keyed** set for the access-graph keyed check — a keyed

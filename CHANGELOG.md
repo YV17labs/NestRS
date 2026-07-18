@@ -11,6 +11,18 @@ both new features and breaking changes.
 
 ### Fixed
 
+- **A scoped/transient provider's missing dependency fails the boot,
+  not the first request.** The access graph only flagged *cross-module*
+  reaches; a request-scoped or transient provider whose dependency was
+  provided by no module at all passed boot and panicked at its first
+  `get(...)` resolution — a runtime panic in place of the framework's
+  hallmark named boot diagnostic. Lazily-built providers now report the
+  names of what they inject, and the access-graph pass fails boot with a
+  `MissingDependencyError` naming both the provider and the unmet
+  dependency. A dependency provided imperatively (a hand-written
+  `impl Module`) or by a lazy factory is still tolerated: the pass
+  consults the actual registered set before declaring a dependency unmet.
+
 - **`#[crud]` writes return the right HTTP status.** A generated create
   / update / delete previously mapped every write failure to a blanket
   `500`, so a unique-constraint violation, an out-of-scope create the

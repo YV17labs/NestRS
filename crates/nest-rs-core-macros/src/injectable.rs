@@ -7,7 +7,7 @@ use syn::{Ident, ItemStruct, Token, parse_macro_input};
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, from_scope_method, injected_keyed_method, injected_method,
-    optional_dependencies_method,
+    injected_names_method, optional_dependencies_method,
 };
 
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -38,6 +38,9 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
         InjectableScope::Singleton | InjectableScope::Transient => TokenStream2::new(),
     };
     let injected = injected_method(&dep_keys);
+    // Emitted for every scope (aligned with `injected`), so the access graph can
+    // name a missing dependency of a lazily-built scoped/transient provider.
+    let injected_names = injected_names_method(&dep_names);
     let injected_keyed = injected_keyed_method(&keyed_dep_keys);
 
     // Request-scoped and transient: lazy build, no register-phase ordering deps,
@@ -101,6 +104,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
             #dependency_names
             #optional_dependencies
             #injected
+            #injected_names
             #injected_keyed
 
             #register_fn

@@ -51,6 +51,7 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     name: #name_lit,
                     provides: || ::std::any::TypeId::of::<#p>(),
                     injects: <#p as ::nest_rs_core::Discoverable>::injected,
+                    inject_names: <#p as ::nest_rs_core::Discoverable>::injected_names,
                     injects_keyed: <#p as ::nest_rs_core::Discoverable>::injected_keyed,
                 }
             }
@@ -62,6 +63,7 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     name: #name_lit,
                     provides: || ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>(),
                     injects: <#provider as ::nest_rs_core::Discoverable>::injected,
+                    inject_names: <#provider as ::nest_rs_core::Discoverable>::injected_names,
                     injects_keyed: <#provider as ::nest_rs_core::Discoverable>::injected_keyed,
                 }
             }

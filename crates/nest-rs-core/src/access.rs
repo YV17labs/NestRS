@@ -38,6 +38,11 @@ pub struct ProviderDescriptor {
     /// `TypeId` of each bare `#[inject]` field plus each attribute-referenced
     /// layer (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`).
     pub injects: fn() -> Vec<TypeId>,
+    /// Human-readable label for each [`injects`](Self::injects) entry, in the
+    /// same order, so a dependency no module provides is named in the boot
+    /// error. May be shorter than `injects` (a provider that emits no names
+    /// falls back to a placeholder); never longer.
+    pub inject_names: fn() -> Vec<&'static str>,
     /// Each **keyed** `#[inject(key = "…")]` field, validated against the
     /// global keyed set. Empty for providers with no keyed dependency.
     pub injects_keyed: fn() -> Vec<KeyedDependency>,
@@ -81,6 +86,50 @@ pub struct AccessGraphError {
     pub consumer: &'static str,
     pub dependency: &'static str,
     pub owner: &'static str,
+}
+
+/// A provider depends on something **no module provides** — not global
+/// infrastructure, not in its import closure, not registered anywhere. Raised at
+/// boot so a lazily-built scoped/transient provider fails cleanly here instead
+/// of panicking at its first `get(...).expect(...)` resolution. (An *eager*
+/// provider's missing dependency is caught the same way, before the register
+/// phase would panic on it.)
+#[derive(Debug, Error)]
+#[error(
+    "unmet dependency: `{consumer}` (in module `{module}`) depends on `{dependency}`, but no \
+     module provides it and it is not global infrastructure (a seed or factory output). Add a \
+     provider for `{dependency}` to a module reachable from the root, or seed it at \
+     `App::builder()`."
+)]
+pub struct MissingDependencyError {
+    pub module: &'static str,
+    pub consumer: &'static str,
+    pub dependency: &'static str,
+}
+
+/// The failure modes of the bare (non-keyed) access-graph pass: a cross-module
+/// reach that no import covers, or a dependency no module provides.
+#[derive(Debug, Error)]
+pub enum AccessError {
+    #[error(transparent)]
+    CrossModule(#[from] AccessGraphError),
+    #[error(transparent)]
+    Missing(#[from] MissingDependencyError),
+}
+
+impl AccessError {
+    /// Flatten into an `anyhow::Error` carrying the **concrete** inner error,
+    /// discarding the enum wrapper, so a boot failure downcasts to
+    /// `AccessGraphError` / `MissingDependencyError` directly — the wrapper is an
+    /// internal detail of the pass, not part of the boot-error contract.
+    /// `anyhow::Error::new` (over the concrete type) is what preserves the
+    /// downcast; boxing to `dyn Error` first would lose it.
+    pub fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            AccessError::CrossModule(e) => anyhow::Error::new(e),
+            AccessError::Missing(e) => anyhow::Error::new(e),
+        }
+    }
 }
 
 /// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider
@@ -128,7 +177,8 @@ pub fn validate_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
     global: &HashSet<TypeId>,
-) -> Result<(), AccessGraphError> {
+    registered: &HashSet<TypeId>,
+) -> Result<(), AccessError> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
 
@@ -161,20 +211,40 @@ pub fn validate_access_graph(
         }
 
         for p in desc.providers {
-            for dep in (p.injects)() {
-                if global.contains(&dep) || closure_keys.contains(&dep) {
+            let deps = (p.injects)();
+            let names = (p.inject_names)();
+            for (i, dep) in deps.iter().enumerate() {
+                if global.contains(dep) || closure_keys.contains(dep) {
                     continue;
                 }
-                // A genuinely missing provider is rejected earlier by the
-                // register-phase fixpoint; only flag a cross-module reach.
-                if let Some((dependency, owner)) = provided_by.get(&dep) {
+                // Provided by some other module but not imported ⇒ a cross-module
+                // reach; provided by no module at all ⇒ an unmet dependency that
+                // would otherwise panic at first resolution (lazy) or at the
+                // register phase (eager). The dependency name is index-aligned
+                // with `injects`; a provider that emits no names falls back.
+                if let Some((dependency, owner)) = provided_by.get(dep) {
                     return Err(AccessGraphError {
                         module: desc.name,
                         consumer: p.name,
                         dependency,
                         owner,
-                    });
+                    }
+                    .into());
                 }
+                // Not a declarative provider anywhere. It may still be resolvable
+                // — a hand-written `impl Module` (e.g. `EventsModule`) or a lazy
+                // factory registers imperatively, invisible to this graph. Only
+                // when it is absent from the actual registered set is it a
+                // genuinely unmet dependency that would panic at resolution.
+                if registered.contains(dep) {
+                    continue;
+                }
+                return Err(MissingDependencyError {
+                    module: desc.name,
+                    consumer: p.name,
+                    dependency: names.get(i).copied().unwrap_or("<unnamed dependency>"),
+                }
+                .into());
             }
         }
     }
@@ -302,9 +372,10 @@ pub fn unreachable_resolvers(
 pub(crate) fn validate_from_inventory(
     roots: &[TypeId],
     global: &HashSet<TypeId>,
-) -> Result<(), AccessGraphError> {
+    registered: &HashSet<TypeId>,
+) -> Result<(), AccessError> {
     let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-    validate_access_graph(&descriptors, roots, global)
+    validate_access_graph(&descriptors, roots, global, registered)
 }
 
 /// Boot-time keyed pass over the link-time module registry — the
@@ -370,6 +441,14 @@ mod tests {
         Vec::new()
     }
 
+    fn no_names() -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    fn billing_names() -> Vec<&'static str> {
+        vec!["UsersService"]
+    }
+
     fn no_keyed_deps() -> Vec<KeyedDependency> {
         Vec::new()
     }
@@ -391,6 +470,7 @@ mod tests {
                 name: "UsersService",
                 provides: || TypeId::of::<UsersService>(),
                 injects: users_deps,
+                inject_names: no_names,
                 injects_keyed: no_keyed_deps,
             }],
         }
@@ -410,8 +490,13 @@ mod tests {
             providers: &[],
         };
         let descriptors = [&app, &users];
-        validate_access_graph(&descriptors, &[TypeId::of::<AppMod>()], &global())
-            .expect("a dependency on global infrastructure is always reachable");
+        validate_access_graph(
+            &descriptors,
+            &[TypeId::of::<AppMod>()],
+            &global(),
+            &HashSet::new(),
+        )
+        .expect("a dependency on global infrastructure is always reachable");
     }
 
     #[test]
@@ -425,18 +510,25 @@ mod tests {
                     name: "AppAbility",
                     provides: || TypeId::of::<UsersService>(),
                     injects: no_deps,
+                    inject_names: no_names,
                     injects_keyed: no_keyed_deps,
                 },
                 ProviderDescriptor {
                     name: "AppGuard",
                     provides: || TypeId::of::<AppGuard>(),
                     injects: billing_deps,
+                    inject_names: no_names,
                     injects_keyed: no_keyed_deps,
                 },
             ],
         };
-        validate_access_graph(&[&app], &[TypeId::of::<AppMod>()], &HashSet::new())
-            .expect("a provider may depend on another provider of the same module");
+        validate_access_graph(
+            &[&app],
+            &[TypeId::of::<AppMod>()],
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .expect("a provider may depend on another provider of the same module");
     }
 
     #[test]
@@ -450,6 +542,7 @@ mod tests {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
+                inject_names: no_names,
                 injects_keyed: no_keyed_deps,
             }],
         };
@@ -463,6 +556,7 @@ mod tests {
             &[&app, &billing, &users],
             &[TypeId::of::<AppMod>()],
             &global(),
+            &HashSet::new(),
         )
         .expect("an imported module's provider is reachable");
     }
@@ -478,6 +572,7 @@ mod tests {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
+                inject_names: no_names,
                 injects_keyed: no_keyed_deps,
             }],
         };
@@ -491,9 +586,13 @@ mod tests {
             &[&app, &billing, &users],
             &[TypeId::of::<AppMod>()],
             &global(),
+            &HashSet::new(),
         )
         .expect_err("reaching an unimported module must fail");
 
+        let AccessError::CrossModule(err) = err else {
+            panic!("a cross-module reach must be a CrossModule error, got {err:?}");
+        };
         assert_eq!(err.consumer, "BillingService");
         assert_eq!(err.module, "BillingModule");
         assert_eq!(err.dependency, "UsersService");
@@ -501,6 +600,43 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("BillingService"), "{msg}");
         assert!(msg.contains("UsersModule"), "{msg}");
+    }
+
+    #[test]
+    fn a_dependency_no_module_provides_is_a_named_boot_error() {
+        // `BillingService` depends on `UsersService`, but no module provides it
+        // (the users module is absent) and it is not global. This is the case
+        // that used to slip past the graph and panic at first `get()` for a lazy
+        // provider — now a clean boot error naming both provider and dependency.
+        let billing = ModuleDescriptor {
+            module: || TypeId::of::<BillingMod>(),
+            name: "BillingModule",
+            imports: &[],
+            providers: &[ProviderDescriptor {
+                name: "BillingService",
+                provides: || TypeId::of::<BillingService>(),
+                injects: billing_deps,
+                inject_names: billing_names,
+                injects_keyed: no_keyed_deps,
+            }],
+        };
+        let err = validate_access_graph(
+            &[&billing],
+            &[TypeId::of::<BillingMod>()],
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .expect_err("a dependency no module provides must fail the boot");
+
+        let AccessError::Missing(err) = err else {
+            panic!("an unmet dependency must be a Missing error, got {err:?}");
+        };
+        assert_eq!(err.consumer, "BillingService");
+        assert_eq!(err.module, "BillingModule");
+        assert_eq!(err.dependency, "UsersService");
+        let msg = err.to_string();
+        assert!(msg.contains("BillingService"), "{msg}");
+        assert!(msg.contains("UsersService"), "{msg}");
     }
 
     #[test]
@@ -514,6 +650,7 @@ mod tests {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
+                inject_names: no_names,
                 injects_keyed: no_keyed_deps,
             }],
         };
@@ -527,14 +664,20 @@ mod tests {
             &[&app, &billing],
             &[TypeId::of::<AppMod>()],
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("a module outside the root's import tree is not validated");
     }
 
     #[test]
     fn hand_written_root_without_descriptor_is_a_noop() {
-        validate_access_graph(&[], &[TypeId::of::<AppMod>()], &HashSet::new())
-            .expect("a root with no descriptor validates trivially");
+        validate_access_graph(
+            &[],
+            &[TypeId::of::<AppMod>()],
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .expect("a root with no descriptor validates trivially");
     }
 
     fn orgs_resolver_desc() -> ResolverDescriptor {
@@ -554,6 +697,7 @@ mod tests {
                 name: "OrgsResolver",
                 provides: || TypeId::of::<OrgsResolver>(),
                 injects: no_deps,
+                inject_names: no_names,
                 injects_keyed: no_keyed_deps,
             }],
         };
@@ -587,6 +731,7 @@ mod tests {
                 name: "OrgsResolver",
                 provides: || TypeId::of::<OrgsResolver>(),
                 injects: no_deps,
+                inject_names: no_names,
                 injects_keyed: no_keyed_deps,
             }],
         };
@@ -640,6 +785,7 @@ mod tests {
                 name: "SocialLoginService",
                 provides: || TypeId::of::<UsersService>(),
                 injects: no_deps,
+                inject_names: no_names,
                 injects_keyed: github_dep,
             }],
         }

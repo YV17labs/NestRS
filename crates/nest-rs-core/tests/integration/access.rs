@@ -7,6 +7,39 @@ use std::sync::Arc;
 
 use nest_rs_core::{App, ContainerBuilder, Discoverable, injectable, module};
 
+// A type no module provides — the dependency a scoped provider will fail to
+// resolve. Not `#[injectable]`, so nothing ever registers it.
+struct AbsentDep;
+
+#[allow(dead_code)]
+#[injectable(scope = request)]
+struct ScopedNeedy {
+    #[inject]
+    dep: Arc<AbsentDep>,
+}
+
+#[module(providers = [ScopedNeedy])]
+struct ScopedMissingModule;
+
+#[tokio::test]
+async fn a_scoped_providers_missing_dependency_is_a_boot_error_not_a_panic() {
+    // A request-scoped provider builds lazily, so a missing dependency used to
+    // slip through boot and panic at the first `get(...).expect(...)`. The access
+    // graph now catches it up front, naming both the provider and the dependency.
+    let err = App::builder()
+        .module::<ScopedMissingModule>()
+        .build()
+        .await
+        .err()
+        .expect("a scoped provider with an unprovided dependency must fail the boot, not panic");
+    let msg = err.to_string();
+    assert!(msg.contains("ScopedNeedy"), "names the provider: {msg}");
+    assert!(
+        msg.contains("AbsentDep"),
+        "names the missing dependency: {msg}"
+    );
+}
+
 #[injectable]
 struct ServiceA;
 

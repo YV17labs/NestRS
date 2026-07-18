@@ -8,7 +8,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    ReachableProviders, ResolverSchemaActive, UnreachableResolversError,
+    AccessError, ReachableProviders, ResolverSchemaActive, UnreachableResolversError,
     reachable_provider_ids_from_inventory, unreachable_resolvers_from_inventory,
     validate_from_inventory, validate_keyed_from_inventory,
     warn_unreachable_resolvers_from_inventory,
@@ -38,7 +38,11 @@ impl App {
         // infrastructure for the access graph, so it must be in `global` up
         // front regardless of seed ordering.
         let global: HashSet<TypeId> = HashSet::from([TypeId::of::<ReachableProviders>()]);
-        validate_from_inventory(&roots, &global)?;
+        // The actual registered set (singletons + scoped/transient factories +
+        // imperatively-provided values) — consulted so a dependency provided
+        // outside the declarative graph is not misreported as unmet.
+        let registered = builder.registered_ids();
+        validate_from_inventory(&roots, &global, &registered).map_err(AccessError::into_anyhow)?;
         // Keyed providers are configured imperatively; the sync path seeds none
         // up front, so any keyed dependency here is genuinely unmet.
         validate_keyed_from_inventory(&roots, &HashSet::new())?;
@@ -365,7 +369,11 @@ impl AppBuilder {
         }
 
         let roots: Vec<TypeId> = modules.iter().map(|h| h.type_id).collect();
-        validate_from_inventory(&roots, &global)?;
+        // The full registered set after modules and overrides — includes
+        // imperatively-provided values (a hand-written `impl Module`) and
+        // scoped/transient factories the declarative graph cannot see.
+        let registered = builder.registered_ids();
+        validate_from_inventory(&roots, &global, &registered).map_err(AccessError::into_anyhow)?;
         validate_keyed_from_inventory(&roots, &global_keyed)?;
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder.provide(ReachableProviders(reachable));

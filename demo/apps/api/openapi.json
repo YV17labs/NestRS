@@ -1392,6 +1392,157 @@
         }
       }
     },
+    "/audio/uploads/direct": {
+      "post": {
+        "operationId": "upload_direct",
+        "tags": [
+          "Audio"
+        ],
+        "summary": "Upload an audio file directly as multipart/form-data",
+        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part; the server streams the part into object storage and returns the object key plus a presigned GET URL. The part's filename is validated against the same anti-traversal allowlist as the presigned path. Requires a bearer JWT and the admin capability.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresignedUrlDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audio/download": {
+      "get": {
+        "operationId": "download",
+        "tags": [
+          "Audio"
+        ],
+        "summary": "Stream a transcoded object back through the server",
+        "description": "Given the source object `key` (query param `file`), streams the derived object's bytes chunk by chunk as the response body — the large file never sits whole in server memory — or `404` while the worker has not produced it yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; this endpoint is the streamed proxy. Requires a bearer JWT and the admin capability.",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audio/events": {
+      "get": {
+        "operationId": "events",
+        "tags": [
+          "Audio"
+        ],
+        "summary": "Stream transcode progress as Server-Sent Events",
+        "description": "Opens a `text/event-stream` that polls the derived object and emits a `transcode` event (`{state: pending|ready}`) until it is produced, then ends — a live progress feed the browser reads with `EventSource`. Requires a bearer JWT and the admin capability.",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/audio/transcode": {
       "post": {
         "operationId": "transcode",

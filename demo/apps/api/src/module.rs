@@ -29,7 +29,13 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         HealthModule,
         ServerTimingModule,
         ScheduleModule,
-        HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
+        HttpModule::for_root(HttpConfig {
+            port: 3002,
+            // Negotiate gzip/br responses — the app terminates its own traffic
+            // in the demo (no reverse proxy in front).
+            compression: true,
+            ..Default::default()
+        }),
         ThrottlerModule::for_root(None),
         GraphqlModule::for_root(None),
         OpenApiModule::for_root(None),

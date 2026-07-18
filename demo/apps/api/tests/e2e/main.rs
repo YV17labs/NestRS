@@ -8,11 +8,13 @@ use features::{Claims, Role};
 use nest_rs_authn::{JwtConfig, JwtOptions, JwtService};
 use nest_rs_authz::{AbilityBuilder, Action, with_ability};
 use nest_rs_core::module;
+use nest_rs_http::HttpTransport;
 use nest_rs_redis::{QueueModule, QueueWorker, QueueWorkerModule};
 use nest_rs_seaorm::{DatabaseModule, Executor, Repo, with_executor};
 use nest_rs_storage::{Storage, StorageConfig};
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
+use poem::test::{TestForm, TestFormField};
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
 use serde_json::json;
 use uuid::Uuid;
@@ -233,6 +235,51 @@ async fn openapi_document_describes_the_routes() {
             "create advertises a problem+json {status} response",
         );
     }
+}
+
+// A client that advertises `Accept-Encoding: gzip` gets a gzip-encoded body;
+// one that does not gets plain JSON. Proves the transport's compression layer
+// (`HttpConfig.compression`, on for the api app) negotiates per request. The
+// test harness drives a bare default transport, so the compression-on transport
+// is supplied explicitly — the same knob `HttpModule` flips from the config.
+#[tokio::test]
+async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("create + migrate a throwaway database");
+    let app = TestApp::builder()
+        .module::<ApiModule>()
+        .http(HttpTransport::new().compression(true))
+        .with_test_telemetry()
+        .provide_arc(db.connection())
+        .provide(JwtConfig {
+            public_key: Some(DEV_PUBLIC_KEY.into()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("ApiModule boots on a compression-enabled transport");
+    let _db = db;
+    let bearer = format!("Bearer {}", login().await);
+
+    let compressed = app
+        .http()
+        .get("/users")
+        .header(header::AUTHORIZATION, &bearer)
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .send()
+        .await;
+    compressed.assert_status_is_ok();
+    compressed.assert_header(header::CONTENT_ENCODING, "gzip");
+
+    let plain = app
+        .http()
+        .get("/users")
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await;
+    plain.assert_status_is_ok();
+    plain.assert_header_is_not_exist(header::CONTENT_ENCODING);
 }
 
 #[tokio::test]
@@ -1668,6 +1715,112 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
     assert_eq!(
         got_bytes, payload,
         "the derived object's bytes match the uploaded payload",
+    );
+
+    worker_queue
+        .shutdown()
+        .await
+        .expect("the worker's QueueWorker stops cleanly");
+}
+
+/// The multipart + streaming counterpart of the presigned round-trip: the client
+/// posts the file as `multipart/form-data` straight through the server (no
+/// presign), the worker transcodes it, and `GET /audio/download` streams the
+/// derived object back chunk by chunk — asserted byte-for-byte against live
+/// RustFS, no mocking.
+#[tokio::test]
+async fn audio_multipart_upload_and_streamed_download_round_trip() {
+    let (_db, app) = boot().await;
+    let http = reqwest::Client::new();
+    ensure_bucket(&http).await;
+
+    let worker = TestApp::builder()
+        .module::<AudioWorkerHarness>()
+        .build_headless()
+        .await
+        .expect("the audio worker boots against Redis and storage");
+    let worker_queue = worker
+        .spawn_transport(QueueWorker::new())
+        .await
+        .expect("the worker's QueueWorker drains the audio queue");
+
+    let bearer = format!("Bearer {}", login().await);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let filename = format!("e2e-multipart-{}-{}.mp3", std::process::id(), nonce);
+    let payload = b"nestrs multipart + streaming payload \xf0\x9f\x8e\xa7".to_vec();
+
+    // 1. Upload the file directly as multipart/form-data through the server.
+    let form = TestForm::new().field(
+        TestFormField::bytes(payload.clone())
+            .name("file")
+            .filename(&filename),
+    );
+    let up = app
+        .http()
+        .post("/audio/uploads/direct")
+        .header(header::AUTHORIZATION, &bearer)
+        .multipart(form)
+        .send()
+        .await;
+    up.assert_status_is_ok();
+    let key = up
+        .json()
+        .await
+        .value()
+        .object()
+        .get("key")
+        .string()
+        .to_owned();
+
+    // 2 & 3. Enqueue the transcode and stream the derived object back once ready.
+    let mut downloaded: Option<Vec<u8>> = None;
+    'outer: for _ in 0..5 {
+        app.http()
+            .post("/audio/transcode")
+            .header(header::AUTHORIZATION, &bearer)
+            .body_json(&json!({ "file": key }))
+            .send()
+            .await
+            .assert_status_is_ok();
+
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let resp = app
+                .http()
+                .get(format!("/audio/download?file={key}"))
+                .header(header::AUTHORIZATION, &bearer)
+                .send()
+                .await;
+            if resp.0.status() == StatusCode::OK {
+                let bytes = resp.0.into_body().into_bytes().await.expect("stream body");
+                downloaded = Some(bytes.to_vec());
+                break 'outer;
+            }
+        }
+    }
+    let downloaded = downloaded.expect("the streamed download served the derived object");
+    assert_eq!(
+        downloaded, payload,
+        "the streamed bytes match the multipart upload",
+    );
+
+    // 4. The SSE progress feed reports the transcode as ready and closes.
+    let events = app
+        .http()
+        .get(format!("/audio/events?file={key}"))
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await;
+    events.assert_status_is_ok();
+    events.assert_content_type("text/event-stream");
+    let body = events.0.into_body().into_bytes().await.expect("sse body");
+    let body = String::from_utf8(body.to_vec()).expect("sse is utf-8");
+    assert!(
+        body.contains("event: transcode") && body.contains("\"state\":\"ready\""),
+        "the SSE feed emits a ready transcode event: {body:?}",
     );
 
     worker_queue

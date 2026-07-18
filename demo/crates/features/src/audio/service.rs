@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt};
 use nest_rs_core::injectable;
 use nest_rs_queue::{JobProducerExt, QueueError};
 use nest_rs_redis::QueueConnection;
@@ -88,6 +90,50 @@ impl AudioService {
             "transcoded",
         );
         Ok(derived)
+    }
+
+    /// Direct-upload side: store bytes the server received (a multipart part)
+    /// and hand back the object key plus a presigned `GET` URL for it. The key
+    /// is uuid-prefixed like [`presign_upload`](Self::presign_upload)'s, so the
+    /// follow-up transcode/download accept it. Unlike the presigned path the
+    /// server proxies the payload — the cost of a single round-trip upload.
+    pub async fn store_upload(&self, filename: &str, bytes: Vec<u8>) -> Result<PresignedUrlDto> {
+        let key = format!("{}-{filename}", Uuid::now_v7());
+        self.storage
+            .put_bytes(&key, bytes, AUDIO_CONTENT_TYPE)
+            .await?;
+        let url = self.storage.presign_get(&key, PRESIGN_TTL).await?;
+        tracing::debug!(target: "features::audio", key, "stored direct multipart upload");
+        Ok(PresignedUrlDto { key, url })
+    }
+
+    /// Streamed read side: open the derived object as a chunked byte stream the
+    /// controller feeds straight into a streamed HTTP body — the large-file
+    /// download never sits whole in process memory. `None` while the worker has
+    /// not produced the derived object yet.
+    pub async fn open_result(
+        &self,
+        file: &str,
+    ) -> Result<Option<impl Stream<Item = std::io::Result<Bytes>> + Send + 'static + use<>>> {
+        let key = Self::derived_key(file);
+        if self.storage.head(&key).await?.is_none() {
+            return Ok(None);
+        }
+        // poem's streamed body wants an `io::Error`; a mid-stream storage read
+        // failure surfaces as one rather than silently truncating the download.
+        let stream = self
+            .storage
+            .get_stream(&key)
+            .await?
+            .map(|chunk| chunk.map_err(std::io::Error::other));
+        Ok(Some(stream))
+    }
+
+    /// Whether the worker has produced the derived object yet — a cheap `head`,
+    /// no presign. Drives the `GET /audio/events` SSE progress feed.
+    pub async fn result_ready(&self, file: &str) -> Result<bool> {
+        let key = Self::derived_key(file);
+        Ok(self.storage.head(&key).await?.is_some())
     }
 
     /// Read side: if the worker has produced the derived object, mint a presigned

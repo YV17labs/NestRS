@@ -1,10 +1,15 @@
 use std::sync::Arc;
 
+use std::time::Duration;
+
+use futures_util::stream;
 use nest_rs_http::{Valid, controller, routes};
 use nest_rs_throttler::{Throttle, ThrottlerGuard};
 use poem::http::StatusCode;
-use poem::web::{Json, Query};
-use poem::{Error, Result};
+use poem::web::sse::{Event, SSE};
+use poem::web::{Json, Multipart, Query};
+use poem::{Body, Error, Response, Result};
+use validator::Validate;
 
 use super::guard::TranscodeGuard;
 use crate::audio::{AudioService, PresignedUrlDto, TranscodeDto, UploadRequestDto};
@@ -65,6 +70,115 @@ impl AudioController {
             Some(ticket) => Ok(Json(ticket)),
             None => Err(Error::from_status(StatusCode::NOT_FOUND)),
         }
+    }
+
+    #[post("/uploads/direct")]
+    #[meta(Throttle::per_minute(20))]
+    #[api(
+        summary = "Upload an audio file directly as multipart/form-data",
+        description = "The single-round-trip alternative to the presigned flow: the client posts a \
+                       `multipart/form-data` body with a `file` part; the server streams the part \
+                       into object storage and returns the object key plus a presigned GET URL. The \
+                       part's filename is validated against the same anti-traversal allowlist as \
+                       the presigned path. Requires a bearer JWT and the admin capability.",
+        tags("Audio")
+    )]
+    async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> {
+        while let Some(field) = form
+            .next_field()
+            .await
+            .map_err(|e| Error::from_string(e.to_string(), StatusCode::BAD_REQUEST))?
+        {
+            if field.name() != Some("file") {
+                continue;
+            }
+            let filename = field.file_name().map(str::to_owned).unwrap_or_default();
+            // Reuse the presigned path's edge validation — a rejected filename
+            // never becomes an object key.
+            UploadRequestDto {
+                filename: filename.clone(),
+            }
+            .validate()
+            .map_err(|e| Error::from_string(e.to_string(), StatusCode::UNPROCESSABLE_ENTITY))?;
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| Error::from_string(e.to_string(), StatusCode::BAD_REQUEST))?;
+            let ticket = self.svc.store_upload(&filename, bytes).await.map_err(|e| {
+                Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            })?;
+            return Ok(Json(ticket));
+        }
+        Err(Error::from_string(
+            "multipart body has no `file` part",
+            StatusCode::BAD_REQUEST,
+        ))
+    }
+
+    #[get("/download")]
+    #[meta(Throttle::per_minute(60))]
+    #[api(
+        summary = "Stream a transcoded object back through the server",
+        description = "Given the source object `key` (query param `file`), streams the derived \
+                       object's bytes chunk by chunk as the response body — the large file never \
+                       sits whole in server memory — or `404` while the worker has not produced it \
+                       yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; \
+                       this endpoint is the streamed proxy. Requires a bearer JWT and the admin \
+                       capability.",
+        tags("Audio")
+    )]
+    async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
+        let file = query.into_inner().file;
+        match self
+            .svc
+            .open_result(&file)
+            .await
+            .map_err(|e| Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?
+        {
+            Some(stream) => Ok(Response::builder()
+                .content_type("audio/mpeg")
+                .body(Body::from_bytes_stream(stream))),
+            None => Err(Error::from_status(StatusCode::NOT_FOUND)),
+        }
+    }
+
+    #[get("/events")]
+    #[meta(Throttle::per_minute(60))]
+    #[api(
+        summary = "Stream transcode progress as Server-Sent Events",
+        description = "Opens a `text/event-stream` that polls the derived object and emits a \
+                       `transcode` event (`{state: pending|ready}`) until it is produced, then \
+                       ends — a live progress feed the browser reads with `EventSource`. Requires \
+                       a bearer JWT and the admin capability.",
+        tags("Audio")
+    )]
+    async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SSE {
+        let file = query.into_inner().file;
+        let svc = self.svc.clone();
+        // Poll the derived object; emit one event per tick, end on the first
+        // `ready`. `u32::MAX` past the terminal event trips the cap on the next
+        // poll, so the stream closes cleanly rather than keeping the socket open.
+        let events = stream::unfold(0u32, move |attempt| {
+            let svc = svc.clone();
+            let file = file.clone();
+            async move {
+                if attempt >= 20 {
+                    return None;
+                }
+                let ready = svc.result_ready(&file).await.unwrap_or(false);
+                let state = if ready { "ready" } else { "pending" };
+                let event =
+                    Event::message(format!("{{\"state\":\"{state}\",\"attempt\":{attempt}}}"))
+                        .event_type("transcode");
+                if ready {
+                    Some((event, u32::MAX))
+                } else {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Some((event, attempt + 1))
+                }
+            }
+        });
+        SSE::new(events).keep_alive(Duration::from_secs(15))
     }
 
     #[post("/transcode")]

@@ -72,7 +72,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 # error→response mapping in the app. `rustls` terminates TLS at the transport
 # (`HttpTransport::tls`) with no OpenSSL system dependency, keeping the
 # single-static-binary promise.
-poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
+poem = { version = "3", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
 
 # Response-body plumbing for the access log: wrap poem's body stream in a byte
 # counter so the access event reports the exact size sent (poem stamps

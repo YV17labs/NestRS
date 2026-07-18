@@ -189,8 +189,6 @@ Typical mistake — controller registered without importing the port:
 pub struct PostsHttpModule;
 ```
 
-{/* TODO(step8-evidence): capture verbatim boot output from a real failing run */}
-
 ```text frame="terminal"
 Error: module access violation: `PostsController` (in module
   `PostsHttpModule`) depends on `PostsService`, but `PostsHttpModule`

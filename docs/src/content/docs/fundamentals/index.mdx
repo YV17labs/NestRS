@@ -139,13 +139,14 @@ repo.
 Comment the line that lists `BlogService` in `BlogModule`'s providers,
 then build:
 
-```text frame="terminal" "(needs BlogService)"
-module `BlogModule`: cannot register provider(s) ["BlogController (needs BlogService)"] — each injects a dependency that neither this module's `providers` nor its `imports` registers; add the provider or import the module that exposes it
+```text frame="terminal" "BlogService"
+Error: unmet dependency: `BlogController` (in module `BlogModule`) depends on `BlogService`, but no module provides it and it is not global infrastructure (a seed or factory output). Add a provider for `BlogService` to a module reachable from the root, or seed it at `App::builder()`.
 ```
 
-The error names *what* cannot be built (`BlogController`) and *why*
-(`needs BlogService`). Boot fails inside `build().await`, before the HTTP
-transport starts — never at the first request.
+The error names the consumer (`BlogController`), the missing dependency
+(`BlogService`), and the two ways to fix it. Boot fails inside
+`build().await`, before the HTTP transport starts — never at the first
+request.
 
 ## Five ideas to remember
 

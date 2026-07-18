@@ -114,6 +114,41 @@ struct SecondProviderModule;
 #[module(imports = [FirstProviderModule, SecondProviderModule])]
 struct DuplicateRoot;
 
+#[injectable]
+#[derive(Default)]
+struct UnprovidedDep;
+
+#[injectable]
+struct EagerConsumer {
+    #[inject]
+    _dep: std::sync::Arc<UnprovidedDep>,
+}
+
+// `EagerConsumer` injects `UnprovidedDep`, which no module provides.
+#[module(providers = [EagerConsumer])]
+struct EagerMissingModule;
+
+#[test]
+fn an_eager_provider_with_a_missing_dependency_is_a_named_boot_error_not_a_panic() {
+    // The register phase used to panic on this before the access-graph check
+    // could run; it now defers to the graph, so the failure is the same named
+    // boot error as every other wiring mistake.
+    match App::new::<EagerMissingModule>() {
+        Ok(_) => panic!("an unprovided eager dependency must fail the boot"),
+        Err(err) => {
+            let missing = err
+                .downcast::<nest_rs_core::MissingDependencyError>()
+                .expect("the failure is the named missing-dependency error, not a panic");
+            assert_eq!(missing.consumer, "EagerConsumer");
+            assert!(
+                missing.dependency.contains("UnprovidedDep"),
+                "names the missing dep: {}",
+                missing.dependency
+            );
+        }
+    }
+}
+
 #[test]
 fn two_modules_providing_the_same_concrete_type_fail_the_boot() {
     // A concrete type registered by two modules used to silently last-write-wins;

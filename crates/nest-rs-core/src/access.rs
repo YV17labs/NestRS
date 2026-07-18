@@ -91,9 +91,10 @@ pub struct AccessGraphError {
 /// A provider depends on something **no module provides** — not global
 /// infrastructure, not in its import closure, not registered anywhere. Raised at
 /// boot so a lazily-built scoped/transient provider fails cleanly here instead
-/// of panicking at its first `get(...).expect(...)` resolution. (An *eager*
-/// provider's missing dependency is caught the same way, before the register
-/// phase would panic on it.)
+/// of panicking at its first `get(...).expect(...)` resolution. An *eager*
+/// provider's missing dependency lands here too: the register phase defers it
+/// to this check rather than panicking ahead of it, so every wiring failure is
+/// one `Result`.
 #[derive(Debug, Error)]
 #[error(
     "unmet dependency: `{consumer}` (in module `{module}`) depends on `{dependency}`, but no \

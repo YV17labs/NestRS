@@ -203,16 +203,22 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     break;
                 }
                 if !__progressed {
-                    // Stalled: split the two failure modes for an actionable msg.
+                    // Stalled: split the two failure modes. A genuinely-missing
+                    // dependency is *deferred* to the boot-time access-graph check
+                    // (`App::new` / `App::builder().build()`), which fails with a
+                    // named `MissingDependencyError` / `AccessGraphError` — so the
+                    // register phase no longer panics ahead of it, and every
+                    // wiring failure surfaces through the same `Result`. A true
+                    // cycle (no missing dep, providers only waiting on each other)
+                    // is invisible to the graph, so it still fails loudly here.
                     let mut __cyclic: ::std::vec::Vec<&'static str> = ::std::vec::Vec::new();
                     let mut __unprovided: ::std::vec::Vec<::std::string::String> =
                         ::std::vec::Vec::new();
                     #(#classifies)*
                     if !__unprovided.is_empty() {
-                        ::std::panic!(
-                            "module `{}`: cannot register provider(s) {:?} — each injects a dependency that neither this module's `providers` nor its `imports` registers; add the provider or import the module that exposes it",
-                            #name_str, __unprovided
-                        );
+                        // Leave the unbuilt providers out; the access-graph check
+                        // names the missing dependency and fails the boot cleanly.
+                        break;
                     } else {
                         ::std::panic!(
                             "module `{}`: dependency cycle among provider(s) {:?} — each waits on another provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete type",

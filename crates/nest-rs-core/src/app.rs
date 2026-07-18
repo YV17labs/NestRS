@@ -42,9 +42,15 @@ fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
 }
 
 impl App {
-    /// Build the container from the root module synchronously. Returns
-    /// [`AccessGraphError`](crate::AccessGraphError) on contract violations.
-    /// A missing provider still panics inside the sync register-phase fixpoint.
+    /// Build the container from the root module synchronously. Every wiring
+    /// failure is a `Result`: a cross-module reach returns
+    /// [`AccessGraphError`](crate::AccessGraphError), a dependency no module
+    /// provides returns [`MissingDependencyError`](crate::MissingDependencyError),
+    /// a doubly-registered type returns
+    /// [`DuplicateProviderError`](crate::DuplicateProviderError). The register
+    /// phase defers a missing dependency to the access-graph check rather than
+    /// panicking ahead of it; only a true provider cycle (invisible to the
+    /// graph) still panics.
     pub fn new<M: Module + 'static>() -> Result<Self> {
         let builder = M::register(Container::builder());
         let roots = [TypeId::of::<M>()];

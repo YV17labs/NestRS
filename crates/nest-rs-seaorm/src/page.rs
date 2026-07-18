@@ -87,7 +87,7 @@ pub(crate) fn next_cursor_from<M>(
 
 /// The `?first=&after=` cursor query. An unparsable `after` is ignored — paging
 /// from the start, never an error.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct PageParams {
     /// Requested page size; defaults to 20 and is clamped to `1..=100`.
     pub first: Option<u64>,

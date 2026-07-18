@@ -3000,6 +3000,7 @@ dependencies = [
  "nest-rs-worker",
  "nest-rs-ws",
  "poem",
+ "schemars",
  "sea-orm",
  "serde",
  "serde_json",

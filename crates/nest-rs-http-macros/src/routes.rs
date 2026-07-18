@@ -137,6 +137,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         let is_public = take_flag_attr(&mut method.attrs, "public");
         // `#[no_pipes]` opts out of every global pipe for this route.
         let no_pipes = take_flag_attr(&mut method.attrs, "no_pipes");
+        // Internal marker the `#[crud]` macro stamps on its write ops (create /
+        // update / delete) — their write-error mapper can surface a `409` on a
+        // uniqueness violation, so the document advertises that response. Always
+        // stripped here so it never reaches the compiler.
+        let may_conflict = take_flag_attr(&mut method.attrs, "crud_write");
 
         // Drained after the `use_*` attributes so error spans for a misuse of
         // a response decorator point past the layers — and *before* emitting
@@ -257,6 +262,24 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             _ => quote! { ::core::option::Option::None },
         };
 
+        // `Path<T>` extractor types (in path order) and `Query<T>` payload
+        // types — the OpenAPI doc turns the former into real path-param schemas
+        // (`Uuid` → `format: uuid`, `i64` → `integer`) and expands each of the
+        // latter's object properties into individual query parameters. Both
+        // impose `JsonSchema` on the captured type, as `Json<T>` bodies do.
+        let path_param_tys = path_param_types(&inputs);
+        let path_params = if path_param_tys.is_empty() {
+            quote! { &[] }
+        } else {
+            quote! { &[#(::nest_rs_http::schema_of::<#path_param_tys> as ::nest_rs_http::SchemaFn),*] }
+        };
+        let query_param_tys = query_payloads(&inputs);
+        let query_params = if query_param_tys.is_empty() {
+            quote! { &[] }
+        } else {
+            quote! { &[#(::nest_rs_http::schema_of::<#query_param_tys> as ::nest_rs_http::SchemaFn),*] }
+        };
+
         route_metas.push(quote! {
             ::nest_rs_http::HttpRouteMeta {
                 verb: #verb_variant,
@@ -267,6 +290,9 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 tags: #tags,
                 request_body: #request_body,
                 response: #response,
+                path_params: #path_params,
+                query_params: #query_params,
+                may_conflict: #may_conflict,
                 scoped_guarded: #method_guarded
                     || !<#self_ty>::__nestrs_controller_guard_specs().is_empty(),
                 public: #is_public,
@@ -675,6 +701,65 @@ fn request_payload(inputs: &[FnArg]) -> Option<Type> {
         FnArg::Typed(pt) => json_payload(&pt.ty),
         _ => None,
     })
+}
+
+/// The type inside a `Path<T>` extractor: `Path<T>`, `Valid<Path<T>>`, and
+/// `Piped<_, Path<T>>` all yield `T`. Non-`Path` yields `None`.
+fn path_payload(ty: &Type) -> Option<Type> {
+    if let Some(t) = nth_generic_type(ty, "Path", 0) {
+        return Some(t.clone());
+    }
+    if let Some(inner) = nth_generic_type(ty, "Valid", 0) {
+        return path_payload(inner);
+    }
+    if let Some(inner) = nth_generic_type(ty, "Piped", 1) {
+        return path_payload(inner);
+    }
+    None
+}
+
+/// The path-parameter types a handler binds, in path order. A single
+/// `Path<T>` yields `[T]`; a tuple `Path<(A, B)>` yields `[A, B]` (poem binds
+/// tuple elements to the `:name` segments left-to-right). A handler with no
+/// `Path<…>` extractor (it binds its id via `Bind<_, _>` instead) yields an
+/// empty vec — the doc then guesses `format: uuid` for id-like segments.
+fn path_param_types(inputs: &[FnArg]) -> Vec<Type> {
+    for arg in inputs {
+        let FnArg::Typed(pt) = arg else { continue };
+        if let Some(inner) = path_payload(&pt.ty) {
+            return match inner {
+                Type::Tuple(tuple) => tuple.elems.into_iter().collect(),
+                other => vec![other],
+            };
+        }
+    }
+    Vec::new()
+}
+
+/// The type inside a `Query<T>` extractor: `Query<T>`, `Valid<Query<T>>`, and
+/// `Piped<_, Query<T>>` all yield `T`. Non-`Query` yields `None`.
+fn query_payload(ty: &Type) -> Option<Type> {
+    if let Some(t) = nth_generic_type(ty, "Query", 0) {
+        return Some(t.clone());
+    }
+    if let Some(inner) = nth_generic_type(ty, "Valid", 0) {
+        return query_payload(inner);
+    }
+    if let Some(inner) = nth_generic_type(ty, "Piped", 1) {
+        return query_payload(inner);
+    }
+    None
+}
+
+/// Every `Query<T>` payload type in the handler signature, in argument order.
+fn query_payloads(inputs: &[FnArg]) -> Vec<Type> {
+    inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            FnArg::Typed(pt) => query_payload(&pt.ty),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `Some(T)` when `ty` is `Result<T, _>`, `None` otherwise. Detects the

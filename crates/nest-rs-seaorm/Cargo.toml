@@ -63,6 +63,9 @@ serde.workspace = true
 # `ServiceError`'s RFC-9457 `problem+json` rendering serializes `validator`
 # field errors into an `errors` extension member.
 serde_json.workspace = true
+# `PageParams` derives `JsonSchema` so the `#[crud]` list op's `Query<PageParams>`
+# can advertise its `first`/`after` cursor as OpenAPI query parameters.
+schemars.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true

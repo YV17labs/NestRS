@@ -86,6 +86,26 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
             );
             let spec =
                 serde_json::to_string_pretty(&document).unwrap_or_else(|_| document.to_string());
+            // Emit lives here — the only place with the assembled container.
+            // The OpenAPI analogue of the GraphQL SDL emit: keep the committed
+            // `openapi.json` fresh as a side effect of a dev run.
+            if options.emit_document {
+                let dest = &options.document_path;
+                match std::fs::write(dest, format!("{spec}\n")) {
+                    Ok(()) => tracing::info!(
+                        target: "nest_rs::routes",
+                        path = %dest.display(),
+                        bytes = spec.len(),
+                        "wrote OpenAPI document",
+                    ),
+                    Err(err) => tracing::warn!(
+                        target: "nest_rs::routes",
+                        path = %dest.display(),
+                        error = %err,
+                        "failed to write OpenAPI document",
+                    ),
+                }
+            }
             route
                 .at(SPEC_PATH, get(ui::spec_endpoint(spec)))
                 .at(DOCS_PATH, get(ui::swagger_index))

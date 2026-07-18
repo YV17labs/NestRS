@@ -276,3 +276,6 @@ globally. The error itself stays pure.
 - [Interceptors](/fundamentals/interceptors/) — the success-path sibling.
 - [Guards](/fundamentals/guards/) — return `Err(Response)` directly,
   bypassing the filter chain.
+- [`posts/http/exception_filter.rs`](https://github.com/NestRS/NestRS/blob/main/demo/crates/features/src/posts/http/exception_filter.rs)
+  in the demo — maps `PostError::AlreadyPublished` to RFC 9457
+  `application/problem+json`.

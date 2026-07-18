@@ -96,7 +96,17 @@ impl UsersService {
         org_id: Uuid,
     ) -> Result<entity::Model, ServiceError> {
         let active = prepare_new_user(input, org_id, None)?;
-        let user = active.insert(&Repo::<Users>::conn()?).await?;
+        let user = match active.insert(&Repo::<Users>::conn()?).await {
+            Ok(user) => user,
+            // The unique-email constraint is a client conflict (409), not an
+            // opaque 500 — surface it as such instead of swallowing it as a `Db`.
+            Err(e) if is_unique_violation(&e) => {
+                return Err(ServiceError::conflict(
+                    "a user with this email already exists",
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
         tracing::debug!(target: "features::users", id = %user.id, %org_id, "user created");
         Ok(user)
     }

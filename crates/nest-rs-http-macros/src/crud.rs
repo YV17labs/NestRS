@@ -266,13 +266,31 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         #[::nest_rs_http::routes]
         #item
 
+        // Map a write failure to the HTTP status it deserves instead of a
+        // blanket 500: a unique-constraint violation is a 409, a create the
+        // ability re-check rolled back (`RecordNotInserted`) is a 403, a row
+        // that vanished between the access check and the write is a 404. Only a
+        // genuinely unexpected `DbErr` is a 500 — and it ships an empty body, so
+        // the raw driver message never reaches the client.
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        fn #internal<E: ::std::string::ToString>(__e: E) -> ::poem::Error {
-            ::poem::Error::from_string(
-                ::std::string::ToString::to_string(&__e),
-                ::poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )
+        fn #internal(__e: ::sea_orm::DbErr) -> ::poem::Error {
+            let __status = match ::sea_orm::DbErr::sql_err(&__e) {
+                ::core::option::Option::Some(
+                    ::sea_orm::SqlErr::UniqueConstraintViolation(_),
+                ) => ::poem::http::StatusCode::CONFLICT,
+                _ => match __e {
+                    ::sea_orm::DbErr::RecordNotInserted => {
+                        ::poem::http::StatusCode::FORBIDDEN
+                    }
+                    ::sea_orm::DbErr::RecordNotUpdated
+                    | ::sea_orm::DbErr::RecordNotFound(_) => {
+                        ::poem::http::StatusCode::NOT_FOUND
+                    }
+                    _ => ::poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                },
+            };
+            ::poem::Error::from_status(__status)
         }
     })
 }

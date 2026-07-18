@@ -30,6 +30,24 @@ both new features and breaking changes.
 
 ### Added
 
+- **`HttpConfig.compression`** negotiates response compression (gzip /
+  deflate / brotli / zstd) from each request's `Accept-Encoding` — one
+  flag (`NESTRS_HTTP__COMPRESSION` or the pinned struct), off by default
+  so a fronting proxy keeps ownership when it has it. A preflight
+  (`OPTIONS`, no body) and an already-encoded response are left alone.
+
+- **`Storage::get_stream`** downloads an object as a chunked byte stream
+  instead of buffering the whole body ([`get_bytes`] collects), so a
+  large media file flows to the client without ever sitting whole in
+  process memory — feed it straight into a streamed HTTP body.
+
+- **Streaming and multipart HTTP** are now first-class: poem's `sse`,
+  `multipart` and `compression` features are enabled, so a handler can
+  return `poem::web::sse::SSE` or a `Body::from_bytes_stream` response,
+  or take a `poem::web::Multipart` upload, and `#[routes]` passes each
+  through untouched. The demo's `audio` slice exercises all three
+  (direct upload, streamed download, an SSE progress feed).
+
 - **`nestrs g migration <name>`** scaffolds a SeaORM migration and
   registers it in **both** `crates/migrations/src/lib.rs` and
   `migrator.rs` — the `migrator.rs` vec is regenerated from the module

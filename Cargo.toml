@@ -69,7 +69,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 # error→response mapping in the app. `rustls` terminates TLS at the transport
 # (`HttpTransport::tls`) with no OpenSSL system dependency, keeping the
 # single-static-binary promise.
-poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
+poem = { version = "3", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
 
 # S3-compatible object storage (nest-rs-storage). `object_store` is the generic,
 # multi-driver object-store abstraction (S3/GCS/Azure/fs/memory) under Apache

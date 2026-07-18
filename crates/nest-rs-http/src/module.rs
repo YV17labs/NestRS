@@ -64,6 +64,7 @@ impl DynamicModule for HttpSetup {
                 }
                 http = http.fail_secure_strict(cfg.fail_secure_strict);
                 http = http.security_headers(cfg.security_headers.clone());
+                http = http.compression(cfg.compression);
                 Ok(Box::new(http))
             },
         })

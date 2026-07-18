@@ -6,7 +6,7 @@ use nest_rs_core::{Container, DiscoveryService, Transport};
 use poem::endpoint::BoxEndpoint;
 use poem::http::header::{HeaderName, HeaderValue, SERVER};
 use poem::listener::{Listener, TcpListener};
-use poem::middleware::{Cors, SetHeader};
+use poem::middleware::{Compression, Cors, SetHeader};
 use poem::{EndpointExt, IntoEndpoint, Response, Route, Server};
 use tokio_util::sync::CancellationToken;
 
@@ -70,6 +70,7 @@ pub struct HttpTransport {
     request_timeout: Option<std::time::Duration>,
     fail_secure_strict: bool,
     security_headers: crate::SecurityHeadersConfig,
+    compression: bool,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -110,6 +111,7 @@ impl HttpTransport {
             // `NESTRS_HTTP__FAIL_SECURE_STRICT=false`.
             fail_secure_strict: true,
             security_headers: crate::SecurityHeadersConfig::default(),
+            compression: false,
             endpoint: None,
         }
     }
@@ -174,6 +176,15 @@ impl HttpTransport {
     /// or interceptor runs.
     pub fn cors(mut self, cors: Cors) -> Self {
         self.cors = Some(cors);
+        self
+    }
+
+    /// Negotiate response compression from each request's `Accept-Encoding`
+    /// (poem's [`Compression`] middleware — gzip / deflate / brotli / zstd).
+    /// Off by default; [`HttpModule`](crate::HttpModule) turns it on when
+    /// `HttpConfig.compression` is set.
+    pub fn compression(mut self, on: bool) -> Self {
+        self.compression = on;
         self
     }
 
@@ -434,6 +445,12 @@ impl Transport for HttpTransport {
             let header_value = HeaderValue::from_static(value);
             let set = SetHeader::new().overriding(SERVER, header_value);
             endpoint = endpoint.with(set).map_to_response().boxed();
+        }
+        // Response compression, negotiated from `Accept-Encoding`. Inside CORS
+        // (a preflight carries no body to compress) and outside the handler /
+        // header layers so the encoded bytes are what leaves the process.
+        if self.compression {
+            endpoint = endpoint.with(Compression::new()).map_to_response().boxed();
         }
         // CORS wraps outermost, so a preflight is handled before guards run.
         if let Some(cors) = self.cors.take() {

@@ -1,0 +1,63 @@
+---
+title: Streaming responses
+description: Return a chunked body or a Server-Sent Events stream from a handler — poem's response types pass straight through.
+sidebar:
+  order: 9
+---
+
+A handler can return a body that streams instead of one buffered whole in
+memory, or a live Server-Sent Events feed the browser reads with
+`EventSource`. `#[routes]` passes the handler's return type through
+untouched, so any poem response type works — no wrapper, no schema
+requirement.
+
+```rust title="crates/features/src/audio/http/controller.rs" {6-8}
+#[get("/download")]
+async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
+    let file = query.into_inner().file;
+    match self.svc.open_result(&file).await.map_err(internal)? {
+        Some(stream) => Ok(Response::builder()
+            .content_type("audio/mpeg")
+            // The object's bytes flow chunk by chunk — never whole in memory.
+            .body(Body::from_bytes_stream(stream))),
+        None => Err(Error::from_status(StatusCode::NOT_FOUND)),
+    }
+}
+```
+
+## Streamed bodies
+
+`poem::Body::from_bytes_stream` turns any `Stream<Item = Result<Bytes,
+E>>` into a response body. Feed it a source that itself streams — the
+object-storage client's [`get_stream`](/storage/) hands back the S3
+`GetObject` chunks directly, so a large download proxies through the
+server without ever sitting whole in process memory.
+
+## Server-Sent Events
+
+Return `poem::web::sse::SSE` for a long-lived `text/event-stream`. Each
+item the stream yields is an `Event`; the browser reconnects on drop.
+
+```rust title="crates/features/src/audio/http/controller.rs"
+#[get("/events")]
+async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SSE {
+    let stream = /* a Stream<Item = Event> polling the job */;
+    SSE::new(stream).keep_alive(Duration::from_secs(15))
+}
+```
+
+## Limits
+
+- A streamed handler advertises no response body schema in the [OpenAPI
+  document](/openapi/) — there is no `Json<T>` to derive one from.
+- SSE and streamed bodies are HTTP only; the WebSocket
+  [gateway](/websockets/) is the push channel for two-way traffic.
+- Compression sits outside the handler, so a streamed body is still
+  encoded if the client accepts it — usually you leave
+  [compression](/http/compression/) off for already-compressed media.
+
+## Going further
+
+- [File storage](/storage/) — the streaming object-store client.
+- [`audio` in the demo](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/audio/http/controller.rs) — the streamed download and SSE feed in full.
+- [File uploads](/http/file-uploads/) — the multipart counterpart.

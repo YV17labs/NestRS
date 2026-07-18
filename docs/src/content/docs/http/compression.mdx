@@ -1,0 +1,57 @@
+---
+title: Compression
+description: Negotiate gzip/brotli response compression from Accept-Encoding with a single HttpConfig flag.
+sidebar:
+  order: 8
+---
+
+One flag makes the transport compress responses when the client asks for
+it. `HttpConfig.compression` turns on poem's negotiation layer: each
+request's `Accept-Encoding` header picks gzip, deflate, brotli or zstd,
+and the response body is encoded before it leaves the process. Off by
+default — in most deployments a reverse proxy already does this.
+
+```rust title="apps/api/src/module.rs" {3}
+HttpModule::for_root(HttpConfig {
+    port: 3002,
+    compression: true,
+    ..Default::default()
+}),
+```
+
+## Wire it in
+
+Like every `HttpConfig` field, the flag is dual-path — pin it in code as
+above, or set it in the environment:
+
+```bash frame="terminal"
+NESTRS_HTTP__COMPRESSION=true nestrs run dev api
+```
+
+A client that advertises support gets an encoded body; one that does not
+gets plain bytes — the same route, negotiated per request:
+
+```bash frame="terminal"
+$ curl -sS -H 'Accept-Encoding: gzip' -D - -o /dev/null localhost:3002/api-json
+HTTP/1.1 200 OK
+content-type: application/json
+content-encoding: gzip
+
+$ curl -sS -D - -o /dev/null localhost:3002/api-json
+HTTP/1.1 200 OK
+content-type: application/json
+```
+
+## Limits
+
+- The layer sits inside CORS, so a preflight (`OPTIONS`, no body) is never
+  compressed, and outside the handler, so what the handler returns is what
+  gets encoded.
+- A response already carrying `Content-Encoding` is left untouched.
+- Turn it off (the default) when a proxy, CDN, or load balancer in front of
+  the app compresses — doing it twice only burns CPU.
+
+## Going further
+
+- [Configuration](/http/configuration/) — every `HttpConfig` field.
+- [Streaming responses](/http/streaming/) — SSE and streamed bodies.

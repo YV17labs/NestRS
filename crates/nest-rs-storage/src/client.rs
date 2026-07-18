@@ -130,6 +130,29 @@ impl Storage {
         result.bytes().await.map_err(StorageError::Get)
     }
 
+    /// Stream an object's bytes chunk by chunk instead of buffering the whole
+    /// body ([`get_bytes`](Self::get_bytes) collects; this does not).
+    ///
+    /// The returned stream drives the S3 `GetObject` response directly, so a
+    /// large media file flows to the client without ever sitting whole in
+    /// process memory — feed it to a streaming HTTP body. Each item is a
+    /// [`Result`] so a mid-stream transport error still surfaces rather than
+    /// silently truncating.
+    pub async fn get_stream(
+        &self,
+        key: &str,
+    ) -> Result<impl futures_util::Stream<Item = Result<Bytes>> + Send + 'static + use<>> {
+        use futures_util::StreamExt;
+        let result = self
+            .store()?
+            .get(&Path::from(key))
+            .await
+            .map_err(StorageError::Get)?;
+        Ok(result
+            .into_stream()
+            .map(|chunk| chunk.map_err(StorageError::Get)))
+    }
+
     /// Upload bytes (e.g. a media worker writes a WebP variant).
     pub async fn put_bytes(&self, key: &str, bytes: Vec<u8>, content_type: &str) -> Result<()> {
         let mut attributes = Attributes::new();

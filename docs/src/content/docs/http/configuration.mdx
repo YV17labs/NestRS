@@ -63,6 +63,9 @@ Real env always wins over the `.env` cascade.
 | `request_timeout_secs` | `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (seconds) | `30` | `HttpConfig { request_timeout_secs: Some(15), ..Default::default() }` |
 | `fail_secure_strict` | `NESTRS_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
 | `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__FRAME_OPTIONS`, `__HSTS`, `__CONTENT_TYPE_OPTIONS` | on (safe values) | `HttpConfig { security_headers: SecurityHeadersConfig { enabled: false, ..Default::default() }, ..Default::default() }` |
+| `compression` | `NESTRS_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
+
+See [Compression](/http/compression/) for what the flag negotiates and when to leave it off.
 
 ## Serve HTTPS
 

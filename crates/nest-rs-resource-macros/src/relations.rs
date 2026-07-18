@@ -24,8 +24,10 @@ use syn::{Ident, Type};
 use crate::attr::{RelationKind, ResourceField, ResourceModel, complexity_attr, is_uuid};
 
 /// Default complexity expression for an auto-emitted `HasMany` field resolver.
-/// The list is unbounded (the loader returns every child of the parent row), so
-/// each step of fanout multiplies the cost of selected sub-fields by `10`. A
+/// The loader caps each parent's children at
+/// [`RELATION_LOAD_CAP`](nest_rs_seaorm::RELATION_LOAD_CAP), so fanout is
+/// bounded — but the query-cost estimate still multiplies the cost of selected
+/// sub-fields by `10` per level to keep deep chains expensive. A
 /// 3-deep chain `{ users { posts { comments { id } } } }` scores
 /// `10 + 10*10 + 10*100 = 1000` (only the outermost level enters the document
 /// total, so the result is exactly `10^3`). async-graphql checks
@@ -264,6 +266,13 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                         count = __keys.len(),
                         #target_label,
                     );
+                    // Bound memory: never load more than `RELATION_LOAD_CAP`
+                    // children per parent. The batch query is capped at
+                    // `cap × keys` and each parent's bucket is truncated, so an
+                    // unbounded relation (millions of children under one parent)
+                    // can never pull an unbounded result set into memory.
+                    use ::sea_orm::{QueryOrder as _, QuerySelect as _};
+                    let __cap = ::nest_rs_seaorm::RELATION_LOAD_CAP;
                     let __conn = ::nest_rs_seaorm::Repo::<Entity>::conn()?;
                     let __rows = ::nest_rs_seaorm::Repo::<Entity>::scoped(
                         ::nest_rs_authz::Action::Read,
@@ -275,29 +284,55 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                                 __keys.iter().cloned(),
                             ),
                         )
+                        // Group children of a parent contiguously so the batch
+                        // cap truncates whole parents, not an arbitrary slice.
+                        .order_by_asc(Column::#fk_col_pascal)
+                        .limit(__cap.saturating_mul(__keys.len() as u64))
                         .all(&__conn)
                         .await?;
-                    let mut __map: ::std::collections::HashMap<#fk_ty, ::std::vec::Vec<#wire>> =
+                    let mut __raw: ::std::collections::HashMap<#fk_ty, ::std::vec::Vec<Model>> =
                         __keys
                             .iter()
                             .map(|__k| (::core::clone::Clone::clone(__k), ::std::vec::Vec::new()))
                             .collect();
                     for __row in __rows {
-                        if let ::core::option::Option::Some(__bucket) = __map.get_mut(&__row.#from) {
+                        if let ::core::option::Option::Some(__bucket) = __raw.get_mut(&__row.#from) {
+                            __bucket.push(__row);
+                        }
+                    }
+                    let mut __truncated = false;
+                    let mut __map: ::std::collections::HashMap<#fk_ty, ::std::vec::Vec<#wire>> =
+                        ::std::collections::HashMap::with_capacity(__raw.len());
+                    for (__k, mut __children) in __raw {
+                        if __children.len() as u64 > __cap {
+                            __children.truncate(__cap as usize);
+                            __truncated = true;
+                        }
+                        let mut __wire = ::std::vec::Vec::with_capacity(__children.len());
+                        for __row in &__children {
                             // Field-level masking through the ambient ability,
                             // mirroring `by_id` — `scoped(Read)` only filters
                             // rows, not columns.
-                            __bucket.push(
+                            __wire.push(
                                 ::nest_rs_authz::masked_output_ambient::<
                                     ::nest_rs_authz::Read,
                                     Entity,
                                     #wire,
-                                >(&__row)
+                                >(__row)
                                 .map_err(|__e| ::nest_rs_seaorm::ServiceError::Masking(
                                     ::std::string::ToString::to_string(&__e),
                                 ))?,
                             );
                         }
+                        __map.insert(__k, __wire);
+                    }
+                    if __truncated {
+                        ::tracing::warn!(
+                            target: "nest_rs::loader",
+                            cap = __cap,
+                            loader = #target_label,
+                            "relation load truncated at RELATION_LOAD_CAP",
+                        );
                     }
                     ::core::result::Result::Ok(__map)
                 }
@@ -414,8 +449,10 @@ fn emit_belongs_to_method(
 /// `RelatedTo<Self::Entity>::Loader`, keyed on `self`'s PK. The target's macro
 /// is responsible for declaring the `RelatedTo` impl from its own `belongs_to`.
 ///
-/// The auto-emitted loader returns *every* child of the parent — unbounded
-/// fanout. We **always** emit a `#[graphql(complexity = …)]` override so the
+/// The auto-emitted loader returns up to
+/// [`RELATION_LOAD_CAP`](nest_rs_seaorm::RELATION_LOAD_CAP) children per parent
+/// (a hard memory backstop). We **always** emit a `#[graphql(complexity = …)]`
+/// override so the
 /// score scales multiplicatively (`factor * child_complexity`) instead of
 /// additively (`1 + child_complexity`, async-graphql's default for bare
 /// fields). That asymmetry is the whole point: BelongsTo loads one row,

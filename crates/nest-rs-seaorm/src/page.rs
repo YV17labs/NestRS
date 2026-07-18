@@ -48,6 +48,15 @@ pub fn clamp_page_size(first: u64) -> u64 {
 /// that can grow past it must paginate (`CrudService::page`).
 pub const LIST_CAP: u64 = 1_000;
 
+/// Hard backstop on an auto-resolved `has_many` relation load: no exposed
+/// relation field returns more than this many children **per parent**, ever.
+/// The auto-emitted FK dataloader caps its batch query at `RELATION_LOAD_CAP ×
+/// keys` and truncates each parent's bucket, logging a `warn` — so a relation
+/// with unbounded fanout (`Org.posts` over millions of rows) can never load an
+/// unbounded result set into memory. A relation that legitimately exceeds it
+/// should be a paginated field, not an auto-resolved `#[expose]`d list.
+pub const RELATION_LOAD_CAP: u64 = 100;
+
 /// `(items, has_more)` from a `limit + 1` cursor fetch. Truncates `items` to
 /// `limit` when an extra row was returned. The pure-data half of `Repo::page`,
 /// extracted so its boundary behaviour is unit-testable without a DB.

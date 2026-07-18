@@ -11,6 +11,17 @@ both new features and breaking changes.
 
 ### Fixed
 
+- **`#[crud]` writes return the right HTTP status.** A generated create
+  / update / delete previously mapped every write failure to a blanket
+  `500`, so a unique-constraint violation, an out-of-scope create the
+  ability re-check rolled back, or a row that vanished mid-request all
+  read as internal errors. The generated handlers now map a
+  `DbErr` to its status — unique violation → `409`, `RecordNotInserted`
+  → `403`, `RecordNotUpdated` / `RecordNotFound` → `404` — and a
+  genuinely unexpected error to a `500` with an empty body (the driver
+  message no longer leaks). A service with a manual create maps the
+  unique violation to `ServiceError::conflict` for the same result.
+
 - **Auto-resolved `has_many` relations are memory-bounded.** An
   `#[expose]`d `has_many` field's dataloader previously loaded *every*
   child of a parent (`.all()` with no `LIMIT`), so a relation with large

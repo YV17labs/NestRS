@@ -522,7 +522,7 @@ async fn a_failed_mutation_persists_nothing() {
         .body_json(&json!({ "name": "Grace", "email": "dup@hooli.test" }))
         .send()
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(StatusCode::CONFLICT);
 
     assert_eq!(user_names(&app, &admin).await, vec!["Ada".to_string()]);
 }
@@ -812,6 +812,43 @@ async fn graphql_auto_resolved_relations_respect_ability_scope() {
         !seen.contains(&"leak@rel.test".to_string()),
         "org B's user must not leak through Org.users: {seen:?}",
     );
+}
+
+#[tokio::test]
+async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
+    let (_db, app) = boot().await;
+    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+
+    // Auto-generated `#[crud]` create (orgs): a duplicate unique name is a 409,
+    // not the blanket 500 the generated create used to return.
+    create_org(&app, &admin, "SameName").await;
+    app.http()
+        .post("/orgs")
+        .header(header::AUTHORIZATION, &admin)
+        .body_json(&json!({ "name": "SameName" }))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // Manual create handler (users) delegating to the service: the service maps
+    // the unique-email violation to a `Conflict` rather than an opaque `Db` 500.
+    let org = create_org(&app, &admin, "Conflict").await;
+    let token = format!("Bearer {}", token_for(&org, "admin").await);
+    let body = json!({ "name": "Dup", "email": "dup@conflict.test" });
+    app.http()
+        .post("/users")
+        .header(header::AUTHORIZATION, &token)
+        .body_json(&body)
+        .send()
+        .await
+        .assert_status_is_ok();
+    app.http()
+        .post("/users")
+        .header(header::AUTHORIZATION, &token)
+        .body_json(&body)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
 }
 
 #[tokio::test]

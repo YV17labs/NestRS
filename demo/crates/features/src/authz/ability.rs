@@ -105,6 +105,7 @@ mod tests {
             author_id,
             title: "Hello".into(),
             body: "World".into(),
+            status: post::PostStatus::Published,
             created_at: now,
             updated_at: now,
             deleted_at: None,

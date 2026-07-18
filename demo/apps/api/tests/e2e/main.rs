@@ -54,6 +54,60 @@ async fn token_for(org_id: &str, role: &str) -> String {
     .expect("sign the test token")
 }
 
+/// Sign a token carrying a `sub` — required to author a post (`PostAuthorGuard`
+/// rejects a subject-less machine token on `POST /posts`).
+async fn token_with_sub(org_id: &str, role: &str, sub: Uuid) -> String {
+    let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
+        .expect("the dev keypair parses");
+    let roles = match role {
+        "admin" => vec![Role::Admin],
+        _ => vec![Role::User],
+    };
+    jwt.sign(&Claims {
+        sub: Some(sub),
+        org_id: Uuid::parse_str(org_id).expect("valid org uuid"),
+        roles,
+        exp: jwt.expiry(),
+    })
+    .expect("sign the test token")
+}
+
+async fn create_user(app: &TestApp, bearer: &str, name: &str, email: &str) -> String {
+    let resp = app
+        .http()
+        .post("/users")
+        .header(header::AUTHORIZATION, bearer)
+        .body_json(&json!({ "name": name, "email": email }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    resp.json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned()
+}
+
+async fn create_post(app: &TestApp, bearer: &str, title: &str, body: &str) -> String {
+    let resp = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, bearer)
+        .body_json(&json!({ "title": title, "body": body }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    resp.json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned()
+}
+
 async fn create_org(app: &TestApp, bearer: &str, name: &str) -> String {
     let resp = app
         .http()
@@ -1054,5 +1108,161 @@ async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {
     assert_eq!(
         resp.json().await.value().object().get("file").string(),
         "track-1.mp3",
+    );
+}
+
+/// The posts GraphQL adapter: reads are row-level scoped to the caller's org,
+/// and `publishPost` transitions a draft to published (the path that emits
+/// `PostPublishedEvent` to the notifications listener).
+#[tokio::test]
+async fn posts_graphql_scopes_reads_and_publish_transitions() {
+    let (_db, app) = boot().await;
+    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org_a = create_org(&app, &bootstrap, "PostAcme").await;
+    let org_b = create_org(&app, &bootstrap, "PostGlobex").await;
+
+    // An author user in org A, then a token whose `sub` is that user (a post
+    // needs a human author — a subject-less machine token is refused).
+    let admin_a = format!("Bearer {}", token_for(&org_a, "admin").await);
+    let author_id =
+        Uuid::parse_str(&create_user(&app, &admin_a, "Author", "author@postacme.test").await)
+            .expect("valid user uuid");
+    let author_a = format!(
+        "Bearer {}",
+        token_with_sub(&org_a, "admin", author_id).await
+    );
+    let admin_b = format!("Bearer {}", token_for(&org_b, "admin").await);
+
+    // Create a post in org A over HTTP — it lands as a draft.
+    let post_a = create_post(&app, &author_a, "Launch", "Big news").await;
+
+    let list = json!({ "query": "{ posts { id status } }" });
+
+    // Row-level scope over GraphQL: org B sees none of org A's posts.
+    let b = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &admin_b)
+        .body_json(&list)
+        .send()
+        .await;
+    b.assert_status_is_ok();
+    let b_body = b.json().await;
+    assert!(
+        b_body.value().object().get_opt("errors").is_none(),
+        "org B list must not error",
+    );
+    assert!(
+        b_body
+            .value()
+            .object()
+            .get("data")
+            .object()
+            .get("posts")
+            .array()
+            .iter()
+            .next()
+            .is_none(),
+        "org B sees no posts of org A",
+    );
+
+    // Org A sees its post, still a draft.
+    let a = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &author_a)
+        .body_json(&list)
+        .send()
+        .await;
+    a.assert_status_is_ok();
+    let a_body = a.json().await;
+    let a_status = a_body
+        .value()
+        .object()
+        .get("data")
+        .object()
+        .get("posts")
+        .array()
+        .iter()
+        .find(|p| p.object().get("id").string() == post_a.as_str())
+        .expect("org A sees its own post")
+        .object()
+        .get("status")
+        .string()
+        .to_owned();
+    assert_eq!(a_status, "DRAFT", "a freshly created post is a draft");
+
+    let publish = |id: &str| json!({ "query": format!("mutation {{ publishPost(id: \"{id}\") {{ id status }} }}") });
+
+    // Org B cannot publish org A's post — forbidden (GraphQL error, no data).
+    let denied = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &admin_b)
+        .body_json(&publish(&post_a))
+        .send()
+        .await;
+    denied.assert_status_is_ok();
+    assert!(
+        denied
+            .json()
+            .await
+            .value()
+            .object()
+            .get_opt("errors")
+            .is_some(),
+        "org B is forbidden publishing org A's post",
+    );
+
+    // Org A publishes — the transition returns PUBLISHED and emits the event.
+    let published = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &author_a)
+        .body_json(&publish(&post_a))
+        .send()
+        .await;
+    published.assert_status_is_ok();
+    let pub_body = published.json().await;
+    assert!(
+        pub_body.value().object().get_opt("errors").is_none(),
+        "publish must not error",
+    );
+    assert_eq!(
+        pub_body
+            .value()
+            .object()
+            .get("data")
+            .object()
+            .get("publishPost")
+            .object()
+            .get("status")
+            .string(),
+        "PUBLISHED",
+    );
+
+    // The transition persists.
+    let by_id = json!({ "query": format!("{{ post(id: \"{post_a}\") {{ status }} }}") });
+    let again = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &author_a)
+        .body_json(&by_id)
+        .send()
+        .await;
+    again.assert_status_is_ok();
+    assert_eq!(
+        again
+            .json()
+            .await
+            .value()
+            .object()
+            .get("data")
+            .object()
+            .get("post")
+            .object()
+            .get("status")
+            .string(),
+        "PUBLISHED",
     );
 }

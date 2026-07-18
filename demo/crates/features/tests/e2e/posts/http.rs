@@ -32,7 +32,7 @@ const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd
 )]
 struct PostsHttpTestModule;
 
-async fn boot() -> (EphemeralDatabase, TestApp, String) {
+async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
@@ -81,12 +81,27 @@ async fn boot() -> (EphemeralDatabase, TestApp, String) {
         .build()
         .await
         .expect("PostsHttpTestModule boots against the throwaway database");
-    (db, app, bearer)
+    (db, app, bearer, org_id)
+}
+
+/// A same-org admin bearer — the `User` role seeded by `boot` may create posts
+/// but not publish them (only `Manage`/`Update` can), so the publish tests act
+/// as an org admin.
+fn admin_bearer(org_id: Uuid) -> String {
+    let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
+        .expect("the dev keypair parses");
+    jwt.sign(&Claims {
+        sub: Some(Uuid::now_v7()),
+        org_id,
+        roles: vec![Role::Admin],
+        exp: jwt.expiry(),
+    })
+    .expect("sign admin token")
 }
 
 #[tokio::test]
 async fn posts_round_trip() {
-    let (_db, app, bearer) = boot().await;
+    let (_db, app, bearer, _org_id) = boot().await;
     let auth = format!("Bearer {bearer}");
 
     let created = app
@@ -116,7 +131,7 @@ async fn posts_round_trip() {
 
 #[tokio::test]
 async fn create_without_a_subject_returns_403() {
-    let (_db, app, _) = boot().await;
+    let (_db, app, _, _) = boot().await;
     let org_id = Uuid::now_v7();
     let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
         .expect("the dev keypair parses");
@@ -140,7 +155,7 @@ async fn create_without_a_subject_returns_403() {
 
 #[tokio::test]
 async fn create_with_empty_title_returns_400() {
-    let (_db, app, bearer) = boot().await;
+    let (_db, app, bearer, _org_id) = boot().await;
     app.http()
         .post("/posts")
         .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
@@ -148,4 +163,132 @@ async fn create_with_empty_title_returns_400() {
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+}
+
+/// A read passes through the controller-bound `PostAuditInterceptor` unchanged —
+/// its only effect is the emitted audit event, so the response is untouched.
+/// The module also boots with the interceptor bound, so the access graph
+/// validated its wiring.
+#[tokio::test]
+async fn audit_interceptor_is_transparent_to_posts_requests() {
+    let (_db, app, bearer, _org_id) = boot().await;
+    let auth = format!("Bearer {bearer}");
+
+    let created = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, &auth)
+        .body_json(&json!({ "title": "Audited", "body": "World" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+    let id = created
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+
+    app.http()
+        .get(format!("/posts/{id}"))
+        .header(header::AUTHORIZATION, &auth)
+        .send()
+        .await
+        .assert_status_is_ok();
+}
+
+/// Publishing a draft transitions it to `published` (an org admin can `Manage`
+/// posts in their org, which covers `Update`).
+#[tokio::test]
+async fn publish_transitions_a_draft_to_published() {
+    let (_db, app, bearer, org_id) = boot().await;
+
+    let created = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body_json(&json!({ "title": "Draft", "body": "World" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+    let body = created.json().await;
+    let id = body.value().object().get("id").string().to_owned();
+    assert_eq!(body.value().object().get("status").string(), "draft");
+
+    let published = app
+        .http()
+        .post(format!("/posts/{id}/publish"))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", admin_bearer(org_id)),
+        )
+        .send()
+        .await;
+    published.assert_status_is_ok();
+    assert_eq!(
+        published
+            .json()
+            .await
+            .value()
+            .object()
+            .get("status")
+            .string(),
+        "published"
+    );
+}
+
+/// Re-publishing an already published post is a domain conflict rendered by
+/// `PostProblemFilter` as RFC 9457 `application/problem+json` (409).
+#[tokio::test]
+async fn re_publishing_returns_rfc9457_problem_json() {
+    let (_db, app, bearer, org_id) = boot().await;
+
+    let created = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body_json(&json!({ "title": "Draft", "body": "World" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+    let id = created
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+
+    let admin = format!("Bearer {}", admin_bearer(org_id));
+    app.http()
+        .post(format!("/posts/{id}/publish"))
+        .header(header::AUTHORIZATION, &admin)
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    let conflict = app
+        .http()
+        .post(format!("/posts/{id}/publish"))
+        .header(header::AUTHORIZATION, &admin)
+        .send()
+        .await;
+    conflict.assert_status(StatusCode::CONFLICT);
+    conflict.assert_header(header::CONTENT_TYPE, "application/problem+json");
+
+    let body = conflict.json().await;
+    let problem = body.value().object();
+    assert_eq!(problem.get("status").i64(), 409);
+    assert_eq!(problem.get("title").string(), "Post already published");
+    assert_eq!(
+        problem.get("type").string(),
+        "https://nestrs.dev/problems/post-already-published"
+    );
+    assert!(
+        problem.get("detail").string().contains("already published"),
+        "detail should describe the conflict"
+    );
 }

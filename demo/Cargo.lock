@@ -1489,6 +1489,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-events",
+ "nest-rs-exception-filters",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",

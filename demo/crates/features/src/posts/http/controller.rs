@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
-use nest_rs_authz::Create;
 use nest_rs_authz::http::Authorize;
+use nest_rs_authz::{Create, Update};
 use nest_rs_http::{Ctx, Valid, controller, crud};
+use nest_rs_seaorm::Bind;
 use poem::Result;
+use poem::http::StatusCode;
 use poem::web::Json;
 
+use super::exception_filter::PostProblemFilter;
 use super::guard::{PostAuthor, PostAuthorGuard};
+use super::interceptor::PostAuditInterceptor;
 use crate::Claims;
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
@@ -14,6 +18,7 @@ use crate::posts::{CreatePost, Entity as PostEntity, Post, PostsService, UpdateP
 
 #[controller(path = "/posts")]
 #[use_guards(AuthGuard, AuthzGuard)]
+#[use_interceptors(PostAuditInterceptor)]
 pub struct PostsController {
     #[inject]
     svc: Arc<PostsService>,
@@ -50,5 +55,29 @@ impl PostsController {
                 .create_in_org(body.into_inner(), auth.org_id, author_id)
                 .await?,
         ))
+    }
+
+    #[post("/:id/publish")]
+    #[use_exception_filters(PostProblemFilter)]
+    #[api(
+        summary = "Publish a draft post",
+        description = "Transitions a draft to published. The id is bound to the loaded, \
+                       `Update`-authorized post through the service. Re-publishing an already \
+                       published post returns RFC 9457 `application/problem+json` (409).",
+        tags("Post")
+    )]
+    async fn publish(
+        &self,
+        _authz: Authorize<Update, PostEntity>,
+        post: Bind<PostsService, Update>,
+    ) -> Result<Json<Post>> {
+        // The state rule lives in the service; here we only surface its typed
+        // `PostError` as a thrown `poem::Error` so `PostProblemFilter` — the
+        // typed catch bound above — renders it as problem+json.
+        let model = post.into_inner();
+        self.svc
+            .ensure_unpublished(&model)
+            .map_err(|err| poem::Error::new(err, StatusCode::CONFLICT))?;
+        Ok(Json(self.svc.publish(model).await?))
     }
 }

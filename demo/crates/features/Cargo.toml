@@ -18,6 +18,7 @@ nest-rs-authn.workspace = true
 nest-rs-authz = { workspace = true, features = ["http", "graphql", "mcp"] }
 nest-rs-config.workspace = true
 nest-rs-events.workspace = true
+nest-rs-exception-filters.workspace = true
 nest-rs-graphql.workspace = true
 nest-rs-guards = { workspace = true, features = ["graphql"] }
 nest-rs-http.workspace = true

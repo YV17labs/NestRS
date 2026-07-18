@@ -11,6 +11,7 @@ use sea_orm::Set;
 use uuid::Uuid;
 
 use super::entity::{CreatePost, Entity as Posts, Model, Post, PostStatus, UpdatePost};
+use super::error::PostError;
 use super::event::PostPublishedEvent;
 
 #[injectable]
@@ -59,6 +60,18 @@ impl PostsService {
             "post created",
         );
         Ok(Post::from(&model))
+    }
+
+    /// The publish precondition: a post may be published only from `Draft`.
+    ///
+    /// The state rule lives in the service — not the HTTP handler — so the
+    /// decision stays where business logic belongs; the `publish` route maps the
+    /// returned [`PostError`] to RFC 9457 problem+json via `PostProblemFilter`.
+    pub fn ensure_unpublished(&self, model: &Model) -> Result<(), PostError> {
+        if model.status == PostStatus::Published {
+            return Err(PostError::AlreadyPublished { id: model.id });
+        }
+        Ok(())
     }
 
     /// Transition a loaded post to `Published` and announce the fact.

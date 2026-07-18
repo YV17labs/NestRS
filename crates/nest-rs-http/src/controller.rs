@@ -7,19 +7,28 @@ use poem::Route;
 /// mounts its routes (prefixed with the controller's `PATH`) onto a parent
 /// [`Route`].
 pub trait Controller: 'static {
+    /// Attach this controller's routes (under its `PATH`) onto `route`,
+    /// resolving handler dependencies from `container`.
     fn mount(container: &Container, route: Route) -> Route;
 }
 
+/// The HTTP method a route answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HttpVerb {
+    /// `GET`.
     Get,
+    /// `POST`.
     Post,
+    /// `PUT`.
     Put,
+    /// `DELETE`.
     Delete,
+    /// `PATCH`.
     Patch,
 }
 
 impl HttpVerb {
+    /// The uppercase method token (`"GET"`, `"POST"`, …).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Get => "GET",
@@ -50,15 +59,23 @@ pub fn schema_of<T: schemars::JsonSchema>(
 /// builds a spec from discovery alone.
 #[derive(Clone)]
 pub struct HttpRouteMeta {
+    /// The method this route answers.
     pub verb: HttpVerb,
+    /// The route path, relative to the controller prefix.
     pub path: &'static str,
+    /// The handler method's name — the `handler` field in the boot route log.
     pub handler: &'static str,
+    /// `#[api(summary = …)]` one-liner for the OpenAPI operation, if given.
     pub summary: Option<&'static str>,
+    /// `#[api(description = …)]` long text for the OpenAPI operation, if given.
     pub description: Option<&'static str>,
     /// `#[api(tags(...))]`, else a single-element slice holding the controller
     /// struct name — so routes group by controller in the docs by default.
     pub tags: &'static [&'static str],
+    /// Schema builder for the `Json<T>` request body, or `None` for a
+    /// non-JSON/absent body.
     pub request_body: Option<SchemaFn>,
+    /// Schema builder for the `Json<T>` response, or `None` for a non-JSON return.
     pub response: Option<SchemaFn>,
     /// A controller- or method-level `#[use_guards]` covers this route. Read at
     /// boot by the fail-secure posture check. A global guard pool covers every
@@ -90,13 +107,19 @@ pub struct HttpControllerMeta {
     /// back to its source type — surfaced as a field in the boot route log and
     /// the default OpenAPI tag.
     pub controller: &'static str,
+    /// The controller's shared path prefix (before URI versioning).
     pub path: &'static str,
+    /// `#[controller(version = …)]` for URI versioning, mounting under `/v{n}`.
     pub version: Option<&'static str>,
+    /// Metadata for each route this controller declares.
     pub routes: Vec<HttpRouteMeta>,
     mount: Arc<MountFn>,
 }
 
 impl HttpControllerMeta {
+    /// Assemble the discovery metadata for one controller. Emitted by the
+    /// `#[controller]`/`#[routes]` macros; `mount` closes over the handler
+    /// wiring.
     pub fn new<F>(
         controller: &'static str,
         path: &'static str,
@@ -123,6 +146,8 @@ impl HttpControllerMeta {
         crate::version_path(self.version, self.path)
     }
 
+    /// Mount this controller's routes onto `route`, resolving handler
+    /// dependencies from `container`.
     pub fn mount(&self, container: &Container, route: Route) -> Route {
         (self.mount)(container, route)
     }

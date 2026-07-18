@@ -28,7 +28,9 @@ pub trait Executor: Any + Send + Sync + 'static {
 /// expected — it's system work; on a request it's a bug).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecutorScope {
+    /// A user request — a missing ambient ability is a bug, so `Repo` fails closed.
     Request,
+    /// System work (cron/queue) — no principal is expected, so reads are unscoped.
     Job,
 }
 

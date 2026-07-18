@@ -32,6 +32,7 @@ use nest_rs_core::RequestScope;
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {
+    /// Take the resolved provider handle out of the wrapper.
     pub fn into_inner(self) -> Arc<T> {
         self.0
     }

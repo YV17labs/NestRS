@@ -68,14 +68,18 @@ impl HttpEndpointMeta {
         self
     }
 
+    /// The path this surface self-mounts at (e.g. `/graphql`, `/ws`).
     pub fn path(&self) -> &str {
         &self.path
     }
 
+    /// Human-readable label for the boot mount log.
     pub fn label(&self) -> &str {
         &self.label
     }
 
+    /// This self-mount's edge posture — whether the transport runs the global
+    /// guard chain at its edge or leaves it to gate in-band.
     pub fn posture(&self) -> EdgePosture {
         self.posture
     }
@@ -95,6 +99,8 @@ impl HttpEndpointMeta {
         !global_guards && self.posture == EdgePosture::Guarded
     }
 
+    /// Mount this surface onto `route`, resolving its dependencies from
+    /// `container`.
     pub fn mount(&self, container: &Container, route: Route) -> Route {
         (self.mount)(container, route)
     }
@@ -114,6 +120,9 @@ type GuardWrapFn = dyn Fn(&Container, BoxEndpoint<'static, Response>) -> BoxEndp
 pub struct SelfMountGuardWrap(Arc<GuardWrapFn>);
 
 impl SelfMountGuardWrap {
+    /// Wrap a guarded self-mount's endpoint in the global guard chain. Supplied
+    /// by `nest-rs-guards` (which can see the `Guard` trait); the closure keeps
+    /// this crate free of a guard dependency.
     pub fn new<F>(wrap: F) -> Self
     where
         F: Fn(&Container, BoxEndpoint<'static, Response>) -> BoxEndpoint<'static, Response>

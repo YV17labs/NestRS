@@ -91,6 +91,8 @@
 //! the graphql/ws chain runners) that the other three trio members consume.
 //! Splitting it would mean duplicating the chain across crates or routing
 //! through a fifth — both worse than the asymmetry.
+#![warn(missing_docs)]
+
 mod builder;
 mod denial;
 pub mod dispatch;

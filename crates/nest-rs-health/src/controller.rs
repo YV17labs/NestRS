@@ -6,6 +6,8 @@ use poem::{Response, http::StatusCode};
 use crate::indicator::{IndicatorStatus, ProbeKind, ProbeReport};
 use crate::service::HealthService;
 
+/// Serves the Kubernetes-style probe endpoints under `/health`, delegating each
+/// to [`HealthService`].
 #[controller(path = "/health")]
 pub struct HealthController {
     #[inject]

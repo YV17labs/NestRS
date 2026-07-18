@@ -1,11 +1,18 @@
 //! Action verbs + compile-time markers for routes that name one as a type
 //! parameter (`Authorize<Read, _>`).
 
+/// The verb a rule grants or denies. A rule pairs one of these with a subject
+/// entity; [`Manage`](Self::Manage) is the wildcard that matches all four
+/// concrete verbs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
+    /// Read/list the entity — the query-filter and response-mask layers.
     Read,
+    /// Create a new instance of the entity.
     Create,
+    /// Modify an existing instance.
     Update,
+    /// Remove an instance.
     Delete,
     /// CASL `manage` — matches every action.
     Manage,
@@ -14,6 +21,7 @@ pub enum Action {
 /// Lets a route name an [`Action`] as a type argument on stable Rust (enum
 /// const generics still need nightly `adt_const_params`).
 pub trait ActionMarker: Send + Sync + 'static {
+    /// The runtime [`Action`] this type marker stands for.
     const ACTION: Action;
 }
 

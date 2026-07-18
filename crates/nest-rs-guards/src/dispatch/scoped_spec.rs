@@ -20,8 +20,11 @@ use crate::Guard;
 /// key, plus a `resolve` fn pointer that recovers the concrete `Arc<L>`
 /// from the container at first request.
 pub struct ScopedLayerSpec<L: ?Sized> {
+    /// `TypeId` of the layer type — the dedup key against the global chain.
     pub type_id: TypeId,
+    /// The layer type's name, for boot logs.
     pub name: &'static str,
+    /// Recovers the concrete `Arc<L>` from the container at first request.
     pub resolve: fn(&Container) -> Option<Arc<L>>,
 }
 

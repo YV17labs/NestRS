@@ -9,6 +9,9 @@ use serde_json::{Map, Value};
 /// column; entities without an `#[expose]` impl get the default no-op (their
 /// masking handlers must deserialize without the hidden columns).
 pub trait WireModelDefaults: EntityTrait {
+    /// Insert default JSON values for the entity's unexposed columns into `map`
+    /// so a wire DTO (which omits them) can deserialize into the full `Model`.
+    /// The default no-op suits entities with no unexposed columns to reconstruct.
     fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
 
     /// The exposed (`#[expose]`) column names that may cross the wire. Response

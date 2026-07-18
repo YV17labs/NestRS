@@ -1,4 +1,6 @@
 //! The `#[scheduled]` decorator, re-exported by `nest-rs-schedule`.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod scheduled;

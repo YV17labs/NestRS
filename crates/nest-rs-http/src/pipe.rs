@@ -25,7 +25,9 @@ use crate::{RawBody, RawBodyLimit};
 /// Owned-unwrap for poem extractors, so a pipe can take the value they carry
 /// without cloning.
 pub trait IntoInner {
+    /// The value the wrapping extractor carries.
     type Inner;
+    /// Unwrap the extractor into the value it carries, by value.
     fn into_inner(self) -> Self::Inner;
 }
 
@@ -116,6 +118,7 @@ pub struct Piped<P: Pipe, E> {
 }
 
 impl<P: Pipe, E> Piped<P, E> {
+    /// Take ownership of the pipe's output value.
     pub fn into_inner(self) -> P::Out {
         self.value
     }
@@ -149,6 +152,7 @@ where
 pub struct Valid<E: IntoInner>(E::Inner);
 
 impl<E: IntoInner> Valid<E> {
+    /// Take ownership of the validated inner value.
     pub fn into_inner(self) -> E::Inner {
         self.0
     }

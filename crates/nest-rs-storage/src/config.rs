@@ -13,10 +13,14 @@ use validator::Validate;
 pub struct StorageConfig {
     /// S3 endpoint URL (e.g. `http://rustfs:9000`). Empty ⇒ real AWS S3.
     pub endpoint: String,
+    /// The S3 region (required).
     #[validate(length(min = 1, message = "must not be empty"))]
     pub region: String,
+    /// The access key id for S3 authentication.
     pub access_key: String,
+    /// The secret access key for S3 authentication.
     pub secret_key: String,
+    /// The bucket every operation is scoped to (required).
     #[validate(length(min = 1, message = "must not be empty"))]
     pub bucket: String,
     /// `true` ⇒ path-style addressing (`endpoint/bucket/key`), required by

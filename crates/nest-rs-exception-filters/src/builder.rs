@@ -18,6 +18,8 @@ use crate::registry::{ExceptionFilterSpec, ExceptionFilterSpecs};
 ///     .run().await
 /// ```
 pub trait AppBuilderExceptionFiltersExt: Sized {
+    /// Register `specs` as the global exception-filter chain — the transport-wide
+    /// pool, deduped by type against controller/method-scope declarations.
     fn use_exception_filters_global<I>(self, specs: I) -> Self
     where
         I: IntoIterator<Item = ExceptionFilterSpec>;

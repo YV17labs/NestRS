@@ -26,7 +26,9 @@ use crate::rate::Throttle;
 /// Cap distinct throttle keys to resist unbounded memory growth.
 const MAX_KEYS: usize = 10_000;
 
+/// The outcome of counting one request against a rate limit.
 pub struct Decision {
+    /// Whether the request is permitted.
     pub allowed: bool,
     /// When denied, time until the window resets (for the `Retry-After` header).
     pub retry_after: Duration,
@@ -65,6 +67,8 @@ struct Window {
     window: Duration,
 }
 
+/// The in-process default [`ThrottlerStore`] — fixed-window counters in a
+/// bounded map. A distributed deployment swaps in a shared-store implementor.
 pub struct InMemoryThrottler {
     default: Throttle,
     trusted_proxies: Vec<IpAddr>,
@@ -72,6 +76,7 @@ pub struct InMemoryThrottler {
 }
 
 impl InMemoryThrottler {
+    /// Build a throttler with the given default limit and trusted-proxy list.
     pub fn new(default: Throttle, trusted_proxies: Vec<IpAddr>) -> Self {
         Self {
             default,
@@ -80,10 +85,12 @@ impl InMemoryThrottler {
         }
     }
 
+    /// IPs whose `X-Forwarded-For` is trusted to identify the real client.
     pub fn trusted_proxies(&self) -> &[IpAddr] {
         &self.trusted_proxies
     }
 
+    /// The default rate limit for routes that pin none.
     pub fn default_limit(&self) -> Throttle {
         self.default
     }

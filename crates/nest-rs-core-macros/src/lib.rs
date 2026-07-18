@@ -1,6 +1,8 @@
 //! Surface-agnostic nestrs decorators (`#[injectable]`, `#[hooks]`,
 //! `#[module]`), re-exported by `nest-rs-core`. Each `#[proc_macro_attribute]`
 //! entry below is a thin delegation to its implementation module.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod hooks;

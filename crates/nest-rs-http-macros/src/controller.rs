@@ -89,7 +89,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         #item
 
         impl #impl_generics #name #ty_generics #where_clause {
+            /// The controller's route prefix, from `#[controller(path = "…")]`.
             pub const PATH: &'static str = #path_lit;
+            /// The URI version segment, from `#[controller(version = "…")]`; `None` if unversioned.
             pub const VERSION: ::core::option::Option<&'static str> = #version_opt;
 
             #from_container

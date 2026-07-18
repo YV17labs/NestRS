@@ -8,6 +8,8 @@
 //!
 //! This crate never depends on `nest-rs-core` or any other surface crate:
 //! emitted absolute-path tokens (`::nest_rs_core::*`) resolve at the call site.
+#![warn(missing_docs)]
+
 mod args;
 mod casing;
 mod crud;

@@ -18,7 +18,9 @@ pub enum Denial {
 
     /// 429 — rate limit exceeded.
     RateLimited {
+        /// Seconds until the caller may retry (the `Retry-After` value).
         retry_after_secs: u32,
+        /// Human-readable reason for the denial.
         reason: Cow<'static, str>,
     },
 
@@ -28,14 +30,17 @@ pub enum Denial {
 }
 
 impl Denial {
+    /// A `401 Unauthorized` denial — authentication is missing or invalid.
     pub fn unauthorized(reason: impl Into<Cow<'static, str>>) -> Self {
         Self::Unauthorized(reason.into())
     }
 
+    /// A `403 Forbidden` denial — authenticated but not permitted.
     pub fn forbidden(reason: impl Into<Cow<'static, str>>) -> Self {
         Self::Forbidden(reason.into())
     }
 
+    /// A `429 Too Many Requests` denial with the `Retry-After` hint.
     pub fn rate_limited(retry_after_secs: u32, reason: impl Into<Cow<'static, str>>) -> Self {
         Self::RateLimited {
             retry_after_secs,
@@ -43,6 +48,7 @@ impl Denial {
         }
     }
 
+    /// A `500` denial — a guard wiring bug surfaced at request time.
     pub fn internal(reason: impl Into<Cow<'static, str>>) -> Self {
         Self::Internal(reason.into())
     }

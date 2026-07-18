@@ -13,7 +13,9 @@ use crate::Guard;
 /// One entry in the `use_guards_global` list. Created by [`guard::<T>()`];
 /// resolved against the live container at configure time.
 pub struct GuardSpec {
+    /// `TypeId` of the guard type — the dedup key across scopes.
     pub type_id: TypeId,
+    /// The guard type's name, for boot logs and fail-secure diagnostics.
     pub name: &'static str,
     pub(crate) resolve: fn(&Container) -> Option<Arc<dyn Guard>>,
 }
@@ -45,7 +47,9 @@ impl GuardSpec {
 
 /// One entry in the `use_pipes_global` list — same shape as [`GuardSpec`].
 pub struct PipeSpec {
+    /// `TypeId` of the pipe type — the dedup key across scopes.
     pub type_id: TypeId,
+    /// The pipe type's name, for boot logs.
     pub name: &'static str,
     pub(crate) resolve: fn(&Container) -> Option<Arc<dyn GlobalPipe>>,
 }
@@ -66,6 +70,7 @@ pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
 }
 
 impl PipeSpec {
+    /// Resolve this spec against the live container.
     pub fn resolve(&self, container: &Container) -> Option<Arc<dyn GlobalPipe>> {
         (self.resolve)(container)
     }

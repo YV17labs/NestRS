@@ -1,3 +1,7 @@
+//! The [`App`] and its [`AppBuilder`] — the boot entry point that wires the
+//! root module, runs the four build phases, validates the access graph, and
+//! drives the lifecycle and transports.
+
 use std::any::{Any, TypeId};
 use std::collections::HashSet;
 use std::future::Future;
@@ -82,6 +86,8 @@ impl App {
         AppBuilder::new()
     }
 
+    /// The assembled singleton container, for tests and tooling that resolve
+    /// providers directly outside the declarative `#[inject]` surface.
     pub fn container(&self) -> &Container {
         &self.container
     }

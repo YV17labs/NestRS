@@ -28,6 +28,9 @@ impl HealthService {
         let _ = self.container.set(container);
     }
 
+    /// Run every reachable indicator for `kind` and aggregate their results
+    /// into a [`ProbeReport`]. Reports `up` if called before bootstrap wires
+    /// the container, so a probe racing startup does not flap.
     pub async fn probe(&self, kind: ProbeKind) -> ProbeReport {
         let Some(container) = self.container.get() else {
             // Called before bootstrap — no indicators can run; report `up`

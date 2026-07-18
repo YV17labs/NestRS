@@ -40,6 +40,8 @@ use nest_rs_ws::WsDataPipe;
 /// get an authorization check before authentication has attached the
 /// principal — usually a bug.
 pub trait AppBuilderGuardsExt: Sized {
+    /// Register `specs` as the global guard chain, run in list order at the
+    /// route shaper — order matters (authn before authz).
     fn use_guards_global<I>(self, specs: I) -> Self
     where
         I: IntoIterator<Item = GuardSpec>;
@@ -119,6 +121,8 @@ impl AppBuilderGuardsExt for AppBuilder {
 /// Adds `.use_pipes_global(...)` to [`AppBuilder`]. Each pipe runs before
 /// every JSON HTTP handler; per-route opt-out via `#[no_pipes]`.
 pub trait AppBuilderPipesExt: Sized {
+    /// Register `specs` as the global pipe pool — run before every JSON HTTP
+    /// handler unless a route opts out with `#[no_pipes]`.
     fn use_pipes_global<I>(self, specs: I) -> Self
     where
         I: IntoIterator<Item = PipeSpec>;

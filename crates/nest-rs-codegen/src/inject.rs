@@ -13,8 +13,12 @@ use crate::ty::{arc_inner, nth_generic_type, type_label};
 /// The constructor expression plus, per `#[inject]` dependency, its `TypeId`
 /// expression and a human-readable label.
 pub struct InjectableBody {
+    /// The struct-literal constructor expression that builds `Self` from the
+    /// resolved `#[inject]` fields.
     pub ctor: TokenStream2,
+    /// `TypeId` expression for each required `#[inject]` dependency.
     pub dep_keys: Vec<TokenStream2>,
+    /// Human-readable label for each entry in `dep_keys`, in the same order.
     pub dep_names: Vec<TokenStream2>,
     /// `TypeId` of each `#[inject] Option<Arc<…>>`. Kept apart from `dep_keys`
     /// — optionals must not gate the register fixpoint, but are still used to
@@ -214,6 +218,9 @@ pub fn injected_keyed_method(keyed_dep_keys: &[TokenStream2]) -> TokenStream2 {
 /// The `from_container` constructor emitted by every decorator macro.
 pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {
+        /// Construct this provider by resolving its `#[inject]` fields from the
+        /// container. Emitted by the decorator; called by the register phase,
+        /// not by hand.
         pub fn from_container(container: &::nest_rs_core::Container) -> Self {
             let _ = container;
             #ctor
@@ -232,6 +239,9 @@ pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
 /// resolution methods.
 pub fn from_scope_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {
+        /// Construct this request-scoped provider from the per-request scope,
+        /// so request-scoped `#[inject]` deps share the request's instances.
+        /// Emitted by `#[injectable(scope = request)]`; called per request.
         pub fn from_scope(container: &::nest_rs_core::RequestScope) -> Self {
             let _ = container;
             #ctor

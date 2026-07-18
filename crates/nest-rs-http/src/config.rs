@@ -15,7 +15,9 @@ const DEFAULT_PORT: u16 = 3000;
 #[config(namespace = "http")]
 #[derive(Clone, Debug, Validate)]
 pub struct HttpConfig {
+    /// Bind address; defaults to `0.0.0.0` (all interfaces).
     pub host: String,
+    /// Listen port; defaults to `3000`.
     pub port: u16,
     /// PEM cert + key for HTTPS. `None` ⇒ plain HTTP. Picked up from
     /// `NESTRS_HTTP__TLS_CERT[_FILE]` + `NESTRS_HTTP__TLS_KEY[_FILE]`.

@@ -10,6 +10,8 @@ use nest_rs_core::{Container, LifecycleHook, LifecyclePhase, module};
 
 use crate::registry::SocialProviders;
 
+/// Provides the [`SocialProviders`] registry. Import it (plus each provider
+/// crate) so reachable social providers are discovered and validated at boot.
 #[module(providers = [SocialProviders])]
 pub struct SocialModule;
 

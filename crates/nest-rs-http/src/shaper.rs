@@ -21,6 +21,8 @@ pub trait RouteResponseShaper {
     /// Bits the shaper extracts from the request before the handler consumes it.
     type Captured: Send;
 
+    /// Snapshot what the shaper needs off the request (e.g. the ambient
+    /// ability) before the handler takes ownership of it.
     fn capture(req: &Request) -> Self::Captured;
 
     /// Run the handler `inner` and shape its result. The shaper may wrap
@@ -31,6 +33,8 @@ pub trait RouteResponseShaper {
         F: Future<Output = Result<Response>> + Send;
 }
 
+/// Wrap `inner` in the shaper `P`. Emitted by `#[routes]` when a handler
+/// declares a parameter of a [`RouteResponseShaper`] type.
 pub fn shaped<P, E>(inner: E, _shaper: PhantomData<P>) -> ShapedEndpoint<P, E> {
     ShapedEndpoint {
         inner,
@@ -38,6 +42,8 @@ pub fn shaped<P, E>(inner: E, _shaper: PhantomData<P>) -> ShapedEndpoint<P, E> {
     }
 }
 
+/// An endpoint wrapped by the [`RouteResponseShaper`] `P`, applying `capture`
+/// before and `run` around the inner handler.
 pub struct ShapedEndpoint<P, E> {
     inner: E,
     _marker: PhantomData<fn() -> P>,

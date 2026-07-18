@@ -18,13 +18,16 @@ impl<T> Job for T where T: Serialize + DeserializeOwned + Clone + Send + Sync + 
 /// `#[process(retries = N)]` budget.
 #[async_trait]
 pub trait Processor: Send + Sync + 'static {
+    /// The job payload type this processor consumes.
     type Job: Job;
 
+    /// Handle one job; returning `Err` fails it for the backend to retry.
     async fn process(&self, job: Self::Job) -> anyhow::Result<()>;
 }
 
 /// Queue analog of `#[injectable]`'s `from_container`, expressed as a trait so
 /// a backend can build any processor generically from the container.
 pub trait FromContainer: Sized {
+    /// Build the processor by resolving its `#[inject]` dependencies.
     fn from_container(container: &Container) -> Self;
 }

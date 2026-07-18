@@ -17,7 +17,9 @@ use async_graphql::OutputType;
 ///   `by_id` method — typically named `<Service>ById`.
 /// - `Wire` is the GraphQL output type emitted by `#[expose(name = "…")]`.
 pub trait PkLoadable {
+    /// The `#[dataloader]`-generated primary-key loader (`<Service>ById`).
     type Loader: ::core::marker::Send + ::core::marker::Sync + 'static;
+    /// The GraphQL output type `#[expose(name = "…")]` emits for this entity.
     type Wire: OutputType + ::core::marker::Send + ::core::marker::Sync + 'static;
 }
 
@@ -25,6 +27,8 @@ pub trait PkLoadable {
 /// foreign-key column." Phase 2 — populated by `#[expose]` on the entity
 /// owning the FK.
 pub trait RelatedTo<Parent: ?Sized> {
+    /// The FK loader that batches this child by its foreign-key column.
     type Loader: ::core::marker::Send + ::core::marker::Sync + 'static;
+    /// The GraphQL output type for this child entity.
     type Wire: OutputType + ::core::marker::Send + ::core::marker::Sync + 'static;
 }

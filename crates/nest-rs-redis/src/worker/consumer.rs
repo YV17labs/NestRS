@@ -18,12 +18,16 @@ use tracing::Instrument;
 
 use crate::connection::QueueConnection;
 
+/// The consumer-side transport: drains the `#[processor]` inventory and runs
+/// each job's process method against the Redis queue. Attached by
+/// [`QueueWorkerModule`](crate::QueueWorkerModule).
 pub struct QueueWorker {
     methods: Vec<&'static ProcessMethod>,
     container: Option<Container>,
 }
 
 impl QueueWorker {
+    /// An empty worker; process methods and the container are wired at boot.
     pub fn new() -> Self {
         Self {
             methods: Vec::new(),

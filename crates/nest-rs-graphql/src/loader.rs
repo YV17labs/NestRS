@@ -28,9 +28,12 @@ pub struct GraphqlLoaderRegistration {
 
 inventory::collect!(GraphqlLoaderRegistration);
 
+/// A DataLoader batch's work, boxed for spawning on its own task.
 pub type GraphqlBatchFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 
+/// Spawns a batch future, having re-established the request's ambient state
+/// around it (see [`GraphqlBatchContext`]).
 pub type GraphqlBatchSpawner = Box<dyn Fn(GraphqlBatchFuture) + Send + Sync>;
 
 /// Re-establishes per-request ambient state inside a DataLoader batch.
@@ -45,6 +48,8 @@ pub type GraphqlBatchSpawner = Box<dyn Fn(GraphqlBatchFuture) + Send + Sync>;
 /// registered, batches spawn bare on `tokio::spawn` (correct for an app
 /// without row-level security).
 pub trait GraphqlBatchContext: Send + Sync + 'static {
+    /// Build a spawner that carries the current request's ambient executor +
+    /// ability into each batch it runs.
     fn spawner(&self) -> GraphqlBatchSpawner;
 }
 

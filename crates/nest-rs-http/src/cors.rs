@@ -15,11 +15,17 @@ use poem::middleware::Cors;
 /// installed (the default). Lists are comma-separated in env vars.
 #[derive(Clone, Debug, Default)]
 pub struct CorsConfig {
+    /// Allowed origins; empty ⇒ no CORS layer installed.
     pub origins: Vec<String>,
+    /// Allowed request methods (`Access-Control-Allow-Methods`).
     pub methods: Vec<String>,
+    /// Allowed request headers (`Access-Control-Allow-Headers`).
     pub headers: Vec<String>,
+    /// Response headers exposed to the browser (`Access-Control-Expose-Headers`).
     pub exposed_headers: Vec<String>,
+    /// Whether to allow credentialed requests (`Access-Control-Allow-Credentials`).
     pub credentials: bool,
+    /// Preflight cache lifetime (`Access-Control-Max-Age`); `None` omits it.
     pub max_age: Option<Duration>,
 }
 

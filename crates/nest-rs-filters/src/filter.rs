@@ -17,12 +17,17 @@ use poem::{Endpoint, IntoResponse, Request, Response, Result};
 /// captured up front.
 #[derive(Debug, Clone)]
 pub struct RequestSnapshot {
+    /// The request method.
     pub method: Method,
+    /// The request URI (path + query).
     pub uri: Uri,
+    /// The request headers.
     pub headers: HeaderMap,
 }
 
 impl RequestSnapshot {
+    /// Capture the routing-relevant parts of `req` before the inner endpoint
+    /// consumes it.
     pub fn from_req(req: &Request) -> Self {
         Self {
             method: req.method().clone(),
@@ -88,12 +93,15 @@ impl<T: Filter + ?Sized> Filter for Arc<T> {
     }
 }
 
+/// A poem endpoint `E` wrapped by filter `F`, produced by
+/// [`FilterExt::filter`](crate::FilterExt::filter).
 pub struct FilterEndpoint<E, F> {
     inner: E,
     filter: F,
 }
 
 impl<E, F> FilterEndpoint<E, F> {
+    /// Pair `inner` with `filter` so the filter maps errors it returns.
     pub fn new(inner: E, filter: F) -> Self {
         Self { inner, filter }
     }

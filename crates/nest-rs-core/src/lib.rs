@@ -58,6 +58,7 @@
 //! let app = App::new::<AppModule>()?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
+#![warn(missing_docs)]
 
 pub mod access;
 pub mod app;

@@ -12,7 +12,10 @@ use crate::EventBus;
 /// (boot `tracing::warn`, target `nest_rs::events`) — never silently dropped, so
 /// leftover code doesn't disappear without a trace.
 pub struct ListenerMethod {
+    /// The listener method's name — the `method` field in the boot wire log.
     pub name: &'static str,
+    /// `TypeId` of the host provider, matched against the reachable set to
+    /// module-gate this listener.
     pub provider_type_id: fn() -> TypeId,
     /// Resolves the provider from the assembled container and subscribes a
     /// closure to the bus for the method's event type.

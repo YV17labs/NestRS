@@ -26,6 +26,7 @@ use crate::{Access, Authorized, CrudService};
 pub struct Bind<S: CrudService, A>(<S::Entity as EntityTrait>::Model, PhantomData<fn() -> A>);
 
 impl<S: CrudService, A> Bind<S, A> {
+    /// Take ownership of the loaded, authorized model.
     pub fn into_inner(self) -> <S::Entity as EntityTrait>::Model {
         self.0
     }

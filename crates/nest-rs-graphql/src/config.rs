@@ -11,10 +11,13 @@ use validator::Validate;
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
+/// GraphQL endpoint options, settable via `NESTRS_GRAPHQL__*` or pinned through
+/// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root). Every field
+/// defaults production-safe.
 #[config(namespace = "graphql")]
 #[derive(Clone, Debug, Validate)]
 pub struct GraphqlConfig {
-    /// Default `/graphql`.
+    /// Endpoint path. Default `/graphql`.
     pub path: String,
     /// Default `false` (production-safe).
     pub playground: bool,

@@ -10,6 +10,8 @@ use nest_rs_core::module;
 use crate::client::Storage;
 use crate::config::StorageConfig;
 
+/// Provides the S3 [`Storage`](crate::Storage) client from [`StorageConfig`].
+/// Import it to inject `Storage` for presigned URLs, uploads and metadata reads.
 #[module(
     imports = [ConfigModule::for_feature::<StorageConfig>()],
     providers = [Storage],

@@ -14,6 +14,7 @@ use crate::config::ThrottlerConfig;
 use crate::rate::Throttle;
 use crate::store::{InMemoryThrottler, ThrottlerStore};
 
+/// The default rate limit when neither config nor a route pins one: 60/minute.
 pub const DEFAULT_THROTTLE: Throttle = Throttle::per_minute(60);
 
 /// Provides the process-wide [`InMemoryThrottler`]. Wire with
@@ -31,6 +32,8 @@ impl ThrottlerModule {
     }
 }
 
+/// The configured import produced by [`ThrottlerModule::for_root`]. Registers
+/// the [`InMemoryThrottler`](crate::InMemoryThrottler) from the resolved config.
 pub struct ThrottlerSetup {
     pinned: Option<ThrottlerConfig>,
 }

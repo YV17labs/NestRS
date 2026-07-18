@@ -20,6 +20,7 @@ type CheckFn = Box<dyn Fn(&Container) -> Result<(), String> + Send + Sync>;
 pub struct HttpBootCheck(CheckFn);
 
 impl HttpBootCheck {
+    /// Register a check to run at `configure` — `Err(message)` aborts boot.
     pub fn new<F>(check: F) -> Self
     where
         F: Fn(&Container) -> Result<(), String> + Send + Sync + 'static,
@@ -27,6 +28,7 @@ impl HttpBootCheck {
         Self(Box::new(check))
     }
 
+    /// Run the check against the live container.
     pub fn run(&self, container: &Container) -> Result<(), String> {
         (self.0)(container)
     }

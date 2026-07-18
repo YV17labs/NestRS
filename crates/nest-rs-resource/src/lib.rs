@@ -18,8 +18,12 @@
 //! // + GraphQL surface (requires `features = ["graphql"]` on `nest-rs-resource`).
 //! #[expose(name = "Item", service = super::service::ItemsService, graphql)]
 //! ```
+#![warn(missing_docs)]
+
 mod exposures;
 
+/// Re-exports of the `async-graphql` primitives `#[expose(..., graphql)]`
+/// emits, so generated code names them through this crate.
 #[cfg(feature = "graphql")]
 pub mod graphql {
     pub use nest_rs_graphql::async_graphql;

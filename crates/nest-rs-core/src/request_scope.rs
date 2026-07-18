@@ -48,6 +48,7 @@ pub struct RequestScope {
 }
 
 impl RequestScope {
+    /// Open a fresh request scope over the singleton container — one per request.
     pub fn new(root: Container) -> Self {
         Self {
             root,
@@ -55,6 +56,7 @@ impl RequestScope {
         }
     }
 
+    /// The underlying singleton container, for resolving non-scoped providers.
     pub fn root(&self) -> &Container {
         &self.root
     }

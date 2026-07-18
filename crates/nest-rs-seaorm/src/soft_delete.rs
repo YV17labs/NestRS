@@ -12,6 +12,8 @@ use sea_orm::{ColumnTrait, EntityTrait};
 /// `#[expose(..., soft_delete)]`; the service still opts in via
 /// [`CrudService::soft_delete_column`](crate::CrudService::soft_delete_column).
 pub trait SoftDeletable: EntityTrait {
+    /// The nullable tombstone column (`deleted_at`) whose non-null value marks a
+    /// row as soft-deleted.
     fn deleted_at_column() -> Self::Column;
 }
 

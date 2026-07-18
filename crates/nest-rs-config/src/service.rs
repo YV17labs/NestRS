@@ -21,6 +21,7 @@ pub struct ConfigService {
 }
 
 impl ConfigService {
+    /// A reader scoped to `namespace`, backed by the process/`.env` environment.
     pub fn for_namespace(namespace: &str) -> Self {
         Self::with_source(namespace, Arc::new(EnvSource))
     }
@@ -61,6 +62,7 @@ impl ConfigService {
         format!("{PREFIX}{}__{}", self.namespace, key.to_ascii_uppercase())
     }
 
+    /// The raw string value for `key` in this namespace, or `None` if unset.
     pub fn get(&self, key: &str) -> Option<String> {
         self.source.get(&self.var_name(key))
     }

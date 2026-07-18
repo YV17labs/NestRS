@@ -40,6 +40,9 @@ use crate::registry::{InterceptorSpec, InterceptorSpecs};
 /// controller / method redeclarations against this global scope by `TypeId`
 /// (broadest wins), so any interceptor still executes exactly once.
 pub trait AppBuilderInterceptorsExt: Sized {
+    /// Register `specs` as the global interceptor chain — the transport-edge
+    /// pool that runs before authentication, deduped by type against
+    /// controller/method scope (broadest wins).
     fn use_interceptors_global<I>(self, specs: I) -> Self
     where
         I: IntoIterator<Item = InterceptorSpec>;

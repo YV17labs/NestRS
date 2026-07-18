@@ -33,6 +33,7 @@ pub struct QueueConnection {
 }
 
 impl QueueConnection {
+    /// Open a multiplexed Redis connection to `redis_url`.
     pub async fn connect(redis_url: &str) -> Result<Self, ConnectionError> {
         let conn = apalis_redis::connect(redis_url).await?;
         Ok(Self { conn })
@@ -94,6 +95,7 @@ pub struct Queue<J: Job> {
 }
 
 impl<J: Job> Queue<J> {
+    /// Serialize `job` and enqueue it onto this queue's Redis storage.
     pub async fn push(&self, job: J) -> Result<(), QueueError> {
         let payload = serde_json::to_value(&job)?;
         // `push` takes `&mut self`; storage is a cheap clone of the connection

@@ -16,7 +16,11 @@ use crate::builder::AbilityBuilder;
 /// }
 /// ```
 pub trait AbilityFactory: Send + Sync + 'static {
+    /// The app's authenticated-actor type — the principal whose claims the
+    /// rules are written against.
     type Actor: Clone + Send + Sync + 'static;
 
+    /// Populate `ability` with this actor's rules — the single place an app
+    /// declares who may do what, called once per request the actor makes.
     fn define(&self, actor: &Self::Actor, ability: &mut AbilityBuilder);
 }

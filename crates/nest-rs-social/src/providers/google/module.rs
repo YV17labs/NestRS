@@ -13,6 +13,8 @@ pub struct GoogleSocialProviderModule {
 }
 
 impl GoogleSocialProviderModule {
+    /// `None` loads [`GoogleSocialConfig`] from `NESTRS_SOCIAL__GOOGLE__*`;
+    /// `Some(cfg)` pins it in code.
     pub fn for_root(config: impl Into<Option<GoogleSocialConfig>>) -> Self {
         Self {
             pinned: config.into(),

@@ -24,6 +24,9 @@ use crate::Guard;
 use crate::dispatch::denial_convert::denial_to_http_response;
 use crate::registry::GuardSpecs;
 
+/// Runs the global guard pool in-band per GraphQL operation — the fallback
+/// [`GraphqlOperationGuard`] when no app-specific bridge is registered, so
+/// `/graphql` stays fail-secure under its `Exempt` edge posture.
 pub struct GlobalPoolOperationGuard {
     chain: Vec<ResolvedLayer<dyn Guard>>,
 }

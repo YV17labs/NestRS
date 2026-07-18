@@ -2,6 +2,8 @@
 //! backend-agnostic abstractions crate) so the call site keeps writing
 //! `use nest_rs_queue::processor;` regardless of which backend integration
 //! (nest-rs-redis, …) is wired in.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod processor;

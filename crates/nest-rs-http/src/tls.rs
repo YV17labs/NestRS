@@ -33,6 +33,7 @@ impl std::fmt::Debug for TlsConfig {
 }
 
 impl TlsConfig {
+    /// Build a TLS config from PEM certificate and private-key bytes.
     pub fn new(cert: impl Into<Vec<u8>>, key: impl Into<Vec<u8>>) -> Self {
         Self {
             cert: cert.into(),

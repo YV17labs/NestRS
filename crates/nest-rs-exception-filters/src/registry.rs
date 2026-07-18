@@ -15,7 +15,9 @@ use crate::erased::ExceptionFilterErased;
 /// `type_id` identifies the filter *type* (used for dedup against
 /// controller- and method-scope declarations), not the exception type.
 pub struct ExceptionFilterSpec {
+    /// `TypeId` of the filter type — the dedup key across scopes.
     pub type_id: TypeId,
+    /// The filter type's name, for boot logs and fail-secure diagnostics.
     pub name: &'static str,
     pub(crate) resolve: fn(&Container) -> Option<Arc<dyn ExceptionFilterErased>>,
 }
@@ -42,6 +44,8 @@ where
 }
 
 impl ExceptionFilterSpec {
+    /// Resolve the filter instance from the live container, or `None` if its
+    /// provider was never registered (a fail-secure boot check flags this).
     pub fn resolve(&self, container: &Container) -> Option<Arc<dyn ExceptionFilterErased>> {
         (self.resolve)(container)
     }
@@ -53,6 +57,8 @@ impl ExceptionFilterSpec {
 pub struct ExceptionFilterSpecs(pub Vec<ExceptionFilterSpec>);
 
 impl ExceptionFilterSpecs {
+    /// The `(TypeId, name)` of every spec, for deduping the global pool against
+    /// narrower-scope declarations.
     pub fn type_ids(&self) -> Vec<(TypeId, &'static str)> {
         self.0.iter().map(|s| (s.type_id, s.name)).collect()
     }

@@ -11,6 +11,7 @@ pub trait InterceptorExt: Endpoint + Sized + Send + Sync
 where
     Self::Output: IntoResponse,
 {
+    /// Wrap this endpoint in `interceptor`, returning the wrapped endpoint.
     fn interceptor<I: Interceptor>(self, interceptor: I) -> InterceptorEndpoint<Self, I> {
         InterceptorEndpoint::new(self, interceptor)
     }

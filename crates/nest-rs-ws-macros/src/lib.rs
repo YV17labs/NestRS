@@ -4,6 +4,8 @@
 //! `#[subscribe_message("event")]`, `#[on_connect]`, `#[on_disconnect]` are
 //! inert attributes consumed by `#[messages]`, same shape as the HTTP verb
 //! attributes consumed by `#[routes]`.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod attr;

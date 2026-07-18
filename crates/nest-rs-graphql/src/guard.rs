@@ -28,5 +28,6 @@ use async_trait::async_trait;
 /// GraphQL error.
 #[async_trait]
 pub trait GraphqlResolverGuard: Send + Sync + 'static {
+    /// Gate the operation; return `Err` to short-circuit with a GraphQL error.
     async fn check(&self, ctx: &Context<'_>) -> Result<()>;
 }

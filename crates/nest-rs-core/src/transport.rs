@@ -1,3 +1,7 @@
+//! The [`Transport`] trait and the [`TransportContribution`] a module attaches
+//! to gain one — the seam between the container and anything that accepts
+//! inbound requests on the app's behalf.
+
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -17,7 +21,11 @@ use crate::container::Container;
 /// triggers.
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
+    /// Scan the container for the surfaces this transport serves and wire them
+    /// up, before any request is accepted. Runs at boot in registration order.
     async fn configure(&mut self, container: &Container) -> Result<()>;
+    /// Accept requests until `cancel` fires, then shut down gracefully. Spawned
+    /// after every transport has been configured.
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()>;
 }
 

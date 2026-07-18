@@ -6,6 +6,8 @@
 //! versioned source of truth. This crate adds no API of its own — it only
 //! collects what already exists behind Cargo features, with one feature per
 //! surface so an app pays only for what it uses.
+#![warn(missing_docs)]
+
 pub use nest_rs_core as core;
 
 #[cfg(feature = "http")]

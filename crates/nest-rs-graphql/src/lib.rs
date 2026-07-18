@@ -27,6 +27,8 @@
 //! 4. review the SDL diff — an intended change means updating the committed
 //!    snapshot; an unexpected one is a regression in the composed schema.
 
+#![warn(missing_docs)]
+
 mod config;
 mod context;
 mod guard;

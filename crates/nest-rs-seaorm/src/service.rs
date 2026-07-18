@@ -22,12 +22,15 @@ use crate::repo::{Repo, scope_for};
 /// Build a fresh `ActiveModel` from a create-input DTO. Implemented by `#[expose]`
 /// for each `Create<Name>Input`.
 pub trait CreateModel<E: EntityTrait> {
+    /// Turn the create-input DTO into a fresh `ActiveModel` ready to insert.
     fn into_active_model(self) -> E::ActiveModel;
 }
 
 /// Apply an update-input DTO onto a loaded `ActiveModel`. Implemented by
 /// `#[expose]` for each `Update<Name>Input`.
 pub trait UpdateModel<E: EntityTrait> {
+    /// Apply the update-input DTO's set fields onto the loaded `ActiveModel`,
+    /// leaving unset fields untouched.
     fn apply_to(self, model: E::ActiveModel) -> E::ActiveModel;
 }
 
@@ -35,8 +38,12 @@ pub trait UpdateModel<E: EntityTrait> {
 /// lets a surface map to 200/403/404 (REST) or data/forbidden/null (GraphQL)
 /// without leaking existence by silently returning `Missing` for a denied row.
 pub enum Access<M> {
+    /// The row exists and the ability grants the action — carries the row.
     Found(M),
+    /// The row exists but the ability denies the action (maps to 403).
     Denied,
+    /// No such row (maps to 404). Kept distinct from `Denied` only where
+    /// leaking existence is acceptable; the by-id write paths collapse both.
     Missing,
 }
 
@@ -96,6 +103,7 @@ where
     <Self::Entity as EntityTrait>::Model:
         Send + Sync + IntoActiveModel<<Self::Entity as EntityTrait>::ActiveModel>,
 {
+    /// The SeaORM entity this service is the audited API for.
     type Entity: EntityTrait;
 
     /// The entity's table name; included as the `entity` field on every log
@@ -112,6 +120,9 @@ where
         None
     }
 
+    /// The `WHERE` that hides soft-deleted rows: `deleted_at IS NULL` when
+    /// [`soft_delete_column`](Self::soft_delete_column) is set, else `TRUE`.
+    /// `Repo` reads AND this onto the ability scope.
     fn live_read_filter() -> Condition {
         match Self::soft_delete_column() {
             Some(col) => crate::soft_delete::live_condition_for_column(col),
@@ -211,6 +222,8 @@ where
 /// resource that does not offer one.
 #[async_trait]
 pub trait Creatable: CrudService {
+    /// The create-input DTO this resource accepts, lowered to an `ActiveModel`
+    /// via [`CreateModel`].
     type Create: CreateModel<Self::Entity> + Send;
 
     /// Insert a row from a create-input DTO, in the request transaction.
@@ -258,6 +271,8 @@ pub trait Creatable: CrudService {
 /// a resource that has no honest update to apply.
 #[async_trait]
 pub trait Updatable: CrudService {
+    /// The update-input DTO this resource accepts, applied to a loaded row via
+    /// [`UpdateModel`].
     type Update: UpdateModel<Self::Entity> + Send;
 
     /// Apply an update-input DTO to a loaded row, in the request transaction.

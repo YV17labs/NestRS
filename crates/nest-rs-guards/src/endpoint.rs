@@ -19,6 +19,7 @@ pub struct GuardEndpoint<E, G: ?Sized> {
 }
 
 impl<E, G: ?Sized> GuardEndpoint<E, G> {
+    /// Wrap `inner` so `guard` runs before it on each request.
     pub fn new(inner: E, guard: Arc<G>) -> Self {
         Self { inner, guard }
     }
@@ -49,6 +50,7 @@ pub trait GuardExt: Endpoint + Sized + Send + Sync
 where
     Self::Output: IntoResponse,
 {
+    /// Wrap this endpoint so `guard` runs before it.
     fn guard<G>(self, guard: Arc<G>) -> GuardEndpoint<Self, G>
     where
         G: Guard + ?Sized,

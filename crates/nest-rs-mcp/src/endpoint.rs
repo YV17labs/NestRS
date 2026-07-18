@@ -21,6 +21,8 @@ where
     endpoint_with_guard(None, factory)
 }
 
+/// Like [`endpoint`], but runs `guard` before each operation. `None` installs
+/// the deny-all guard, so an unguarded MCP endpoint is closed by default.
 pub fn endpoint_with_guard<F, H>(
     guard: Option<Arc<dyn McpOperationGuard>>,
     factory: F,

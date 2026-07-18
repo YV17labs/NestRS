@@ -1,3 +1,6 @@
+//! The [`Discoverable`] trait — the contract a `#[module]` uses to register a
+//! provider and report its dependencies to the access-graph check.
+
 use std::any::TypeId;
 
 use crate::container::{ContainerBuilder, KeyedDependency};
@@ -60,5 +63,9 @@ pub trait Discoverable {
         Vec::new()
     }
 
+    /// Install this provider's construction into the builder — the register
+    /// phase's per-provider step. Emitted by the decorator (`#[injectable]`,
+    /// `#[routes]`, …); resolves the provider's dependencies from the builder
+    /// and stores the built value plus any metadata.
     fn register(builder: ContainerBuilder) -> ContainerBuilder;
 }

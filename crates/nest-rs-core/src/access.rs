@@ -30,6 +30,8 @@ use crate::container::{KeyedDependency, ProviderKey};
 /// One provider declared in a module's `providers = [...]`, recorded by the
 /// `#[module]` macro for the access-graph check.
 pub struct ProviderDescriptor {
+    /// The provider type's name, used to name the offending consumer in a boot
+    /// access error.
     pub name: &'static str,
     /// The container key this provider registers under:
     /// `TypeId::of::<Concrete>()` for an `#[injectable]`, or
@@ -50,12 +52,17 @@ pub struct ProviderDescriptor {
 
 /// Per-module descriptor submitted to the link-time registry by `#[module]`.
 pub struct ModuleDescriptor {
+    /// `TypeId` of the `#[module]` struct — the graph node's identity, matched
+    /// against other modules' [`imports`](Self::imports).
     pub module: fn() -> TypeId,
+    /// The module type's name, used to name the module in a boot access error.
     pub name: &'static str,
     /// Statically-typed imports only. Dynamic (`for_root(...)`) imports
     /// contribute only global infrastructure, never an injectable a provider
     /// could depend on.
     pub imports: &'static [fn() -> TypeId],
+    /// Every provider this module declares in its `providers = [...]`, each with
+    /// the dependency information the access-graph walk needs.
     pub providers: &'static [ProviderDescriptor],
 }
 
@@ -66,7 +73,10 @@ inventory::collect!(ModuleDescriptor);
 /// regardless of any module, so module membership is what brings its injected
 /// dependencies under the access contract.
 pub struct ResolverDescriptor {
+    /// `TypeId` of the `#[resolver]` struct, matched against reachable modules'
+    /// `providers = [...]` to decide whether the resolver is under the contract.
     pub resolver: fn() -> TypeId,
+    /// The resolver type's name, surfaced in the unreachable-resolver boot warn.
     pub name: &'static str,
 }
 
@@ -82,9 +92,13 @@ inventory::collect!(ResolverDescriptor);
      through a module `{module}` already imports."
 )]
 pub struct AccessGraphError {
+    /// Module that owns the offending consumer and whose imports fall short.
     pub module: &'static str,
+    /// Provider that reached for a dependency its module cannot see.
     pub consumer: &'static str,
+    /// The dependency that was out of reach.
     pub dependency: &'static str,
+    /// Module that actually provides `dependency` — the one to import to fix it.
     pub owner: &'static str,
 }
 
@@ -103,8 +117,11 @@ pub struct AccessGraphError {
      `App::builder()`."
 )]
 pub struct MissingDependencyError {
+    /// Module that owns the consumer whose dependency is unmet.
     pub module: &'static str,
+    /// Provider whose dependency no module supplies.
     pub consumer: &'static str,
+    /// The dependency that is registered nowhere and is not global infra.
     pub dependency: &'static str,
 }
 
@@ -112,8 +129,10 @@ pub struct MissingDependencyError {
 /// reach that no import covers, or a dependency no module provides.
 #[derive(Debug, Error)]
 pub enum AccessError {
+    /// A provider reached across modules for something no import covers.
     #[error(transparent)]
     CrossModule(#[from] AccessGraphError),
+    /// A provider depends on something no module provides at all.
     #[error(transparent)]
     Missing(#[from] MissingDependencyError),
 }
@@ -145,6 +164,7 @@ impl AccessError {
      `dyn Trait` binding if a deliberate override was intended."
 )]
 pub struct DuplicateProviderError {
+    /// The type registered more than once.
     pub type_name: &'static str,
 }
 
@@ -163,9 +183,13 @@ pub struct DuplicateProviderError {
      `ContainerBuilder::provide_keyed`/factory in a module reachable from the root."
 )]
 pub struct KeyedDependencyError {
+    /// Module that owns the consumer with the unreachable keyed dependency.
     pub module: &'static str,
+    /// Provider whose `#[inject(key = "…")]` has no keyed provider registered.
     pub consumer: &'static str,
+    /// The injected type of the keyed dependency.
     pub type_name: &'static str,
+    /// The requested key — named alongside the type so both appear in the error.
     pub key: &'static str,
 }
 

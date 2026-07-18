@@ -26,6 +26,7 @@ pub enum CmpOp {
 /// A condition over entity `E`, interpreted as SQL or in memory.
 #[derive(Default)]
 pub enum Predicate<E: EntityTrait> {
+    /// Unconditional match — an unrestricted grant/denial over every row.
     #[default]
     Always,
     /// Malformation sentinel: renders an always-false SQL condition (`1 = 0`)
@@ -40,7 +41,9 @@ pub enum Predicate<E: EntityTrait> {
     /// that hole. On the grant side the same sentinel is fail-closed (deny-all),
     /// but a silent developer error is still worth surfacing.
     Deny,
+    /// Column equals a bound value — `col = value`.
     Eq(E::Column, Value),
+    /// Column is one of a set — `col IN (values)`.
     In(E::Column, Vec<Value>),
     /// Scalar comparison (`Ne`/`Lt`/`Lte`/`Gt`/`Gte`) on one of `E`'s own
     /// columns. Pure and symmetric: SQL renders the matching operator, the
@@ -49,8 +52,11 @@ pub enum Predicate<E: EntityTrait> {
     /// Nullness test on one of `E`'s own columns. `true` → `IS NULL`,
     /// `false` → `IS NOT NULL`.
     IsNull(E::Column, bool),
+    /// Conjunction — every sub-predicate must match.
     And(Vec<Predicate<E>>),
+    /// Disjunction — at least one sub-predicate must match.
     Or(Vec<Predicate<E>>),
+    /// Negation of the inner predicate.
     Not(Box<Predicate<E>>),
     /// Scope `E` by a condition on a *related* entity reached through a typed
     /// SeaORM relation. Type-erased over the related entity (see
@@ -273,10 +279,12 @@ impl<E: EntityTrait> PredicateBuilder<E> {
         PredicateBuilder(PhantomData)
     }
 
+    /// `column = value`.
     pub fn eq(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
         Predicate::Eq(column, value.into())
     }
 
+    /// `column IN (values)`.
     pub fn is_in<V: Into<Value>>(
         &self,
         column: E::Column,
@@ -285,22 +293,27 @@ impl<E: EntityTrait> PredicateBuilder<E> {
         Predicate::In(column, values.into_iter().map(Into::into).collect())
     }
 
+    /// `column <> value`.
     pub fn ne(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
         Predicate::Cmp(column, CmpOp::Ne, value.into())
     }
 
+    /// `column < value`.
     pub fn lt(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
         Predicate::Cmp(column, CmpOp::Lt, value.into())
     }
 
+    /// `column <= value`.
     pub fn lte(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
         Predicate::Cmp(column, CmpOp::Lte, value.into())
     }
 
+    /// `column > value`.
     pub fn gt(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
         Predicate::Cmp(column, CmpOp::Gt, value.into())
     }
 
+    /// `column >= value`.
     pub fn gte(&self, column: E::Column, value: impl Into<Value>) -> Predicate<E> {
         Predicate::Cmp(column, CmpOp::Gte, value.into())
     }
@@ -315,14 +328,17 @@ impl<E: EntityTrait> PredicateBuilder<E> {
         Predicate::IsNull(column, false)
     }
 
+    /// Conjunction — matches when every `part` matches.
     pub fn all(&self, parts: impl IntoIterator<Item = Predicate<E>>) -> Predicate<E> {
         Predicate::And(parts.into_iter().collect())
     }
 
+    /// Disjunction — matches when any `part` matches.
     pub fn any(&self, parts: impl IntoIterator<Item = Predicate<E>>) -> Predicate<E> {
         Predicate::Or(parts.into_iter().collect())
     }
 
+    /// Negate `inner`.
     pub fn not(&self, inner: Predicate<E>) -> Predicate<E> {
         Predicate::Not(Box::new(inner))
     }

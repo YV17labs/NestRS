@@ -5,6 +5,7 @@
 //! [`ConfigService`]; `ConfigModule` owns loading (the `.env` cascade + the
 //! namespaced reader) and registers each config as `Arc<C>` for injection.
 #![cfg_attr(not(test), deny(unsafe_code))]
+#![warn(missing_docs)]
 
 mod config;
 mod dotenv;

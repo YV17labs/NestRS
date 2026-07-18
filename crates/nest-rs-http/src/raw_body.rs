@@ -37,6 +37,7 @@ impl RawBody {
     /// resist a memory-exhaustion attempt from a single request.
     pub const DEFAULT_LIMIT: usize = 2 * 1024 * 1024;
 
+    /// Take ownership of the buffered body bytes.
     pub fn into_inner(self) -> Bytes {
         self.0
     }

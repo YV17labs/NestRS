@@ -11,6 +11,8 @@ use nest_rs_core::injectable;
 use nest_rs_health::indicators;
 use sea_orm::DatabaseConnection;
 
+/// Health indicator that pings the pool on the readiness and startup probes, so
+/// an unreachable database drops those probes to `503`.
 #[injectable]
 pub struct DbHealthIndicator {
     #[inject]

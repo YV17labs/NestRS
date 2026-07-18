@@ -95,6 +95,8 @@ pub struct GuardAsWsMessageCheck {
 
 #[cfg(feature = "ws")]
 impl GuardAsWsMessageCheck {
+    /// Adapt an HTTP [`Guard`] into a per-WS-message check, preserving its
+    /// `type_id`/`name` so dedup and logging match the HTTP path.
     pub fn new(inner: Arc<dyn Guard>, type_id: TypeId, name: &'static str) -> Self {
         Self {
             inner,

@@ -24,7 +24,12 @@ use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, Response, Result
 /// two GraphQL apps in one workspace can forward different principal types
 /// without colliding.
 pub struct GraphqlContextSeed {
+    /// `None` for a framework-level seed (always fires); `Some(id)` gates the
+    /// seed on its owner being reachable, so two apps forward different types
+    /// without colliding.
     pub owner_type_id: fn() -> Option<TypeId>,
+    /// Reads from the poem request and container and attaches values onto the
+    /// outgoing GraphQL request.
     pub seed: fn(&Request, &Container, GqlRequest) -> GqlRequest,
 }
 
@@ -51,6 +56,8 @@ inventory::submit! {
     }
 }
 
+/// A boxed, `Send` future — the return type of an async method in a
+/// dyn-compatible GraphQL trait.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Per-operation guard the GraphQL endpoint runs around every request — the

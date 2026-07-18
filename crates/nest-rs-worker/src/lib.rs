@@ -11,6 +11,8 @@
 //! path); *job* = unit of work executed. [`JobContext`] is per-**job** ambient
 //! state, not per-worker — installed once around each unit of work the
 //! transport drives.
+#![warn(missing_docs)]
+
 pub mod context;
 
 pub use context::{JobContext, run_in_job_context};

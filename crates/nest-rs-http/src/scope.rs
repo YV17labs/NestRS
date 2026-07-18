@@ -21,6 +21,8 @@ pub struct RequestScopeEndpoint<E> {
 }
 
 impl<E> RequestScopeEndpoint<E> {
+    /// Wrap `inner`, installing a per-request scope over `container` before each
+    /// call.
     pub fn new(inner: E, container: Container) -> Self {
         Self { inner, container }
     }
@@ -46,6 +48,7 @@ where
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {
+    /// Take the resolved provider handle out of the extractor.
     pub fn into_inner(self) -> Arc<T> {
         self.0
     }

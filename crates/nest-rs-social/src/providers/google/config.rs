@@ -7,10 +7,13 @@ use validator::Validate;
 #[config(namespace = "social__google")]
 #[derive(Clone, Default, Validate)]
 pub struct GoogleSocialConfig {
+    /// The Google OAuth client id.
     #[validate(length(min = 1))]
     pub client_id: String,
+    /// The Google OAuth client secret.
     #[validate(length(min = 1))]
     pub client_secret: String,
+    /// The registered redirect URL the callback returns to.
     #[validate(length(min = 1))]
     pub redirect_url: String,
     /// Defaults to `openid email profile` when unset.

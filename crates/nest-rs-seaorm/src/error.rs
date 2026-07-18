@@ -26,8 +26,11 @@ use validator::ValidationErrors;
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum ServiceError {
+    /// Edge validation (`validator`) rejected the input — maps to a 400.
     #[error(transparent)]
     Validation(#[from] ValidationErrors),
+    /// A `Repo`/ORM query failed. The `DbErr` detail stays for `tracing`; the
+    /// wire sees a generic message.
     #[error("database error")]
     Db(#[from] DbErr),
     /// Response masking could not reconcile a loaded row into its wire DTO.

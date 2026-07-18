@@ -16,6 +16,7 @@
 //! ```
 //!
 //! Pin explicit values with [`DatabaseModule::for_root`]`(DatabaseConfig { .. })`.
+#![warn(missing_docs)]
 
 mod config;
 mod error;

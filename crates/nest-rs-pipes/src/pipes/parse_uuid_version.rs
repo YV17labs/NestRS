@@ -22,8 +22,11 @@ impl<const VERSION: u8> Pipe for ParseUuidVersion<VERSION> {
     }
 }
 
+/// Parse the input as a UUID and require version 3.
 pub type ParseUuidV3 = ParseUuidVersion<3>;
+/// Parse the input as a UUID and require version 4 (random).
 pub type ParseUuidV4 = ParseUuidVersion<4>;
+/// Parse the input as a UUID and require version 5.
 pub type ParseUuidV5 = ParseUuidVersion<5>;
 /// UUID v7 (time-ordered, sortable) — the version nestrs apps mint for ids.
 pub type ParseUuidV7 = ParseUuidVersion<7>;

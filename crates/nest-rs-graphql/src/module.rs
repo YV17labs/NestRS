@@ -34,6 +34,8 @@ impl GraphqlModule {
     }
 }
 
+/// The configured import produced by [`GraphqlModule::for_root`]. Registers the
+/// [`GraphqlConfig`] and self-mounts the `/graphql` endpoint on the HTTP transport.
 pub struct GraphqlSetup {
     pinned: Option<GraphqlConfig>,
 }

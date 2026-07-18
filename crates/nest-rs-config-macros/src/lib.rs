@@ -1,4 +1,6 @@
 //! The `#[config]` decorator, re-exported by `nest-rs-config`.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod config;

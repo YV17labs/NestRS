@@ -10,6 +10,9 @@ use nest_rs_core::{ContainerBuilder, DynamicModule};
 use crate::QueueConnection;
 use crate::config::QueueConfig;
 
+/// The producer-side activation seam. Import [`QueueModule::for_root`] to build
+/// and share the Redis [`QueueConnection`](crate::QueueConnection) — enough to
+/// push jobs without running a consumer.
 pub struct QueueModule;
 
 impl QueueModule {
@@ -21,6 +24,8 @@ impl QueueModule {
     }
 }
 
+/// The configured import produced by [`QueueModule::for_root`]. Builds the Redis
+/// connection in the collect phase and registers it as [`QueueConnection`](crate::QueueConnection).
 pub struct QueueSetup {
     pinned: Option<QueueConfig>,
 }

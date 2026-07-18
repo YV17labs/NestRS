@@ -91,6 +91,9 @@ impl Default for HttpTransport {
 }
 
 impl HttpTransport {
+    /// A transport with framework defaults — bind `0.0.0.0:3000`, no TLS/CORS,
+    /// fail-secure strict. [`HttpModule`](crate::HttpModule) configures it from
+    /// [`HttpConfig`](crate::HttpConfig); apps rarely build it directly.
     pub fn new() -> Self {
         Self {
             bind: "0.0.0.0:3000".into(),
@@ -144,6 +147,7 @@ impl HttpTransport {
         self
     }
 
+    /// Set the listen address (`host:port`).
     pub fn bind(mut self, addr: impl Into<String>) -> Self {
         self.bind = addr.into();
         self

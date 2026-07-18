@@ -12,6 +12,9 @@ use crate::service::HealthService;
         HealthController,
     ],
 )]
+/// Provides the health probe endpoints. Import it to mount `/health` and let
+/// any reachable provider contribute `#[liveness]`/`#[readiness]`/`#[startup]`
+/// indicators.
 pub struct HealthModule;
 
 // Stash the assembled container on `HealthService` so its `probe()` can

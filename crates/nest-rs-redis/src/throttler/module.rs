@@ -33,6 +33,8 @@ impl RedisThrottlerModule {
     }
 }
 
+/// The configured import produced by `RedisThrottlerModule::for_root`. Registers
+/// the Redis-backed throttler store so rate limits are shared across instances.
 pub struct RedisThrottlerSetup {
     pinned: Option<ThrottlerConfig>,
 }

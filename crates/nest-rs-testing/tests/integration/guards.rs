@@ -465,3 +465,34 @@ async fn a_guard_attached_context_is_read_back_by_the_handler() {
     anon.assert_status_is_ok();
     anon.assert_text("anon").await;
 }
+
+#[controller(path = "/ctx-bare")]
+struct CtxUnguarded;
+
+#[routes]
+impl CtxUnguarded {
+    // No guard attaches `Principal`, so `Ctx<Principal>` cannot resolve.
+    #[get("/whoami")]
+    async fn bare_whoami(&self, principal: Ctx<Principal>) -> String {
+        principal.into_inner().0
+    }
+}
+
+#[module(providers = [CtxUnguarded])]
+struct CtxUnguardedModule;
+
+#[tokio::test]
+async fn a_missing_context_is_a_bare_500_without_leaking_the_rust_type() {
+    let app = TestApp::for_module::<CtxUnguardedModule>()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/ctx-bare/whoami").send().await;
+    resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+    // The Rust type name belongs in the logs, never the response body.
+    let body = resp.0.into_body().into_string().await.expect("body");
+    assert!(
+        !body.contains("Principal"),
+        "the response body must not leak the context type name: {body:?}"
+    );
+}

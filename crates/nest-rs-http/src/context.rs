@@ -33,14 +33,17 @@ impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
         match req.extensions().get::<T>() {
             Some(value) => Ok(Ctx(value.clone())),
-            None => Err(Error::from_string(
-                format!(
-                    "missing request context `{}` — is the guard or interceptor that sets it \
-                     applied to this route?",
-                    std::any::type_name::<T>()
-                ),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )),
+            // A missing context is a wiring bug, not a client error. The Rust
+            // type name belongs in the logs, not the response body — reply with
+            // a bare 500 and record the detail (queryable) at `error`.
+            None => {
+                tracing::error!(
+                    target: "nest_rs::http",
+                    context_type = std::any::type_name::<T>(),
+                    "missing request context — the guard or interceptor that sets it did not run on this route",
+                );
+                Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+            }
         }
     }
 }

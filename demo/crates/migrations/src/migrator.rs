@@ -3,6 +3,7 @@ use sea_orm_migration::prelude::*;
 use super::{
     m20260526_000000_create_org, m20260526_000001_create_user, m20260609_000000_create_post,
     m20260610_000000_add_post_org_author, m20260714_000000_create_user_identity,
+    m20260718_000000_add_post_status,
 };
 
 pub struct Migrator;
@@ -16,6 +17,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260609_000000_create_post::Migration),
             Box::new(m20260610_000000_add_post_org_author::Migration),
             Box::new(m20260714_000000_create_user_identity::Migration),
+            Box::new(m20260718_000000_add_post_status::Migration),
         ]
     }
 }

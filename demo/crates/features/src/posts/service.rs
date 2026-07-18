@@ -6,10 +6,11 @@ use nest_rs_seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
 };
 use sea_orm::ActiveModelTrait;
+use sea_orm::IntoActiveModel;
 use sea_orm::Set;
 use uuid::Uuid;
 
-use super::entity::{CreatePost, Entity as Posts, Post, UpdatePost};
+use super::entity::{CreatePost, Entity as Posts, Model, Post, PostStatus, UpdatePost};
 use super::event::PostPublishedEvent;
 
 #[injectable]
@@ -46,6 +47,9 @@ impl PostsService {
         let mut active = input.into_active_model();
         active.org_id = Set(org_id);
         active.author_id = Set(author_id);
+        // A freshly created post is a draft; publishing is a deliberate second
+        // step (`publish`), so creation never notifies subscribers.
+        active.status = Set(PostStatus::Draft);
         let model = active.insert(&Repo::<Posts>::conn()?).await?;
         tracing::debug!(
             target: "features::posts",
@@ -54,15 +58,39 @@ impl PostsService {
             %author_id,
             "post created",
         );
-        // Publish the fact. Fire-and-forget: emit does not await delivery, and
-        // a listener panic never fails the create. See the `notifications` slice.
+        Ok(Post::from(&model))
+    }
+
+    /// Transition a loaded post to `Published` and announce the fact.
+    ///
+    /// The row must already be authorized for `Update` by the caller's ability
+    /// (the resolver binds it through `CrudService::access`); [`Repo::update`]
+    /// re-applies that scope, so a row outside the caller's reach is never
+    /// touched. Publishing — not creation — is what emits [`PostPublishedEvent`]:
+    /// fire-and-forget, so a listener panic never fails the transition. See the
+    /// `notifications` slice.
+    pub async fn publish(&self, model: Model) -> Result<Post, ServiceError> {
+        let post_id = model.id;
+        let org_id = model.org_id;
+        let title = model.title.clone();
+
+        let mut active = model.into_active_model();
+        active.status = Set(PostStatus::Published);
+        let published = Repo::<Posts>::update(active).await?;
+
+        tracing::debug!(
+            target: "features::posts",
+            id = %post_id,
+            %org_id,
+            "post published",
+        );
         self.bus
             .emit(PostPublishedEvent {
-                post_id: model.id,
+                post_id,
                 org_id,
-                title: model.title.clone(),
+                title,
             })
             .await;
-        Ok(Post::from(&model))
+        Ok(Post::from(&published))
     }
 }

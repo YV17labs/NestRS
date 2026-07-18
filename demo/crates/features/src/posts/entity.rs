@@ -2,6 +2,31 @@ use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// Publication state of a post, backed by the `status` string column. `Draft`
+/// is the state a freshly created post lands in; `publishPost` transitions it
+/// to `Published`, which is when subscribers are notified.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    EnumIter,
+    DeriveActiveEnum,
+    async_graphql::Enum,
+)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "lowercase")]
+pub enum PostStatus {
+    #[sea_orm(string_value = "draft")]
+    Draft,
+    #[sea_orm(string_value = "published")]
+    Published,
+}
+
 #[expose(
     name = "Post",
     service = super::service::PostsService,
@@ -27,6 +52,8 @@ pub struct Model {
     pub title: String,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub body: String,
+    #[expose]
+    pub status: PostStatus,
     #[expose]
     pub created_at: DateTimeWithTimeZone,
     #[expose]

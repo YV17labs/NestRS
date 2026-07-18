@@ -16,7 +16,7 @@ use features::authn::AuthnModule;
 use features::authz::{AuthzGraphqlModule, AuthzHttpModule};
 use features::notifications::NotificationsEventsModule;
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
-use features::posts::PostsHttpModule;
+use features::posts::{PostsGraphqlModule, PostsHttpModule};
 use features::users::{UsersGraphqlModule, UsersHttpModule};
 
 #[module(
@@ -41,6 +41,7 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         UsersHttpModule,
         UsersGraphqlModule,
         PostsHttpModule,
+        PostsGraphqlModule,
         NotificationsEventsModule,
         AudioHttpModule,
         AudioScheduleModule,

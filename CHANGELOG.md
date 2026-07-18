@@ -9,7 +9,26 @@ both new features and breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`nestrs g resource --guarded`** scaffolds the hardened `#[crud]` +
+  guards form (the `orgs/` shape) instead of the unguarded stub, for a
+  workspace that already provides `AuthGuard` / `AuthzGuard` /
+  `AuthzHttpModule`.
+
 ### Fixed
+
+- **A duplicated concrete provider fails the boot.** Two modules (or a
+  seed and a module) registering the same concrete type previously
+  warned and silently last-write-wins — a wiring mistake that only
+  surfaced as wrong behaviour. It now fails the boot with a named
+  `DuplicateProviderError`, uniform with the other wiring checks. Keyed
+  providers keep their documented last-write-wins, and `dyn Trait`
+  bindings stay the intended override mechanism.
+
+- **A missing `Ctx<T>` replies with a bare 500, not the Rust type.** The
+  extractor built the response body from the internal Rust type name;
+  that detail now goes to the logs and the client gets a bare 500.
 
 - **A malformed relational rule fails ability construction instead of
   going fail-open.** `PredicateBuilder::related` rejects an invalid

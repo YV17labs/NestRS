@@ -202,12 +202,24 @@ pub struct ContainerBuilder {
     factories: Vec<(TypeId, BoxedFactory)>,
     scoped: HashMap<TypeId, ScopedFactory>,
     transient: HashMap<TypeId, TransientFactory>,
+    /// Concrete/keyed registrations that replaced an earlier one — a wiring
+    /// mistake the boot rejects (see [`duplicate_providers`](Self::duplicate_providers)).
+    duplicates: Vec<DuplicateProvider>,
+}
+
+/// A bare concrete-type provider registered more than once. Surfaced by the
+/// boot as a fatal wiring error rather than a silent last-write-wins. (Keyed
+/// providers keep the documented last-write-wins and are not collected here.)
+#[derive(Clone, Copy)]
+pub struct DuplicateProvider {
+    /// Type name of the doubly-registered provider.
+    pub type_name: &'static str,
 }
 
 impl ContainerBuilder {
     /// Register a value, wrapped in `Arc` internally.
     pub fn provide<T: Any + Send + Sync>(mut self, value: T) -> Self {
-        self.warn_if_replacing(ProviderKey::typed::<T>(), std::any::type_name::<T>());
+        self.record_if_replacing(&ProviderKey::typed::<T>(), std::any::type_name::<T>());
         self.warn_if_cross_kind_singleton(TypeId::of::<T>(), std::any::type_name::<T>());
         self.providers
             .insert(ProviderKey::typed::<T>(), Arc::new(value));
@@ -216,7 +228,7 @@ impl ContainerBuilder {
 
     /// Register an already-shared `Arc<T>`.
     pub fn provide_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
-        self.warn_if_replacing(ProviderKey::typed::<T>(), std::any::type_name::<T>());
+        self.record_if_replacing(&ProviderKey::typed::<T>(), std::any::type_name::<T>());
         self.warn_if_cross_kind_singleton(TypeId::of::<T>(), std::any::type_name::<T>());
         self.providers.insert(ProviderKey::typed::<T>(), value);
         self
@@ -230,7 +242,7 @@ impl ContainerBuilder {
     /// Keyed providers are singletons only. Registering twice under the same
     /// `(T, name)` warns and last-write-wins, mirroring [`provide`](Self::provide).
     pub fn provide_keyed<T: Any + Send + Sync>(mut self, name: &'static str, value: T) -> Self {
-        self.warn_if_replacing(ProviderKey::named::<T>(name), std::any::type_name::<T>());
+        self.record_if_replacing(&ProviderKey::named::<T>(name), std::any::type_name::<T>());
         self.providers
             .insert(ProviderKey::named::<T>(name), Arc::new(value));
         self
@@ -242,7 +254,7 @@ impl ContainerBuilder {
         name: &'static str,
         value: Arc<T>,
     ) -> Self {
-        self.warn_if_replacing(ProviderKey::named::<T>(name), std::any::type_name::<T>());
+        self.record_if_replacing(&ProviderKey::named::<T>(name), std::any::type_name::<T>());
         self.providers.insert(ProviderKey::named::<T>(name), value);
         self
     }
@@ -264,21 +276,37 @@ impl ContainerBuilder {
         self
     }
 
-    /// Warn when a concrete-type registration silently replaces an earlier
-    /// one — usually two modules registering the same type by mistake.
-    /// Trait-object bindings ([`provide_dyn`](Self::provide_dyn)) are exempt:
-    /// last-binding-wins is their documented override mechanism. Keyed
-    /// providers ([`provide_keyed`](Self::provide_keyed)) share this path,
-    /// scoped to their `(TypeId, name)` slot.
-    fn warn_if_replacing(&self, key: ProviderKey, type_name: &'static str) {
-        if self.providers.contains_key(&key) {
-            tracing::warn!(
+    /// A **bare** concrete-type registration that replaces an earlier one — two
+    /// modules (or a seed and a module) registering the same type by mistake.
+    /// [`App`](crate::App) reads [`duplicate_providers`](Self::duplicate_providers)
+    /// after the register phase and **fails the boot**, uniform with every other
+    /// wiring error. Trait-object bindings ([`provide_dyn`](Self::provide_dyn))
+    /// are exempt: last-binding-wins is their documented override mechanism, and
+    /// the test override path ([`replace`](Self::replace)) does not route here.
+    /// **Keyed** providers ([`provide_keyed`](Self::provide_keyed)) keep the
+    /// documented last-write-wins: re-registering `(T, name)` is a supported
+    /// keyed override, so it warns rather than failing the boot.
+    fn record_if_replacing(&mut self, key: &ProviderKey, type_name: &'static str) {
+        if !self.providers.contains_key(key) {
+            return;
+        }
+        match key.name {
+            None => self.duplicates.push(DuplicateProvider { type_name }),
+            Some(name) => tracing::warn!(
                 target: "nest_rs::container",
                 provider = type_name,
-                key = key.name,
-                "provider override",
-            );
+                key = name,
+                "keyed provider override",
+            ),
         }
+    }
+
+    /// Concrete/keyed providers registered more than once — collected during the
+    /// register phase so the boot fails naming them (a duplicate silently
+    /// last-write-wins would otherwise be a wiring bug that only surfaces as
+    /// wrong behaviour). Empty in the common case.
+    pub(crate) fn duplicate_providers(&self) -> &[DuplicateProvider] {
+        &self.duplicates
     }
 
     /// Warn when a singleton registration shadows an existing transient

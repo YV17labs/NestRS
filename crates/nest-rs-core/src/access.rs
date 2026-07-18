@@ -132,6 +132,21 @@ impl AccessError {
     }
 }
 
+/// A concrete or keyed provider was registered more than once — two modules,
+/// or a seed and a module, providing the same type. Raised at boot rather than
+/// silently last-write-wins, uniform with every other wiring error.
+/// Trait-object bindings (`provide_dyn`) and the test override path are exempt
+/// (they are the *intended* replacement mechanisms).
+#[derive(Debug, Error)]
+#[error(
+    "duplicate provider: `{type_name}` is registered more than once. Two modules (or a seed and a \
+     module) provide the same type — remove the redundant registration, or expose it as a \
+     `dyn Trait` binding if a deliberate override was intended."
+)]
+pub struct DuplicateProviderError {
+    pub type_name: &'static str,
+}
+
 /// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider
 /// registered as global infrastructure (a seed or a factory output). Raised at
 /// boot by the keyed pass of the access-graph validation. Unlike a bare

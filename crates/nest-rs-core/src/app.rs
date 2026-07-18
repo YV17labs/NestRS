@@ -8,9 +8,9 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    AccessError, ReachableProviders, ResolverSchemaActive, UnreachableResolversError,
-    reachable_provider_ids_from_inventory, unreachable_resolvers_from_inventory,
-    validate_from_inventory, validate_keyed_from_inventory,
+    AccessError, DuplicateProviderError, ReachableProviders, ResolverSchemaActive,
+    UnreachableResolversError, reachable_provider_ids_from_inventory,
+    unreachable_resolvers_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
     warn_unreachable_resolvers_from_inventory,
 };
 use crate::container::ProviderKey;
@@ -27,6 +27,20 @@ pub struct App {
     container: Container,
 }
 
+/// Fail the boot if any concrete/keyed provider was registered twice — a wiring
+/// mistake that would otherwise silently last-write-wins. Reports the first
+/// duplicate; fixing it re-runs and surfaces the next, same as the other
+/// boot-time wiring checks.
+fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
+    if let Some(dup) = builder.duplicate_providers().first() {
+        return Err(DuplicateProviderError {
+            type_name: dup.type_name,
+        }
+        .into());
+    }
+    Ok(())
+}
+
 impl App {
     /// Build the container from the root module synchronously. Returns
     /// [`AccessGraphError`](crate::AccessGraphError) on contract violations.
@@ -41,6 +55,7 @@ impl App {
         // The actual registered set (singletons + scoped/transient factories +
         // imperatively-provided values) — consulted so a dependency provided
         // outside the declarative graph is not misreported as unmet.
+        check_duplicate_providers(&builder)?;
         let registered = builder.registered_ids();
         validate_from_inventory(&roots, &global, &registered).map_err(AccessError::into_anyhow)?;
         // Keyed providers are configured imperatively; the sync path seeds none
@@ -372,6 +387,7 @@ impl AppBuilder {
         // The full registered set after modules and overrides — includes
         // imperatively-provided values (a hand-written `impl Module`) and
         // scoped/transient factories the declarative graph cannot see.
+        check_duplicate_providers(&builder)?;
         let registered = builder.registered_ids();
         validate_from_inventory(&roots, &global, &registered).map_err(AccessError::into_anyhow)?;
         validate_keyed_from_inventory(&roots, &global_keyed)?;

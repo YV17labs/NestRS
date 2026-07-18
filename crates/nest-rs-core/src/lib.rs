@@ -74,9 +74,10 @@ pub mod request_scope;
 pub mod transport;
 
 pub use access::{
-    AccessError, AccessGraphError, KeyedDependencyError, MissingDependencyError, ModuleDescriptor,
-    ProviderDescriptor, ReachableProviders, ResolverDescriptor, ResolverSchemaActive,
-    UnreachableResolversError, validate_keyed_access_graph,
+    AccessError, AccessGraphError, DuplicateProviderError, KeyedDependencyError,
+    MissingDependencyError, ModuleDescriptor, ProviderDescriptor, ReachableProviders,
+    ResolverDescriptor, ResolverSchemaActive, UnreachableResolversError,
+    validate_keyed_access_graph,
 };
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, KeyedDependency, ProviderKey};

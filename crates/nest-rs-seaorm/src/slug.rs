@@ -22,7 +22,7 @@ const MAX_ATTEMPTS: u32 = 100;
 /// predicate (`Column::OrgId.eq(id)`) for per-scope uniqueness.
 ///
 /// Returns the first free candidate (`base`, then `base-2`, `base-3`, …), or a
-/// [`ServiceError`] after [`MAX_ATTEMPTS`] collisions.
+/// [`ServiceError`] after `MAX_ATTEMPTS` collisions.
 ///
 /// Queries the connection directly (not [`Repo`](crate::Repo)) so the probe is
 /// **unscoped by ability**: a slug must be unique across every live row,

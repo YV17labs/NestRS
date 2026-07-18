@@ -51,7 +51,7 @@ mod resolver;
 /// `__nestrs_injected` / `__nestrs_resolver_guard_specs` helpers `#[resolver]
 /// impl` reads back, and a resolver-membership descriptor.
 ///
-/// ```ignore
+/// ```text
 /// // struct form
 /// pub struct UsersResolver { /* … */ }
 /// impl UsersResolver {
@@ -84,7 +84,7 @@ mod resolver;
 /// }
 /// ```
 ///
-/// ```ignore
+/// ```text
 /// // impl form
 /// pub struct __UsersResolverQuery(Arc<UsersResolver>);
 /// #[::nest_rs_graphql::async_graphql::Object]
@@ -178,7 +178,7 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// registry whose `seed` builds the request's `DataLoader` from the assembled
 /// container.
 ///
-/// ```ignore
+/// ```text
 /// pub struct UsersServiceById(Arc<UsersService>);
 /// impl ::nest_rs_graphql::async_graphql::dataloader::Loader<Uuid> for UsersServiceById {
 ///     type Value = User;

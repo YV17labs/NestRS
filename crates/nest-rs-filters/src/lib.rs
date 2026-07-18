@@ -4,12 +4,12 @@
 //!
 //! A [`Filter`] runs only on the error path: when the inner endpoint returns
 //! `Err(poem::Error)`, the filter maps the error to a [`Response`](poem::Response).
-//! Successful responses pass through unchanged. `Filter` is a [`Layer`]
+//! Successful responses pass through unchanged. `Filter` is a [`Layer`](nest_rs_core::Layer)
 //! sub-trait so global + per-scope declarations dedup by
 //! [`TypeId`](std::any::TypeId) at mount time.
 //!
 //! For handlers that catch a single typed exception, see
-//! [`nest_rs_exception_filters::ExceptionFilter`].
+//! `nest_rs_exception_filters::ExceptionFilter`.
 //!
 //! ## Defining a filter
 //!

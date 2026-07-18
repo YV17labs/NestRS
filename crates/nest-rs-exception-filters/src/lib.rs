@@ -1,6 +1,6 @@
 //! # nest-rs-exception-filters
 //!
-//! [`ExceptionFilter`] catches a single typed exception. Unlike a [`Filter`]
+//! [`ExceptionFilter`] catches a single typed exception. Unlike a `Filter`
 //! from `nest-rs-filters` (which unconditionally maps every inner error to a
 //! response), an `ExceptionFilter` declares the concrete error type it claims
 //! via its [`ExceptionFilter::Exception`] associated type and only catches
@@ -9,7 +9,7 @@
 //! Dispatch is via `poem::Error::downcast::<Exception>()` — anything carryable
 //! as a `Box<dyn std::error::Error + Send + Sync + 'static>` is catchable.
 //!
-//! Unlike [`Filter`](nest_rs_filters::Filter), there is no `ExceptionFilterExt`
+//! Unlike `Filter` (`nest_rs_filters::Filter`), there is no `ExceptionFilterExt`
 //! `.except_filter(_)` shim because an exception filter is **typed** — its
 //! `Self::Exception` cannot be erased through a poem endpoint wrapper without
 //! losing the downcast. Wiring runs through `ScopedExceptionFilterSpec` + the

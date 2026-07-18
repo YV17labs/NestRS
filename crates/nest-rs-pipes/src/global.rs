@@ -45,7 +45,7 @@ use nest_rs_core::Layer;
 use crate::pipe::PipeError;
 
 /// A request-body validator/transformer applied to every handler across
-/// every transport. Runs after [`Guard`]s, before the extractor (HTTP) or
+/// every transport. Runs after `Guard`s, before the extractor (HTTP) or
 /// before the resolver/handler (GraphQL/WS).
 ///
 /// One impl, three transports — override only the `transform_*` method

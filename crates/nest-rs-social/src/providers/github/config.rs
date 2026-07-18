@@ -4,7 +4,7 @@ use validator::Validate;
 
 /// GitHub OAuth deployment config. Only credentials, redirect, and scopes are
 /// deployment config — the auth/token/userinfo endpoint URLs are provider
-/// constants (see [`GithubSocialConfig::oauth2_config`]).
+/// constants (see `GithubSocialConfig::oauth2_config`).
 ///
 /// Dual-path (env `NESTRS_SOCIAL__GITHUB__*` **and** the pinned struct). No
 /// `Debug`: `client_secret` must not leak through a derived format.
@@ -18,7 +18,7 @@ pub struct GithubSocialConfig {
     #[validate(length(min = 1))]
     pub redirect_url: String,
     /// Defaults to `read:user user:email` (the canonical login set) when unset
-    /// — see [`GithubSocialConfig::scopes_or_default`].
+    /// — see `GithubSocialConfig::scopes_or_default`.
     pub scopes: Vec<String>,
 }
 

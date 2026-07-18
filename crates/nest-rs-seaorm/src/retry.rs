@@ -6,11 +6,10 @@
 //! "retry the whole transaction", because SeaORM's transaction handle is
 //! already aborted past a conflict — the same `DatabaseTransaction` cannot
 //! be replayed. This module is the **reusable primitive** a service can
-//! wrap around a programmatic transaction boundary; the [`DbContext`]
+//! wrap around a programmatic transaction boundary; the `DbContext`
 //! interceptor consults [`is_retryable_conflict`] to tag the conflict for
 //! observability when the `retry_serialization_conflicts` config is on.
 //!
-//! [`DbContext`]: crate::DbContext
 //! [`is_retryable_conflict`]: crate::retry::is_retryable_conflict
 
 use std::time::Duration;

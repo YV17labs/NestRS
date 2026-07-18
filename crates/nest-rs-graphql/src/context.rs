@@ -83,7 +83,7 @@ pub trait GraphqlOperationGuard: Send + Sync + 'static {
 /// Factory slot for the fallback [`GraphqlOperationGuard`]. `nest-rs-guards`'
 /// `use_guards_global` provides one (a fn pointer — the container does not
 /// exist yet at builder time) that folds the global guard pool in-band;
-/// [`ContextEndpoint`] invokes it at mount when no `dyn GraphqlOperationGuard`
+/// `ContextEndpoint` invokes it at mount when no `dyn GraphqlOperationGuard`
 /// is registered. This is what keeps `/graphql` fail-secure under
 /// `EdgePosture::Exempt`: forgetting the authz bridge module does not leave
 /// operations unguarded — the global pool still gates them.
@@ -93,7 +93,7 @@ pub struct FallbackOperationGuard(pub fn(&Container) -> Arc<dyn GraphqlOperation
 /// operation-level analog of HTTP's `transform_body`. `nest-rs-guards`'
 /// `use_pipes_global` provides a fn pointer that folds every registered global
 /// pipe's [`GlobalPipe::transform_graphql_variables`](nest_rs_pipes::GlobalPipe)
-/// over an operation's variables; [`ContextEndpoint`] invokes it after parsing,
+/// over an operation's variables; `ContextEndpoint` invokes it after parsing,
 /// before execution. Defined here (the endpoint calls it) and provided by
 /// guards (which owns the `PipeSpecs` registry) — the same seeded-fn-pointer
 /// pattern as [`FallbackOperationGuard`], since guards depends on this crate,

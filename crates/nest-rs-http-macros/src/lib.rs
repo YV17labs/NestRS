@@ -19,7 +19,7 @@ mod routes;
 /// `#[use_interceptors(...)]` placed *below* `#[controller]` apply to every
 /// route the controller mounts; they stack *outside* any per-route binding
 /// (first listed outermost). An optional `version = "1"` enables URI versioning
-/// — see [`version_path`](::nest_rs_http::version_path).
+/// — see `version_path`.
 ///
 /// The `Discoverable` impl is emitted by `#[routes]` (which owns the route
 /// table), not here.
@@ -30,7 +30,7 @@ mod routes;
 /// hidden helper fns `#[routes]` reads (injected keys + the per-family
 /// controller-level layer specs). Illustrative sketch:
 ///
-/// ```ignore
+/// ```text
 /// struct UsersController { /* … */ }                 // the item, unchanged
 ///
 /// impl UsersController {

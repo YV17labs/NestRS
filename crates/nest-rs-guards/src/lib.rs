@@ -5,12 +5,12 @@
 //! `App::builder().use_guards_global(...)`, every handler on every
 //! transport runs through the chain.
 //!
-//! Plug-in point for the Layer System: every guard is a [`Layer`], so the
+//! Plug-in point for the Layer System: every guard is a [`Layer`](nest_rs_core::Layer), so the
 //! `#[routes]` / `#[resolver]` / `#[messages]` shapers dedup by `TypeId` when
 //! the same guard is declared at multiple sites (global + controller +
-//! method) — the broadest [`LayerSite`](nest_rs_core::LayerSite) wins and the
+//! method) — the broadest [`LayerSite`] wins and the
 //! rest log a `warn`. The framework runs guards in **declaration order**;
-//! [`Layer::priority`] is an opt-in tiebreaker.
+//! [`Layer::priority`](nest_rs_core::Layer::priority) is an opt-in tiebreaker.
 //!
 //! `#[public]` is not a framework-level skip: the macro attaches a
 //! [`Public`](nest_rs_core::Public) marker via the same metadata channel
@@ -75,13 +75,13 @@
 //! ## Architecture
 //!
 //! Each shaper macro (`#[routes]`, `#[resolver]`, `#[messages]`) emits a
-//! call to one of [`RouteShaper`] / [`run_layered_graphql_chain`]
+//! call to one of [`RouteShaper`] / `run_layered_graphql_chain`
 //! / [`run_layered_ws_chain`] at the start of every handler — the per-route
 //! entry is what gives TypeId-level dedup against the global chain. Guards
 //! have **no** transport-edge band: the pool executes in the shaper
 //! (post-routing, so it reads `#[public]`), at a `Guarded` self-mount's
 //! edge (`SelfMountGuardWrap`), or in-band on `/graphql` (the
-//! [`GlobalPoolOperationGuard`](dispatch::GlobalPoolOperationGuard)
+//! `GlobalPoolOperationGuard`
 //! fallback when no bridge is registered).
 //!
 //! **Larger than its siblings on purpose.** Where `nest-rs-interceptors` /

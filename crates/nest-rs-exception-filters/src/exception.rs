@@ -21,7 +21,7 @@ use serde_json::Value as JsonValue;
 /// Each impl declares the concrete error type it claims via
 /// [`Self::Exception`]; non-matching errors fall through to the next
 /// exception filter in the chain, then to any outer
-/// [`Filter`](nest_rs_filters::Filter), then back to the transport's
+/// `Filter` (`nest_rs_filters::Filter`), then back to the transport's
 /// default error renderer.
 ///
 /// The bound on [`Self::Exception`] is what each transport's downcast

@@ -8,7 +8,7 @@
 //! from `#[use_guards]` / `#[use_pipes]` / `#[force_guards]`. Wrapped as
 //! the outermost handler layer so the guard pool runs before the handler.
 //! The response-side pools (exception-filters / filters / interceptors)
-//! wrap inside it via [`route_layers`].
+//! wrap inside it via `route_layers`.
 //!
 //! Note: `#[public]` is NOT a framework-level skip — the macro attaches
 //! a [`Public`](nest_rs_core::Public) marker via the same metadata
@@ -18,7 +18,7 @@
 //! ## GraphQL / WS — inline chain calls
 //!
 //! The `#[resolver]` and `#[messages]` macros emit a call to
-//! [`run_layered_graphql_chain`] / [`run_layered_ws_chain`] at the start
+//! `run_layered_graphql_chain` / [`run_layered_ws_chain`] at the start
 //! of every handler method.
 
 // The GraphQL / WS in-band chain runners live here; only compiled when at

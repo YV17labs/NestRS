@@ -1,6 +1,5 @@
 //! The `nestrs new` command: infer the layout from the tree and scaffold it
-//! through one of the [`standalone`](super::standalone) /
-//! [`workspace`](super::workspace) strategies.
+//! through one of the [`standalone`] / [`workspace`] strategies.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -21,7 +21,7 @@ use serde_json::Value as JsonValue;
 /// handler runs and the outputs after. `intercept(req, next)` is the HTTP
 /// entry — the only one the framework wires today. A GraphQL `POST` and a WS
 /// upgrade are HTTP requests, so a *global* interceptor covers them through
-/// the transport-edge wrap; [`wrap_graphql`](Interceptor::wrap_graphql) /
+/// the transport-edge wrap; `wrap_graphql` /
 /// [`wrap_ws`](Interceptor::wrap_ws) are reserved seams for per-resolver /
 /// per-message wrapping and are **not invoked** yet.
 ///

@@ -228,7 +228,7 @@ pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
 /// request), while singleton / keyed / `dyn` deps forward to the root. The
 /// binding is named `container` so the shared `ctor` tokens
 /// (`container.get()`, `container.get_dyn()`, `container.get_keyed()`) compile
-/// unchanged against [`RequestScope`](nest_rs_core::RequestScope)'s matching
+/// unchanged against `RequestScope`'s matching
 /// resolution methods.
 pub fn from_scope_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {

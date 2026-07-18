@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::server::WsClient;
 
-/// Object-safe view of [`nest_rs_guards::Guard::check_ws_message`] so the
+/// Object-safe view of `nest_rs_guards::Guard::check_ws_message` so the
 /// table can store any guard without importing the trait directly (avoids a
 /// nest-rs-ws → nest-rs-guards dep cycle).
 ///

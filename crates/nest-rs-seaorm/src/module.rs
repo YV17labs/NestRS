@@ -11,7 +11,7 @@ use sea_orm::{Database, DatabaseConnection};
 use crate::config::DatabaseConfig;
 
 /// Registers a `sea_orm::DatabaseConnection` and installs the
-/// [`DbContext`](crate::DbContext) request interceptor.
+/// `DbContext` request interceptor.
 pub struct DatabaseModule;
 
 impl DatabaseModule {

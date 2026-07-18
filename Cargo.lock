@@ -2637,6 +2637,7 @@ dependencies = [
  "nest-rs-testing",
  "nest-rs-ws",
  "poem",
+ "schemars",
  "sea-orm",
  "serde",
  "serde_json",

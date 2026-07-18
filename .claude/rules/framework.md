@@ -52,8 +52,9 @@ DI crate.** Extend ours.
   - `#[injectable(scope = request)]` — built per request, deps from the
     singleton root. **One level deep**: request-scoped may inject
     singletons; never the reverse or another request-scoped. Reach one
-    through the request boundary (today **HTTP only**:
-    `nest_rs_http::Scoped<T>`), never via `#[inject]`.
+    through the request boundary (`nest_rs_http::Scoped<T>`,
+    `nest_rs_graphql::Scoped<T>`, `nest_rs_mcp::Scoped<T>`), never via
+    `#[inject]`.
   - `#[injectable(scope = transient)]` — rebuilt on **every** resolution,
     no caching. May depend on singletons or request-scoped. A transient
     that transitively depends on itself **panics at resolution** with a

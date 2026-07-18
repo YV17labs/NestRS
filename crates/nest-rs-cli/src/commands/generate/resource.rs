@@ -1,7 +1,9 @@
 //! `nestrs g resource <name>` — a DB-backed CRUD slice: an `#[expose]` entity,
 //! a `CrudService`, and an HTTP adapter with explicit thin handlers. Missing
 //! workspace dependencies are spliced in automatically; the slice compiles as
-//! generated. Harden it with `#[crud]` + guards by copying `users/`/`orgs/`.
+//! generated. `--guarded` emits the hardened `#[crud]` + guards form instead
+//! (the `orgs/` shape) — it needs the workspace to provide `AuthGuard`,
+//! `AuthzGuard`, and `AuthzHttpModule`.
 
 use std::path::PathBuf;
 
@@ -17,6 +19,9 @@ pub struct ResourceOptions {
     pub name: String,
     pub path: Option<PathBuf>,
     pub dry_run: bool,
+    /// Scaffold the hardened `#[crud]` + guards form (needs the workspace to
+    /// provide `AuthGuard` / `AuthzGuard` / `AuthzHttpModule`).
+    pub guarded: bool,
 }
 
 pub fn run(opts: ResourceOptions) -> CliResult<()> {
@@ -42,13 +47,18 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     s.create(root.join("module.rs"), r.render(resource::MODULE));
     s.create(root.join("mod.rs"), r.render(resource::MOD));
 
-    // HTTP adapter.
+    // HTTP adapter — guarded (`#[crud]` + guards) or the unguarded stub.
     s.create(root.join("http/mod.rs"), r.render(resource::HTTP_MOD));
-    s.create(root.join("http/module.rs"), r.render(resource::HTTP_MODULE));
-    s.create(
-        root.join("http/controller.rs"),
-        r.render(resource::HTTP_CONTROLLER),
-    );
+    let (controller_tmpl, module_tmpl) = if opts.guarded {
+        (
+            resource::HTTP_CONTROLLER_GUARDED,
+            resource::HTTP_MODULE_GUARDED,
+        )
+    } else {
+        (resource::HTTP_CONTROLLER, resource::HTTP_MODULE)
+    };
+    s.create(root.join("http/module.rs"), r.render(module_tmpl));
+    s.create(root.join("http/controller.rs"), r.render(controller_tmpl));
 
     // Dependencies + feature registration.
     s.edit(
@@ -77,11 +87,11 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
         &ws.root,
         &format!("Created resource `{}`", names.snake),
     )?;
-    print_next_steps(&ctx, &names, wired_app);
+    print_next_steps(&ctx, &names, wired_app, opts.guarded);
     Ok(())
 }
 
-fn print_next_steps(ctx: &Context, names: &Names, wired_app: Option<PathBuf>) {
+fn print_next_steps(ctx: &Context, names: &Names, wired_app: Option<PathBuf>, guarded: bool) {
     println!();
     println!("Next steps:");
     println!("  1. Fill in `entity.rs` columns and add a migration.");
@@ -105,5 +115,16 @@ fn print_next_steps(ctx: &Context, names: &Names, wired_app: Option<PathBuf>) {
         );
     }
     println!("  3. Add transports:  nestrs g graphql|ws {}", names.kebab);
-    println!("  Harden with #[crud] + guards — see crates/features/src/orgs/.");
+    if guarded {
+        println!(
+            "  Guarded form: needs AuthGuard/AuthzGuard/AuthzHttpModule in the \
+             workspace, and ability rules for {} in your AppAbility.",
+            names.entity()
+        );
+    } else {
+        println!(
+            "  Harden with #[crud] + guards:  nestrs g resource {} --guarded",
+            names.kebab
+        );
+    }
 }

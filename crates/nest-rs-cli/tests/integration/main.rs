@@ -319,6 +319,43 @@ fn generate_resource_creates_crud_slice_and_deps() {
 }
 
 #[test]
+fn generate_resource_guarded_emits_the_crud_and_guards_form() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+
+    run_ok(
+        dir.path(),
+        &[
+            "g",
+            "resource",
+            "posts",
+            "--guarded",
+            "-p",
+            dir.path().to_str().unwrap(),
+        ],
+    );
+
+    let feature = dir.path().join("crates/features/src/posts");
+    let controller = fs::read_to_string(feature.join("http/controller.rs")).unwrap();
+    assert!(
+        controller.contains("#[use_guards(AuthGuard, AuthzGuard)]"),
+        "guarded controller binds the guards: {controller}"
+    );
+    assert!(
+        controller.contains("#[crud(") && controller.contains("entity = PostEntity"),
+        "guarded controller uses the #[crud] form: {controller}"
+    );
+    // The unguarded stub's SECURITY comment must be gone.
+    assert!(!controller.contains("scaffolded without guards"));
+
+    let module = fs::read_to_string(feature.join("http/module.rs")).unwrap();
+    assert!(
+        module.contains("AuthzHttpModule"),
+        "guarded http module imports AuthzHttpModule: {module}"
+    );
+}
+
+#[test]
 fn generate_http_adapter_wires_feature_mod() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());

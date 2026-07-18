@@ -142,12 +142,25 @@ pub struct GenTarget {
     pub dry_run: bool,
 }
 
+/// `g resource` target: the shared flags plus the guarded-form opt-in.
+#[derive(Args, Debug)]
+pub struct ResourceTarget {
+    #[command(flatten)]
+    pub target: GenTarget,
+
+    /// Scaffold the hardened `#[crud]` + guards form instead of the
+    /// unguarded stub. Requires the workspace to provide `AuthGuard`,
+    /// `AuthzGuard`, and `AuthzHttpModule` (as the `demo` does).
+    #[arg(long)]
+    pub guarded: bool,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum GenerateCommand {
     /// A transport-agnostic port (mod + module + service).
     Feature(GenTarget),
     /// A DB-backed CRUD slice (entity + CrudService + HTTP adapter).
-    Resource(GenTarget),
+    Resource(ResourceTarget),
     /// Add an HTTP controller adapter to an existing feature.
     Http(GenTarget),
     /// Add a GraphQL resolver adapter to an existing feature.
@@ -223,9 +236,10 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
             dry_run: t.dry_run,
         }),
         Resource(t) => commands::run_resource(commands::ResourceOptions {
-            name: t.name,
-            path: t.path,
-            dry_run: t.dry_run,
+            name: t.target.name,
+            path: t.target.path,
+            dry_run: t.target.dry_run,
+            guarded: t.guarded,
         }),
         Http(t) => adapter(Transport::Http, t),
         Graphql(t) => adapter(Transport::Graphql, t),

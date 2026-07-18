@@ -1,6 +1,6 @@
 use nest_rs_http::input;
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use validator::ValidationError;
 
 /// Formats the worker is allowed to transcode. An **allowlist** (not a
@@ -24,6 +24,31 @@ pub struct TranscodeDto {
         custom(function = "validate_transcode_file")
     )]
     pub file: String,
+}
+
+/// REST body for `POST /audio/uploads` — names the audio file a client wants a
+/// presigned upload slot for. Validated with the **same** anti-traversal /
+/// allowlist rule as [`TranscodeDto`] so a rejected filename can never become an
+/// object key (the storage key the server mints keeps this filename as its
+/// suffix, and the follow-up transcode request must pass the same validator).
+#[input]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct UploadRequestDto {
+    #[validate(
+        length(min = 1, max = 255),
+        custom(function = "validate_transcode_file")
+    )]
+    pub filename: String,
+}
+
+/// REST response carrying a short-lived presigned URL and the object `key` it
+/// addresses. Returned by `POST /audio/uploads` (a `PUT` slot the client pushes
+/// bytes to) and `GET /audio/results` (a `GET` slot for the derived object) —
+/// one shape, since both hand the client a signed URL plus the key it targets.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PresignedUrlDto {
+    pub key: String,
+    pub url: String,
 }
 
 /// Reject anything that is not a bare audio filename: a path separator (`/` or

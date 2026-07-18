@@ -40,6 +40,11 @@ serde_json.workspace = true
 poem = { workspace = true, features = ["test"] }
 nest-rs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
 migrations = { workspace = true }
+# The audio-storage e2e boots a worker to drain the `audio` queue and talks to
+# real RustFS directly: `nest-rs-storage` builds the client that ensures the
+# bucket, `reqwest` PUTs to / GETs from the presigned URLs the api mints.
+nest-rs-storage = { workspace = true }
+reqwest = { workspace = true }
 
 [lints]
 workspace = true

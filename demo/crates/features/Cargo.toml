@@ -27,6 +27,7 @@ nest-rs-queue.workspace = true
 nest-rs-redis.workspace = true
 nest-rs-schedule.workspace = true
 nest-rs-social.workspace = true
+nest-rs-storage.workspace = true
 nest-rs-throttler.workspace = true
 nest-rs-ws.workspace = true
 nest-rs-resource = { workspace = true, features = ["graphql"] }

@@ -1,7 +1,8 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use api::ApiModule;
+use features::audio::AudioQueueModule;
 use features::notifications::NotificationsQueueModule;
 use features::{Claims, Role};
 use nest_rs_authn::{JwtConfig, JwtOptions, JwtService};
@@ -9,6 +10,7 @@ use nest_rs_authz::{AbilityBuilder, Action, with_ability};
 use nest_rs_core::module;
 use nest_rs_redis::{QueueModule, QueueWorker, QueueWorkerModule};
 use nest_rs_seaorm::{DatabaseModule, Executor, Repo, with_executor};
+use nest_rs_storage::{Storage, StorageConfig};
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
@@ -1390,6 +1392,172 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
     assert!(
         messages.iter().any(|m| m.contains("Launch")),
         "the persisted notification names the published post: {messages:?}",
+    );
+
+    worker_queue
+        .shutdown()
+        .await
+        .expect("the worker's QueueWorker stops cleanly");
+}
+
+/// A worker that drains the `audio` queue, booted in-process for the storage
+/// round-trip below. `AudioQueueModule` imports the audio port, which owns the
+/// `StorageModule` import, so the processor's `AudioService` gets the real
+/// `Storage` client — no DB is involved (audio touches only object storage and
+/// Redis).
+#[module(
+    imports = [
+        QueueModule::for_root(None),
+        QueueWorkerModule,
+        AudioQueueModule,
+    ],
+)]
+struct AudioWorkerHarness;
+
+/// A `Storage` client mirroring the app's configuration, used only to ensure the
+/// bucket exists before the round-trip. Honors the `NESTRS_STORAGE__*` overrides
+/// the app reads (defaults target the dev-container RustFS).
+fn storage_client() -> Storage {
+    let mut config = StorageConfig::default();
+    if let Ok(v) = std::env::var("NESTRS_STORAGE__ENDPOINT") {
+        config.endpoint = v;
+    }
+    if let Ok(v) = std::env::var("NESTRS_STORAGE__ACCESS_KEY") {
+        config.access_key = v;
+    }
+    if let Ok(v) = std::env::var("NESTRS_STORAGE__SECRET_KEY") {
+        config.secret_key = v;
+    }
+    if let Ok(v) = std::env::var("NESTRS_STORAGE__BUCKET") {
+        config.bucket = v;
+    }
+    Storage::new(Arc::new(config))
+}
+
+/// Best-effort bucket creation: a presigned PUT on the bucket root is an S3
+/// `CreateBucket`; a 2xx means created, a 409 means it already exists. Both are
+/// fine — the object round-trip below is the real assertion.
+async fn ensure_bucket(http: &reqwest::Client) {
+    if let Ok(url) = storage_client()
+        .presign_put("", Duration::from_secs(60))
+        .await
+    {
+        let _ = http.put(&url).send().await;
+    }
+}
+
+/// End-to-end proof of task A4: the audio slice does real S3 object I/O.
+/// `POST /audio/uploads` presigns a PUT; the client pushes bytes straight to
+/// RustFS (the server never sees the payload); `POST /audio/transcode` enqueues
+/// the object key; the worker reads the source object and writes a derived one;
+/// and `GET /audio/results` presigns a GET the client fetches to read the
+/// derived bytes back — asserted byte-for-byte, against live RustFS, no mocking.
+#[tokio::test]
+async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
+    let (_db, app) = boot().await;
+    let http = reqwest::Client::new();
+    ensure_bucket(&http).await;
+
+    // Boot a worker that drains the audio queue against real Redis + storage.
+    let worker = TestApp::builder()
+        .module::<AudioWorkerHarness>()
+        .build_headless()
+        .await
+        .expect("the audio worker boots against Redis and storage");
+    let worker_queue = worker
+        .spawn_transport(QueueWorker::new())
+        .await
+        .expect("the worker's QueueWorker drains the audio queue");
+
+    let bearer = format!("Bearer {}", login().await);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let filename = format!("e2e-{}-{}.mp3", std::process::id(), nonce);
+
+    // 1. Presign a PUT and push a small payload straight to storage.
+    let ticket = app
+        .http()
+        .post("/audio/uploads")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "filename": filename }))
+        .send()
+        .await;
+    ticket.assert_status_is_ok();
+    let ticket = ticket.json().await;
+    let key = ticket.value().object().get("key").string().to_owned();
+    let put_url = ticket.value().object().get("url").string().to_owned();
+
+    let payload = b"nestrs audio A4 e2e \xf0\x9f\x8e\xb5 payload".to_vec();
+    let put = http
+        .put(&put_url)
+        .body(payload.clone())
+        .send()
+        .await
+        .expect("PUT to the presigned upload URL");
+    assert!(
+        put.status().is_success(),
+        "presigned PUT failed: {} — {}",
+        put.status(),
+        put.text().await.unwrap_or_default(),
+    );
+
+    // 2 & 3. Enqueue the transcode and poll the result endpoint until the worker
+    // has produced the derived object. Re-enqueuing across outer iterations is
+    // safe (the transform is deterministic) and defends against a stray worker on
+    // shared Redis stealing a single message.
+    let mut result_url: Option<String> = None;
+    'outer: for _ in 0..5 {
+        app.http()
+            .post("/audio/transcode")
+            .header(header::AUTHORIZATION, &bearer)
+            .body_json(&json!({ "file": key }))
+            .send()
+            .await
+            .assert_status_is_ok();
+
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let resp = app
+                .http()
+                .get(format!("/audio/results?file={key}"))
+                .header(header::AUTHORIZATION, &bearer)
+                .send()
+                .await;
+            if resp.0.status() == StatusCode::OK {
+                result_url = Some(
+                    resp.json()
+                        .await
+                        .value()
+                        .object()
+                        .get("url")
+                        .string()
+                        .to_owned(),
+                );
+                break 'outer;
+            }
+        }
+    }
+    let result_url =
+        result_url.expect("the worker produced the derived object and /audio/results served a URL");
+
+    // 4. Fetch the derived object back through the presigned GET and assert the
+    // bytes survived the upload → worker → download round-trip.
+    let got = http
+        .get(&result_url)
+        .send()
+        .await
+        .expect("GET the presigned result URL");
+    assert!(
+        got.status().is_success(),
+        "presigned GET failed: {}",
+        got.status(),
+    );
+    let got_bytes = got.bytes().await.expect("result body").to_vec();
+    assert_eq!(
+        got_bytes, payload,
+        "the derived object's bytes match the uploaded payload",
     );
 
     worker_queue

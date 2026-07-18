@@ -18,9 +18,10 @@ impl AudioTasks {
     #[every("5s")]
     async fn enqueue_transcode(&self) -> Result<()> {
         let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc
-            .enqueue_transcode(format!("track-{id}.mp3"))
-            .await?;
+        // Seed a synthetic source object, then enqueue its transcode, so the
+        // live pipeline does real object I/O end-to-end (the worker's read would
+        // otherwise reject a key that was never uploaded).
+        self.svc.seed_and_enqueue(format!("track-{id}.mp3")).await?;
         Ok(())
     }
 

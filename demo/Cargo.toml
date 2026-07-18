@@ -210,6 +210,7 @@ nest-rs-schedule = { version = "0.3.0", path = "../crates/nest-rs-schedule" }
 nest-rs-schedule-macros = { version = "0.3.0", path = "../crates/nest-rs-schedule-macros" }
 nest-rs-server-timing = { version = "0.3.0", path = "../crates/nest-rs-server-timing" }
 nest-rs-social = { version = "0.3.0", path = "../crates/nest-rs-social" }
+nest-rs-storage = { version = "0.3.0", path = "../crates/nest-rs-storage" }
 nest-rs-opentelemetry = { version = "0.3.0", path = "../crates/nest-rs-opentelemetry" }
 nest-rs-testing = { version = "0.3.0", path = "../crates/nest-rs-testing" }
 nest-rs-worker = { version = "0.3.0", path = "../crates/nest-rs-worker" }

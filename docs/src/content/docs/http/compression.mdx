@@ -11,7 +11,7 @@ request's `Accept-Encoding` header picks gzip, deflate, brotli or zstd,
 and the response body is encoded before it leaves the process. Off by
 default — in most deployments a reverse proxy already does this.
 
-```rust title="apps/api/src/module.rs" {3}
+```rust title="apps/api/src/module.rs (abridged)" {3}
 HttpModule::for_root(HttpConfig {
     port: 3002,
     compression: true,

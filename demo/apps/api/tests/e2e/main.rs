@@ -238,10 +238,11 @@ async fn openapi_document_describes_the_routes() {
 }
 
 // A client that advertises `Accept-Encoding: gzip` gets a gzip-encoded body;
-// one that does not gets plain JSON. Proves the transport's compression layer
-// (`HttpConfig.compression`, on for the api app) negotiates per request. The
-// test harness drives a bare default transport, so the compression-on transport
-// is supplied explicitly — the same knob `HttpModule` flips from the config.
+// one that does not gets plain JSON — the transport's compression layer
+// negotiating per request. The test harness boots a bare default transport, so
+// this drives the compression knob directly (`HttpTransport::compression`, the
+// same one `HttpModule` sets from `HttpConfig.compression`); the api app's own
+// config-driven wiring is proven by a real-server curl, not this in-process test.
 #[tokio::test]
 async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()

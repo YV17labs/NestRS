@@ -9,9 +9,9 @@ Take a file part straight from a `multipart/form-data` request with
 poem's `Multipart` extractor. `#[routes]` passes it through like any other
 handler argument, so a direct upload is the single-round-trip alternative
 to the [presigned flow](/storage/): the client posts the bytes, the server
-streams them into storage.
+stores them.
 
-```rust title="crates/features/src/audio/http/controller.rs" {2}
+```rust title="crates/features/src/audio/http/controller.rs (abridged)" {2}
 #[post("/uploads/direct")]
 async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> {
     while let Some(field) = form.next_field().await.map_err(bad_request)? {
@@ -48,11 +48,13 @@ a stored object.
 
 ## Limits
 
-- The [body-size cap](/http/configuration/) (`max_body_bytes`, 2 MiB by
-  default) applies to the whole multipart body — raise it for large
-  direct uploads, or prefer the presigned path.
-- The uploaded part is buffered per field before it reaches storage; for
-  very large files the presigned PUT avoids proxying entirely.
+- The [`max_body_bytes` cap](/http/configuration/) gates the `RawBody` and
+  `Json` extractors — **not** `Multipart`, which poem reads independently.
+  A direct upload is bounded only by the field buffering below, so keep the
+  admin gate and rate limit the demo binds, or prefer the presigned path.
+- The uploaded part is buffered whole per field before it reaches storage
+  (`field.bytes()`); for very large files the presigned PUT avoids proxying
+  through the server entirely.
 
 ## Going further
 

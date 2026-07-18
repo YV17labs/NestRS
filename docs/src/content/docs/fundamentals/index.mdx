@@ -139,8 +139,6 @@ repo.
 Comment the line that lists `BlogService` in `BlogModule`'s providers,
 then build:
 
-{/* TODO(step8-evidence): capture verbatim boot output from a real failing run */}
-
 ```text frame="terminal" "(needs BlogService)"
 module `BlogModule`: cannot register provider(s) ["BlogController (needs BlogService)"] — each injects a dependency that neither this module's `providers` nor its `imports` registers; add the provider or import the module that exposes it
 ```

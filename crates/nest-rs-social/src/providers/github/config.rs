@@ -11,10 +11,13 @@ use validator::Validate;
 #[config(namespace = "social__github")]
 #[derive(Clone, Default, Validate)]
 pub struct GithubSocialConfig {
+    /// The GitHub OAuth app's client id.
     #[validate(length(min = 1))]
     pub client_id: String,
+    /// The GitHub OAuth app's client secret.
     #[validate(length(min = 1))]
     pub client_secret: String,
+    /// The registered redirect URL the callback returns to.
     #[validate(length(min = 1))]
     pub redirect_url: String,
     /// Defaults to `read:user user:email` (the canonical login set) when unset

@@ -21,6 +21,8 @@
 //! standard provider implements only [`SocialProvider::profile`]. A provider
 //! with a non-standard protocol overrides a step without changing the trait —
 //! the ecosystem never breaks on a new provider shape.
+#![warn(missing_docs)]
+
 mod module;
 mod provider;
 mod registry;

@@ -3,5 +3,7 @@
 //! (`DynamicModule` building the provider from config), and a `provider.rs`
 //! (the trait impl + its `inventory::submit!`).
 
+/// First-party GitHub OAuth provider.
 pub mod github;
+/// First-party Google OIDC provider.
 pub mod google;

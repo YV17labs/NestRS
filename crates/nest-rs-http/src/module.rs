@@ -11,6 +11,8 @@ use crate::config::HttpConfig;
 use crate::raw_body::RawBody;
 use crate::transport::HttpTransport;
 
+/// The HTTP activation seam. Import [`HttpModule::for_root`] in an app module's
+/// `imports` to attach the [`HttpTransport`](crate::HttpTransport) at boot.
 pub struct HttpModule;
 
 impl HttpModule {
@@ -22,6 +24,8 @@ impl HttpModule {
     }
 }
 
+/// The configured import produced by [`HttpModule::for_root`]. Registers the
+/// [`HttpConfig`] (pinned or env-loaded) and contributes the HTTP transport.
 pub struct HttpSetup {
     pinned: Option<HttpConfig>,
 }

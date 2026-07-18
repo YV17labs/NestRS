@@ -8,14 +8,22 @@ use nest_rs_config::{Config, ConfigService, Result, config};
 use sea_orm::ConnectOptions;
 use validator::Validate;
 
+/// Connection settings for [`DatabaseModule`](crate::DatabaseModule). Every
+/// field is settable via a `NESTRS_DATABASE__*` env var (see `from_env`) or
+/// pinned through [`DatabaseModule::for_root`](crate::DatabaseModule::for_root).
 #[config(namespace = "database")]
 #[derive(Clone, Default, Validate)]
 pub struct DatabaseConfig {
     /// e.g. `postgres://user:pass@host/db`. Empty aborts the build.
     pub url: String,
+    /// Upper bound on pooled connections; `None` uses SeaORM's default.
     pub max_connections: Option<u32>,
+    /// Lower bound on idle pooled connections; `None` uses SeaORM's default.
     pub min_connections: Option<u32>,
+    /// How long to wait for a connection before failing; `None` uses the default.
     pub connect_timeout_secs: Option<u64>,
+    /// Log every statement SeaORM issues. Off in production — chatty and leaks
+    /// query shapes into logs.
     pub sqlx_logging: bool,
     /// Retry a mutating request's transaction when it fails with a Postgres
     /// `40001` (`serialization_failure`), `40P01` (`deadlock_detected`), or

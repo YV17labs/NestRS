@@ -35,10 +35,12 @@ pub struct SocialProfile {
     pub provider: &'static str,
     /// Provider-side stable identifier (GitHub numeric id, OIDC `sub`).
     pub subject: String,
+    /// The account email, if the provider returned one.
     pub email: Option<String>,
     /// Whether the provider attests the email. Drives the linking rule: only a
     /// verified email may match an existing account.
     pub email_verified: bool,
+    /// The account display name, if the provider returned one.
     pub name: Option<String>,
 }
 
@@ -63,6 +65,7 @@ impl SocialProfile {
         self
     }
 
+    /// Set the display name, treating an empty string as absent.
     pub fn with_name(mut self, name: Option<String>) -> Self {
         self.name = name.filter(|n| !n.is_empty());
         self
@@ -87,9 +90,14 @@ impl fmt::Debug for SocialProfile {
 /// Boxed futures keep the trait object-safe without an `async-trait`
 /// dependency — mirrors `nest-rs-health`'s `IndicatorFuture`.
 pub type TokenFuture<'a> = Pin<Box<dyn Future<Output = Result<TokenSet, AuthError>> + Send + 'a>>;
+/// The boxed future returned by [`SocialProvider::profile`].
 pub type ProfileFuture<'a> =
     Pin<Box<dyn Future<Output = Result<SocialProfile, AuthError>> + Send + 'a>>;
 
+/// The behavioral contract a social login provider implements — the open seam
+/// third-party provider crates extend. Standard OIDC/OAuth2 providers override
+/// only [`profile`](Self::profile); the default `authorize`/`exchange` drive the
+/// shared PKCE/CSRF flow.
 pub trait SocialProvider: Send + Sync + 'static {
     /// Stable route/config key: lowercase, no spaces (`"github"`). Matches the
     /// registry entry key and [`SocialProfile::provider`].

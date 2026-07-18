@@ -17,8 +17,11 @@ impl<T: FromStr> Pipe for Parse<T> {
     }
 }
 
+/// Parse the input string into an `i64`.
 pub type ParseInt = Parse<i64>;
+/// Parse the input string into an `f64`.
 pub type ParseFloat = Parse<f64>;
+/// Parse the input string into a `bool`.
 pub type ParseBool = Parse<bool>;
 
 fn short_type_name<T>() -> &'static str {

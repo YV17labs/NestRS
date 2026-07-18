@@ -106,6 +106,8 @@ pub struct Next<'a> {
 }
 
 impl<'a> Next<'a> {
+    /// Build a continuation over `endpoint` — the next link an interceptor may
+    /// delegate to.
     pub fn new<E>(endpoint: &'a E) -> Self
     where
         E: Endpoint + Send + Sync,
@@ -114,6 +116,7 @@ impl<'a> Next<'a> {
         Self { inner: endpoint }
     }
 
+    /// Delegate to the inner endpoint (handler or next interceptor) with `req`.
     pub async fn run(self, req: Request) -> Result<Response> {
         self.inner.call_boxed(req).await
     }
@@ -155,12 +158,15 @@ where
     }
 }
 
+/// A poem endpoint `E` wrapped by interceptor `I`, produced by
+/// [`InterceptorExt::interceptor`](crate::InterceptorExt::interceptor).
 pub struct InterceptorEndpoint<E, I> {
     inner: E,
     interceptor: I,
 }
 
 impl<E, I> InterceptorEndpoint<E, I> {
+    /// Pair `inner` with `interceptor` so the interceptor runs around each call.
     pub fn new(inner: E, interceptor: I) -> Self {
         Self { inner, interceptor }
     }

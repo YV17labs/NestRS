@@ -1,3 +1,7 @@
+//! The read side of discovery — [`DiscoveryService`], the transport-agnostic
+//! facade over the container's metadata index that transports and applicative
+//! scanners (OpenAPI, cron, MCP, …) query to find the surfaces they mount.
+
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
@@ -12,6 +16,7 @@ pub struct DiscoveryService<'a> {
 }
 
 impl<'a> DiscoveryService<'a> {
+    /// Borrow a container to read discovery metadata from.
     pub fn new(container: &'a Container) -> Self {
         Self { container }
     }
@@ -59,7 +64,10 @@ impl<'a> DiscoveryService<'a> {
 /// when host-bound. Scanners invoke the live provider through closures
 /// embedded in `meta`.
 pub struct Discovered<M> {
+    /// The metadata payload the provider submitted at registration.
     pub meta: Arc<M>,
+    /// `TypeId` of the host provider when the metadata is host-bound (a scanner
+    /// resolves the live provider through it); `None` for free-standing metadata.
     pub provider_type_id: Option<TypeId>,
 }
 

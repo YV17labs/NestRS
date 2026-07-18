@@ -1,3 +1,7 @@
+//! The [`DynamicModule`] trait — the contract a configured import
+//! (`Foo::for_root(opts)`) implements to seed values or queue async factories
+//! at its import site, distinct from a bare `#[module]` type.
+
 use crate::container::ContainerBuilder;
 
 /// Boot-time trace emitted by the `#[module]` macro after a module finishes
@@ -52,6 +56,10 @@ pub trait Module {
 /// - [`register`](Self::register) — install synchronous providers, metadata,
 ///   or config.
 pub trait DynamicModule {
+    /// Install synchronous providers, metadata or config from this module's
+    /// configuration. Consumes `self` — the config is moved into the providers.
+    /// Defaults to a no-op for modules that only queue async work in
+    /// [`collect`](Self::collect).
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder
     where
         Self: Sized,
@@ -59,6 +67,10 @@ pub trait DynamicModule {
         builder
     }
 
+    /// Queue an async factory (for resources like a DB pool that must be built
+    /// asynchronously) to be awaited in the factories phase. Takes `&self` so
+    /// the config survives into [`register`](Self::register). Defaults to a
+    /// no-op.
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         builder
     }

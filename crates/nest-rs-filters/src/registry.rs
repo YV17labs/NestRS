@@ -11,7 +11,9 @@ use crate::filter::Filter;
 /// One entry in the `use_filters_global` list. Resolved against the live
 /// container at configure time.
 pub struct FilterSpec {
+    /// `TypeId` of the filter type — the dedup key across scopes.
     pub type_id: TypeId,
+    /// The filter type's name, for boot logs and fail-secure diagnostics.
     pub name: &'static str,
     pub(crate) resolve: fn(&Container) -> Option<Arc<dyn Filter>>,
 }
@@ -32,6 +34,8 @@ pub fn filter<F: Filter + 'static>() -> FilterSpec {
 }
 
 impl FilterSpec {
+    /// Resolve the filter instance from the live container, or `None` if its
+    /// provider was never registered (a fail-secure boot check flags this).
     pub fn resolve(&self, container: &Container) -> Option<Arc<dyn Filter>> {
         (self.resolve)(container)
     }
@@ -43,6 +47,8 @@ impl FilterSpec {
 pub struct FilterSpecs(pub Vec<FilterSpec>);
 
 impl FilterSpecs {
+    /// The `(TypeId, name)` of every spec, for deduping the global pool against
+    /// narrower-scope declarations.
     pub fn type_ids(&self) -> Vec<(TypeId, &'static str)> {
         self.0.iter().map(|s| (s.type_id, s.name)).collect()
     }

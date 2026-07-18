@@ -22,8 +22,11 @@ use serde::Serialize;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProbeKind {
+    /// Liveness — is the process healthy enough to keep running?
     Liveness,
+    /// Readiness — can the process serve traffic right now?
     Readiness,
+    /// Startup — has the process finished initializing?
     Startup,
 }
 
@@ -33,14 +36,18 @@ pub enum ProbeKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IndicatorStatus {
+    /// The check returned `Ok`.
     Up,
+    /// The check returned an error.
     Down,
 }
 
 /// Outcome of a single indicator check, included in a [`ProbeReport`].
 #[derive(Clone, Debug, Serialize)]
 pub struct IndicatorReport {
+    /// The indicator's stable id (its snake_case method name).
     pub name: &'static str,
+    /// Whether this indicator's check passed.
     pub status: IndicatorStatus,
     /// `Some` only when the check failed — the stringified `anyhow` error so
     /// the JSON body carries enough for an operator to triage without a log
@@ -54,6 +61,7 @@ pub struct IndicatorReport {
 /// `down`.
 #[derive(Clone, Debug, Serialize)]
 pub struct ProbeReport {
+    /// The overall probe result — `down` if any indicator is down.
     pub status: IndicatorStatus,
     /// Up indicators, keyed by name (Terminus-style: easy to grep in JSON
     /// logs without iterating a list).
@@ -113,11 +121,13 @@ pub struct HealthIndicator {
     /// `"<method_name>"` — the indicator's stable id (snake_case method
     /// name), used as the JSON key and the structured-log field.
     pub name: &'static str,
+    /// The probe this indicator participates in.
     pub kind: ProbeKind,
     /// `TypeId::of::<Provider>()` — checked against
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so an
     /// unreachable provider's indicators do not run.
     pub provider_type_id: fn() -> TypeId,
+    /// Resolves the owning provider and runs the check method.
     pub run: IndicatorRun,
 }
 

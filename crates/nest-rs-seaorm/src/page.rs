@@ -17,8 +17,12 @@ use crate::repo::{Repo, scope_for};
 /// One keyset page. `next_cursor` is the last row's primary key, present only
 /// when [`has_more`](Page::has_more).
 pub struct Page<M> {
+    /// The rows on this page, ascending by primary key.
     pub items: Vec<M>,
+    /// Cursor to pass as `after` for the next page — the last row's key, set
+    /// only when [`has_more`](Self::has_more).
     pub next_cursor: Option<Uuid>,
+    /// Whether a further page exists (an extra row was over-fetched).
     pub has_more: bool,
 }
 
@@ -85,7 +89,9 @@ pub(crate) fn next_cursor_from<M>(
 /// from the start, never an error.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PageParams {
+    /// Requested page size; defaults to 20 and is clamped to `1..=100`.
     pub first: Option<u64>,
+    /// Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.
     pub after: Option<String>,
 }
 
@@ -95,6 +101,8 @@ impl PageParams {
         clamp_page_size(self.first.unwrap_or(20))
     }
 
+    /// The `after` cursor parsed as a primary key, or `None` when absent or
+    /// malformed — an unparsable cursor pages from the start rather than erroring.
     pub fn after_uuid(&self) -> Option<Uuid> {
         self.after.as_deref().and_then(|s| Uuid::parse_str(s).ok())
     }

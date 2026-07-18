@@ -12,6 +12,10 @@ use crate::ability::{Ability, FieldSet, MalformedRuleError, Rule};
 use crate::action::Action;
 use crate::predicate::{Predicate, PredicateBuilder};
 
+/// Accumulates rules into an [`Ability`]. Handed to
+/// [`AbilityFactory::define`](crate::AbilityFactory::define); each
+/// [`can`](Self::can) / [`cannot`](Self::cannot) opens a [`RuleSpec`] that
+/// commits on drop.
 #[derive(Default)]
 pub struct AbilityBuilder {
     ability: Ability,
@@ -23,6 +27,7 @@ pub struct AbilityBuilder {
 }
 
 impl AbilityBuilder {
+    /// An empty builder with no rules — grants nothing until `can` is called.
     pub fn new() -> Self {
         Self::default()
     }

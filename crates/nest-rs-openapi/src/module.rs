@@ -42,6 +42,8 @@ impl OpenApiModule {
     }
 }
 
+/// The configured import produced by [`OpenApiModule::for_root`]. Registers the
+/// [`OpenApiConfig`] and self-mounts the `/api-json` + `/api` endpoints.
 pub struct OpenApiSetup {
     pinned: Option<OpenApiConfig>,
 }

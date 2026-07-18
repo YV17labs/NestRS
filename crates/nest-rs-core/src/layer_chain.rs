@@ -31,9 +31,13 @@ pub use crate::layer::LayerSite;
 /// A layer that survived dedup, paired with its origin site and the name
 /// the shaper logged at mount.
 pub struct ResolvedLayer<L: ?Sized> {
+    /// The layer type's identity — the key dedup collapsed duplicates on.
     pub type_id: TypeId,
+    /// The layer type's name, as logged when the shaper mounts it.
     pub name: &'static str,
+    /// The site the surviving instance came from (global, controller, method).
     pub source: LayerSite,
+    /// The resolved layer instance to run.
     pub layer: Arc<L>,
 }
 

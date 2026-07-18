@@ -22,6 +22,9 @@ pub fn current_ability() -> Option<Arc<Ability>> {
     ABILITY.try_with(Arc::clone).ok()
 }
 
+/// Run `fut` with `ability` installed as the ambient, task-local capability
+/// set. The HTTP surface wraps the handler in this so a downstream `Repo` read
+/// picks the ability up via [`current_ability`] without threading it through.
 pub async fn with_ability<F: Future>(ability: Arc<Ability>, fut: F) -> F::Output {
     ABILITY.scope(ability, fut).await
 }

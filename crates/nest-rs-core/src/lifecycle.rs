@@ -20,10 +20,15 @@ use crate::container::Container;
 /// after the transports stop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LifecyclePhase {
+    /// First init phase — each module's own setup, before cross-cutting bootstrap.
     OnModuleInit,
+    /// Second init phase — app-wide setup once every module has initialized.
     OnApplicationBootstrap,
+    /// First shutdown phase — per-module teardown after transports stop.
     OnModuleDestroy,
+    /// Shutdown notification, before the app-wide shutdown work runs.
     BeforeApplicationShutdown,
+    /// Final shutdown phase — the last hooks to run before the process exits.
     OnApplicationShutdown,
 }
 
@@ -31,8 +36,12 @@ type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '
 
 /// One lifecycle hook submitted to the link-time registry by `#[hooks]`.
 pub struct LifecycleHook {
+    /// The phase this hook runs in.
     pub phase: LifecyclePhase,
+    /// The host provider's name — the primary key of the `(provider, method)`
+    /// run order and the label in the boot trace.
     pub provider: &'static str,
+    /// The hook method's name — the tiebreaker in the `(provider, method)` order.
     pub method: &'static str,
     /// Whether this hook's provider is resolvable in the assembled container.
     /// `#[hooks]` emits a `Container::get::<Provider>().is_some()` probe, so a
@@ -41,6 +50,7 @@ pub struct LifecycleHook {
     /// vanishing silently (the module-gated discovery rule). Module-level infra
     /// hooks that self-gate inside `run` pass `|_| true` to opt out.
     pub present: fn(&Container) -> bool,
+    /// Resolve the provider and invoke the hook method against the container.
     pub run: for<'a> fn(&'a Container) -> HookFuture<'a>,
 }
 

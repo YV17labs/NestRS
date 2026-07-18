@@ -15,6 +15,8 @@ use crate::environment::Environment;
 pub struct ConfigModule;
 
 impl ConfigModule {
+    /// Import first in the root module — makes the `.env` cascade visible to
+    /// config reads and registers `Arc<Environment>`.
     pub fn for_root() -> ConfigRootSetup {
         ConfigRootSetup
     }
@@ -39,6 +41,8 @@ impl ConfigModule {
     }
 }
 
+/// The import produced by [`ConfigModule::for_feature`]. Queues a factory that
+/// loads and validates `C` in the factory phase, as global infrastructure.
 pub struct ConfigFeatureSetup<C>(PhantomData<fn() -> C>);
 
 impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
@@ -51,6 +55,8 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
     }
 }
 
+/// The import produced by [`ConfigModule::for_root`]. Registers the active
+/// [`Environment`] so later config loads see the resolved `.env` cascade.
 pub struct ConfigRootSetup;
 
 impl DynamicModule for ConfigRootSetup {

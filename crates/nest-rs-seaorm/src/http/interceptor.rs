@@ -43,6 +43,10 @@ use crate::config::DatabaseConfig;
 use crate::executor::{Executor, with_request_executor};
 use crate::retry::{DEFAULT_INITIAL_BACKOFF, DEFAULT_RETRY_ATTEMPTS, is_retryable_conflict};
 
+/// The request interceptor that installs the ambient [`Executor`] — the pool for
+/// a safe method, a per-request transaction (committed on 2xx/3xx, rolled back
+/// otherwise) for a mutating one. Auto-mounted at band −10 by importing
+/// [`DatabaseModule`](crate::DatabaseModule).
 #[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
@@ -52,6 +56,8 @@ pub struct DbContext {
 }
 
 impl DbContext {
+    /// Construct the interceptor from a pool and config — the honest constructor
+    /// tests use in place of container resolution.
     pub fn new(db: Arc<DatabaseConnection>, config: Arc<DatabaseConfig>) -> Self {
         Self { db, config }
     }

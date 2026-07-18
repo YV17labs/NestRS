@@ -17,6 +17,7 @@ use poem::{Error, FromRequest, Request, RequestBody, Result};
 pub struct Ctx<T>(pub T);
 
 impl<T> Ctx<T> {
+    /// Take ownership of the extracted value.
     pub fn into_inner(self) -> T {
         self.0
     }

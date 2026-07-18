@@ -48,6 +48,7 @@ pub(crate) async fn with_request_scope<F: Future>(scope: Arc<RequestScope>, fut:
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {
+    /// Take the resolved provider handle out of the wrapper.
     pub fn into_inner(self) -> Arc<T> {
         self.0
     }

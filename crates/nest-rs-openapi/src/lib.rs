@@ -5,6 +5,8 @@
 //! `GET /api` (bundled, offline Swagger UI). Request/response schemas come from
 //! the `Json<T>` payload types via [`schemars::JsonSchema`].
 
+#![warn(missing_docs)]
+
 mod config;
 mod document;
 mod module;

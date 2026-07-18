@@ -4,6 +4,9 @@
 use nest_rs_config::{Config, ConfigService, Result, config};
 use validator::Validate;
 
+/// The OpenAPI document's `info` block plus the master enable switch, settable
+/// via `NESTRS_OPENAPI__*` or pinned through
+/// [`OpenApiModule::for_root`](crate::OpenApiModule::for_root).
 #[config(namespace = "openapi")]
 #[derive(Clone, Debug, Validate)]
 pub struct OpenApiConfig {
@@ -21,8 +24,11 @@ pub struct OpenApiConfig {
     /// endpoint. A set-but-unparseable `NESTRS_OPENAPI__ENABLED` fails boot
     /// naming the variable — it never silently falls back to on.
     pub enabled: bool,
+    /// The API title shown in the document `info` block and Swagger UI.
     pub title: String,
+    /// The API version string in the `info` block (the app's version, not nestrs').
     pub version: String,
+    /// Optional long-form API description for the `info` block.
     pub description: Option<String>,
 }
 

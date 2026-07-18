@@ -16,7 +16,9 @@ pub enum StorageError {
     /// Signing a presigned URL failed (the variant carries the HTTP method).
     #[error("failed to presign {method} URL")]
     Presign {
+        /// The HTTP method the URL was being signed for (`GET`/`PUT`).
         method: String,
+        /// The underlying signing failure.
         #[source]
         source: object_store::Error,
     },

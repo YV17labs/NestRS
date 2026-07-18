@@ -68,6 +68,7 @@ impl Storage {
         Ok(self.store.get_or_init(|| built))
     }
 
+    /// The configured bucket every key in this client is addressed within.
     pub fn bucket_name(&self) -> &str {
         &self.config.bucket
     }
@@ -147,5 +148,6 @@ impl Storage {
 
 /// Result of a `head` — the metadata we cache onto a stored-file record.
 pub struct HeadMetadata {
+    /// The object's size in bytes, as reported by S3.
     pub byte_size: i64,
 }

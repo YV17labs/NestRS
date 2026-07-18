@@ -6,6 +6,7 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Path, Token};
 
+/// How a generated `list` op bounds its result set.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Paginate {
     /// Keyset over the primary key — the default. Free for UUID-v7 keys
@@ -54,13 +55,18 @@ pub struct GeneratedOps<'a> {
     pub delete: bool,
 }
 
+/// The parsed `#[crud(...)]` configuration both surface generators consume.
 pub struct CrudConfig {
     /// Field holding the entity's `CrudService` — every generated op
     /// delegates to it so controllers/resolvers never touch `Repo` directly.
     pub service: Ident,
+    /// The SeaORM entity the operations target.
     pub entity: Path,
+    /// The `#[expose]` wire DTO returned by the generated read ops.
     pub output: Path,
+    /// The create-input type (`create = `); `None` disables the `create` op.
     pub create: Option<Path>,
+    /// The update-input type (`update = `); `None` disables the `update` op.
     pub update: Option<Path>,
     /// Which operations to generate (default = all five, back-compatibly).
     pub ops: OpsSelection,
@@ -258,6 +264,7 @@ impl Parse for CrudConfig {
     }
 }
 
+/// Parse a `#[crud(...)]` attribute's tokens into a [`CrudConfig`].
 pub fn parse_crud_args(args: TokenStream2) -> syn::Result<CrudConfig> {
     syn::parse2(args)
 }

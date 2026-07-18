@@ -11,6 +11,8 @@ use nest_rs_core::{ContainerBuilder, Module, TransportContribution};
 
 use super::QueueWorker;
 
+/// The consumer-side activation seam. Import it in a worker app to attach the
+/// [`QueueWorker`](crate::QueueWorker) transport; a producer-only app omits it.
 pub struct QueueWorkerModule;
 
 impl Module for QueueWorkerModule {

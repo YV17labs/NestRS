@@ -1,3 +1,7 @@
+//! The IoC [`Container`] and its [`ContainerBuilder`] — the single flat
+//! registry keyed by [`ProviderKey`] that every provider resolves through, plus
+//! the request-scoped and transient factory machinery layered on top of it.
+
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -24,7 +28,10 @@ type AnyArc = Arc<dyn Any + Send + Sync>;
 /// metadata index, stay bare `TypeId`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ProviderKey {
+    /// The provided type's identity.
     pub type_id: TypeId,
+    /// The key when this is a keyed provider; `None` for the bare, default
+    /// identity — two entries of the same type differ only by this.
     pub name: Option<&'static str>,
 }
 
@@ -63,7 +70,9 @@ impl ProviderKey {
 /// the key.
 #[derive(Clone, Copy, Debug)]
 pub struct KeyedDependency {
+    /// The keyed container identity this dependency must match.
     pub key: ProviderKey,
+    /// The injected type's name, so a boot failure can name it alongside the key.
     pub type_name: &'static str,
 }
 
@@ -102,6 +111,9 @@ pub(crate) struct MetaEntry {
     pub(crate) meta: AnyArc,
 }
 
+/// The single flat provider registry. Cheap to clone — every field is an
+/// [`Arc`], so a clone shares the same immutable maps. Built once by
+/// [`ContainerBuilder::build`] and thereafter read-only.
 #[derive(Clone, Default)]
 pub struct Container {
     providers: Arc<HashMap<ProviderKey, AnyArc>>,
@@ -111,6 +123,7 @@ pub struct Container {
 }
 
 impl Container {
+    /// Start an empty [`ContainerBuilder`] to register providers into.
     pub fn builder() -> ContainerBuilder {
         ContainerBuilder::default()
     }
@@ -187,6 +200,9 @@ fn build_transient(
     // value path above is skipped.
 }
 
+/// Mutable staging area for the container: providers, metadata and scoped
+/// factories accumulate here across the build phases, then [`build`](Self::build)
+/// freezes them into an immutable [`Container`].
 #[derive(Default)]
 pub struct ContainerBuilder {
     providers: HashMap<ProviderKey, AnyArc>,
@@ -517,6 +533,7 @@ impl ContainerBuilder {
             .collect()
     }
 
+    /// Freeze the accumulated registrations into the immutable [`Container`].
     pub fn build(self) -> Container {
         Container {
             providers: Arc::new(self.providers),

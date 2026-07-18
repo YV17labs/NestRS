@@ -13,6 +13,7 @@ use crate::service::ConfigService;
 /// The `<DOMAIN>` in `NESTRS_<DOMAIN>__<KEY>`. Supplied by the [`config`](crate::config)
 /// macro from `#[config(namespace = "…")]`.
 pub trait Namespaced {
+    /// The `<DOMAIN>` segment of every `NESTRS_<DOMAIN>__<KEY>` this type reads.
     const NAMESPACE: &'static str;
 }
 
@@ -26,6 +27,9 @@ pub trait Config: Namespaced + Validate + Clone + Send + Sync + Sized + 'static 
     /// boot — never a silent fallback.
     fn from_env(env: &ConfigService) -> Result<Self>;
 
+    /// Read from the environment for this type's namespace and validate the
+    /// result. The default composes [`from_env`](Self::from_env) with
+    /// `validator::Validate`; a set-but-unparseable variable aborts boot.
     fn load() -> Result<Self> {
         let env = ConfigService::for_namespace(Self::NAMESPACE);
         let config = Self::from_env(&env)?;

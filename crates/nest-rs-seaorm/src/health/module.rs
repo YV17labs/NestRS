@@ -7,5 +7,7 @@ use nest_rs_core::module;
 
 use super::DbHealthIndicator;
 
+/// Import seam for the DB readiness bridge — registers [`DbHealthIndicator`] so
+/// `/health/ready` and `/startup` gate on a database round-trip.
 #[module(providers = [DbHealthIndicator])]
 pub struct DatabaseHealthModule;

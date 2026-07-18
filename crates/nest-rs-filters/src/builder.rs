@@ -33,6 +33,9 @@ use crate::registry::{FilterSpec, FilterSpecs};
 /// this global scope by `TypeId` (broadest wins), so any filter still
 /// executes exactly once.
 pub trait AppBuilderFiltersExt: Sized {
+    /// Register `specs` as the global filter chain — the transport-edge pool
+    /// that maps every error escaping routing, deduped by type against
+    /// controller/method scope (broadest wins).
     fn use_filters_global<I>(self, specs: I) -> Self
     where
         I: IntoIterator<Item = FilterSpec>;

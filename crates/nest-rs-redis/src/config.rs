@@ -3,9 +3,13 @@ use validator::Validate;
 
 const DEFAULT_URL: &str = "redis://127.0.0.1/";
 
+/// Redis connection settings for the queue, settable via `NESTRS_QUEUE__*` or
+/// pinned through [`QueueModule::for_root`](crate::QueueModule::for_root). The
+/// URL is redacted in `Debug` output — it may embed credentials.
 #[config(namespace = "queue")]
 #[derive(Clone, Validate)]
 pub struct QueueConfig {
+    /// The Redis connection URL (e.g. `redis://127.0.0.1/`).
     pub url: String,
 }
 

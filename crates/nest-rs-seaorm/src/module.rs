@@ -25,6 +25,9 @@ impl DatabaseModule {
     }
 }
 
+/// The configured import produced by [`DatabaseModule::for_root`]. Queues the
+/// async pool factory and installs the request layers when registered; a pinned
+/// `DatabaseConfig` overrides the environment (handy for tests).
 pub struct DatabaseSetup {
     pinned: Option<DatabaseConfig>,
 }

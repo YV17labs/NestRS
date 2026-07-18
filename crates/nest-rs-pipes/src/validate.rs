@@ -65,6 +65,8 @@ pub struct ValidateProbe<'a, T>(pub &'a T);
 /// Specialized path: an **inherent** method (higher priority than the trait
 /// fallback) exists only when `T: Validate`, so this runs the real validation.
 impl<T: Validate> ValidateProbe<'_, T> {
+    /// Run `validator::Validate` on the wrapped value (the specialized path when
+    /// `T: Validate`).
     pub fn maybe_validate(&self) -> Result<(), PipeError> {
         match self.0.validate() {
             Ok(()) => Ok(()),
@@ -77,6 +79,8 @@ impl<T: Validate> ValidateProbe<'_, T> {
 /// `Validate` resolves here and skips validation. Shadowed by the inherent
 /// method above whenever `T: Validate`.
 pub trait MaybeValidateFallback {
+    /// No-op validation — the fallback for a `T` that does not implement
+    /// `Validate`.
     fn maybe_validate(&self) -> Result<(), PipeError>;
 }
 

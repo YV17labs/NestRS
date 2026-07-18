@@ -17,6 +17,7 @@ pub struct EventBus {
 }
 
 impl EventBus {
+    /// An empty bus with no listeners registered yet.
     pub fn new() -> Self {
         Self::default()
     }

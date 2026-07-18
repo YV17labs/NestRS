@@ -44,6 +44,9 @@ pub struct RouteShaper {
 impl RouteShaper {
     // Macros emit this — a parameter struct would only add indirection at
     // call sites the user never reads.
+    /// Build the per-route guard/pipe shaper. Emitted by `#[routes]`; composes
+    /// the controller/method/global specs into one deduped chain around the
+    /// route.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         container: &Container,

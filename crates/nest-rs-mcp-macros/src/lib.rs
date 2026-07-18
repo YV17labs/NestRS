@@ -1,4 +1,6 @@
 //! `#[mcp]` decorator, re-exported by `nest-rs-mcp`. Emits absolute-path tokens.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod mcp;

@@ -23,10 +23,12 @@ fn default_per_page() -> u64 {
     derive(crate::graphql::async_graphql::InputObject)
 )]
 pub struct PageArgs {
+    /// 1-based page number; defaults to 1, must be `>= 1`.
     #[cfg_attr(feature = "graphql", graphql(default = 1))]
     #[serde(default = "default_page")]
     #[validate(range(min = 1))]
     pub page: u64,
+    /// Rows per page; defaults to 20, clamped to `1..=100`.
     #[cfg_attr(feature = "graphql", graphql(default = 20))]
     #[serde(default = "default_per_page")]
     #[validate(range(min = 1, max = 100))]
@@ -48,6 +50,7 @@ impl PageArgs {
         self.page.saturating_sub(1) * self.per_page
     }
 
+    /// The `LIMIT` for this page — an alias for `per_page`.
     pub fn limit(&self) -> u64 {
         self.per_page
     }

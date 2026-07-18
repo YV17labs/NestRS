@@ -54,6 +54,8 @@
 //!     .module::<AppModule>()
 //!     .build().await?.run().await
 //! ```
+#![warn(missing_docs)]
+
 mod builder;
 mod ext;
 mod interceptor;

@@ -1,4 +1,6 @@
 //! The `#[listeners]` decorator macro, re-exported by `nest-rs-events`.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod listeners;

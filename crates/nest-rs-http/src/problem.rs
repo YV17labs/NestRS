@@ -23,11 +23,16 @@ pub struct ProblemDetails {
     /// should ignore the type and key on `status` + `title` instead.
     #[serde(rename = "type")]
     pub type_uri: String,
+    /// Short, human-readable summary of the problem type (stable per `type`).
     pub title: String,
+    /// The HTTP status code, mirrored into the body as a number.
     #[serde(serialize_with = "serialize_status")]
     pub status: StatusCode,
+    /// Human-readable explanation specific to this occurrence; omitted when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// URI identifying this specific occurrence (e.g. the request path); omitted
+    /// when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
 }
@@ -62,6 +67,7 @@ impl ProblemDetails {
         }
     }
 
+    /// A `400 Bad Request` problem.
     pub fn bad_request() -> Self {
         Self::new(
             "https://www.rfc-editor.org/rfc/rfc9110#status.400",
@@ -70,6 +76,7 @@ impl ProblemDetails {
         )
     }
 
+    /// A `401 Unauthorized` problem.
     pub fn unauthorized() -> Self {
         Self::new(
             "https://www.rfc-editor.org/rfc/rfc9110#status.401",
@@ -78,6 +85,7 @@ impl ProblemDetails {
         )
     }
 
+    /// A `403 Forbidden` problem.
     pub fn forbidden() -> Self {
         Self::new(
             "https://www.rfc-editor.org/rfc/rfc9110#status.403",
@@ -86,6 +94,7 @@ impl ProblemDetails {
         )
     }
 
+    /// A `404 Not Found` problem.
     pub fn not_found() -> Self {
         Self::new(
             "https://www.rfc-editor.org/rfc/rfc9110#status.404",
@@ -94,6 +103,7 @@ impl ProblemDetails {
         )
     }
 
+    /// A `409 Conflict` problem.
     pub fn conflict() -> Self {
         Self::new(
             "https://www.rfc-editor.org/rfc/rfc9110#status.409",
@@ -102,6 +112,7 @@ impl ProblemDetails {
         )
     }
 
+    /// A `422 Unprocessable Content` problem — well-formed but semantically invalid.
     pub fn unprocessable() -> Self {
         Self::new(
             "https://www.rfc-editor.org/rfc/rfc9110#status.422",
@@ -110,6 +121,7 @@ impl ProblemDetails {
         )
     }
 
+    /// A `500 Internal Server Error` problem.
     pub fn internal() -> Self {
         Self::new(
             "https://www.rfc-editor.org/rfc/rfc9110#status.500",
@@ -118,21 +130,25 @@ impl ProblemDetails {
         )
     }
 
+    /// Set the occurrence-specific `detail` message.
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
     }
 
+    /// Set the `instance` URI identifying this occurrence.
     pub fn with_instance(mut self, instance: impl Into<String>) -> Self {
         self.instance = Some(instance.into());
         self
     }
 
+    /// Override the `type` URI — e.g. to point at an app's own type registry.
     pub fn with_type(mut self, type_uri: impl Into<String>) -> Self {
         self.type_uri = type_uri.into();
         self
     }
 
+    /// Override the human-readable `title`.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self

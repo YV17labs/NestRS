@@ -4,8 +4,11 @@
 /// (`Piped<ParseInt, _>`), never instantiated — so `transform` is an associated
 /// function. Stateful/DI-injected pipes would need a different binding.
 pub trait Pipe {
+    /// The value the pipe receives (the extractor's output).
     type In;
+    /// The value the pipe hands the handler.
     type Out;
+    /// Convert `input`, or reject it with a [`PipeError`].
     fn transform(input: Self::In) -> Result<Self::Out, PipeError>;
 }
 
@@ -20,6 +23,7 @@ pub struct PipeError {
 }
 
 impl PipeError {
+    /// A rejection carrying just a human-readable message.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -27,6 +31,8 @@ impl PipeError {
         }
     }
 
+    /// A rejection with a message plus structured `details` (e.g. field errors)
+    /// the surface adapter can render.
     pub fn with_details(message: impl Into<String>, details: serde_json::Value) -> Self {
         Self {
             message: message.into(),
@@ -34,14 +40,17 @@ impl PipeError {
         }
     }
 
+    /// The human-readable rejection message.
     pub fn message(&self) -> &str {
         &self.message
     }
 
+    /// The structured details, if any were attached.
     pub fn details(&self) -> Option<&serde_json::Value> {
         self.details.as_ref()
     }
 
+    /// Take ownership of the structured details, if any.
     pub fn into_details(self) -> Option<serde_json::Value> {
         self.details
     }

@@ -6,19 +6,24 @@ use std::time::Duration;
 /// At most `limit` requests per `window`, per client.
 #[derive(Clone, Copy, Debug)]
 pub struct Throttle {
+    /// Maximum requests permitted per `window`, per client.
     pub limit: u32,
+    /// The rolling window the `limit` applies over.
     pub window: Duration,
 }
 
 impl Throttle {
+    /// `limit` requests per `window`.
     pub const fn new(limit: u32, window: Duration) -> Self {
         Self { limit, window }
     }
 
+    /// `limit` requests per minute.
     pub const fn per_minute(limit: u32) -> Self {
         Self::new(limit, Duration::from_secs(60))
     }
 
+    /// `limit` requests per second.
     pub const fn per_second(limit: u32) -> Self {
         Self::new(limit, Duration::from_secs(1))
     }

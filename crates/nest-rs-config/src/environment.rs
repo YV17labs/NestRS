@@ -9,11 +9,14 @@ use crate::source::real_env_var;
 /// `.env` file. Unset or unrecognised ⇒ [`Development`](Self::Development).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Environment {
+    /// Local development — the default when `NESTRS_ENV` is unset or unrecognised.
     #[default]
     Development,
     /// `.env.local` is **not** loaded so tests stay hermetic.
     Test,
+    /// Pre-production staging.
     Staging,
+    /// Production.
     Production,
 }
 
@@ -30,6 +33,7 @@ impl Environment {
         env
     }
 
+    /// Read the active environment from `NESTRS_ENV` (real process env only).
     pub fn from_env() -> Self {
         // `NESTRS_ENV` selects the cascade, so it must come from the real
         // process env, never a `.env` file — read it without the dotenv
@@ -42,6 +46,7 @@ impl Environment {
         }
     }
 
+    /// The lowercase name of this environment (`"development"`, `"production"`, …).
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Development => "development",
@@ -51,6 +56,7 @@ impl Environment {
         }
     }
 
+    /// Whether this is [`Production`](Self::Production).
     pub fn is_production(&self) -> bool {
         matches!(self, Self::Production)
     }

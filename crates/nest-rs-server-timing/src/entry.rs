@@ -6,8 +6,11 @@ use parking_lot::Mutex;
 /// One Server-Timing entry: name, optional `desc`, duration.
 #[derive(Clone, Debug)]
 pub struct Entry {
+    /// The metric name (the `name` token in the `Server-Timing` header).
     pub name: String,
+    /// Optional description, rendered as a tooltip in browser DevTools.
     pub desc: Option<String>,
+    /// The measured duration, emitted as `dur=<ms>`.
     pub dur: Duration,
 }
 
@@ -20,6 +23,7 @@ pub struct Timings {
 }
 
 impl Timings {
+    /// Record a named sub-step duration for this request.
     pub fn record(&self, name: impl Into<String>, dur: Duration) {
         self.push(name, None, dur);
     }

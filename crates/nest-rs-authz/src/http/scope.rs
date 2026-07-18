@@ -17,6 +17,7 @@ use crate::{Ability, ActionMarker};
 pub struct Scope<E, A>(Condition, PhantomData<fn() -> (E, A)>);
 
 impl<E, A> Scope<E, A> {
+    /// Take ownership of the underlying row-level `Condition`.
     pub fn into_inner(self) -> Condition {
         self.0
     }

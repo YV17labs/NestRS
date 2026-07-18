@@ -13,6 +13,8 @@
 //! the `QueueWorker` transport, the activation modules). A third-party
 //! `nest-rs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
 //! directly — see this crate's README for the extension contract.
+#![warn(missing_docs)]
+
 mod consumer;
 mod error;
 mod inventory;

@@ -39,9 +39,13 @@ pub type JobHandler = fn(
 /// directly; this type remains for backends that consume `ProcessorMeta` via
 /// `DiscoveryService::meta::<ProcessorMeta>()`.
 pub struct ProcessorMeta {
+    /// The processor type's name, for boot logs.
     pub name: &'static str,
+    /// The queue name this consumer drains.
     pub queue: &'static str,
+    /// How many jobs to process concurrently.
     pub concurrency: usize,
+    /// Retry budget per job before it is considered failed.
     pub retries: usize,
     /// The type-erased handler the backend dispatches each job through.
     pub handler: JobHandler,
@@ -54,11 +58,18 @@ pub struct ProcessorMeta {
 /// provider not reachable from the app's module tree is skipped with a boot
 /// `warn` (the consumer logs it, so leftover code stays visible).
 pub struct ProcessMethod {
+    /// The process method's name, for boot logs.
     pub name: &'static str,
+    /// The queue name this method drains.
     pub queue: &'static str,
+    /// How many jobs to process concurrently.
     pub concurrency: usize,
+    /// Retry budget per job before it is considered failed.
     pub retries: usize,
+    /// `TypeId` of the host provider, matched against the reachable set to
+    /// module-gate this consumer.
     pub provider_type_id: fn() -> TypeId,
+    /// The type-erased handler that resolves the provider and runs the method.
     pub handler: JobHandler,
 }
 

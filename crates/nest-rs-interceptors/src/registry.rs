@@ -11,7 +11,9 @@ use crate::interceptor::Interceptor;
 /// One entry in the `use_interceptors_global` list. Resolved against the live
 /// container at configure time.
 pub struct InterceptorSpec {
+    /// `TypeId` of the interceptor type — the dedup key across scopes.
     pub type_id: TypeId,
+    /// The interceptor type's name, for boot logs and fail-secure diagnostics.
     pub name: &'static str,
     pub(crate) resolve: fn(&Container) -> Option<Arc<dyn Interceptor>>,
 }
@@ -32,6 +34,8 @@ pub fn interceptor<I: Interceptor + 'static>() -> InterceptorSpec {
 }
 
 impl InterceptorSpec {
+    /// Resolve the interceptor instance from the live container, or `None` if
+    /// its provider was never registered (a fail-secure boot check flags this).
     pub fn resolve(&self, container: &Container) -> Option<Arc<dyn Interceptor>> {
         (self.resolve)(container)
     }

@@ -2,6 +2,8 @@
 //! absolute paths (`::nest_rs_http::*`, `::poem::*`, `::nest_rs_core::*`), so
 //! this crate has no dependency on its surface crate — they resolve at the
 //! call site.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod attr;

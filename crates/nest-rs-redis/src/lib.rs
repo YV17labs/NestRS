@@ -34,6 +34,8 @@
 //! [`Processor`]: ::nest_rs_queue::Processor
 //! [`ProcessMethod`]: ::nest_rs_queue::ProcessMethod
 
+#![warn(missing_docs)]
+
 mod config;
 mod connection;
 mod error;

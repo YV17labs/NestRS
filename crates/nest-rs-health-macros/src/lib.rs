@@ -1,4 +1,6 @@
 //! The `#[indicators]` decorator, re-exported by `nest-rs-health`.
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod indicators;

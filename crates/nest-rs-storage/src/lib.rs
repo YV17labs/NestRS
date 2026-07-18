@@ -42,6 +42,8 @@
 //!   carries only the byte size.
 //! - [`Storage::get_bytes`] / [`Storage::put_bytes`] — server-side byte
 //!   read/write (e.g. a worker transforming an original).
+#![warn(missing_docs)]
+
 mod client;
 mod config;
 mod error;

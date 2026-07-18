@@ -16,9 +16,11 @@ use std::any::Any;
 use nest_rs_core::HandlerMetadata;
 use poem::Request;
 
+/// Reads per-handler `#[meta(...)]` metadata off the live request by type.
 pub struct Reflector<'a>(&'a Request);
 
 impl<'a> Reflector<'a> {
+    /// Wrap a request so a guard can read its attached route metadata.
     pub fn new(req: &'a Request) -> Self {
         Reflector(req)
     }

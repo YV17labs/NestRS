@@ -38,7 +38,11 @@ pub use nest_rs_database::current_executor_scope;
 /// internally `Arc`-shaped, so the `Txn` variant keeps its `Arc`.
 #[derive(Clone)]
 pub enum Executor {
+    /// The shared connection pool — safe (read) methods and system/job work run
+    /// here, outside any transaction.
     Pool(DatabaseConnection),
+    /// The request's transaction — a mutating HTTP method runs here so the
+    /// interceptor can commit on success and roll back on failure.
     Txn(Arc<DatabaseTransaction>),
 }
 
@@ -131,10 +135,14 @@ pub async fn with_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
     nest_rs_database::with_executor(Arc::new(executor), fut).await
 }
 
+/// Install `executor` tagged as a **request** scope, so `Repo` applies the
+/// ambient ability's `WHERE` (fail-closed with no ability, like any request).
 pub async fn with_request_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
     nest_rs_database::with_request_executor(Arc::new(executor), fut).await
 }
 
+/// Install `executor` tagged as a **job** scope — the one unscoped path, for
+/// system work (cron, queue) that has no principal to scope to.
 pub async fn with_job_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
     nest_rs_database::with_job_executor(Arc::new(executor), fut).await
 }

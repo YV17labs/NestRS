@@ -6,6 +6,8 @@
 //! `#[meta(Throttle::...)]`. Over-limit requests get `429 Too Many Requests`.
 //! Backed by an in-memory fixed-window counter ([`InMemoryThrottler`]).
 
+#![warn(missing_docs)]
+
 mod config;
 mod guard;
 mod module;

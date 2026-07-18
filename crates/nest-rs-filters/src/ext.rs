@@ -10,6 +10,7 @@ pub trait FilterExt: Endpoint + Sized + Send + Sync
 where
     Self::Output: IntoResponse,
 {
+    /// Wrap this endpoint in `filter`, returning the wrapped endpoint.
     fn filter<F: Filter>(self, filter: F) -> FilterEndpoint<Self, F> {
         FilterEndpoint::new(self, filter)
     }

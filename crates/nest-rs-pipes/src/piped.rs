@@ -39,6 +39,7 @@ impl<P: Pipe<In = T>, T> Piped<P, T> {
 }
 
 impl<P: Pipe, T> Piped<P, T> {
+    /// Take ownership of the pipe's output value.
     pub fn into_inner(self) -> P::Out {
         self.value
     }
@@ -58,12 +59,14 @@ impl<P: Pipe, T> Deref for Piped<P, T> {
 pub struct Valid<T>(T);
 
 impl<T: Validate> Valid<T> {
+    /// Validate `input`, wrapping it on success or returning the field errors.
     pub fn apply(input: T) -> Result<Self, PipeError> {
         Ok(Valid(ValidationPipe::<T>::transform(input)?))
     }
 }
 
 impl<T> Valid<T> {
+    /// Take ownership of the validated inner value.
     pub fn into_inner(self) -> T {
         self.0
     }

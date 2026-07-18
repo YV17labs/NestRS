@@ -4,6 +4,7 @@
 //! endpoint another surface declares (a GraphQL schema, an MCP service — each
 //! via [`HttpEndpointMeta`]), and any extra endpoint registered with
 //! [`HttpTransport::mount`].
+#![warn(missing_docs)]
 
 mod boot_check;
 mod client_ip;

@@ -63,4 +63,18 @@ pub use inventory;
 // nest-rs-pipes directly — the global-validation ("ValidationPipe") path.
 pub use nest_rs_pipes::{MaybeValidateFallback, ValidateProbe};
 
-pub use nest_rs_graphql_macros::{crud, dataloader, resolver};
+pub use nest_rs_graphql_macros::{crud, dataloader};
+
+/// The resolver decorator. `#[use_interceptors(...)]` / `#[use_filters(...)]`
+/// are **HTTP-only** — the per-operation GraphQL seam is reserved but not
+/// invoked, so binding one on a resolver is rejected at compile time instead of
+/// silently doing nothing:
+///
+/// ```compile_fail
+/// use nest_rs_graphql::resolver;
+///
+/// #[resolver]
+/// #[use_interceptors(SomeInterceptor)]
+/// struct BadResolver;
+/// ```
+pub use nest_rs_graphql_macros::resolver;

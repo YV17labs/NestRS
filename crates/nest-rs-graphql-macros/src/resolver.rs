@@ -44,6 +44,9 @@ pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// the struct). The impl-form macro reads the layer specs back at runtime
 /// via the inherent `__nestrs_resolver_*_specs()` helpers emitted here.
 fn resolver_struct(mut item: ItemStruct) -> TokenStream {
+    if let Err(err) = reject_http_only_layers(&item.attrs) {
+        return err.to_compile_error().into();
+    }
     // Resolver-scope (provider) guard declarations — same shape and same
     // mental model as `#[controller] struct` + `#[gateway] struct`. Stored
     // here so the impl-form macro can fold them into the per-operation
@@ -118,6 +121,29 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 /// attribute. At most one per item.
 fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
     take_path_list(attrs, "use_guards")
+}
+
+/// `#[use_interceptors(...)]` / `#[use_filters(...)]` are **HTTP-only** today:
+/// the per-operation GraphQL seam (`wrap_graphql`) is reserved but not invoked,
+/// so binding an interceptor or filter on a resolver would be a silent no-op.
+/// Reject it at compile time — a named error beats a capability that quietly
+/// does nothing. Guards *are* bridged (via the operation guard), so they stay.
+fn reject_http_only_layers(attrs: &[Attribute]) -> syn::Result<()> {
+    for attr in attrs {
+        for name in ["use_interceptors", "use_filters"] {
+            if attr.path().is_ident(name) {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    format!(
+                        "`#[{name}]` is not bridged on GraphQL yet — it would be a silent no-op on a \
+                         resolver. Remove it, or move the layer onto an HTTP `#[controller]` / \
+                         `#[routes]`, where interceptors and filters run. Guards work on both.",
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `#[force_guards(...)]` — the Layer-System opt-in that lets a per-method
@@ -550,6 +576,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
              uniform with `#[controller]` and `#[gateway]`",
         ));
     }
+    reject_http_only_layers(&item.attrs)?;
 
     let query_obj = format_ident!("__{}Query", base);
     let mutation_obj = format_ident!("__{}Mutation", base);
@@ -580,6 +607,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         let verb_attr = method.attrs.remove(idx);
 
+        reject_http_only_layers(&method.attrs)?;
         let method_guards = take_use_guards(&mut method.attrs)?;
         let force_method_guards = take_force_guards(&mut method.attrs)?;
         // The operation's access posture: `#[authorize(Action, Entity)]`

@@ -12,7 +12,7 @@ use nest_rs_codegen::{
     InjectableBody, build_injectable_body, from_container_method, injected_keys_with_layers,
 };
 
-use crate::attr::{expr_str, take_use_attr};
+use crate::attr::{expr_str, reject_http_only_layers, take_use_attr};
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     let GatewayArgs { path, namespace } = match parse_gateway_args(args.into()) {
@@ -21,6 +21,10 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let path_lit = path;
     let mut item = parse_macro_input!(input as ItemStruct);
+
+    if let Err(err) = reject_http_only_layers(&item.attrs) {
+        return err.to_compile_error().into();
+    }
 
     // `@UseGuards` analog on the struct — run on the WS upgrade.
     let guards = match take_use_attr(&mut item.attrs, "use_guards") {

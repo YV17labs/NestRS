@@ -48,7 +48,7 @@ fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
     (ty.clone(), None)
 }
 
-use crate::attr::take_use_attr;
+use crate::attr::{reject_http_only_layers, take_use_attr};
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
@@ -106,6 +106,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         };
         event_names.push(event.clone());
 
+        if let Err(err) = reject_http_only_layers(&method.attrs) {
+            return err.to_compile_error().into();
+        }
         let guards = match take_use_attr(&mut method.attrs, "use_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),

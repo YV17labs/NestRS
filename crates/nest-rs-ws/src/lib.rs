@@ -96,4 +96,18 @@ pub use tracing;
 
 pub use poem;
 
-pub use nest_rs_ws_macros::{gateway, messages};
+pub use nest_rs_ws_macros::messages;
+
+/// The gateway decorator. `#[use_interceptors(...)]` / `#[use_filters(...)]`
+/// are **HTTP-only** — the per-message WS seam is reserved but not invoked, so
+/// binding one on a gateway is rejected at compile time instead of silently
+/// doing nothing:
+///
+/// ```compile_fail
+/// use nest_rs_ws::gateway;
+///
+/// #[gateway(path = "/ws")]
+/// #[use_filters(SomeFilter)]
+/// struct BadGateway;
+/// ```
+pub use nest_rs_ws_macros::gateway;

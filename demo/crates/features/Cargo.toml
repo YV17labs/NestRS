@@ -24,6 +24,7 @@ nest-rs-guards = { workspace = true, features = ["graphql"] }
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-mcp.workspace = true
+nest-rs-pipes.workspace = true
 nest-rs-queue.workspace = true
 nest-rs-redis.workspace = true
 nest-rs-schedule.workspace = true

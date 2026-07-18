@@ -1496,6 +1496,7 @@ dependencies = [
  "nest-rs-interceptors",
  "nest-rs-mcp",
  "nest-rs-opentelemetry",
+ "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
  "nest-rs-resource",

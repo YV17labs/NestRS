@@ -5,7 +5,8 @@ use crate::oauth::{
     OAuthService, TokenRequestDto,
 };
 use nest_rs_authn::OAuth2Client;
-use nest_rs_http::{Ctx, Valid, controller, routes};
+use nest_rs_http::{Ctx, Piped, Valid, controller, routes};
+use nest_rs_pipes::Lowercase;
 use nest_rs_throttler::{Throttle, ThrottlerGuard};
 use poem::http::{StatusCode, header};
 use poem::web::{Form, Json, Path};
@@ -46,12 +47,19 @@ impl OAuthController {
         summary = "Social login — redirects to the named provider",
         tags("OAuth2")
     )]
-    async fn social_authorize(&self, provider: Path<String>, req: &Request) -> Result<Response> {
+    async fn social_authorize(
+        &self,
+        // `Lowercase` pipe normalizes the path segment, so `/social/GitHub/...`
+        // resolves the same provider as `/social/github/...` — provider keys are
+        // case-insensitive without the handler (or the registry) knowing.
+        provider: Piped<Lowercase, Path<String>>,
+        req: &Request,
+    ) -> Result<Response> {
         // Unknown provider ⇒ 404 (the registry does not know the key); an
         // otherwise-valid provider whose flow errors ⇒ 500.
         let authorization = self
             .svc
-            .authorize(&provider.0)
+            .authorize(&provider.into_inner())
             .ok_or_else(|| poem::Error::from_status(StatusCode::NOT_FOUND))?
             .map_err(poem::error::InternalServerError)?;
         let secure = cookie_secure(req);

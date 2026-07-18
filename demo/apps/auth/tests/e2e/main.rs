@@ -261,6 +261,24 @@ async fn the_social_authorize_endpoint_redirects_to_the_provider() {
 }
 
 #[tokio::test]
+async fn the_provider_path_segment_is_case_insensitive() {
+    // The `Lowercase` pipe normalizes the `:provider` segment, so a mixed-case
+    // key resolves the same provider as its lowercase form (302 to GitHub),
+    // not a 404 — the handler never sees the original casing.
+    let (_db, app) = boot().await;
+    let resp = app.http().get("/social/GitHub/authorize").send().await;
+    resp.assert_status(StatusCode::FOUND);
+    let location = resp.0.headers().get("location").expect("location header");
+    assert!(
+        location
+            .to_str()
+            .expect("ascii location")
+            .starts_with("https://github.com/login/oauth/authorize"),
+        "case-insensitive provider must still hit GitHub, got {location:?}",
+    );
+}
+
+#[tokio::test]
 async fn a_configured_provider_that_is_not_imported_is_unknown() {
     // Only github + google are imported; an unregistered key is a 404.
     let (_db, app) = boot().await;

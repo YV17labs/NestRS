@@ -10,8 +10,8 @@ import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 You add one module to the app root and one migration to the workspace,
 and the data layer comes alive. By the end of this page, `POST /posts`
 persists into Postgres inside a transaction, a failing handler rolls
-back automatically, and the e2e baseline you're about to add (next
-page) has a real database to point at.
+back automatically, and the e2e baseline you add in
+[Test it end to end](/tutorial/testing/) has a real database to point at.
 
 ## The data layer in one import
 
@@ -181,9 +181,10 @@ $ curl -s http://localhost:3005/posts
 ```
 
 Create a second post with the same title — there is no unique constraint
-on `title`, so both rows persist. Transaction rollback on a `5xx` is
-what page 8 locks down in e2e when you add richer failure paths; for
-now, trust the interceptor contract above.
+on `title`, so both rows persist. Transaction rollback on a `5xx` is what
+the e2e suite in [Test it end to end](/tutorial/testing/) locks down when
+you add richer failure paths; for now, trust the interceptor contract
+above.
 
 <Aside type="tip">
 Set `RUST_LOG=nest_rs::orm=trace` to watch the `BEGIN` / `COMMIT` /
@@ -202,13 +203,14 @@ tags the interceptor span and the SQL spans.
   logic through `Repo`.
 
 <Aside type="note">
-Auth, row-level filtering, and response masking live in
-[`api`](/tutorial/security/) — not in `blog`. Follow those
-pages when you extend the Publish workspace; skip them while you
-finish the minimal tutorial.
+Auth, row-level filtering, and response masking are the `api` layers you
+saw enforced on [See the security payoff](/tutorial/checkpoint/). You
+build them yourself in
+[Authenticate and authorize](/tutorial/security/); `blog` itself stays
+public HTTP CRUD.
 </Aside>
 
 ## Going further
 
-- [Test it end to end](/tutorial/testing/) — the next step: boot `BlogModule` against a throwaway Postgres.
+- [Validate inputs](/tutorial/validation/) — the next step: reject a bad body with a structured `400`.
 - [CRUD](/database/crud/) — the reference page for `Repo`, `CrudService`, and transactions.

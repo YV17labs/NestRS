@@ -2,7 +2,7 @@
 title: Test it end to end
 description: A single tests/e2e/main.rs boots the real BlogModule against a throwaway database; nestrs run test e2e runs it; happy path and failure modes both asserted.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
@@ -28,7 +28,8 @@ it provides `TestApp` (the in-process boot harness) and
 <FileTree>
 - apps/blog/
   - tests/
-    - e2e.rs
+    - e2e/
+      - main.rs
 </FileTree>
 
 Add the dev-dependencies the test needs:
@@ -122,7 +123,7 @@ transaction interceptor, and the service; the `GET /posts/:id` walks
 ## The validation failure
 
 A happy-path test is half a test. Add one negative path — the same
-`400` you verified by hand on page 5.
+`400` you verified by hand in [Validate inputs](/tutorial/validation/).
 
 ```rust title="apps/blog/tests/e2e/main.rs"
 #[tokio::test]
@@ -153,7 +154,7 @@ filter for the e2e file.
 
 <Steps>
 
-1. Bring Postgres up (already done in page 6).
+1. Bring Postgres up (already done in [Persist through Postgres](/tutorial/database/)).
 
    ```bash frame="terminal"
    $ nestrs run db up

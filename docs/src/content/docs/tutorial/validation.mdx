@@ -2,17 +2,18 @@
 title: Validate inputs
 description: "Rules on the entity flow into #[crud]'s generated POST /posts — a malformed body becomes a structured 400 before the handler runs."
 sidebar:
-  order: 5
+  order: 7
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-You already wrote the validation rules on the entity — page 2. The
-`#[crud]` macro's generated `POST /posts` handler takes
-`Valid<Json<CreatePost>>`, so every request body is checked against
-those rules before `PostsService::create` runs. By the end of this page,
-`curl` returns a structured `400` for an empty title and the service
-never sees the bad input.
+You already wrote the validation rules on the entity in
+[Declare the entity](/tutorial/entity/). The `#[crud]` macro's generated
+`POST /posts` handler takes `Valid<Json<CreatePost>>`, so every request
+body is checked against those rules before `PostsService::create` runs.
+By the end of this page, `curl` returns a structured `400` for an empty
+title, and a well-formed body persists a post through the database you
+wired on the previous page.
 
 ## No handler edit required
 
@@ -45,7 +46,8 @@ HTTP binding lives in `nest-rs-http` as the `Valid<E>` extractor.
 
 ## Where the rules live
 
-You already wrote the rules — on the entity, page 2:
+You already wrote the rules — on the entity, in
+[Declare the entity](/tutorial/entity/):
 
 ```rust title="crates/features/src/posts/entity.rs"
 #[expose(input(create, update), validate(length(min = 1)))]
@@ -92,18 +94,20 @@ to a different validator without locking the message string.
 
 ## The good-body path is unchanged
 
-A well-formed body still reaches the handler exactly as before — the
-pipe is a no-op on successful validation.
+A well-formed body flows straight through — the pipe is a no-op on
+successful validation — and, with the database wired on the previous
+page, the handler persists the post and returns it.
 
 ```bash frame="terminal"
-$ curl -X POST http://localhost:3005/posts \
+$ curl -s -X POST http://localhost:3005/posts \
     -H 'Content-Type: application/json' \
     -d '{"title":"Hello","body":"World"}'
-HTTP/1.1 500 Internal Server Error
+{"id":"018f…","title":"Hello","body":"World"}
 ```
 
-Still `500` — the DB isn't wired yet — but the body cleared validation
-and the handler ran. Page 6 closes that gap.
+A `2xx` with the created row — the body cleared validation and the
+service committed it in a transaction. The pipe only ever intercepts the
+malformed case.
 
 ## Two failure modes worth the distinction
 
@@ -153,5 +157,5 @@ The error `code` (`"placeholder_title"`) surfaces in `details.title[].code`
 
 ## Going further
 
-- [Persist through Postgres](/tutorial/database/) — the next step: wire `DatabaseModule` and a migration.
+- [Test it end to end](/tutorial/testing/) — the next step: lock the round-trip down with an e2e suite.
 - [Pipes](/fundamentals/pipes/) — the reference page for `Valid<E>` and the pipe layer.

@@ -25,7 +25,8 @@ you with code that compiles and a command you can run.
     - main.rs
     - module.rs
   - tests/
-    - e2e.rs
+    - e2e/
+      - main.rs
 - crates/
   - features/
     - src/
@@ -81,18 +82,14 @@ Rust 1.96+ is required. The database and testing pages need Postgres
 <CardGrid>
   <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="nestrs new blog, nestrs run dev blog, 404 on / — then read what the CLI wrote." />
   <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The Post entity with SeaORM and #[expose]." />
-  <LinkCard title="3. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts." />
-  <LinkCard title="4. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />
+  <LinkCard title="3. See the security payoff" href="/tutorial/checkpoint/" description="Run the reference api: an admin, a masked member, a cross-tenant 403 — no handler check." />
+  <LinkCard title="4. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts." />
   <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="DatabaseModule, migrations, transactional writes." />
-  <LinkCard title="6. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e/main.rs against an EphemeralDatabase." />
+  <LinkCard title="6. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />
+  <LinkCard title="7. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e/main.rs against an EphemeralDatabase." />
+  <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Guards, AppAbility, Bind — build the access control you lived on step 3." />
+  <LinkCard title="9. Mirror on GraphQL" href="/tutorial/graphql/" description="A UsersResolver over the same service, ability, and dataloader." />
 </CardGrid>
-
-<Aside type="note">
-Pages on [security](/tutorial/security/) and [GraphQL](/tutorial/graphql/)
-document patterns for **`api`** (auth, multi-transport) — not
-`apps/blog/`. Follow them when you extend the Publish workspace; skip them
-while building the minimal blog.
-</Aside>
 
 <Aside type="tip">
 The tutorial feature exemplar in this repo is

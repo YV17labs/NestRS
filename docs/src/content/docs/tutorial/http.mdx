@@ -2,7 +2,7 @@
 title: Expose over HTTP
 description: A PostsService that goes through Repo, a PostsController that mounts GET /posts/:id and POST /posts, the first curl that returns a post.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
@@ -10,7 +10,8 @@ import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 You write the service that owns the entity, the controller that mounts
 the CRUD routes, and the HTTP module that ties them together. By the end
 of this page, `curl` returns a fresh post from `POST /posts` and the
-same post from `GET /posts/:id` — once Postgres is wired on page 6.
+same post from `GET /posts/:id` — once Postgres is wired on the next page,
+[Persist through Postgres](/tutorial/database/).
 
 ## The service
 
@@ -63,8 +64,8 @@ full surface.
 
 `Repo::<Posts>::conn()` reaches the ambient executor — the pool on safe
 routes, the transaction on mutating routes. You don't pass it in; the
-data layer installs it before the handler runs (page 6 makes that
-concrete).
+data layer installs it before the handler runs
+([Persist through Postgres](/tutorial/database/) makes that concrete).
 
 Register the service in the port module:
 
@@ -196,32 +197,13 @@ if other apps already occupy it when you ran `nestrs new blog`.
 
 ## Run it
 
-<Steps>
+Boot the binary and read the route table from the boot log — the
+`nest_rs::routes` target prints every mount on startup.
 
-1. Boot the binary.
-
-   ```bash frame="terminal"
-   $ nestrs run dev blog
-   DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
-   ```
-
-2. The controller and the service compile, but you haven't wired a
-   database yet — `Repo::<Posts>::conn()` returns an error. Page 6
-   plugs `DatabaseModule` in. For now, confirm the routes mounted.
-
-   ```bash frame="terminal"
-   $ curl -i http://localhost:3005/posts
-   HTTP/1.1 500 Internal Server Error
-   ```
-
-</Steps>
-
-The route table has the verbs (`GET /posts`, `GET /posts/:id`,
-`POST /posts`, `PATCH /posts/:id`, `DELETE /posts/:id`); the 500 is
-honest — there's no ambient DB to reach yet. The shape is right.
-
-Confirm the route table from the boot log: the `nest_rs::routes` target
-prints every mount on startup.
+```bash frame="terminal"
+$ nestrs run dev blog
+DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
+```
 
 ```text frame="terminal"
 INFO nest_rs::routes: mounted route controller=PostsController method=GET path=/posts
@@ -230,6 +212,24 @@ INFO nest_rs::routes: mounted route controller=PostsController method=GET path=/
 INFO nest_rs::routes: mounted route controller=PostsController method=PATCH path=/posts/:id
 INFO nest_rs::routes: mounted route controller=PostsController method=DELETE path=/posts/:id
 ```
+
+Five routes mounted from one `#[crud]` block — the full CRUD surface,
+before you wrote a single handler body. The shape is right; the live
+call lands on the next page.
+
+## What fails if you get it wrong
+
+The controller and service compile, but no database is wired yet, so
+hitting a route reaches `Repo::<Posts>::conn()` with no ambient executor:
+
+```bash frame="terminal"
+$ curl -i http://localhost:3005/posts
+HTTP/1.1 500 Internal Server Error
+```
+
+The `500` is honest — the route exists and ran; there is just no pool to
+reach. [Persist through Postgres](/tutorial/database/) plugs
+`DatabaseModule` in, and the same curl returns a post.
 
 ## What you have now
 
@@ -240,5 +240,5 @@ INFO nest_rs::routes: mounted route controller=PostsController method=DELETE pat
 
 ## Going further
 
-- [Validate inputs](/tutorial/validation/) — the next step: reject a bad body with a structured `400`.
+- [Persist through Postgres](/tutorial/database/) — the next step: wire `DatabaseModule` and see the first curl return a post.
 - [Controllers](/http/controllers/) — the reference page for `#[controller]` and `#[crud]`.

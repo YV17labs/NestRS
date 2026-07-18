@@ -73,7 +73,8 @@ land in `crates/features/` from page 2 onward).
     - main.rs
     - module.rs
   - tests/
-    - e2e.rs
+    - e2e/
+      - main.rs
 </FileTree>
 
 ```toml title="apps/blog/Cargo.toml"
@@ -145,7 +146,8 @@ async fn main() -> Result<()> {
 `App::builder()` runs the four boot phases — seeds, collect, factories,
 register — verifies the access graph, then `.run()` blocks on the
 transports. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
-for the e2e test on page 8) and a stub `tests/e2e/main.rs`.
+for the e2e test in [Test it end to end](/tutorial/testing/)) and a stub
+`tests/e2e/main.rs`.
 
 ## Run it again
 

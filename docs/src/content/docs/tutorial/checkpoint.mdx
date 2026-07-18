@@ -1,0 +1,102 @@
+---
+title: See the security payoff
+description: Run the reference Publish api, sign in as an admin then a member, and watch row-level scoping and email masking without a handler check.
+sidebar:
+  order: 4
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Before you wire persistence into your own `posts`, see where the
+framework is heading. The reference **Publish** workspace ships `auth`
+and `api` fully built on `users` and `orgs`. In four curls you watch one
+JWT drive row-level scoping and field masking — no check written in any
+handler. By the end of this page an admin sees every column, a member
+sees the same rows with `email` gone, and a cross-tenant read returns
+`403`.
+
+## Run the reference workspace
+
+The tutorial `blog` app has no auth yet — that is deliberate. To live the
+payoff now, drive the reference [`api`](/publish/) app over `users` and
+`orgs`. It already wires the guards, the ability, and the masker you
+build by hand later in
+[Authenticate and authorize](/tutorial/security/).
+
+<Steps>
+
+1. From the Publish repo, load the demo tenants and start both apps.
+
+   ```bash frame="terminal"
+   $ nestrs run db reset
+   seed: 12 row(s) inserted
+   $ nestrs run dev auth   # token issuer on :3001
+   $ nestrs run dev api    # resource server on :3002
+   ```
+
+   `db reset` seeds two orgs — Acme and Globex — each with an admin and
+   members. Every demo account shares the password `publish-demo`.
+
+2. Sign in as the Acme admin and read the org's users.
+
+   ```bash frame="terminal"
+   $ ADMIN=$(curl -s localhost:3001/login -H 'content-type: application/json' \
+       -d '{"email":"admin@acme.test","password":"publish-demo"}' | jq -r .access_token)
+
+   $ curl -s localhost:3002/users -H "authorization: Bearer $ADMIN" | jq -c '.[0]'
+   {"id":"018f…","name":"Acme Admin","email":"admin@acme.test"}
+   ```
+
+   The admin sees every field — `email` included — and only Acme rows.
+
+3. Sign in as a plain member and run the identical query.
+
+   ```bash frame="terminal"
+   $ MEMBER=$(curl -s localhost:3001/login -H 'content-type: application/json' \
+       -d '{"email":"acme-user-1@example.test","password":"publish-demo"}' | jq -r .access_token)
+
+   $ curl -s localhost:3002/users -H "authorization: Bearer $MEMBER" | jq -c '.[0]'
+   {"id":"018f…","name":"Acme Admin"}
+   ```
+
+   Same rows, same route — but `email` is gone from every object. The
+   member's ability grants only `id` and `name`.
+
+4. Read a user in the other tenant with the member's token.
+
+   ```bash frame="terminal"
+   $ curl -s -o /dev/null -w '%{http_code}\n' \
+       localhost:3002/users/00000000-0000-7000-8000-000000006101 \
+       -H "authorization: Bearer $MEMBER"
+   403
+   ```
+
+   That row belongs to Globex, so the member's org-scoped ability refuses
+   it — a `403`, decided by the framework, not the handler.
+
+</Steps>
+
+## What just happened
+
+One policy — the caller's `Ability` — drove three outcomes with no
+authorization code in the controller. The row-level `.when(...)`
+condition scoped both listings to the caller's org; the field-level
+`.fields([...])` grant dropped `email` for the member; and the by-id bind
+turned a cross-tenant load into a `403`. The `UsersController` that
+produced all three is the same thin CRUD shape you are about to write for
+`posts` — it never reads the tenant or the role.
+
+You build this yourself — the guards, the `AppAbility`, the `Bind`
+extractor — in [Authenticate and authorize](/tutorial/security/), once
+your `posts` feature persists and is tested.
+
+<Aside type="note">
+Living this needs the Publish repo (`auth` + `api` + seeded Postgres).
+Your own scaffolded `blog` stays public HTTP CRUD until you add the auth
+layer — the point here is to see the destination before you build toward
+it.
+</Aside>
+
+## Going further
+
+- [Expose over HTTP](/tutorial/http/) — the next step: back in `blog`, write the service and mount the CRUD routes.

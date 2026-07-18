@@ -2,18 +2,13 @@
 title: Authenticate and authorize
 description: AuthGuard verifies the JWT, AppAbility decides what the caller may do, Repo filters every read, Bind enforces by-id access.
 sidebar:
-  order: 8
+  order: 9
 ---
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
-<Aside type="caution">
-This page applies to **`api`**, not the tutorial **`blog`** app.
-`blog` stays public HTTP CRUD on `posts` — auth and row-level policy are
-demonstrated here for the full Publish workspace.
-</Aside>
-
-You add two guards to the controller — one for *who* the caller is, one
+This is the feature behind [See the security payoff](/tutorial/checkpoint/)
+— now you build it. You add two guards to the controller — one for *who* the caller is, one
 for *what they may do* — and the framework filters every read by their
 organisation, gates every by-id load against their ability, and masks
 the response before it leaves the process. By the end of this page, a
@@ -151,8 +146,8 @@ Four things changed:
 | `_authz: Authorize<Create, UserEntity>` | Check the ability allows `Create` on `UserEntity` before the body runs |
 | `user: Bind<UsersService, Read>` | Parse the `:id`, load the row through the service, return `403` if the ability refuses it |
 
-The placeholder `Uuid::nil()` from page 3 is gone — the org id comes
-from the caller's claims, never from the body.
+The org id comes from the caller's claims, never from the body — there
+is no placeholder to fill in and no way to spoof the tenant.
 
 ## Import the authz module
 

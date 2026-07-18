@@ -100,3 +100,35 @@ fn a_guard_whose_module_is_imported_boots_cleanly() {
     App::new::<TightModule>()
         .expect("a controller that imports the guard's module satisfies the contract");
 }
+
+#[injectable]
+#[derive(Default)]
+struct SharedThing;
+
+#[module(providers = [SharedThing])]
+struct FirstProviderModule;
+
+#[module(providers = [SharedThing])]
+struct SecondProviderModule;
+
+#[module(imports = [FirstProviderModule, SecondProviderModule])]
+struct DuplicateRoot;
+
+#[test]
+fn two_modules_providing_the_same_concrete_type_fail_the_boot() {
+    // A concrete type registered by two modules used to silently last-write-wins;
+    // it now fails the boot, uniform with every other wiring error.
+    match App::new::<DuplicateRoot>() {
+        Ok(_) => panic!("a duplicate concrete provider must fail the boot"),
+        Err(err) => {
+            let dup = err
+                .downcast::<nest_rs_core::DuplicateProviderError>()
+                .expect("the failure is the named duplicate-provider error");
+            assert!(
+                dup.type_name.contains("SharedThing"),
+                "the error names the duplicated type: {}",
+                dup.type_name
+            );
+        }
+    }
+}

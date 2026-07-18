@@ -121,6 +121,12 @@ Or explore the tool surface with the MCP Inspector — no client config needed:
 $ npx @modelcontextprotocol/inspector
 ```
 
+Now use it. Ask the model — in Claude Code, "say hello to Ada" — and it calls
+the `hello` tool with `{ "name": "Ada" }`; the tool answers `Hello, Ada!`. That
+round trip — client → `/mcp` → your `#[tool]` method → response — is the whole
+surface. You have a running assistant, discovered and wired like any other
+provider.
+
 ## Authorization
 
 The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To

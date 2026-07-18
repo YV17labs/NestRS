@@ -53,6 +53,11 @@ pub struct HttpConfig {
     /// under TLS). On by default; tune via `NESTRS_HTTP__SECURITY_HEADERS`,
     /// `__FRAME_OPTIONS`, `__HSTS`, `__CONTENT_TYPE_OPTIONS`.
     pub security_headers: SecurityHeadersConfig,
+    /// Negotiate response compression (gzip / deflate / brotli) from the
+    /// request's `Accept-Encoding`. Off by default — leave it to the reverse
+    /// proxy in most deployments; flip on with `NESTRS_HTTP__COMPRESSION=true`
+    /// when the app terminates responses directly.
+    pub compression: bool,
 }
 
 impl Default for HttpConfig {
@@ -68,6 +73,7 @@ impl Default for HttpConfig {
             request_timeout_secs: Some(30),
             fail_secure_strict: true,
             security_headers: SecurityHeadersConfig::default(),
+            compression: false,
         }
     }
 }
@@ -119,6 +125,7 @@ impl Config for HttpConfig {
             request_timeout_secs: env.parse("REQUEST_TIMEOUT_SECS")?.or(Some(30)),
             fail_secure_strict: env.flag("FAIL_SECURE_STRICT", true)?,
             security_headers: SecurityHeadersConfig::from_env(env)?,
+            compression: env.flag("COMPRESSION", false)?,
         })
     }
 }
@@ -142,6 +149,21 @@ mod tests {
         );
         assert!(d.global_prefix.is_none(), "no global prefix by default");
         assert_eq!(d.max_body_bytes, Some(RawBody::DEFAULT_LIMIT));
+        assert!(
+            !d.compression,
+            "compression opt-in — proxy-terminated by default"
+        );
+    }
+
+    #[test]
+    fn from_env_reads_compression_flag() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_HTTP__COMPRESSION", "true");
+            let env = ConfigService::for_namespace("http");
+            let cfg = HttpConfig::from_env(&env).expect("env parses");
+            assert!(cfg.compression);
+            Ok(())
+        });
     }
 
     #[test]

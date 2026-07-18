@@ -27,6 +27,8 @@ http.workspace = true
 # `get_bytes` hands back `object_store`'s `Bytes` (Arc-backed, cheap clone) so a
 # downloaded body is never copied on the way out.
 bytes.workspace = true
+# `get_stream` maps `object_store`'s chunk stream, mapping its error into ours.
+futures-util.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

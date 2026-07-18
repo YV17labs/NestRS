@@ -1,0 +1,61 @@
+---
+title: File uploads
+description: Accept a multipart/form-data upload with poem's Multipart extractor and stream the part into object storage.
+sidebar:
+  order: 10
+---
+
+Take a file part straight from a `multipart/form-data` request with
+poem's `Multipart` extractor. `#[routes]` passes it through like any other
+handler argument, so a direct upload is the single-round-trip alternative
+to the [presigned flow](/storage/): the client posts the bytes, the server
+streams them into storage.
+
+```rust title="crates/features/src/audio/http/controller.rs" {2}
+#[post("/uploads/direct")]
+async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> {
+    while let Some(field) = form.next_field().await.map_err(bad_request)? {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let filename = field.file_name().map(str::to_owned).unwrap_or_default();
+        // Validate before the bytes become an object key.
+        UploadRequestDto { filename: filename.clone() }.validate().map_err(unprocessable)?;
+        let bytes = field.bytes().await.map_err(bad_request)?;
+        let ticket = self.svc.store_upload(&filename, bytes).await.map_err(internal)?;
+        return Ok(Json(ticket));
+    }
+    Err(Error::from_string("multipart body has no `file` part", StatusCode::BAD_REQUEST))
+}
+```
+
+## Validate the filename at the edge
+
+A multipart part's filename is attacker-controlled — never let it become
+an object key unchecked. Reuse the same validated DTO the rest of the
+slice binds (`UploadRequestDto`), so one anti-traversal allowlist covers
+both the presigned and the direct path. A rejected name is a `422`, never
+a stored object.
+
+## Presigned or direct
+
+| | Presigned PUT | Direct multipart |
+|---|---|---|
+| Bytes flow | client → storage | client → server → storage |
+| Server memory | none | one part at a time |
+| Round trips | two (mint, then PUT) | one |
+| Use when | large media, offload the transfer | small files, one call |
+
+## Limits
+
+- The [body-size cap](/http/configuration/) (`max_body_bytes`, 2 MiB by
+  default) applies to the whole multipart body — raise it for large
+  direct uploads, or prefer the presigned path.
+- The uploaded part is buffered per field before it reaches storage; for
+  very large files the presigned PUT avoids proxying entirely.
+
+## Going further
+
+- [File storage](/storage/) — the presigned flow and the object-store client.
+- [`audio` in the demo](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/audio/http/controller.rs) — the direct upload in full.
+- [Streaming responses](/http/streaming/) — the download counterpart.

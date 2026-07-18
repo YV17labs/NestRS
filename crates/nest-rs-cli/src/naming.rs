@@ -208,9 +208,13 @@ fn port_role_file(role: &str, stem: &str, total: usize) -> String {
 /// File holding a **REST** data-transfer object (`Dto`): one → `dto.rs`, 2+ →
 /// `dtos/<stem>_dto.rs`. The macro-generated `Create<E>`/`Update<E>`
 /// (shared REST+GraphQL CRUD body) live inside the entity's `#[expose]` block,
-/// so the multi-DTO directory form has no generator caller yet — kept as the
-/// single source of the placement rule rather than re-deriving it.
-#[allow(dead_code)]
+/// so the multi-DTO directory form has no generator caller yet.
+///
+/// **Reserved surface** (no generator emits a DTO file today — the CRUD body is
+/// macro-generated inside `#[expose]`): kept as the single, tested source of
+/// the placement rule so a future `g dto` derives the path from here, not by
+/// re-deriving the convention. The `naming::tests` lock the rule.
+#[allow(dead_code)] // reserved: placement authority for a future `g dto`
 pub fn dto_file(stem: &str, total: usize) -> String {
     port_role_file("dto", stem, total)
 }
@@ -219,9 +223,9 @@ pub fn dto_file(stem: &str, total: usize) -> String {
 /// one handler): one → `command.rs`, 2+ → `commands/<stem>_command.rs`. The
 /// payload is a producer↔worker contract, so it lives at the port; the
 /// `queue/` adapter's `processor.rs` imports it. The single-`command.rs` form
-/// is what `g queue` emits today; the `commands/` directory form is the
-/// placement authority for the multi-payload case.
-#[allow(dead_code)]
+/// is what `g queue` emits today (via [`generate::adapter`](crate::commands));
+/// the `commands/` directory form is the placement authority for the
+/// multi-payload case.
 pub fn command_file(stem: &str, total: usize) -> String {
     port_role_file("command", stem, total)
 }
@@ -230,7 +234,10 @@ pub fn command_file(stem: &str, total: usize) -> String {
 /// potentially many consumers): one → `event.rs`, 2+ →
 /// `events/<stem>_event.rs`. Same port placement as a [`command_file`]; choose
 /// `Event` only when broadcasting a fact rather than commanding one handler.
-#[allow(dead_code)]
+///
+/// **Reserved surface** (no generator emits an event payload today): kept as
+/// the tested placement authority for a future event generator.
+#[allow(dead_code)] // reserved: placement authority for a future event generator
 pub fn event_file(stem: &str, total: usize) -> String {
     port_role_file("event", stem, total)
 }
@@ -239,7 +246,11 @@ pub fn event_file(stem: &str, total: usize) -> String {
 /// not the shared CRUD body). Same role-file rule as the port objects, but
 /// nested under the `graphql/` adapter (not the port): one → `graphql/input.rs`,
 /// 2+ → `graphql/inputs/<stem>_input.rs`.
-#[allow(dead_code)]
+///
+/// **Reserved surface** (no generator emits a hand-written GraphQL input today):
+/// kept as the tested placement authority — it also encodes the `graphql/`
+/// adapter nesting the port helpers do not.
+#[allow(dead_code)] // reserved: placement authority for a future `g graphql` input
 pub fn input_file(stem: &str, total: usize) -> String {
     format!("graphql/{}", port_role_file("input", stem, total))
 }

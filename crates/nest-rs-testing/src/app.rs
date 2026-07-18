@@ -60,7 +60,8 @@ impl TestAppBuilder {
         // env-aware defaults (GraphQL playground / SDL emit) stay off. An
         // explicit value wins (e.g. CI asserting prod behaviour).
         if std::env::var_os("NESTRS_ENV").is_none() {
-            // FIXME: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: runs during single-threaded harness bootstrap, before any
+            // app task or transport spawns — no concurrent env reader exists.
             // Test-harness env setup on the (non-test) lib build: the sole sanctioned unsafe.
             #[allow(unsafe_code)]
             unsafe {

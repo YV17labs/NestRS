@@ -9,7 +9,7 @@ use super::cargo::{adapter_deps, ensure_features_deps, ensure_workspace_deps};
 use super::{finish, resolve_start, wire_into_app};
 use crate::context::Context;
 use crate::error::{CliError, CliResult};
-use crate::naming::{Names, Transport};
+use crate::naming::{Names, Transport, command_file};
 use crate::scaffold::{Renderer, Scaffold, ensure_lines};
 use crate::templates::adapter;
 
@@ -60,8 +60,11 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     // `mod.rs` are folded into the single edit below (one edit per file).
     let mut port_lines = Vec::new();
     if transport == Transport::Queue {
+        // Single payload today, so `command_file` yields `command.rs`; routing
+        // through it keeps the port-object placement rule in one place for when
+        // the multi-payload (`commands/<stem>_command.rs`) form gains a caller.
         s.create(
-            feature_root.join("command.rs"),
+            feature_root.join(command_file(&opts.name, 1)),
             r.render(adapter::QUEUE_COMMAND),
         );
         port_lines.push("mod command;".to_string());

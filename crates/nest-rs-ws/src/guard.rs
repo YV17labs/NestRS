@@ -65,10 +65,12 @@ pub struct EventLayerTable {
 }
 
 impl EventLayerTable {
+    /// An empty table — `#[messages]` fills it at mount, one entry per event.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Register the resolved guard chain for one event name.
     pub fn insert(&mut self, event: &'static str, chain: Vec<Arc<dyn WsMessageCheck>>) {
         self.by_event.insert(event, chain);
     }

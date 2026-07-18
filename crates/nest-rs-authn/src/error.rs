@@ -17,16 +17,26 @@ pub struct CredentialError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AuthError {
+    /// No credential was presented (no bearer token, no cookie). Rendered as a
+    /// 401 challenge.
     #[error("missing credentials")]
     MissingCredentials,
+    /// The token was malformed or failed a claim check (`aud`/`iss`/generic
+    /// decode) — the catch-all token rejection.
     #[error("invalid token")]
     InvalidToken,
+    /// The token's signature did not verify against the configured key.
     #[error("invalid token signature")]
     InvalidSignature,
+    /// The token was signed with an algorithm the verifier does not accept —
+    /// closes an `alg`-confusion downgrade.
     #[error("invalid token algorithm")]
     InvalidAlgorithm,
+    /// The token's `nbf` (not-before) is still in the future, beyond leeway.
     #[error("token not yet valid")]
     NotYetValid,
+    /// The token's `exp` has passed, beyond leeway. Kept distinct from the
+    /// other token failures because it is the routine "log in again" case.
     #[error("token expired")]
     Expired,
     /// Strategy-specific or configuration failures. The message is for logs, not the client body.

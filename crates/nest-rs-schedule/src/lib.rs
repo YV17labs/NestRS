@@ -15,6 +15,7 @@
 // the production guarantee (the lib itself has no `unsafe`) without breaking the
 // integration test.
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod inventory;
 mod module;

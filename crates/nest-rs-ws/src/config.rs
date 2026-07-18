@@ -25,6 +25,8 @@ use validator::Validate;
 /// credential keeps a live socket's privileges.
 const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 
+/// WebSocket transport options resolved at boot (namespace `ws`). See the
+/// module docs for why the socket-lifetime ceiling is a security control.
 #[config(namespace = "ws")]
 #[derive(Clone, Debug, Validate)]
 pub struct WsConfig {

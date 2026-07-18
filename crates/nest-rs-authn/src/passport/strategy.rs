@@ -18,5 +18,7 @@ pub trait Strategy: Send + Sync + 'static {
     /// — every principal must say who it is for audit (or `None`).
     type Principal: PrincipalIdentity + Clone + Send + Sync + 'static;
 
+    /// Map the request to a principal, or return why authentication failed.
+    /// Must not issue a transport response — a pure request → principal step.
     async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError>;
 }

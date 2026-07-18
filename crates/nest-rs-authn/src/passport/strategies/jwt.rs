@@ -12,6 +12,9 @@ use crate::error::AuthError;
 use crate::jwt::JwtService;
 use crate::passport::{PrincipalIdentity, Strategy, bearer_token};
 
+/// Bearer-token [`Strategy`](crate::passport::Strategy): reads the `Authorization: Bearer`
+/// token and verifies it into the caller-chosen claims type `C` via the injected
+/// [`JwtService`]. `C` must be the principal (`DeserializeOwned + PrincipalIdentity`).
 #[injectable]
 pub struct JwtStrategy<C: Send + Sync + 'static> {
     #[inject]

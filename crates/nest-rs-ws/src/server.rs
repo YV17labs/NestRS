@@ -114,6 +114,7 @@ impl<N: 'static> WsServer<N> {
         Ok(self.emit_value(id, event, serde_json::to_value(data)?))
     }
 
+    /// Number of live connections currently registered — for health/metrics.
     pub fn connection_count(&self) -> usize {
         self.conns.lock().len()
     }
@@ -123,10 +124,16 @@ impl<N: 'static> WsServer<N> {
 /// needs without naming the namespace. Payloads cross it pre-encoded as
 /// [`serde_json::Value`] so the trait stays object-safe.
 pub trait Registry: Send + Sync + 'static {
+    /// Add a connection to a room (idempotent; no-op if the id is gone).
     fn join(&self, id: ConnId, room: &str);
+    /// Remove a connection from a room (no-op if absent).
     fn leave(&self, id: ConnId, room: &str);
+    /// Send a pre-encoded frame to every connection; returns the count reached.
     fn broadcast_value(&self, event: &str, data: serde_json::Value) -> usize;
+    /// Send a pre-encoded frame to every connection in `room`; returns the count
+    /// reached.
     fn emit_to_value(&self, room: &str, event: &str, data: serde_json::Value) -> usize;
+    /// Send a pre-encoded frame to one connection; `false` if it is gone.
     fn emit_value(&self, id: ConnId, event: &str, data: serde_json::Value) -> bool;
 }
 
@@ -187,6 +194,8 @@ pub struct WsClient {
 }
 
 impl WsClient {
+    /// Build a client handle over a connection id and its gateway's registry —
+    /// used by the mount code; tests usually reach for [`for_test`](Self::for_test).
     pub fn new(id: ConnId, registry: Arc<dyn Registry>) -> Self {
         Self { id, registry }
     }
@@ -203,18 +212,23 @@ impl WsClient {
         Self { id, registry }
     }
 
+    /// This connection's stable id, for addressing it later via the registry.
     pub fn id(&self) -> ConnId {
         self.id
     }
 
+    /// The type-erased [`Registry`] backing this client — for broadcasts or
+    /// room fan-out beyond this single connection.
     pub fn registry(&self) -> &Arc<dyn Registry> {
         &self.registry
     }
 
+    /// Add this connection to `room`, so a later `emit_to`/`to` reaches it.
     pub fn join(&self, room: impl AsRef<str>) {
         self.registry.join(self.id, room.as_ref());
     }
 
+    /// Remove this connection from `room`.
     pub fn leave(&self, room: &str) {
         self.registry.leave(self.id, room);
     }

@@ -65,6 +65,8 @@ impl Job {
 }
 
 impl Scheduler {
+    /// An empty scheduler with no container bound — jobs are added at
+    /// `configure` from the inventory. Prefer this over relying on `Default`.
     pub fn new() -> Self {
         Self {
             jobs: Vec::new(),

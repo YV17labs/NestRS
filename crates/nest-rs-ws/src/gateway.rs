@@ -28,8 +28,12 @@ use crate::server::{ConnId, Registry, WsClient, WsServer};
 /// `&self` and the connecting socket's [`WsClient`].
 #[async_trait]
 pub trait Gateway: Send + Sync + 'static {
+    /// Route one decoded message to its handler: match `event`, deserialize
+    /// `data`, invoke the handler, and wrap the return in [`WsReply`]. Emitted
+    /// by `#[messages]` — never hand-written.
     async fn dispatch(&self, client: &WsClient, event: &str, data: serde_json::Value) -> WsReply;
 
+    /// Runs once when a socket connects, after the upgrade guards pass.
     async fn on_connect(&self, client: &WsClient) {
         let _ = client;
     }
@@ -66,6 +70,9 @@ pub fn resolve_ws_data_pipe(container: &Container) -> Option<Arc<WsDataFold>> {
     ))
 }
 
+/// Assemble a [`GatewayEndpoint`] from a gateway and its resolved per-connection
+/// wiring (registry, guard table, ambient context, global data-pipe fold).
+/// Called by `#[gateway]`-generated mount code, not by hand.
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,

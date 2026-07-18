@@ -14,11 +14,20 @@ use crate::jwt::JwtOptions;
 const HS256_MIN_SECRET_BYTES: usize = 32;
 
 // No `Debug`: secrets must not leak through a derived format.
+/// Env-driven JWT key material (namespace `authn`). The combination of keys
+/// present selects the signing mode; see [`into_options`](Self::into_options).
+/// No `Debug` derive: secrets must not leak through a format.
 #[config(namespace = "authn")]
 #[derive(Clone, Default, Validate)]
 pub struct JwtConfig {
+    /// HS256 shared secret (`NESTRS_AUTHN__SECRET`). Present ⇒ symmetric mode;
+    /// must be ≥ 32 bytes. A verifier holding it can also mint tokens.
     pub secret: Option<String>,
+    /// EdDSA signing key, PEM (`NESTRS_AUTHN__PRIVATE_KEY`). Set only on the app
+    /// that issues tokens; requires `public_key` alongside it.
     pub private_key: Option<String>,
+    /// EdDSA verification key, PEM (`NESTRS_AUTHN__PUBLIC_KEY`). A resource
+    /// server holds only this — it can verify but not sign.
     pub public_key: Option<String>,
     /// Clock skew leeway in seconds (`NESTRS_AUTHN__LEEWAY_SECS`, default 30).
     pub leeway_secs: Option<u64>,

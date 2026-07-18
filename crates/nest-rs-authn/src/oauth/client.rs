@@ -20,6 +20,7 @@ use crate::oauth::OAuth2Config;
 
 /// The redirect leg of the flow, produced by [`OAuth2Client::authorize`].
 pub struct Authorization {
+    /// The provider authorization URL to redirect the user agent to.
     pub url: String,
     /// Signed, short-lived token binding the CSRF state to the PKCE verifier.
     /// Set as a cookie on the redirect; pass back to [`exchange`](OAuth2Client::exchange).
@@ -40,8 +41,13 @@ pub struct Authorization {
 /// fills it there — the base client does not parse OIDC extra fields.
 #[non_exhaustive]
 pub struct TokenSet {
+    /// The bearer access token used to call the provider's APIs (e.g. userinfo).
     pub access_token: String,
+    /// The OIDC id_token, when the provider reads identity from it. `None` on
+    /// the standard resource path — an OIDC provider fills it by overriding
+    /// `SocialProvider::exchange`.
     pub id_token: Option<String>,
+    /// The refresh token, when the provider issued one; `None` otherwise.
     pub refresh_token: Option<String>,
 }
 
@@ -53,6 +59,9 @@ struct Transaction {
     exp: u64,
 }
 
+/// A transient Authorization-Code (PKCE) client built per flow from an
+/// [`OAuth2Config`]. Its HTTP backend refuses redirects (anti-SSRF) and carries
+/// a fixed user-agent; see [`new`](Self::new).
 pub struct OAuth2Client {
     config: OAuth2Config,
     http: oauth2::reqwest::Client,

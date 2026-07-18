@@ -9,6 +9,10 @@ use poem::Request;
 
 use crate::passport::Strategy;
 
+/// The authentication guard: runs a [`Strategy`] on the request, attaches the
+/// resulting principal, and records `actor_id` on the span. Generic over the
+/// strategy `S`. Bind it via `#[use_guards]` / `use_guards_global`; on a
+/// `#[public]` route it authenticates opportunistically but never rejects.
 #[injectable]
 pub struct AuthGuard<S: Strategy> {
     #[inject]

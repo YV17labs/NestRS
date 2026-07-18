@@ -17,7 +17,10 @@ pub enum JwtKey {
     Hmac(String),
     /// Asymmetric PEM keys. `private_pem` is `None` on a verify-only resource server.
     Pem {
+        /// EdDSA private key, PEM. `None` on a verify-only resource server —
+        /// then [`sign`](JwtService::sign) refuses.
         private_pem: Option<String>,
+        /// EdDSA public key, PEM. Always present — verification needs it.
         public_pem: String,
     },
 }
@@ -25,8 +28,12 @@ pub enum JwtKey {
 /// Runtime JWT settings passed to [`AuthnModule::for_root`](super::AuthnModule::for_root).
 #[derive(Clone)]
 pub struct JwtOptions {
+    /// The key material (HMAC secret or EdDSA PEM pair) backing sign/verify.
     pub key: JwtKey,
+    /// The signing/verifying algorithm; kept alongside [`key`](Self::key) so
+    /// the header and validation agree on it.
     pub algorithm: Algorithm,
+    /// Lifetime applied to minted tokens' `exp` (default 1 hour).
     pub expires_in: Duration,
     /// Clock skew tolerated when validating `exp` / `nbf`.
     pub leeway: Duration,
@@ -39,6 +46,8 @@ pub struct JwtOptions {
 impl JwtOptions {
     const DEFAULT_LEEWAY: Duration = Duration::from_secs(30);
 
+    /// HS256 options from a shared secret. Audience/issuer are unset (no
+    /// claim check) and TTL defaults to 1 hour — layer on via the fields.
     pub fn new(secret: impl Into<String>) -> Self {
         Self {
             key: JwtKey::Hmac(secret.into()),
@@ -50,6 +59,7 @@ impl JwtOptions {
         }
     }
 
+    /// EdDSA options with both keys — a token *issuer* that can sign and verify.
     pub fn eddsa(private_pem: impl Into<String>, public_pem: impl Into<String>) -> Self {
         Self {
             key: JwtKey::Pem {
@@ -64,6 +74,8 @@ impl JwtOptions {
         }
     }
 
+    /// EdDSA options with only the public key — a *resource server* that can
+    /// verify but never mint (the `apps/api` posture).
     pub fn eddsa_verify(public_pem: impl Into<String>) -> Self {
         Self {
             key: JwtKey::Pem {
@@ -79,6 +91,8 @@ impl JwtOptions {
     }
 }
 
+/// Singleton token signer/verifier, built once at boot and injected wherever a
+/// token is signed or verified. `encoding` is `None` on a verify-only server.
 pub struct JwtService {
     encoding: Option<EncodingKey>,
     decoding: DecodingKey,
@@ -88,6 +102,10 @@ pub struct JwtService {
 }
 
 impl JwtService {
+    /// Build the service from [`JwtOptions`], deriving keys and pinning the
+    /// validation policy (`exp`/`nbf` always checked; `aud`/`iss` required only
+    /// when configured, and then also required-present so an omitting token
+    /// fails closed). Errors on unparseable PEM key material.
     pub fn new(options: JwtOptions) -> Result<Self, AuthError> {
         let (encoding, decoding) = match &options.key {
             JwtKey::Hmac(secret) => {
@@ -147,6 +165,8 @@ impl JwtService {
         })
     }
 
+    /// Sign `claims` into a compact JWT. Errors on a verify-only service (no
+    /// encoding key) or a serialization failure.
     pub fn sign<C: Serialize>(&self, claims: &C) -> Result<String, AuthError> {
         let encoding = self.encoding.as_ref().ok_or_else(|| {
             AuthError::Failed("this JwtService is verify-only — no signing key configured".into())
@@ -154,12 +174,17 @@ impl JwtService {
         encode(&self.header, claims, encoding).map_err(|e| AuthError::Failed(e.to_string()))
     }
 
+    /// Verify `token` and deserialize its claims into `C`, applying the pinned
+    /// `exp`/`nbf`/`aud`/`iss` validation. Maps the failure to a typed
+    /// [`AuthError`] (expired, bad signature, wrong algorithm, …).
     pub fn verify<C: DeserializeOwned>(&self, token: &str) -> Result<C, AuthError> {
         decode::<C>(token, &self.decoding, &self.validation)
             .map(|data| data.claims)
             .map_err(map_decode_error)
     }
 
+    /// Absolute `exp` for a token minted now with the default TTL — the value
+    /// callers put in a claims struct's `exp` field.
     pub fn expiry(&self) -> u64 {
         get_current_timestamp() + self.expires_in.as_secs()
     }
@@ -171,6 +196,8 @@ impl JwtService {
         get_current_timestamp() + secs
     }
 
+    /// The configured default token lifetime, in seconds — e.g. to report a
+    /// token's `expires_in` in an OAuth token response.
     pub fn ttl_secs(&self) -> u64 {
         self.expires_in.as_secs()
     }

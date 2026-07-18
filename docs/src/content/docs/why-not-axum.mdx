@@ -1,0 +1,134 @@
+---
+title: Why not axum?
+description: The honest comparison — axum routes HTTP; NestRS adds the multi-tenant isolation you cannot forget.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+You are a Rust engineer, so you already know axum. It is a focused,
+well-built routing and HTTP library on top of hyper and tokio, and it does
+that job cleanly. So the fair question is not "which is faster" — both compile
+to native code on the same core. The question is what each one hands you.
+
+axum hands you a router. NestRS hands you an application framework: the
+cross-cutting concerns — authn, authz, row-level tenant filtering, per-field
+masking, transactions — are carried by the framework, checked at boot, applied
+by the data layer. The one thing you cannot forget is a tenant filter, because
+you never write it.
+
+Here is a full authenticated, tenant-scoped, transactional, field-masked CRUD
+resource for orgs. The `impl` block is empty on purpose.
+
+```rust title="demo/crates/features/src/orgs/http/controller.rs (abridged)"
+#[controller(path = "/orgs")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct OrgsController {
+    #[inject]
+    svc: Arc<OrgsService>,
+}
+
+#[crud(
+    service = svc,
+    entity = OrgEntity,
+    output = Org,
+    create = CreateOrg,
+    update = UpdateOrg,
+)]
+impl OrgsController {}
+```
+
+The two guards declare posture; `#[crud]` generates the five REST operations
+and re-emits them under `#[routes]`. Every read goes through the data layer,
+which filters rows by the caller's ambient ability. Every write runs inside a
+transaction that commits on `2xx`/`3xx` and rolls back otherwise. Every
+response body is masked field by field. None of that appears in the file,
+because none of it is yours to maintain.
+
+## What you assemble by hand with axum
+
+The same resource on axum is not hard to write. It is hard to keep correct
+across a codebase, because each concern lives in a different place and each
+query is a place a tenant filter can go missing.
+
+- **Routing** — five handlers registered on a `Router`, one per operation.
+- **Auth** — a tower middleware that validates the token and attaches a
+  principal, plus an authorization check inside each handler.
+- **Tenancy** — a `WHERE org_id = $1` on every read, and a matching check on
+  every write. This is the load-bearing line. Nothing in the type system
+  reminds you when a new query forgets it.
+- **Transactions** — begin, commit, and rollback wired per mutating handler,
+  or a middleware that installs a transaction and a discipline that every
+  query picks it up.
+- **Masking** — a response shape per role, applied by hand before serializing.
+
+Each of these is one correct line and one forgotten line away from a
+cross-tenant leak. In NestRS the filter is applied by the data layer from the
+ambient ability, so forgetting it is a category error the framework prevents —
+not a review comment someone has to catch.
+
+<Aside type="note">
+  Once the security modules are imported, every read is filtered, every write
+  is gated, and every response is masked. A feature does not opt in to this;
+  it opts out by not importing them. Security is structural, not vigilant.
+</Aside>
+
+## Wiring you find out about at boot, not at 3am
+
+axum resolves its state and its routes as you build the `Router`. A dependency
+you forgot to thread through surfaces where you use it, at runtime, on the
+request that needs it.
+
+NestRS records every module's imports and every provider's dependencies at
+compile time, then walks the graph in `App::build()`. A provider that injects
+something its module cannot reach fails the boot with an error naming the
+consumer, the missing dependency, and the module that provides it — before the
+first request. The check lives in
+[`crates/nest-rs-core/src/access.rs`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-core/src/access.rs)
+and governs `#[inject]` and the guard, filter, and interceptor attributes
+alike.
+
+A misconfigured import is a startup error you read once, not a `Cannot
+resolve` your users find for you.
+
+## Performance is the secondary benefit
+
+NestRS sits on top of hyper, tokio, and poem — the same native core the
+fastest Rust frameworks use. So performance is not the axis that separates the
+two; both are compiled and both are fast. It is a benefit, not the argument.
+
+For context, our own measurements on the demo API — a single instance, the
+full JWT plus authz plus row-level plus masking pipeline, Postgres included —
+land around 23k req/s with a p99 under 4.5 ms in roughly 32 MB of resident
+memory. The binary ships in the 11–20 MB range and boots in tens of
+milliseconds. These are figures we measured on our hardware, not a published,
+reproducible harness — treat them as a shape, not a spec.
+
+<Aside type="caution">
+  Do not choose NestRS for the throughput number. Choose it for the
+  guarantees. If the guarantees do not apply to your service, the throughput
+  alone does not justify the framework over a router you already know.
+</Aside>
+
+## Where axum is still the right call
+
+Respect the tool for its job. Reach for axum directly when the application
+framework has nothing to carry:
+
+- **A small proxy or gateway** with no data model and no per-tenant authz.
+- **A single-tenant service** where there is no row-level isolation to enforce
+  and no masking to apply.
+- **A library or embedded component** that should stay a thin dependency, not
+  pull in a composition model.
+
+NestRS earns its keep the moment you have cross-cutting concerns —
+authentication, authorization, tenancy, transactions — repeated across many
+features. That is exactly where hand-wired correctness drifts, and exactly what
+the framework is built to make structural. If your service does not have that
+shape, axum is the honest answer.
+
+## Going further
+
+- [Why NestRS](/why/) — the thesis and the six structural properties that follow.
+- [Security](/security/) — how row-level filtering, gating, and masking compose.
+- [The Publish workspace](/publish/) — the users/orgs/posts universe every example uses.
+- [Fundamentals — Providers](/fundamentals/providers/) — the access graph checked at boot.

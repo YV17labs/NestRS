@@ -113,8 +113,9 @@ Landed with the first `0.1.0` crates.io release and the first docs push:
 - **Scaffolding CLI** — **`nest-rs-cli`** / binary **`nestrs`**: `nestrs new`
   (workspace by default, `--standalone` for a single crate), `nestrs g feature`
   (transport-agnostic port), the `g resource` / `http` / `graphql` / `ws` /
-  `queue` / `schedule` / `mcp` generators, and `nestrs doctor` all ship in the
-  workspace; crates.io with the next lockstep release.
+  `queue` / `schedule` / `mcp` generators, and `nestrs doctor` — published on
+  [crates.io](https://crates.io/crates/nest-rs-cli) with the `0.3.0` lockstep
+  release (`cargo install --locked nest-rs-cli`).
 
 ## Next — project & release infrastructure
 

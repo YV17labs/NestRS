@@ -7,15 +7,56 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/NestRS/NestRS/stargazers"><img src="https://img.shields.io/github/stars/NestRS/NestRS?style=flat&logo=github&color=555" alt="GitHub stars"></a>
   <img src="https://img.shields.io/badge/built%20with-Rust-CE412B?logo=rust&logoColor=white" alt="Built with Rust">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 </p>
 
+## What it is
+
+You write business logic; the framework carries the rest — authn, authz,
+row-level tenant filtering, per-field masking, transactions, discovery, and
+lifecycle. Those concerns are transparent to your code and verified at boot,
+not left to review discipline.
+
+A full authenticated, tenant-scoped, transactional, field-masked CRUD resource
+is an empty `impl` block:
+
+```rust
+#[controller(path = "/orgs")]
+#[use_guards(AuthGuard, AuthzGuard)]
+pub struct OrgsController {
+    #[inject]
+    svc: Arc<OrgsService>,
+}
+
+#[crud(service = svc, entity = OrgEntity, output = Org,
+       create = CreateOrg, update = UpdateOrg)]
+impl OrgsController {}
+```
+
+The differentiator is **structural multi-tenant isolation you cannot forget**:
+row-level filtering, response masking, and transactions become non-optional the
+moment the security modules are imported. A feature opts *out* by not importing
+them. No other framework — NestJS, Spring, Rails, axum, Actix, Loco — offers
+this as a structural guarantee.
+
+And it stays lean. Our own measurements of the demo API — the full JWT + authz
++ row-level + masking pipeline, Postgres included — land around **23k req/s**,
+**p99 < 4.5 ms**, in **~32 MB** of resident memory; the binary ships at 11–20 MB
+and boots in tens of milliseconds. (Our hardware, our numbers — a shape, not a
+reproducible harness.)
+
+→ [Why not axum?](https://nestrs.dev/why-not-axum/) ·
+[Coming from NestJS](https://nestrs.dev/coming-from-nestjs/) ·
+[Why NestRS](https://nestrs.dev/why/)
+
 ## Documentation
 
 **Using NestRS?** Head to **[nestrs.dev](https://nestrs.dev)** — getting started,
-tutorial, [why NestRS](https://nestrs.dev/why/), benchmarks, and one section per
+tutorial, [why NestRS](https://nestrs.dev/why/), the
+[axum comparison](https://nestrs.dev/why-not-axum/), and one section per
 capability crate.
 
 **Contributing to the framework?** This README is your entry point. For design

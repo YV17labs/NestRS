@@ -39,15 +39,32 @@ framework that only **documents** the same concerns.
   generated loader type (`UsersServiceByName`) is found by naming convention; a typo
   surfaces at runtime or as a cryptic type error. Typed queue handles and a clearer
   loader-type surface would move both to compile time.
+- **Alias-proof masking arm** — `#[routes]` arms the response shaper (ambient
+  ability + masking) by *textually* matching a parameter path segment named
+  `Authorize`/`Bind`, so a renamed import (`use Authorize as Az`) keeps the
+  class gate but silently skips masking. The scoped data path stays fail-closed
+  (pinned by tests), but a hand-built body ships unmasked. The fix is a generic
+  ambient-context seam in `nest-rs-http` (the extractor registers a type-erased
+  masker + ability; a generic shaper applies them) so arming stops depending on
+  how the type is spelled — a security-critical rework, staged deliberately.
+- **Transparent row-level filtering on MCP** — rmcp executes a `#[tool]` body
+  inside its own spawned `serve_inner` loop, so the executor/ability task-locals
+  installed around the endpoint never reach the tool. The guard chain works
+  (deny-all default, 401 without a token); making `Repo`-backed tools transparent
+  needs executor + ability re-installed *inside* rmcp's dispatch (wrapping the
+  generated `call_tool`), the same guarantee the other three transports already
+  carry.
 
 ## Next — completing shipped features
 
 Known, deliberate gaps in features that already ship:
 
-- **OpenAPI completeness** — the emitted document omits query and header
-  parameters, types every path parameter as `string`, and documents no security
-  schemes; a committed `openapi.json` snapshot written on boot (mirroring the
-  GraphQL SDL) is also missing.
+- **OpenAPI last edges** — the document now carries typed path params, expanded
+  query params, `bearerAuth` on guarded routes, RFC 9457 error responses and a
+  boot-written `openapi.json` snapshot. What remains: header parameters, a
+  schema for multipart request bodies and streamed responses (both advertise no
+  body today), and replacing the heuristic error statuses (`422` on any body,
+  `404` on any `:param` path) with per-route declarations.
 - **Dependency-injection scopes** — request and transient scopes ship on HTTP via
   `Scoped<T>`. What remains is request-scoped → request-scoped dependencies (the
   model is one level deep over singletons today), and bridging the scope into the
@@ -78,8 +95,11 @@ The verdict on what is **not** worth reproducing is in *Not on the roadmap*.
   share limits across processes, reusing the queue's connection pattern.
 - **Caching** — a `CacheModule` + a response-caching interceptor + an injectable
   `Cache` provider, memory- or Redis-backed.
-- **File upload & streaming responses** — a multipart extractor for uploads and a
-  `StreamableFile` response for large or generated payloads.
+- **Streaming uploads** — multipart uploads, streamed download bodies, SSE and
+  response compression all ship (poem's `Multipart`, `Body::from_bytes_stream`,
+  `SSE`, `HttpConfig.compression`); what remains is streaming a multipart *part*
+  into storage without buffering it whole per field, plus a dedicated size cap
+  for multipart bodies (`max_body_bytes` gates `RawBody`/`Json` only).
 
 ## Shipped — project & release infrastructure
 

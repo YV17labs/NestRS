@@ -1,6 +1,8 @@
 //! [`OpenApiConfig`] — the OpenAPI document `info` block, populated from
 //! `NESTRS_OPENAPI__*` in the `.env` cascade.
 
+use std::path::PathBuf;
+
 use nest_rs_config::{Config, ConfigService, Result, config};
 use validator::Validate;
 
@@ -30,6 +32,14 @@ pub struct OpenApiConfig {
     pub version: String,
     /// Optional long-form API description for the `info` block.
     pub description: Option<String>,
+    /// (Re)write [`document_path`](Self::document_path) with the built document
+    /// once at boot — the OpenAPI analogue of the GraphQL SDL emit, so the
+    /// committed `openapi.json` stays fresh as a side effect of a dev run.
+    /// Default `false`; the demo turns it on with `NESTRS_OPENAPI__EMIT_DOCUMENT=true`.
+    pub emit_document: bool,
+    /// Where [`emit_document`](Self::emit_document) writes the JSON document,
+    /// relative to the process working directory. Default `openapi.json`.
+    pub document_path: PathBuf,
 }
 
 impl Default for OpenApiConfig {
@@ -39,6 +49,8 @@ impl Default for OpenApiConfig {
             title: "nestrs API".into(),
             version: "0.1.0".into(),
             description: None,
+            emit_document: false,
+            document_path: "openapi.json".into(),
         }
     }
 }
@@ -54,6 +66,11 @@ impl Config for OpenApiConfig {
             title: env.get("TITLE").unwrap_or(d.title),
             version: env.get("VERSION").unwrap_or(d.version),
             description: env.get("DESCRIPTION"),
+            emit_document: env.flag("EMIT_DOCUMENT", d.emit_document)?,
+            document_path: env
+                .get("DOCUMENT_PATH")
+                .map(PathBuf::from)
+                .unwrap_or(d.document_path),
         })
     }
 }

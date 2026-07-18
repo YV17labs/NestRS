@@ -164,6 +164,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         generated.push(parse_quote! {
             #[post("/")]
             #[api(summary = #summary, tags(#tag))]
+            #[crud_write]
             async fn create(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Create, #entity>,
@@ -187,6 +188,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         generated.push(parse_quote! {
             #[patch("/:id")]
             #[api(summary = #summary, tags(#tag))]
+            #[crud_write]
             async fn update(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Update, #entity>,
@@ -228,6 +230,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         generated.push(parse_quote! {
             #[delete("/:id")]
             #[api(summary = #summary, tags(#tag))]
+            #[crud_write]
             async fn delete(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Delete, #entity>,

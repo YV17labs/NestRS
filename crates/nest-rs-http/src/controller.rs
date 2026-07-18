@@ -77,6 +77,25 @@ pub struct HttpRouteMeta {
     pub request_body: Option<SchemaFn>,
     /// Schema builder for the `Json<T>` response, or `None` for a non-JSON return.
     pub response: Option<SchemaFn>,
+    /// Schema builders for the handler's `Path<T>` extractor components, in
+    /// path order (a `Path<(A, B)>` tuple yields one per element). Empty when
+    /// the handler binds its id another way (`Bind<_, _>`) — the doc then falls
+    /// back to a `format: uuid` guess for id-like segments. Each imposes a
+    /// `JsonSchema` bound, so a `Path<Uuid>` types the parameter as
+    /// `string`/`format: uuid`, a `Path<i64>` as `integer`.
+    pub path_params: &'static [SchemaFn],
+    /// Schema builders for the handler's `Query<T>` extractor payloads (one per
+    /// `Query<T>` argument; `Valid`/`Piped` wrappers are unwrapped). Each `T`'s
+    /// object schema is expanded into one OpenAPI `query` parameter per property
+    /// — this is how the `#[crud]` list op surfaces its `first`/`after`
+    /// pagination cursor. Imposes `JsonSchema` on every `Query<T>` type, the
+    /// same contract `Json<T>` bodies already carry.
+    pub query_params: &'static [SchemaFn],
+    /// The operation is a write that can fail a uniqueness/constraint check and
+    /// surface a `409 Conflict` — the `#[crud]` create/update/delete ops set it
+    /// so the document advertises the conflict response their write-error mapper
+    /// can actually produce. A hand-written handler leaves it `false`.
+    pub may_conflict: bool,
     /// A controller- or method-level `#[use_guards]` covers this route. Read at
     /// boot by the fail-secure posture check. A global guard pool covers every
     /// route regardless, so the check only consults this when no pool is active.
@@ -218,6 +237,9 @@ mod tests {
             tags: &["Users"],
             request_body: None,
             response: None,
+            path_params: &[],
+            query_params: &[],
+            may_conflict: false,
             scoped_guarded: false,
             public: false,
         }];
@@ -259,6 +281,9 @@ mod tests {
             tags: &[],
             request_body: None,
             response: None,
+            path_params: &[],
+            query_params: &[],
+            may_conflict: false,
             scoped_guarded,
             public,
         }

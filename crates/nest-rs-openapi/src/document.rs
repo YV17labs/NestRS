@@ -31,7 +31,7 @@ pub fn build_document(
         let prefix = controller.meta.effective_prefix();
         for route in &controller.meta.routes {
             let full = join_path(&prefix, route.path);
-            let operation = operation_object(route, &path_parameters(&full), &mut generator);
+            let operation = operation_object(route, &full, &mut generator);
             let item = paths
                 .entry(openapi_path(&full))
                 .or_insert_with(|| Value::Object(Map::new()));
@@ -41,7 +41,11 @@ pub fn build_document(
         }
     }
 
-    let schemas = generator.take_definitions(true);
+    let mut schemas = generator.take_definitions(true);
+    // The RFC 9457 error body every failure renders (see `nest_rs_http::problem`).
+    // Hand-written rather than derived so the doc has no build-time dependency on
+    // the concrete struct's schemars derive.
+    schemas.insert("ProblemDetails".into(), problem_details_schema());
 
     let mut info = json!({ "title": title, "version": version });
     if let (Some(description), Value::Object(info)) = (description, &mut info) {
@@ -52,13 +56,42 @@ pub fn build_document(
         "openapi": "3.1.2",
         "info": info,
         "paths": Value::Object(paths),
-        "components": { "schemas": Value::Object(schemas) },
+        "components": {
+            "schemas": Value::Object(schemas),
+            // A guarded operation carries `security: [{ bearerAuth: [] }]`; a
+            // `#[public]` one carries none — so a generated client can tell the
+            // two apart (the gap this closes).
+            "securitySchemes": {
+                "bearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "JWT",
+                }
+            },
+        },
+    })
+}
+
+/// The RFC 9457 `application/problem+json` schema referenced by every error
+/// response. `errors` is the extension member field-level validation rides on.
+fn problem_details_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "type": { "type": "string", "format": "uri" },
+            "title": { "type": "string" },
+            "status": { "type": "integer" },
+            "detail": { "type": "string" },
+            "instance": { "type": "string", "format": "uri" },
+            "errors": { "type": "object", "additionalProperties": true },
+        },
+        "required": ["type", "title", "status"],
     })
 }
 
 fn operation_object(
     route: &HttpRouteMeta,
-    parameters: &[Value],
+    full_path: &str,
     generator: &mut SchemaGenerator,
 ) -> Value {
     let mut op = Map::new();
@@ -70,9 +103,13 @@ fn operation_object(
     if let Some(description) = route.description {
         op.insert("description".into(), json!(description));
     }
+
+    let mut parameters = typed_path_parameters(full_path, route.path_params, generator);
+    parameters.extend(expand_query_params(route.query_params, generator));
     if !parameters.is_empty() {
-        op.insert("parameters".into(), Value::Array(parameters.to_vec()));
+        op.insert("parameters".into(), Value::Array(parameters));
     }
+
     if let Some(schema_fn) = route.request_body {
         op.insert(
             "requestBody".into(),
@@ -83,8 +120,13 @@ fn operation_object(
         );
     }
 
+    // A guarded, non-public route demands a bearer token.
+    if route.scoped_guarded && !route.public {
+        op.insert("security".into(), json!([{ "bearerAuth": [] }]));
+    }
+
+    let mut responses = Map::new();
     let mut ok = Map::new();
-    // OpenAPI requires a response description; per-response text isn't modeled yet.
     ok.insert("description".into(), json!("OK"));
     if let Some(schema_fn) = route.response {
         ok.insert(
@@ -92,23 +134,120 @@ fn operation_object(
             json!({ "application/json": { "schema": schema_fn(generator).to_value() } }),
         );
     }
-    op.insert("responses".into(), json!({ "200": Value::Object(ok) }));
+    responses.insert("200".into(), Value::Object(ok));
+    for (status, title) in error_statuses(route, full_path) {
+        responses.insert(status.into(), problem_response(title));
+    }
+    op.insert("responses".into(), Value::Object(responses));
 
     Value::Object(op)
 }
 
-fn path_parameters(path: &str) -> Vec<Value> {
+/// Path parameters typed from the handler's `Path<T>` extractor: the `i`-th
+/// `:name` segment gets the schema of `path_params[i]`. When the handler binds
+/// its id another way (`Bind<_, _>` leaves `path_params` empty), fall back to a
+/// `string`/`format: uuid` guess for an id-like segment.
+fn typed_path_parameters(
+    path: &str,
+    path_params: &[nest_rs_http::SchemaFn],
+    generator: &mut SchemaGenerator,
+) -> Vec<Value> {
     path.split('/')
         .filter_map(|seg| seg.strip_prefix(':'))
-        .map(|name| {
-            json!({
-                "name": name,
-                "in": "path",
-                "required": true,
-                "schema": { "type": "string" },
-            })
+        .enumerate()
+        .map(|(i, name)| {
+            let schema = match path_params.get(i) {
+                Some(schema_fn) => schema_fn(generator).to_value(),
+                None if name == "id" || name.ends_with("_id") => {
+                    json!({ "type": "string", "format": "uuid" })
+                }
+                None => json!({ "type": "string" }),
+            };
+            json!({ "name": name, "in": "path", "required": true, "schema": schema })
         })
         .collect()
+}
+
+/// Expand each `Query<T>` payload into one `query` parameter per property of
+/// `T`'s object schema — this is how the `#[crud]` list op's `Query<PageParams>`
+/// surfaces `first` and `after`. A property absent from the schema's `required`
+/// is an optional query parameter.
+fn expand_query_params(
+    query_params: &[nest_rs_http::SchemaFn],
+    _generator: &mut SchemaGenerator,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    for schema_fn in query_params {
+        // A named struct (`PageParams`) yields a `$ref`, not inline properties.
+        // Build it in a throwaway generator and resolve the ref against that
+        // generator's definitions so we get the object with its `properties`.
+        let mut sub = SchemaSettings::draft2020_12().into_generator();
+        let schema = schema_fn(&mut sub).to_value();
+        let defs = sub.take_definitions(true);
+        let object = resolve_ref(&schema, &defs);
+        let required: Vec<&str> = object
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|r| r.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if let Some(props) = object.get("properties").and_then(Value::as_object) {
+            for (name, prop_schema) in props {
+                out.push(json!({
+                    "name": name,
+                    "in": "query",
+                    "required": required.contains(&name.as_str()),
+                    "schema": prop_schema,
+                }));
+            }
+        }
+    }
+    out
+}
+
+/// Follow a top-level `{"$ref": "…/Name"}` to its definition; return the schema
+/// unchanged when it is already inline.
+fn resolve_ref(schema: &Value, defs: &Map<String, Value>) -> Value {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
+        && let Some(name) = reference.rsplit('/').next()
+        && let Some(def) = defs.get(name)
+    {
+        return def.clone();
+    }
+    schema.clone()
+}
+
+/// The error responses an operation can actually produce, as `(status, title)`.
+/// Honest per route: auth codes only on a guarded route, `404` only where a
+/// path binds an id, `409` only on a `#[crud]` write, `422` only with a body.
+fn error_statuses(route: &HttpRouteMeta, full_path: &str) -> Vec<(&'static str, &'static str)> {
+    let mut out = Vec::new();
+    if route.request_body.is_some() {
+        out.push(("422", "Unprocessable Content"));
+    }
+    if route.scoped_guarded && !route.public {
+        out.push(("401", "Unauthorized"));
+        out.push(("403", "Forbidden"));
+    }
+    if full_path.contains(":") {
+        out.push(("404", "Not Found"));
+    }
+    if route.may_conflict {
+        out.push(("409", "Conflict"));
+    }
+    out
+}
+
+/// A single `application/problem+json` error response referencing the shared
+/// `ProblemDetails` schema.
+fn problem_response(title: &str) -> Value {
+    json!({
+        "description": title,
+        "content": {
+            "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+            }
+        }
+    })
 }
 
 /// poem path syntax (`/users/:id`) → OpenAPI syntax (`/users/{id}`).
@@ -155,23 +294,28 @@ mod tests {
 
     #[test]
     fn derives_path_parameters() {
-        let params = path_parameters("/users/:id");
+        let mut g = generator();
+        // No `Path<T>` schema ⇒ an `id` segment falls back to `format: uuid`.
+        let params = typed_path_parameters("/users/:id", &[], &mut g);
         assert_eq!(params.len(), 1);
         assert_eq!(params[0]["name"], "id");
         assert_eq!(params[0]["in"], "path");
         assert_eq!(params[0]["required"], true);
         assert_eq!(params[0]["schema"]["type"], "string");
+        assert_eq!(params[0]["schema"]["format"], "uuid");
     }
 
     #[test]
     fn path_parameters_is_empty_for_a_static_path() {
-        assert!(path_parameters("/health").is_empty());
-        assert!(path_parameters("/").is_empty());
+        let mut g = generator();
+        assert!(typed_path_parameters("/health", &[], &mut g).is_empty());
+        assert!(typed_path_parameters("/", &[], &mut g).is_empty());
     }
 
     #[test]
     fn path_parameters_emits_one_object_per_segment() {
-        let params = path_parameters("/orgs/:org_id/users/:id");
+        let mut g = generator();
+        let params = typed_path_parameters("/orgs/:org_id/users/:id", &[], &mut g);
         assert_eq!(params.len(), 2);
         assert_eq!(params[0]["name"], "org_id");
         assert_eq!(params[1]["name"], "id");
@@ -204,6 +348,9 @@ mod tests {
             description: None,
             request_body: None,
             response: None,
+            path_params: &[],
+            query_params: &[],
+            may_conflict: false,
             scoped_guarded: false,
             public: false,
         }
@@ -214,7 +361,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("get_health", "/health");
         r.tags = &["health"];
-        let op = operation_object(&r, &[], &mut g);
+        let op = operation_object(&r, "/health", &mut g);
         assert_eq!(op["operationId"], "get_health");
         assert_eq!(op["tags"][0], "health");
     }
@@ -222,7 +369,7 @@ mod tests {
     #[test]
     fn operation_object_skips_optional_metadata_when_absent() {
         let mut g = generator();
-        let op = operation_object(&route("h", "/h"), &[], &mut g);
+        let op = operation_object(&route("h", "/h"), "/h", &mut g);
         let obj = op.as_object().unwrap();
         assert!(!obj.contains_key("summary"));
         assert!(!obj.contains_key("description"));
@@ -236,7 +383,7 @@ mod tests {
         let mut r = route("h", "/h");
         r.summary = Some("Quick");
         r.description = Some("Full prose");
-        let op = operation_object(&r, &[], &mut g);
+        let op = operation_object(&r, "/h", &mut g);
         assert_eq!(op["summary"], "Quick");
         assert_eq!(op["description"], "Full prose");
     }
@@ -245,8 +392,7 @@ mod tests {
     fn operation_object_inlines_parameters_when_path_has_any() {
         let mut g = generator();
         let r = route("get_user", "/users/:id");
-        let params = path_parameters("/users/:id");
-        let op = operation_object(&r, &params, &mut g);
+        let op = operation_object(&r, "/users/:id", &mut g);
         assert!(op["parameters"].is_array());
         assert_eq!(op["parameters"][0]["name"], "id");
     }
@@ -256,7 +402,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("create_user", "/users");
         r.request_body = Some(schema_for_dummy);
-        let op = operation_object(&r, &[], &mut g);
+        let op = operation_object(&r, "/users", &mut g);
         assert_eq!(op["requestBody"]["required"], true);
         assert!(op["requestBody"]["content"]["application/json"]["schema"].is_object());
     }
@@ -264,7 +410,7 @@ mod tests {
     #[test]
     fn operation_object_always_emits_a_200_response_with_description() {
         let mut g = generator();
-        let op = operation_object(&route("h", "/h"), &[], &mut g);
+        let op = operation_object(&route("h", "/h"), "/h", &mut g);
         assert_eq!(op["responses"]["200"]["description"], "OK");
         // No `response` fn → no content block on 200.
         assert!(op["responses"]["200"].get("content").is_none());
@@ -275,7 +421,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("get_user", "/users/:id");
         r.response = Some(schema_for_dummy);
-        let op = operation_object(&r, &[], &mut g);
+        let op = operation_object(&r, "/users/:id", &mut g);
         assert!(op["responses"]["200"]["content"]["application/json"]["schema"].is_object());
     }
 

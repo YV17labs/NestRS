@@ -212,7 +212,7 @@ impl WeatherProvider for StubWeather {
 }
 
 let app = TestApp::builder()
-    .module::<AssistantModule>()
+    .module::<AppModule>()
     .override_dyn::<dyn WeatherProvider>(Arc::new(StubWeather))
     .build()
     .await?;

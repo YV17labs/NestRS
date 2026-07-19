@@ -24,6 +24,10 @@ nest-rs-guards = { workspace = true, features = ["graphql"] }
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-mcp.workspace = true
+# The rmcp `#[tool_router]`/`#[tool_handler]` macros (re-exported by
+# nest-rs-mcp) expand to `rmcp::` paths, so a crate hosting an MCP tool needs
+# the crate in scope directly.
+rmcp.workspace = true
 nest-rs-pipes.workspace = true
 nest-rs-queue.workspace = true
 nest-rs-redis.workspace = true

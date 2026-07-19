@@ -209,7 +209,7 @@ Tool inputs are deserialized to a typed struct, so the schema the client reads
 is already typed. For extra checks beyond shape — ranges, enums, mutual
 exclusion — pair `serde` with `validator`:
 
-```rust title="apps/assistant/src/weather/coords.rs"
+```rust title="src/weather/coords.rs"
 use nest_rs_mcp::schemars;
 use serde::Deserialize;
 use validator::Validate;
@@ -224,7 +224,7 @@ pub struct Coords {
 }
 ```
 
-```rust title="apps/assistant/src/weather/tool.rs (abridged)"
+```rust title="src/weather/tool.rs (abridged)"
 #[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
 async fn current_weather(
     &self,
@@ -338,7 +338,9 @@ the access graph rejects accidental coupling at boot.
 
 ### Reference
 
-- `apps/assistant/` — the full Weather example.
+- `apps/assistant/` + `demo/crates/features/src/audio/mcp/` — the demo's
+  guarded MCP surface: a JWT-authenticated `transcode_status` tool over the
+  Publish audio pipeline (no token ⇒ the endpoint refuses).
 - `crates/nest-rs-mcp/` — `#[mcp]`, the streamable-HTTP endpoint factory,
   and the re-exported rmcp surface (`tool_router`, `tool`, `tool_handler`,
   `ServerHandler`, `McpError`, `Parameters`, `CallToolResult`, `Content`).

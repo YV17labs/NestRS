@@ -425,24 +425,21 @@ name = "assistant"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "nest-rs-config",
+ "features",
+ "nest-rs-authn",
  "nest-rs-core",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-mcp",
  "nest-rs-opentelemetry",
+ "nest-rs-redis",
  "nest-rs-server-timing",
+ "nest-rs-storage",
  "nest-rs-testing",
  "poem",
  "reqwest 0.13.4",
- "rmcp",
- "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
- "tracing",
- "validator",
+ "uuid",
 ]
 
 [[package]]
@@ -1594,6 +1591,7 @@ dependencies = [
  "nest-rs-worker",
  "nest-rs-ws",
  "poem",
+ "rmcp",
  "schemars",
  "sea-orm",
  "serde",

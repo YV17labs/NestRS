@@ -22,7 +22,7 @@ reference: Publish.
 |-----|------|-------------------|------------|
 | [`auth`](/security/authentication/issuer-and-resource-server/) | 3001 | Authors sign in (OAuth2, JWT issuance) | HTTP |
 | [`api`](/tutorial/) | 3002 | Main API — users, orgs, audio hooks | HTTP, GraphQL, OpenAPI |
-| [`assistant`](/mcp/) | 3003 | AI tools (summarize, tag, weather demo) | MCP |
+| [`assistant`](/mcp/) | 3003 | AI tools over the audio pipeline (JWT-guarded) | MCP |
 | [`live`](/websockets/) | 3004 | Live comments and notifications | WebSockets |
 | [`worker`](/queue/) | — | Async jobs — newsletters, audio queue | Queue, Schedule |
 

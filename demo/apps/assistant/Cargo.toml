@@ -5,27 +5,25 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+features.workspace = true
 nest-rs-core.workspace = true
-nest-rs-config.workspace = true
-nest-rs-mcp.workspace = true
 nest-rs-health.workspace = true
 nest-rs-http.workspace = true
+# `QueueModule::for_root` seeds the queue connection the audio port injects.
+nest-rs-redis.workspace = true
 nest-rs-server-timing.workspace = true
 nest-rs-opentelemetry = { workspace = true, features = ["http"] }
-rmcp.workspace = true
-poem.workspace = true
 tokio.workspace = true
-tracing.workspace = true
 anyhow.workspace = true
-thiserror.workspace = true
-serde.workspace = true
-async-trait.workspace = true
-validator.workspace = true
-reqwest.workspace = true
 
 [dev-dependencies]
+nest-rs-authn.workspace = true
+nest-rs-storage.workspace = true
 nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
+poem.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

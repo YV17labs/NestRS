@@ -84,9 +84,6 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
     (db, app, bearer, org_id)
 }
 
-/// A same-org admin bearer — the `User` role seeded by `boot` may create posts
-/// but not publish them (only `Manage`/`Update` can), so the publish tests act
-/// as an org admin.
 fn admin_bearer(org_id: Uuid) -> String {
     let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
         .expect("the dev keypair parses");
@@ -165,10 +162,6 @@ async fn create_with_empty_title_returns_400() {
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
-/// A read passes through the controller-bound `PostAuditInterceptor` unchanged —
-/// its only effect is the emitted audit event, so the response is untouched.
-/// The module also boots with the interceptor bound, so the access graph
-/// validated its wiring.
 #[tokio::test]
 async fn audit_interceptor_is_transparent_to_posts_requests() {
     let (_db, app, bearer, _org_id) = boot().await;
@@ -199,8 +192,6 @@ async fn audit_interceptor_is_transparent_to_posts_requests() {
         .assert_status_is_ok();
 }
 
-/// Publishing a draft transitions it to `published` (an org admin can `Manage`
-/// posts in their org, which covers `Update`).
 #[tokio::test]
 async fn publish_transitions_a_draft_to_published() {
     let (_db, app, bearer, org_id) = boot().await;
@@ -239,8 +230,6 @@ async fn publish_transitions_a_draft_to_published() {
     );
 }
 
-/// Re-publishing an already published post is a domain conflict rendered by
-/// `PostProblemFilter` as RFC 9457 `application/problem+json` (409).
 #[tokio::test]
 async fn re_publishing_returns_rfc9457_problem_json() {
     let (_db, app, bearer, org_id) = boot().await;

@@ -266,8 +266,6 @@ mod tests {
     #[test]
     fn notifications_are_never_writable_over_the_wire() {
         let org = Uuid::now_v7();
-        // The resource is read-only: no role holds any write grant on it, so the
-        // pre-filter for a write action matches nothing (fail-closed).
         for ab in [admin(org), member(org)] {
             for action in [Action::Create, Action::Update, Action::Delete] {
                 let sql = notification::Entity::find()

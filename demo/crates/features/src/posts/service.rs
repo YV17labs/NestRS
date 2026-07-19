@@ -48,8 +48,6 @@ impl PostsService {
         let mut active = input.into_active_model();
         active.org_id = Set(org_id);
         active.author_id = Set(author_id);
-        // A freshly created post is a draft; publishing is a deliberate second
-        // step (`publish`), so creation never notifies subscribers.
         active.status = Set(PostStatus::Draft);
         let model = active.insert(&Repo::<Posts>::conn()?).await?;
         tracing::debug!(
@@ -62,11 +60,6 @@ impl PostsService {
         Ok(Post::from(&model))
     }
 
-    /// The publish precondition: a post may be published only from `Draft`.
-    ///
-    /// The state rule lives in the service — not the HTTP handler — so the
-    /// decision stays where business logic belongs; the `publish` route maps the
-    /// returned [`PostError`] to RFC 9457 problem+json via `PostProblemFilter`.
     pub fn ensure_unpublished(&self, model: &Model) -> Result<(), PostError> {
         if model.status == PostStatus::Published {
             return Err(PostError::AlreadyPublished { id: model.id });
@@ -74,14 +67,6 @@ impl PostsService {
         Ok(())
     }
 
-    /// Transition a loaded post to `Published` and announce the fact.
-    ///
-    /// The row must already be authorized for `Update` by the caller's ability
-    /// (the resolver binds it through `CrudService::access`); [`Repo::update`]
-    /// re-applies that scope, so a row outside the caller's reach is never
-    /// touched. Publishing — not creation — is what emits [`PostPublishedEvent`]:
-    /// fire-and-forget, so a listener panic never fails the transition. See the
-    /// `notifications` slice.
     pub async fn publish(&self, model: Model) -> Result<Post, ServiceError> {
         let post_id = model.id;
         let org_id = model.org_id;

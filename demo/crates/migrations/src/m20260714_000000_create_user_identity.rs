@@ -18,11 +18,8 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(UserIdentity::UserId).uuid().not_null())
-                    // Provider key ("github") + provider-side stable subject.
                     .col(ColumnDef::new(UserIdentity::Provider).string().not_null())
                     .col(ColumnDef::new(UserIdentity::Subject).string().not_null())
-                    // The provider email at link time — an audit fact, never a
-                    // lookup key.
                     .col(ColumnDef::new(UserIdentity::Email).string().null())
                     .col(
                         ColumnDef::new(UserIdentity::CreatedAt)
@@ -36,7 +33,6 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(Expr::current_timestamp()),
                     )
-                    // One identity per (provider, subject): the resolution key.
                     .index(
                         Index::create()
                             .name("uq_user_identity_provider_subject")

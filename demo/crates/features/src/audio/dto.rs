@@ -3,19 +3,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use validator::ValidationError;
 
-/// Formats the worker is allowed to transcode. An **allowlist** (not a
-/// denylist): an unrecognized extension is rejected by default, so a newly
-/// added format can't slip through unvetted — fail-secure, matching the
-/// framework's opt-in posture.
 const ALLOWED_AUDIO_EXTENSIONS: [&str; 6] = ["mp3", "wav", "flac", "aac", "ogg", "m4a"];
 
-/// REST body for `POST /audio/transcode` — a `Dto` (it crosses the HTTP
-/// boundary). `#[input]` appends `Deserialize`, `Validate`, and
-/// `#[serde(deny_unknown_fields)]`, so the body is validated at the edge (via
-/// `Valid<Json<TranscodeDto>>`) before the controller hands `file` to the
-/// service, which enqueues a [`super::command::TranscodeCommand`] for the
-/// worker. Validating here is what closes the path-traversal / SSRF surface
-/// that would otherwise reach the worker over the shared `audio` queue.
 #[input]
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct TranscodeDto {
@@ -26,11 +15,6 @@ pub struct TranscodeDto {
     pub file: String,
 }
 
-/// REST body for `POST /audio/uploads` — names the audio file a client wants a
-/// presigned upload slot for. Validated with the **same** anti-traversal /
-/// allowlist rule as [`TranscodeDto`] so a rejected filename can never become an
-/// object key (the storage key the server mints keeps this filename as its
-/// suffix, and the follow-up transcode request must pass the same validator).
 #[input]
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct UploadRequestDto {
@@ -41,21 +25,12 @@ pub struct UploadRequestDto {
     pub filename: String,
 }
 
-/// REST response carrying a short-lived presigned URL and the object `key` it
-/// addresses. Returned by `POST /audio/uploads` (a `PUT` slot the client pushes
-/// bytes to) and `GET /audio/results` (a `GET` slot for the derived object) —
-/// one shape, since both hand the client a signed URL plus the key it targets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PresignedUrlDto {
     pub key: String,
     pub url: String,
 }
 
-/// Reject anything that is not a bare audio filename: a path separator (`/` or
-/// `\`, which also rules out absolute paths and `scheme://` URLs), a
-/// parent-directory hop (`..`), or an extension outside
-/// [`ALLOWED_AUDIO_EXTENSIONS`]. Runs at the edge, before a `TranscodeCommand`
-/// is ever enqueued for the worker.
 fn validate_transcode_file(file: &str) -> Result<(), ValidationError> {
     if file.contains('/') || file.contains('\\') {
         return Err(ValidationError::new("transcode_file_has_path_separator"));

@@ -8,9 +8,6 @@ use parking_lot::Mutex;
 
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 
-/// Cap on the in-memory chat scrollback. The buffer is a singleton every
-/// connected client can append to, so it must be bounded: at capacity the
-/// oldest message is dropped (ring buffer) to keep process memory flat.
 const HISTORY_CAPACITY: usize = 256;
 
 #[injectable]
@@ -34,10 +31,6 @@ impl ChatService {
         self.present.load(Ordering::Relaxed)
     }
 
-    /// Records the message to the scrollback and broadcasts it live. A broadcast
-    /// failure is **propagated**, not swallowed: `#[messages]` turns the `Err`
-    /// into the dispatch-layer `warn` plus an error frame to the sender, so a
-    /// message the room never received is never reported as delivered.
     pub fn record(&self, message: SendMessageDto) -> Result<ChatMessageDto, serde_json::Error> {
         let stored = ChatMessageDto {
             author: message.author,

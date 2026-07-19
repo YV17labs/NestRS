@@ -25,8 +25,6 @@ struct ProbeCommand {
     tag: String,
 }
 
-// Typed handle: the producer's `push_to::<ProbeQueue>` and the consumer's
-// `#[process(queue = ProbeQueue)]` share this one name + payload type.
 #[queue(name = "nestrs-e2e-probe", job = ProbeCommand)]
 struct ProbeQueue;
 
@@ -55,8 +53,6 @@ struct ProbeModule;
 
 #[tokio::test]
 async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
-    // Boot the real app module — the mandated e2e check that `WorkerModule`
-    // composes and its `QueueWorker` transport spawns against live Redis.
     let worker = TestApp::builder()
         .module::<WorkerModule>()
         .build_headless()
@@ -67,9 +63,6 @@ async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
         .await
         .expect("WorkerModule's QueueWorker configures against Redis");
 
-    // Prove a job enqueued onto real Redis is actually consumed end-to-end. A
-    // synthetic probe consumer gives the otherwise side-effect-free pipeline an
-    // observable signal.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let _ = PROBE_TX.set(tx);
 

@@ -6,34 +6,9 @@ use uuid::Uuid;
 
 use crate::Claims;
 
-/// The authenticated caller's id, verified present by [`PostAuthorGuard`] and
-/// attached to the request so the create handler can stamp it as the post's
-/// author. Read it back with `nest_rs_http::Ctx<PostAuthor>` — because the
-/// guard already rejected a subject-less token, the handler never re-checks an
-/// `Option` (and never smuggles the decision into its body).
 #[derive(Debug, Clone, Copy)]
 pub struct PostAuthor(pub Uuid);
 
-/// Author gate for `POST /posts`.
-///
-/// A post must have a human author, so the caller's token must carry a subject
-/// (`sub`). A machine principal — a client-credentials grant, org-scoped but
-/// subject-less — is refused here with `403`, in a guard, rather than in the
-/// handler body: the authorization *decision* lives in the one place the
-/// framework permits it, so it stays greppable at the `#[use_guards(...)]`
-/// site.
-///
-/// It reads the request-scoped [`Claims`] that `AuthGuard` seeds, so bind it
-/// *after* `AuthGuard`. The `PostsController` already binds
-/// `#[use_guards(AuthGuard, AuthzGuard)]`, which run at the controller site
-/// (before any method-site guard), so `#[use_guards(PostAuthorGuard)]` on the
-/// `create` handler alone is enough — and it gates only `create`, leaving the
-/// read routes reachable by a machine token.
-///
-/// On success it attaches [`PostAuthor`] with the verified id.
-///
-/// Fails **closed**: absent `Claims` means the auth guards did not run first
-/// (a wiring bug), so it denies with `500`, never an unauthored post.
 #[injectable]
 #[derive(Default)]
 pub struct PostAuthorGuard;

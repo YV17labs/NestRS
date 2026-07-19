@@ -6,9 +6,6 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Append-only notification log. `org_id` is the row-level scope tag the
-        // read resource filters on; there is no soft-delete or `updated_at`
-        // because a notification is written once by the worker and only read.
         manager
             .create_table(
                 Table::create()

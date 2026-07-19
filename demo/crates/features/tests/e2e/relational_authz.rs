@@ -1,13 +1,3 @@
-//! E2E for the relational authorization filter (live Postgres). Proves that a
-//! rule scoping a child entity through a typed relation to its parent — the
-//! child carries no tenant column of its own — enforces row-level isolation on
-//! list reads, distinguishes Found/Denied/Missing on a by-id bind, and rejects
-//! a create whose parent is out of the caller's scope.
-//!
-//! The entities and tables are defined inline (and created with raw DDL on the
-//! ephemeral database) so the test exercises the framework data layer directly,
-//! without coupling to any product schema.
-
 use std::sync::Arc;
 
 use nest_rs_authz::{Ability, AbilityBuilder, Action, with_ability};
@@ -18,8 +8,6 @@ use nest_rs_testing::EphemeralDatabase;
 use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbErr, Set};
 use uuid::Uuid;
 
-// `container` carries the tenant key (`org_id`); `item` reaches it only through
-// the `belongs_to` relation — the message → conversation shape.
 mod container {
     use sea_orm::entity::prelude::*;
 
@@ -121,8 +109,6 @@ async fn seed_item(conn: &DatabaseConnection, id: Uuid, container_id: Uuid, labe
     .expect("seed item");
 }
 
-/// An ability that may Read and Create items whose parent container is in `org`,
-/// expressed purely relationally (the item has no `org_id`).
 fn items_in_org(org: Uuid) -> Arc<Ability> {
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, item::Entity).when(move |p| {
@@ -187,7 +173,6 @@ async fn access_distinguishes_found_denied_and_missing() {
 
     with_request_executor(Executor::Pool((*conn).clone()), async {
         with_ability(items_in_org(org_a), async {
-            // In scope: the by-id re-check against condition_for(Read) passes.
             assert!(
                 matches!(
                     ItemsService.access(Action::Read, item_a).await.expect("a"),
@@ -195,8 +180,6 @@ async fn access_distinguishes_found_denied_and_missing() {
                 ),
                 "an item in the caller's org resolves to Found",
             );
-            // Exists but the relational scope excludes it ⇒ Denied, not Missing
-            // (existence is not leaked as a 404, but it is not granted either).
             assert!(
                 matches!(
                     ItemsService.access(Action::Read, item_b).await.expect("b"),
@@ -204,7 +187,6 @@ async fn access_distinguishes_found_denied_and_missing() {
                 ),
                 "a cross-org item resolves to Denied, not Missing",
             );
-            // No such row at all ⇒ Missing.
             assert!(
                 matches!(
                     ItemsService
@@ -236,7 +218,6 @@ async fn create_under_an_out_of_scope_parent_is_rejected() {
 
     with_request_executor(Executor::Pool((*conn).clone()), async {
         with_ability(items_in_org(org_a), async {
-            // Creating under the caller's own container succeeds.
             let ok = ItemsService
                 .create(CreateItem {
                     container_id: cont_a,
@@ -245,9 +226,6 @@ async fn create_under_an_out_of_scope_parent_is_rejected() {
                 .await;
             assert!(ok.is_ok(), "in-scope create succeeds: {ok:?}");
 
-            // Creating under a container in another org is refused by the
-            // post-insert scoped re-check (relational grant the in-memory check
-            // could not evaluate) — surfaced as RecordNotInserted.
             let denied = ItemsService
                 .create(CreateItem {
                     container_id: cont_b,

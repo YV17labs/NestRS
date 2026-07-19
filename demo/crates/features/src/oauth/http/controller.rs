@@ -49,14 +49,9 @@ impl OAuthController {
     )]
     async fn social_authorize(
         &self,
-        // `Lowercase` pipe normalizes the path segment, so `/social/GitHub/...`
-        // resolves the same provider as `/social/github/...` — provider keys are
-        // case-insensitive without the handler (or the registry) knowing.
         provider: Piped<Lowercase, Path<String>>,
         req: &Request,
     ) -> Result<Response> {
-        // Unknown provider ⇒ 404 (the registry does not know the key); an
-        // otherwise-valid provider whose flow errors ⇒ 500.
         let authorization = self
             .svc
             .authorize(&provider.into_inner())
@@ -77,10 +72,6 @@ impl OAuthController {
             .finish())
     }
 
-    // Not `#[public]`: `OAuthGuard` is authoritative here — the code/state/
-    // cookie *are* the authentication. Marking the route public would make the
-    // guard lenient (a forged callback would fall through to the handler with
-    // no `Caller` ⇒ 500 instead of a 401 denial).
     #[get("/social/:provider/callback")]
     #[use_guards(ThrottlerGuard, OAuthGuard)]
     #[meta(Throttle::per_minute(10))]

@@ -9,8 +9,6 @@ use uuid::Uuid;
 fn oauth_service() -> OAuthService {
     let jwt_svc =
         Arc::new(JwtService::new(JwtOptions::new("oauth-grant-test-secret")).expect("jwt service"));
-    // The client-credentials grant path under test does not dispatch on a
-    // social provider, so an empty registry suffices.
     let providers = Arc::new(SocialProviders::default());
     let users_svc = Arc::new(features::users::UsersService::new(Arc::new(
         DatabaseConnection::default(),

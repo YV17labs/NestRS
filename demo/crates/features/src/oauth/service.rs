@@ -20,11 +20,8 @@ pub struct Caller {
     pub roles: Vec<Role>,
 }
 
-/// This example's machine principal: a client scoped to an org (the generic
-/// `payload`). Shape + `PrincipalIdentity` come from the framework grant.
 pub type AuthenticatedClient = nest_rs_authn::AuthenticatedClient<Uuid>;
 
-/// Audit identity: the authenticated user.
 impl nest_rs_authn::PrincipalIdentity for Caller {
     fn actor_id(&self) -> Option<String> {
         Some(self.user_id.to_string())
@@ -90,18 +87,11 @@ impl OAuthService {
         grant_client_credentials_with_jwt(&self.jwt_svc, grant_type, scope, client)
     }
 
-    /// Begin the redirect leg for a named social provider, or `None` when the
-    /// key is unknown (the controller maps that to a 404). The provider's
-    /// trait method — not `client()` — is the flow's front door on every leg.
     pub fn authorize(&self, provider: &str) -> Option<Result<Authorization, AuthError>> {
         let provider = self.providers.get(provider)?;
         Some(provider.authorize(&self.jwt_svc))
     }
 
-    /// Complete the callback for a named provider: exchange the code, fetch the
-    /// profile, resolve it to a local user via the `(provider, subject)`
-    /// identity, and build the [`Caller`]. Token issuance stays in
-    /// [`issue`](Self::issue) — one choke point.
     pub async fn resolve_caller(
         &self,
         provider: &str,
@@ -140,9 +130,6 @@ impl OAuthService {
     }
 }
 
-/// Map the framework's [`SocialProfile`] onto the users feature's own
-/// [`SocialIdentity`] input contract — the users feature does not depend on
-/// `nest-rs-social`.
 fn social_identity(profile: SocialProfile) -> SocialIdentity {
     SocialIdentity {
         provider: profile.provider,
@@ -204,9 +191,6 @@ pub(crate) fn grant_client_credentials_with_jwt(
     issue_with_jwt(jwt_svc, None, client.payload, roles)
 }
 
-/// Translate an authentication outcome into the RFC 6749 token error: a store
-/// outage is a `server_error` (500), everything else on the password path is an
-/// opaque `invalid_credentials` (401) — the two are never conflated.
 fn token_error_from_auth(err: AuthError) -> TokenError {
     if matches!(err, AuthError::Unavailable(_)) {
         TokenError::Server(err.into())
@@ -356,8 +340,6 @@ mod tests {
 
     fn oauth_service(ttl: Duration) -> OAuthService {
         let jwt_svc = Arc::new(jwt_with_ttl(ttl));
-        // An empty registry: the grant/issue/authenticate paths tested here do
-        // not dispatch on a provider (the redirect + callback legs are e2e).
         let providers = Arc::new(SocialProviders::default());
         let config = Arc::new(IssuerConfig {
             clients: vec![RegisteredClient {

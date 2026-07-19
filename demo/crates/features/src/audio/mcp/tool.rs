@@ -9,10 +9,6 @@ use validator::Validate;
 
 use crate::audio::{AudioService, TranscodeDto};
 
-/// The assistant's window into the audio pipeline: ask whether an episode's
-/// transcode has landed and get the presigned download link when it has. Runs
-/// behind `AppMcpGuard`, so every call is JWT-authenticated — same chain as the
-/// HTTP controllers.
 #[mcp(path = "/mcp")]
 #[derive(Clone)]
 pub struct AudioTool {
@@ -32,8 +28,6 @@ impl AudioTool {
         &self,
         Parameters(params): Parameters<TranscodeDto>,
     ) -> Result<CallToolResult, McpError> {
-        // Same edge validation as the HTTP transcode route — a traversal-shaped
-        // key is rejected before it reaches storage.
         params
             .validate()
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
@@ -66,8 +60,6 @@ mod tests {
 
     #[test]
     fn mcp_tool_declares_its_injected_service_for_the_access_graph() {
-        // `#[mcp]` emits `injected()` only — the tool has no module-level
-        // `dependencies()` of its own.
         assert!(AudioTool::dependencies().is_empty());
         assert!(
             AudioTool::injected().contains(&TypeId::of::<AudioService>()),

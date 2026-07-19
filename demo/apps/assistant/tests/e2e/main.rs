@@ -1,7 +1,3 @@
-//! The assistant serves one guarded MCP surface: the Publish audio tool. These
-//! tests prove the guard chain end to end — no token ⇒ the endpoint refuses;
-//! a dev-signed JWT ⇒ the tool answers with real object-storage state.
-
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -48,9 +44,6 @@ fn bearer() -> String {
     format!("Bearer {token}")
 }
 
-/// A `Storage` client mirroring the app's configuration — used to seed the
-/// derived object the tool reports on. Honors the `NESTRS_STORAGE__*`
-/// overrides the app reads (defaults target the dev-container RustFS).
 fn storage_client() -> Storage {
     let mut config = StorageConfig::default();
     if let Ok(v) = std::env::var("NESTRS_STORAGE__ENDPOINT") {
@@ -68,8 +61,6 @@ fn storage_client() -> Storage {
     Storage::new(Arc::new(config))
 }
 
-/// Best-effort bucket creation: a presigned PUT on the bucket root is an S3
-/// `CreateBucket`; a 2xx means created, a 409 means it already exists.
 async fn ensure_bucket() {
     if let Ok(url) = storage_client()
         .presign_put("", Duration::from_secs(60))
@@ -103,8 +94,6 @@ async fn audio_tool_self_mounts_the_mcp_endpoint() {
 
 #[tokio::test]
 async fn mcp_endpoint_refuses_an_unauthenticated_request() {
-    // `AppMcpGuard` runs before every MCP operation — even `initialize` is
-    // refused without a bearer token.
     let app = boot().await;
     let resp = app
         .http()
@@ -135,17 +124,12 @@ fn initialize_request() -> serde_json::Value {
     })
 }
 
-/// Full MCP session against the guarded endpoint with real object storage:
-/// initialize → initialized → `transcode_status` says `pending` for a fresh
-/// key → seed the derived object into RustFS → the same call says `ready`
-/// with a presigned link. No mocking.
 #[tokio::test]
 async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
     let app = boot().await;
     ensure_bucket().await;
     let auth = bearer();
 
-    // 1. initialize — the response carries the session id to thread through.
     let init = app
         .http()
         .post("/mcp")
@@ -165,7 +149,6 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
         .expect("initialize returns an Mcp-Session-Id header")
         .to_owned();
 
-    // 2. the client acknowledges initialization on the same session.
     let ack = app
         .http()
         .post("/mcp")
@@ -197,7 +180,6 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
         })
     };
 
-    // 3. no derived object yet — the tool reports `pending`.
     let pending = app
         .http()
         .post("/mcp")
@@ -216,8 +198,6 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
         "a fresh key has no derived object yet: {body}",
     );
 
-    // 4. seed the derived object the worker would produce, straight into
-    // RustFS, then ask again — the tool now reports `ready` with a link.
     storage_client()
         .put_bytes(
             &format!("transcoded/{file}"),

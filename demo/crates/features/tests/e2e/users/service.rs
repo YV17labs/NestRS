@@ -1,15 +1,3 @@
-//! E2E for `UsersService::resolve_social_identity` (live Postgres). Pins the
-//! `(provider, subject)` resolution order from the social-login design (§5.1):
-//! a known identity wins over a drifted provider email, a **verified** email
-//! links to an existing account exactly once, an **unverified** email never
-//! links (the cross-provider takeover guard), an unknown verified identity
-//! provisions user + identity together, and concurrent first logins converge
-//! on a single user.
-//!
-//! The `user_identity` table is deliberately unexposed (no entity re-export),
-//! so link/row assertions read it back with plain SQL rather than widening the
-//! feature's public API.
-
 use std::sync::Arc;
 
 use features::orgs::ActiveModel as OrgActiveModel;
@@ -31,8 +19,6 @@ async fn seed_org(conn: &DatabaseConnection, id: Uuid) {
     .expect("seed org");
 }
 
-/// A password-less user that already exists — the account a social login may
-/// (or, unverified, may not) link onto. Returns its id.
 async fn seed_user(conn: &DatabaseConnection, org_id: Uuid, email: &str) -> Uuid {
     UserActiveModel {
         id: Set(Uuid::now_v7()),
@@ -59,7 +45,6 @@ fn github(subject: &str, email: &str, verified: bool) -> SocialIdentity {
     }
 }
 
-/// Run a `SELECT COUNT(*) AS n …` and read the count back.
 async fn count(
     conn: &DatabaseConnection,
     sql: &str,
@@ -108,15 +93,12 @@ async fn identity_user_id(
 async fn users_with_email(conn: &DatabaseConnection, email: &str) -> i64 {
     count(
         conn,
-        // `user` is reserved in Postgres — quote it.
         "SELECT COUNT(*) AS n FROM \"user\" WHERE email = $1",
         [Value::from(email.to_owned())],
     )
     .await
 }
 
-/// Step 1: a known `(provider, subject)` wins over the current provider email —
-/// even when that email now belongs to a *different* live user (drift).
 #[tokio::test]
 async fn a_known_identity_wins_over_a_drifted_email() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
@@ -129,14 +111,11 @@ async fn a_known_identity_wins_over_a_drifted_email() {
     with_request_executor(Executor::Pool((*conn).clone()), async {
         let svc = UsersService::new(Arc::clone(&conn));
 
-        // First login provisions the account and its (github, 42) identity.
         let created = svc
             .resolve_social_identity(&github("42", "ada@first.example", true), org_id)
             .await
             .expect("first social login provisions a user");
 
-        // A different live user now owns the email the provider reports next.
-        // Matching on email would resolve to Bob — the drift takeover shape.
         let bob = seed_user(conn.as_ref(), org_id, "ada@second.example").await;
         assert_ne!(bob, created.id);
 
@@ -162,8 +141,6 @@ async fn a_known_identity_wins_over_a_drifted_email() {
     .await;
 }
 
-/// Step 2: a provider-**verified** email links to an existing account, and the
-/// link is written exactly once (a second login is an identity hit).
 #[tokio::test]
 async fn a_verified_email_links_to_an_existing_account_exactly_once() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
@@ -189,7 +166,6 @@ async fn a_verified_email_links_to_an_existing_account_exactly_once() {
             "the identity row points at the linked account",
         );
 
-        // A second login now matches the identity — no duplicate link.
         let second = svc
             .resolve_social_identity(&github("77", "carol@example.com", true), org_id)
             .await
@@ -204,8 +180,6 @@ async fn a_verified_email_links_to_an_existing_account_exactly_once() {
     .await;
 }
 
-/// Step 2, negative: an **unverified** email matching an existing account is
-/// rejected, never linked — the cross-provider takeover guard.
 #[tokio::test]
 async fn an_unverified_email_never_links_to_an_existing_account() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
@@ -241,8 +215,6 @@ async fn an_unverified_email_never_links_to_an_existing_account() {
     .await;
 }
 
-/// Step 3: an unknown identity with a verified email provisions the user and
-/// its identity row together.
 #[tokio::test]
 async fn an_unknown_verified_identity_provisions_a_user_and_its_identity() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
@@ -280,9 +252,6 @@ async fn an_unknown_verified_identity_provisions_a_user_and_its_identity() {
     .await;
 }
 
-/// Two first logins for the same identity, racing: one wins the insert, the
-/// other re-reads on the unique violation — both converge on one user, one
-/// identity row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_first_logins_resolve_to_a_single_user() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()

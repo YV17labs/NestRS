@@ -6,15 +6,6 @@ use poem::http::StatusCode;
 
 use crate::posts::PostError;
 
-/// Renders a posts-domain [`PostError`] as RFC 9457
-/// `application/problem+json`.
-///
-/// Bound with `#[use_exception_filters(PostProblemFilter)]` beside the publish
-/// handler, it is the typed catch sitting closest to that handler: a
-/// `PostError` thrown as a `poem::Error` is downcast here and turned into a
-/// problem document, while any other error type falls through untouched to the
-/// outer chain. Exception filters, unlike reusable pipes, are legitimately
-/// app-defined — this is the product's wire contract for a domain failure.
 #[injectable]
 #[derive(Default)]
 pub struct PostProblemFilter;
@@ -33,8 +24,6 @@ impl ExceptionFilter for PostProblemFilter {
                 "https://nestrs.dev/problems/post-already-published",
             ),
         };
-        // RFC 9457 members: a `type` URI identifying the problem class, a human
-        // `title`, the numeric `status`, and a request-specific `detail`.
         let body = serde_json::json!({
             "type": kind,
             "title": title,

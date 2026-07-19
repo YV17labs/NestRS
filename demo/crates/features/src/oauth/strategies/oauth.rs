@@ -29,8 +29,6 @@ impl Strategy for OAuthStrategy {
     type Principal = Caller;
 
     async fn authenticate(&self, req: &mut Request) -> Result<Caller, AuthError> {
-        // The provider key is the `:provider` route segment (the code/state
-        // still ride the query string). Owned so it outlives the later borrows.
         let provider = req
             .raw_path_param("provider")
             .ok_or_else(|| AuthError::Failed("OAuth callback missing provider".into()))?

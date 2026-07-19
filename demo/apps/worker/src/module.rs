@@ -9,9 +9,6 @@ use features::notifications::NotificationsQueueModule;
 #[module(
     imports = [
         ConfigModule::for_root(),
-        // The notifications processor persists through `Repo`; `DatabaseModule`
-        // auto-binds the `WorkerDbContext` (`JobContext`) that installs a pool
-        // executor per job — system work, unscoped by design.
         DatabaseModule::for_root(None),
         QueueModule::for_root(None),
         QueueWorkerModule,

@@ -8,11 +8,6 @@ use nest_rs_redis::QueueConnection;
 use crate::notifications::{NotifyCommand, NotifyQueue};
 use crate::posts::PostPublishedEvent;
 
-/// Listener host for post-publication side effects. A plain provider (not a
-/// service): it reacts to a fact, it is not the entity's DB gateway. A listener
-/// runs **outside** any request — no ambient executor, no transaction — so it
-/// must never touch the DB directly. Instead it stays a pure **producer**,
-/// enqueuing a [`NotifyCommand`] the worker persists in its own system context.
 #[injectable]
 pub struct NotificationsListener {
     #[inject]

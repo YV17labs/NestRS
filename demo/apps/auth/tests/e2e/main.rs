@@ -40,8 +40,6 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             ..Default::default()
         })
-        // Seed the social provider configs (a seed wins over the env-reading
-        // factory), so the e2e boot resolves without live credentials.
         .provide(GithubSocialConfig {
             client_id: "demo-github-client-id".into(),
             client_secret: "demo-github-client-secret".into(),
@@ -249,7 +247,6 @@ async fn the_social_authorize_endpoint_redirects_to_the_provider() {
     resp.assert_status(StatusCode::FOUND);
     resp.assert_header_exist("location");
     resp.assert_header_exist("set-cookie");
-    // The redirect targets the configured GitHub provider.
     let location = resp.0.headers().get("location").expect("location header");
     assert!(
         location
@@ -262,9 +259,6 @@ async fn the_social_authorize_endpoint_redirects_to_the_provider() {
 
 #[tokio::test]
 async fn the_provider_path_segment_is_case_insensitive() {
-    // The `Lowercase` pipe normalizes the `:provider` segment, so a mixed-case
-    // key resolves the same provider as its lowercase form (302 to GitHub),
-    // not a 404 — the handler never sees the original casing.
     let (_db, app) = boot().await;
     let resp = app.http().get("/social/GitHub/authorize").send().await;
     resp.assert_status(StatusCode::FOUND);
@@ -280,7 +274,6 @@ async fn the_provider_path_segment_is_case_insensitive() {
 
 #[tokio::test]
 async fn a_configured_provider_that_is_not_imported_is_unknown() {
-    // Only github + google are imported; an unregistered key is a 404.
     let (_db, app) = boot().await;
     app.http()
         .get("/social/gitlab/authorize")
@@ -291,7 +284,6 @@ async fn a_configured_provider_that_is_not_imported_is_unknown() {
 
 #[tokio::test]
 async fn the_social_callback_rejects_a_forged_state() {
-    // No transaction cookie ⇒ the CSRF binding is absent ⇒ the guard denies.
     let (_db, app) = boot().await;
     app.http()
         .get("/social/github/callback?code=abc&state=forged")

@@ -93,8 +93,6 @@ impl AudioController {
                 continue;
             }
             let filename = field.file_name().map(str::to_owned).unwrap_or_default();
-            // Reuse the presigned path's edge validation — a rejected filename
-            // never becomes an object key.
             UploadRequestDto {
                 filename: filename.clone(),
             }
@@ -155,9 +153,6 @@ impl AudioController {
     async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SSE {
         let file = query.into_inner().file;
         let svc = self.svc.clone();
-        // Poll the derived object; emit one event per tick, end on the first
-        // `ready`. `u32::MAX` past the terminal event trips the cap on the next
-        // poll, so the stream closes cleanly rather than keeping the socket open.
         let events = stream::unfold(0u32, move |attempt| {
             let svc = svc.clone();
             let file = file.clone();
@@ -175,8 +170,6 @@ impl AudioController {
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         Some((event("pending"), attempt + 1))
                     }
-                    // A storage failure is surfaced as a terminal `error` event,
-                    // never masqueraded as `pending` — the client sees the fault.
                     Err(e) => {
                         tracing::warn!(
                             target: "features::audio",

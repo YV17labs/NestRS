@@ -234,8 +234,6 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
         .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
     let db = Database::connect(&url).await.expect("connect to Postgres");
 
-    // Two fresh tenants: org A (two members) and org B (one). A per-run org id
-    // keeps the caller's `users.list` result to exactly this run's rows.
     let org_a = Uuid::now_v7();
     let org_b = Uuid::now_v7();
     let (alice, bob, carol) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
@@ -262,8 +260,6 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
         .await
         .expect("HTTP transport serves");
 
-    // A plain member of org A: the ability scopes reads to org A and grants only
-    // `id` + `name` — `email` is admin-only.
     let token = token_for_org(org_a, Role::User).await;
     let mut socket = connect_with_retry(&format!("ws://{bind}/users"), &token).await;
     socket

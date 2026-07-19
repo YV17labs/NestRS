@@ -62,8 +62,6 @@ async fn token_for(org_id: &str, role: &str) -> String {
     .expect("sign the test token")
 }
 
-/// Sign a token carrying a `sub` — required to author a post (`PostAuthorGuard`
-/// rejects a subject-less machine token on `POST /posts`).
 async fn token_with_sub(org_id: &str, role: &str, sub: Uuid) -> String {
     let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
         .expect("the dev keypair parses");
@@ -195,7 +193,6 @@ async fn openapi_document_describes_the_routes() {
     assert!(paths.contains_key("/orgs"), "paths include /orgs");
     assert!(paths.contains_key("/users"), "paths include /users");
 
-    // Security scheme declared, and applied to the guarded list route.
     assert_eq!(
         doc["components"]["securitySchemes"]["bearerAuth"]["scheme"], "bearer",
         "bearerAuth security scheme is declared",
@@ -206,7 +203,6 @@ async fn openapi_document_describes_the_routes() {
         "the guarded list route requires bearerAuth",
     );
 
-    // #[crud] pagination surfaces as query parameters.
     let params = doc["paths"]["/orgs"]["get"]["parameters"]
         .as_array()
         .expect("list op has parameters");
@@ -220,13 +216,11 @@ async fn openapi_document_describes_the_routes() {
         "pagination cursor is documented as query params: {query_names:?}",
     );
 
-    // Path param carries its real type, not a bare string.
     assert_eq!(
         doc["paths"]["/orgs/{id}"]["get"]["parameters"][0]["schema"]["format"], "uuid",
         "the :id path param is typed uuid",
     );
 
-    // Error responses are the RFC 9457 problem+json shape.
     let create = &doc["paths"]["/orgs"]["post"]["responses"];
     for status in ["401", "403", "409", "422"] {
         assert_eq!(
@@ -237,12 +231,6 @@ async fn openapi_document_describes_the_routes() {
     }
 }
 
-// A client that advertises `Accept-Encoding: gzip` gets a gzip-encoded body;
-// one that does not gets plain JSON — the transport's compression layer
-// negotiating per request. The test harness boots a bare default transport, so
-// this drives the compression knob directly (`HttpTransport::compression`, the
-// same one `HttpModule` sets from `HttpConfig.compression`); the api app's own
-// config-driven wiring is proven by a real-server curl, not this in-process test.
 #[tokio::test]
 async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
@@ -301,16 +289,11 @@ async fn protected_route_rejects_a_missing_or_bogus_bearer_token() {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
-/// Every modelled HTTP failure — a guard denial (401), an edge-validation
-/// rejection (400), a not-found (404), and a conflict (409) — comes back on the
-/// single RFC-9457 `application/problem+json` envelope with `type`/`title`/
-/// `status`. The acceptance criterion for the one-error-format unification.
 #[tokio::test]
 async fn every_modelled_failure_returns_rfc9457_problem_json() {
     let (_db, app) = boot().await;
     let bearer = format!("Bearer {}", login().await);
 
-    // 401 — a guard denial (no bearer token) on a protected route.
     let unauthorized = app.http().get("/orgs").send().await;
     unauthorized.assert_status(StatusCode::UNAUTHORIZED);
     unauthorized.assert_header(header::CONTENT_TYPE, "application/problem+json");
@@ -323,7 +306,6 @@ async fn every_modelled_failure_returns_rfc9457_problem_json() {
         "problem carries a type URI"
     );
 
-    // 400 — a malformed path id rejected by the edge pipe before the handler.
     let bad_request = app
         .http()
         .get("/users/not-a-uuid")
@@ -343,7 +325,6 @@ async fn every_modelled_failure_returns_rfc9457_problem_json() {
         400,
     );
 
-    // 404 — a well-formed but absent id, mapped from `ServiceError::NotFound`.
     let not_found = app
         .http()
         .get("/users/018f0000-0000-7000-8000-0000000000ff")
@@ -357,7 +338,6 @@ async fn every_modelled_failure_returns_rfc9457_problem_json() {
         404,
     );
 
-    // 409 — a duplicate unique org name, mapped from `ServiceError::Conflict`.
     create_org(&app, &bearer, "Conflict Co").await;
     let conflict = app
         .http()
@@ -1037,8 +1017,6 @@ async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
     let (_db, app) = boot().await;
     let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
 
-    // Auto-generated `#[crud]` create (orgs): a duplicate unique name is a 409,
-    // not the blanket 500 the generated create used to return.
     create_org(&app, &admin, "SameName").await;
     app.http()
         .post("/orgs")
@@ -1048,8 +1026,6 @@ async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
         .await
         .assert_status(StatusCode::CONFLICT);
 
-    // Manual create handler (users) delegating to the service: the service maps
-    // the unique-email violation to a `Conflict` rather than an opaque `Db` 500.
     let org = create_org(&app, &admin, "Conflict").await;
     let token = format!("Bearer {}", token_for(&org, "admin").await);
     let body = json!({ "name": "Dup", "email": "dup@conflict.test" });
@@ -1078,7 +1054,6 @@ async fn has_many_relation_load_is_capped_at_relation_load_cap() {
     let org = create_org(&app, &admin, "Fanout").await;
     let token = format!("Bearer {}", token_for(&org, "admin").await);
 
-    // An author in that org to satisfy the post's author FK.
     let author_resp = app
         .http()
         .post("/users")
@@ -1096,7 +1071,6 @@ async fn has_many_relation_load_is_capped_at_relation_load_cap() {
         .string()
         .to_owned();
 
-    // Seed more children under one parent than the relation cap allows.
     let seeded = nest_rs_seaorm::RELATION_LOAD_CAP + 5;
     let rows: Vec<String> = (0..seeded)
         .map(|i| format!("('{}','{org}','{author}','t{i}','b{i}')", Uuid::now_v7()))
@@ -1275,9 +1249,6 @@ async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {
     );
 }
 
-/// The posts GraphQL adapter: reads are row-level scoped to the caller's org,
-/// and `publishPost` transitions a draft to published (the path that emits
-/// `PostPublishedEvent` to the notifications listener).
 #[tokio::test]
 async fn posts_graphql_scopes_reads_and_publish_transitions() {
     let (_db, app) = boot().await;
@@ -1285,8 +1256,6 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
     let org_a = create_org(&app, &bootstrap, "PostAcme").await;
     let org_b = create_org(&app, &bootstrap, "PostGlobex").await;
 
-    // An author user in org A, then a token whose `sub` is that user (a post
-    // needs a human author — a subject-less machine token is refused).
     let admin_a = format!("Bearer {}", token_for(&org_a, "admin").await);
     let author_id =
         Uuid::parse_str(&create_user(&app, &admin_a, "Author", "author@postacme.test").await)
@@ -1297,12 +1266,10 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
     );
     let admin_b = format!("Bearer {}", token_for(&org_b, "admin").await);
 
-    // Create a post in org A over HTTP — it lands as a draft.
     let post_a = create_post(&app, &author_a, "Launch", "Big news").await;
 
     let list = json!({ "query": "{ posts { id status } }" });
 
-    // Row-level scope over GraphQL: org B sees none of org A's posts.
     let b = app
         .http()
         .post("/graphql")
@@ -1330,7 +1297,6 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
         "org B sees no posts of org A",
     );
 
-    // Org A sees its post, still a draft.
     let a = app
         .http()
         .post("/graphql")
@@ -1358,7 +1324,6 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
 
     let publish = |id: &str| json!({ "query": format!("mutation {{ publishPost(id: \"{id}\") {{ id status }} }}") });
 
-    // Org B cannot publish org A's post — forbidden (GraphQL error, no data).
     let denied = app
         .http()
         .post("/graphql")
@@ -1378,7 +1343,6 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
         "org B is forbidden publishing org A's post",
     );
 
-    // Org A publishes — the transition returns PUBLISHED and emits the event.
     let published = app
         .http()
         .post("/graphql")
@@ -1405,7 +1369,6 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
         "PUBLISHED",
     );
 
-    // The transition persists.
     let by_id = json!({ "query": format!("{{ post(id: \"{post_a}\") {{ status }} }}") });
     let again = app
         .http()
@@ -1431,11 +1394,6 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
     );
 }
 
-/// The real worker path, booted in-process against the **same** ephemeral DB the
-/// api uses: `DatabaseModule` auto-binds the `WorkerDbContext` that gives each
-/// job a pool executor, and `NotificationsQueueModule` registers the processor
-/// that drains the `notifications` queue. Mirrors the inline module the worker
-/// e2e defines to exercise its own consumer.
 #[module(
     imports = [
         DatabaseModule::for_root(None),
@@ -1446,17 +1404,10 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
 )]
 struct NotificationsWorkerHarness;
 
-/// End-to-end proof of task A7's magic moment: publishing a post over GraphQL
-/// emits `PostPublishedEvent`; the listener enqueues a `NotifyCommand` (no DB —
-/// it has no request context); the worker consumes it and persists a
-/// `Notification`; and `GET /notifications` returns it, row-level scoped so
-/// org B never sees org A's notification.
 #[tokio::test]
 async fn publishing_a_post_notifies_the_org_through_the_worker() {
     let (db, app) = boot().await;
 
-    // Boot the real worker on the same ephemeral DB + real Redis, and start its
-    // queue transport so it drains `notifications`.
     let worker = TestApp::builder()
         .module::<NotificationsWorkerHarness>()
         .provide_arc(db.connection())
@@ -1468,7 +1419,6 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         .await
         .expect("the worker's QueueWorker drains the notifications queue");
 
-    // Two orgs; an author (with a `sub`) in org A to satisfy the post author FK.
     let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
     let org_a = create_org(&app, &bootstrap, "NotifyAcme").await;
     let org_b = create_org(&app, &bootstrap, "NotifyGlobex").await;
@@ -1484,7 +1434,6 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
 
     let post_a = create_post(&app, &author_a, "Launch", "Big news").await;
 
-    // Count org A's notifications through the read resource.
     let notification_count = |bearer: String| {
         let app = &app;
         async move {
@@ -1499,8 +1448,6 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         }
     };
 
-    // Publish (re-publishing defensively: a stray competing worker on shared
-    // Redis could steal a single message) and poll until the worker persists.
     let mut seen = false;
     'outer: for _ in 0..5 {
         let publish = json!({ "query": format!("mutation {{ publishPost(id: \"{post_a}\") {{ id status }} }}") });
@@ -1525,14 +1472,12 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         "the worker persisted a notification for org A that GET /notifications returns",
     );
 
-    // Row-level scope: org B sees none of org A's notifications.
     assert_eq!(
         notification_count(admin_b).await,
         0,
         "org B must not see org A's notification",
     );
 
-    // And the message is the one the listener produced from the publish event.
     let a_list = app
         .http()
         .get("/notifications")
@@ -1558,11 +1503,6 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         .expect("the worker's QueueWorker stops cleanly");
 }
 
-/// A worker that drains the `audio` queue, booted in-process for the storage
-/// round-trip below. `AudioQueueModule` imports the audio port, which owns the
-/// `StorageModule` import, so the processor's `AudioService` gets the real
-/// `Storage` client — no DB is involved (audio touches only object storage and
-/// Redis).
 #[module(
     imports = [
         QueueModule::for_root(None),
@@ -1572,9 +1512,6 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
 )]
 struct AudioWorkerHarness;
 
-/// A `Storage` client mirroring the app's configuration, used only to ensure the
-/// bucket exists before the round-trip. Honors the `NESTRS_STORAGE__*` overrides
-/// the app reads (defaults target the dev-container RustFS).
 fn storage_client() -> Storage {
     let mut config = StorageConfig::default();
     if let Ok(v) = std::env::var("NESTRS_STORAGE__ENDPOINT") {
@@ -1592,9 +1529,6 @@ fn storage_client() -> Storage {
     Storage::new(Arc::new(config))
 }
 
-/// Best-effort bucket creation: a presigned PUT on the bucket root is an S3
-/// `CreateBucket`; a 2xx means created, a 409 means it already exists. Both are
-/// fine — the object round-trip below is the real assertion.
 async fn ensure_bucket(http: &reqwest::Client) {
     if let Ok(url) = storage_client()
         .presign_put("", Duration::from_secs(60))
@@ -1604,19 +1538,12 @@ async fn ensure_bucket(http: &reqwest::Client) {
     }
 }
 
-/// End-to-end proof of task A4: the audio slice does real S3 object I/O.
-/// `POST /audio/uploads` presigns a PUT; the client pushes bytes straight to
-/// RustFS (the server never sees the payload); `POST /audio/transcode` enqueues
-/// the object key; the worker reads the source object and writes a derived one;
-/// and `GET /audio/results` presigns a GET the client fetches to read the
-/// derived bytes back — asserted byte-for-byte, against live RustFS, no mocking.
 #[tokio::test]
 async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
     let (_db, app) = boot().await;
     let http = reqwest::Client::new();
     ensure_bucket(&http).await;
 
-    // Boot a worker that drains the audio queue against real Redis + storage.
     let worker = TestApp::builder()
         .module::<AudioWorkerHarness>()
         .build_headless()
@@ -1634,7 +1561,6 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
         .as_nanos();
     let filename = format!("e2e-{}-{}.mp3", std::process::id(), nonce);
 
-    // 1. Presign a PUT and push a small payload straight to storage.
     let ticket = app
         .http()
         .post("/audio/uploads")
@@ -1661,10 +1587,6 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
         put.text().await.unwrap_or_default(),
     );
 
-    // 2 & 3. Enqueue the transcode and poll the result endpoint until the worker
-    // has produced the derived object. Re-enqueuing across outer iterations is
-    // safe (the transform is deterministic) and defends against a stray worker on
-    // shared Redis stealing a single message.
     let mut result_url: Option<String> = None;
     'outer: for _ in 0..5 {
         app.http()
@@ -1700,8 +1622,6 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
     let result_url =
         result_url.expect("the worker produced the derived object and /audio/results served a URL");
 
-    // 4. Fetch the derived object back through the presigned GET and assert the
-    // bytes survived the upload → worker → download round-trip.
     let got = http
         .get(&result_url)
         .send()
@@ -1724,11 +1644,6 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
         .expect("the worker's QueueWorker stops cleanly");
 }
 
-/// The multipart + streaming counterpart of the presigned round-trip: the client
-/// posts the file as `multipart/form-data` straight through the server (no
-/// presign), the worker transcodes it, and `GET /audio/download` streams the
-/// derived object back chunk by chunk — asserted byte-for-byte against live
-/// RustFS, no mocking.
 #[tokio::test]
 async fn audio_multipart_upload_and_streamed_download_round_trip() {
     let (_db, app) = boot().await;
@@ -1753,7 +1668,6 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
     let filename = format!("e2e-multipart-{}-{}.mp3", std::process::id(), nonce);
     let payload = b"nestrs multipart + streaming payload \xf0\x9f\x8e\xa7".to_vec();
 
-    // 1. Upload the file directly as multipart/form-data through the server.
     let form = TestForm::new().field(
         TestFormField::bytes(payload.clone())
             .name("file")
@@ -1776,7 +1690,6 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
         .string()
         .to_owned();
 
-    // 2 & 3. Enqueue the transcode and stream the derived object back once ready.
     let mut downloaded: Option<Vec<u8>> = None;
     'outer: for _ in 0..5 {
         app.http()
@@ -1808,7 +1721,6 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
         "the streamed bytes match the multipart upload",
     );
 
-    // 4. The SSE progress feed reports the transcode as ready and closes.
     let events = app
         .http()
         .get(format!("/audio/events?file={key}"))

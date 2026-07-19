@@ -1,8 +1,3 @@
-//! Notifications slice: on a `PostPublishedEvent`, the `events/` listener
-//! enqueues a `NotifyCommand` (producer only — a listener has no request
-//! context, so it never touches the DB); the `queue/` worker consumes it and
-//! persists a `Notification`; the `http/` adapter exposes that append-only log
-//! as a **read-only**, org-scoped resource.
 mod command;
 mod entity;
 mod module;

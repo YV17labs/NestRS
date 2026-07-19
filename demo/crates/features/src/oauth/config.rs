@@ -3,14 +3,11 @@ use nest_rs_config::{Config, ConfigError, ConfigService, config};
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
 
-// The seeded Acme org (a UUID v7 — see `demo/crates/seed`): a social login
-// with no explicit org lands in a real, reachable tenant.
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
 #[config(namespace = "issuer")]
 #[derive(Clone, Default)]
 pub struct IssuerConfig {
-    // The org id each client acts as is the framework client's generic payload.
     pub clients: Vec<RegisteredClient<Uuid>>,
     pub default_org_id: Uuid,
 }

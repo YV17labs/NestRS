@@ -1,9 +1,6 @@
 use nest_rs_http::input;
 use schemars::JsonSchema;
 
-// `#[input]` appends `Deserialize`, `Validate`, and `#[serde(deny_unknown_fields)]`,
-// so a login body carrying an extra field (e.g. `is_admin: true`) is rejected at
-// parse time rather than silently ignored — fail-secure on the auth edge.
 #[input]
 #[derive(Debug, JsonSchema)]
 pub struct LoginDto {

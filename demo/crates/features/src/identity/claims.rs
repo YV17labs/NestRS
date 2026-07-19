@@ -24,8 +24,6 @@ impl Claims {
     }
 }
 
-/// Audit identity: the `sub` claim. A subject-less token (e.g. a
-/// client-credentials grant carried in these claims) has no actor id.
 impl nest_rs_authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|sub| sub.to_string())

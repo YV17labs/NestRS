@@ -8,7 +8,6 @@ mod strategies;
 pub mod http;
 
 pub use config::IssuerConfig;
-// Re-exported so apps wiring the issuer config name the client type via the feature.
 pub use dtos::{AccessTokenDto, LoginDto, TokenRequestDto};
 pub use module::OAuthModule;
 pub use nest_rs_authn::RegisteredClient;

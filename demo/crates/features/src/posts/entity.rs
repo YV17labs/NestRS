@@ -2,9 +2,6 @@ use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Publication state of a post, backed by the `status` string column. `Draft`
-/// is the state a freshly created post lands in; `publishPost` transitions it
-/// to `Published`, which is when subscribers are notified.
 #[derive(
     Clone,
     Copy,

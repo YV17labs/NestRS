@@ -47,8 +47,6 @@ impl PostsController {
         author: Ctx<PostAuthor>,
         body: Valid<Json<CreatePost>>,
     ) -> Result<Json<Post>> {
-        // `PostAuthorGuard` already verified the token carries a subject and
-        // attached it as `PostAuthor`; the org comes from the same token.
         let PostAuthor(author_id) = *author;
         Ok(Json(
             self.svc
@@ -71,9 +69,6 @@ impl PostsController {
         _authz: Authorize<Update, PostEntity>,
         post: Bind<PostsService, Update>,
     ) -> Result<Json<Post>> {
-        // The state rule lives in the service; here we only surface its typed
-        // `PostError` as a thrown `poem::Error` so `PostProblemFilter` — the
-        // typed catch bound above — renders it as problem+json.
         let model = post.into_inner();
         self.svc
             .ensure_unpublished(&model)

@@ -59,14 +59,9 @@ impl UsersService {
     ) -> Result<entity::Model, AuthError> {
         burn_verify(password);
         let conn = Repo::<Users>::conn().map_err(|e| store_unavailable(email, e))?;
-        // Pre-authentication: no principal exists yet, so no ability — the
-        // sanctioned unscoped path (see `Repo::unscoped`). Routing through
-        // `scoped` here would deny every row on a request executor.
         let user = find_by_email(email, &conn)
             .await
             .map_err(|e| store_unavailable(email, e))?;
-        // The store was reachable: from here a failure is a genuine credential
-        // mismatch (opaque 401), never confused with the store being down (500).
         verify_credentials(email, user, password).map_err(AuthError::from)
     }
 
@@ -98,8 +93,6 @@ impl UsersService {
         let active = prepare_new_user(input, org_id, None)?;
         let user = match active.insert(&Repo::<Users>::conn()?).await {
             Ok(user) => user,
-            // The unique-email constraint is a client conflict (409), not an
-            // opaque 500 — surface it as such instead of swallowing it as a `Db`.
             Err(e) if is_unique_violation(&e) => {
                 return Err(ServiceError::conflict(
                     "a user with this email already exists",
@@ -111,21 +104,6 @@ impl UsersService {
         Ok(user)
     }
 
-    /// Resolve a social login to a local user, keyed on the stable
-    /// `(provider, subject)` identity — never the email. Pre-authentication:
-    /// no principal exists yet, so this runs on the sanctioned **unscoped**
-    /// path (like [`authenticate`](Self::authenticate)).
-    ///
-    /// Order (see the social-login design):
-    /// 1. A known `(provider, subject)` ⇒ that user, regardless of the current
-    ///    provider email (email drift never orphans the account).
-    /// 2. Else a **verified** email matching a live user ⇒ *link* the identity
-    ///    to it (an audited event) and return the user. An unverified email
-    ///    never links — the cross-provider takeover guard.
-    /// 3. Else create the user and its identity, using the verified email.
-    ///
-    /// An unknown identity with no verified email is rejected here (the login
-    /// never provisions a guest from an unattested email).
     pub async fn resolve_social_identity(
         &self,
         identity: &SocialIdentity,
@@ -134,12 +112,10 @@ impl UsersService {
         let conn =
             Repo::<Users>::conn().map_err(|e| social_store_unavailable(identity.provider, e))?;
 
-        // 1. Known identity.
         if let Some(user) = self.find_by_identity(identity, &conn).await? {
             return Ok(user);
         }
 
-        // 2 & 3 both require a provider-attested email.
         let Some(email) = identity.verified_email() else {
             tracing::warn!(
                 target: "features::users",
@@ -150,7 +126,6 @@ impl UsersService {
             return Err(AuthError::Failed("no verified email".into()));
         };
 
-        // 2. Link a verified email to an existing account.
         if let Some(user) = find_by_email(email, &conn)
             .await
             .map_err(|e| social_store_unavailable(identity.provider, e))?
@@ -159,7 +134,6 @@ impl UsersService {
             return Ok(user);
         }
 
-        // 3. Create the user and its identity.
         self.create_with_identity(identity, email, default_org_id, &conn)
             .await
     }
@@ -178,7 +152,6 @@ impl UsersService {
         let Some(row) = row else {
             return Ok(None);
         };
-        // Load the linked user (unscoped, pre-auth), skipping soft-deleted rows.
         Repo::<Users>::unscoped_by_id(row.user_id)
             .filter(live_condition::<Users>())
             .one(conn)
@@ -202,8 +175,6 @@ impl UsersService {
                 );
                 Ok(())
             }
-            // Lost a race with a concurrent link for the same (provider,
-            // subject): the identity row now exists, so the link is done.
             Err(e) if is_unique_violation(&e) => Ok(()),
             Err(e) => Err(social_store_unavailable(identity.provider, e)),
         }
@@ -234,8 +205,6 @@ impl UsersService {
                 tracing::debug!(target: "features::users", id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
                 user
             }
-            // Concurrent first login for this email created the row: re-read it
-            // (read-then-insert TOCTOU), then link below.
             Err(e) if is_unique_violation(&e) => find_by_email(email, conn)
                 .await
                 .map_err(|e| social_store_unavailable(identity.provider, e))?
@@ -248,18 +217,9 @@ impl UsersService {
     }
 }
 
-/// The external identity a social login resolves to a local user. The users
-/// feature's **own** input contract — it deliberately does not depend on
-/// `nest-rs-social`; the oauth feature maps a `SocialProfile` into this.
-///
-/// [`Debug`] is hand-written to **redact** the PII fields (`email`, `name`) —
-/// presence only, never the value — matching the `SocialProfile` it is mapped
-/// from, so neither side can leak a user email into a log line.
 #[derive(Clone)]
 pub struct SocialIdentity {
-    /// Provider key, e.g. `"github"`.
     pub provider: &'static str,
-    /// Provider-side stable identifier.
     pub subject: String,
     pub email: Option<String>,
     pub email_verified: bool,
@@ -280,8 +240,6 @@ impl std::fmt::Debug for SocialIdentity {
 }
 
 impl SocialIdentity {
-    /// The email only when the provider attests it — the gate for linking to
-    /// or provisioning an account.
     fn verified_email(&self) -> Option<&str> {
         if self.email_verified {
             self.email.as_deref().filter(|e| !e.is_empty())
@@ -290,8 +248,6 @@ impl SocialIdentity {
         }
     }
 
-    /// A display name, synthesized from `provider-subject` when the provider
-    /// gave none.
     fn display_name(&self) -> String {
         self.name
             .clone()
@@ -306,24 +262,16 @@ fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identit
         user_id: Set(user_id),
         provider: Set(identity.provider.to_owned()),
         subject: Set(identity.subject.clone()),
-        // The provider email at link time — an audit fact.
         email: Set(identity.email.clone()),
-        // created_at / updated_at carry DB defaults.
         ..Default::default()
     }
 }
 
-/// A `500` mapper for a DB failure on the social-identity path (store
-/// unreachable), logged at `error` — kept separate from a credential/identity
-/// rejection so an outage is never reported as a login failure.
 fn social_store_unavailable(provider: &str, err: DbErr) -> AuthError {
     tracing::error!(target: "features::users", provider, error = %err, "social identity store unreachable");
     AuthError::Unavailable(err.to_string())
 }
 
-/// Shared unscoped by-email lookup for the pre-authentication paths:
-/// [`UsersService::authenticate`], and the verified-email link + create-race
-/// re-read in [`UsersService::resolve_social_identity`].
 async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Model>, DbErr> {
     Repo::<Users>::unscoped()
         .filter(live_condition::<Users>())
@@ -336,10 +284,6 @@ fn is_unique_violation(err: &DbErr) -> bool {
     matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
 }
 
-/// An `AuthError` that renders 500 (the identity store is unreachable), logged
-/// at `error` — the sanctioned response for a DB failure on a login path, kept
-/// separate from the opaque credential rejection so an outage is never reported
-/// to the caller as invalid credentials.
 fn store_unavailable(email: &str, err: DbErr) -> AuthError {
     tracing::error!(target: "features::users", %email, error = %err, "credential lookup failed");
     AuthError::Unavailable(err.to_string())
@@ -352,8 +296,6 @@ pub(crate) fn prepare_new_user(
 ) -> Result<entity::ActiveModel, ServiceError> {
     input.validate()?;
     let password_hash = match password {
-        // A hashing failure is not a DB error: surface it as an internal 500
-        // (`ServiceError::Internal`) with the source kept for `tracing`.
         Some(plain) => Some(
             hash_password(plain)
                 .map_err(|e| ServiceError::internal(format!("password hashing failed: {e}")))?,
@@ -386,9 +328,6 @@ pub(crate) fn verify_credentials(
             tracing::warn!(target: "features::users", %email, reason = "bad_password", "login failed");
             Err(CredentialError)
         }
-        // The stored hash is unparseable — an operator-visible data fault, not
-        // an ordinary wrong password. Stay opaque to the caller (still
-        // `CredentialError`) but log at `error` so the corruption is noticed.
         Err(e) => {
             tracing::error!(target: "features::users", %email, error = %e, reason = "unverifiable_hash", "login failed");
             Err(CredentialError)
@@ -744,8 +683,6 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_social_identity_surfaces_executor_error_as_unavailable() {
-        // A store outage on the pre-auth social path must be `Unavailable`
-        // (500), never a login-shaped rejection.
         let svc = users_service_disconnected();
         let identity = SocialIdentity {
             provider: "github",
@@ -763,9 +700,6 @@ mod tests {
 
     #[test]
     fn verified_email_gate_blocks_unverified_and_blank_emails() {
-        // The gate for both linking (step 2) and provisioning (step 3): an
-        // unverified or absent email is never usable, so an unknown identity
-        // with one is rejected rather than provisioned.
         let unverified = SocialIdentity {
             provider: "github",
             subject: "7".into(),

@@ -72,6 +72,50 @@ not a review comment someone has to catch.
   it opts out by not importing them. Security is structural, not vigilant.
 </Aside>
 
+## The macro question
+
+"An empty `impl` block that turns into five routes" is where a Rust engineer
+reasonably slows down. Attribute macros have a reputation: hidden control
+flow, opaque errors, code you cannot read. Two properties keep NestRS's
+decorators inspectable.
+
+**The expansion is code you can read.** `cargo expand` prints what a
+decorator emitted — plain Rust, compiled by rustc like anything you write by
+hand, with doc comments naming the attribute argument each item came from.
+Nothing is resolved by reflection and nothing is generated at runtime.
+
+```console
+$ cargo expand -p features orgs::http::controller
+pub struct OrgsController {
+    svc: Arc<OrgsService>,
+}
+impl OrgsController {
+    /// The controller's route prefix, from `#[controller(path = "…")]`.
+    pub const PATH: &'static str = "/orgs";
+    /// Construct this provider by resolving its `#[inject]` fields from the
+    /// container. Emitted by the decorator; called by the register phase,
+    /// not by hand.
+    pub fn from_container(container: &::nest_rs_core::Container) -> Self {
+…
+```
+
+**Mistakes fail at compile time, pointing at your line.** A mistyped option
+is not a cryptic trait error deep in the expansion — the first error names
+the option and the accepted set, at the line and column you typed it:
+
+```console
+$ cargo check -p features
+error: unknown #[crud] option `servcie` (expected `service`, `entity`, `output`, `create`, `update`, `ops`, `paginate`)
+  --> crates/features/src/orgs/http/controller.rs:17:5
+   |
+17 |     servcie = svc,
+   |     ^^^^^^^
+```
+
+What a decorator cannot check at compile time — that every injected
+dependency is reachable through your module imports — fails at boot instead,
+as the next section shows.
+
 ## Wiring you find out about at boot, not at 3am
 
 axum resolves its state and its routes as you build the `Router`. A dependency

@@ -157,14 +157,22 @@ WebSockets, queues, scheduled jobs, MCP.
 
 The same "Hello World" service — a provider, a controller, a module — built
 once in NestRS and once in NestJS 11 on Node.js 24, under identical `wrk` load
-(2 cores, `-t2 -c64 -d20s`). Synthetic baseline: same handler shape and
-hardware — illustrates framework overhead, not a domain-heavy API.
+(each server pinned to 2 cores, `-t2 -c64 -d20s`). Synthetic baseline: same
+handler shape and hardware — it isolates framework overhead, not a
+domain-heavy API.
 
-Where these numbers come from: we measured them ourselves in a Linux Docker
-container capped at **4 cores and 8 GB of RAM**, with the load generator
-running on those same cores. Not a tuned lab rig, and not a reproducible
-harness — treat every figure on this page as a lower bound from a constrained
-machine, and re-measure on your own hardware for your own workload.
+Two different measurements, don't conflate them: the **~23k req/s in ~32 MB**
+in the hero is the demo API's **full pipeline** — JWT verification, ability
+build, a row-level-filtered Postgres query, response masking. The
+**~463k req/s and 4–6 MB** below are the **bare hello-world** — no database,
+no auth. The gap between the two is the cost of real work (crypto + Postgres),
+not of the framework.
+
+Both ran on the same machine: a Linux Docker container capped at **4 cores
+and 8 GB of RAM**, with the load generator sharing those cores. Not a tuned
+lab rig, and not a reproducible harness — treat every figure on this page as
+a lower bound from a constrained machine, and re-measure on your own hardware
+for your own workload.
 
 <Bench />
 
@@ -186,13 +194,15 @@ machine, and re-measure on your own hardware for your own workload.
   </Card>
   <Card title="Native throughput" icon="rocket">
     **~463k req/s** on 2 cores, **~231k per core**, sub-millisecond p99,
-    no GC pauses. The same `hyper`/`tokio` core as the fastest Rust web
-    frameworks — with a structure on top.
+    no GC pauses (hello-world baseline — conditions above). The same
+    `hyper`/`tokio` core as the fastest Rust web frameworks — with a
+    structure on top.
   </Card>
   <Card title="An order of magnitude less RAM" icon="laptop">
-    **~4 MB idle, ~6 MB under load** — versus ~80–120 MB for an
-    equivalent Node service. Smaller instances, higher density, a
-    materially lighter cloud bill.
+    **~4 MB idle, ~6 MB under load** for the hello-world baseline — versus
+    ~80–120 MB for an equivalent Node service; the full demo pipeline,
+    Postgres included, stays around ~32 MB. Smaller instances, higher
+    density, a materially lighter cloud bill.
   </Card>
   <Card title="Boots in milliseconds" icon="bars">
     Each deployable is a static native binary with no runtime to warm up —

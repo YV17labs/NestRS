@@ -61,9 +61,8 @@ pub struct OrgsController {
 impl OrgsController {}
 ```
 
-The policy lives in one place — and if you've used [CASL](https://casl.js.org/)
-in Node, you already know how to read it; the lineage is deliberate. Here, a
-member sees only their own org's users, and only the fields the ability grants:
+The policy lives in one place. A member sees only their own org's users, and
+only the fields the ability grants:
 
 ```rust title="crates/features/src/authz/ability.rs (abridged)"
 ab.can(Action::Read, user::Entity)

@@ -12,7 +12,7 @@ hero:
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
     <span class="hero-lead">Multi-tenant isolation you <span class="lead-accent">cannot forget.</span></span>
-    <span class="hero-sub">Row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. For teams shipping structured Rust backends, especially if NestJS shaped how you think about modules: you write a controller, a service, a module; the decorators carry security and wiring. And it stays lean — the full auth + authz + row-level + masking pipeline serves <strong>~23k req/s</strong> at <strong>p99 &lt; 4.5 ms</strong> in <strong>~32 MB</strong> of RAM, Postgres included.</span>
+    <span class="hero-sub">Row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. For teams shipping structured Rust backends, especially if NestJS shaped how you think about modules: you write a controller, a service, a module; the decorators carry security and wiring. And it stays lean — the full auth + authz + row-level + masking pipeline serves <strong>~23k req/s</strong> at <strong>p99 &lt; 4.5 ms</strong> in <strong>~32 MB</strong> of RAM, Postgres included — measured in a Linux Docker container on 4 cores and 8 GB.</span>
     <span class="hero-stack">
       <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
       <span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
@@ -159,6 +159,12 @@ The same "Hello World" service — a provider, a controller, a module — built
 once in NestRS and once in NestJS 11 on Node.js 24, under identical `wrk` load
 (2 cores, `-t2 -c64 -d20s`). Synthetic baseline: same handler shape and
 hardware — illustrates framework overhead, not a domain-heavy API.
+
+Where these numbers come from: we measured them ourselves in a Linux Docker
+container capped at **4 cores and 8 GB of RAM**, with the load generator
+running on those same cores. Not a tuned lab rig, and not a reproducible
+harness — treat every figure on this page as a lower bound from a constrained
+machine, and re-measure on your own hardware for your own workload.
 
 <Bench />
 

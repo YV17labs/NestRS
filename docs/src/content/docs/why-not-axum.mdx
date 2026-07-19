@@ -100,8 +100,10 @@ For context, our own measurements on the demo API — a single instance, the
 full JWT plus authz plus row-level plus masking pipeline, Postgres included —
 land around 23k req/s with a p99 under 4.5 ms in roughly 32 MB of resident
 memory. The binary ships in the 11–20 MB range and boots in tens of
-milliseconds. These are figures we measured on our hardware, not a published,
-reproducible harness — treat them as a shape, not a spec.
+milliseconds. We measured these ourselves in a Linux Docker container capped
+at 4 cores and 8 GB, with the load generator sharing the same cores — not a
+published, reproducible harness. Treat them as lower bounds from a
+constrained machine: a shape, not a spec.
 
 <Aside type="caution">
   Do not choose NestRS for the throughput number. Choose it for the

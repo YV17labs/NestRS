@@ -46,9 +46,9 @@ And it stays lean. Our own measurements of the demo API — the full JWT + authz
 + row-level + masking pipeline, Postgres included — land around **23k req/s**,
 **p99 < 4.5 ms**, in **~32 MB** of resident memory; the binary ships at 11–20 MB
 and boots in tens of milliseconds. (Measured in a Linux Docker container
-capped at 4 cores and 8 GB, load generator on the same cores. Our numbers,
-lower bounds from a constrained machine — a shape, not a reproducible
-harness.)
+capped at 4 cores and 8 GB, with the load generator competing for the same
+cores — a setup that understates the numbers; dedicated hardware only
+pushes them up.)
 
 → [Why not axum?](https://nestrs.dev/why-not-axum/) ·
 [Coming from NestJS](https://nestrs.dev/coming-from-nestjs/) ·

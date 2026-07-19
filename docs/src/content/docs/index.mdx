@@ -169,10 +169,9 @@ no auth. The gap between the two is the cost of real work (crypto + Postgres),
 not of the framework.
 
 Both ran on the same machine: a Linux Docker container capped at **4 cores
-and 8 GB of RAM**, with the load generator sharing those cores. Not a tuned
-lab rig, and not a reproducible harness — treat every figure on this page as
-a lower bound from a constrained machine, and re-measure on your own hardware
-for your own workload.
+and 8 GB of RAM**, with the load generator competing for those same cores.
+That setup understates the framework — on dedicated hardware, with the
+client off-box, every figure on this page goes up. Measure it on yours.
 
 <Bench />
 

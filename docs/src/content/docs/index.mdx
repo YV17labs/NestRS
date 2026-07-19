@@ -12,10 +12,10 @@ hero:
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
     <span class="hero-lead">Multi-tenant isolation you <span class="lead-accent">cannot forget.</span></span>
-    <span class="hero-sub">Row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. For teams shipping structured Rust backends, especially if NestJS shaped how you think about modules: you write a controller, a service, a module; the decorators carry security and wiring. And it stays lean — the full auth + authz + row-level + masking pipeline serves <strong>~23k req/s</strong> at <strong>p99 &lt; 4.5 ms</strong> in <strong>~32 MB</strong> of RAM, Postgres included — measured in a Linux Docker container on 4 cores and 8 GB.</span>
+    <span class="hero-sub">Row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. For backend teams who want native performance without giving up structure — whether your reflexes come from NestJS, Spring, or Laravel: you write a controller, a service, a module; the decorators carry security and wiring. And it stays lean — on the same hello-world, <strong>~25× the throughput</strong> of the Node equivalent in <strong>4–6 MB</strong> of RAM; the full auth + authz + row-level + masking pipeline, Postgres included, serves <strong>~23k req/s</strong> at <strong>p99 &lt; 4.5 ms</strong> in <strong>~32 MB</strong> — both setups measured and detailed below.</span>
     <span class="hero-stack">
       <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
-      <span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
+      <span>Database</span><span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
       <span class="hero-stack-accent">Authentication</span><span class="hero-stack-accent">OAuth2</span><span class="hero-stack-accent">Authorization</span>
     </span>
   image:
@@ -61,8 +61,9 @@ pub struct OrgsController {
 impl OrgsController {}
 ```
 
-The policy lives in one place. A member reads their own org, and sees only the
-fields the ability grants:
+The policy lives in one place — and if you've used [CASL](https://casl.js.org/)
+in Node, you already know how to read it; the lineage is deliberate. Here, a
+member sees only their own org's users, and only the fields the ability grants:
 
 ```rust title="crates/features/src/authz/ability.rs (abridged)"
 ab.can(Action::Read, user::Entity)
@@ -84,6 +85,10 @@ Same route, same handler — the caller's token decides the rows and the fields:
   ]}
 />
 
+Behind the guards sits a full authentication stack — JWT on EdDSA keys, OAuth2
+with PKCE, Argon2id passwords with timing-safe verification, social login —
+each a module import, documented in [Security](/security/).
+
 **[See it live — the security checkpoint →](/tutorial/checkpoint/)**
 
 </div>
@@ -92,7 +97,10 @@ Same route, same handler — the caller's token decides the rows and the fields:
 
 <div class="nestrs-reveal not-content">
 
-No wiring file. No config. No boilerplate. Scaffold a **standalone** crate with
+No wiring file. No config. No boilerplate. And if Rust's learning curve is
+what holds you back: what you write is what the tabs show — structs,
+decorators, business logic. The machinery that gives Rust its reputation
+for difficulty lives inside the framework. Scaffold a **standalone** crate with
 the CLI, then follow the tabs from **Controller** (your HTTP surface) through
 **Service**, **Module**, and **Main** — that's a real, type-checked service.
 The dependency graph is built and **verified at boot**, and the crate compiles
@@ -166,12 +174,17 @@ in the hero is the demo API's **full pipeline** — JWT verification, ability
 build, a row-level-filtered Postgres query, response masking. The
 **~463k req/s and 4–6 MB** below are the **bare hello-world** — no database,
 no auth. The gap between the two is the cost of real work (crypto + Postgres),
-not of the framework.
+not of the framework. Read it the other way around: the fully-secured API
+still lands in the range Node reaches serving a bare hello-world.
 
 Both ran on the same machine: a Linux Docker container capped at **4 cores
 and 8 GB of RAM**, with the load generator competing for those same cores.
 That setup understates the framework — on dedicated hardware, with the
 client off-box, every figure on this page goes up. Measure it on yours.
+
+If your point of comparison is axum or Actix rather than Node: same native
+core, so the question is not speed — it is what the framework carries for you.
+See [Why not axum?](/why-not-axum/).
 
 <Bench />
 
@@ -180,11 +193,22 @@ client off-box, every figure on this page goes up. Measure it on yours.
 <div class="nestrs-reveal nestrs-reveal--stagger not-content">
 
 <CardGrid>
+  <Card title="Secure & transactional by composition" icon="approve-check-circle">
+    Authn, authorization, row-level filtering, response masking, transaction
+    scope — you turn them on by importing a module, never by remembering to
+    call them. Forgetting to redact a field becomes structurally hard.
+  </Card>
+  <Card title="Verified before it serves" icon="warning">
+    The DI graph is checked at boot — a bad import fails startup with a
+    clear error naming the missing wire. No reflection, no runtime
+    "cannot resolve dependency" five minutes after deploy.
+  </Card>
   <Card title="Declarative, decorator-driven" icon="puzzle">
     `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`,
     `#[gateway]`, `#[scheduled]`, `#[mcp]`. You write logic; the decorator
-    expands the boilerplate. No service locator, no registration list to keep
-    in sync.
+    expands the boilerplate — into plain Rust you can read with
+    [`cargo expand`](/why-not-axum/#the-macro-question). No service locator,
+    no registration list to keep in sync.
   </Card>
   <Card title="Types you don't fight" icon="approve-check">
     Rust types end to end — entity, DTO, route handler, dataloader, GraphQL
@@ -206,16 +230,6 @@ client off-box, every figure on this page goes up. Measure it on yours.
   <Card title="Boots in milliseconds" icon="bars">
     Each deployable is a static native binary with no runtime to warm up —
     autoscaling and cold starts stop hurting.
-  </Card>
-  <Card title="Secure & transactional by composition" icon="approve-check-circle">
-    Authn, authorization, row-level filtering, response masking, transaction
-    scope — you turn them on by importing a module, never by remembering to
-    call them. Forgetting to redact a field becomes structurally hard.
-  </Card>
-  <Card title="Verified before it serves" icon="warning">
-    The DI graph is checked at boot — a bad import fails startup with a
-    clear error naming the missing wire. No reflection, no runtime
-    "cannot resolve dependency" five minutes after deploy.
   </Card>
   <Card title="Batteries included, opt-in by crate" icon="setting">
     HTTP, GraphQL, OpenAPI, WebSockets, Redis-backed queues, scheduling,
@@ -376,4 +390,6 @@ knob — each app under `apps/*` gets its own replica count.
 - [Getting started](/getting-started/) — scaffold and run your first app.
 - [Tutorial](/tutorial/) — build a posts feature end to end.
 - [Why NestRS](/why/) — the thesis and the structural properties behind it.
-- [The Publish workspace](/publish/) — the reference product every example app tells.
+- [Threat model](/security/threat-model/) — what each layer catches, what it
+  doesn't, and where the framework defers to your deployment.
+- [The Publish workspace](/publish/) — the product universe every example is drawn from.

@@ -9,6 +9,79 @@ both new features and breaking changes.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-19
+
+### Changed
+
+- **WS message handlers are transactional.** `WsDataContext` installs the
+  same lazy executor per message: a read-only or non-querying message opens
+  no transaction, while a writing handler commits on a success reply and
+  rolls back on an error reply — a multi-write handler that fails mid-way no
+  longer half-persists. Guest connections stay fail-closed (deny-all without
+  an ambient ability).
+- **Mutating HTTP requests no longer pay `BEGIN`/`ROLLBACK` before guards
+  run.** `DbContext` now installs a lazy executor (`Executor::Lazy`): the
+  request transaction opens on the **first data-layer touch**, so a
+  guard-denied POST — or any mutating request that never queries — opens
+  zero transactions and consumes no Postgres transaction slot. Commit /
+  rollback semantics, the `MappedError` rollback, and the escaped-executor
+  fail-loud check are unchanged.
+- **`Creatable::create` is atomic on every executor shape.** On a pool
+  executor (a WS message handler, a bare `with_executor`) the insert and its
+  SQL scope re-check now run in a local transaction — an out-of-scope create
+  surfaces `RecordNotInserted` and persists nothing, instead of relying on
+  the HTTP request transaction for the rollback.
+- **`ThrottlerStore::hit` is async.** The Redis store awaits its round-trip
+  on the request task instead of parking a runtime worker with
+  `block_in_place` + `block_on` per rate-limit check (which also panicked on
+  a current-thread runtime). Fail-closed behavior on a Redis outage is
+  unchanged.
+- **Guard chains are validated at boot from declared markers.** `Guard` gains
+  `phase()` (authentication / authorization / other) and
+  `produced_principal()` / `expected_principal()`. A chain listing authz
+  before authn, or pairing an `AuthGuard` whose principal type differs from
+  the `AbilityGuard`'s expected actor, now **fails boot with a named error**
+  instead of answering 500 on every request; the old name-substring ordering
+  heuristic is gone.
+
+- **Response masking is cross-checked at run time.** `#[routes]` arms the
+  response shaper by matching the `Authorize`/`Bind` parameter-type name; a
+  renamed import (`use Authorize as Az`) used to disarm masking silently.
+  Unarmed routes now carry a `MaskProbe`: when a masking extractor runs on a
+  route whose shaper is not armed, the request fails closed with a logged
+  `500` instead of shipping an unmasked body.
+- **`Bind` / GraphQL `bind` no longer echo `DbErr` text to the client.** A
+  failed by-id load logs the full error at `error` on `nest_rs::orm` and
+  answers with an empty `500` (HTTP) / a generic `INTERNAL_SERVER_ERROR`
+  extension (GraphQL), matching the `#[crud]` write mapper.
+
+### Added
+
+- **`nest_rs_authz::masked_reply`** — mask a handler's wire JSON with the
+  ambient ability in one call, for surfaces with no automatic response
+  shaper (a WS gateway reply, a hand-built payload). Same fail-closed core
+  as the HTTP shaper and the GraphQL wrapper; the reference `users` WS
+  gateway now uses it instead of ten hand-rolled masking lines.
+- **`Creatable::create_from_active`** — insert a *prepared* `ActiveModel`
+  through the same audited create path as `Creatable::create` (atomic
+  insert + SQL scope re-check), for service methods that stamp server-side
+  columns (the token's org id, a status default) before insert. The demo's
+  users/posts services now use it instead of raw
+  `ActiveModel::insert(&Repo::conn()?)`.
+
+### Removed
+
+- **Reserved cross-transport layer seams that were never invoked.**
+  `Interceptor::wrap_graphql`/`wrap_ws` (with `GraphqlNext`/`WsNext`),
+  `ExceptionFilter::catch_graphql`/`catch_ws`, and
+  `Filter::filter_graphql`/`filter_ws` compiled but no macro or dispatcher
+  ever called them — implementing one was a silent no-op. They are removed
+  from the trait surfaces (along with the now-empty `graphql`/`ws` features
+  of `nest-rs-interceptors`, `nest-rs-exception-filters`, and
+  `nest-rs-filters`) until real wiring ships. Guards' cross-transport
+  entries are unaffected; a global interceptor/filter still covers GraphQL
+  and WS through the HTTP transport edge.
+
 ## [0.4.0] - 2026-07-19
 
 ### Changed
@@ -360,6 +433,7 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
+[0.5.0]: https://github.com/NestRS/NestRS/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/NestRS/NestRS/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/NestRS/NestRS/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/NestRS/NestRS/compare/v0.1.0...v0.2.0

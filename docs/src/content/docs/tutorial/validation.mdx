@@ -117,10 +117,10 @@ malformed case.
 | Failure | Status | Trigger |
 |---------|--------|---------|
 | The body isn't valid JSON | `400` | poem rejects before any pipe runs |
-| The body parses but a field is wrong | `400` with `details` | `ValidationPipe` rejects after extraction |
+| The body parses but a field is wrong | `400` with `errors` | `ValidationPipe` rejects after extraction |
 
-Both are `400`; the second carries the structured details a client
-form binds to. The handler never sees either.
+Both are `400`; the second carries the structured `errors` member a
+client form binds to. The handler never sees either.
 
 ## A custom rule with `#[validate(custom)]`
 
@@ -146,7 +146,7 @@ fn not_a_placeholder_title(title: &str) -> Result<(), validator::ValidationError
 }
 ```
 
-The error `code` (`"placeholder_title"`) surfaces in `details.title[].code`
+The error `code` (`"placeholder_title"`) surfaces in `errors.title[].code`
 — same shape, same client contract.
 
 ## What you have now

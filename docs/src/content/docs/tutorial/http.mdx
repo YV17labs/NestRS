@@ -9,9 +9,9 @@ import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
 You write the service that owns the entity, the controller that mounts
 the CRUD routes, and the HTTP module that ties them together. By the end
-of this page, `curl` returns a fresh post from `POST /posts` and the
-same post from `GET /posts/:id` — once Postgres is wired on the next page,
-[Persist through Postgres](/tutorial/database/).
+of this page, the boot log shows five CRUD routes mounted from one empty
+`#[crud]` impl. The first successful `curl` lands on the next page,
+[Persist through Postgres](/tutorial/database/), once Postgres is wired.
 
 ## The service
 

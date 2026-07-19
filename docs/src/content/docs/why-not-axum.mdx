@@ -42,7 +42,10 @@ and re-emits them under `#[routes]`. Every read goes through the data layer,
 which filters rows by the caller's ambient ability. Every write runs inside a
 transaction that commits on `2xx`/`3xx` and rolls back otherwise. Every
 response body is masked field by field. None of that appears in the file,
-because none of it is yours to maintain.
+because none of it is yours to maintain. And the posture itself is not
+optional: a GraphQL operation with neither `#[authorize]` nor `#[public]`
+does not compile, and an HTTP controller whose guard wiring is missing
+fails at boot.
 
 ## What you assemble by hand with axum
 

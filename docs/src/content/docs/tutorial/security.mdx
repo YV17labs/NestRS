@@ -8,7 +8,9 @@ sidebar:
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
 This is the feature behind [See the security payoff](/tutorial/checkpoint/)
-— now you build it. You add two guards to the controller — one for *who* the caller is, one
+— now you build it. You're now building inside the reference `api`'s
+`users` feature — your `blog` app from the previous pages keeps its
+public CRUD. You add two guards to the controller — one for *who* the caller is, one
 for *what they may do* — and the framework filters every read by their
 organisation, gates every by-id load against their ability, and masks
 the response before it leaves the process. By the end of this page, a
@@ -172,19 +174,27 @@ masker. Forgetting the import is caught at boot by the access graph —
 the binary fails to start with a clear "missing guard" error rather
 than running silently unprotected.
 
-The app root imports `AuthnModule` once:
+The app root — `api`, not `blog` — imports `AuthnModule` and
+`AuthzHttpModule` once:
 
-```rust title="apps/blog/src/module.rs"
+```rust title="apps/api/src/module.rs (abridged)"
 use features::authn::AuthnModule;
+use features::authz::AuthzHttpModule;
+use features::users::UsersHttpModule;
 
 #[module(
     imports = [
-        HttpModule::for_root(None),
+        DatabaseModule::for_root(None),
+        HttpModule::for_root(HttpConfig {
+            port: 3002,
+            ..Default::default()
+        }),
         AuthnModule,
+        AuthzHttpModule,
         UsersHttpModule,
     ],
 )]
-pub struct BlogModule;
+pub struct ApiModule;
 ```
 
 ## What changed at runtime

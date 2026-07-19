@@ -39,8 +39,11 @@ impl OrgsController {}
 The differentiator is **structural multi-tenant isolation you cannot forget**:
 row-level filtering, response masking, and transactions become non-optional the
 moment the security modules are imported. A feature opts *out* by not importing
-them. No other framework — NestJS, Spring, Rails, axum, Actix, Loco — offers
-this as a structural guarantee.
+them. In NestJS, Spring, Rails, axum, or Loco, tenant filtering is discipline —
+a scope you remember, a middleware you apply, a review comment. In NestRS it is
+structural: the data layer applies it from the caller's ability, and an
+operation with no declared access posture is refused — at compile time on
+GraphQL, at boot on HTTP.
 
 And it stays lean. On the same hello-world service under identical `wrk` load,
 NestRS serves **~463k req/s** to NestJS 11's ~18k — **~25×** — in **4–6 MB** of
@@ -51,6 +54,14 @@ ships at 11–20 MB and boots in tens of milliseconds. (Measured in a Linux
 Docker container capped at 4 cores and 8 GB, with the load generator competing
 for the same cores — a setup that understates the numbers; dedicated hardware
 only pushes them up.)
+
+Try it on your machine:
+
+```bash
+cargo install --locked nest-rs-cli
+nestrs new hello --standalone && cd hello
+nestrs run dev   # → Hello World on :3000
+```
 
 → [Why not axum?](https://nestrs.dev/why-not-axum/) ·
 [Coming from NestJS](https://nestrs.dev/coming-from-nestjs/) ·
@@ -88,7 +99,7 @@ The runnable apps live in their own workspace under [`demo/`](demo/) — `cd dem
 first; that directory is where `nestrs run`, the `.env` cascade, and the
 database/test recipes resolve.
 
-> Prefer a local toolchain? See [Getting started → On your own machine](https://nestrs.dev/getting-started/#on-your-own-machine).
+> Prefer a local toolchain? See [Getting started → Scaffold and start](https://nestrs.dev/getting-started/#scaffold-and-start).
 
 ### Project layout
 

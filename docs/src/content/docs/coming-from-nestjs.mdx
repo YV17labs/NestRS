@@ -74,7 +74,8 @@ compile time. At startup, `App::build()` walks that graph.
 A provider that injects something its module cannot reach fails startup with an
 error naming the missing dependency and the fix — never a runtime resolution
 error minutes after deploy. The reflex to test-request an endpoint just to
-confirm it wired up does not carry over; if it built, it wired.
+confirm it wired up does not carry over; if it **boots**, it's wired — and it
+boots in milliseconds, so you find out immediately.
 
 <Aside type="note">
   This is [property 5 in *Why NestRS*](/why/#5-wiring-verified-at-boot). The

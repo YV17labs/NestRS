@@ -9,6 +9,8 @@ both new features and breaking changes.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-19
+
 ### Changed
 
 - **One error format at the HTTP boundary — RFC 9457
@@ -29,6 +31,22 @@ both new features and breaking changes.
   `with_extension`.
 
 ### Added
+
+- **The OpenAPI document is complete.** Previously skeletal — no query
+  parameters, every path parameter a bare `string`, no security scheme,
+  a lone `200` per operation. The generated document now carries: path
+  parameters typed from the handler's `Path<T>` (a `Path<Uuid>` id is
+  `string`/`format: uuid`), each `Query<T>` payload expanded into one
+  query parameter per property (the `#[crud]` list op's `first`/`after`
+  cursor is documented), a `bearerAuth` security scheme applied to
+  guarded non-`#[public]` routes — including routes covered only by a
+  `use_guards_global` pool — and per-route RFC 9457 error responses
+  (401/403/404/409/422, each honest to what the route can produce)
+  referencing a shared `ProblemDetails` schema. A new
+  `NESTRS_OPENAPI__EMIT_DOCUMENT`/`DOCUMENT_PATH` config writes the
+  document to disk at boot, the OpenAPI analogue of the GraphQL SDL
+  emit, so a committed `openapi.json` stays fresh as a side effect of a
+  dev run.
 
 - **`HttpConfig.compression`** negotiates response compression (gzip /
   deflate / brotli / zstd) from each request's `Accept-Encoding` — one
@@ -95,6 +113,14 @@ both new features and breaking changes.
   dependency. A dependency provided imperatively (a hand-written
   `impl Module`) or by a lazy factory is still tolerated: the pass
   consults the actual registered set before declaring a dependency unmet.
+
+- **An eagerly-built provider's missing dependency no longer panics
+  before the graph check.** The synchronous register phase ran ahead of
+  `validate_from_inventory`, so a missing dependency panicked with the
+  generated `expect` message and preempted the named `AccessGraphError`.
+  Construction now defers the miss to the graph pass, which reports the
+  same unified `MissingDependencyError`; a genuine dependency cycle still
+  panics with its cycle diagnostic naming the chain.
 
 - **`#[crud]` writes return the right HTTP status.** A generated create
   / update / delete previously mapped every write failure to a blanket
@@ -334,6 +360,7 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
+[0.4.0]: https://github.com/NestRS/NestRS/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/NestRS/NestRS/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/NestRS/NestRS/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/NestRS/NestRS/releases/tag/v0.1.0

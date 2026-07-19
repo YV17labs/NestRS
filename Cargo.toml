@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.96"
@@ -186,47 +186,47 @@ proc-macro2 = "1"
 # mapping makes the Rust import path `nest_rs_*` (no `[lib]` override needed), so
 # app code still writes `use nest_rs::prelude::*;` and proc-macros still emit
 # `::nest_rs_core::*`. See project_publishing_strategy memory.
-nest-rs-core = { version = "0.3.0", path = "crates/nest-rs-core" }
-nest-rs-authn = { version = "0.3.0", path = "crates/nest-rs-authn" }
-nest-rs-throttler = { version = "0.3.0", path = "crates/nest-rs-throttler" }
-nest-rs-config = { version = "0.3.0", path = "crates/nest-rs-config" }
-nest-rs-config-macros = { version = "0.3.0", path = "crates/nest-rs-config-macros" }
-nest-rs-events = { version = "0.3.0", path = "crates/nest-rs-events" }
-nest-rs-events-macros = { version = "0.3.0", path = "crates/nest-rs-events-macros" }
-nest-rs-authz = { version = "0.3.0", path = "crates/nest-rs-authz" }
-nest-rs-codegen = { version = "0.3.0", path = "crates/nest-rs-codegen" }
-nest-rs-core-macros = { version = "0.3.0", path = "crates/nest-rs-core-macros" }
-nest-rs-graphql = { version = "0.3.0", path = "crates/nest-rs-graphql" }
-nest-rs-graphql-macros = { version = "0.3.0", path = "crates/nest-rs-graphql-macros" }
-nest-rs-guards = { version = "0.3.0", path = "crates/nest-rs-guards" }
-nest-rs-health = { version = "0.3.0", path = "crates/nest-rs-health" }
-nest-rs-health-macros = { version = "0.3.0", path = "crates/nest-rs-health-macros" }
-nest-rs-http = { version = "0.3.0", path = "crates/nest-rs-http" }
-nest-rs-http-macros = { version = "0.3.0", path = "crates/nest-rs-http-macros" }
-nest-rs-mcp = { version = "0.3.0", path = "crates/nest-rs-mcp" }
-nest-rs-mcp-macros = { version = "0.3.0", path = "crates/nest-rs-mcp-macros" }
-nest-rs-interceptors = { version = "0.3.0", path = "crates/nest-rs-interceptors" }
-nest-rs-filters = { version = "0.3.0", path = "crates/nest-rs-filters" }
-nest-rs-exception-filters = { version = "0.3.0", path = "crates/nest-rs-exception-filters" }
-nest-rs-openapi = { version = "0.3.0", path = "crates/nest-rs-openapi" }
-nest-rs-database = { version = "0.3.0", path = "crates/nest-rs-database" }
-nest-rs-seaorm = { version = "0.3.0", path = "crates/nest-rs-seaorm" }
-nest-rs-pipes = { version = "0.3.0", path = "crates/nest-rs-pipes" }
-nest-rs-queue = { version = "0.3.0", path = "crates/nest-rs-queue" }
-nest-rs-queue-macros = { version = "0.3.0", path = "crates/nest-rs-queue-macros" }
-nest-rs-redis = { version = "0.3.0", path = "crates/nest-rs-redis" }
-nest-rs-resource = { version = "0.3.0", path = "crates/nest-rs-resource" }
-nest-rs-resource-macros = { version = "0.3.0", path = "crates/nest-rs-resource-macros" }
-nest-rs-schedule = { version = "0.3.0", path = "crates/nest-rs-schedule" }
-nest-rs-schedule-macros = { version = "0.3.0", path = "crates/nest-rs-schedule-macros" }
-nest-rs-server-timing = { version = "0.3.0", path = "crates/nest-rs-server-timing" }
-nest-rs-social = { version = "0.3.0", path = "crates/nest-rs-social" }
-nest-rs-opentelemetry = { version = "0.3.0", path = "crates/nest-rs-opentelemetry" }
-nest-rs-testing = { version = "0.3.0", path = "crates/nest-rs-testing" }
-nest-rs-worker = { version = "0.3.0", path = "crates/nest-rs-worker" }
-nest-rs-ws = { version = "0.3.0", path = "crates/nest-rs-ws" }
-nest-rs-ws-macros = { version = "0.3.0", path = "crates/nest-rs-ws-macros" }
-nest-rs-cli = { version = "0.3.0", path = "crates/nest-rs-cli" }
+nest-rs-core = { version = "0.4.0", path = "crates/nest-rs-core" }
+nest-rs-authn = { version = "0.4.0", path = "crates/nest-rs-authn" }
+nest-rs-throttler = { version = "0.4.0", path = "crates/nest-rs-throttler" }
+nest-rs-config = { version = "0.4.0", path = "crates/nest-rs-config" }
+nest-rs-config-macros = { version = "0.4.0", path = "crates/nest-rs-config-macros" }
+nest-rs-events = { version = "0.4.0", path = "crates/nest-rs-events" }
+nest-rs-events-macros = { version = "0.4.0", path = "crates/nest-rs-events-macros" }
+nest-rs-authz = { version = "0.4.0", path = "crates/nest-rs-authz" }
+nest-rs-codegen = { version = "0.4.0", path = "crates/nest-rs-codegen" }
+nest-rs-core-macros = { version = "0.4.0", path = "crates/nest-rs-core-macros" }
+nest-rs-graphql = { version = "0.4.0", path = "crates/nest-rs-graphql" }
+nest-rs-graphql-macros = { version = "0.4.0", path = "crates/nest-rs-graphql-macros" }
+nest-rs-guards = { version = "0.4.0", path = "crates/nest-rs-guards" }
+nest-rs-health = { version = "0.4.0", path = "crates/nest-rs-health" }
+nest-rs-health-macros = { version = "0.4.0", path = "crates/nest-rs-health-macros" }
+nest-rs-http = { version = "0.4.0", path = "crates/nest-rs-http" }
+nest-rs-http-macros = { version = "0.4.0", path = "crates/nest-rs-http-macros" }
+nest-rs-mcp = { version = "0.4.0", path = "crates/nest-rs-mcp" }
+nest-rs-mcp-macros = { version = "0.4.0", path = "crates/nest-rs-mcp-macros" }
+nest-rs-interceptors = { version = "0.4.0", path = "crates/nest-rs-interceptors" }
+nest-rs-filters = { version = "0.4.0", path = "crates/nest-rs-filters" }
+nest-rs-exception-filters = { version = "0.4.0", path = "crates/nest-rs-exception-filters" }
+nest-rs-openapi = { version = "0.4.0", path = "crates/nest-rs-openapi" }
+nest-rs-database = { version = "0.4.0", path = "crates/nest-rs-database" }
+nest-rs-seaorm = { version = "0.4.0", path = "crates/nest-rs-seaorm" }
+nest-rs-pipes = { version = "0.4.0", path = "crates/nest-rs-pipes" }
+nest-rs-queue = { version = "0.4.0", path = "crates/nest-rs-queue" }
+nest-rs-queue-macros = { version = "0.4.0", path = "crates/nest-rs-queue-macros" }
+nest-rs-redis = { version = "0.4.0", path = "crates/nest-rs-redis" }
+nest-rs-resource = { version = "0.4.0", path = "crates/nest-rs-resource" }
+nest-rs-resource-macros = { version = "0.4.0", path = "crates/nest-rs-resource-macros" }
+nest-rs-schedule = { version = "0.4.0", path = "crates/nest-rs-schedule" }
+nest-rs-schedule-macros = { version = "0.4.0", path = "crates/nest-rs-schedule-macros" }
+nest-rs-server-timing = { version = "0.4.0", path = "crates/nest-rs-server-timing" }
+nest-rs-social = { version = "0.4.0", path = "crates/nest-rs-social" }
+nest-rs-opentelemetry = { version = "0.4.0", path = "crates/nest-rs-opentelemetry" }
+nest-rs-testing = { version = "0.4.0", path = "crates/nest-rs-testing" }
+nest-rs-worker = { version = "0.4.0", path = "crates/nest-rs-worker" }
+nest-rs-ws = { version = "0.4.0", path = "crates/nest-rs-ws" }
+nest-rs-ws-macros = { version = "0.4.0", path = "crates/nest-rs-ws-macros" }
+nest-rs-cli = { version = "0.4.0", path = "crates/nest-rs-cli" }
 
 # Lints opted into by the apps (via `[lints] workspace = true`). Config literals
 # always close with `..Default::default()` — the house convention that keeps an

@@ -22,9 +22,10 @@ tracing.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
+# Enables `features::testing` (dev keypair, org id, token minting) for e2e.
+features = { workspace = true, features = ["test-support"] }
 nest-rs-authn.workspace = true
 nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
-features.workspace = true
 uuid.workspace = true
 futures-util.workspace = true
 tokio-tungstenite = "0.27"

@@ -14,8 +14,10 @@ use std::sync::Arc;
 /// Downcasting is the documented seam: this crate stays free of every
 /// candidate ORM's query API, and each `Repo` knows exactly which executor
 /// shape its `Module` installs. A downcast miss is a framework bug
-/// (mismatched `Module` + `Repo`) and should `panic!` with a clear message
-/// during boot tests, never surface as a runtime "no rows".
+/// (mismatched `Module` + `Repo`); the contract is **log at `error` and
+/// degrade to `None`** — the `Repo` then fails the operation (no ambient
+/// executor), so the request errors loudly instead of panicking a worker
+/// thread or silently reading "no rows".
 pub trait Executor: Any + Send + Sync + 'static {
     /// Downcast handle. Used by an ORM-specific `Repo` to recover its
     /// concrete executor type from the ambient `Arc<dyn Executor>`.

@@ -31,6 +31,7 @@ mod operation_guard;
 mod route_layers;
 mod route_shaper;
 mod scoped_spec;
+mod validate;
 
 #[cfg(feature = "graphql")]
 pub use chain::run_layered_graphql_chain;
@@ -39,6 +40,7 @@ pub use chain::run_layered_ws_chain;
 #[cfg(feature = "graphql")]
 pub use denial_convert::denial_to_graphql_error;
 pub use denial_convert::denial_to_http_response;
+pub(crate) use denial_convert::deny_http;
 #[cfg(feature = "graphql")]
 pub use operation_guard::GlobalPoolOperationGuard;
 pub use route_layers::{wrap_route_exception_filters, wrap_route_filters, wrap_route_interceptors};
@@ -47,3 +49,4 @@ pub use scoped_spec::{
     ScopedExceptionFilterSpec, ScopedFilterSpec, ScopedGuardSpec, ScopedInterceptorSpec,
     ScopedLayerSpec, ScopedPipeSpec,
 };
+pub use validate::{boot_validate_guards, validate_guard_chain};

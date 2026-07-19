@@ -7,18 +7,15 @@ use poem::http::{StatusCode, header};
 use serde_json::json;
 use uuid::Uuid;
 
-use features::Claims;
 use features::authn::AuthnModule;
 use features::authz::AuthzHttpModule;
 use features::identity::Role;
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::PostsHttpModule;
+use features::testing::{DEV_PUBLIC_KEY, token};
 use features::users::ActiveModel as UserActive;
-use nest_rs_authn::{JwtConfig, JwtOptions, JwtService};
+use nest_rs_authn::JwtConfig;
 use sea_orm::{ActiveModelTrait, Set};
-
-const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
-const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
 
 #[module(
     imports = [
@@ -59,16 +56,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
     .await
     .expect("seed author");
 
-    let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
-        .expect("the dev keypair parses");
-    let bearer = jwt
-        .sign(&Claims {
-            sub: Some(author_id),
-            org_id,
-            roles: vec![Role::User],
-            exp: jwt.expiry(),
-        })
-        .expect("sign the test token");
+    let bearer = token(org_id, vec![Role::User], Some(author_id));
 
     let app = TestApp::builder()
         .module::<PostsHttpTestModule>()
@@ -85,15 +73,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
 }
 
 fn admin_bearer(org_id: Uuid) -> String {
-    let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
-        .expect("the dev keypair parses");
-    jwt.sign(&Claims {
-        sub: Some(Uuid::now_v7()),
-        org_id,
-        roles: vec![Role::Admin],
-        exp: jwt.expiry(),
-    })
-    .expect("sign admin token")
+    token(org_id, vec![Role::Admin], Some(Uuid::now_v7()))
 }
 
 #[tokio::test]
@@ -130,16 +110,7 @@ async fn posts_round_trip() {
 async fn create_without_a_subject_returns_403() {
     let (_db, app, _, _) = boot().await;
     let org_id = Uuid::now_v7();
-    let jwt = JwtService::new(JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY))
-        .expect("the dev keypair parses");
-    let machine = jwt
-        .sign(&Claims {
-            sub: None,
-            org_id,
-            roles: vec![Role::Admin],
-            exp: jwt.expiry(),
-        })
-        .expect("sign machine token");
+    let machine = token(org_id, vec![Role::Admin], None);
 
     app.http()
         .post("/posts")

@@ -1,7 +1,6 @@
 //! The unified [`Guard`] trait — extends [`Layer`] so guards plug into the
 //! Layer System (dedup-by-`TypeId`, declaration-order chain).
 
-#[cfg(feature = "ws")]
 use std::any::TypeId;
 use std::sync::Arc;
 
@@ -17,6 +16,40 @@ use crate::denial::Denial;
 
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::async_graphql::Context as GraphqlContext;
+
+/// Where in a guard chain this guard belongs — **declared**, never inferred
+/// from type names. Boot-time chain validation reads it to refuse a chain
+/// whose authorization guard is listed before the authentication guard it
+/// depends on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuardPhase {
+    /// Establishes *who* the caller is (attaches a principal).
+    Authentication,
+    /// Decides *what* the caller may do (consumes a principal).
+    Authorization,
+    /// Neither — throttling, feature gates, custom checks.
+    Other,
+}
+
+/// A principal type a guard produces onto — or expects from — the request,
+/// described by `TypeId` plus a human-readable name for boot errors.
+#[derive(Clone, Copy, Debug)]
+pub struct PrincipalClaim {
+    /// The principal's `TypeId` (the request-extension key).
+    pub type_id: TypeId,
+    /// The principal's type name, for boot diagnostics.
+    pub type_name: &'static str,
+}
+
+impl PrincipalClaim {
+    /// Describe the principal type `T`.
+    pub fn of<T: 'static>() -> Self {
+        Self {
+            type_id: TypeId::of::<T>(),
+            type_name: std::any::type_name::<T>(),
+        }
+    }
+}
 
 /// A transport-spanning guard.
 ///
@@ -58,6 +91,27 @@ pub trait Guard: Layer {
     ) -> Result<(), Denial> {
         Ok(())
     }
+
+    /// The chain phase this guard declares. Boot-time validation refuses a
+    /// chain listing an [`Authentication`](GuardPhase::Authentication) guard
+    /// after an [`Authorization`](GuardPhase::Authorization) one.
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Other
+    }
+
+    /// The principal type this guard attaches to the request on success
+    /// (an authn guard's claims), if any. Read by boot-time chain validation.
+    fn produced_principal(&self) -> Option<PrincipalClaim> {
+        None
+    }
+
+    /// The principal type this guard expects an earlier guard to have
+    /// attached (an authz guard's actor), if any. Boot-time chain validation
+    /// fails boot when an earlier guard produces a *different* principal type
+    /// — the mismatch that would otherwise 500 on every request.
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        None
+    }
 }
 
 #[async_trait]
@@ -79,6 +133,18 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
         data: &Value,
     ) -> Result<(), Denial> {
         (**self).check_ws_message(client, event, data).await
+    }
+
+    fn phase(&self) -> GuardPhase {
+        (**self).phase()
+    }
+
+    fn produced_principal(&self) -> Option<PrincipalClaim> {
+        (**self).produced_principal()
+    }
+
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        (**self).expected_principal()
     }
 }
 

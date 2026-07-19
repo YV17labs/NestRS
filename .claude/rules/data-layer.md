@@ -57,12 +57,12 @@ Singletons have no other way to read per-request state:
 **Install depths.** *Executor* via the auto-registered `DbContext`
 interceptor (just import `DatabaseModule`) — innermost transport band
 (−10), wrapping routing, so it covers controllers and self-mounts alike.
-Safe methods run on the pool; mutating methods in a transaction — commit
-on 2xx/3xx, rollback otherwise **and** on any `MappedError`-tagged
-response. Guards run *inside* it (post-routing): a denied mutation opens
-an empty txn that rolls back — fail-secure holds; the wasted
-`BEGIN`/`ROLLBACK` is the accepted cost of guards reading `#[public]`
-after routing (a lazy executor is the planned fix).
+Safe methods run on the pool; mutating methods get a **lazy**
+transaction (`Executor::Lazy` — `BEGIN` deferred to the first data-layer
+touch) — commit on 2xx/3xx, rollback otherwise **and** on any
+`MappedError`-tagged response. Guards run *inside* it (post-routing): a
+denied mutation never touches the data layer, so it opens **no**
+transaction at all — fail-secure holds at zero `BEGIN`/`ROLLBACK` cost.
 
 *Ability* installs inside per-route guards via the `#[routes]` shaper —
 the only seam that runs after `AbilityGuard` and still wraps the handler,

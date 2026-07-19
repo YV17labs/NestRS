@@ -31,6 +31,8 @@ pub use factory::AbilityFactory;
 pub use mask::masked_output_ambient;
 pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::Subject;
+#[cfg(any(feature = "http", feature = "graphql"))]
+pub use wire_mask::{MaskReplyError, masked_reply};
 
 #[cfg(feature = "graphql")]
 pub mod graphql;

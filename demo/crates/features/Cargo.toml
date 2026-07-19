@@ -56,7 +56,15 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+[features]
+# Dev-only e2e helpers (`features::testing`): the dev keypair, the seeded org
+# id, and Claims token minting. Enabled from the app suites' dev-dependencies;
+# never on in a production build.
+test-support = []
+
 [dev-dependencies]
+# Enables `features::testing` for this crate's own e2e suite.
+features = { path = ".", features = ["test-support"] }
 tokio.workspace = true
 nest-rs-http.workspace = true
 nest-rs-opentelemetry = { workspace = true, features = ["http"] }

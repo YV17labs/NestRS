@@ -17,6 +17,9 @@ tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+# Enables `features::testing` (dev keypair, org id, token minting) for e2e.
+features = { workspace = true, features = ["test-support"] }
+nest-rs-config.workspace = true
 nest-rs-authn.workspace = true
 nest-rs-storage.workspace = true
 nest-rs-testing = { workspace = true, features = ["opentelemetry"] }

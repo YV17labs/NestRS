@@ -3,13 +3,12 @@
 //! Auto-installed by [`DatabaseModule`](crate::DatabaseModule), it wraps the
 //! routing tree (band `DATA_CONTEXT`, the innermost transport wrap), so it
 //! covers controller routes and self-mounted surfaces alike. The guard pool
-//! runs *inside* it (in the per-route shaper, post-routing): an
-//! unauthenticated mutating request therefore opens a transaction before the
-//! guard denies it — the denial is a non-2xx response, so that empty
-//! transaction rolls back and nothing persists. The wasted `BEGIN`/`ROLLBACK`
-//! is the accepted cost of guards reading `#[public]` after routing; a lazy
-//! executor (`BEGIN` deferred to first use) is the planned removal.
-//! Guards and handlers resolve the same ambient
+//! runs *inside* it (in the per-route shaper, post-routing). The executor a
+//! mutating method gets is **lazy**: `BEGIN` is deferred to the first
+//! data-layer touch, so a request a guard denies — or one that never queries
+//! — costs no transaction at all (no pool connection, no Postgres transaction
+//! slot; an unauthenticated POST flood cannot amplify into `BEGIN`/`ROLLBACK`
+//! round-trips). Guards and handlers resolve the same ambient
 //! [`Executor`](crate::Executor) via [`Repo`](crate::Repo). Safe methods
 //! (GET/HEAD/OPTIONS/TRACE) run on the pool; mutating methods run in a
 //! transaction committed on 2xx/3xx and rolled back otherwise — a failed
@@ -37,15 +36,16 @@ use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
-use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
+use sea_orm::{DatabaseConnection, DbErr};
 
 use crate::config::DatabaseConfig;
-use crate::executor::{Executor, with_request_executor};
+use crate::executor::{Executor, FinalizeOutcome, LazyTransaction, with_request_executor};
 use crate::retry::{DEFAULT_INITIAL_BACKOFF, DEFAULT_RETRY_ATTEMPTS, is_retryable_conflict};
 
 /// The request interceptor that installs the ambient [`Executor`] — the pool for
-/// a safe method, a per-request transaction (committed on 2xx/3xx, rolled back
-/// otherwise) for a mutating one. Auto-mounted at band −10 by importing
+/// a safe method, a **lazily opened** per-request transaction (committed on
+/// 2xx/3xx, rolled back otherwise; never opened when nothing touches the data
+/// layer) for a mutating one. Auto-mounted at band −10 by importing
 /// [`DatabaseModule`](crate::DatabaseModule).
 #[interceptor(priority = -10)]
 pub struct DbContext {
@@ -72,92 +72,55 @@ impl Interceptor for DbContext {
             return with_request_executor(Executor::Pool((*self.db).clone()), next.run(req)).await;
         }
 
-        let txn = match self.db.begin().await {
-            Ok(txn) => Arc::new(txn),
-            Err(err) => {
-                tracing::error!(target: "nest_rs::orm", error = %err, "failed to open transaction");
-                return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
-            }
-        };
+        // Lazy: `BEGIN` runs on the first data-layer touch, inside the
+        // executor itself. A guard denial (or a handler that never queries)
+        // leaves the cell empty and this request costs no transaction.
+        let lazy = Arc::new(LazyTransaction::new((*self.db).clone()));
 
-        let result = with_request_executor(Executor::Txn(txn.clone()), next.run(req)).await;
+        let result = with_request_executor(Executor::Lazy(lazy.clone()), next.run(req)).await;
 
-        // A lingering Arc means the executor escaped into a task outliving the
-        // handler — we can't commit (the leaked task's eventual Drop rolls back),
-        // so an otherwise-successful response is silent data loss. Fail it loud.
-        let txn = match Arc::try_unwrap(txn) {
-            Ok(txn) => txn,
-            Err(escaped) => {
-                drop(escaped);
-                if should_commit(&result) {
-                    tracing::error!(
-                        target: "nest_rs::orm",
-                        outcome = "rollback_and_fail",
-                        "transaction escaped into a spawned task"
-                    );
-                    return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
+        let success = should_commit(&result);
+        match lazy.finalize(success, "http").await {
+            FinalizeOutcome::NoTransaction
+            | FinalizeOutcome::Committed
+            | FinalizeOutcome::RolledBack => result,
+            // The escape invariant (logged by `finalize`): a handle outliving
+            // the handler cannot be committed, so an otherwise-successful
+            // response is silent data loss — fail it loud.
+            FinalizeOutcome::Escaped { .. } => {
+                if success {
+                    Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+                } else {
+                    result
                 }
-                tracing::error!(
-                    target: "nest_rs::orm",
-                    outcome = "rollback",
-                    "transaction escaped into a spawned task"
-                );
-                return result;
             }
-        };
-
-        finalize_transaction(txn, &result, self.config.retry_serialization_conflicts).await?;
-        result
+            FinalizeOutcome::CommitFailed(err) => Err(commit_failure(
+                err,
+                self.config.retry_serialization_conflicts,
+            )),
+        }
     }
 }
 
-/// Commit on 2xx/3xx, roll back otherwise. When `retry_conflicts` is on,
-/// a commit that fails with a typed SQLSTATE matched by
-/// [`is_retryable_conflict`] is logged at `warn` and surfaces as `500` —
-/// the handler body is not replayable here, so the retry is bounded to
-/// the commit itself, and a handler-time conflict is the service's job
-/// (via `retry::retry_on_conflict`) to retry around its own transaction
-/// boundary.
-async fn finalize_transaction(
-    txn: DatabaseTransaction,
-    result: &Result<Response>,
-    retry_conflicts: bool,
-) -> Result<()> {
-    if should_commit(result) {
-        match txn.commit().await {
-            Ok(()) => Ok(()),
-            Err(err) if retry_conflicts && is_retryable_conflict(&err) => {
-                // A serialization/deadlock at commit time can't be retried at
-                // this layer (the txn handle is already consumed). Log with the
-                // conflict tag so ops sees the failure mode distinctly from a
-                // generic commit error, then fail the response closed.
-                tracing::warn!(
-                    target: "nest_rs::orm",
-                    error = %err,
-                    attempts = DEFAULT_RETRY_ATTEMPTS,
-                    initial_backoff_ms = DEFAULT_INITIAL_BACKOFF.as_millis() as u64,
-                    hint = "handler is not replayable from the interceptor; use `retry::retry_on_conflict` at a programmatic transaction boundary",
-                    "serialization conflict at commit",
-                );
-                Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
-            }
-            Err(err) => {
-                tracing::error!(target: "nest_rs::orm", error = %err, "transaction commit failed");
-                Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
-            }
-        }
+/// Classify a commit-time failure. When `retry_conflicts` is on, a typed
+/// SQLSTATE matched by [`is_retryable_conflict`] is logged at `warn` with the
+/// conflict tag (the handler body is not replayable at this layer — use
+/// `retry::retry_on_conflict` at a programmatic transaction boundary);
+/// anything else logs at `error`. Either way the response fails closed.
+fn commit_failure(err: DbErr, retry_conflicts: bool) -> Error {
+    if retry_conflicts && is_retryable_conflict(&err) {
+        tracing::warn!(
+            target: "nest_rs::orm",
+            error = %err,
+            attempts = DEFAULT_RETRY_ATTEMPTS,
+            initial_backoff_ms = DEFAULT_INITIAL_BACKOFF.as_millis() as u64,
+            hint = "handler is not replayable from the interceptor; use `retry::retry_on_conflict` at a programmatic transaction boundary",
+            "serialization conflict at commit",
+        );
     } else {
-        if let Err(err) = txn.rollback().await {
-            tracing::error!(target: "nest_rs::orm", error = %err, "transaction rollback failed");
-        }
-        // A handler-time conflict surfaces upstream as an already-mapped
-        // `poem::Error`; the typed `DbErr` is gone past `Repo`, so the
-        // only honest thing to do here is rely on `Repo`'s own
-        // `nest_rs::orm` warn lines. Pattern-matching the formatted
-        // response string was producing false positives on any digit
-        // substring (a port, a row id, a timestamp) — see Bug 7.
-        Ok(())
+        tracing::error!(target: "nest_rs::orm", error = %err, "transaction commit failed");
     }
+    Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn is_safe(method: &Method) -> bool {

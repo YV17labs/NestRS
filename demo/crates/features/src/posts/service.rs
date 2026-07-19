@@ -5,7 +5,6 @@ use nest_rs_events::EventBus;
 use nest_rs_seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
 };
-use sea_orm::ActiveModelTrait;
 use sea_orm::IntoActiveModel;
 use sea_orm::Set;
 use uuid::Uuid;
@@ -49,7 +48,7 @@ impl PostsService {
         active.org_id = Set(org_id);
         active.author_id = Set(author_id);
         active.status = Set(PostStatus::Draft);
-        let model = active.insert(&Repo::<Posts>::conn()?).await?;
+        let model = self.create_from_active(active).await?;
         tracing::debug!(
             target: "features::posts",
             id = %model.id,

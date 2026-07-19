@@ -1,16 +1,18 @@
-//! `scope_for` denies every row on request-scoped executors without an ability.
+//! `scope_for` denies every row on request-scoped executors without an
+//! ability — asserted against **executed** queries on live Postgres, not
+//! rendered SQL strings.
 
 use nest_rs_authz::Action;
 use nest_rs_seaorm::{Executor, scope_for, with_request_executor};
-use sea_orm::{Database, EntityTrait, QueryFilter, QueryTrait};
+use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 mod widget {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "widgets")]
+    #[sea_orm(table_name = "scope_probe_widgets")]
     pub struct Model {
-        #[sea_orm(primary_key)]
+        #[sea_orm(primary_key, auto_increment = false)]
         pub id: i32,
         pub name: String,
     }
@@ -21,20 +23,47 @@ mod widget {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// Connect and make sure the probe table exists with its two rows. The DDL +
+/// seed run once per process (concurrent `CREATE TABLE IF NOT EXISTS` races
+/// the Postgres catalog).
+async fn db() -> DatabaseConnection {
+    static SETUP: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    let conn = crate::harness::connect().await;
+    SETUP
+        .get_or_init(|| async {
+            conn.execute_unprepared(
+                "CREATE TABLE IF NOT EXISTS scope_probe_widgets (
+                    id INT PRIMARY KEY,
+                    name TEXT NOT NULL
+                )",
+            )
+            .await
+            .expect("create the probe table");
+            conn.execute_unprepared(
+                "INSERT INTO scope_probe_widgets (id, name) VALUES (1, 'a'), (2, 'b')
+                 ON CONFLICT (id) DO NOTHING",
+            )
+            .await
+            .expect("seed the probe rows");
+        })
+        .await;
+    conn
+}
+
 #[tokio::test]
 async fn request_scope_without_ability_denies_all_rows() {
-    let url = std::env::var("NESTRS_DATABASE__URL")
-        .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
-    let conn = Database::connect(&url).await.expect("connect to Postgres");
+    let conn = db().await;
 
-    with_request_executor(Executor::Pool(conn), async {
-        let sql = widget::Entity::find()
+    with_request_executor(Executor::Pool(conn.clone()), async {
+        let rows = widget::Entity::find()
             .filter(scope_for::<widget::Entity>(Action::Read))
-            .build(sea_orm::DatabaseBackend::Postgres)
-            .to_string();
+            .all(&conn)
+            .await
+            .expect("the scoped query executes");
         assert!(
-            sql.contains("1 = 0"),
-            "request paths without an ability must fail closed: {sql}",
+            rows.is_empty(),
+            "request paths without an ability must fail closed, got {} row(s)",
+            rows.len(),
         );
     })
     .await;
@@ -42,18 +71,18 @@ async fn request_scope_without_ability_denies_all_rows() {
 
 #[tokio::test]
 async fn job_scope_without_ability_remains_unscoped() {
-    let url = std::env::var("NESTRS_DATABASE__URL")
-        .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
-    let conn = Database::connect(&url).await.expect("connect to Postgres");
+    let conn = db().await;
 
-    nest_rs_seaorm::with_job_executor(Executor::Pool(conn), async {
-        let sql = widget::Entity::find()
+    nest_rs_seaorm::with_job_executor(Executor::Pool(conn.clone()), async {
+        let rows = widget::Entity::find()
             .filter(scope_for::<widget::Entity>(Action::Read))
-            .build(sea_orm::DatabaseBackend::Postgres)
-            .to_string();
+            .all(&conn)
+            .await
+            .expect("the scoped query executes");
         assert!(
-            !sql.contains("1 = 0"),
-            "worker paths stay unscoped when no ability is present: {sql}",
+            rows.len() >= 2,
+            "worker paths stay unscoped when no ability is present, got {} row(s)",
+            rows.len(),
         );
     })
     .await;

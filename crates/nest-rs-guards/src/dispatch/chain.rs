@@ -31,9 +31,8 @@ use crate::dispatch::denial_convert::denial_to_graphql_error;
 ///
 /// GraphQL pipes ([`nest_rs_pipes::GlobalPipe::transform_graphql_variables`])
 /// are not invoked here — variables live at the operation level, not per
-/// resolver, so wiring them belongs at the GraphQL transport's request
-/// entry. The trait method exists today for surface symmetry; runtime
-/// wiring at the operation level is queued.
+/// resolver, so they run at the GraphQL transport's request entry
+/// (`nest_rs_graphql::context` folds them over an operation's variables).
 #[cfg(feature = "graphql")]
 pub async fn run_layered_graphql_chain(
     ctx: &GraphqlContext<'_>,

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{HandlerMetadata, Layer, injectable};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::{Reflector, async_trait};
 use poem::Request;
 
@@ -67,5 +67,13 @@ impl<S: Strategy> Guard for AuthGuard<S> {
                 Err(Denial::unauthorized(error.client_message()))
             }
         }
+    }
+
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
+    fn produced_principal(&self) -> Option<PrincipalClaim> {
+        Some(PrincipalClaim::of::<S::Principal>())
     }
 }

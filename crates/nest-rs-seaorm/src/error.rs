@@ -90,6 +90,20 @@ impl ServiceError {
     }
 }
 
+/// The one log line for a failed by-id access load — shared by the HTTP
+/// [`Bind`](crate::Bind) extractor and the GraphQL `bind` helper so the
+/// security/ops contract (full detail at `error` on `nest_rs::orm`, opaque
+/// wire) lives in a single place.
+#[cfg(any(feature = "http", feature = "graphql"))]
+pub(crate) fn log_by_id_load_failure(service: &'static str, err: &sea_orm::DbErr) {
+    tracing::error!(
+        target: "nest_rs::orm",
+        service,
+        error = %err,
+        "by-id access load failed",
+    );
+}
+
 #[cfg(feature = "http")]
 mod http {
     use nest_rs_http::ProblemDetails;

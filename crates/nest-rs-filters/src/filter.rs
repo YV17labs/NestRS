@@ -4,10 +4,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
-#[cfg(feature = "graphql")]
-use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
-#[cfg(feature = "ws")]
-use nest_rs_ws::WsClient;
 use poem::http::{HeaderMap, Method, Uri};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
@@ -37,59 +33,25 @@ impl RequestSnapshot {
     }
 }
 
-/// Maps errors returned by the inner handler to a response (HTTP) or a
-/// reshaped error frame (GraphQL / WS). Runs only on the error path;
-/// successful results pass through unchanged.
+/// Maps errors returned by the inner handler to a response. Runs only on the
+/// error path; successful results pass through unchanged. A global filter
+/// covers a GraphQL `POST` or WS upgrade through its HTTP entry — there is no
+/// per-resolver / per-message seam (former reserved ones were removed until
+/// they are actually wired).
 ///
-/// One impl, three transports — override only the method(s) the filter
-/// targets. `Filter` extends [`Layer`] so global + per-scope declarations
-/// dedup by [`TypeId`](std::any::TypeId).
+/// `Filter` extends [`Layer`] so global + per-scope declarations dedup by
+/// [`TypeId`](std::any::TypeId).
 #[async_trait]
 pub trait Filter: Layer {
     /// HTTP entry — required, no default: a filter that targets HTTP
     /// without implementing this would silently let errors through.
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
-
-    /// GraphQL per-resolver entry — a reserved seam, **not wired** today
-    /// (no macro or dispatcher calls it; a global filter still covers the
-    /// `/graphql` POST as a whole via its HTTP entry). Default returns
-    /// `error` unchanged (no-op). Available with the `graphql` feature.
-    #[cfg(feature = "graphql")]
-    async fn filter_graphql<'a>(
-        &self,
-        _ctx: &GraphqlContext<'a>,
-        error: GraphqlError,
-    ) -> GraphqlError {
-        error
-    }
-
-    /// WS per-message entry — a reserved seam, **not wired** today (no
-    /// macro or dispatcher calls it). Default returns `error` unchanged
-    /// (no-op). Available with the `ws` feature.
-    #[cfg(feature = "ws")]
-    async fn filter_ws(&self, _client: &WsClient, _event: &str, error: String) -> String {
-        error
-    }
 }
 
 #[async_trait]
 impl<T: Filter + ?Sized> Filter for Arc<T> {
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response {
         (**self).filter(req, error).await
-    }
-
-    #[cfg(feature = "graphql")]
-    async fn filter_graphql<'a>(
-        &self,
-        ctx: &GraphqlContext<'a>,
-        error: GraphqlError,
-    ) -> GraphqlError {
-        (**self).filter_graphql(ctx, error).await
-    }
-
-    #[cfg(feature = "ws")]
-    async fn filter_ws(&self, client: &WsClient, event: &str, error: String) -> String {
-        (**self).filter_ws(client, event, error).await
     }
 }
 
@@ -128,5 +90,62 @@ where
                 Ok(resp)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use poem::http::StatusCode;
+    use poem::{Endpoint, endpoint::make, handler};
+
+    use super::*;
+
+    struct TeapotFilter;
+
+    impl Layer for TeapotFilter {}
+
+    #[async_trait]
+    impl Filter for TeapotFilter {
+        async fn filter(&self, _req: &RequestSnapshot, _error: poem::Error) -> Response {
+            Response::builder()
+                .status(StatusCode::IM_A_TEAPOT)
+                .body("mapped")
+        }
+    }
+
+    #[handler]
+    fn ok_handler() -> &'static str {
+        "ok"
+    }
+
+    #[tokio::test]
+    async fn success_passes_through_unmapped() {
+        let ep = FilterEndpoint::new(ok_handler, TeapotFilter);
+        let resp = ep
+            .call(Request::default())
+            .await
+            .expect("success flows through");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            resp.extensions()
+                .get::<nest_rs_core::MappedError>()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn errors_map_to_the_filters_response_tagged_mapped_error() {
+        let failing = make(|_req: Request| async {
+            Err::<Response, _>(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+        });
+        let ep = FilterEndpoint::new(failing, TeapotFilter);
+        let resp = ep.call(Request::default()).await.expect("error is mapped");
+        assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+        assert!(
+            resp.extensions()
+                .get::<nest_rs_core::MappedError>()
+                .is_some(),
+            "a mapped error response must carry the rollback tag",
+        );
     }
 }

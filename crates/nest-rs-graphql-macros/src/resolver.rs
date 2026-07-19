@@ -124,10 +124,10 @@ fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
 }
 
 /// `#[use_interceptors(...)]` / `#[use_filters(...)]` are **HTTP-only** today:
-/// the per-operation GraphQL seam (`wrap_graphql`) is reserved but not invoked,
-/// so binding an interceptor or filter on a resolver would be a silent no-op.
-/// Reject it at compile time — a named error beats a capability that quietly
-/// does nothing. Guards *are* bridged (via the operation guard), so they stay.
+/// there is no per-operation GraphQL seam on those traits, so binding an
+/// interceptor or filter on a resolver would be a silent no-op. Reject it at
+/// compile time — a named error beats a capability that quietly does nothing.
+/// Guards *are* bridged (via the operation guard), so they stay.
 fn reject_http_only_layers(attrs: &[Attribute]) -> syn::Result<()> {
     for attr in attrs {
         for name in ["use_interceptors", "use_filters"] {
@@ -1018,9 +1018,23 @@ fn field_method(
                     method_name,
                     quote!(#dep_ty),
                 );
-                dep_bindings.push(quote! {
-                    let #dep = __container.get::<#dep_ty>().expect(#msg);
-                });
+                // Non-panicking on `Result`-returning resolvers (the common
+                // case): a missing provider degrades to a named GraphQL
+                // error, matching the `data_opt` pattern the relation
+                // resolvers use. A bare-return resolver has no error channel,
+                // so the named panic stays there — the access graph has
+                // already validated the dep at boot either way.
+                if sig_returns_result(sig) {
+                    dep_bindings.push(quote! {
+                        let #dep = __container.get::<#dep_ty>().ok_or_else(|| {
+                            ::nest_rs_graphql::async_graphql::Error::new(#msg)
+                        })?;
+                    });
+                } else {
+                    dep_bindings.push(quote! {
+                        let #dep = __container.get::<#dep_ty>().expect(#msg);
+                    });
+                }
                 call_args.push(quote! { &#dep });
                 injected_deps.push(dep_ty.clone());
             }

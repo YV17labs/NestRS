@@ -546,6 +546,12 @@ impl ContainerBuilder {
     /// Snapshot the providers registered so far. Used by `#[module]` to let a
     /// provider being built resolve its dependencies while the builder is
     /// still under construction.
+    ///
+    /// **Known ceiling:** this deep-clones four maps per provider
+    /// registration, making boot O(n²) in provider count. Fine at current
+    /// scales (hundreds of providers boot in milliseconds); if provider
+    /// counts grow into the thousands, switch these maps to persistent
+    /// (structurally shared) maps rather than optimizing call sites.
     pub fn snapshot(&self) -> Container {
         Container {
             providers: Arc::new(self.providers.clone()),

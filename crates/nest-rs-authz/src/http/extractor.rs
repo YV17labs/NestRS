@@ -26,11 +26,11 @@ use crate::{Ability, ActionMarker, Subject};
 /// **textually** matching a handler-parameter type whose path has a segment
 /// literally named `Authorize` or `Bind` — so `nest_rs_authz::http::Authorize`
 /// or any module-qualified path works, but a **renamed** alias
-/// (`use ... as Az`) does **not**: the class-level gate still runs, but masking
-/// and the ambient-ability install are silently skipped. The miss is
-/// fail-closed (a request-scoped executor with no ambient ability denies every
-/// row via `scope_for`), so the route degrades to "no data", never a leak —
-/// but prefer a qualified path over a rename to keep masking active.
+/// (`use ... as Az`) does **not**. The miss is caught at run time: this
+/// extractor marks the route's `nest_rs_http::MaskProbe`, and an unarmed route
+/// whose probe was marked fails the request closed (a logged `500`) rather
+/// than shipping an unmasked body. Prefer a qualified path over a rename so
+/// masking arms normally.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>
@@ -39,6 +39,7 @@ where
     S: Subject,
 {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
+        nest_rs_http::MaskProbe::mark();
         let ability = req.extensions().get::<Arc<Ability>>().ok_or_else(|| {
             Error::from_string(
                 "missing request `Ability` — is the ability guard applied to this route?",

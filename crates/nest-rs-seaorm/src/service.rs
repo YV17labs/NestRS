@@ -10,12 +10,13 @@ use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait, IntoActiveModel,
-    PrimaryKeyTrait, QueryFilter,
+    ActiveModelBehavior, ActiveModelTrait, ConnectionTrait, DbErr, EntityName, EntityTrait,
+    IntoActiveModel, PrimaryKeyTrait, QueryFilter, TransactionTrait,
 };
 
 use nest_rs_authz::{Action, ActionMarker};
 
+use crate::executor::Executor;
 use crate::page::Page;
 use crate::repo::{Repo, scope_for};
 
@@ -226,43 +227,110 @@ pub trait Creatable: CrudService {
     /// via [`CreateModel`].
     type Create: CreateModel<Self::Entity> + Send;
 
-    /// Insert a row from a create-input DTO, in the request transaction.
+    /// Insert a row from a create-input DTO, atomically with its scope check.
     ///
     /// Defense in depth beyond the route's `Authorize<Create, _>` gate: the
     /// freshly inserted row is re-checked **in SQL** against
     /// `condition_for(Create)` — the same source of truth the read filter uses
-    /// — and a row outside the caller's scope is rolled back via
-    /// [`DbErr::RecordNotInserted`]. Deciding in SQL (rather than an in-memory
-    /// `can`) covers every predicate kind, including a **relational** Create
-    /// grant whose scope lives on a parent row the in-memory check cannot
-    /// reach — so a caller cannot create a child under an out-of-scope parent.
-    /// On a worker/system (`Job`) executor with no ambient ability `scope_for`
-    /// is unscoped, so the insert stands, mirroring the read default there.
+    /// — and a row outside the caller's scope surfaces as
+    /// [`DbErr::RecordNotInserted`] and never persists. Deciding in SQL
+    /// (rather than an in-memory `can`) covers every predicate kind, including
+    /// a **relational** Create grant whose scope lives on a parent row the
+    /// in-memory check cannot reach — so a caller cannot create a child under
+    /// an out-of-scope parent.
+    ///
+    /// Atomicity does not depend on the ambient executor's shape: on the
+    /// request transaction (HTTP `DbContext`) insert + re-check ride it and
+    /// the interceptor rolls back; on a **pool** executor (a WS message
+    /// handler, a bare `with_executor`) a local transaction wraps the pair,
+    /// committing only when the re-check passes. On a worker/system (`Job`)
+    /// executor with no ambient ability `scope_for` is unscoped, so the
+    /// insert stands, mirroring the read default there.
     async fn create(
         &self,
         input: Self::Create,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
-        let entity = Self::entity_name();
-        let conn = Repo::<Self::Entity>::conn()?;
-        let model = input.into_active_model().insert(&conn).await?;
-        let in_scope = Repo::<Self::Entity>::scoped(Action::Create)
-            .filter(pk_condition::<Self::Entity>(&model))
-            .one(&conn)
-            .await?
-            .is_some();
-        if !in_scope {
-            tracing::warn!(
-                target: "nest_rs::orm",
-                entity,
-                id = ?model_pk::<Self::Entity>(&model),
-                action = ?Action::Create,
-                "access denied — row outside the caller's scope",
-            );
-            return Err(DbErr::RecordNotInserted);
-        }
-        tracing::debug!(target: "nest_rs::orm", entity, id = ?model_pk::<Self::Entity>(&model), "row created");
-        Ok(model)
+        self.create_from_active(input.into_active_model()).await
     }
+
+    /// Insert a **prepared** `ActiveModel` through the same audited path as
+    /// [`create`](Creatable::create) — atomic insert + SQL scope re-check —
+    /// for service methods that stamp server-side columns (the token's org
+    /// id, a status default) before insert. This is the sanctioned seam for
+    /// those writes; a raw `ActiveModel::insert(&Repo::conn()?)` bypasses the
+    /// ability pre-filter.
+    async fn create_from_active(
+        &self,
+        active: <Self::Entity as EntityTrait>::ActiveModel,
+    ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
+        let entity = Self::entity_name();
+        match Repo::<Self::Entity>::conn()? {
+            // Transactional shapes (the HTTP request transaction, eager or
+            // lazily opened): insert + re-check ride them; the interceptor
+            // rolls back on `RecordNotInserted`.
+            conn @ (Executor::Txn(_) | Executor::Lazy(_)) => {
+                insert_in_scope::<Self::Entity, _>(active, entity, &conn).await
+            }
+            // A plain pool executor (a bare `with_executor`): nothing ambient
+            // rolls back, so a local transaction keeps insert + re-check one
+            // atomic unit.
+            Executor::Pool(pool) => {
+                let txn = pool.begin().await?;
+                match insert_in_scope::<Self::Entity, _>(active, entity, &txn).await {
+                    Ok(model) => {
+                        txn.commit().await?;
+                        Ok(model)
+                    }
+                    Err(err) => {
+                        if let Err(rollback_err) = txn.rollback().await {
+                            tracing::error!(
+                                target: "nest_rs::orm",
+                                entity,
+                                error = %rollback_err,
+                                "rollback of the local create transaction failed",
+                            );
+                        }
+                        Err(err)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The audited create body shared by both `create_from_active` arms: insert,
+/// then re-check the fresh row against `condition_for(Create)` **in SQL** on
+/// the same connection. Generic over the connection so the ambient executor
+/// and a local `DatabaseTransaction` use one implementation.
+async fn insert_in_scope<E, C>(
+    active: E::ActiveModel,
+    entity: &'static str,
+    conn: &C,
+) -> Result<E::Model, DbErr>
+where
+    E: EntityTrait,
+    E::ActiveModel: ActiveModelBehavior + Send,
+    E::Model: IntoActiveModel<E::ActiveModel>,
+    C: ConnectionTrait,
+{
+    let model = active.insert(conn).await?;
+    let in_scope = Repo::<E>::scoped(Action::Create)
+        .filter(pk_condition::<E>(&model))
+        .one(conn)
+        .await?
+        .is_some();
+    if !in_scope {
+        tracing::warn!(
+            target: "nest_rs::orm",
+            entity,
+            id = ?model_pk::<E>(&model),
+            action = ?Action::Create,
+            "access denied — row outside the caller's scope",
+        );
+        return Err(DbErr::RecordNotInserted);
+    }
+    tracing::debug!(target: "nest_rs::orm", entity, id = ?model_pk::<E>(&model), "row created");
+    Ok(model)
 }
 
 /// Opt-in write capability: the resource accepts **updates**. Carries the

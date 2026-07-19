@@ -56,7 +56,7 @@ impl Guard for ThrottlerGuard {
         // IP, so the composite key never collides across the join.
         let key = format!("{route}\u{1f}{ip}");
 
-        let decision = self.throttler.hit(&key, limit);
+        let decision = self.throttler.hit(&key, limit).await;
         if decision.allowed {
             return Ok(());
         }

@@ -8,9 +8,8 @@
 //! transport edge (so it also observes 404s, guard denials, and
 //! self-mounted surfaces — a GraphQL `POST` or WS upgrade is an HTTP
 //! request); a **controller / method** interceptor wraps its handler,
-//! inside the guard chain. The per-resolver / per-message seams
-//! (`wrap_graphql` /
-//! [`wrap_ws`](Interceptor::wrap_ws)) are reserved and not invoked yet.
+//! inside the guard chain. There is no per-resolver / per-message seam —
+//! a former reserved one was removed until it is actually wired.
 //!
 //! `Interceptor` is a [`Layer`](nest_rs_core::Layer) sub-trait, so global + per-scope
 //! declarations dedup by [`TypeId`](std::any::TypeId) at mount time
@@ -63,9 +62,5 @@ mod registry;
 
 pub use builder::AppBuilderInterceptorsExt;
 pub use ext::InterceptorExt;
-#[cfg(feature = "graphql")]
-pub use interceptor::GraphqlNext;
-#[cfg(feature = "ws")]
-pub use interceptor::WsNext;
 pub use interceptor::{Interceptor, InterceptorEndpoint, Next};
 pub use registry::{InterceptorSpec, InterceptorSpecs, interceptor};

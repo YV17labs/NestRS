@@ -11,6 +11,21 @@ use crate::denial::Denial;
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::async_graphql::{Error as GraphqlError, ErrorExtensions};
 
+/// Structural denial handling for the HTTP chain sites (route shaper,
+/// self-mount fold): the one `warn` that keeps the "every denial visible at
+/// warn+" invariant independent of individual guard authors, then the wire
+/// conversion. Individual guards may add richer context; this line is the
+/// floor.
+pub(crate) fn deny_http(guard: &'static str, denial: Denial) -> Response {
+    tracing::warn!(
+        target: "nest_rs::layers",
+        guard,
+        status = denial.http_status(),
+        "guard denied the request",
+    );
+    denial_to_http_response(denial)
+}
+
 /// Convert a transport-agnostic [`Denial`] to a poem [`Response`] on the single
 /// RFC-9457 `application/problem+json` envelope — a guard denial is an
 /// `Ok(4xx)` response that never travels the `Err`/`ResponseError` path, so it

@@ -25,15 +25,29 @@ impl Interceptor for ServerTiming {
         req.extensions_mut().insert(timings.clone());
         let start = Instant::now();
 
-        let mut res = next.run(req).await?;
+        let result = next.run(req).await;
         let total = start.elapsed();
 
-        if let Some(value) = format_header(&timings.drain(), total) {
-            // `append` (not `insert`): the spec allows multiple `Server-Timing`
-            // headers and a downstream interceptor or the handler may already
-            // have set one.
-            res.headers_mut().append(SERVER_TIMING, value);
+        let header = format_header(&timings.drain(), total);
+        match result {
+            Ok(mut res) => {
+                if let Some(value) = header {
+                    // `append` (not `insert`): the spec allows multiple
+                    // `Server-Timing` headers and a downstream interceptor or
+                    // the handler may already have set one.
+                    res.headers_mut().append(SERVER_TIMING, value);
+                }
+                Ok(res)
+            }
+            // An error response deserves its timing too — attach the header
+            // to the rendered response and keep the error shape for outer
+            // layers.
+            Err(err) => {
+                let Some(value) = header else { return Err(err) };
+                let mut res = err.into_response();
+                res.headers_mut().append(SERVER_TIMING, value);
+                Err(poem::Error::from_response(res))
+            }
         }
-        Ok(res)
     }
 }

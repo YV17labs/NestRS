@@ -14,10 +14,10 @@ pub(crate) fn expr_str(expr: &Expr) -> syn::Result<LitStr> {
 }
 
 /// `#[use_interceptors(...)]` / `#[use_filters(...)]` are **HTTP-only** today:
-/// the per-message WS seam (`wrap_ws`) is reserved but not invoked, so binding
-/// an interceptor or filter on a gateway or message handler would be a silent
-/// no-op. Reject it at compile time with a named error. Guards *are* bridged
-/// (the upgrade reuses the HTTP guard chain), so they stay.
+/// there is no per-message WS seam on those traits, so binding an interceptor
+/// or filter on a gateway or message handler would be a silent no-op. Reject
+/// it at compile time with a named error. Guards *are* bridged (the upgrade
+/// reuses the HTTP guard chain), so they stay.
 pub(crate) fn reject_http_only_layers(attrs: &[Attribute]) -> syn::Result<()> {
     for attr in attrs {
         for name in ["use_interceptors", "use_filters"] {

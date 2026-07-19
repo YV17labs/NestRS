@@ -62,27 +62,28 @@ $ nestrs run test e2e
 
 ## What you should know going in
 
-The tutorial assumes you've already followed
-[Getting started](/getting-started/) — a **workspace** you scaffolded with
-[`nestrs new hello`](/getting-started/), the [`nestrs` CLI](/cli/)
-installed, and `nestrs run dev hello` serving `Hello World` from
-`crates/features/src/hello/`. Page 1 adds `apps/blog/` with
-`nestrs new blog`; everything after that happens in `blog`, not `hello`.
-If you cloned **this** repository to explore Publish, scaffold hello and
-blog in a separate workspace — they are not hosted here. Skim
-[Fundamentals](/fundamentals/), [Configuration](/configuration/), and
-[HTTP](/http/) so module, provider, and controller are familiar terms.
-`docker` is available for the Postgres step.
+- A **workspace** scaffolded per [Getting started](/getting-started/) —
+  the [`nestrs` CLI](/cli/) installed and `nestrs run dev hello` serving
+  `Hello World` from `crates/features/src/hello/`.
+- **Rust 1.96+**, and enough of [Fundamentals](/fundamentals/),
+  [Configuration](/configuration/), and [HTTP](/http/) that module,
+  provider, and controller are familiar terms.
+- **Docker** available — the database and testing pages need Postgres
+  (`nestrs run db up`); earlier pages run without one.
+- Page 1 adds `apps/blog/` with `nestrs new blog`; everything after that
+  happens in `blog`, not `hello`.
 
-Rust 1.96+ is required. The database and testing pages need Postgres
-(`nestrs run db up`); earlier pages run without one.
+<Aside type="note">
+If you cloned **this** repository to explore Publish, scaffold `hello` and
+`blog` in a separate workspace — they are not hosted here.
+</Aside>
 
 ## The pages, in order
 
 <CardGrid>
   <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="nestrs new blog, nestrs run dev blog, 404 on / — then read what the CLI wrote." />
   <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The Post entity with SeaORM and #[expose]." />
-  <LinkCard title="3. See the security payoff" href="/tutorial/checkpoint/" description="Run the reference api: an admin, a masked member, a cross-tenant 403 — no handler check." />
+  <LinkCard title="3. See the security payoff" href="/tutorial/checkpoint/" description="Optional detour — 10 min, needs Docker + a clone. Run the reference api: an admin, a masked member, a cross-tenant 403 — no handler check." />
   <LinkCard title="4. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts." />
   <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="DatabaseModule, migrations, transactional writes." />
   <LinkCard title="6. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />

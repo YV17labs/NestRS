@@ -12,7 +12,7 @@ hero:
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
     <span class="hero-lead">Multi-tenant isolation you <span class="lead-accent">cannot forget.</span></span>
-    <span class="hero-sub">Row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. For backend teams who want native performance without giving up structure — whether your reflexes come from NestJS, Spring, or Laravel: you write a controller, a service, a module; the decorators carry security and wiring. And it stays lean — on the same hello-world, <strong>~25× the throughput</strong> of the Node equivalent in <strong>4–6 MB</strong> of RAM; the full auth + authz + row-level + masking pipeline, Postgres included, serves <strong>~23k req/s</strong> at <strong>p99 &lt; 4.5 ms</strong> in <strong>~32 MB</strong> — both setups measured and detailed below.</span>
+    <span class="hero-sub">Row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. You write a controller, a service, a module; decorators carry the security and the wiring. Native speed comes free: <strong>~25×</strong> Node's hello-world throughput in <strong>4–6 MB</strong> of RAM — the full auth + row-level + masking pipeline, Postgres included, holds <strong>~23k req/s</strong> at <strong>p99 &lt; 4.5 ms</strong> in <strong>~32 MB</strong>. Both measured below. Familiar if you come from NestJS, Spring, or Laravel.</span>
     <span class="hero-stack">
       <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
       <span>Database</span><span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
@@ -84,6 +84,11 @@ Same route, same handler — the caller's token decides the rows and the fields:
   ]}
 />
 
+Posture is mandatory, not a convention: a GraphQL operation with neither
+`#[authorize]` nor `#[public]` does not compile, and an HTTP controller whose
+guard wiring is missing fails at boot — an ungated, unmasked surface cannot
+ship.
+
 Behind the guards sits a full authentication stack — JWT on EdDSA keys, OAuth2
 with PKCE, Argon2id passwords with timing-safe verification, social login —
 each a module import, documented in [Security](/security/).
@@ -97,9 +102,9 @@ each a module import, documented in [Security](/security/).
 <div class="nestrs-reveal not-content">
 
 No wiring file. No config. No boilerplate. And if Rust's learning curve is
-what holds you back: what you write is what the tabs show — structs,
-decorators, business logic. The machinery that gives Rust its reputation
-for difficulty lives inside the framework. Scaffold a **standalone** crate with
+what holds you back: the hard parts of framework Rust — lifetimes in
+middleware, trait gymnastics, generic bounds — live inside the framework.
+What's left in your files is structs, decorators, and async fns. Scaffold a **standalone** crate with
 the CLI, then follow the tabs from **Controller** (your HTTP surface) through
 **Service**, **Module**, and **Main** — that's a real, type-checked service.
 The dependency graph is built and **verified at boot**, and the crate compiles
@@ -173,8 +178,7 @@ in the hero is the demo API's **full pipeline** — JWT verification, ability
 build, a row-level-filtered Postgres query, response masking. The
 **~463k req/s and 4–6 MB** below are the **bare hello-world** — no database,
 no auth. The gap between the two is the cost of real work (crypto + Postgres),
-not of the framework. Read it the other way around: the fully-secured API
-still lands in the range Node reaches serving a bare hello-world.
+not of the framework.
 
 Both ran on the same machine: a Linux Docker container capped at **4 cores
 and 8 GB of RAM**, with the load generator competing for those same cores.
@@ -184,6 +188,30 @@ client off-box, every figure on this page goes up. Measure it on yours.
 If your point of comparison is axum or Actix rather than Node: same native
 core, so the question is not speed — it is what the framework carries for you.
 See [Why not axum?](/why-not-axum/).
+
+**Read it the other way around: the fully-secured API still lands in the
+range Node reaches serving a bare hello-world.**
+
+<details>
+<summary>How these numbers were taken</summary>
+
+Both services ran on the same machine, inside a Linux Docker container
+capped at 4 cores and 8 GB of RAM, each server pinned to 2 cores, with the
+load generator sharing the remaining cores:
+
+```bash
+wrk -t2 -c64 -d20s http://localhost:3000/
+```
+
+The NestRS side is the scaffolded hello (`nestrs new hello --standalone`,
+built in release); the Node side is the equivalent NestJS 11 hello-world on
+Node.js 24 in production mode. The full-pipeline figures come from the same
+container driving the seeded Publish `api` app's `GET /users` with a member
+JWT — verification, ability build, row-level-filtered Postgres query, and
+response masking on every request. The client competing for the same cores
+understates both sides — measure on your own hardware.
+
+</details>
 
 <Bench />
 
@@ -197,10 +225,11 @@ See [Why not axum?](/why-not-axum/).
     scope — you turn them on by importing a module, never by remembering to
     call them. Forgetting to redact a field becomes structurally hard.
   </Card>
-  <Card title="Verified before it serves" icon="warning">
+  <Card title="Wiring you find out about at boot, not at 3am" icon="warning">
     The DI graph is checked at boot — a bad import fails startup with a
     clear error naming the missing wire. No reflection, no runtime
-    "cannot resolve dependency" five minutes after deploy.
+    "cannot resolve dependency" five minutes after deploy. The check lives
+    in [`access.rs`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-core/src/access.rs).
   </Card>
   <Card title="Declarative, decorator-driven" icon="puzzle">
     `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`,
@@ -238,45 +267,25 @@ See [Why not axum?](/why-not-axum/).
   </Card>
 </CardGrid>
 
+Every capability above has a reference section on this site; nothing on
+this list is roadmap.
+
 </div>
 
 ## One domain, several workloads
 
-**Microservice scaling without the distributed-systems tax.** Each app ships as
-one static native binary sharing a single domain model — you split how it
-*deploys and scales*, not the code it's built from.
+**Microservice scaling without the distributed-systems tax.** A **workload**
+is one deployable binary with one operational job — HTTP API, WebSocket
+gateway, queue worker, MCP server. **Entities, services, and policy are
+written once** in a shared `features` crate; each app under `apps/*` is a
+thin composition root importing only the transports it serves, so a worker
+never compiles the HTTP stack. One monorepo or several repositories —
+coupling stays loose either way: self-contained tokens and a shared
+database, no chatty RPC and no service mesh to get started.
 
-A **workload** is one deployable binary with one operational job — HTTP API,
-WebSocket gateway, queue worker, MCP server, and so on. NestRS supports
-**several workloads for the same product** in either layout:
-
-- **One monorepo** — `nestrs new` scaffolds a workspace: shared logic in
-  `crates/features/`, thin composition roots under `apps/*`. Add another
-  workload with `nestrs new <name>` from the same tree.
-- **Several repositories** — each workload can live in its own crate or repo;
-  domain code stays in a shared `features` library both sides depend on. No
-  chatty RPC required — self-contained tokens and a shared database are enough.
-
-The standalone demo above is one workload in one crate. As the product grows,
-**splitting by workload** is how you keep that model without rewriting business
-logic:
-
-- **Lean binaries** — import only the transports an app serves; a worker never
-  pulls in HTTP or GraphQL it will not run.
-- **Independent scaling** — scale the request path on traffic, background work
-  on queue depth; no single “scale everything” knob.
-- **Operational boundaries** — who runs where is a composition choice in each
-  app's `module.rs`, not a fork of entities and services.
-
-**Entities, services, and policy are written once** in features. Each workload
-has a **clear responsibility** — some are **public** (surfaces clients
-and partners call), others stay **private** — non-public workloads, off the request
-path. Your workloads stay **loosely coupled**: shared contracts and data, not
-a platform team or service mesh to get started.
-
-See [Getting started](/getting-started/) and the [CLI](/cli/) to scaffold a
-workspace. In that layout, each workload is an **app** under `apps/<name>/` —
-schematically:
+Who runs where is a composition choice in each app's `module.rs`, not a
+fork of entities and services. See [Getting started](/getting-started/)
+and the [CLI](/cli/) to scaffold the workspace layout — schematically:
 
 <div class="mono nestrs-reveal not-content">
   <div class="mono-deploy">
@@ -326,11 +335,10 @@ schematically:
 
 ## Scale each workload on its own signal
 
-Splitting by responsibility is only the first step. In production you **scale
-horizontally per app** — the same binary, more replicas when *its* signal moves.
-A hot public surface follows **demand**; a steady one keeps a small footprint;
-background apps follow **queue depth**. There is no single “scale the monolith”
-knob — each app under `apps/*` gets its own replica count.
+In production you **scale horizontally per app** — the same binary, more
+replicas when *its* signal moves: a hot public surface follows **demand**,
+background apps follow **queue depth**. Each app under `apps/*` gets its
+own replica count — no single "scale the monolith" knob.
 
 <div class="scale nestrs-reveal not-content">
   <div class="scale-lanes scale-lanes--four">

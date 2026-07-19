@@ -25,7 +25,25 @@ build by hand later in
 
 <Steps>
 
-1. From the Publish repo, load the demo tenants and start both apps.
+1. Clone the reference repo and open it in the devcontainer — VS Code
+   offers **Reopen in Container**, which brings up Postgres and Redis
+   beside the workspace and installs the `nestrs` CLI. Then generate
+   the JWT signing key the `auth` issuer refuses to boot without:
+
+   ```bash frame="terminal"
+   $ git clone https://github.com/NestRS/NestRS && code NestRS
+   # accept "Reopen in Container", then in the container terminal:
+   $ cd demo
+   $ printf 'NESTRS_AUTHN__PRIVATE_KEY="%s"\n' \
+       "$(openssl genpkey -algorithm ed25519 | sed ':a;N;$!ba;s/\n/\\n/g')" >> .env.local
+   ```
+
+   Without VS Code, start the same services from the repo's compose
+   file (`docker compose -f .devcontainer/docker-compose.yml up -d
+   postgres redis rustfs`) and point `NESTRS_DATABASE__URL` /
+   `NESTRS_QUEUE__URL` at `localhost` in `demo/.env.local`.
+
+2. Load the demo tenants and start both apps.
 
    ```bash frame="terminal"
    $ nestrs run db reset
@@ -37,7 +55,7 @@ build by hand later in
    `db reset` seeds two orgs — Acme and Globex — each with an admin and
    members. Every demo account shares the password `publish-demo`.
 
-2. Sign in as the Acme admin and read the org's users.
+3. Sign in as the Acme admin and read the org's users.
 
    ```bash frame="terminal"
    $ ADMIN=$(curl -s localhost:3001/login -H 'content-type: application/json' \
@@ -49,7 +67,7 @@ build by hand later in
 
    The admin sees every field — `email` included — and only Acme rows.
 
-3. Sign in as a plain member and run the identical query.
+4. Sign in as a plain member and run the identical query.
 
    ```bash frame="terminal"
    $ MEMBER=$(curl -s localhost:3001/login -H 'content-type: application/json' \
@@ -62,7 +80,7 @@ build by hand later in
    Same rows, same route — but `email` is gone from every object. The
    member's ability grants only `id` and `name`.
 
-4. Read a user in the other tenant with the member's token.
+5. Read a user in the other tenant with the member's token.
 
    ```bash frame="terminal"
    $ curl -s -o /dev/null -w '%{http_code}\n' \

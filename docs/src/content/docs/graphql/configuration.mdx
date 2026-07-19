@@ -109,7 +109,8 @@ The path is a `nest`ed route on the HTTP transport, so the surrounding
 When `playground = true`, `GET <path>` serves
 `async_graphql::http::playground_source` — the offline HTML, no CDN
 fetch. The page hits the same mount path for its requests, so a
-reverse proxy or a `path = "/api/graphql"` override Just Works.
+reverse proxy or a `path = "/api/graphql"` override needs no extra
+playground setting.
 
 In dev, the playground is the fastest way to read the schema, run a
 query, and inspect the response with field-level docs. In production,

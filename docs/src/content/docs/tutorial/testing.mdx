@@ -23,7 +23,9 @@ The crate driving this page is
 [**`nest-rs-testing`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-testing) —
 it provides `TestApp` (the in-process boot harness) and
 `EphemeralDatabase` (a throwaway Postgres provisioned through
-[testcontainers](https://docs.rs/testcontainers)).
+[testcontainers](https://docs.rs/testcontainers)). `EphemeralDatabase`
+needs a reachable Docker daemon — it starts and drops a real Postgres
+container per suite.
 
 <FileTree>
 - apps/blog/

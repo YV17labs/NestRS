@@ -40,17 +40,16 @@ written slightly differently in two different files.
 
 Two shifts make this trade-off worth reopening.
 
-**Memory is now a line item.** Cloud RAM has grown steadily more expensive, and
-for many services it is the largest single part of the bill. Managed runtimes —
-Node among them — are genuinely productive, but they buy that productivity with a
-garbage collector and a runtime whose footprint is always resident, whether or
-not a request is in flight. You pay for it idle, and you pay for it again in
-energy per request.
+**RAM decides your instance class.** A Node service idling at 100 MB fixes
+the smallest box you can rent before it serves a request; a 5 MB binary
+packs an order of magnitude more services per node. Managed runtimes —
+Node among them — are genuinely productive, but they buy that productivity
+with a garbage collector and a runtime whose footprint is always resident,
+whether or not a request is in flight.
 
 **Native code is no longer the hard path.** Much of the boilerplate that once
 made higher-level runtimes feel faster to ship — scaffolding, ceremony,
-repetitive wiring — is easier to absorb today. The friction that justified the
-runtime tax has largely dissolved.
+repetitive wiring — is carried by the framework's decorators today.
 
 NestRS reopens the trade-off between the two: keep the declarative,
 decorator-driven style that makes the managed-runtime model productive, but stand

@@ -58,6 +58,8 @@ nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 tokio.workspace = true
 serde_json.workspace = true
+# Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
+trybuild.workspace = true
 
 [lints]
 workspace = true

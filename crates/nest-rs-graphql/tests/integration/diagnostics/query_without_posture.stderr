@@ -1,0 +1,5 @@
+error: every `#[query]`/`#[mutation]` declares its access posture: `#[authorize(Action, Entity)]` (class-level gate + automatic response masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` (no `#[authorize]` gate and no response mask — `#[use_guards]` guards still run)
+  --> tests/integration/diagnostics/query_without_posture.rs:13:14
+   |
+13 |     async fn ping(&self) -> i32 {
+   |              ^^^^

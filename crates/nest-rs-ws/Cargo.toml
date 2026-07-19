@@ -49,6 +49,8 @@ validator.workspace = true
 # this crate in isolation (`cargo test -p nest-rs-ws`) fails to compile that
 # test (it only worked under workspace feature-unification before).
 nest-rs-guards = { path = "../nest-rs-guards", features = ["ws"] }
+# Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
+trybuild.workspace = true
 
 [lints]
 workspace = true

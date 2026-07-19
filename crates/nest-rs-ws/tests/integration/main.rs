@@ -8,4 +8,5 @@
 //! - `src/server.rs` — `WsServer` registry has inline `#[cfg(test)] mod tests`.
 //! - `src/envelope.rs`, `src/guard.rs` — coverage to add when next touched.
 
+mod diagnostics;
 mod gateway;

@@ -59,6 +59,8 @@ tokio.workspace = true
 # `tests/global_prefix.rs` env-path test isolates the process env via
 # `figment::Jail`, matching how `nest-rs-config` itself tests env reads.
 figment = { workspace = true, features = ["test"] }
+# Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
+trybuild.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,5 @@
+error: `#[use_filters]` is not bridged on WebSockets yet — it would be a silent no-op on a gateway. Remove it, or move the layer onto an HTTP `#[controller]` / `#[routes]`, where interceptors and filters run. Guards work on both.
+ --> tests/integration/diagnostics/filters_on_gateway.rs:8:1
+  |
+8 | #[use_filters(SomeFilter)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^

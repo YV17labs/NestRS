@@ -1,0 +1,5 @@
+error: #[crud] `ops` lists `create` but no `create = <InputType>` was given — a resource generates `create` only when it provides the input type and implements `Creatable`
+ --> tests/integration/diagnostics/crud_op_without_input.rs:9:57
+  |
+9 | #[crud(service = svc, entity = OrgEntity, output = Org, ops = [create])]
+  |                                                         ^^^

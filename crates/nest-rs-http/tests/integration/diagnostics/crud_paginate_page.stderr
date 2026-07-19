@@ -1,0 +1,5 @@
+error: #[crud] REST list does not yet support `paginate = page` (offset); use `paginate = cursor` (the default) or `paginate = none`
+ --> tests/integration/diagnostics/crud_paginate_page.rs:9:68
+  |
+9 | #[crud(service = svc, entity = OrgEntity, output = Org, paginate = page)]
+  |                                                                    ^^^^

@@ -21,14 +21,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, ExecResult,
-    QueryResult, Statement,
+    QueryResult, Statement, TransactionTrait,
 };
 
 pub use nest_rs_database::ExecutorScope;
 pub use nest_rs_database::current_executor_scope;
 
-/// The connection a request's queries run against: the shared pool, or the
-/// per-request [`DatabaseTransaction`]. Cheap to clone.
+/// The connection a request's queries run against: the shared pool, the
+/// per-request [`DatabaseTransaction`], or a transaction opened lazily on
+/// first use. Cheap to clone.
 ///
 /// `DatabaseConnection` is internally `Arc`-shaped (a `Clone` handle on the
 /// connection manager), so the `Pool` variant holds it directly — wrapping
@@ -44,6 +45,141 @@ pub enum Executor {
     /// The request's transaction — a mutating HTTP method runs here so the
     /// interceptor can commit on success and roll back on failure.
     Txn(Arc<DatabaseTransaction>),
+    /// A transaction opened on **first data-layer touch**. Installed by the
+    /// HTTP `DbContext` for mutating methods, so a request a guard denies (or
+    /// one that never queries) costs no `BEGIN`/`ROLLBACK` round-trip at all.
+    Lazy(Arc<LazyTransaction>),
+}
+
+/// The deferred-`BEGIN` state behind [`Executor::Lazy`]: the pool to open on,
+/// and the transaction once something touched the data layer. Concurrent
+/// first touches race through a [`tokio::sync::OnceCell`], so exactly one
+/// transaction opens per request.
+pub struct LazyTransaction {
+    pool: DatabaseConnection,
+    cell: tokio::sync::OnceCell<Arc<DatabaseTransaction>>,
+}
+
+impl LazyTransaction {
+    /// A lazy transaction over `pool` — nothing is opened yet.
+    pub fn new(pool: DatabaseConnection) -> Self {
+        Self {
+            pool,
+            cell: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// The request's transaction, opening it on the first call. Returns a
+    /// borrow so the per-query path costs no `Arc` clone.
+    async fn txn_ref(&self) -> Result<&DatabaseTransaction, DbErr> {
+        Ok(self
+            .cell
+            .get_or_try_init(|| async { self.pool.begin().await.map(Arc::new) })
+            .await?
+            .as_ref())
+    }
+
+    /// The transaction, if a data-layer touch opened one — consumed by
+    /// [`finalize`](LazyTransaction::finalize). `None` means no `BEGIN` was
+    /// ever issued.
+    pub fn into_opened(self) -> Option<Arc<DatabaseTransaction>> {
+        self.cell.into_inner()
+    }
+
+    /// Whether a transaction has been opened.
+    pub fn is_opened(&self) -> bool {
+        self.cell.get().is_some()
+    }
+
+    /// Settle the boundary's lazily opened transaction: commit on `success`,
+    /// roll back otherwise, do nothing when no data-layer touch ever opened
+    /// one. This is the **single home** of the escape invariant — a lingering
+    /// executor clone in a spawned task cannot be committed, so it is logged
+    /// at `error` and reported as [`FinalizeOutcome::Escaped`]; the caller
+    /// must fail an otherwise-successful response loudly rather than lose the
+    /// writes silently. A rollback failure is logged here and reported as
+    /// rolled back (the transaction is gone either way); a commit failure is
+    /// **not** logged here — it is returned so the transport can classify it
+    /// (serialization conflicts vs. generic failure).
+    pub async fn finalize(
+        self: Arc<Self>,
+        success: bool,
+        transport: &'static str,
+    ) -> FinalizeOutcome {
+        let escaped_outcome = if success {
+            "rollback_and_fail"
+        } else {
+            "rollback"
+        };
+        let lazy = match Arc::try_unwrap(self) {
+            Ok(lazy) => lazy,
+            Err(escaped) => {
+                let opened = escaped.is_opened();
+                drop(escaped);
+                tracing::error!(
+                    target: "nest_rs::orm",
+                    transport,
+                    opened,
+                    outcome = escaped_outcome,
+                    "executor escaped into a spawned task"
+                );
+                return FinalizeOutcome::Escaped { opened };
+            }
+        };
+        let Some(txn) = lazy.into_opened() else {
+            return FinalizeOutcome::NoTransaction;
+        };
+        let txn = match Arc::try_unwrap(txn) {
+            Ok(txn) => txn,
+            Err(escaped) => {
+                drop(escaped);
+                tracing::error!(
+                    target: "nest_rs::orm",
+                    transport,
+                    opened = true,
+                    outcome = escaped_outcome,
+                    "transaction escaped into a spawned task"
+                );
+                return FinalizeOutcome::Escaped { opened: true };
+            }
+        };
+        if success {
+            match txn.commit().await {
+                Ok(()) => FinalizeOutcome::Committed,
+                Err(err) => FinalizeOutcome::CommitFailed(err),
+            }
+        } else {
+            if let Err(err) = txn.rollback().await {
+                tracing::error!(
+                    target: "nest_rs::orm",
+                    transport,
+                    error = %err,
+                    "transaction rollback failed"
+                );
+            }
+            FinalizeOutcome::RolledBack
+        }
+    }
+}
+
+/// How [`LazyTransaction::finalize`] settled the boundary's transaction.
+#[derive(Debug)]
+pub enum FinalizeOutcome {
+    /// Nothing ever touched the data layer — no `BEGIN` was issued.
+    NoTransaction,
+    /// The transaction committed.
+    Committed,
+    /// The transaction rolled back (a rollback error was already logged).
+    RolledBack,
+    /// A handle escaped into a task outliving the boundary; nothing could be
+    /// committed (the leaked handle's eventual `Drop` rolls back). On a
+    /// success path the caller must fail the response loudly.
+    Escaped {
+        /// Whether a transaction had been opened when the escape was detected.
+        opened: bool,
+    },
+    /// The commit itself failed — the caller classifies and logs it.
+    CommitFailed(DbErr),
 }
 
 #[async_trait]
@@ -52,6 +188,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.get_database_backend(),
             Executor::Txn(t) => t.get_database_backend(),
+            Executor::Lazy(l) => l.pool.get_database_backend(),
         }
     }
 
@@ -59,6 +196,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.execute_raw(stmt).await,
             Executor::Txn(t) => t.execute_raw(stmt).await,
+            Executor::Lazy(l) => l.txn_ref().await?.execute_raw(stmt).await,
         }
     }
 
@@ -66,6 +204,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.execute_unprepared(sql).await,
             Executor::Txn(t) => t.execute_unprepared(sql).await,
+            Executor::Lazy(l) => l.txn_ref().await?.execute_unprepared(sql).await,
         }
     }
 
@@ -73,6 +212,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.query_one_raw(stmt).await,
             Executor::Txn(t) => t.query_one_raw(stmt).await,
+            Executor::Lazy(l) => l.txn_ref().await?.query_one_raw(stmt).await,
         }
     }
 
@@ -80,6 +220,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.query_all_raw(stmt).await,
             Executor::Txn(t) => t.query_all_raw(stmt).await,
+            Executor::Lazy(l) => l.txn_ref().await?.query_all_raw(stmt).await,
         }
     }
 
@@ -87,6 +228,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.support_returning(),
             Executor::Txn(t) => t.support_returning(),
+            Executor::Lazy(l) => l.pool.support_returning(),
         }
     }
 
@@ -94,6 +236,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.is_mock_connection(),
             Executor::Txn(t) => t.is_mock_connection(),
+            Executor::Lazy(l) => l.pool.is_mock_connection(),
         }
     }
 }

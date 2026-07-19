@@ -1739,8 +1739,7 @@
         },
         "required": [
           "filename"
-        ],
-        "description": "REST body for `POST /audio/uploads` — names the audio file a client wants a\npresigned upload slot for. Validated with the **same** anti-traversal /\nallowlist rule as [`TranscodeDto`] so a rejected filename can never become an\nobject key (the storage key the server mints keeps this filename as its\nsuffix, and the follow-up transcode request must pass the same validator)."
+        ]
       },
       "PresignedUrlDto": {
         "type": "object",
@@ -1755,8 +1754,7 @@
         "required": [
           "key",
           "url"
-        ],
-        "description": "REST response carrying a short-lived presigned URL and the object `key` it\naddresses. Returned by `POST /audio/uploads` (a `PUT` slot the client pushes\nbytes to) and `GET /audio/results` (a `GET` slot for the derived object) —\none shape, since both hand the client a signed URL plus the key it targets."
+        ]
       },
       "TranscodeDto": {
         "type": "object",
@@ -1770,8 +1768,7 @@
         },
         "required": [
           "file"
-        ],
-        "description": "REST body for `POST /audio/transcode` — a `Dto` (it crosses the HTTP\nboundary). `#[input]` appends `Deserialize`, `Validate`, and\n`#[serde(deny_unknown_fields)]`, so the body is validated at the edge (via\n`Valid<Json<TranscodeDto>>`) before the controller hands `file` to the\nservice, which enqueues a [`super::command::TranscodeCommand`] for the\nworker. Validating here is what closes the path-traversal / SSRF surface\nthat would otherwise reach the worker over the shared `audio` queue."
+        ]
       },
       "ProblemDetails": {
         "type": "object",

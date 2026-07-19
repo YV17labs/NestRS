@@ -17,9 +17,11 @@ use nest_rs_pipes::GlobalPipe;
 use serde_json::Value;
 
 use crate::Guard;
-use crate::dispatch::denial_convert::denial_to_http_response;
-use crate::dispatch::scoped_spec::{ScopedGuardSpec, ScopedPipeSpec, resolve_specs};
-use crate::registry::{GuardSpecs, PipeSpecs};
+use crate::dispatch::denial_convert::deny_http;
+use crate::dispatch::scoped_spec::{
+    ScopedGuardSpec, ScopedPipeSpec, resolve_global_guards, resolve_specs,
+};
+use crate::registry::PipeSpecs;
 
 /// HTTP per-route shaper.
 ///
@@ -81,19 +83,7 @@ fn resolve_guards(
     method_guards: &[ScopedGuardSpec],
     force_guards: &[TypeId],
 ) -> Vec<ResolvedLayer<dyn Guard>> {
-    let mut global: Vec<ResolvedLayer<dyn Guard>> = Vec::new();
-    if let Some(specs) = container.get::<GuardSpecs>() {
-        for spec in &specs.0 {
-            if let Some(layer) = spec.resolve(container) {
-                global.push(ResolvedLayer {
-                    type_id: spec.type_id,
-                    name: spec.name,
-                    source: LayerSite::Global,
-                    layer,
-                });
-            }
-        }
-    }
+    let global = resolve_global_guards(container);
     let controller = resolve_specs(container, controller_guards, LayerSite::Controller);
     let method = resolve_specs(container, method_guards, LayerSite::Method);
     let chain = compose_chain::<dyn Guard>(
@@ -147,7 +137,7 @@ impl Interceptor for RouteShaper {
     async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
         for entry in &self.guards {
             if let Err(denial) = entry.layer.check_http(&mut req).await {
-                return Ok(denial_to_http_response(denial));
+                return Ok(deny_http(entry.name, denial));
             }
         }
 
@@ -242,7 +232,18 @@ async fn apply_body_pipes(
             return Err(nest_rs_http::poem::Error::from(problem));
         }
     }
-    let rewritten = serde_json::to_vec(&value).unwrap_or_default();
+    // A re-serialization failure must not hand the handler an empty body
+    // silently — fail the request instead.
+    let rewritten = serde_json::to_vec(&value).map_err(|err| {
+        tracing::error!(
+            target: "nest_rs::layers",
+            error = %err,
+            "global pipe: failed to re-serialize the transformed body",
+        );
+        nest_rs_http::poem::Error::from_status(
+            nest_rs_http::poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+        )
+    })?;
     req.set_body(Body::from_bytes(rewritten.into()));
     Ok(())
 }

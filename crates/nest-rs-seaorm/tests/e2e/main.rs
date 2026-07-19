@@ -4,7 +4,11 @@
 //! `binary(e2e)` nextest filter.
 //!
 
+mod harness;
+
+mod create;
 mod interceptor;
+mod lazy;
 mod scope;
 mod worker;
 #[cfg(feature = "ws")]

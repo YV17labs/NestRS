@@ -91,6 +91,13 @@
 //! the graphql/ws chain runners) that the other three trio members consume.
 //! Splitting it would mean duplicating the chain across crates or routing
 //! through a fifth — both worse than the asymmetry.
+//!
+//! **HTTP-coupled for 0.x, deliberately.** [`Guard`] requires `check_http`
+//! and this crate depends on the HTTP stack, so a worker-only binary drags
+//! HTTP in. Decided and accepted for now — one trait, one chain, zero
+//! duplicated dispatch beats a premature split; the transport-neutral core
+//! trait is scheduled before 1.0 (see ROADMAP, "Transport-neutral guard
+//! core").
 #![warn(missing_docs)]
 
 mod builder;
@@ -102,15 +109,9 @@ pub mod prelude;
 mod registry;
 
 pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
-// Cross-transport interceptor / filter / exception-filter trait methods
-// (`wrap_graphql`, `wrap_ws`, `filter_graphql`, `filter_ws`,
-// `catch_graphql`, `catch_ws`) and the matching continuation types
-// (`GraphqlNext`, `WsNext`) now live directly on the base traits in
-// `nest-rs-interceptors` / `nest-rs-filters` / `nest-rs-exception-filters`.
-// Re-exported here for the historical import path used by the macros.
 pub use denial::Denial;
 pub use endpoint::{GuardEndpoint, GuardExt};
-pub use guard::Guard;
+pub use guard::{Guard, GuardPhase, PrincipalClaim};
 // The WS bridge the `#[messages]` macro wraps per-event guards in — only
 // exists (and is only needed) when the `ws` feature is on.
 #[cfg(feature = "ws")]
@@ -120,12 +121,6 @@ pub use guard::GuardAsWsMessageCheck;
 // in-band chains) composes through. Re-exported for macro-emitted code.
 pub use nest_rs_core::layer_chain;
 pub use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer};
-// The reserved continuation types live on `nest-rs-interceptors` behind the
-// matching transport feature; re-exported for the historical macro import path.
-#[cfg(feature = "graphql")]
-pub use nest_rs_interceptors::GraphqlNext;
-#[cfg(feature = "ws")]
-pub use nest_rs_interceptors::WsNext;
 pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
 // Re-export dispatch helpers for macro-emitted code.

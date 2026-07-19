@@ -7,29 +7,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
-#[cfg(feature = "graphql")]
-use nest_rs_graphql::async_graphql::{
-    Context as GraphqlContext, ServerResult, Value as GraphqlValue,
-};
-#[cfg(feature = "ws")]
-use nest_rs_ws::WsClient;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
-#[cfg(feature = "ws")]
-use serde_json::Value as JsonValue;
 
 /// Wraps handler execution. An [`Interceptor`] sees the inputs before the
 /// handler runs and the outputs after. `intercept(req, next)` is the HTTP
-/// entry — the only one the framework wires today. A GraphQL `POST` and a WS
-/// upgrade are HTTP requests, so a *global* interceptor covers them through
-/// the transport-edge wrap; `wrap_graphql` /
-/// [`wrap_ws`](Interceptor::wrap_ws) are reserved seams for per-resolver /
-/// per-message wrapping and are **not invoked** yet.
+/// entry. A GraphQL `POST` and a WS upgrade are HTTP requests, so a *global*
+/// interceptor covers them through the transport-edge wrap; per-resolver /
+/// per-message wrapping is not offered (a former reserved seam was removed
+/// until it is actually wired).
 ///
 /// `Interceptor` extends [`Layer`] so the same impl can be declared at any
 /// scope (global / controller / method) and the Layer System dedups by
-/// [`TypeId`](std::any::TypeId). Override only the method(s) where this
-/// interceptor has work to do — the others inherit a pass-through default
-/// (`next.run(...).await`).
+/// [`TypeId`](std::any::TypeId).
 ///
 /// Bind globally via [`use_interceptors_global`](crate::AppBuilderInterceptorsExt),
 /// per-provider via `#[use_interceptors(...)]` on the
@@ -41,60 +30,12 @@ pub trait Interceptor: Layer {
     /// route. Required (no default) so an `Interceptor` impl that
     /// genuinely targets HTTP cannot forget to wire it.
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
-
-    /// GraphQL per-resolver-call entry — a reserved seam, **not wired**
-    /// today (no macro or dispatcher calls it). `next` resolves to the
-    /// resolver's return value; the default just awaits it (no-op wrap).
-    /// Available with the `graphql` feature on this crate.
-    #[cfg(feature = "graphql")]
-    async fn wrap_graphql<'a>(
-        &self,
-        _ctx: &GraphqlContext<'a>,
-        next: GraphqlNext<'a>,
-    ) -> ServerResult<GraphqlValue> {
-        next.await
-    }
-
-    /// WS per-message entry — a reserved seam, **not wired** today (no
-    /// macro or dispatcher calls it). `next` resolves to the handler's reply
-    /// (an optional JSON value); the default just awaits it (no-op wrap).
-    /// Available with the `ws` feature on this crate.
-    #[cfg(feature = "ws")]
-    async fn wrap_ws<'a>(
-        &self,
-        _client: &WsClient,
-        _event: &str,
-        _data: &JsonValue,
-        next: WsNext<'a>,
-    ) -> std::result::Result<Option<JsonValue>, String> {
-        next.await
-    }
 }
 
 #[async_trait]
 impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
         (**self).intercept(req, next).await
-    }
-
-    #[cfg(feature = "graphql")]
-    async fn wrap_graphql<'a>(
-        &self,
-        ctx: &GraphqlContext<'a>,
-        next: GraphqlNext<'a>,
-    ) -> ServerResult<GraphqlValue> {
-        (**self).wrap_graphql(ctx, next).await
-    }
-
-    #[cfg(feature = "ws")]
-    async fn wrap_ws<'a>(
-        &self,
-        client: &WsClient,
-        event: &str,
-        data: &JsonValue,
-        next: WsNext<'a>,
-    ) -> std::result::Result<Option<JsonValue>, String> {
-        (**self).wrap_ws(client, event, data, next).await
     }
 }
 
@@ -121,19 +62,6 @@ impl<'a> Next<'a> {
         self.inner.call_boxed(req).await
     }
 }
-
-/// Continuation passed to [`Interceptor::wrap_graphql`]. `.await` invokes
-/// the next interceptor in the chain (or the resolver itself when this is
-/// the innermost wrap).
-#[cfg(feature = "graphql")]
-pub type GraphqlNext<'a> = Pin<Box<dyn Future<Output = ServerResult<GraphqlValue>> + Send + 'a>>;
-
-/// Continuation passed to [`Interceptor::wrap_ws`]. `.await` invokes the
-/// next interceptor in the chain (or the message handler itself when this
-/// is the innermost wrap).
-#[cfg(feature = "ws")]
-pub type WsNext<'a> =
-    Pin<Box<dyn Future<Output = std::result::Result<Option<JsonValue>, String>> + Send + 'a>>;
 
 /// Type-erased view of any `Endpoint<Output: IntoResponse>`. Lets [`Next`]
 /// hold any inner endpoint without leaking the concrete `E` generic across
@@ -183,5 +111,63 @@ where
     async fn call(&self, req: Request) -> Result<Self::Output> {
         let next = Next::new(&self.inner);
         self.interceptor.intercept(req, next).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use poem::handler;
+    use poem::http::StatusCode;
+
+    use super::*;
+
+    struct Stamp;
+
+    impl Layer for Stamp {}
+
+    #[async_trait]
+    impl Interceptor for Stamp {
+        async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+            let mut resp = next.run(req).await?;
+            resp.headers_mut()
+                .insert("x-stamp", "hit".parse().expect("valid header value"));
+            Ok(resp)
+        }
+    }
+
+    struct ShortCircuit;
+
+    impl Layer for ShortCircuit {}
+
+    #[async_trait]
+    impl Interceptor for ShortCircuit {
+        async fn intercept(&self, _req: Request, _next: Next<'_>) -> Result<Response> {
+            Ok(Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body("blocked"))
+        }
+    }
+
+    #[handler]
+    fn ok_handler() -> &'static str {
+        "ok"
+    }
+
+    #[tokio::test]
+    async fn the_interceptor_wraps_the_inner_endpoint() {
+        let ep = InterceptorEndpoint::new(ok_handler, Stamp);
+        let resp = ep.call(Request::default()).await.expect("handler runs");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("x-stamp").map(|v| v.as_bytes()),
+            Some(&b"hit"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_interceptor_may_short_circuit_without_running_the_handler() {
+        let ep = InterceptorEndpoint::new(ok_handler, ShortCircuit);
+        let resp = ep.call(Request::default()).await.expect("short circuit");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

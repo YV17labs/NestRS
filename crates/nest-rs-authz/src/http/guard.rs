@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{HandlerMetadata, Layer, injectable};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::{Reflector, async_trait};
 use nest_rs_ws::WsClient;
 use poem::Request;
@@ -118,6 +118,14 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             ));
         }
         Ok(())
+    }
+
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authorization
+    }
+
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        Some(PrincipalClaim::of::<F::Actor>())
     }
 }
 

@@ -31,6 +31,20 @@ pub struct PresignedUrlDto {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscodeState {
+    Pending,
+    Ready,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+pub struct TranscodeEventDto {
+    pub state: TranscodeState,
+    pub attempt: u32,
+}
+
 fn validate_transcode_file(file: &str) -> Result<(), ValidationError> {
     if file.contains('/') || file.contains('\\') {
         return Err(ValidationError::new("transcode_file_has_path_separator"));

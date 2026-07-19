@@ -2,16 +2,17 @@ use std::sync::Arc;
 
 use std::time::Duration;
 
-use futures_util::stream;
+use futures_util::StreamExt;
 use nest_rs_http::{Valid, controller, routes};
 use nest_rs_throttler::{Throttle, ThrottlerGuard};
 use poem::http::StatusCode;
 use poem::web::sse::{Event, SSE};
-use poem::web::{Json, Multipart, Query};
+use poem::web::{Json, Query};
 use poem::{Body, Error, Response, Result};
-use validator::Validate;
 
+use super::extract::UploadedAudio;
 use super::guard::TranscodeGuard;
+use crate::audio::error::{queue_error, storage_error};
 use crate::audio::{AudioService, PresignedUrlDto, TranscodeDto, UploadRequestDto};
 use crate::authn::AuthGuard;
 use crate::authz::AuthzGuard;
@@ -42,10 +43,11 @@ impl AudioController {
         body: Valid<Json<UploadRequestDto>>,
     ) -> Result<Json<PresignedUrlDto>> {
         let req = body.into_inner();
-        let ticket =
-            self.svc.presign_upload(&req.filename).await.map_err(|e| {
-                Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-            })?;
+        let ticket = self
+            .svc
+            .presign_upload(&req.filename)
+            .await
+            .map_err(|e| storage_error("presign_upload", e))?;
         Ok(Json(ticket))
     }
 
@@ -65,7 +67,7 @@ impl AudioController {
             .svc
             .presign_result(&file)
             .await
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?
+            .map_err(|e| storage_error("presign_result", e))?
         {
             Some(ticket) => Ok(Json(ticket)),
             None => Err(Error::from_status(StatusCode::NOT_FOUND)),
@@ -83,34 +85,13 @@ impl AudioController {
                        the presigned path. Requires a bearer JWT and the admin capability.",
         tags("Audio")
     )]
-    async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> {
-        while let Some(field) = form
-            .next_field()
+    async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
+        let ticket = self
+            .svc
+            .store_upload(&upload.filename, upload.bytes)
             .await
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::BAD_REQUEST))?
-        {
-            if field.name() != Some("file") {
-                continue;
-            }
-            let filename = field.file_name().map(str::to_owned).unwrap_or_default();
-            UploadRequestDto {
-                filename: filename.clone(),
-            }
-            .validate()
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::UNPROCESSABLE_ENTITY))?;
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|e| Error::from_string(e.to_string(), StatusCode::BAD_REQUEST))?;
-            let ticket = self.svc.store_upload(&filename, bytes).await.map_err(|e| {
-                Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-            })?;
-            return Ok(Json(ticket));
-        }
-        Err(Error::from_string(
-            "multipart body has no `file` part",
-            StatusCode::BAD_REQUEST,
-        ))
+            .map_err(|e| storage_error("store_upload", e))?;
+        Ok(Json(ticket))
     }
 
     #[get("/download")]
@@ -131,7 +112,7 @@ impl AudioController {
             .svc
             .open_result(&file)
             .await
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?
+            .map_err(|e| storage_error("open_result", e))?
         {
             Some(stream) => Ok(Response::builder()
                 .content_type("audio/mpeg")
@@ -152,35 +133,16 @@ impl AudioController {
     )]
     async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SSE {
         let file = query.into_inner().file;
-        let svc = self.svc.clone();
-        let events = stream::unfold(0u32, move |attempt| {
-            let svc = svc.clone();
-            let file = file.clone();
-            async move {
-                if attempt >= 20 {
-                    return None;
-                }
-                let event = |state: &str| {
-                    Event::message(format!("{{\"state\":\"{state}\",\"attempt\":{attempt}}}"))
-                        .event_type("transcode")
-                };
-                match svc.result_ready(&file).await {
-                    Ok(true) => Some((event("ready"), u32::MAX)),
-                    Ok(false) => {
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        Some((event("pending"), attempt + 1))
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "features::audio",
-                            file = %file,
-                            error = %e,
-                            "transcode status poll failed",
-                        );
-                        Some((event("error"), u32::MAX))
-                    }
-                }
-            }
+        let events = self.svc.clone().transcode_events(file).map(|payload| {
+            let body = serde_json::to_string(&payload).unwrap_or_else(|e| {
+                tracing::error!(
+                    target: "features::audio",
+                    error = %e,
+                    "failed to serialize transcode event",
+                );
+                r#"{"state":"error"}"#.to_string()
+            });
+            Event::message(body).event_type("transcode")
         });
         SSE::new(events).keep_alive(Duration::from_secs(15))
     }
@@ -202,7 +164,7 @@ impl AudioController {
         self.svc
             .enqueue_transcode(job.file.clone())
             .await
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            .map_err(|e| queue_error("enqueue_transcode", e))?;
         Ok(Json(job))
     }
 }

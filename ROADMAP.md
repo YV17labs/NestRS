@@ -41,12 +41,19 @@ framework that only **documents** the same concerns.
   loader-type surface would move both to compile time.
 - **Alias-proof masking arm** — `#[routes]` arms the response shaper (ambient
   ability + masking) by *textually* matching a parameter path segment named
-  `Authorize`/`Bind`, so a renamed import (`use Authorize as Az`) keeps the
-  class gate but silently skips masking. The scoped data path stays fail-closed
-  (pinned by tests), but a hand-built body ships unmasked. The fix is a generic
-  ambient-context seam in `nest-rs-http` (the extractor registers a type-erased
-  masker + ability; a generic shaper applies them) so arming stops depending on
-  how the type is spelled — a security-critical rework, staged deliberately.
+  `Authorize`/`Bind`. A renamed import (`use Authorize as Az`) now **fails
+  closed at run time**: unarmed routes carry a `MaskProbe`, and a masking
+  extractor running without an armed shaper turns the response into a logged
+  `500` instead of an unmasked body. What remains is the compile/boot-time
+  version: a generic ambient-context seam in `nest-rs-http` (the extractor
+  registers a type-erased masker + ability; a generic shaper applies them) so
+  arming stops depending on how the type is spelled.
+- **Transport-neutral guard core** — the base `Guard` trait requires
+  `check_http(&mut poem::Request)` and `nest-rs-guards` depends on the HTTP
+  stack, so a worker-only binary compiles HTTP it never serves. **Accepted for
+  0.x** (one trait, one chain, no duplicated dispatch — see the crate docs);
+  before 1.0, split a transport-neutral core trait with HTTP/GraphQL/WS
+  entries as extensions so a headless binary carries no `poem`.
 - **Transparent row-level filtering on MCP** — rmcp executes a `#[tool]` body
   inside its own spawned `serve_inner` loop, so the executor/ability task-locals
   installed around the endpoint never reach the tool. The guard chain works

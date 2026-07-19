@@ -18,7 +18,8 @@ use poem::{Error, FromRequest, Request, RequestBody, Result};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
-use crate::{Access, Authorized, CrudService};
+use crate::error::log_by_id_load_failure;
+use crate::{Access, Authorized, CrudService, ServiceError};
 
 /// The loaded, authorized entity bound from a path id, through service `S`.
 /// Declare as a handler parameter (`user: Bind<UsersService, Read>`); read the
@@ -58,6 +59,7 @@ where
     A: ActionMarker,
 {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
+        nest_rs_http::MaskProbe::mark();
         let Path(id) = Path::<Uuid>::from_request(req, body).await?;
         if id.get_version_num() != 7 {
             return Err(Error::from_string(
@@ -86,15 +88,38 @@ where
             )
         })?;
 
+        // A failed load logs in full and ships the crate's one opaque DbErr
+        // envelope (`ServiceError::Db` — problem+json 500, constant detail),
+        // so SQL/driver text never reaches the client.
         let access = with_ability(ability.clone(), service.access(A::ACTION, id))
             .await
             .map_err(|err| {
-                Error::from_string(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+                log_by_id_load_failure(std::any::type_name::<S>(), &err);
+                Error::from(ServiceError::Db(err))
             })?;
         match access {
             Access::Found(model) => Ok(Bind(model, PhantomData)),
             Access::Denied => Err(Error::from_status(StatusCode::FORBIDDEN)),
             Access::Missing => Err(Error::from_status(StatusCode::NOT_FOUND)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::DbErr;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn db_errors_map_to_an_opaque_500_with_no_driver_text() {
+        let err = DbErr::Custom("connection to db.internal:5432 refused".into());
+        let resp = Error::from(ServiceError::Db(err)).into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = resp.into_body().into_string().await.expect("body");
+        assert!(
+            !body.contains("db.internal"),
+            "driver text must not reach the client: {body}"
+        );
     }
 }

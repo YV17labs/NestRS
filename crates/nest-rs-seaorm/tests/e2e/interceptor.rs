@@ -10,13 +10,7 @@ use nest_rs_seaorm::{DatabaseConfig, DbContext, current_executor};
 use poem::endpoint::make;
 use poem::http::{Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
-use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
-
-async fn db() -> Arc<sea_orm::DatabaseConnection> {
-    let url = std::env::var("NESTRS_DATABASE__URL")
-        .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
-    Arc::new(Database::connect(&url).await.expect("connect to Postgres"))
-}
+use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
 fn config() -> Arc<DatabaseConfig> {
     Arc::new(DatabaseConfig::default())
@@ -38,7 +32,7 @@ fn status_of(result: Result<Response>) -> StatusCode {
 
 #[tokio::test]
 async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
-    let ctx = DbContext::new(db().await, config());
+    let ctx = DbContext::new(crate::harness::connect_arc().await, config());
 
     let endpoint = make(|_req: Request| async {
         let escaped = current_executor().expect("the handler runs with an ambient executor");
@@ -59,7 +53,7 @@ async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
 
 #[tokio::test]
 async fn a_well_behaved_mutating_handler_keeps_its_status() {
-    let ctx = DbContext::new(db().await, config());
+    let ctx = DbContext::new(crate::harness::connect_arc().await, config());
 
     let endpoint = make(|_req: Request| async {
         current_executor().expect("the handler runs with an ambient executor");
@@ -72,7 +66,7 @@ async fn a_well_behaved_mutating_handler_keeps_its_status() {
 
 #[tokio::test]
 async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
-    let conn = db().await;
+    let conn = crate::harness::connect_arc().await;
 
     // A committed scratch table on the pool, isolated from the request txn.
     conn.execute_unprepared("DROP TABLE IF EXISTS mapped_rollback_probe")

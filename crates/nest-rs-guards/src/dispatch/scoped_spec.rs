@@ -43,6 +43,27 @@ pub type ScopedInterceptorSpec = ScopedLayerSpec<dyn Interceptor>;
 /// declares `#[use_filters(...)]`.
 pub type ScopedFilterSpec = ScopedLayerSpec<dyn Filter>;
 
+/// Resolve the global guard pool from the container into `LayerSite::Global`
+/// entries — the single implementation the route shaper and the boot-time
+/// chain validation both compose from, so their dedup inputs cannot drift.
+pub(crate) fn resolve_global_guards(container: &Container) -> Vec<ResolvedLayer<dyn crate::Guard>> {
+    let Some(specs) = container.get::<crate::registry::GuardSpecs>() else {
+        return Vec::new();
+    };
+    specs
+        .0
+        .iter()
+        .filter_map(|spec| {
+            spec.resolve(container).map(|layer| ResolvedLayer {
+                type_id: spec.type_id,
+                name: spec.name,
+                source: LayerSite::Global,
+                layer,
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn resolve_specs<L: ?Sized>(
     container: &Container,
     specs: &[ScopedLayerSpec<L>],

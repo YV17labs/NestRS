@@ -11,24 +11,11 @@ description = "Transport-spanning guards for nestrs — one trait, three transpo
 [features]
 default = []
 # GraphQL surface: the `check_graphql` guard entry + the `/graphql` in-band
-# chain runners. Forwards the `graphql` feature onto every trait crate guards
-# re-exports through, so the reserved cross-transport seams line up and the
-# GraphQL stack is compiled once, coherently, whenever GraphQL is served.
-graphql = [
-    "dep:nest-rs-graphql",
-    "nest-rs-filters/graphql",
-    "nest-rs-exception-filters/graphql",
-    "nest-rs-interceptors/graphql",
-]
+# chain runners.
+graphql = ["dep:nest-rs-graphql"]
 # WebSocket surface: the `check_ws_message` guard entry, `GuardAsWsMessageCheck`
 # bridge, the per-message chain runner, and the `WsDataPipe` global-pipe fold.
-# Forwards `ws` onto the sibling trait crates for the same coherence reason.
-ws = [
-    "dep:nest-rs-ws",
-    "nest-rs-filters/ws",
-    "nest-rs-exception-filters/ws",
-    "nest-rs-interceptors/ws",
-]
+ws = ["dep:nest-rs-ws"]
 
 [dependencies]
 async-trait.workspace = true

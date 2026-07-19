@@ -15,7 +15,7 @@ use poem::EndpointExt;
 use crate::Guard;
 #[cfg(feature = "graphql")]
 use crate::dispatch::GlobalPoolOperationGuard;
-use crate::dispatch::denial_to_http_response;
+use crate::dispatch::deny_http;
 use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::{FallbackOperationGuard, GraphqlVariablePipe};
@@ -53,7 +53,6 @@ impl AppBuilderGuardsExt for AppBuilder {
         I: IntoIterator<Item = GuardSpec>,
     {
         let collected: Vec<GuardSpec> = specs.into_iter().collect();
-        validate_order_by_name(&collected);
         // Seed `GuardSpecs` — read by the per-route `RouteShaper`, which runs
         // the global guard pool (deduped against controller / method
         // declarations) *after* routing so a guard sees `#[public]`. Plus the
@@ -99,16 +98,18 @@ impl AppBuilderGuardsExt for AppBuilder {
                     .filter(|s| s.resolve(container).is_none())
                     .map(|s| s.name)
                     .collect();
-                if missing.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format!(
+                if !missing.is_empty() {
+                    return Err(format!(
                         "global guard(s) not resolvable from the container: {} — import the \
                          module that provides them; an unresolvable global guard would \
                          silently drop and leave every route unguarded",
                         missing.join(", "),
-                    ))
+                    ));
                 }
+                // Declared-phase ordering + produced/expected principal
+                // cross-check on the global chain — a reversed or mismatched
+                // pairing fails boot here instead of answering 500 per request.
+                crate::dispatch::boot_validate_guards(container, &[], "the global guard chain")
             }));
         if active {
             builder.provide(GlobalGuardsActive)
@@ -228,33 +229,10 @@ impl nest_rs_interceptors::Interceptor for GuardsHttpFold {
     ) -> poem::Result<poem::Response> {
         for entry in &self.chain {
             if let Err(denial) = entry.layer.check_http(&mut req).await {
-                return Ok(denial_to_http_response(denial));
+                return Ok(deny_http(entry.name, denial));
             }
         }
         next.run(req).await
-    }
-}
-
-/// Log a warning if `Authorization`-sounding precedes `Auth`-sounding in
-/// the declaration list. Best-effort static name heuristic; ordering at
-/// runtime is whatever the dev listed (no auto-reorder).
-fn validate_order_by_name(specs: &[GuardSpec]) {
-    let mut saw_authz = false;
-    for s in specs {
-        let name = s.name.to_ascii_lowercase();
-        let is_authz = name.contains("authz") || name.contains("ability");
-        let is_authn = (name.contains("auth") && !is_authz) || name.contains("authn");
-        if saw_authz && is_authn {
-            tracing::warn!(
-                target: "nest_rs::layers",
-                guard = %s.name,
-                hint = "authn should precede authz",
-                "guard order looks reversed",
-            );
-        }
-        if is_authz {
-            saw_authz = true;
-        }
     }
 }
 

@@ -37,6 +37,8 @@ sea-orm.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+# Enables `features::testing` (dev keypair, org id, token minting) for e2e.
+features = { workspace = true, features = ["test-support"] }
 poem = { workspace = true, features = ["test"] }
 nest-rs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
 migrations = { workspace = true }

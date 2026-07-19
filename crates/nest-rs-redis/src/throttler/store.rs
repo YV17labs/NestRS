@@ -8,19 +8,19 @@
 //! script (`INCR` + set-expiry-if-unset + `PTTL`) — one round-trip, no
 //! check-then-act race between replicas.
 //!
-//! **Fail-closed.** [`ThrottlerStore::hit`] is sync; a Redis round-trip is not,
-//! so the call is bridged with `block_in_place` + `Handle::block_on` exactly as
-//! the trait prescribes. When Redis is unreachable the store **denies** (mirrors
-//! the in-memory saturation choice): a rate limiter that fails open under a
-//! backend outage is an auth bypass, so the outage is logged at `warn` and the
-//! request is refused.
+//! **Fail-closed.** [`ThrottlerStore::hit`] is async, so the Redis round-trip
+//! is awaited directly on the guard's request task — no worker thread is
+//! blocked per rate-limit check. When Redis is unreachable the store **denies**
+//! (mirrors the in-memory saturation choice): a rate limiter that fails open
+//! under a backend outage is an auth bypass, so the outage is logged at `warn`
+//! and the request is refused.
 
 use std::net::IpAddr;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
 use redis::Script;
-use tokio::runtime::Handle;
 
 use crate::QueueConnection;
 
@@ -67,36 +67,29 @@ impl RedisThrottler {
     }
 
     /// Run the window script for `key` over the shared connection. `window_ms`
-    /// is the current limit's window. Sync boundary: the [`ThrottlerStore`]
-    /// trait is sync (it runs inside `Guard::check`), so the async round-trip is
-    /// bridged with `block_in_place` + `Handle::block_on` — requires the guard
-    /// to run on a multi-threaded runtime, which the HTTP transport is.
-    fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), redis::RedisError> {
+    /// is the current limit's window. Awaited on the guard's own request task —
+    /// the [`ThrottlerStore`] seam is async, so no runtime worker is blocked
+    /// and a current-thread runtime works too.
+    async fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), redis::RedisError> {
         // A namespace prefix keeps throttle counters from colliding with queue
         // keys on a shared Redis, and makes them greppable in `redis-cli`.
         let namespaced = format!("nestrs:throttle:{key}");
         let mut conn = self.conn.manager();
-        // Borrow the compiled script rather than cloning it: `block_on` drives
-        // the invocation to completion before `run` returns, so the borrowed
-        // `ScriptInvocation` never needs to outlive `self` — no per-request
-        // clone of the Lua body + cached SHA.
-        tokio::task::block_in_place(|| {
-            Handle::current().block_on(
-                self.script
-                    .key(namespaced)
-                    .arg(window_ms)
-                    .invoke_async::<(i64, i64)>(&mut conn),
-            )
-        })
+        self.script
+            .key(namespaced)
+            .arg(window_ms)
+            .invoke_async::<(i64, i64)>(&mut conn)
+            .await
     }
 }
 
+#[async_trait]
 impl ThrottlerStore for RedisThrottler {
-    fn hit(&self, key: &str, limit: Throttle) -> Decision {
+    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
         // `as u64` is saturating-safe here: a `Duration` window never exceeds
         // `u64::MAX` ms in any real config, and Redis PEXPIRE takes an i64 ms.
         let window_ms = limit.window.as_millis().min(u64::MAX as u128) as u64;
-        match self.run(key, window_ms) {
+        match self.run(key, window_ms).await {
             Ok((count, ttl_ms)) => {
                 // Denied when the count has passed the limit — identical rule to
                 // the in-memory store (`count > limit.limit`).

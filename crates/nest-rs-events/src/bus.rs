@@ -44,6 +44,13 @@ impl EventBus {
 
     /// Runs each listener in registration order, awaited in turn. No-op when
     /// nothing is registered for `E`.
+    ///
+    /// **Contract — in-process, sequential, no isolation.** The emitter awaits
+    /// every listener: a slow listener delays the ones after it and the
+    /// emitter itself, and a panicking listener propagates into the emitter's
+    /// task. This is deliberate — the bus is for lightweight same-process
+    /// reactions. Work that must not block or fail its emitter belongs on the
+    /// queue (a `Command`/`Event` job), which buys isolation and retries.
     pub async fn emit<E: Clone + Send + 'static>(&self, event: E) {
         // Clone out the list so the lock is released before awaiting.
         let listeners = self.listeners.read().get(&TypeId::of::<E>()).cloned();

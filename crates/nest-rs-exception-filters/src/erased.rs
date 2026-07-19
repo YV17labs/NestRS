@@ -8,13 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
-#[cfg(feature = "graphql")]
-use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
-#[cfg(feature = "ws")]
-use nest_rs_ws::WsClient;
 use poem::{Error, Response};
-#[cfg(feature = "ws")]
-use serde_json::Value as JsonValue;
 
 use crate::ExceptionFilter;
 
@@ -36,29 +30,6 @@ pub trait ExceptionFilterErased: Layer {
     /// [`ExceptionFilter::catch`] and return the response. Otherwise hand
     /// the error back unchanged.
     async fn try_catch(&self, err: Error) -> Result<Response, Error>;
-
-    /// GraphQL dispatch. Inspect `err.source()` for `Exception`; if it
-    /// matches, call [`ExceptionFilter::catch_graphql`] and return the
-    /// reshaped [`GraphqlError`]. Otherwise hand the error back unchanged.
-    /// Available with the `graphql` feature.
-    #[cfg(feature = "graphql")]
-    async fn try_catch_graphql<'a>(
-        &self,
-        ctx: &GraphqlContext<'a>,
-        err: GraphqlError,
-    ) -> Result<GraphqlError, GraphqlError>;
-
-    /// WS dispatch. Inspect `err.downcast_ref::<Exception>()`; if it
-    /// matches, call [`ExceptionFilter::catch_ws`] and return the reply
-    /// JSON. Otherwise hand the error back unchanged. Available with the
-    /// `ws` feature.
-    #[cfg(feature = "ws")]
-    async fn try_catch_ws(
-        &self,
-        client: &WsClient,
-        event: &str,
-        err: anyhow::Error,
-    ) -> Result<JsonValue, anyhow::Error>;
 }
 
 #[async_trait]
@@ -80,41 +51,6 @@ where
             Err(unchanged) => Err(unchanged),
         }
     }
-
-    #[cfg(feature = "graphql")]
-    async fn try_catch_graphql<'a>(
-        &self,
-        ctx: &GraphqlContext<'a>,
-        err: GraphqlError,
-    ) -> Result<GraphqlError, GraphqlError> {
-        // async_graphql::Error has both a `source` field
-        // (`Option<Arc<dyn Any + Send + Sync>>`) and a `source<T>()`
-        // method — Rust resolves `.source::<T>()` to the field with a
-        // turbofish, not the method. Reach into the field directly to
-        // avoid the ambiguity.
-        let matched = err
-            .source
-            .as_ref()
-            .and_then(|arc| arc.downcast_ref::<T::Exception>());
-        match matched {
-            Some(exception) => Ok(self.catch_graphql(ctx, exception).await),
-            None => Err(err),
-        }
-    }
-
-    #[cfg(feature = "ws")]
-    async fn try_catch_ws(
-        &self,
-        client: &WsClient,
-        event: &str,
-        err: anyhow::Error,
-    ) -> Result<JsonValue, anyhow::Error> {
-        if let Some(exception) = err.downcast_ref::<T::Exception>() {
-            Ok(self.catch_ws(client, event, exception).await)
-        } else {
-            Err(err)
-        }
-    }
 }
 
 #[async_trait]
@@ -130,23 +66,65 @@ impl<T: ExceptionFilterErased + ?Sized> ExceptionFilterErased for Arc<T> {
     async fn try_catch(&self, err: Error) -> Result<Response, Error> {
         (**self).try_catch(err).await
     }
+}
 
-    #[cfg(feature = "graphql")]
-    async fn try_catch_graphql<'a>(
-        &self,
-        ctx: &GraphqlContext<'a>,
-        err: GraphqlError,
-    ) -> Result<GraphqlError, GraphqlError> {
-        (**self).try_catch_graphql(ctx, err).await
+#[cfg(test)]
+mod tests {
+    use nest_rs_core::Layer;
+    use poem::http::StatusCode;
+
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("domain boom")]
+    struct DomainError;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("other boom")]
+    struct OtherError;
+
+    struct DomainErrorFilter;
+
+    impl Layer for DomainErrorFilter {}
+
+    #[async_trait]
+    impl crate::ExceptionFilter for DomainErrorFilter {
+        type Exception = DomainError;
+
+        async fn catch(&self, _err: DomainError) -> Response {
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body("caught")
+        }
     }
 
-    #[cfg(feature = "ws")]
-    async fn try_catch_ws(
-        &self,
-        client: &WsClient,
-        event: &str,
-        err: anyhow::Error,
-    ) -> Result<JsonValue, anyhow::Error> {
-        (**self).try_catch_ws(client, event, err).await
+    #[tokio::test]
+    async fn a_matching_exception_is_caught_and_mapped() {
+        let filter: &dyn ExceptionFilterErased = &DomainErrorFilter;
+        let resp = filter
+            .try_catch(Error::new(DomainError, StatusCode::INTERNAL_SERVER_ERROR))
+            .await
+            .expect("the typed exception matches");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn a_non_matching_exception_flows_through_unchanged() {
+        let filter: &dyn ExceptionFilterErased = &DomainErrorFilter;
+        let err = filter
+            .try_catch(Error::new(OtherError, StatusCode::INTERNAL_SERVER_ERROR))
+            .await
+            .expect_err("a foreign exception is handed back");
+        assert!(
+            err.downcast_ref::<OtherError>().is_some(),
+            "the original error must survive for the next filter",
+        );
+    }
+
+    #[test]
+    fn the_erased_view_reports_the_claimed_exception_type() {
+        let filter: &dyn ExceptionFilterErased = &DomainErrorFilter;
+        assert_eq!(filter.exception_type_id(), TypeId::of::<DomainError>());
+        assert!(filter.exception_type_name().contains("DomainError"));
     }
 }

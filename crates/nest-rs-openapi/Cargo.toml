@@ -25,6 +25,9 @@ poem.workspace = true
 # captured. `openapi3()` settings emit `$ref`s at `#/components/schemas/...`.
 schemars.workspace = true
 serde_json.workspace = true
+# `emit_document` writes the spec on a blocking task so the boot/config path
+# never runs synchronous filesystem IO on the executor.
+tokio.workspace = true
 # One boot event when the documentation endpoints are disabled by config, so an
 # imported-but-off `OpenApiModule` is never silently inert.
 tracing.workspace = true

@@ -9,13 +9,11 @@ use std::sync::Arc;
 use nest_rs_core::Container;
 use nest_rs_seaorm::{Executor, WorkerDbContext, current_executor};
 use nest_rs_worker::JobContext;
-use sea_orm::{ConnectionTrait, Database};
+use sea_orm::ConnectionTrait;
 
 #[tokio::test]
 async fn worker_db_context_installs_a_live_pool_executor_for_a_job() {
-    let url = std::env::var("NESTRS_DATABASE__URL")
-        .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
-    let conn = Arc::new(Database::connect(&url).await.expect("connect to Postgres"));
+    let conn = crate::harness::connect_arc().await;
 
     let container = Container::builder().provide_arc(conn).build();
     let ctx: Arc<dyn JobContext> = Arc::new(WorkerDbContext::from_container(&container));

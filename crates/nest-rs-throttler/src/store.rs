@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use parking_lot::Mutex;
 
 use crate::rate::Throttle;
@@ -36,19 +37,19 @@ pub struct Decision {
 
 /// Contract a rate-limit backend fulfils so a [`crate::ThrottlerGuard`]-style
 /// guard can interrogate it. The in-process [`InMemoryThrottler`] is the
-/// default impl; a third-party crate (e.g. `nest-rs-throttler-redis`) ships an
-/// alternative implementor plus its own module + guard that injects the
-/// implementor.
+/// default impl; a shared-store implementor (Redis) swaps in via its own
+/// module.
 ///
-/// Sync on purpose: a Redis implementor either fronts the call with a
-/// `tokio::task::block_in_place` wrapper, or — preferable — wraps a non-async
-/// driver (`redis::Commands`) on a dedicated thread pool. Keeping the trait
-/// sync lets the existing `Guard::check` flow stay free of an extra await
-/// point for the in-memory default.
+/// `hit` is **async**: the guard runs inside an already-async `check_http`,
+/// so a networked implementor awaits its round-trip directly — no
+/// `block_in_place` bridge occupying a runtime worker per rate-limit check,
+/// and no panic on a current-thread runtime. The in-memory default resolves
+/// immediately.
+#[async_trait]
 pub trait ThrottlerStore: Send + Sync + 'static {
     /// Count one hit for `key` under `limit`. Returns whether the request is
     /// allowed and, when denied, the `Retry-After` duration.
-    fn hit(&self, key: &str, limit: Throttle) -> Decision;
+    async fn hit(&self, key: &str, limit: Throttle) -> Decision;
 
     /// Default rate limit applied when a route does not pin one via
     /// `#[meta(Throttle::...)]`.
@@ -149,8 +150,9 @@ impl InMemoryThrottler {
     }
 }
 
+#[async_trait]
 impl ThrottlerStore for InMemoryThrottler {
-    fn hit(&self, key: &str, limit: Throttle) -> Decision {
+    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
         Self::hit(self, key, limit)
     }
 

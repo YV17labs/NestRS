@@ -42,7 +42,9 @@ pub use raw_body::{RawBody, RawBodyLimit};
 pub use reflector::Reflector;
 pub use scope::{RequestScopeEndpoint, Scoped};
 pub use security_headers::SecurityHeadersConfig;
-pub use shaper::{RouteResponseShaper, ShapedEndpoint, shaped};
+pub use shaper::{
+    MaskProbe, MaskProbedEndpoint, RouteResponseShaper, ShapedEndpoint, mask_probed, shaped,
+};
 pub use tls::TlsConfig;
 pub use transport::{HttpTransport, join_path, version_path};
 

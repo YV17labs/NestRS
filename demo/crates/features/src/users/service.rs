@@ -80,7 +80,7 @@ impl UsersService {
             org_id,
             Some(password),
         )?;
-        let user = active.insert(&Repo::<Users>::conn()?).await?;
+        let user = self.create_from_active(active).await?;
         tracing::debug!(target: "features::users", id = %user.id, %org_id, "user registered with password");
         Ok(User::from(&user))
     }
@@ -91,7 +91,7 @@ impl UsersService {
         org_id: Uuid,
     ) -> Result<entity::Model, ServiceError> {
         let active = prepare_new_user(input, org_id, None)?;
-        let user = match active.insert(&Repo::<Users>::conn()?).await {
+        let user = match self.create_from_active(active).await {
             Ok(user) => user,
             Err(e) if is_unique_violation(&e) => {
                 return Err(ServiceError::conflict(

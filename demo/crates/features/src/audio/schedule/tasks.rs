@@ -5,18 +5,23 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_schedule::{CronExpression, scheduled};
 
-use crate::audio::{AUDIO_QUEUE, AudioService};
+use crate::audio::{AUDIO_QUEUE, AudioConfig, AudioService};
 
 #[injectable]
 pub struct AudioTasks {
     #[inject]
     svc: Arc<AudioService>,
+    #[inject]
+    config: Arc<AudioConfig>,
 }
 
 #[scheduled]
 impl AudioTasks {
     #[every("5s")]
     async fn enqueue_transcode(&self) -> Result<()> {
+        if !self.config.synthetic_seed {
+            return Ok(());
+        }
         let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
         self.svc.seed_and_enqueue(format!("track-{id}.mp3")).await?;
         Ok(())

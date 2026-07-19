@@ -18,25 +18,34 @@ use nest_rs_codegen::{
 
 use crate::attr::{expr_str, opt_str, take_flag_attr, take_use_attr};
 
-/// One route handler: verb ident, wrapper-fn ident, `#[use_guards]` paths,
-/// `#[use_filters]` paths, `#[use_interceptors]` paths, the `Authorize<_, _>`
-/// shaper type (if any), `#[meta(...)]` value expressions, the `#[public]`
-/// opt-out flag, the `#[no_pipes]` opt-out flag, `#[force_guards]` paths,
-/// `#[use_pipes]` paths, and `#[use_exception_filters]` paths.
-type RouteHandler = (
-    syn::Ident,
-    syn::Ident,
-    Vec<Path>,
-    Vec<Path>,
-    Vec<Path>,
-    Option<Type>,
-    Vec<Expr>,
-    bool,
-    bool,
-    Vec<Path>,
-    Vec<Path>,
-    Vec<Path>,
-);
+/// One route handler, by named field — a positional tuple here once let a
+/// field-order slip silently swap e.g. `force_guards`/`pipes`.
+struct RouteHandler {
+    /// The HTTP verb ident (`get`, `post`, …).
+    verb: syn::Ident,
+    /// The generated wrapper fn's ident.
+    wrapper: syn::Ident,
+    /// `#[use_guards]` paths on the method.
+    guards: Vec<Path>,
+    /// `#[use_filters]` paths on the method.
+    filters: Vec<Path>,
+    /// `#[use_interceptors]` paths on the method.
+    interceptors: Vec<Path>,
+    /// The `Authorize<_, _>` / `Bind<_, _>` shaper type, if any.
+    shaper: Option<Type>,
+    /// `#[meta(...)]` value expressions.
+    metas: Vec<Expr>,
+    /// The `#[public]` flag.
+    is_public: bool,
+    /// The `#[no_pipes]` opt-out flag.
+    no_pipes: bool,
+    /// `#[force_guards]` paths on the method.
+    force_guards: Vec<Path>,
+    /// `#[use_pipes]` paths on the method.
+    pipes: Vec<Path>,
+    /// `#[use_exception_filters]` paths on the method.
+    exception_filters: Vec<Path>,
+}
 
 /// Handlers grouped by path in first-seen order. Several verbs may share a
 /// path (`GET` + `POST /users`), and poem rejects two `.at(path, ..)` for the
@@ -197,20 +206,20 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         // Detected by name so this crate stays free of any dep on the authz crate.
         let shaper = shaper_type(&inputs);
 
-        let handler = (
-            verb_ident.clone(),
-            wrapper_name.clone(),
+        let handler = RouteHandler {
+            verb: verb_ident.clone(),
+            wrapper: wrapper_name.clone(),
             guards,
             filters,
             interceptors,
-            shaper.clone(),
+            shaper: shaper.clone(),
             metas,
             is_public,
             no_pipes,
             force_guards,
-            method_pipes,
-            method_exception_filters,
-        );
+            pipes: method_pipes,
+            exception_filters: method_exception_filters,
+        };
         match routes_by_path
             .iter_mut()
             .find(|(path, _)| path.value() == route_path.value())
@@ -306,30 +315,16 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         routes_by_path
             .iter()
             .flat_map(|(_, handlers)| handlers.iter())
-            .flat_map(
-                |(
-                    _,
-                    _,
-                    guards,
-                    filters,
-                    interceptors,
-                    _,
-                    _,
-                    _,
-                    _,
-                    force_guards,
-                    pipes,
-                    exception_filters,
-                )| {
-                    guards
-                        .iter()
-                        .chain(filters)
-                        .chain(interceptors)
-                        .chain(force_guards)
-                        .chain(pipes)
-                        .chain(exception_filters)
-                },
-            ),
+            .flat_map(|handler| {
+                handler
+                    .guards
+                    .iter()
+                    .chain(&handler.filters)
+                    .chain(&handler.interceptors)
+                    .chain(&handler.force_guards)
+                    .chain(&handler.pipes)
+                    .chain(&handler.exception_filters)
+            }),
     );
     let injected_method = injected_method_with_layers(&self_ty, &route_layer_keys);
 
@@ -338,14 +333,14 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         .map(|(path, handlers)| {
             let mut iter = handlers.iter();
             let first = iter.next().expect("each path has at least one verb");
-            let first_label = format!("{} {}", first.0, path.value());
+            let first_label = format!("{} {}", first.verb, path.value());
             let first_ep = guarded_handler(first, &first_label, &self_ty);
-            let first_verb = &first.0;
+            let first_verb = &first.verb;
             let mut method = quote! { ::poem::#first_verb(#first_ep) };
             for handler in iter {
-                let label = format!("{} {}", handler.0, path.value());
+                let label = format!("{} {}", handler.verb, path.value());
                 let ep = guarded_handler(handler, &label, &self_ty);
-                let verb = &handler.0;
+                let verb = &handler.verb;
                 method = quote! { #method.#verb(#ep) };
             }
             quote! { .at(#path, #method) }
@@ -388,7 +383,21 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                     ::std::vec![#(#route_metas),*],
                     |__c, __r| <#self_ty as ::nest_rs_http::Controller>::mount(__c, __r),
                 );
-                builder.attach_meta::<#self_ty, ::nest_rs_http::HttpControllerMeta>(__meta)
+                builder
+                    .attach_meta::<#self_ty, ::nest_rs_http::HttpControllerMeta>(__meta)
+                    // Boot-time guard-chain validation for this controller:
+                    // declared phase ordering plus the produced/expected
+                    // principal cross-check (authn's claims vs. authz's actor)
+                    // fail boot with a named error instead of a per-request 500.
+                    .attach_meta::<#self_ty, ::nest_rs_http::HttpBootCheck>(
+                        ::nest_rs_http::HttpBootCheck::new(|__container| {
+                            ::nest_rs_guards::dispatch::boot_validate_guards(
+                                __container,
+                                &<#self_ty>::__nestrs_controller_guard_specs(),
+                                #ctrl_tag,
+                            )
+                        }),
+                    )
             }
         }
     }
@@ -396,7 +405,10 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Response shaper type: `Authorize<A, S>` or `Bind<S, A>` anywhere in the
-/// handler parameter list (any path segment, so aliases still shape).
+/// handler parameter list, matched by path-segment **name** (any module
+/// qualification works; a *renamed* import does not). The blind spot is closed
+/// at run time: unarmed routes carry `nest_rs_http::mask_probed`, which fails
+/// the request closed when a masking extractor runs without an armed shaper.
 fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
     inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };
@@ -438,8 +450,8 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
 /// same at both sites: interceptors outside filters, filters outside
 /// exception-filters.
 fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
-    let (
-        _verb,
+    let RouteHandler {
+        verb: _,
         wrapper,
         guards,
         filters,
@@ -449,16 +461,19 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         is_public,
         no_pipes,
         force_guards,
-        method_pipes,
-        method_exception_filters,
-    ) = handler;
+        pipes: method_pipes,
+        exception_filters: method_exception_filters,
+    } = handler;
+    let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
+    // An unarmed route carries the run-time mask probe: if a masking extractor
+    // (`Authorize`/`Bind` under a rename the name scan cannot see) runs anyway,
+    // the request fails closed instead of shipping an unmasked body.
     let mut expr = match shaper {
         Some(ty) => quote! {
             ::nest_rs_http::shaped(#wrapper, ::core::marker::PhantomData::<#ty>)
         },
-        None => quote! { #wrapper },
+        None => quote! { ::nest_rs_http::mask_probed(#wrapper, #route_label_lit) },
     };
-    let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
     let method_exception_filter_specs = exception_filter_specs(method_exception_filters);
     expr = quote! {
         ::nest_rs_guards::dispatch::wrap_route_exception_filters(

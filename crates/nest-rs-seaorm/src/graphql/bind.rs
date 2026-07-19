@@ -14,6 +14,14 @@ fn forbidden() -> Error {
     Error::new("forbidden").extend_with(|_, e| e.set("code", "FORBIDDEN"))
 }
 
+/// A failed by-id load is logged in full (shared with the HTTP `Bind`) and
+/// answered with a generic error, so SQL/driver detail never reaches the
+/// client.
+fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
+    crate::error::log_by_id_load_failure(service, err);
+    Error::new("internal error").extend_with(|_, e| e.set("code", "INTERNAL_SERVER_ERROR"))
+}
+
 /// Turn a by-id argument into the loaded, authorized entity (the resolver
 /// analog of [`crate::Bind`]). Outcomes: no row → `Ok(None)`; denied →
 /// `FORBIDDEN` (existence not hidden, matching the HTTP `Bind`); else
@@ -66,7 +74,7 @@ where
     match service
         .access(A::ACTION, id)
         .await
-        .map_err(|err| Error::new(err.to_string()))?
+        .map_err(|err| internal(std::any::type_name::<S>(), &err))?
     {
         Access::Found(model) => Ok(Some(model)),
         Access::Denied => Err(forbidden()),

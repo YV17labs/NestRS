@@ -8,9 +8,18 @@
 //! this bridge captures it once and re-installs it per message — it does **not**
 //! re-run the guard chain, unlike the GraphQL bridge.
 //!
-//! The captured executor is the **pool**: a WebSocket message has no
-//! safe/mutating HTTP method to classify, so there is no per-message
-//! transaction. Mutating handlers auto-commit individually.
+//! **Per-message transactions, lazily.** Each dispatch installs an
+//! [`Executor::Lazy`]: `BEGIN` is deferred to the handler's first data-layer
+//! touch, so a read-only or non-querying message costs no transaction at all,
+//! while a writing handler gets the same commit-on-success /
+//! rollback-on-error semantics as an HTTP mutation — a multi-write handler
+//! that fails mid-way never half-persists. Success is a
+//! [`WsReply::Reply`]/[`WsReply::None`]; a [`WsReply::Error`] rolls back.
+//!
+//! A guest connection has no `Ability`; `Repo`'s `scope_for` then denies every
+//! row on this request-tagged executor (fail-closed) — a handler that must
+//! serve guests reads through an explicitly public path, never silently
+//! unscoped.
 
 use std::sync::Arc;
 
@@ -20,12 +29,13 @@ use nest_rs_ws::{BoxFuture, Captured, SocketContext, WsReply};
 use poem::Request;
 use sea_orm::DatabaseConnection;
 
+use crate::executor::{FinalizeOutcome, LazyTransaction};
 use crate::{Executor, with_request_executor};
 
-/// Captured on upgrade. A guest connection has no `Ability` and its handlers
-/// run unscoped — the resolvers' own gate then refuses what it must.
+/// Captured on upgrade: the pool to open per-message transactions on, and the
+/// caller's ability (absent on a guest connection — deny-all under `Repo`).
 struct CapturedContext {
-    executor: Executor,
+    pool: DatabaseConnection,
     ability: Option<Arc<Ability>>,
 }
 
@@ -40,7 +50,7 @@ pub struct WsDataContext {
 impl SocketContext for WsDataContext {
     fn capture(&self, req: &Request) -> Captured {
         Arc::new(CapturedContext {
-            executor: Executor::Pool((*self.db).clone()),
+            pool: (*self.db).clone(),
             ability: req.extensions().get::<Arc<Ability>>().cloned(),
         })
     }
@@ -51,7 +61,8 @@ impl SocketContext for WsDataContext {
         inner: BoxFuture<'a, WsReply>,
     ) -> BoxFuture<'a, WsReply> {
         Box::pin(async move {
-            // A downcast miss is a framework bug; run unscoped rather than panic.
+            // A downcast miss is a framework bug; run bare (no ambient
+            // executor ⇒ `Repo::conn()` errors, fail-closed) rather than panic.
             let Some(cx) = captured.downcast_ref::<CapturedContext>() else {
                 tracing::error!(
                     target: "nest_rs::ws",
@@ -60,12 +71,39 @@ impl SocketContext for WsDataContext {
                 );
                 return inner.await;
             };
-            let executor = cx.executor.clone();
-            match &cx.ability {
+            let lazy = Arc::new(LazyTransaction::new(cx.pool.clone()));
+            let executor = Executor::Lazy(lazy.clone());
+            let reply = match &cx.ability {
                 Some(ability) => {
                     with_request_executor(executor, with_ability(ability.clone(), inner)).await
                 }
                 None => with_request_executor(executor, inner).await,
+            };
+            // Settle the message's lazily opened transaction: commit on a
+            // success reply, roll back on an error reply. The escape
+            // invariant lives in `finalize`; an escaped handle on a success
+            // reply fails loudly rather than silently losing writes.
+            let success = !matches!(reply, WsReply::Error(_));
+            match lazy.finalize(success, "ws").await {
+                FinalizeOutcome::NoTransaction
+                | FinalizeOutcome::Committed
+                | FinalizeOutcome::RolledBack => reply,
+                FinalizeOutcome::Escaped { .. } => {
+                    if success {
+                        WsReply::error("internal error")
+                    } else {
+                        reply
+                    }
+                }
+                FinalizeOutcome::CommitFailed(err) => {
+                    tracing::error!(
+                        target: "nest_rs::orm",
+                        transport = "ws",
+                        error = %err,
+                        "message transaction commit failed"
+                    );
+                    WsReply::error("internal error")
+                }
             }
         })
     }

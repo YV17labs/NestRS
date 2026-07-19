@@ -8,29 +8,17 @@ repository.workspace = true
 homepage.workspace = true
 description = "Transport-spanning error-mapping filters for nestrs — one Layer System sub-trait that turns inner errors into responses on HTTP, GraphQL, and WS, declared globally via `use_filters_global` or per-scope through `#[use_filters]`."
 
-[features]
-default = []
-# The reserved `filter_graphql` seam names async-graphql's native context /
-# error types. Gated so an HTTP-only filter consumer never compiles the GraphQL
-# stack; GraphQL-serving consumers turn it on via `nest-rs-guards/graphql`.
-graphql = ["dep:nest-rs-graphql"]
-# The reserved `filter_ws` seam names `WsClient`. Gated likewise.
-ws = ["dep:nest-rs-ws"]
-
 [dependencies]
 async-trait.workspace = true
 poem.workspace = true
 tracing.workspace = true
 nest-rs-core.workspace = true
-# Native context types for the cross-transport `filter_graphql` /
-# `filter_ws` methods (reserved seams). Optional + feature-gated so a pure-HTTP
-# consumer does not pull the GraphQL / WS stacks. No cycle (see
-# nest-rs-interceptors Cargo).
-nest-rs-graphql = { workspace = true, optional = true }
-nest-rs-ws = { workspace = true, optional = true }
 # `use_filters_global` attaches its transport-level wrap via
 # `HttpInterceptorMeta`. Safe direction.
 nest-rs-http.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

@@ -21,6 +21,49 @@ use crate::{Ability, Action};
 // here since the transport masking paths import it alongside `mask_wire_json`.
 pub(crate) use crate::ability::warn_mask_failure;
 
+/// Why [`masked_reply`] could not produce a masked value. Callers must treat
+/// either case as fail-closed: send an error frame, never the unmasked body.
+#[derive(Debug, thiserror::Error)]
+pub enum MaskReplyError {
+    /// No ambient [`Ability`] is installed — the auth bridge for this
+    /// transport is missing, so masking cannot run.
+    #[error("no ambient ability — is the transport's authz bridge installed?")]
+    NoAmbientAbility,
+    /// The wire value could not be reconciled with the entity model.
+    #[error("wire value could not be reconciled with the entity model")]
+    Irreconcilable(#[source] serde_json::Error),
+}
+
+/// Mask a handler's wire JSON with the **ambient** ability — the manual
+/// analog of the HTTP response shaper and the GraphQL resolver wrapper, for
+/// surfaces with no automatic shaper (a WS gateway reply, a hand-built
+/// payload). One call replaces the hand-rolled serialize + permitted-fields +
+/// retain dance, with the same fail-closed semantics: rows the ability
+/// refuses are dropped, field grants strip columns, unexposed columns are
+/// strained out, and an irreconcilable body is an error, never a passthrough.
+pub fn masked_reply<S>(action: Action, wire: Value) -> Result<Value, MaskReplyError>
+where
+    S: EntityTrait + WireModelDefaults,
+    S::Model: DeserializeOwned + Serialize,
+{
+    let Some(ability) = crate::current_ability() else {
+        return Err(MaskReplyError::NoAmbientAbility);
+    };
+    match mask_wire_json::<S>(&ability, action, &wire) {
+        Ok(MaskedWire::Masked(masked)) => Ok(masked),
+        Ok(MaskedWire::Passthrough) => Ok(wire),
+        Err(err) => {
+            warn_mask_failure(
+                std::any::type_name::<S>(),
+                action,
+                "wire value could not be reconciled with the entity model",
+                &err,
+            );
+            Err(MaskReplyError::Irreconcilable(err))
+        }
+    }
+}
+
 /// Outcome of masking one wire JSON value.
 pub(crate) enum MaskedWire {
     /// An object or array body, masked and strained — ship this instead.

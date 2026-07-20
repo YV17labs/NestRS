@@ -3,7 +3,7 @@
 NestRS is a small, volunteer-run project, and the goal here is simple: keep it
 a place where contributing — code, docs, questions, ideas — feels welcoming
 and worth the effort. Everyone interacting in the repository, the
-[Discussions](https://github.com/NestRS/NestRS/discussions), the issue tracker,
+[Discussions](https://github.com/YV17labs/NestRS/discussions), the issue tracker,
 and any other project space is expected to follow the rules below.
 
 ## What we expect
@@ -45,7 +45,7 @@ maintainers. You do not have to be the target to report.
 The fastest private channel is a **GitHub direct message to
 [@yvanitou](https://github.com/yvanitou)**, or — if you prefer to keep it on
 the repo — open a private advisory through the
-[Security tab](https://github.com/NestRS/NestRS/security) and mark it as a
+[Security tab](https://github.com/YV17labs/NestRS/security) and mark it as a
 Code of Conduct report; it stays confidential until a maintainer responds.
 
 Include what happened, where, and (if helpful) links to the messages. Your

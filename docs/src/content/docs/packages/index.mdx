@@ -14,7 +14,7 @@ HTTP stack; an MCP-only assistant compiles no GraphQL schema.
 crates you need** — it is what `nestrs new` scaffolds, what every exemplar
 app in the Publish workspace does, and what each module's adoption page
 means by `cargo add nest-rs-<crate>`. The
-[`nest-rs`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs)
+[`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs)
 umbrella (one dependency, surface crates behind **Cargo features** such as
 `features = ["http", "seaorm", "graphql"]`, plus `nest_rs::prelude`) is an
 optional convenience for quick experiments — same crates underneath, less
@@ -31,8 +31,8 @@ slices.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs) | *(always)* | Re-exports core + optional surface crates; `nest_rs::prelude` for the common case | [Getting started](/getting-started/) |
-| [`nest-rs-core`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-core) | *(via umbrella)* | DI container, `#[module]`, lifecycle hooks, boot-time access graph | [Fundamentals](/fundamentals/) |
+| [`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs) | *(always)* | Re-exports core + optional surface crates; `nest_rs::prelude` for the common case | [Getting started](/getting-started/) |
+| [`nest-rs-core`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-core) | *(via umbrella)* | DI container, `#[module]`, lifecycle hooks, boot-time access graph | [Fundamentals](/fundamentals/) |
 
 Default features: `http`, `config` — every other surface crate is opt-in via
 `features = [...]`.
@@ -45,20 +45,20 @@ Each transport is a module you import in `AppModule`. HTTP-shaped surfaces
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-http`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-http) | `http` | HTTP transport — controllers, routes, extractors, built on poem | [HTTP](/http/) |
-| [`nest-rs-graphql`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-graphql) | `graphql` | Resolver discovery, schema composition, async-graphql integration | [GraphQL](/graphql/) |
-| [`nest-rs-ws`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-ws) | `ws` | WebSocket gateways — self-mount on the HTTP transport | [WebSockets](/websockets/) |
-| [`nest-rs-openapi`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-openapi) | `openapi` | OpenAPI 3 document + bundled Swagger UI from the route table | [OpenAPI](/openapi/) |
-| [`nest-rs-mcp`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-mcp) | `mcp` | Model Context Protocol server over HTTP | [MCP](/mcp/) |
+| [`nest-rs-http`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-http) | `http` | HTTP transport — controllers, routes, extractors, built on poem | [HTTP](/http/) |
+| [`nest-rs-graphql`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-graphql) | `graphql` | Resolver discovery, schema composition, async-graphql integration | [GraphQL](/graphql/) |
+| [`nest-rs-ws`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-ws) | `ws` | WebSocket gateways — self-mount on the HTTP transport | [WebSockets](/websockets/) |
+| [`nest-rs-openapi`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-openapi) | `openapi` | OpenAPI 3 document + bundled Swagger UI from the route table | [OpenAPI](/openapi/) |
+| [`nest-rs-mcp`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-mcp) | `mcp` | Model Context Protocol server over HTTP | [MCP](/mcp/) |
 
 ## Data
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-database`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-database) | `database` | ORM-agnostic executor seam — ambient request/job context any driver implements | [Database](/database/) · [Writing a driver](/database/writing-a-driver/) |
-| [`nest-rs-seaorm`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-seaorm) | `seaorm` | First-class SeaORM integration — `DatabaseModule`, `Repo`, transactions, dataloaders | [Database](/database/) |
-| [`nest-rs-resource`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-resource) | *(direct dep)* | `#[expose]` — one entity declaration for GraphQL + OpenAPI + CRUD helpers | [CRUD](/database/crud/) · [Relations](/graphql/relations/) |
-| [`nest-rs-storage`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-storage) | *(direct dep)* | S3-compatible object storage — injectable `Storage`, presigned URLs, via `object_store` | [Storage](/storage/) |
+| [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database) | `database` | ORM-agnostic executor seam — ambient request/job context any driver implements | [Database](/database/) · [Writing a driver](/database/writing-a-driver/) |
+| [`nest-rs-seaorm`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) | `seaorm` | First-class SeaORM integration — `DatabaseModule`, `Repo`, transactions, dataloaders | [Database](/database/) |
+| [`nest-rs-resource`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-resource) | *(direct dep)* | `#[expose]` — one entity declaration for GraphQL + OpenAPI + CRUD helpers | [CRUD](/database/crud/) · [Relations](/graphql/relations/) |
+| [`nest-rs-storage`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-storage) | *(direct dep)* | S3-compatible object storage — injectable `Storage`, presigned URLs, via `object_store` | [Storage](/storage/) |
 
 ## Security
 
@@ -68,9 +68,9 @@ these crates are the engine.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-authn`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-authn) | `authn` | JWT service, pluggable `Strategy`, `AuthGuard` | [Authentication](/security/authentication/) |
-| [`nest-rs-authz`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-authz) | `authz` | CASL-style abilities — access gate, row-level filter, response masking | [Authorization](/security/authorization/) |
-| [`nest-rs-social`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-social) | `social` | Open `SocialProvider` contract — first-party GitHub/Google, third-party providers via the same seam | [Social login](/security/authentication/social-login/) |
+| [`nest-rs-authn`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authn) | `authn` | JWT service, pluggable `Strategy`, `AuthGuard` | [Authentication](/security/authentication/) |
+| [`nest-rs-authz`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authz) | `authz` | CASL-style abilities — access gate, row-level filter, response masking | [Authorization](/security/authorization/) |
+| [`nest-rs-social`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-social) | `social` | Open `SocialProvider` contract — first-party GitHub/Google, third-party providers via the same seam | [Social login](/security/authentication/social-login/) |
 
 ## Request pipeline
 
@@ -79,38 +79,38 @@ globally on `App::builder()` or per controller / resolver / gateway.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-guards`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-guards) | *(direct dep)* | The `Guard` trait — gates access before the handler runs | [Guards](/fundamentals/guards/) |
-| [`nest-rs-pipes`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-pipes) | *(direct dep)* | Stateless input validation and transformation at the edge | [Pipes](/fundamentals/pipes/) |
-| [`nest-rs-interceptors`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-interceptors) | *(direct dep)* | Wrap handler execution — logging, transactions, ability scope | [Interceptors](/fundamentals/interceptors/) |
-| [`nest-rs-filters`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-filters) | *(direct dep)* | Map inner errors to transport responses | [Exception filters](/fundamentals/exception-filters/) |
-| [`nest-rs-exception-filters`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-exception-filters) | *(direct dep)* | Typed exception filters — catch one concrete error type | [Exception filters](/fundamentals/exception-filters/) |
+| [`nest-rs-guards`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-guards) | *(direct dep)* | The `Guard` trait — gates access before the handler runs | [Guards](/fundamentals/guards/) |
+| [`nest-rs-pipes`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-pipes) | *(direct dep)* | Stateless input validation and transformation at the edge | [Pipes](/fundamentals/pipes/) |
+| [`nest-rs-interceptors`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-interceptors) | *(direct dep)* | Wrap handler execution — logging, transactions, ability scope | [Interceptors](/fundamentals/interceptors/) |
+| [`nest-rs-filters`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-filters) | *(direct dep)* | Map inner errors to transport responses | [Exception filters](/fundamentals/exception-filters/) |
+| [`nest-rs-exception-filters`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-exception-filters) | *(direct dep)* | Typed exception filters — catch one concrete error type | [Exception filters](/fundamentals/exception-filters/) |
 
 ## Background work
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-queue`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-queue) | `queue` | Backend-agnostic job contract + `#[process]` registry | [Queue](/queue/) |
-| [`nest-rs-redis`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-redis) | `redis` | Redis-backed producer and worker (via apalis) | [Queue wiring](/queue/wiring/) |
-| [`nest-rs-schedule`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-schedule) | `schedule` | Cron-style scheduled jobs — `#[scheduled]` + `ScheduleModule` | [Schedule](/schedule/) |
-| [`nest-rs-events`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-events) | `events` | Typed in-process event bus — `#[listeners]` / `#[on_event]` | [Events](/events/) |
-| [`nest-rs-worker`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-worker) | *(direct dep)* | Ambient job context seam for off-request transports | [Queue](/queue/) · [Writing a driver](/database/writing-a-driver/) |
+| [`nest-rs-queue`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-queue) | `queue` | Backend-agnostic job contract + `#[process]` registry | [Queue](/queue/) |
+| [`nest-rs-redis`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) | `redis` | Redis-backed producer and worker (via apalis) | [Queue wiring](/queue/wiring/) |
+| [`nest-rs-schedule`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-schedule) | `schedule` | Cron-style scheduled jobs — `#[scheduled]` + `ScheduleModule` | [Schedule](/schedule/) |
+| [`nest-rs-events`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-events) | `events` | Typed in-process event bus — `#[listeners]` / `#[on_event]` | [Events](/events/) |
+| [`nest-rs-worker`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-worker) | *(direct dep)* | Ambient job context seam for off-request transports | [Queue](/queue/) · [Writing a driver](/database/writing-a-driver/) |
 
 ## Platform
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-config`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-config) | `config` | Namespaced env + file config bound to typed `#[config]` structs | [Configuration](/configuration/) |
-| [`nest-rs-health`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-health) | `health` | Kubernetes-style liveness / readiness / startup probes | [Health](/health/) |
-| [`nest-rs-throttler`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-throttler) | `throttler` | Per-route rate limiting via `ThrottlerGuard` | [Throttler](/rate-limiting/) |
-| [`nest-rs-opentelemetry`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-opentelemetry) | `opentelemetry` | Logs, traces, metrics, W3C propagation, OTLP export | [OpenTelemetry](/opentelemetry/) |
-| [`nest-rs-server-timing`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-server-timing) | `server-timing` | W3C `Server-Timing` response header (independent of OTel) | [Server-Timing](/server-timing/) |
+| [`nest-rs-config`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-config) | `config` | Namespaced env + file config bound to typed `#[config]` structs | [Configuration](/configuration/) |
+| [`nest-rs-health`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-health) | `health` | Kubernetes-style liveness / readiness / startup probes | [Health](/health/) |
+| [`nest-rs-throttler`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-throttler) | `throttler` | Per-route rate limiting via `ThrottlerGuard` | [Throttler](/rate-limiting/) |
+| [`nest-rs-opentelemetry`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-opentelemetry) | `opentelemetry` | Logs, traces, metrics, W3C propagation, OTLP export | [OpenTelemetry](/opentelemetry/) |
+| [`nest-rs-server-timing`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-server-timing) | `server-timing` | W3C `Server-Timing` response header (independent of OTel) | [Server-Timing](/server-timing/) |
 
 ## Developer tools
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-cli`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-cli) | *(binary: `nestrs`)* | Scaffold workspaces, generate features, project health checks | [CLI](/cli/) |
-| [`nest-rs-testing`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-testing) | `testing` | In-process harness — boot the real DI graph, drive HTTP/GraphQL/MCP without a socket | [Testing](/testing/) |
+| [`nest-rs-cli`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-cli) | *(binary: `nestrs`)* | Scaffold workspaces, generate features, project health checks | [CLI](/cli/) |
+| [`nest-rs-testing`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-testing) | `testing` | In-process harness — boot the real DI graph, drive HTTP/GraphQL/MCP without a socket | [Testing](/testing/) |
 
 ## Typical binary profiles
 
@@ -138,7 +138,7 @@ re-exports what you need. For a decorator index see
 
 **Your product's `features` crate** holds domain modules (entities, services,
 controllers per transport). It is workspace-local and not published to
-crates.io — copy [`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users/)
+crates.io — copy [`crates/features/src/users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users/)
 as the exemplar.
 
 ## Adding a crate to your app

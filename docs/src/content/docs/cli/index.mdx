@@ -276,11 +276,11 @@ pub struct ApiModule;
 
 `g resource` emits a self-contained, unauthenticated slice so it compiles in any
 workspace. For auth-protected CRUD, copy the `#[crud]` + guard wiring from
-[`orgs/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/orgs)
-or [`users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users)
+[`orgs/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/orgs)
+or [`users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
 and import the matching `Authz<Transport>Module`. Before inventing a second
 layout, open
-[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users)
+[`crates/features/src/users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
 side by side with what the generator emitted.
 
 ## Doctor
@@ -344,7 +344,7 @@ Aliases: **`nestrs g`** = **`nestrs generate`**.
 
 ## Roadmap
 
-Planned generators (see [Roadmap](https://github.com/NestRS/NestRS/blob/main/ROADMAP.md)):
+Planned generators (see [Roadmap](https://github.com/YV17labs/NestRS/blob/main/ROADMAP.md)):
 migration scaffold and `nestrs info` (route/module scan).
 
 ## Going further

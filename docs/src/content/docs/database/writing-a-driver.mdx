@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-The [`nest-rs-database`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-database)
+The [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database)
 crate is a seam: an object-safe `Executor` trait, two `tokio::task_local!`s,
 and the install helpers that thread "the request's current handle, optionally
 inside a transaction" across every layer. The seam names no store and no
@@ -16,7 +16,7 @@ document-store client, a key-value session, a graph driver, an in-memory
 map. This page gives you the **shape** of a driver, not its implementation:
 the trait you implement, the methods you wire, with `// your code here`
 markers where the store-specific work lands. The reference impl is
-[`nest-rs-seaorm`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-seaorm) —
+[`nest-rs-seaorm`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
 read it once when a placeholder is unclear.
 
 ## What you'll implement
@@ -256,13 +256,13 @@ access graph and module wiring, structured observability under
 
 ## Reference
 
-- [`crates/nest-rs-seaorm/`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-seaorm) —
+- [`crates/nest-rs-seaorm/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
   the first-party driver; read its `executor.rs`, `interceptor.rs`,
   `worker.rs`, and `module.rs` whenever a placeholder above needs a
   concrete shape.
-- [`crates/nest-rs-database/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-database/README.md) —
+- [`crates/nest-rs-database/README.md`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-database/README.md) —
   the trait contract, the task-local seam, the install helpers in detail.
-- [`crates/nest-rs-redis/`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-redis) —
+- [`crates/nest-rs-redis/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) —
   an analogous worker-side integration on the queue runtime, for a second
   read on the `JobContext` pattern.
 

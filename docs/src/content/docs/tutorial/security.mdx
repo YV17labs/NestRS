@@ -23,11 +23,11 @@ Authentication and authorization are different jobs handled by different
 crates. The reference feature wires both:
 
 - **`AuthGuard`** lives in
-  [**`nest-rs-authn`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-authn).
+  [**`nest-rs-authn`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authn).
   A `Strategy` turns the request into a principal — for a resource
   server, that's `JwtStrategy<Claims>` verifying a `Bearer` token.
 - **`AuthzGuard`** lives in
-  [**`nest-rs-authz`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-authz).
+  [**`nest-rs-authz`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authz).
   It seeds the ambient `Ability` from the principal and an `AbilityFactory`.
 
 Two crates, one binding on the controller. The reference feature

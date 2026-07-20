@@ -246,7 +246,7 @@ nestrs g resource posts
 ```
 
 Import edge modules in each app's root `module.rs` — see
-[`users/`](https://github.com/NestRS/NestRS/tree/main/crates/features/src/users)
+[`users/`](https://github.com/YV17labs/NestRS/tree/main/crates/features/src/users)
 in the framework repo.
 "#;
 

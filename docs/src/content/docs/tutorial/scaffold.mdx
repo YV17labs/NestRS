@@ -19,7 +19,7 @@ thin apps under `apps/*`. Run every command from **your** workspace root
 fresh one). This repository hosts **Publish** only — use
 [`nestrs new blog`](/cli/#add-an-app-to-an-existing-workspace) to create
 `apps/blog/`; compare your tree with the tutorial feature exemplar in
-[`crates/features/src/posts/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/posts).
+[`crates/features/src/posts/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/posts).
 </Aside>
 
 ## Create the app
@@ -118,7 +118,7 @@ if other apps already exist in the workspace.
 
 `BlogModule` has no `providers = [...]` list. A root module composes
 feature modules and lets each own its providers — the
-[reference root](https://github.com/NestRS/NestRS/blob/main/demo/apps/api/src/module.rs)
+[reference root](https://github.com/YV17labs/NestRS/blob/main/demo/apps/api/src/module.rs)
 carries only `imports`.
 
 ```rust title="apps/blog/src/main.rs"

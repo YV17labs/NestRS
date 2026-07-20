@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NestRS/NestRS/stargazers"><img src="https://img.shields.io/github/stars/NestRS/NestRS?style=flat&logo=github&color=555" alt="GitHub stars"></a>
+  <a href="https://github.com/YV17labs/NestRS/stargazers"><img src="https://img.shields.io/github/stars/YV17labs/NestRS?style=flat&logo=github&color=555" alt="GitHub stars"></a>
   <img src="https://img.shields.io/badge/built%20with-Rust-CE412B?logo=rust&logoColor=white" alt="Built with Rust">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
@@ -155,9 +155,9 @@ app map, and the Docker build are documented in
 NestRS is young, and early contributors shape what it becomes — you don't have
 to write Rust to help.
 
-- 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/NestRS/NestRS/discussions).
-- 🐛 **Report a bug or request a feature** through [issues](https://github.com/NestRS/NestRS/issues/new/choose).
-- 🌱 **Pick up a** [`good first issue`](https://github.com/NestRS/NestRS/labels/good%20first%20issue) — [CONTRIBUTING.md](CONTRIBUTING.md) is the short path from idea to merged PR.
+- 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/YV17labs/NestRS/discussions).
+- 🐛 **Report a bug or request a feature** through [issues](https://github.com/YV17labs/NestRS/issues/new/choose).
+- 🌱 **Pick up a** [`good first issue`](https://github.com/YV17labs/NestRS/labels/good%20first%20issue) — [CONTRIBUTING.md](CONTRIBUTING.md) is the short path from idea to merged PR.
 - 🗺️ **See where it's heading** in the [roadmap](ROADMAP.md).
 - 🔒 **Found a vulnerability?** Follow [SECURITY.md](SECURITY.md) — please don't open a public issue for it.
 

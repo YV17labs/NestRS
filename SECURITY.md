@@ -8,7 +8,7 @@ Security reports are taken seriously at any stage.
 
 Report it privately through GitHub:
 
-1. Go to the [**Security** tab](https://github.com/NestRS/NestRS/security) of the
+1. Go to the [**Security** tab](https://github.com/YV17labs/NestRS/security) of the
    repository.
 2. Click **Report a vulnerability** to open a private advisory.
 

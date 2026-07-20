@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: 💬 Questions & ideas
-    url: https://github.com/NestRS/NestRS/discussions
+    url: https://github.com/YV17labs/NestRS/discussions
     about: >-
       Anything that isn't a concrete bug or feature request — questions, ideas,
       design discussions, or just saying hi. This is the place.

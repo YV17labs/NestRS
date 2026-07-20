@@ -130,7 +130,7 @@ compile time, then walks the graph in `App::build()`. A provider that injects
 something its module cannot reach fails the boot with an error naming the
 consumer, the missing dependency, and the module that provides it — before the
 first request. The check lives in
-[`crates/nest-rs-core/src/access.rs`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-core/src/access.rs)
+[`crates/nest-rs-core/src/access.rs`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-core/src/access.rs)
 and governs `#[inject]` and the guard, filter, and interceptor attributes
 alike.
 

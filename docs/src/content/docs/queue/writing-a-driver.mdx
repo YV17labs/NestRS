@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-The [`nest-rs-queue`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-queue)
+The [`nest-rs-queue`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-queue)
 crate is a seam: a `JobProducer` trait on the push side, a link-time
 `ProcessMethod` inventory + a wire envelope on the consume side, and a
 `Transport` slot the framework drives at boot. The seam names no storage
@@ -16,7 +16,7 @@ in-process channel, a Postgres queue table all plug in the same way.
 This page gives you the **shape** of a driver, not its implementation:
 the traits you implement, the registry you drain, with `// your code
 here` markers where the storage-specific work lands. The reference impl
-is [`nest-rs-redis`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-redis)
+is [`nest-rs-redis`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis)
 (apalis on Redis) — read it once when a placeholder is unclear.
 
 ## What you'll implement
@@ -283,10 +283,10 @@ the driver's README.
 
 ## Reference
 
-- [`crates/nest-rs-redis/`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-redis) —
+- [`crates/nest-rs-redis/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) —
   the reference impl; read its `connection.rs`, `worker.rs`, and
   `module.rs` whenever a placeholder above needs a concrete shape.
-- [`crates/nest-rs-queue/README.md`](https://github.com/NestRS/NestRS/blob/main/crates/nest-rs-queue/README.md) —
+- [`crates/nest-rs-queue/README.md`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-queue/README.md) —
   the extension contract, the `ProcessMethod` registry, the envelope spec.
 - [Database driver](/database/writing-a-driver/) — the analogous scaffold
   for the data layer, same shape, same seams.

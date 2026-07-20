@@ -2,4 +2,4 @@
 
 OpenTelemetry for nestrs: logs, traces, metrics, W3C propagation, OTLP export.
 
-[Documentation](https://nestrs.dev/opentelemetry/) · [GitHub](https://github.com/NestRS/NestRS)
+[Documentation](https://nestrs.dev/opentelemetry/) · [GitHub](https://github.com/YV17labs/NestRS)

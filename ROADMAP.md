@@ -5,8 +5,8 @@ community needs. The sections below are ordered by **priority** — correctness 
 parity work first; `Later` holds what is explicitly deferred.
 
 Want to shape it? Open a
-[Discussion](https://github.com/NestRS/NestRS/discussions) or pick up a
-[`good first issue`](https://github.com/NestRS/NestRS/labels/good%20first%20issue).
+[Discussion](https://github.com/YV17labs/NestRS/discussions) or pick up a
+[`good first issue`](https://github.com/YV17labs/NestRS/labels/good%20first%20issue).
 The authoritative record of *what was decided and why* is
 [CLAUDE.md](CLAUDE.md); this file tracks *what's next*.
 
@@ -123,7 +123,7 @@ Landed with the first `0.1.0` crates.io release and the first docs push:
 - **The `nest-rs` facade crate** — one dependency and one feature set on
   crates.io (`nest-rs`); in code, `use nest_rs::prelude::*;` for the common case.
 - **GitHub organisation** — canonical home at
-  [github.com/NestRS/NestRS](https://github.com/NestRS/NestRS).
+  [github.com/YV17labs/NestRS](https://github.com/YV17labs/NestRS).
 - **The [nestrs.dev](https://nestrs.dev) docs site** — Starlight site with getting
   started, an end-to-end tutorial, fundamentals, and one section per surface crate
   (HTTP, GraphQL, security, database, queue, events, MCP, health, OpenTelemetry,

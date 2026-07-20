@@ -2,4 +2,4 @@
 
 Internal — the #[listeners] decorator macro; re-exported by nest-rs-events, not a direct dependency.
 
-[Documentation](https://nestrs.dev/events/) · [GitHub](https://github.com/NestRS/NestRS)
+[Documentation](https://nestrs.dev/events/) · [GitHub](https://github.com/YV17labs/NestRS)

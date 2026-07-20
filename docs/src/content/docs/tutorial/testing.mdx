@@ -20,7 +20,7 @@ Every app ships one `tests/e2e/main.rs`. Cargo compiles it as a separate
 binary; nextest gates it through a binary filter, not `#[ignore]`.
 
 The crate driving this page is
-[**`nest-rs-testing`**](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-testing) —
+[**`nest-rs-testing`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-testing) —
 it provides `TestApp` (the in-process boot harness) and
 `EphemeralDatabase` (a throwaway Postgres provisioned through
 [testcontainers](https://docs.rs/testcontainers)). `EphemeralDatabase`
@@ -205,7 +205,7 @@ to add the next bare feature.
 
 When you need auth, GraphQL, org scoping, and the full negative-path
 matrix, open [`api`](/publish/) and
-[`crates/features/src/users/`](https://github.com/NestRS/NestRS/tree/main/demo/crates/features/src/users)
+[`crates/features/src/users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
 — same port-and-adapter layout, more layers on top.
 
 ## Going further

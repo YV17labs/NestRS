@@ -90,7 +90,7 @@ export default defineConfig({
       },
       favicon: '/favicon.svg',
       social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/NestRS/NestRS' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/YV17labs/NestRS' },
       ],
       expressiveCode: {
         themes: ['one-dark-pro', 'github-light'],
@@ -121,7 +121,7 @@ export default defineConfig({
         Hero: './src/components/Hero.astro',
       },
       editLink: {
-        baseUrl: 'https://github.com/NestRS/NestRS/edit/main/docs/',
+        baseUrl: 'https://github.com/YV17labs/NestRS/edit/main/docs/',
       },
       lastUpdated: true,
       // Nine doors (audit §2.4.11): a newcomer reads the group labels as a path.

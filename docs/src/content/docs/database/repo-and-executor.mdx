@@ -12,7 +12,7 @@ installed per request (or per job), and the `Repo<E>` handle every service
 uses to reach it. They are built on
 [SeaORM](https://www.sea-ql.org/SeaORM/) — `Executor` implements SeaORM's
 `ConnectionTrait`, so any SeaORM query runs through it unchanged — and on
-the seam from [`nest-rs-database`](https://github.com/NestRS/NestRS/tree/main/crates/nest-rs-database),
+the seam from [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database),
 which is what keeps the same seam open to a non-SeaORM driver.
 
 The invariant: **every data access goes through a service, and a service

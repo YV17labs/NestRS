@@ -119,6 +119,7 @@ export default defineConfig({
       components: {
         PageFrame: './src/components/PageFrame.astro',
         Hero: './src/components/Hero.astro',
+        Footer: './src/components/Footer.astro',
       },
       editLink: {
         baseUrl: 'https://github.com/YV17labs/NestRS/edit/main/docs/',

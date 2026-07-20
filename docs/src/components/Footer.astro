@@ -1,0 +1,28 @@
+---
+// Extends Starlight's page footer (edit link, last updated, pagination) with a
+// site-wide YV17labs credit line. Rendered on every docs page.
+import Default from '@astrojs/starlight/components/Footer.astro';
+---
+
+<Default {...Astro.props} />
+
+<p class="site-credit sl-flex">
+  Built by <a href="https://github.com/YV17labs" rel="noopener">YV17labs</a>
+</p>
+
+<style>
+  .site-credit {
+    justify-content: center;
+    gap: 0.35em;
+    margin: 1.5rem auto;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .site-credit a {
+    color: var(--sl-color-text-accent);
+    text-decoration: none;
+  }
+  .site-credit a:hover {
+    text-decoration: underline;
+  }
+</style>

@@ -58,9 +58,23 @@ pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, Strin
 /// Merge one `.env` file's assignments into `values` (set-if-absent — the
 /// first writer, i.e. the most specific file, wins).
 fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
-    let Ok(contents) = fs::read_to_string(path) else {
-        return;
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        // A missing cascade file is the normal case — the loader walks every
+        // candidate. Anything else (permissions, invalid UTF-8) is a present
+        // file we failed to read: surface it rather than silently dropping it.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            tracing::warn!(
+                target: "nest_rs::config",
+                path = %path.display(),
+                error = %e,
+                "skipping unreadable .env file",
+            );
+            return;
+        }
     };
+    let mut skipped = 0usize;
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -68,15 +82,27 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
         }
         let line = line.strip_prefix("export ").unwrap_or(line);
         let Some((key, value)) = line.split_once('=') else {
+            skipped += 1;
             continue;
         };
         let key = key.trim();
         if key.is_empty() {
+            skipped += 1;
             continue;
         }
         values
             .entry(key.to_owned())
             .or_insert_with(|| parse_value(value.trim()));
+    }
+    // One aggregate warning per file — a malformed line means a config value the
+    // user expects is quietly absent.
+    if skipped > 0 {
+        tracing::warn!(
+            target: "nest_rs::config",
+            path = %path.display(),
+            skipped,
+            "skipped malformed .env lines",
+        );
     }
 }
 

@@ -197,13 +197,20 @@ pub fn rustfmt(paths: &[PathBuf]) {
     if paths.is_empty() {
         return;
     }
-    let _ = std::process::Command::new("rustfmt")
+    let outcome = std::process::Command::new("rustfmt")
         .arg("--edition")
         .arg("2024")
         .args(paths)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
+    match outcome {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            eprintln!("note: generated code left unformatted: rustfmt exited with {status}")
+        }
+        Err(e) => eprintln!("note: generated code left unformatted: {e}"),
+    }
 }
 
 #[cfg(test)]

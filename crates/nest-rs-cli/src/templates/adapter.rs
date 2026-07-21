@@ -90,7 +90,12 @@ pub struct {{gateway}} {
 impl {{gateway}} {
     #[subscribe_message("{{kebab}}.count")]
     async fn count(&self, client: &WsClient) {
-        let _ = client.broadcast("{{kebab}}.count", &self.svc.count());
+        // Best-effort fan-out: a peer disconnecting mid-broadcast is normal, so
+        // a delivery failure is logged rather than propagated (this handler
+        // returns `()` — there is no client left to surface an error to).
+        if let Err(e) = client.broadcast("{{kebab}}.count", &self.svc.count()) {
+            tracing::warn!(target: "features::{{snake}}", error = %e, "broadcast failed");
+        }
     }
 }
 "#;

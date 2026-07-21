@@ -14,6 +14,9 @@ pub struct DoctorReport {
     pub rustc_version: Option<String>,
     pub cargo_ok: bool,
     pub in_nestrs_workspace: bool,
+    /// Set when workspace detection itself failed (e.g. a malformed manifest),
+    /// as distinct from a clean "not a workspace" result.
+    pub workspace_error: Option<String>,
     pub env_database: Option<bool>,
     pub env_queue: Option<bool>,
     pub env_http_host: bool,
@@ -34,8 +37,10 @@ pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
         .is_some_and(|v| version_at_least(v, MIN_RUST_VERSION));
     report.cargo_ok = which("cargo");
 
-    if let Ok(Some(_)) = crate::context::NestrsWorkspace::discover(&start) {
-        report.in_nestrs_workspace = true;
+    match crate::context::NestrsWorkspace::discover(&start) {
+        Ok(Some(_)) => report.in_nestrs_workspace = true,
+        Ok(None) => {}
+        Err(e) => report.workspace_error = Some(e.to_string()),
     }
 
     report.env_database = env_present("NESTRS_DATABASE__URL");
@@ -69,7 +74,9 @@ fn print_report(report: &DoctorReport) {
         if report.cargo_ok { "ok" } else { "not found" },
     );
 
-    if report.in_nestrs_workspace {
+    if let Some(err) = &report.workspace_error {
+        println!("  nestrs workspace: detection failed: {err}");
+    } else if report.in_nestrs_workspace {
         println!("  nestrs workspace: yes");
     } else {
         println!("  nestrs workspace: no (standalone project or outside a clone)");

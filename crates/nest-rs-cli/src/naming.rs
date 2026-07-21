@@ -221,27 +221,13 @@ impl Names {
 /// *without* the role suffix (`LoginDto` → `login`, `GenerateMediaVariantCommand`
 /// → `generate_media_variant`). The boundary picks the role word — REST body
 /// `dto`, imperative queue payload `command`, published-fact queue payload
-/// `event` (see [`dto_file`], [`command_file`], [`event_file`]).
+/// `event` (see [`command_file`]).
 fn port_role_file(role: &str, stem: &str, total: usize) -> String {
     if total <= 1 {
         format!("{role}.rs")
     } else {
         format!("{role}s/{stem}_{role}.rs")
     }
-}
-
-/// File holding a **REST** data-transfer object (`Dto`): one → `dto.rs`, 2+ →
-/// `dtos/<stem>_dto.rs`. The macro-generated `Create<E>`/`Update<E>`
-/// (shared REST+GraphQL CRUD body) live inside the entity's `#[expose]` block,
-/// so the multi-DTO directory form has no generator caller yet.
-///
-/// **Reserved surface** (no generator emits a DTO file today — the CRUD body is
-/// macro-generated inside `#[expose]`): kept as the single, tested source of
-/// the placement rule so a future `g dto` derives the path from here, not by
-/// re-deriving the convention. The `naming::tests` lock the rule.
-#[allow(dead_code)] // reserved: placement authority for a future `g dto`
-pub fn dto_file(stem: &str, total: usize) -> String {
-    port_role_file("dto", stem, total)
 }
 
 /// File holding an **imperative queue payload** (`Command` — "do this work",
@@ -253,31 +239,6 @@ pub fn dto_file(stem: &str, total: usize) -> String {
 /// multi-payload case.
 pub fn command_file(stem: &str, total: usize) -> String {
     port_role_file("command", stem, total)
-}
-
-/// File holding a **published-fact queue payload** (`Event` — "X happened",
-/// potentially many consumers): one → `event.rs`, 2+ →
-/// `events/<stem>_event.rs`. Same port placement as a [`command_file`]; choose
-/// `Event` only when broadcasting a fact rather than commanding one handler.
-///
-/// **Reserved surface** (no generator emits an event payload today): kept as
-/// the tested placement authority for a future event generator.
-#[allow(dead_code)] // reserved: placement authority for a future event generator
-pub fn event_file(stem: &str, total: usize) -> String {
-    port_role_file("event", stem, total)
-}
-
-/// File holding a **hand-written GraphQL input** (`Input` — transport-specific,
-/// not the shared CRUD body). Same role-file rule as the port objects, but
-/// nested under the `graphql/` adapter (not the port): one → `graphql/input.rs`,
-/// 2+ → `graphql/inputs/<stem>_input.rs`.
-///
-/// **Reserved surface** (no generator emits a hand-written GraphQL input today):
-/// kept as the tested placement authority — it also encodes the `graphql/`
-/// adapter nesting the port helpers do not.
-#[allow(dead_code)] // reserved: placement authority for a future `g graphql` input
-pub fn input_file(stem: &str, total: usize) -> String {
-    format!("graphql/{}", port_role_file("input", stem, total))
 }
 
 fn to_kebab(raw: &str) -> String {
@@ -423,17 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn dto_file_layout_mirrors_the_entity_rule() {
-        // A lone DTO lives directly in `dto.rs` — no directory.
-        assert_eq!(dto_file("transcode", 1), "dto.rs");
-        // Two or more split into a pluralized `dtos/` directory, one
-        // `<stem>_dto.rs` per type, re-exported flat by `dtos/mod.rs` —
-        // covering both a simple and a multi-word stem.
-        assert_eq!(dto_file("login", 2), "dtos/login_dto.rs");
-        assert_eq!(dto_file("token_request", 2), "dtos/token_request_dto.rs");
-    }
-
-    #[test]
     fn command_file_layout_mirrors_the_dto_rule() {
         // A lone imperative payload lives directly in `command.rs`.
         assert_eq!(command_file("transcode", 1), "command.rs");
@@ -446,28 +396,6 @@ mod tests {
         assert_eq!(
             command_file("generate_media_variant", 2),
             "commands/generate_media_variant_command.rs"
-        );
-    }
-
-    #[test]
-    fn event_file_layout_mirrors_the_dto_rule() {
-        // A lone published-fact payload lives directly in `event.rs`.
-        assert_eq!(event_file("order_placed", 1), "event.rs");
-        // Two or more split into a pluralized `events/` directory.
-        assert_eq!(
-            event_file("order_placed", 2),
-            "events/order_placed_event.rs"
-        );
-    }
-
-    #[test]
-    fn input_file_layout_lives_under_the_graphql_adapter() {
-        // A lone hand-written GraphQL input sits in the `graphql/` adapter.
-        assert_eq!(input_file("create_post", 1), "graphql/input.rs");
-        // Two or more split into a pluralized `graphql/inputs/` directory.
-        assert_eq!(
-            input_file("create_post", 2),
-            "graphql/inputs/create_post_input.rs"
         );
     }
 }

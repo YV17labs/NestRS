@@ -6,7 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "OpenAPI 3.0 document generation and bundled Swagger UI for nestrs HTTP controllers (the REST analog of nest-rs-graphql's GraphqlModule)."
+description = "OpenAPI 3.1 document generation and bundled Swagger UI for nestrs HTTP controllers (the REST analog of nest-rs-graphql's GraphqlModule)."
+keywords = ["framework", "nestjs", "openapi", "swagger", "http"]
+categories = ["web-programming::http-server"]
 
 
 [dependencies]

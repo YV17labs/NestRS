@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Expose a SeaORM entity to REST/OpenAPI (wire DTO) from one declaration, via the #[expose] attribute; optional GraphQL surface with the `graphql` flag + feature."
+keywords = ["framework", "nestjs", "seaorm", "crud", "graphql"]
+categories = ["web-programming", "database"]
 
 [features]
 default = []

@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Redis-backed queue integration for nest-rs-queue (via apalis-redis): the QueueConnection producer, the QueueWorker consumer transport, and the #[processor] decorator re-export. The user-facing storage is Redis; apalis is an implementation detail."
+keywords = ["framework", "nestjs", "redis", "queue", "apalis"]
+categories = ["asynchronous", "database"]
 
 
 [dependencies]

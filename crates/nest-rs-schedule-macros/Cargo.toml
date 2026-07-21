@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Internal — the #[scheduled] decorator macro; re-exported by nest-rs-schedule, not a direct dependency."
+keywords = ["framework", "nestjs", "cron", "macros", "proc-macro"]
+categories = ["development-tools::procedural-macro-helpers"]
 
 [lib]
 proc-macro = true

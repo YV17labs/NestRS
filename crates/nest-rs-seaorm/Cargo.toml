@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "SeaORM integration for nestrs: the first-class implementation of the `nest-rs-database` extension contract. `DatabaseModule::for_root` owns the connection, composed at `App::builder()`. Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features."
+keywords = ["framework", "nestjs", "seaorm", "database", "orm"]
+categories = ["database"]
 
 
 [features]

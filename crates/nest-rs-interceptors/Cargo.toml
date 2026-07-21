@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Transport-spanning interceptors for nestrs — one Layer System sub-trait wrapping handler execution on HTTP, GraphQL, and WS, declared globally via `use_interceptors_global` or per-scope through `#[use_interceptors]`."
+keywords = ["framework", "nestjs", "interceptors", "middleware", "web"]
+categories = ["web-programming", "rust-patterns"]
 
 [dependencies]
 async-trait.workspace = true

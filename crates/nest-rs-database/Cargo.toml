@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "ORM-agnostic data-layer seam for NestRS: the ambient request/job Executor task-local plus the object-safe Executor trait an ORM module implements. SeaORM is the first-party implementation (nest-rs-seaorm), and the trait is public so other stores can be written against it."
+keywords = ["framework", "nestjs", "database", "orm", "seaorm"]
+categories = ["database"]
 
 
 [dependencies]

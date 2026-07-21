@@ -64,4 +64,14 @@ pub use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService,
 };
 
+// The whole `rmcp` crate, so an app hosting a tool can reach any rmcp item
+// through the framework instead of carrying its own dependency — the escape
+// hatch for rmcp's `#[tool]` / `#[tool_router]` / `#[tool_handler]` macros,
+// which expand to `rmcp::` paths. Hidden like `nest-rs-queue`'s `serde_json` /
+// `tracing` re-exports: plumbing, not curated surface (the named re-exports
+// above are the documented API). Version stays in lockstep with the workspace
+// pin.
+#[doc(hidden)]
+pub use rmcp;
+
 pub use nest_rs_mcp_macros::mcp;

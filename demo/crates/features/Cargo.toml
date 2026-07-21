@@ -24,9 +24,13 @@ nest-rs-guards = { workspace = true, features = ["graphql"] }
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-mcp.workspace = true
-# The rmcp `#[tool_router]`/`#[tool_handler]` macros (re-exported by
-# nest-rs-mcp) expand to `rmcp::` paths, so a crate hosting an MCP tool needs
-# the crate in scope directly.
+# The rmcp `#[tool_router]`/`#[tool_handler]`/`#[tool]` macros (re-exported by
+# nest-rs-mcp) expand to crate-relative `rmcp::` paths, which resolve only
+# against an extern crate literally named `rmcp` in this crate's prelude — the
+# framework's `nest_rs_mcp::rmcp` re-export cannot supply that name. So a crate
+# hosting an MCP tool must keep the direct dep. Lockstep contract: pin it to the
+# same `rmcp` version the workspace (and nest-rs-mcp) resolve, never a divergent
+# one, or the macro-expanded types would clash with the framework's.
 rmcp.workspace = true
 nest-rs-pipes.workspace = true
 nest-rs-queue.workspace = true

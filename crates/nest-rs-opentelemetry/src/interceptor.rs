@@ -56,8 +56,9 @@ impl Layer for OpenTelemetryHttp {}
 
 #[async_trait]
 impl Interceptor for OpenTelemetryHttp {
-    #[allow(unused_mut, unused_variables)]
-    async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
+    // No blanket lint allow: `req` is read then moved in both feature builds and
+    // never mutated, so the lints stay live to catch a genuine regression.
+    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
         #[cfg(feature = "otlp")]
         {
             let method = req.method().clone();

@@ -163,14 +163,22 @@ impl Drop for OpenTelemetry {
     fn drop(&mut self) {
         #[cfg(feature = "otlp")]
         {
-            if let Some(p) = self.tracer_provider.take() {
-                let _ = p.shutdown();
+            // A failed final flush loses telemetry. `Drop` can't return, and
+            // tracing may itself be mid-teardown, so report to stderr directly.
+            if let Some(p) = self.tracer_provider.take()
+                && let Err(e) = p.shutdown()
+            {
+                eprintln!("nest_rs::opentelemetry: tracer provider shutdown failed: {e}");
             }
-            if let Some(p) = self.meter_provider.take() {
-                let _ = p.shutdown();
+            if let Some(p) = self.meter_provider.take()
+                && let Err(e) = p.shutdown()
+            {
+                eprintln!("nest_rs::opentelemetry: meter provider shutdown failed: {e}");
             }
-            if let Some(p) = self.logger_provider.take() {
-                let _ = p.shutdown();
+            if let Some(p) = self.logger_provider.take()
+                && let Err(e) = p.shutdown()
+            {
+                eprintln!("nest_rs::opentelemetry: logger provider shutdown failed: {e}");
             }
         }
     }

@@ -10,35 +10,41 @@ Want to shape it? Open a
 The authoritative record of *what was decided and why* is
 [CLAUDE.md](CLAUDE.md); this file tracks *what's next*.
 
-## Now — stabilising the API
+## Now — the road to v1.0
 
-- Settle the public API of the core crates so early adopters stop chasing
-  breaking changes.
-- **Cold-start benchmark** — publish the cold-start figure alongside the
-  throughput and memory numbers already in the README (boot time is claimed in
-  prose today, but not measured in the benchmark table).
+The single active priority is a **stable 1.0**, and the stabilisation work is
+now code-complete. The shape below is what has landed and what remains before
+the tag:
+
+- **The stabilisation code work has landed** — the security blockers (throttler
+  `X-Forwarded-For` keying, an unbounded request-body path, a silently-dying
+  scheduler, a per-request panic for one DI shape), the fail-closed parity and
+  data-integrity fixes, and API-freeze hygiene (`#[non_exhaustive]`, opaque
+  structs, a declared pinned-major policy for `poem`/`sea-orm`/`async-graphql`)
+  are all in with their proving tests. What remains before the tag is the
+  version bump and the release itself.
+- **Three crates carry an explicit disposition**: `nest-rs-storage` stays
+  path-only, excluded from the 1.0 publish (no delete/list/streaming);
+  `nest-rs-mcp` ships with its guard chain working (deny-all default) but
+  transparent row-level filtering inside a tool deferred past 1.0 and
+  documented; `nest-rs-openapi` is matured — the generated document now states
+  the wire contract, with header parameters and a multipart body schema the
+  only remaining gaps.
 
 ## Next — hardening the guarantees
 
 The framework's promises — transparent security, a DI graph checked at boot,
 declarative wiring — hold today but lean on developer discipline at a few seams.
 Closing these is what makes the guarantees *airtight*, the real edge over a
-framework that only **documents** the same concerns.
+framework that only **documents** the same concerns. The v1-blocking subset has
+already landed; what stays here is the longer tail beyond 1.0.
 
-- **Harden the GraphQL schema composition** — the self-composing schema reads
-  async-graphql's public-but-internal `registry` API. That access is already
-  centralised in one module (`nest-rs-graphql/src/resolver.rs`) and guarded by
-  tests; what remains is a pinned-version compile guard so an async-graphql bump
-  fails loudly at that single seam rather than rippling silently through the crate.
-- **Keyed / multi-instance providers** — the flat container keys by type, so a
-  second instance of a type (two `OAuth2Client`s, for GitHub *and* Google) needs a
-  hand-written newtype today. A keyed registration (`provide_keyed`) would let one
-  type back several named instances without the ceremony.
-- **Compile-time guardrails for the stringly-typed seams** — a queue name is a
-  string shared between the producer and its `#[processor]`, and a dataloader's
-  generated loader type (`UsersServiceByName`) is found by naming convention; a typo
-  surfaces at runtime or as a cryptic type error. Typed queue handles and a clearer
-  loader-type surface would move both to compile time.
+- **Compile-time guardrails for the stringly-typed seams** — typed queue
+  handles now ship and are the default (`QueueName`, `#[queue]`, `push_to`);
+  the residual work is deprecating the legacy string-literal `#[process(queue
+  = "…")]` form and giving the dataloader loader-type (found today by naming
+  convention, e.g. `UsersServiceByName`) a typed handle so the two macros stop
+  agreeing on a string recipe.
 - **Alias-proof masking arm** — `#[routes]` arms the response shaper (ambient
   ability + masking) by *textually* matching a parameter path segment named
   `Authorize`/`Bind`. A renamed import (`use Authorize as Az`) now **fails
@@ -51,9 +57,13 @@ framework that only **documents** the same concerns.
 - **Transport-neutral guard core** — the base `Guard` trait requires
   `check_http(&mut poem::Request)` and `nest-rs-guards` depends on the HTTP
   stack, so a worker-only binary compiles HTTP it never serves. **Accepted for
-  0.x** (one trait, one chain, no duplicated dispatch — see the crate docs);
-  before 1.0, split a transport-neutral core trait with HTTP/GraphQL/WS
-  entries as extensions so a headless binary carries no `poem`.
+  1.x** (one trait, one chain, no duplicated dispatch — see the crate docs).
+  `check_graphql`/`check_ws_message` are already feature-gated; the residual is
+  moving `check_http` off the base trait into an `HttpGuard` extension so a
+  headless binary carries no `poem`. This is a build-hygiene split with no
+  runtime effect, and doing it cleanly touches every guard impl and the HTTP
+  dispatch — deferred past 1.0 rather than reworked late in stabilization. It
+  freezes the trait HTTP-coupled for the 1.x line.
 - **Transparent row-level filtering on MCP** — rmcp executes a `#[tool]` body
   inside its own spawned `serve_inner` loop, so the executor/ability task-locals
   installed around the endpoint never reach the tool. The guard chain works
@@ -67,20 +77,21 @@ framework that only **documents** the same concerns.
 Known, deliberate gaps in features that already ship:
 
 - **OpenAPI last edges** — the document now carries typed path params, expanded
-  query params, `bearerAuth` on guarded routes, RFC 9457 error responses and a
-  boot-written `openapi.json` snapshot. What remains: header parameters, a
+  query params, `bearerAuth` on guarded routes, per-route error statuses (the
+  effective success code plus `400`/`404`/`429`), RFC 9457 error responses and a
+  boot-written `openapi.json` snapshot. What remains: header parameters and a
   schema for multipart request bodies and streamed responses (both advertise no
-  body today), and replacing the heuristic error statuses (`422` on any body,
-  `404` on any `:param` path) with per-route declarations.
+  body today).
 - **Dependency-injection scopes** — request and transient scopes ship on HTTP via
-  `Scoped<T>`. What remains is request-scoped → request-scoped dependencies (the
-  model is one level deep over singletons today), and bridging the scope into the
-  GraphQL and MCP request paths (which carry per-request state through their own
-  context / DataLoaders for now).
+  `Scoped<T>`, including one level of request-scoped → request-scoped
+  dependencies. What remains is request-scoped chains deeper than one level, and
+  bridging the scope into the GraphQL and MCP request paths (which carry
+  per-request state through their own context / DataLoaders for now).
 - **`nest-rs-resource`** — a first-class `#[expose]` enum mode (an enum column
   already passes through if it derives the surface traits), HasMany pagination
-  via `Connection<T>` (the auto-emitted resolver returns a raw `Vec<T>` today —
-  fine at small N, a DoS waiting at large N), and a `via = "..."` override for
+  via `Connection<T>` (the auto-emitted resolver returns a raw `Vec<T>` today,
+  capped at `RELATION_LOAD_CAP = 100` per parent — safe, but not cursor-
+  paginated), and a `via = "..."` override for
   HasMany so non-conventional FK columns work without falling back to a manual
   `#[field_resolver]`. Adopter backlog landed: HTTP-only `#[expose]`, opt-in
   `soft_delete`/`timestamps`, relation-graph diagnostics, and a guard-naming doc.
@@ -97,16 +108,14 @@ Common server building blocks an app still has to hand-roll. Listed because they
 *load-bearing for real use*, not for completeness — each a well-understood primitive.
 The verdict on what is **not** worth reproducing is in *Not on the roadmap*.
 
-- **Redis-backed rate-limit store** — `nest-rs-throttler` ships with an in-memory
-  fixed-window counter and a `ThrottlerStore` trait; a Redis implementation would
-  share limits across processes, reusing the queue's connection pattern.
 - **Caching** — a `CacheModule` + a response-caching interceptor + an injectable
   `Cache` provider, memory- or Redis-backed.
 - **Streaming uploads** — multipart uploads, streamed download bodies, SSE and
   response compression all ship (poem's `Multipart`, `Body::from_bytes_stream`,
   `SSE`, `HttpConfig.compression`); what remains is streaming a multipart *part*
-  into storage without buffering it whole per field, plus a dedicated size cap
-  for multipart bodies (`max_body_bytes` gates `RawBody`/`Json` only).
+  into storage without buffering it whole per field. (The transport-wide
+  `max_body_bytes` cap that bounds every extractor — bare `Json`/`Multipart`
+  included — now ships.)
 
 ## Shipped — project & release infrastructure
 
@@ -117,9 +126,9 @@ Landed with the first `0.1.0` crates.io release and the first docs push:
   `nest-rs-storage`, held out of the first release — stay `publish = false`.
 - **Release automation** — versions move in **lockstep** (one number for the whole
   workspace, centralised in `[workspace.package]`). Push a `v*.*.*` tag and
-  `.github/workflows/publish.yml` runs `cargo publish --workspace` in dependency
-  order. Independent per-crate versioning waits until crates stabilise at different
-  rates.
+  `.github/workflows/publish.yml` runs an idempotent `cargo workspaces publish`
+  in dependency order. Independent per-crate versioning waits until crates
+  stabilise at different rates.
 - **The `nest-rs` facade crate** — one dependency and one feature set on
   crates.io (`nest-rs`); in code, `use nest_rs::prelude::*;` for the common case.
 - **GitHub organisation** — canonical home at
@@ -153,12 +162,10 @@ companion, and an example app, which a repo-per-crate split would make impossibl
 
 - **Polish the `docs/` site** — CI-verified code snippets, the Basics → All options
   tier split per section, and keeping pages aligned as the API shifts.
-- **Continuous integration** — one workflow on every PR that gates merges:
-  `fmt --check`, `clippy -D warnings`, `build`, and `test --workspace`. The e2e
-  tests exercise live Postgres and Redis, so CI provisions both as service
-  containers. It publishes nothing — its only artifact is a green/red signal.
 - **Scaffolding CLI — remaining generators** — the shipped `nestrs g` surface
-  (see *Shipped*) still lacks `entity`, migrations, and a `nestrs info` command.
+  (see *Shipped*) now includes `migration`; what remains is a dedicated
+  `entity` generator (available today only via `g resource`) and a `nestrs
+  info` command (`nestrs about` already covers most of it).
 
 ## Later — deferred
 

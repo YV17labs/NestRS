@@ -7,22 +7,24 @@ use super::provider::GoogleSocialProvider;
 
 /// Wires the Google provider — same shape as
 /// [`GithubSocialProviderModule`](super::super::github::GithubSocialProviderModule).
-#[derive(Default)]
-pub struct GoogleSocialProviderModule {
-    pinned: Option<GoogleSocialConfig>,
-}
+pub struct GoogleSocialProviderModule;
 
 impl GoogleSocialProviderModule {
     /// `None` loads [`GoogleSocialConfig`] from `NESTRS_SOCIAL__GOOGLE__*`;
     /// `Some(cfg)` pins it in code.
-    pub fn for_root(config: impl Into<Option<GoogleSocialConfig>>) -> Self {
-        Self {
+    pub fn for_root(config: impl Into<Option<GoogleSocialConfig>>) -> GoogleSocialProviderSetup {
+        GoogleSocialProviderSetup {
             pinned: config.into(),
         }
     }
 }
 
-impl DynamicModule for GoogleSocialProviderModule {
+/// The configured import produced by [`GoogleSocialProviderModule::for_root`].
+pub struct GoogleSocialProviderSetup {
+    pinned: Option<GoogleSocialConfig>,
+}
+
+impl DynamicModule for GoogleSocialProviderSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<GoogleSocialProvider, _, _>(|container| async move {

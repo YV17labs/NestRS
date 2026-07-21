@@ -5,25 +5,31 @@ use nest_rs_core::{ContainerBuilder, DynamicModule};
 use super::config::GithubSocialConfig;
 use super::provider::GithubSocialProvider;
 
-/// Wires the GitHub provider. Importing it registers [`GithubSocialConfig`]
-/// (env or pinned) and a factory that builds the [`GithubSocialProvider`] — invalid
-/// config **fails boot naming the provider**. Not importing it leaves the
-/// registered [`SocialProviderEntry`](crate::SocialProviderEntry) inert.
-#[derive(Default)]
-pub struct GithubSocialProviderModule {
-    pinned: Option<GithubSocialConfig>,
-}
+/// Wires the GitHub provider. Always imported with
+/// `GithubSocialProviderModule::for_root(...)`: it registers
+/// [`GithubSocialConfig`] (env or pinned) and a factory that builds the
+/// [`GithubSocialProvider`] — invalid config **fails boot naming the
+/// provider**. Not importing it leaves the registered
+/// [`SocialProviderEntry`](crate::SocialProviderEntry) inert.
+pub struct GithubSocialProviderModule;
 
 impl GithubSocialProviderModule {
-    /// Pin the config in code instead of reading `NESTRS_SOCIAL__GITHUB__*`.
-    pub fn for_root(config: impl Into<Option<GithubSocialConfig>>) -> Self {
-        Self {
+    /// Pass `None` to load [`GithubSocialConfig`] from
+    /// `NESTRS_SOCIAL__GITHUB__*`, or a `GithubSocialConfig` to pin it in code
+    /// (wins over the environment).
+    pub fn for_root(config: impl Into<Option<GithubSocialConfig>>) -> GithubSocialProviderSetup {
+        GithubSocialProviderSetup {
             pinned: config.into(),
         }
     }
 }
 
-impl DynamicModule for GithubSocialProviderModule {
+/// The configured import produced by [`GithubSocialProviderModule::for_root`].
+pub struct GithubSocialProviderSetup {
+    pinned: Option<GithubSocialConfig>,
+}
+
+impl DynamicModule for GithubSocialProviderSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<GithubSocialProvider, _, _>(|container| async move {

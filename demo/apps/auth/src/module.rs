@@ -20,8 +20,8 @@ use features::oauth::OAuthHttpModule;
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
         AuthnModule::for_root(None),
         OAuthHttpModule,
-        GithubSocialProviderModule::default(),
-        GoogleSocialProviderModule::default(),
+        GithubSocialProviderModule::for_root(None),
+        GoogleSocialProviderModule::for_root(None),
     ],
 )]
 pub struct AuthModule;

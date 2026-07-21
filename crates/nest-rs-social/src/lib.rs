@@ -5,7 +5,8 @@
 //! inventory-based [registry](SocialProviders), the base [`SocialModule`], and
 //! two first-party providers (GitHub, Google). A third-party developer
 //! publishes their own provider as an independent crate that depends on this
-//! one, implements [`SocialProvider`], ships a `#[module]`, and submits one
+//! one, implements [`SocialProvider`], ships a `Module`/`Setup` import pair,
+//! and submits one
 //! [`SocialProviderEntry`] to the registry — the exact same public seam the
 //! first-party providers use (dogfooded, no crate-private shortcut).
 //!
@@ -33,5 +34,9 @@ pub use module::SocialModule;
 pub use provider::{ProfileFuture, SocialProfile, SocialProvider, TokenFuture};
 pub use registry::{SocialProviderEntry, SocialProviders};
 
-pub use providers::github::{GithubSocialConfig, GithubSocialProvider, GithubSocialProviderModule};
-pub use providers::google::{GoogleSocialConfig, GoogleSocialProvider, GoogleSocialProviderModule};
+pub use providers::github::{
+    GithubSocialConfig, GithubSocialProvider, GithubSocialProviderModule, GithubSocialProviderSetup,
+};
+pub use providers::google::{
+    GoogleSocialConfig, GoogleSocialProvider, GoogleSocialProviderModule, GoogleSocialProviderSetup,
+};

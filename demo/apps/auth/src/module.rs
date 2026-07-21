@@ -5,7 +5,7 @@ use nest_rs_health::HealthModule;
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_opentelemetry::OpenTelemetryModule;
 use nest_rs_seaorm::DatabaseModule;
-use nest_rs_social::{GithubSocialProviderModule, GoogleSocialProviderModule};
+use nest_rs_social::SocialModule;
 use nest_rs_throttler::ThrottlerModule;
 
 use features::oauth::OAuthHttpModule;
@@ -19,9 +19,8 @@ use features::oauth::OAuthHttpModule;
         HealthModule,
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
         AuthnModule::for_root(None),
+        SocialModule,
         OAuthHttpModule,
-        GithubSocialProviderModule::for_root(None),
-        GoogleSocialProviderModule::for_root(None),
     ],
 )]
 pub struct AuthModule;

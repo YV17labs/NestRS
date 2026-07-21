@@ -7,29 +7,38 @@ use assistant::AssistantModule;
 use nest_rs_authn::JwtConfig;
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_storage::{Storage, StorageConfig};
-use nest_rs_testing::TestApp;
-use serde_json::json;
+use nest_rs_testing::{EphemeralDatabase, TestApp};
 
 use features::testing::{DEV_PUBLIC_KEY, ORG_ID};
 
-pub(crate) async fn boot() -> TestApp {
-    TestApp::builder()
+pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("create + migrate a throwaway database");
+    let app = TestApp::builder()
         .module::<AssistantModule>()
         .with_test_telemetry()
+        .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             ..Default::default()
         })
         .build()
         .await
-        .expect("AssistantModule boots")
+        .expect("AssistantModule boots against the throwaway database");
+    (db, app)
+}
+
+/// A bearer for an arbitrary org — the row-scoping tests need two.
+pub(crate) fn bearer_for(org_id: &str) -> String {
+    format!(
+        "Bearer {}",
+        features::testing::token_for(org_id, "admin", None)
+    )
 }
 
 pub(crate) fn bearer() -> String {
-    format!(
-        "Bearer {}",
-        features::testing::token_for(ORG_ID, "admin", None)
-    )
+    bearer_for(ORG_ID)
 }
 
 pub(crate) fn storage_client() -> Storage {
@@ -47,17 +56,4 @@ pub(crate) async fn ensure_bucket() {
     {
         let _ = reqwest::Client::new().put(&url).send().await;
     }
-}
-
-pub(crate) fn initialize_request() -> serde_json::Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": { "name": "nestrs-e2e", "version": "0" }
-        }
-    })
 }

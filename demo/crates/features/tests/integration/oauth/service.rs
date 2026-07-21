@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use features::oauth::{AuthenticatedClient, IssuerConfig, OAuthService};
 use nest_rs_authn::{JwtOptions, JwtService, TokenError};
-use nest_rs_social::SocialProviders;
+use nest_rs_social::SocialRegistry;
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
@@ -11,7 +11,7 @@ fn oauth_service() -> OAuthService {
         JwtService::new(JwtOptions::new("oauth-grant-test-secret-padded-32b"))
             .expect("jwt service"),
     );
-    let providers = Arc::new(SocialProviders::default());
+    let providers = Arc::new(SocialRegistry::default());
     let users_svc = Arc::new(features::users::UsersService::new(Arc::new(
         DatabaseConnection::default(),
     )));

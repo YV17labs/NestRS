@@ -13,7 +13,7 @@ description = "The product's feature library — vertical slices as port + adapt
 nest-rs-core.workspace = true
 # `#[processor]` (audio queue) emits absolute `::nest_rs_worker::*` paths.
 nest-rs-worker.workspace = true
-nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "ws"] }
+nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "ws", "mcp"] }
 nest-rs-authn.workspace = true
 nest-rs-authz = { workspace = true, features = ["http", "graphql", "mcp"] }
 nest-rs-config.workspace = true

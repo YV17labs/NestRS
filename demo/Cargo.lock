@@ -426,6 +426,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "features",
+ "migrations",
  "nest-rs-authn",
  "nest-rs-config",
  "nest-rs-core",
@@ -433,11 +434,13 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-opentelemetry",
  "nest-rs-redis",
+ "nest-rs-seaorm",
  "nest-rs-server-timing",
  "nest-rs-storage",
  "nest-rs-testing",
  "poem",
  "reqwest 0.13.4",
+ "sea-orm",
  "serde_json",
  "tokio",
  "uuid",
@@ -2765,7 +2768,7 @@ version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -2786,7 +2789,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -2811,7 +2814,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -2839,7 +2842,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -2894,7 +2897,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -2908,6 +2911,7 @@ dependencies = [
  "nest-rs-graphql",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-mcp",
  "nest-rs-pipes",
  "nest-rs-ws",
  "poem",
@@ -2939,7 +2943,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -2970,7 +2974,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -3005,7 +3009,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -3083,7 +3087,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -3113,11 +3117,8 @@ dependencies = [
  "async-graphql",
  "nest-rs-graphql",
  "nest-rs-resource-macros",
- "schemars",
  "sea-orm",
- "serde",
  "serde_json",
- "validator",
 ]
 
 [[package]]
@@ -3127,7 +3128,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -3156,7 +3157,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -3175,6 +3176,7 @@ dependencies = [
  "nest-rs-health",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-mcp",
  "nest-rs-resource",
  "nest-rs-worker",
  "nest-rs-ws",
@@ -3246,6 +3248,7 @@ dependencies = [
  "poem",
  "sea-orm",
  "sea-orm-migration",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3301,7 +3304,7 @@ dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -4777,9 +4780,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm"
-version = "2.0.0-rc.43"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "350a7b21fc90ff973ba45eb72d349192ee537dda2cecee8221c0e884bd547ba9"
+checksum = "549c6d29a2e7a84e35c5dfbc06370a62c4d35f2328c31005267bec586b34f682"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4825,9 +4828,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-cli"
-version = "2.0.0-rc.43"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1f4bc6be93c1636e844aa041449b186435c180a70ff89fffe9d8998e69090bf"
+checksum = "3ec4b7c39c90efa92b8bb0b91ac7159684b9fa0d6371ce39bfab0a9793ce7394"
 dependencies = [
  "chrono",
  "clap",
@@ -4845,9 +4848,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-macros"
-version = "2.0.0-rc.43"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35aca99a640e4e3896104d1ba80201b4e555960b4776fd78874e1ef8142dd0b7"
+checksum = "b4cbb7ae053b9b37c919ea944a3bc52f7830a90c223f8a765c908293bca8f22d"
 dependencies = [
  "heck 0.5.0",
  "itertools 0.14.0",
@@ -4861,9 +4864,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-migration"
-version = "2.0.0-rc.43"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "497f49c482c298e278aa3a8bafdd66efb0c8e9e4be29d095a95ad51e96a1204a"
+checksum = "ef3576c5301b67ea7d2ce4515858d700066e51911c7d228a439c00ff258695c8"
 dependencies = [
  "async-trait",
  "clap",
@@ -5549,6 +5552,17 @@ name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a207d6d6a2b7fc470b80443726053f18a2481b7e1eee970597051596567987a3"
 dependencies = [
  "proc-macro2",
  "quote",

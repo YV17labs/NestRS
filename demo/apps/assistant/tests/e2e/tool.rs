@@ -4,14 +4,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::DiscoveryService;
 use nest_rs_http::HttpEndpointMeta;
-use poem::http::{StatusCode, header};
+use nest_rs_testing::mcp::{initialize_request, open_session, post_message};
+use poem::http::StatusCode;
 use serde_json::json;
 
 use super::harness::*;
 
 #[tokio::test]
 async fn health_live_probe_is_ok() {
-    let app = boot().await;
+    let (_db, app) = boot().await;
     app.http()
         .get("/health/live")
         .send()
@@ -21,7 +22,7 @@ async fn health_live_probe_is_ok() {
 
 #[tokio::test]
 async fn audio_tool_self_mounts_the_mcp_endpoint() {
-    let app = boot().await;
+    let (_db, app) = boot().await;
     let endpoints = DiscoveryService::new(app.container()).meta::<HttpEndpointMeta>();
     assert!(
         endpoints
@@ -33,16 +34,8 @@ async fn audio_tool_self_mounts_the_mcp_endpoint() {
 
 #[tokio::test]
 async fn mcp_endpoint_refuses_an_unauthenticated_request() {
-    let app = boot().await;
-    let resp = app
-        .http()
-        .post("/mcp")
-        .header("host", "localhost")
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .body_json(&initialize_request())
-        .send()
-        .await;
+    let (_db, app) = boot().await;
+    let resp = post_message(app.http(), "/mcp", None, None, &initialize_request()).await;
     assert_eq!(
         resp.0.status(),
         StatusCode::UNAUTHORIZED,
@@ -52,45 +45,13 @@ async fn mcp_endpoint_refuses_an_unauthenticated_request() {
 
 #[tokio::test]
 async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
-    let app = boot().await;
+    let (_db, app) = boot().await;
     ensure_bucket().await;
     let auth = bearer();
 
-    let init = app
-        .http()
-        .post("/mcp")
-        .header("host", "localhost")
-        .header(header::AUTHORIZATION, &auth)
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .body_json(&initialize_request())
-        .send()
-        .await;
-    init.assert_status_is_ok();
-    let session = init
-        .0
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .expect("initialize returns an Mcp-Session-Id header")
-        .to_owned();
-
-    let ack = app
-        .http()
-        .post("/mcp")
-        .header("host", "localhost")
-        .header(header::AUTHORIZATION, &auth)
-        .header("mcp-session-id", &session)
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .body_json(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
-        .send()
-        .await;
-    assert!(
-        ack.0.status().is_success(),
-        "initialized notification is accepted: {}",
-        ack.0.status(),
-    );
+    // `open_session` runs initialize + notifications/initialized; a rejected
+    // handshake would surface as a failing `tools/call` below.
+    let session = open_session(app.http(), "/mcp", Some(&auth)).await;
 
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -106,17 +67,14 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
         })
     };
 
-    let pending = app
-        .http()
-        .post("/mcp")
-        .header("host", "localhost")
-        .header(header::AUTHORIZATION, &auth)
-        .header("mcp-session-id", &session)
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .body_json(&call(2, file.clone()))
-        .send()
-        .await;
+    let pending = post_message(
+        app.http(),
+        "/mcp",
+        Some(&session),
+        Some(&auth),
+        &call(2, file.clone()),
+    )
+    .await;
     pending.assert_status_is_ok();
     let body = pending.0.into_body().into_string().await.expect("sse body");
     assert!(
@@ -133,17 +91,14 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
         .await
         .expect("seed the derived object into live RustFS");
 
-    let ready = app
-        .http()
-        .post("/mcp")
-        .header("host", "localhost")
-        .header(header::AUTHORIZATION, &auth)
-        .header("mcp-session-id", &session)
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .body_json(&call(3, file.clone()))
-        .send()
-        .await;
+    let ready = post_message(
+        app.http(),
+        "/mcp",
+        Some(&session),
+        Some(&auth),
+        &call(3, file.clone()),
+    )
+    .await;
     ready.assert_status_is_ok();
     let body = ready.0.into_body().into_string().await.expect("sse body");
     assert!(

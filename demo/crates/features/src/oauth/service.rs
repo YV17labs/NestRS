@@ -4,7 +4,7 @@ use nest_rs_authn::{
     AuthError, Authorization, JwtService, TokenError, authenticate_against_registry,
 };
 use nest_rs_core::injectable;
-use nest_rs_social::{SocialProfile, SocialProviders};
+use nest_rs_social::{SocialProfile, SocialRegistry};
 use uuid::Uuid;
 
 use super::config::IssuerConfig;
@@ -33,7 +33,7 @@ pub struct OAuthService {
     #[inject]
     jwt_svc: Arc<JwtService>,
     #[inject]
-    providers: Arc<SocialProviders>,
+    providers: Arc<SocialRegistry>,
     #[inject]
     users_svc: Arc<UsersService>,
     #[inject]
@@ -43,7 +43,7 @@ pub struct OAuthService {
 impl OAuthService {
     pub fn new(
         jwt_svc: Arc<JwtService>,
-        providers: Arc<SocialProviders>,
+        providers: Arc<SocialRegistry>,
         users_svc: Arc<UsersService>,
         config: Arc<IssuerConfig>,
     ) -> Self {
@@ -329,7 +329,7 @@ mod tests {
     }
 
     use nest_rs_authn::RegisteredClient;
-    use nest_rs_social::SocialProviders;
+    use nest_rs_social::SocialRegistry;
     use sea_orm::DatabaseConnection;
 
     use crate::users::UsersService;
@@ -340,7 +340,7 @@ mod tests {
 
     fn oauth_service(ttl: Duration) -> OAuthService {
         let jwt_svc = Arc::new(jwt_with_ttl(ttl));
-        let providers = Arc::new(SocialProviders::default());
+        let providers = Arc::new(SocialRegistry::default());
         let config = Arc::new(IssuerConfig {
             clients: vec![RegisteredClient {
                 client_id: "ci".into(),

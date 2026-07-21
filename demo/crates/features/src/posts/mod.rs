@@ -6,6 +6,7 @@ mod service;
 
 pub mod graphql;
 pub mod http;
+pub mod mcp;
 
 pub use entity::*;
 pub use error::PostError;
@@ -15,3 +16,4 @@ pub use service::PostsService;
 
 pub use graphql::{PostsGraphqlModule, PostsResolver};
 pub use http::{PostsController, PostsHttpModule};
+pub use mcp::{PostsMcpModule, PostsTool};

@@ -10,10 +10,9 @@ use syn::punctuated::Punctuated;
 use syn::{ItemStruct, LitStr, Meta, Path, Token, parse_macro_input};
 
 use nest_rs_codegen::{
-    InjectableBody, build_injectable_body, from_container_method, injected_keys_with_layers,
+    InjectableBody, build_injectable_body, expr_str, from_container_method,
+    injected_keys_with_layers, take_path_list,
 };
-
-use crate::attr::{expr_str, take_use_attr};
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let (path_lit, version) = match parse_controller_args(args.into()) {
@@ -27,23 +26,24 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemStruct);
 
     // Inert class-level attributes consumed here; each must sit below `#[controller]`.
-    let interceptors = match take_use_attr(&mut item.attrs, "use_interceptors") {
+    let interceptors = match take_path_list(&mut item.attrs, "use_interceptors", "entry") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
-    let guards = match take_use_attr(&mut item.attrs, "use_guards") {
+    let guards = match take_path_list(&mut item.attrs, "use_guards", "entry") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
-    let filters = match take_use_attr(&mut item.attrs, "use_filters") {
+    let filters = match take_path_list(&mut item.attrs, "use_filters", "entry") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
-    let pipes = match take_use_attr(&mut item.attrs, "use_pipes") {
+    let pipes = match take_path_list(&mut item.attrs, "use_pipes", "entry") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
-    let exception_filters = match take_use_attr(&mut item.attrs, "use_exception_filters") {
+    let exception_filters = match take_path_list(&mut item.attrs, "use_exception_filters", "entry")
+    {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };

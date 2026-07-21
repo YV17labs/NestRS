@@ -11,12 +11,14 @@
 #![warn(missing_docs)]
 
 mod args;
+mod attrs;
 mod casing;
 mod crud;
 mod inject;
 mod ty;
 
 pub use args::{parse_named_str_arg, require_str_lit};
+pub use attrs::{expr_str, reject_http_only_layers, take_flag_attr, take_path_list};
 pub use casing::{pascal_case, snake_case};
 pub use crud::{CrudConfig, Paginate, parse_crud_args, singular_of};
 pub use inject::{

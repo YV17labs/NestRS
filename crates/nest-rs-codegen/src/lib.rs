@@ -15,6 +15,7 @@ mod attrs;
 mod casing;
 mod crud;
 mod inject;
+mod specs;
 mod ty;
 
 pub use args::{parse_named_str_arg, require_str_lit};
@@ -27,4 +28,5 @@ pub use inject::{
     injected_keyed_method, injected_keys_with_layers, injected_method, injected_method_with_layers,
     injected_names_method, layer_inject_keys, optional_dependencies_method,
 };
+pub use specs::{force_guard_typeids, scoped_specs};
 pub use ty::{impl_self_ident, nth_generic_type};

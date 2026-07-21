@@ -11,9 +11,10 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    InjectableBody, build_injectable_body, forwarded_arg_idents, forwarded_idents,
-    from_container_method, impl_self_ident, injected_keys_with_layers, injected_method_with_layers,
-    layer_inject_keys, reject_http_only_layers, take_flag_attr, take_path_list,
+    InjectableBody, build_injectable_body, force_guard_typeids, forwarded_arg_idents,
+    forwarded_idents, from_container_method, impl_self_ident, injected_keys_with_layers,
+    injected_method_with_layers, layer_inject_keys, reject_http_only_layers, scoped_specs,
+    take_flag_attr, take_path_list,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -70,7 +71,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     // together with method guards and `#[field_resolver]` `&Service`
     // deps. Same struct/impl split as `#[controller]`/`#[routes]`.
     let injected_keys = injected_keys_with_layers(&dep_keys, guards.iter());
-    let guard_specs = graphql_guard_specs(&guards);
+    let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
 
     // Resolver-membership marker so the boot can require this resolver be
     // listed in a reachable module's `providers` (its schema presence is
@@ -428,7 +429,7 @@ fn layered_resolver_chain(
     needs_global: bool,
 ) -> TokenStream2 {
     let label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
-    let method_specs = graphql_guard_specs(method_guards);
+    let method_specs = scoped_specs(method_guards, quote!(dyn ::nest_rs_guards::Guard));
     let force_typeids = force_guard_typeids(force_guards);
     if !needs_global && method_guards.is_empty() && force_guards.is_empty() {
         // Bare-return resolver with no method/force guards. Bare-return
@@ -452,33 +453,6 @@ fn layered_resolver_chain(
             ).await?;
         }
     }
-}
-
-fn graphql_guard_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec![] };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec![] };
-    }
-    let entries = paths
-        .iter()
-        .map(|p| quote! { ::core::any::TypeId::of::<#p>() });
-    quote! { ::std::vec![#(#entries),*] }
 }
 
 /// `#[resolver]` on the impl: split `#[query]`/`#[mutation]` methods into

@@ -12,8 +12,9 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    expr_str, forwarded_arg_idents, impl_self_ident, injected_method_with_layers,
-    layer_inject_keys, nth_generic_type, take_flag_attr, take_path_list,
+    expr_str, force_guard_typeids, forwarded_arg_idents, impl_self_ident,
+    injected_method_with_layers, layer_inject_keys, nth_generic_type, scoped_specs, take_flag_attr,
+    take_path_list,
 };
 
 use crate::attr::opt_str;
@@ -516,7 +517,10 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         },
         None => quote! { ::nest_rs_http::mask_probed(#wrapper, #route_label_lit) },
     };
-    let method_exception_filter_specs = exception_filter_specs(method_exception_filters);
+    let method_exception_filter_specs = scoped_specs(
+        method_exception_filters,
+        quote!(dyn ::nest_rs_exception_filters::ExceptionFilterErased),
+    );
     expr = quote! {
         ::nest_rs_guards::dispatch::wrap_route_exception_filters(
             container,
@@ -526,7 +530,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
             #route_label_lit,
         )
     };
-    let method_filter_specs = filter_specs(filters);
+    let method_filter_specs = scoped_specs(filters, quote!(dyn ::nest_rs_filters::Filter));
     expr = quote! {
         ::nest_rs_guards::dispatch::wrap_route_filters(
             container,
@@ -536,7 +540,10 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
             #route_label_lit,
         )
     };
-    let method_interceptor_specs = interceptor_specs(interceptors);
+    let method_interceptor_specs = scoped_specs(
+        interceptors,
+        quote!(dyn ::nest_rs_interceptors::Interceptor),
+    );
     expr = quote! {
         ::nest_rs_guards::dispatch::wrap_route_interceptors(
             container,
@@ -551,9 +558,9 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     // guards reading `#[meta(...)]` via `Reflector` see it; outside the
     // per-route layer wraps so a denial short-circuits before any
     // handler-side work.
-    let method_guard_specs = guard_specs(guards);
+    let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
     let force_guard_typeids = force_guard_typeids(force_guards);
-    let method_pipe_specs = pipe_specs(method_pipes);
+    let method_pipe_specs = scoped_specs(method_pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
     let no_pipes_flag = if *no_pipes {
         quote!(true)
     } else {
@@ -607,113 +614,6 @@ pub(crate) fn guard_path_is_throttler(path: &Path) -> bool {
     path.segments
         .last()
         .is_some_and(|seg| seg.ident == "ThrottlerGuard")
-}
-
-/// Build the `Vec<ScopedGuardSpec>` for the method-level guards. Each entry
-/// captures the type id + resolver fn — the interceptor calls them at first
-/// request.
-fn guard_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec![] };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-/// Build the `Vec<ScopedPipeSpec>` for the method-level pipes.
-fn pipe_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec![] };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_pipes::GlobalPipe>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-/// Build the `Vec<ScopedExceptionFilterSpec>` for the method-level
-/// exception filters. Each entry erases the filter to
-/// `dyn ExceptionFilterErased` via its blanket impl.
-fn exception_filter_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec![] };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_exception_filters::ExceptionFilterErased>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-fn force_guard_typeids(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec![] };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! { ::core::any::TypeId::of::<#p>() }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-/// Build the `Vec<ScopedInterceptorSpec>` for method-level interceptors. The
-/// per-route pool composer (`wrap_route_interceptors`) dedups them against the
-/// controller + global scopes by `TypeId`.
-fn interceptor_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec![] };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-/// Build the `Vec<ScopedFilterSpec>` for method-level filters. Deduped against
-/// controller + global by `wrap_route_filters`.
-fn filter_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec![] };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_filters::Filter>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
 }
 
 #[derive(Default)]

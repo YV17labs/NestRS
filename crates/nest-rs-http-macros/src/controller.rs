@@ -7,11 +7,11 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{ItemStruct, LitStr, Meta, Path, Token, parse_macro_input};
+use syn::{ItemStruct, LitStr, Meta, Token, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, expr_str, from_container_method,
-    injected_keys_with_layers, take_path_list,
+    injected_keys_with_layers, scoped_specs, take_path_list,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -79,15 +79,21 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // System dedup via `__nestrs_controller_guard_specs()`; the wrap below
     // simply boxes the endpoint without adding a guard, so we'd otherwise drop
     // the helper entirely. We keep the box for type stability across handlers.
-    let interceptor_specs = controller_interceptor_specs(&interceptors);
-    let filter_specs = controller_filter_specs(&filters);
-    let guard_specs = controller_guard_specs(&guards);
+    let interceptor_specs = scoped_specs(
+        &interceptors,
+        quote!(dyn ::nest_rs_interceptors::Interceptor),
+    );
+    let filter_specs = scoped_specs(&filters, quote!(dyn ::nest_rs_filters::Filter));
+    let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     // Does a controller-level `#[use_guards]` include `ThrottlerGuard`? `#[routes]`
     // reads this to advertise `429` for every route the controller throttles
     // (OAPI-O4) — a compile-time bool, so the check is free at runtime.
     let controller_has_throttler = guards.iter().any(crate::routes::guard_path_is_throttler);
-    let pipe_specs = controller_pipe_specs(&pipes);
-    let exception_filter_specs = controller_exception_filter_specs(&exception_filters);
+    let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
+    let exception_filter_specs = scoped_specs(
+        &exception_filters,
+        quote!(dyn ::nest_rs_exception_filters::ExceptionFilterErased),
+    );
 
     quote! {
         #item
@@ -195,101 +201,4 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitS
         )
     })?;
     Ok((path, version))
-}
-
-/// Controller-level `#[use_interceptors(...)]` → `Vec<ScopedInterceptorSpec>`
-/// so `#[routes]` composes each interceptor into the per-route pool
-/// (`wrap_route_interceptors`), deduped by `TypeId` against global + method.
-fn controller_interceptor_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec::Vec::new() };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-/// Controller-level `#[use_filters(...)]` → `Vec<ScopedFilterSpec>`. Same
-/// dedup path as `controller_interceptor_specs`.
-fn controller_filter_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec::Vec::new() };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_filters::Filter>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-/// Controller-level `#[use_guards(...)]` → `Vec<ScopedGuardSpec>` so `#[routes]`
-/// folds each guard into the per-route `RouteShaper` and the Layer
-/// System dedup sees the controller scope.
-fn controller_guard_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec::Vec::new() };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-/// Controller-level `#[use_pipes(...)]` → `Vec<ScopedPipeSpec>`.
-fn controller_pipe_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec::Vec::new() };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_pipes::GlobalPipe>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
-}
-
-/// Controller-level `#[use_exception_filters(...)]` →
-/// `Vec<ScopedExceptionFilterSpec>`. Each entry erases the filter to
-/// `dyn ExceptionFilterErased` via its blanket impl.
-fn controller_exception_filter_specs(paths: &[Path]) -> TokenStream2 {
-    if paths.is_empty() {
-        return quote! { ::std::vec::Vec::new() };
-    }
-    let entries = paths.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
-                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_exception_filters::ExceptionFilterErased>),
-            }
-        }
-    });
-    quote! { ::std::vec![#(#entries),*] }
 }

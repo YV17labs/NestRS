@@ -29,7 +29,7 @@
 //!
 //! This interceptor does **not** retry — it cannot: a poem `Request` is
 //! consumed by `next.run` and is not replayable at this layer. When
-//! [`DatabaseConfig::retry_serialization_conflicts`] is on, a commit that fails
+//! [`DatabaseConfig::observe_serialization_conflicts`] is on, a commit that fails
 //! with a SQLSTATE the [`retry`](crate::retry) module recognizes is merely
 //! *tagged* — logged at `warn` as a serialization conflict for observability —
 //! then the request still fails closed (`500`). To actually retry a conflicting
@@ -109,20 +109,20 @@ impl Interceptor for DbContext {
             }
             FinalizeOutcome::CommitFailed(err) => Err(commit_failure(
                 err,
-                self.config.retry_serialization_conflicts,
+                self.config.observe_serialization_conflicts,
             )),
         }
     }
 }
 
-/// Classify a commit-time failure. When `retry_conflicts` is on, a typed
+/// Classify a commit-time failure. When `observe_conflicts` is on, a typed
 /// SQLSTATE matched by [`CommitError::is_retryable_conflict`] is tagged at
 /// `warn` for observability — the interceptor does **not** retry (the handler
 /// body is not replayable here; use `retry::retry_on_conflict` at a
 /// programmatic transaction boundary); anything else logs at `error`. Either
 /// way the response fails closed.
-fn commit_failure(err: CommitError, retry_conflicts: bool) -> Error {
-    if retry_conflicts && err.is_retryable_conflict() {
+fn commit_failure(err: CommitError, observe_conflicts: bool) -> Error {
+    if observe_conflicts && err.is_retryable_conflict() {
         tracing::warn!(
             target: "nest_rs::orm",
             error = %err,

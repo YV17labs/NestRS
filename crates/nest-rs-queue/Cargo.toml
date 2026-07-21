@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Backend-agnostic queue contract for nestrs: traits and the link-time #[process] registry that any backend (Redis via nest-rs-redis, SQS, NATS, in-memory) plugs into."
+description = "Backend-agnostic queue contract for NestRS: traits and the link-time #[process] registry a backend plugs into. Redis ships first-party in nest-rs-redis, and the same public seam carries any other store."
 
 
 [dependencies]

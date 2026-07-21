@@ -1,0 +1,45 @@
+error[E0277]: `Rc<()>` cannot be sent between threads safely
+  --> tests/integration/diagnostics/dynamic_import_not_send.rs:26:1
+   |
+26 | #[module(imports = [NotSendModule::for_root()])]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Rc<()>` cannot be sent between threads safely
+   |
+   = help: within `NotSendSetup`, the trait `Send` is not implemented for `Rc<()>`
+note: required because it appears within the type `NotSendSetup`
+  --> tests/integration/diagnostics/dynamic_import_not_send.rs:19:8
+   |
+19 | struct NotSendSetup {
+   |        ^^^^^^^^^^^^
+note: required by a bound in `ContainerBuilder::register_dynamic_import`
+  --> src/container.rs
+   |
+   |     pub fn register_dynamic_import<D, F>(
+   |            ----------------------- required by a bound in this associated function
+...
+   |         D: DynamicModule + Send + 'static,
+   |                            ^^^^ required by this bound in `ContainerBuilder::register_dynamic_import`
+   = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `Rc<()>` cannot be sent between threads safely
+  --> tests/integration/diagnostics/dynamic_import_not_send.rs:26:21
+   |
+26 | #[module(imports = [NotSendModule::for_root()])]
+   | --------------------^^^^^^^^^^^^^^^^^^^^^^^^^---
+   | |                   |
+   | |                   `Rc<()>` cannot be sent between threads safely
+   | required by a bound introduced by this call
+   |
+   = help: within `NotSendSetup`, the trait `Send` is not implemented for `Rc<()>`
+note: required because it appears within the type `NotSendSetup`
+  --> tests/integration/diagnostics/dynamic_import_not_send.rs:19:8
+   |
+19 | struct NotSendSetup {
+   |        ^^^^^^^^^^^^
+note: required by a bound in `ContainerBuilder::collect_dynamic_import`
+  --> src/container.rs
+   |
+   |     pub fn collect_dynamic_import<D>(mut self, module: TypeId, index: usize, value: D) -> Self
+   |            ---------------------- required by a bound in this associated function
+   |     where
+   |         D: DynamicModule + Send + 'static,
+   |                            ^^^^ required by this bound in `ContainerBuilder::collect_dynamic_import`

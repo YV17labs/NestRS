@@ -1,22 +1,22 @@
-//! [`SocialModule`] — the base module. Importing it provides
-//! [`SocialProviders`]; importing a provider module (e.g.
-//! `GithubSocialProviderModule`) makes that provider reachable so the registry picks
-//! it up at bootstrap.
+//! [`SocialModule`] — the module that owns the social provider registry, and
+//! the only import a social login needs. It provides [`SocialRegistry`]; at
+//! bootstrap the registry activates every linked provider whose credentials
+//! are configured.
 
 use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_core::{Container, LifecycleHook, LifecyclePhase, module};
 
-use crate::registry::SocialProviders;
+use crate::registry::SocialRegistry;
 
-/// Provides the [`SocialProviders`] registry. Import it (plus each provider
-/// crate) so reachable social providers are discovered and validated at boot.
-#[module(providers = [SocialProviders])]
+/// Provides the [`SocialRegistry`]. Import it once so every linked, configured
+/// social provider is discovered and validated at boot.
+#[module(providers = [SocialRegistry])]
 pub struct SocialModule;
 
-// Resolve + validate the reachable providers once the container is assembled,
-// then stash the map on `SocialProviders`. Same lifecycle-hook seam as
+// Resolve + validate the configured providers once the container is assembled,
+// then stash the map on `SocialRegistry`. Same lifecycle-hook seam as
 // `HealthModule::install_container`. Self-gates on the service being present,
 // so it opts out of the inert-hook warn with `present: |_| true`.
 nest_rs_core::inventory::submit! {
@@ -31,7 +31,7 @@ nest_rs_core::inventory::submit! {
 
 fn install(container: &Container) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
-        match container.get::<SocialProviders>() {
+        match container.get::<SocialRegistry>() {
             Some(providers) => providers.install(container),
             None => Ok(()),
         }

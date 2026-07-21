@@ -40,11 +40,16 @@ pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
                 builder.attach_meta::<#name, ::nest_rs_http::HttpEndpointMeta>(
                     ::nest_rs_http::HttpEndpointMeta::new(#path, "mcp", |__c, __r| {
                         let __cc = __c.clone();
-                        let __guard = __c.get_dyn::<dyn ::nest_rs_mcp::McpOperationGuard>();
+                        // Registered bridge → global guard pool → deny-all, in
+                        // one place (the crate), so the mount order is testable
+                        // rather than macro-expanded.
+                        let __guard = ::nest_rs_mcp::resolve_operation_guard(__c);
+                        let __context = __c.get_dyn::<dyn ::nest_rs_mcp::McpToolContext>();
                         __r.nest(
                             #path,
                             ::nest_rs_mcp::endpoint_with_guard(
                                 __guard,
+                                __context,
                                 move || <#name>::from_container(&__cc),
                             ),
                         )

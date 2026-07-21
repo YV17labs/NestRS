@@ -4,7 +4,7 @@
 
 use nest_rs_authz::Action;
 use nest_rs_seaorm::{Executor, scope_for, with_request_executor};
-use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter};
 
 mod widget {
     use sea_orm::entity::prelude::*;
@@ -24,29 +24,21 @@ mod widget {
 }
 
 /// Connect and make sure the probe table exists with its two rows. The DDL +
-/// seed run once per process (concurrent `CREATE TABLE IF NOT EXISTS` races
-/// the Postgres catalog).
+/// seed are serialized in Postgres, not per process — nextest gives each test
+/// its own, so concurrent `CREATE TABLE IF NOT EXISTS` would race the catalog.
 async fn db() -> DatabaseConnection {
-    static SETUP: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
     let conn = crate::harness::connect().await;
-    SETUP
-        .get_or_init(|| async {
-            conn.execute_unprepared(
-                "CREATE TABLE IF NOT EXISTS scope_probe_widgets (
-                    id INT PRIMARY KEY,
-                    name TEXT NOT NULL
-                )",
-            )
-            .await
-            .expect("create the probe table");
-            conn.execute_unprepared(
-                "INSERT INTO scope_probe_widgets (id, name) VALUES (1, 'a'), (2, 'b')
-                 ON CONFLICT (id) DO NOTHING",
-            )
-            .await
-            .expect("seed the probe rows");
-        })
-        .await;
+    crate::harness::setup_shared_table(
+        &conn,
+        "scope_probe_widgets",
+        "CREATE TABLE IF NOT EXISTS scope_probe_widgets (
+            id INT PRIMARY KEY,
+            name TEXT NOT NULL
+        );
+         INSERT INTO scope_probe_widgets (id, name) VALUES (1, 'a'), (2, 'b')
+         ON CONFLICT (id) DO NOTHING;",
+    )
+    .await;
     conn
 }
 

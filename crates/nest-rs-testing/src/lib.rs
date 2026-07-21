@@ -13,6 +13,7 @@
 mod app;
 mod env;
 mod headless;
+pub mod mcp;
 
 #[cfg(feature = "orm")]
 mod database;

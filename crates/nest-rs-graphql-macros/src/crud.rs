@@ -131,13 +131,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     ::core::result::Result::Ok(__rows.iter().map(#output::from).collect())
                 }
             },
-            Paginate::Page => {
-                return Err(syn::Error::new(
-                    cfg.paginate_span,
-                    "#[crud] GraphQL list does not yet support `paginate = page` (offset); \
-                     use `paginate = cursor` (the default) or `paginate = none`",
-                ));
-            }
         };
         generated.push(list_method);
     }

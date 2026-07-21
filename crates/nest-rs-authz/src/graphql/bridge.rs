@@ -10,7 +10,7 @@ use nest_rs_graphql::{BoxFuture, GraphqlOperationGuard};
 use nest_rs_guards::{Guard, denial_to_http_response};
 use poem::{Request, Response};
 
-use crate::{Ability, with_ability};
+use crate::{Ability, run_ability_chain, with_ability};
 
 /// Runs the controllers' guard chain (`A` then `G`) on the GraphQL request and
 /// scopes the operation to the resulting ability.
@@ -25,19 +25,12 @@ pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
 impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
         Box::pin(async move {
-            // Each guard logs its own denial at the source layer — `AuthnGuard`
-            // under `nest_rs::authn`, `AbilityGuard` under `nest_rs::authz` — so
-            // the bridge only maps the denial to a response (the event is said
-            // once, at its source).
-            self.auth
-                .check_http(req)
+            // The ordering itself lives in `run_ability_chain` (shared with the
+            // MCP bridge); this side only maps the denial to its transport
+            // error — a `Response` here, a `poem::Error` there.
+            run_ability_chain(&*self.auth, &*self.ability, req)
                 .await
-                .map_err(denial_to_http_response)?;
-            self.ability
-                .check_http(req)
-                .await
-                .map_err(denial_to_http_response)?;
-            Ok(())
+                .map_err(denial_to_http_response)
         })
     }
 

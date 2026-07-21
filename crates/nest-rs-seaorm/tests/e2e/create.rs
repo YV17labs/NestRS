@@ -9,9 +9,7 @@ use std::sync::Arc;
 use nest_rs_authz::{AbilityBuilder, Action, with_ability};
 use nest_rs_seaorm::{Creatable, CreateModel, CrudService, Executor, with_request_executor};
 use sea_orm::prelude::Uuid;
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set};
 
 mod gadget {
     use sea_orm::entity::prelude::*;
@@ -55,23 +53,18 @@ impl Creatable for GadgetsService {
 }
 
 async fn db() -> DatabaseConnection {
-    // Both tests race this setup; `CREATE TABLE IF NOT EXISTS` is not
-    // concurrency-safe at the Postgres catalog level, so run the DDL once
-    // per process.
-    static TABLE: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    // Both tests race this setup, and nextest runs each in its own process, so
+    // the serialization has to happen in Postgres — see `setup_shared_table`.
     let conn = crate::harness::connect().await;
-    TABLE
-        .get_or_init(|| async {
-            conn.execute_unprepared(
-                "CREATE TABLE IF NOT EXISTS create_scope_gadgets (
-                    id UUID PRIMARY KEY,
-                    org_id INT NOT NULL
-                )",
-            )
-            .await
-            .expect("create the test table");
-        })
-        .await;
+    crate::harness::setup_shared_table(
+        &conn,
+        "create_scope_gadgets",
+        "CREATE TABLE IF NOT EXISTS create_scope_gadgets (
+            id UUID PRIMARY KEY,
+            org_id INT NOT NULL
+        );",
+    )
+    .await;
     conn
 }
 

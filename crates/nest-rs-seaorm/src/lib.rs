@@ -19,6 +19,8 @@
 #![warn(missing_docs)]
 
 mod config;
+#[cfg(any(feature = "ws", feature = "mcp"))]
+mod dispatch;
 mod error;
 mod executor;
 mod module;
@@ -37,6 +39,8 @@ pub mod graphql;
 mod health;
 #[cfg(feature = "http")]
 mod http;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 #[cfg(feature = "ws")]
 pub mod ws;
 

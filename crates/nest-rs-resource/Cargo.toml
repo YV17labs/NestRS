@@ -21,12 +21,14 @@ nest-rs-resource-macros.workspace = true
 async-graphql = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 sea-orm.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-schemars.workspace = true
-validator.workspace = true
 
 [dev-dependencies]
+# `#[expose]` emits `::serde::`/`::schemars::`/`::validator::` paths that resolve
+# in the *consuming* crate, so this crate needs them only to compile its own
+# test fixtures — never as a dependency it imposes on consumers.
+serde.workspace = true
+schemars.workspace = true
 # Path-only, never `.workspace = true`: `nest-rs-seaorm` depends back on this
 # crate, so a versioned dev-edge would form a member cycle no publish order can
 # satisfy. Cargo strips a versionless dev-dep from the published manifest.

@@ -16,6 +16,9 @@ graphql = ["dep:nest-rs-graphql"]
 # WebSocket surface: the `check_ws_message` guard entry, `GuardAsWsMessageCheck`
 # bridge, the per-message chain runner, and the `WsDataPipe` global-pipe fold.
 ws = ["dep:nest-rs-ws"]
+# MCP surface: `GlobalPoolMcpGuard`, the fallback `McpOperationGuard` that folds
+# the global pool in-band on `/mcp` (the twin of the `/graphql` fallback).
+mcp = ["dep:nest-rs-mcp"]
 
 [dependencies]
 async-trait.workspace = true
@@ -25,6 +28,7 @@ poem.workspace = true
 nest-rs-core.workspace = true
 nest-rs-http.workspace = true
 nest-rs-graphql = { workspace = true, optional = true }
+nest-rs-mcp = { workspace = true, optional = true }
 nest-rs-interceptors.workspace = true
 nest-rs-pipes.workspace = true
 nest-rs-ws = { workspace = true, optional = true }

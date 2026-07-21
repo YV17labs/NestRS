@@ -1,10 +1,9 @@
-use std::sync::Arc;
-
 use nest_rs_authn::{AuthError, OAuth2Client, TokenSet};
 use serde::Deserialize;
 
+use super::config::GithubSocialConfig;
 use crate::provider::{ProfileFuture, SocialProfile, SocialProvider};
-use crate::registry::SocialProviderEntry;
+use crate::registry::{SocialProviderEntry, resolve_provider};
 
 /// The GitHub social provider. Holds the shared [`OAuth2Client`] and overrides
 /// only [`SocialProvider::profile`] — the redirect and code-exchange legs use
@@ -104,9 +103,15 @@ impl SocialProvider for GithubSocialProvider {
 nest_rs_core::inventory::submit! {
     SocialProviderEntry {
         key: GithubSocialProvider::KEY,
-        provider_type_id: || std::any::TypeId::of::<GithubSocialProvider>(),
         provider_type_name: || std::any::type_name::<GithubSocialProvider>(),
-        resolve: |c| c.get::<GithubSocialProvider>().map(|p| p as Arc<dyn SocialProvider>),
+        config_namespace: <GithubSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
+        build: |container| {
+            resolve_provider::<GithubSocialProvider, GithubSocialConfig>(container, |config| {
+                let client = OAuth2Client::new(config.oauth2_config())
+                    .map_err(|e| anyhow::anyhow!("invalid GitHub OAuth2 client config: {e}"))?;
+                Ok(GithubSocialProvider::new(client))
+            })
+        },
     }
 }
 

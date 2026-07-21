@@ -42,11 +42,19 @@ graphql = [
     "nest-rs-resource/graphql",
     "dep:poem",
 ]
-# MCP surface: the operation-guard ability bridge (`McpAbilityBridge`).
+# MCP surface: the operation-guard ability bridge (`McpAbilityBridge`), which
+# runs the guard chain and installs the ambient ability for the operation.
+# Masking inside a tool body is the transport-free `masked_output_ambient`. The
+# data context that makes `Repo` work inside a tool body is
+# `nest_rs_seaorm::McpDataContext`, behind that crate's `mcp` feature.
+# `nest-rs-guards/mcp` is forwarded for the same reason the GraphQL binding
+# forwards `nest-rs-guards/graphql`: it is what seeds the in-band fallback
+# (`GlobalPoolMcpGuard`) so `use_guards_global` reaches `/mcp`.
 mcp = [
     "dep:nest-rs-core",
     "dep:nest-rs-mcp",
     "dep:nest-rs-guards",
+    "nest-rs-guards/mcp",
     "dep:poem",
 ]
 # Enable every transport binding at once — useful for
@@ -82,6 +90,13 @@ nest-rs-ws = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Self dev-dependency: turn on every transport binding for this crate's own
+# test targets. Without it `cargo nextest run --workspace` (the Definition of
+# done) builds this crate with `default = []`, so every `#[cfg(feature = …)]`
+# bridge test in `tests/integration/` compiles away — the http / graphql / mcp
+# suites would exist but never run. Dev-deps do not propagate, so no consumer
+# gains a feature from this.
+nest-rs-authz = { path = ".", features = ["full"] }
 # Engine-only tests: `tests/ability.rs` builds a throwaway SeaORM entity and
 # renders `condition_for` to SQL; the masking tests serialize a model via serde.
 sea-orm.workspace = true
@@ -98,6 +113,9 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
 # since the generated `#[Object]` code names `async_graphql::` paths.
 async-graphql.workspace = true
+# Same rule for the MCP bridge test's tool host: the rmcp `#[tool_router]` /
+# `#[tool_handler]` macros (re-exported by nest-rs-mcp) expand to `rmcp::` paths.
+rmcp.workspace = true
 serde_json.workspace = true
 # The alias pin-test's un-shaped routes emit an OpenAPI response schema, which
 # puts a `JsonSchema` bound on their `Json<T>` payloads.

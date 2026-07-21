@@ -15,6 +15,10 @@
 mod ability;
 mod action;
 mod builder;
+// The shared per-operation guard chain: only the two `Exempt`-edge transports
+// run it themselves (HTTP gates in the route shaper's pool instead).
+#[cfg(any(feature = "graphql", feature = "mcp"))]
+mod chain;
 mod context;
 mod factory;
 mod mask;
@@ -26,6 +30,8 @@ mod wire_mask;
 pub use ability::{Ability, FieldSet, MalformedRuleError};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, RuleSpec};
+#[cfg(any(feature = "graphql", feature = "mcp"))]
+pub use chain::run_ability_chain;
 pub use context::{current_ability, with_ability};
 pub use factory::AbilityFactory;
 pub use mask::masked_output_ambient;

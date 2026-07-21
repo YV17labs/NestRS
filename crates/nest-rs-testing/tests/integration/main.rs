@@ -16,5 +16,6 @@ mod reflector;
 mod request_scope;
 mod strict_resolver_membership;
 mod transient_scope;
+mod transport_parity;
 mod versioning_filters;
 mod ws_gateway_guards;

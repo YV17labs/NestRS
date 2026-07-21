@@ -3,5 +3,6 @@
 mod body_limit;
 mod compression;
 mod diagnostics;
+mod exclusive_paths;
 mod global_prefix;
 mod route_decorators;

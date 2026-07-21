@@ -12,3 +12,6 @@ mod http;
 
 #[cfg(feature = "graphql")]
 mod graphql;
+
+#[cfg(feature = "mcp")]
+mod mcp;

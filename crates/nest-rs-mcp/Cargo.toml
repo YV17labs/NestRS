@@ -8,7 +8,6 @@ repository.workspace = true
 homepage.workspace = true
 description = "Model Context Protocol server support for nestrs — wraps the rmcp SDK behind the nestrs DI container and exposes a poem endpoint."
 
-
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-mcp-macros.workspace = true
@@ -25,8 +24,17 @@ tracing.workspace = true
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }
 nest-rs-http = { path = "../nest-rs-http" }
+# The fallback-guard tests drive `use_guards_global` onto `/mcp` through
+# `GlobalPoolMcpGuard`, which lives behind guards' `mcp` feature. Dev-dep cycle
+# (guards/mcp depends on this crate) is allowed by Cargo, same as
+# nest-rs-graphql ↔ nest-rs-guards.
+nest-rs-guards = { path = "../nest-rs-guards", features = ["mcp"] }
+# A real `ThrottlerGuard` in the global pool proves the fallback carries a
+# non-authn guard's `429` — the behaviour `/mcp` could not have before.
+nest-rs-throttler = { path = "../nest-rs-throttler" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 poem = { workspace = true, features = ["test"] }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

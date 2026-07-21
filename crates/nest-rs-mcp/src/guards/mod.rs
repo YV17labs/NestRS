@@ -7,4 +7,4 @@ mod allow;
 mod deny;
 
 pub use allow::AllowAllMcpGuard;
-pub(crate) use deny::DenyAllMcpGuard;
+pub(crate) use deny::deny_all;

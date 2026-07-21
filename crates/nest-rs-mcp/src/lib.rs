@@ -7,40 +7,49 @@
 //! by listing the `#[mcp]`-decorated provider — no `<Transport>Module`
 //! activation seam to import.
 //!
-//! # 1.0 limitation — request-scoped state does not reach a tool body
+//! # Ambient request state reaches a tool body
 //!
-//! The guard chain is fully enforced: an MCP endpoint is **deny-all** without
-//! an explicit [`McpOperationGuard`], and `McpAbilityBridge` returns `401`
-//! without a valid token. What does **not** work in 1.0 is *transparent
-//! per-operation ambient state inside a tool method*: rmcp dispatches each
-//! tool call inside its own spawned `serve_directly` loop (both stateful and
-//! stateless configs `tokio::spawn`), so the request-scope / ambient-executor /
-//! ambient-ability task-locals installed around the poem endpoint never reach
-//! the tool. In practice:
+//! rmcp dispatches each tool call on its own spawned task, so a task-local
+//! installed around the poem endpoint would not reach it. [`PropagatingHandler`]
+//! closes that gap: the endpoint stashes the per-operation state in the request
+//! extensions, rmcp forwards them as `http::request::Parts` into the operation's
+//! `RequestContext`, and the handler re-installs everything *inside* the
+//! dispatch. A tool method therefore gets the same transparency HTTP and
+//! GraphQL have:
 //!
-//! * [`Scoped<T>::from_context`](Scoped) returns a clear `McpError` rather than
-//!   resolving a `#[injectable(scope = request)]` provider.
-//! * A `Repo`-backed tool (row-level filtering / masking) runs with **no
-//!   ambient executor or ability** — it fails **closed and loud** (`Repo::conn`
-//!   errors; `scope_for` denies every row with a `warn`), never a silent wrong
-//!   answer.
+//! * [`Scoped<T>::from_context`](Scoped) resolves an
+//!   `#[injectable(scope = request)]` provider.
+//! * The caller's ability is installed by the operation guard's
+//!   [`around`](McpOperationGuard::around) — the same seam
+//!   `GraphqlOperationGuard` uses, so "who installs the ability" has one answer
+//!   on both transports.
+//! * A `Repo`-backed tool reads through the ambient executor, row-filtered by
+//!   the caller's ability — provide `nest_rs_seaorm::mcp::McpDataContext`
+//!   `as dyn McpToolContext` (what `AuthzMcpModule` does) to install it.
 //!
-//! The transparent fix — a `PropagatingHandler` that re-installs scope +
-//! executor + ability from the `http::request::Parts` rmcp injects into each
-//! message's `RequestContext` — is tracked for a later release (ROADMAP,
-//! *Transparent row-level filtering on MCP*). Until then, keep MCP tools to
-//! non-`Repo`, non-request-scoped work, or resolve dependencies from the
-//! singleton container.
+//! The guard chain is enforced ahead of all that, in the order
+//! [`resolve_operation_guard`] mounts: the app's registered
+//! [`McpOperationGuard`] (`nest_rs_authz::mcp::McpAbilityBridge`, which answers
+//! `401` without a valid token), else the global guard pool through
+//! [`FallbackMcpGuard`], else **deny-all**. Without a registered
+//! [`McpToolContext`] a `Repo`-backed tool still fails **closed and loud**
+//! (`Repo::conn` errors; `scope_for` denies every row), never a silent wrong
+//! answer.
+//!
 #![warn(missing_docs)]
 
+mod context;
 mod endpoint;
 mod guard;
 mod guards;
+mod propagate;
 mod scope;
 
-pub use endpoint::{endpoint, endpoint_with_guard};
-pub use guard::{BoxFuture, McpOperationGuard};
+pub use context::{Captured, McpToolContext, OperationOutcome};
+pub use endpoint::{endpoint, endpoint_with_guard, resolve_operation_guard};
+pub use guard::{BoxFuture, FallbackMcpGuard, McpOperationGuard};
 pub use guards::AllowAllMcpGuard;
+pub use propagate::PropagatingHandler;
 /// Per-operation accessor for `#[injectable(scope = request)]` providers inside
 /// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;

@@ -26,7 +26,9 @@ graphql = ["dep:nest-rs-graphql", "http", "nest-rs-authz?/graphql"]
 # Likewise for WS: the gateway reuses the HTTP guards, so authz's WS binding
 # lives behind its `http` feature (which forwards `nest-rs-guards/ws`).
 ws = ["dep:nest-rs-ws", "http", "nest-rs-authz?/http"]
-mcp = ["dep:nest-rs-mcp", "http"]
+# Likewise for MCP: authz's MCP binding forwards `nest-rs-guards/mcp`, which is
+# what seeds the in-band global-pool fallback on `/mcp`.
+mcp = ["dep:nest-rs-mcp", "http", "nest-rs-authz?/mcp"]
 queue = ["dep:nest-rs-queue"]
 redis = ["dep:nest-rs-redis", "queue"]
 schedule = ["dep:nest-rs-schedule"]
@@ -43,9 +45,7 @@ testing = ["dep:nest-rs-testing"]
 # Layer-System extension-point crates. Writing a custom `Guard` (the mandated
 # authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` — or a
 # `#[resource]`/worker provider — should not force a direct per-crate dep
-# (FACADE-I11). `nest-rs-storage` is deliberately NOT re-exported: it stays
-# path-only and unpublished (O-4), so an optional dep on it would block
-# publishing this umbrella.
+# (FACADE-I11).
 guards = ["dep:nest-rs-guards"]
 pipes = ["dep:nest-rs-pipes"]
 interceptors = ["dep:nest-rs-interceptors"]
@@ -53,6 +53,7 @@ filters = ["dep:nest-rs-filters"]
 exception-filters = ["dep:nest-rs-exception-filters"]
 resource = ["dep:nest-rs-resource"]
 worker = ["dep:nest-rs-worker"]
+storage = ["dep:nest-rs-storage"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -84,6 +85,7 @@ nest-rs-filters = { workspace = true, optional = true }
 nest-rs-exception-filters = { workspace = true, optional = true }
 nest-rs-resource = { workspace = true, optional = true }
 nest-rs-worker = { workspace = true, optional = true }
+nest-rs-storage = { workspace = true, optional = true }
 
 [lints]
 workspace = true

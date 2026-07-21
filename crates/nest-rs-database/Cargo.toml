@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "ORM-agnostic data-layer seam for nestrs: the ambient request/job Executor task-local + the object-safe Executor trait a third-party ORM module implements (sqlx, diesel, prisma-client-rust, mongo, …). The first-party SeaORM integration lives in nest-rs-seaorm; the row-level filter and response masker are SeaORM-specific by design."
+description = "ORM-agnostic data-layer seam for NestRS: the ambient request/job Executor task-local plus the object-safe Executor trait an ORM module implements. SeaORM is the first-party implementation (nest-rs-seaorm), and the trait is public so other stores can be written against it."
 
 
 [dependencies]

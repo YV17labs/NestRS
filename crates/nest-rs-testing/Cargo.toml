@@ -38,12 +38,27 @@ tokio.workspace = true
 tokio-util.workspace = true
 # Every e2e boot loads the project's `.env` via `load_project_env` — normal dep.
 nest-rs-config.workspace = true
+# The MCP helpers (`mcp::call_tool`) build JSON-RPC messages; no `nest-rs-mcp`
+# dependency needed, the protocol is JSON over the `TestClient`.
+serde_json.workspace = true
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 sea-orm-migration = { workspace = true, optional = true }
 
 [dev-dependencies]
+# `transport_parity` boots one module serving both `Exempt`-edge transports to
+# pin that they answer one app wiring identically. That is cross-crate wiring
+# (guards' fallbacks × graphql × mcp), so it lives here rather than in any
+# single surface crate — and dev-deps let it enable the two fallback features
+# without them reaching a consumer of the harness.
+nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp"] }
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+# A crate defining a `#[resolver]` / an `#[mcp]` tool host needs these directly:
+# the generated code names `async_graphql::` and `rmcp::` paths.
+async-graphql.workspace = true
+rmcp.workspace = true
 tokio.workspace = true
 # The config DI test boots a module wiring `ConfigModule::for_feature` and a
 # service injecting the loaded config; `nest-rs-config` is already a normal
@@ -53,7 +68,6 @@ validator.workspace = true
 # The pipes test (`tests/pipes.rs`) needs the `GlobalPipe` trait + a
 # `serde_json::Value` body to observe a pipe rewriting it.
 nest-rs-pipes = { path = "../nest-rs-pipes" }
-serde_json.workspace = true
 # The exception-filters test (`tests/exception_filters.rs`) needs the
 # trait + a typed error to throw and catch.
 thiserror.workspace = true

@@ -26,8 +26,14 @@
 #[cfg(any(feature = "graphql", feature = "ws"))]
 mod chain;
 mod denial_convert;
+// The two in-band fallback operation guards, one per `Exempt`-edge transport,
+// over the pool they share.
+#[cfg(any(feature = "graphql", feature = "mcp"))]
+mod global_pool;
 #[cfg(feature = "graphql")]
-mod operation_guard;
+mod graphql_operation_guard;
+#[cfg(feature = "mcp")]
+mod mcp_operation_guard;
 mod route_layers;
 mod route_shaper;
 mod scoped_spec;
@@ -42,7 +48,9 @@ pub use denial_convert::denial_to_graphql_error;
 pub use denial_convert::denial_to_http_response;
 pub(crate) use denial_convert::deny_http;
 #[cfg(feature = "graphql")]
-pub use operation_guard::GlobalPoolOperationGuard;
+pub use graphql_operation_guard::GlobalPoolOperationGuard;
+#[cfg(feature = "mcp")]
+pub use mcp_operation_guard::GlobalPoolMcpGuard;
 pub use route_layers::{wrap_route_exception_filters, wrap_route_filters, wrap_route_interceptors};
 pub use route_shaper::RouteShaper;
 pub use scoped_spec::{

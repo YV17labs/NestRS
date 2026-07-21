@@ -52,6 +52,13 @@ redis = { version = "0.32", optional = true, default-features = false, features 
 throttler = ["dep:nest-rs-throttler", "dep:redis"]
 
 [dev-dependencies]
+# Self dev-dependency: turn on the `throttler` feature for this crate's own test
+# targets, so the `[[test]] e2e` target's `required-features` below are
+# satisfied under `cargo nextest run --workspace -E 'binary(e2e)'`. Without it
+# the live-Redis suite is skipped in silence rather than run. Dev-deps do not
+# propagate, and a path-only dev-dep is stripped from the published manifest, so
+# a producer-only consumer still pulls neither `redis` nor `nest-rs-throttler`.
+nest-rs-redis = { path = ".", features = ["throttler"] }
 nest-rs-core = { path = "../nest-rs-core" }
 # The `#[processor]` macro emits `::nest_rs_worker::*` paths and the test
 # implements `JobContext` directly.

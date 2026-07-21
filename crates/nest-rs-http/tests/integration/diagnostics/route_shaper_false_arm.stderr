@@ -1,0 +1,85 @@
+error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:19:34
+   |
+19 |     async fn list(&self, _authz: Authorize<u8>) -> Result<Json<u8>> {
+   |                                  ^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:11:1
+   |
+11 | struct Authorize<T>(T);
+   | ^^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `FromRequest<'a>`:
+             &'a HeaderMap
+             &'a HttpRequest
+             &'a LocalAddr
+             &'a RemoteAddr
+             &'a Uri
+             Accept
+             Body
+             ClientIp
+           and $N others
+
+error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:16:1
+   |
+16 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:11:1
+   |
+11 | struct Authorize<T>(T);
+   | ^^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `FromRequest<'a>`:
+             &'a HeaderMap
+             &'a HttpRequest
+             &'a LocalAddr
+             &'a RemoteAddr
+             &'a Uri
+             Accept
+             Body
+             ClientIp
+           and $N others
+   = note: this error originates in the attribute macro `::poem::handler` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Authorize<u8>: RouteResponseShaper` is not satisfied
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:16:1
+   |
+16 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `RouteResponseShaper` is not implemented for `Authorize<u8>`
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:11:1
+   |
+11 | struct Authorize<T>(T);
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: required for `ShapedEndpoint<Authorize<u8>, __nestrs_route_list>` to implement `Endpoint`
+   = note: required for `ShapedEndpoint<Authorize<u8>, __nestrs_route_list>` to implement `IntoEndpoint`
+note: required by a bound in `map_to_response`
+  --> $CARGO/poem-$VERSION/src/endpoint/endpoint.rs
+   |
+   | pub trait EndpointExt: IntoEndpoint {
+   |                        ^^^^^^^^^^^^ required by this bound in `EndpointExt::map_to_response`
+...
+   |     fn map_to_response(self) -> MapToResponse<Self::Endpoint>
+   |        --------------- required by a bound in this associated function
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Authorize<u8>: RouteResponseShaper` is not satisfied
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:19:34
+   |
+19 |     async fn list(&self, _authz: Authorize<u8>) -> Result<Json<u8>> {
+   |                                  ^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `RouteResponseShaper` is not implemented for `Authorize<u8>`
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:11:1
+   |
+11 | struct Authorize<T>(T);
+   | ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `__nestrs_assert_route_shaper`
+  --> tests/integration/diagnostics/route_shaper_false_arm.rs:16:1
+   |
+16 | #[routes]
+   | ^^^^^^^^^ required by this bound in `__nestrs_assert_route_shaper`
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

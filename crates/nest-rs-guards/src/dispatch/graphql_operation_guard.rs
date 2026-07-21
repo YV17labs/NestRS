@@ -16,29 +16,25 @@
 use std::sync::Arc;
 
 use nest_rs_core::Container;
-use nest_rs_core::layer_chain::ResolvedLayer;
 use nest_rs_graphql::{BoxFuture, GraphqlOperationGuard};
 use poem::{Request, Response};
 
-use crate::Guard;
 use crate::dispatch::denial_convert::denial_to_http_response;
-use crate::registry::GuardSpecs;
+use crate::dispatch::global_pool::GlobalPoolChain;
 
 /// Runs the global guard pool in-band per GraphQL operation — the fallback
 /// [`GraphqlOperationGuard`] when no app-specific bridge is registered, so
 /// `/graphql` stays fail-secure under its `Exempt` edge posture.
 pub struct GlobalPoolOperationGuard {
-    chain: Vec<ResolvedLayer<dyn Guard>>,
+    pool: GlobalPoolChain,
 }
 
 impl GlobalPoolOperationGuard {
     /// Resolve the global pool eagerly — the container is final at mount.
     pub fn from_container(container: &Container) -> Self {
-        let chain = container
-            .get::<GuardSpecs>()
-            .map(|specs| specs.resolve_chain(container, "POST /graphql (operation)"))
-            .unwrap_or_default();
-        Self { chain }
+        Self {
+            pool: GlobalPoolChain::resolve(container, "POST /graphql (operation)"),
+        }
     }
 
     /// The factory `use_guards_global` seeds as
@@ -50,18 +46,7 @@ impl GlobalPoolOperationGuard {
 
 impl GraphqlOperationGuard for GlobalPoolOperationGuard {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
-        Box::pin(async move {
-            for entry in &self.chain {
-                if let Err(denial) = entry.layer.check_http(req).await {
-                    // The denial is logged once at its source guard
-                    // (`AuthnGuard`/`AuthzGuard`); re-warning here would emit the
-                    // same event twice. HTTP's `RouteShaper` doesn't re-log a
-                    // pooled denial either — match it.
-                    return Err(denial_to_http_response(denial));
-                }
-            }
-            Ok(())
-        })
+        Box::pin(async move { self.pool.check(req).await.map_err(denial_to_http_response) })
     }
 
     fn around<'a>(

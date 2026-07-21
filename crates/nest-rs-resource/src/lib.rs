@@ -1,7 +1,7 @@
 //! Expose a SeaORM entity to REST/OpenAPI from one declaration via [`macro@expose`].
 //!
-//! The wire DTO (`Serialize` + `JsonSchema`), CRUD input types, pagination
-//! envelope, and [`WireModelDefaults`] for response masking are always emitted.
+//! The wire DTO (`Serialize` + `JsonSchema`), CRUD input types, and
+//! [`WireModelDefaults`] for response masking are always emitted.
 //! Add the `graphql` flag on `#[expose(...)]` **and** enable the `graphql`
 //! feature on this crate to also emit GraphQL types, auto-resolved relations,
 //! and dataloaders.
@@ -30,7 +30,6 @@ pub mod graphql {
     pub use nest_rs_graphql::dataloader;
 }
 
-pub use exposures::pagination::PageArgs;
 #[cfg(feature = "graphql")]
 pub use exposures::relations::{PkLoadable, RelatedTo};
 pub use exposures::wire::WireModelDefaults;

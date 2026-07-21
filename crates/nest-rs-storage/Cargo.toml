@@ -6,10 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-# Held out of the first published release (locked decision); still a workspace
-# member so it keeps building and testing.
-publish = false
-description = "S3-compatible object storage for nestrs: a thin, injectable Storage client (presigned PUT/GET, head, byte read/write) built on the `object_store` crate. Multi-driver by design (S3/GCS/Azure/fs/memory); the AWS-S3 driver is wired by default and works against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style."
+description = "S3-compatible object storage for NestRS: a thin, injectable Storage client (presigned PUT/GET, head, byte read/write) built on the `object_store` crate. The AWS-S3 driver ships wired and runs against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style; the GCS, Azure, fs and memory drivers sit behind the same client."
 
 [dependencies]
 nest-rs-core.workspace = true

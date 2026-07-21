@@ -24,8 +24,8 @@ homepage = "https://nestrs.dev"
 # bump ships only in a nestrs major; within a 1.x line these majors are frozen.
 #   • poem           = "3"        — HTTP transport surface (extractors, Request/Response,
 #                                   Endpoint, WebSocket); re-exported as `nest_rs_http::poem`.
-#   • sea-orm        = "=2.0.0-rc.43" — ORM surface (Repo bounds, Executor, DbErr,
-#                                   entities). Exact-pinned on the rc line (O-1); see below.
+#   • sea-orm        = "=2.0"     — ORM surface (Repo bounds, Executor, DbErr,
+#                                   entities). Exact-pinned; see below.
 #   • async-graphql  = "=7.2.1"   — GraphQL surface; exact-pinned (registry internals).
 #   • rmcp           = "2.2"      — MCP surface (ServerHandler, tool params).
 #   • inventory      = "0.3"      — link-time discovery registry (macro contract).
@@ -153,20 +153,19 @@ validator = { version = "0.20", features = ["derive"] }
 # response masker and JSON responses.
 uuid = { version = "1", features = ["v7", "serde"] }
 
-# ORM. SeaORM 2.0 — the latest published is the `2.0.0-rc` line (the 2.0.0 final
-# is not yet on crates.io, so the pre-release is pinned explicitly). Postgres
-# over the rustls toolchain already used across the workspace.
+# ORM. SeaORM 2.0 final. Postgres over the rustls toolchain already used across
+# the workspace.
 #
 # EXACT pin (`=`), not a caret range. sea-orm types saturate the ORM public
 # surface (`Repo` bounds, `Executor`'s `ConnectionTrait`, `ServiceError::Db`),
-# so ANY rc bump or the 2.0.0 final is a semver break through every one of them.
-# v1.0 ships pinned to this exact rc as a documented known risk (O-1); a bump is
-# a deliberate, reviewed change — never a passive `cargo update`. On bump, move
-# both pins together and re-run the seaorm/storage e2e suites.
-sea-orm = { version = "=2.0.0-rc.43", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
+# so its major is tied to the nestrs major (see the policy block above) and even
+# a minor lands as a deliberate, reviewed change — never a passive
+# `cargo update`. On bump, move both pins together and re-run the seaorm/storage
+# e2e suites.
+sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
 # Migration runner + schema builder. Same release line as sea-orm; the bundled
 # `cli` feature gives the `migrate` binary its up/down/fresh/status subcommands.
-sea-orm-migration = { version = "=2.0.0-rc.43", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 
 # HTTP client (rustls so we avoid an OpenSSL system dep)
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
@@ -201,7 +200,7 @@ apalis = "0.7"
 apalis-redis = "0.7"
 
 # Proc-macro dependencies
-syn = { version = "2", features = ["full"] }
+syn = { version = "3.0", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 
@@ -248,6 +247,7 @@ nest-rs-server-timing = { version = "1.0.0", path = "crates/nest-rs-server-timin
 nest-rs-social = { version = "1.0.0", path = "crates/nest-rs-social" }
 nest-rs-opentelemetry = { version = "1.0.0", path = "crates/nest-rs-opentelemetry" }
 nest-rs-testing = { version = "1.0.0", path = "crates/nest-rs-testing" }
+nest-rs-storage = { version = "1.0.0", path = "crates/nest-rs-storage" }
 nest-rs-worker = { version = "1.0.0", path = "crates/nest-rs-worker" }
 nest-rs-ws = { version = "1.0.0", path = "crates/nest-rs-ws" }
 nest-rs-ws-macros = { version = "1.0.0", path = "crates/nest-rs-ws-macros" }

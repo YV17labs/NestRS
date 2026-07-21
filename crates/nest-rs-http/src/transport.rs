@@ -92,6 +92,28 @@ fn normalize_global_prefix(raw: &str) -> Option<String> {
     Some(format!("/{trimmed}"))
 }
 
+/// Claim `path` for `owner`, or fail boot naming both claimants.
+///
+/// A controller prefix and a self-mounted endpoint path are one rule in two
+/// vocabularies: each `nest`s under its own path, so two mounts sharing one make
+/// poem panic deep in route assembly (`duplicate path: <prefix>/*--poem-rest`).
+/// Both callers claim through here so the two boot diagnostics stay worded alike
+/// by construction, and neither reaches the opaque poem internal.
+fn claim_exclusive_path(
+    owners: &mut HashMap<String, String>,
+    kind: &str,
+    path: String,
+    owner: String,
+) -> anyhow::Result<()> {
+    if let Some(first) = owners.insert(path.clone(), owner.clone()) {
+        anyhow::bail!(
+            "duplicate {kind} {path:?}: {first} and {owner} both mount there — a {kind} is its \
+             exclusive namespace; give each one a distinct path",
+        );
+    }
+    Ok(())
+}
+
 impl Default for HttpTransport {
     fn default() -> Self {
         Self::new()
@@ -256,18 +278,16 @@ impl Transport for HttpTransport {
         // poem panic deep in route assembly ("duplicate path: <prefix>/*--poem-rest").
         // Catch it here instead, naming both controllers, so it reads like every
         // other nestrs boot failure rather than an opaque poem internal.
-        let mut prefix_owner: HashMap<String, &'static str> = HashMap::new();
+        let mut prefix_owner: HashMap<String, String> = HashMap::new();
 
         for d in discovery.meta::<HttpControllerMeta>() {
             let prefix = d.meta.effective_prefix();
-            if let Some(first) = prefix_owner.insert(prefix.clone(), d.meta.controller) {
-                anyhow::bail!(
-                    "duplicate controller prefix {prefix:?}: {first} and {} both mount there — a \
-                     controller prefix is its exclusive namespace; give each controller a \
-                     distinct prefix",
-                    d.meta.controller,
-                );
-            }
+            claim_exclusive_path(
+                &mut prefix_owner,
+                "controller prefix",
+                prefix.clone(),
+                d.meta.controller.to_owned(),
+            )?;
             for r in &d.meta.routes {
                 let path = join_path(&prefix, r.path);
                 tracing::info!(
@@ -312,7 +332,18 @@ impl Transport for HttpTransport {
         // fail-secure stop (the `Guarded` posture already gets the pool wrap
         // below whenever one exists).
         let mut unguarded_edges: Vec<String> = Vec::new();
+        // Same exclusivity rule as a controller prefix, same failure mode: two
+        // self-mounts on one path make poem panic in route assembly. Catch it
+        // here so a second `#[mcp(path = "/mcp")]` reads as a named boot error
+        // naming both endpoints, not an opaque poem internal.
+        let mut endpoint_owner: HashMap<String, String> = HashMap::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
+            claim_exclusive_path(
+                &mut endpoint_owner,
+                "self-mounted endpoint path",
+                d.meta.path().to_owned(),
+                format!("a {} endpoint", d.meta.label()),
+            )?;
             tracing::info!(
                 target: "nest_rs::routes",
                 kind = d.meta.label(),

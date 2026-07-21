@@ -94,7 +94,6 @@ pub(crate) struct ResourceModel {
     pub output_ident: Ident,
     pub create_ident: Ident,
     pub update_ident: Ident,
-    pub page_ident: Ident,
     pub fields: Vec<ResourceField>,
     /// Path to the entity's service, used as the receiver of auto-generated
     /// `#[dataloader]` impls. Required when any exposed relation is present.
@@ -103,7 +102,6 @@ pub(crate) struct ResourceModel {
     /// `complex` or implicitly when any exposed relation calls for a
     /// `#[ComplexObject]`.
     pub complex: bool,
-    pub paginate: bool,
     /// When set, emit GraphQL surface types (SimpleObject, loaders, relations).
     pub graphql: bool,
     /// Stamp `deleted_at` instead of hard-deleting; emit [`SoftDeletable`].
@@ -123,7 +121,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     let mut name: Option<String> = None;
     let mut service: Option<Path> = None;
     let mut complex = false;
-    let mut paginate = false;
     let mut graphql = false;
     let mut soft_delete = false;
     let mut timestamps = false;
@@ -137,9 +134,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         } else if meta.path.is_ident("complex") {
             complex = true;
             Ok(())
-        } else if meta.path.is_ident("paginate") {
-            paginate = true;
-            Ok(())
         } else if meta.path.is_ident("graphql") {
             graphql = true;
             Ok(())
@@ -151,7 +145,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             Ok(())
         } else {
             Err(meta.error(
-                "unknown #[expose(...)] option (expected `name = \"...\"`, `service = …`, `graphql`, `soft_delete`, `timestamps`, `complex`, or `paginate`)",
+                "unknown #[expose(...)] option (expected `name = \"...\"`, `service = …`, `graphql`, `soft_delete`, `timestamps`, or `complex`)",
             ))
         }
     });
@@ -362,11 +356,9 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         output_ident: name_ident.clone(),
         create_ident: format_ident!("Create{}", name_ident),
         update_ident: format_ident!("Update{}", name_ident),
-        page_ident: format_ident!("{}Page", name_ident),
         fields,
         service,
         complex,
-        paginate,
         graphql,
         soft_delete,
         timestamps,

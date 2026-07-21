@@ -113,13 +113,6 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     ::core::result::Result::Ok(__resp)
                 }
             },
-            Paginate::Page => {
-                return Err(syn::Error::new(
-                    cfg.paginate_span,
-                    "#[crud] REST list does not yet support `paginate = page` (offset); \
-                     use `paginate = cursor` (the default) or `paginate = none`",
-                ));
-            }
         };
         generated.push(list_method);
     }

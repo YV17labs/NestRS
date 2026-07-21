@@ -1,10 +1,9 @@
-use std::sync::Arc;
-
 use nest_rs_authn::{AuthError, OAuth2Client, TokenSet};
 use serde::Deserialize;
 
+use super::config::GoogleSocialConfig;
 use crate::provider::{ProfileFuture, SocialProfile, SocialProvider};
-use crate::registry::SocialProviderEntry;
+use crate::registry::{SocialProviderEntry, resolve_provider};
 
 /// The Google OIDC social provider. Reads the profile from the userinfo
 /// endpoint with the access token; overrides only [`SocialProvider::profile`].
@@ -57,9 +56,15 @@ impl SocialProvider for GoogleSocialProvider {
 nest_rs_core::inventory::submit! {
     SocialProviderEntry {
         key: GoogleSocialProvider::KEY,
-        provider_type_id: || std::any::TypeId::of::<GoogleSocialProvider>(),
         provider_type_name: || std::any::type_name::<GoogleSocialProvider>(),
-        resolve: |c| c.get::<GoogleSocialProvider>().map(|p| p as Arc<dyn SocialProvider>),
+        config_namespace: <GoogleSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
+        build: |container| {
+            resolve_provider::<GoogleSocialProvider, GoogleSocialConfig>(container, |config| {
+                let client = OAuth2Client::new(config.oauth2_config())
+                    .map_err(|e| anyhow::anyhow!("invalid Google OAuth2 client config: {e}"))?;
+                Ok(GoogleSocialProvider::new(client))
+            })
+        },
     }
 }
 

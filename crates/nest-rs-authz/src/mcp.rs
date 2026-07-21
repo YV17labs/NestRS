@@ -1,23 +1,23 @@
 //! MCP surface for [`nest_rs_authz`](crate). Enabled by the `mcp` Cargo feature.
 //!
 //! Authenticate MCP HTTP requests with the same guard chain controllers use,
-//! then install the caller's ambient [`Ability`] for the request duration.
+//! then install the caller's ambient [`Ability`] for the operation's duration.
+//!
+//! Field-level masking inside a tool body is [`crate::masked_output_ambient`] —
+//! MCP tool output is arbitrary JSON-RPC content, so it cannot be masked
+//! transparently the way the HTTP route shaper does.
 
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
 use nest_rs_guards::{Guard, denial_to_http_response};
-use nest_rs_mcp::{BoxFuture, McpOperationGuard};
-use poem::http::StatusCode;
-use poem::{Error, Request, Response, Result};
-use sea_orm::EntityTrait;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use nest_rs_mcp::{BoxFuture, Captured, McpOperationGuard, OperationOutcome};
+use poem::{Error, Request, Result};
 
-use crate::ActionMarker;
+use crate::{Ability, run_ability_chain, with_ability};
 
-/// Runs `A` then `G` on each MCP HTTP request and scopes the handler to the
-/// resulting ability when present. Inject it as `dyn McpOperationGuard`.
+/// Runs `A` then `G` on each MCP HTTP request and scopes the operation to the
+/// resulting ability. Inject it as `dyn McpOperationGuard`.
 #[injectable]
 pub struct McpAbilityBridge<A: Guard, G: Guard> {
     #[inject]
@@ -29,37 +29,48 @@ pub struct McpAbilityBridge<A: Guard, G: Guard> {
 impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            if self.auth.check_http(req).await.is_err() {
-                return Err(Error::from_response(
-                    Response::builder()
-                        .status(StatusCode::UNAUTHORIZED)
-                        .body("Unauthorized"),
-                ));
-            }
-            self.ability
-                .check_http(req)
+            // Same ordering as the GraphQL bridge, from the same function; only
+            // the error shape differs. Mapping the `Denial` (rather than
+            // answering a blanket `401`) is what lets a `429` from a throttler
+            // in the chain reach the client as a `429`.
+            run_ability_chain(&*self.auth, &*self.ability, req)
                 .await
                 .map_err(|denial| Error::from_response(denial_to_http_response(denial)))
         })
     }
-}
 
-/// Field-level response masking for MCP tools — the transport analog of
-/// [`crate::http::mask_entity_response`] and `graphql::masked_output_for`.
-///
-/// MCP tool outputs are arbitrary JSON-RPC content, so masking can't be applied
-/// transparently the way the HTTP route shaper does. A tool that returns an
-/// entity row should route it through this helper so the same
-/// `#[expose]`-policy field grants apply: it reads the ambient
-/// [`Ability`] installed by [`McpAbilityBridge`], masks `model` for `A`, and
-/// deserializes into the wire DTO `O`. With no ambient ability the call fails
-/// closed (`Err`) rather than returning an unmasked row.
-pub fn masked_output<A, E, O>(model: &E::Model) -> Result<O, serde_json::Error>
-where
-    A: ActionMarker,
-    E: EntityTrait,
-    E::Model: Serialize,
-    O: DeserializeOwned,
-{
-    crate::masked_output_ambient::<A, E, O>(model)
+    /// The caller's ability, read from the request the chain just authorized.
+    /// Absent (anonymous) ⇒ nothing to install, and `around` never runs —
+    /// `Repo` then fails closed on its own.
+    fn capture(&self, req: &Request) -> Option<Captured> {
+        // Coerce the request's own handle rather than boxing it again — the
+        // ability is already an `Arc`, and this runs on every `/mcp` request.
+        req.extensions()
+            .get::<Arc<Ability>>()
+            .cloned()
+            .map(|ability| ability as Captured)
+    }
+
+    fn around<'a>(
+        &'a self,
+        captured: &'a Captured,
+        inner: BoxFuture<'a, OperationOutcome>,
+    ) -> BoxFuture<'a, OperationOutcome> {
+        Box::pin(async move {
+            // The guard installs the ambient ability on MCP exactly as it does
+            // on GraphQL, so a tool body is scoped whether or not the app also
+            // registered an `McpToolContext`.
+            let Ok(ability) = captured.clone().downcast::<Ability>() else {
+                // A downcast miss is a framework bug; run unscoped rather than
+                // panic — `Repo` fails closed, same as the anonymous path.
+                tracing::error!(
+                    target: "nest_rs::authz",
+                    reason = "guard_capture_downcast_miss",
+                    "unexpected captured operation-guard state",
+                );
+                return inner.await;
+            };
+            with_ability(ability, inner).await
+        })
+    }
 }

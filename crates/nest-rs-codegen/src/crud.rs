@@ -12,9 +12,6 @@ pub enum Paginate {
     /// Keyset over the primary key — the default. Free for UUID-v7 keys
     /// (ordered).
     Cursor,
-    /// Offset (`page`/`per_page`). Random access at the cost of O(offset)
-    /// scans and instability under concurrent inserts.
-    Page,
     /// Explicit opt-out: the full (ability-scoped) collection in one
     /// response, still backstopped by `CrudService::list`'s hard cap.
     None,
@@ -74,11 +71,6 @@ pub struct CrudConfig {
     /// [`Paginate::Cursor`] — an unbounded list is an explicit opt-out
     /// (`paginate = none`), never the silent default.
     pub paginate: Paginate,
-    /// Span of the `paginate = <mode>` mode ident, so a generator that cannot
-    /// yet honour a requested mode (e.g. `paginate = page`) underlines the
-    /// exact offending token rather than the whole `#[crud(...)]` attribute.
-    /// Defaults to [`Span::call_site`] when `paginate` is left implicit.
-    pub paginate_span: Span,
 }
 
 impl CrudConfig {
@@ -152,7 +144,6 @@ impl Parse for CrudConfig {
         let mut update = None;
         let mut ops = OpsSelection::Default;
         let mut paginate = Paginate::Cursor;
-        let mut paginate_span = Span::call_site();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -208,15 +199,13 @@ impl Parse for CrudConfig {
                 "paginate" => {
                     input.parse::<Token![=]>()?;
                     let mode: Ident = input.parse()?;
-                    paginate_span = mode.span();
                     paginate = match mode.to_string().as_str() {
                         "cursor" => Paginate::Cursor,
-                        "page" => Paginate::Page,
                         "none" => Paginate::None,
                         _ => {
                             return Err(syn::Error::new(
                                 mode.span(),
-                                "expected `cursor`, `page`, or `none`",
+                                "expected `cursor` or `none`",
                             ));
                         }
                     };
@@ -259,7 +248,6 @@ impl Parse for CrudConfig {
             update,
             ops,
             paginate,
-            paginate_span,
         })
     }
 }

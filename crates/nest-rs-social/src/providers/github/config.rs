@@ -2,6 +2,8 @@ use nest_rs_authn::OAuth2Config;
 use nest_rs_config::{Config, ConfigService, config};
 use validator::Validate;
 
+use crate::registry::SocialProviderConfig;
+
 /// GitHub OAuth deployment config. Only credentials, redirect, and scopes are
 /// deployment config — the auth/token/userinfo endpoint URLs are provider
 /// constants (see `GithubSocialConfig::oauth2_config`).
@@ -65,6 +67,14 @@ impl Config for GithubSocialConfig {
             redirect_url: env.get("REDIRECT_URL").unwrap_or_default(),
             scopes: env.list("SCOPES"),
         })
+    }
+}
+
+impl SocialProviderConfig for GithubSocialConfig {
+    /// `scopes` alone does not count as configuration — it has a default, so a
+    /// deployment that sets only scopes still has no GitHub app to talk to.
+    fn is_unconfigured(&self) -> bool {
+        self.client_id.is_empty() && self.client_secret.is_empty() && self.redirect_url.is_empty()
     }
 }
 

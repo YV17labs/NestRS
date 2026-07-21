@@ -25,16 +25,19 @@ pub struct DatabaseConfig {
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
     /// query shapes into logs.
     pub sqlx_logging: bool,
-    /// Retry a mutating request's transaction when it fails with a Postgres
-    /// `40001` (`serialization_failure`), `40P01` (`deadlock_detected`), or
-    /// the MySQL/SQL-Server analogs (`1213`, `1205`). Off by default — opt
-    /// in when the app uses serializable isolation and accepts the extra
-    /// latency on contention. The interceptor can only retry at the commit
-    /// boundary; for handler-time conflicts use
-    /// [`retry_on_conflict`](crate::retry::retry_on_conflict) at the
-    /// service's programmatic transaction boundary.
-    /// `NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS`.
-    pub retry_serialization_conflicts: bool,
+    /// Tag a mutating request's commit-time conflict — Postgres `40001`
+    /// (`serialization_failure`), `40P01` (`deadlock_detected`), or the
+    /// MySQL/SQL-Server analogs (`1213`, `1205`) — as a structured `warn` on
+    /// `nest_rs::orm`, so contention is distinguishable from a generic commit
+    /// error in the logs. Off by default; the response fails closed either way.
+    ///
+    /// This observes, it does not retry: replaying a conflict means re-running
+    /// the whole handler, and a handler may already have emitted a
+    /// non-transactional side effect (a queued job, an event, an object write).
+    /// Retrying is the service's call, at a boundary it knows is replayable —
+    /// [`retry_on_conflict`](crate::retry::retry_on_conflict).
+    /// `NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS`.
+    pub observe_serialization_conflicts: bool,
 }
 
 impl Config for DatabaseConfig {
@@ -45,7 +48,7 @@ impl Config for DatabaseConfig {
             min_connections: env.parse("MIN_CONNECTIONS")?, //         NESTRS_DATABASE__MIN_CONNECTIONS
             connect_timeout_secs: env.parse("CONNECT_TIMEOUT_SECS")?, //NESTRS_DATABASE__CONNECT_TIMEOUT_SECS
             sqlx_logging: env.flag("SQLX_LOGGING", false)?, //         NESTRS_DATABASE__SQLX_LOGGING (else false)
-            retry_serialization_conflicts: env.flag("RETRY_SERIALIZATION_CONFLICTS", false)?, //     NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS
+            observe_serialization_conflicts: env.flag("OBSERVE_SERIALIZATION_CONFLICTS", false)?, //     NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS
         })
     }
 }
@@ -59,8 +62,8 @@ impl std::fmt::Debug for DatabaseConfig {
             .field("connect_timeout_secs", &self.connect_timeout_secs)
             .field("sqlx_logging", &self.sqlx_logging)
             .field(
-                "retry_serialization_conflicts",
-                &self.retry_serialization_conflicts,
+                "observe_serialization_conflicts",
+                &self.observe_serialization_conflicts,
             )
             .finish()
     }
@@ -116,7 +119,7 @@ mod tests {
             min_connections: Some(5),
             connect_timeout_secs: Some(8),
             sqlx_logging: true,
-            retry_serialization_conflicts: false,
+            observe_serialization_conflicts: false,
         }
         .connect_options();
         assert_eq!(opts.get_max_connections(), Some(50));
@@ -135,10 +138,10 @@ mod tests {
     }
 
     #[test]
-    fn retry_serialization_conflicts_defaults_off() {
+    fn observe_serialization_conflicts_defaults_off() {
         let cfg = DatabaseConfig::default();
         assert!(
-            !cfg.retry_serialization_conflicts,
+            !cfg.observe_serialization_conflicts,
             "retry must default off — never change behaviour silently",
         );
     }
@@ -153,7 +156,7 @@ mod tests {
                 ("NESTRS_DATABASE__MIN_CONNECTIONS", "2"),
                 ("NESTRS_DATABASE__CONNECT_TIMEOUT_SECS", "12"),
                 ("NESTRS_DATABASE__SQLX_LOGGING", "true"),
-                ("NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS", "true"),
+                ("NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS", "true"),
             ],
         );
         let cfg = DatabaseConfig::from_env(&service).expect("ok");
@@ -162,7 +165,7 @@ mod tests {
         assert_eq!(cfg.min_connections, Some(2));
         assert_eq!(cfg.connect_timeout_secs, Some(12));
         assert!(cfg.sqlx_logging);
-        assert!(cfg.retry_serialization_conflicts);
+        assert!(cfg.observe_serialization_conflicts);
     }
 
     #[test]
@@ -172,6 +175,9 @@ mod tests {
         assert!(cfg.url.is_empty());
         assert!(cfg.max_connections.is_none());
         assert!(!cfg.sqlx_logging, "off by default — never noisy in prod");
-        assert!(!cfg.retry_serialization_conflicts, "retry off by default");
+        assert!(
+            !cfg.observe_serialization_conflicts,
+            "conflict tagging off by default"
+        );
     }
 }

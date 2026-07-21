@@ -2,6 +2,8 @@ use nest_rs_authn::OAuth2Config;
 use nest_rs_config::{Config, ConfigService, config};
 use validator::Validate;
 
+use crate::registry::SocialProviderConfig;
+
 /// Google OIDC deployment config. Dual-path (env `NESTRS_SOCIAL__GOOGLE__*`
 /// **and** the pinned struct). No `Debug`: `client_secret` must not leak.
 #[config(namespace = "social__google")]
@@ -58,6 +60,14 @@ impl Config for GoogleSocialConfig {
             redirect_url: env.get("REDIRECT_URL").unwrap_or_default(),
             scopes: env.list("SCOPES"),
         })
+    }
+}
+
+impl SocialProviderConfig for GoogleSocialConfig {
+    /// `scopes` alone does not count as configuration — it has a default, so a
+    /// deployment that sets only scopes still has no Google app to talk to.
+    fn is_unconfigured(&self) -> bool {
+        self.client_id.is_empty() && self.client_secret.is_empty() && self.redirect_url.is_empty()
     }
 }
 

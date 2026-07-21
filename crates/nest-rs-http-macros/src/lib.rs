@@ -153,7 +153,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Generate standard REST operations (list/get/create/update/delete) on a
 /// `#[controller]` impl block, re-emitting under `#[routes]`. Grammar:
 /// `#[crud(entity = …::Entity, output = Dto, create = CreateDto,
-/// update = UpdateDto, ops = [list, get, ...], paginate = cursor|page|none)]`.
+/// update = UpdateDto, ops = [list, get, ...], paginate = cursor|none)]`.
 ///
 /// `ops` selects which operations to generate; omit it for all five
 /// (back-compatible). A write op is generated only when the resource genuinely

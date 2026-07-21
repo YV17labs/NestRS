@@ -41,6 +41,21 @@ pub(crate) async fn with_request_scope<F: Future>(scope: Arc<RequestScope>, fut:
     MCP_REQUEST_SCOPE.scope(scope, fut).await
 }
 
+/// [`with_request_scope`] for the callers that may or may not have a scope —
+/// every mount path is optional here (an endpoint not nested under
+/// `RequestScopeEndpoint` has none). Kept next to the task-local so the
+/// "no scope ⇒ just await" branch, which decides whether [`Scoped<T>`] resolves,
+/// exists once rather than at each dispatch site.
+pub(crate) async fn maybe_with_request_scope<F: Future>(
+    scope: Option<Arc<RequestScope>>,
+    fut: F,
+) -> F::Output {
+    match scope {
+        Some(scope) => with_request_scope(scope, fut).await,
+        None => fut.await,
+    }
+}
+
 /// Resolves a provider of type `T` from the current MCP operation's
 /// [`RequestScope`]. `from_context` errors if the scope is absent (the endpoint
 /// is not nested under `RequestScopeEndpoint`, or the tool ran off the request

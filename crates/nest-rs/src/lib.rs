@@ -91,6 +91,9 @@ pub use nest_rs_exception_filters as exception_filters;
 #[cfg(feature = "resource")]
 pub use nest_rs_resource as resource;
 
+#[cfg(feature = "storage")]
+pub use nest_rs_storage as storage;
+
 #[cfg(feature = "worker")]
 pub use nest_rs_worker as worker;
 

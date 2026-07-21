@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Rate limiting for nestrs: a per-route ThrottlerGuard reading a #[meta(Throttle)] override, backed by an in-memory fixed-window counter."
+description = "Rate limiting for NestRS: a per-route ThrottlerGuard reading a #[meta(Throttle)] override, over a fixed-window counter behind a pluggable ThrottlerStore trait."
 
 
 [dependencies]

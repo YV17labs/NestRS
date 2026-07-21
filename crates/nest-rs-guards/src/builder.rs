@@ -13,12 +13,16 @@ use nest_rs_interceptors::InterceptorExt;
 use poem::EndpointExt;
 
 use crate::Guard;
+#[cfg(feature = "mcp")]
+use crate::dispatch::GlobalPoolMcpGuard;
 #[cfg(feature = "graphql")]
 use crate::dispatch::GlobalPoolOperationGuard;
 use crate::dispatch::deny_http;
 use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::{FallbackOperationGuard, GraphqlVariablePipe};
+#[cfg(feature = "mcp")]
+use nest_rs_mcp::FallbackMcpGuard;
 #[cfg(feature = "ws")]
 use nest_rs_ws::WsDataPipe;
 
@@ -60,20 +64,28 @@ impl AppBuilderGuardsExt for AppBuilder {
         //
         // - `SelfMountGuardWrap` — a `Guarded` self-mount (WS upgrade) gets
         //   the global chain at its HTTP edge;
-        // - `FallbackOperationGuard` — `/graphql` is `Exempt` at the edge and
-        //   gates per operation; when the app registers no
-        //   `dyn GraphqlOperationGuard` bridge, the global pool runs there
-        //   in-band, so a forgotten bridge module never leaves operations
+        // - `FallbackOperationGuard` / `FallbackMcpGuard` — `/graphql` and
+        //   `/mcp` are `Exempt` at the edge and gate per operation; when the
+        //   app registers no bridge for that transport, the global pool runs
+        //   there in-band, so a forgotten bridge module never leaves operations
         //   unguarded. A registered bridge replaces the fallback (it runs
         //   the same guards itself — nothing runs twice).
         let active = !collected.is_empty();
-        // `builder` is only reassigned under `graphql` (the fallback op-guard);
-        // without that feature it stays bound once, so the `mut` is unused there.
-        #[cfg_attr(not(feature = "graphql"), allow(unused_mut))]
+        // `builder` is only reassigned under `graphql` / `mcp` (the fallback
+        // op-guards); without either feature it stays bound once, so the `mut`
+        // is unused there.
+        #[cfg_attr(not(any(feature = "graphql", feature = "mcp")), allow(unused_mut))]
         let mut builder = self.provide(GuardSpecs(collected));
         #[cfg(feature = "graphql")]
         {
             builder = builder.provide(FallbackOperationGuard(GlobalPoolOperationGuard::factory));
+        }
+        // MCP's no-guard default is deny-all, not pass-through, so the fallback
+        // is seeded only for a non-empty pool: it may widen `/mcp` to exactly
+        // what the app opted into, never to "open".
+        #[cfg(feature = "mcp")]
+        if active {
+            builder = builder.provide(FallbackMcpGuard(GlobalPoolMcpGuard::factory));
         }
         let builder = builder
             .provide_meta(SelfMountGuardWrap::new(|container, endpoint| {

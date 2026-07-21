@@ -2,3 +2,4 @@
 
 mod guard;
 mod mount;
+mod scope;

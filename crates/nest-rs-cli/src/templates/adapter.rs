@@ -166,11 +166,12 @@ impl {{tasks}} {
 
 pub const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!
-//! Security: the MCP endpoint denies every request by default until an
-//! `McpOperationGuard` is bound. Wire your app's `McpAbilityBridge`
-//! (`features::authz::mcp`) as `dyn McpOperationGuard` so callers are
-//! authenticated and the ambient `Ability` is installed; return entity rows
-//! through `nest_rs_authz::mcp::masked_output` to apply field-level masking.
+//! Security: the MCP endpoint gates through the app's `dyn McpOperationGuard`,
+//! else the global guard pool (`use_guards_global`), else deny-all. Wire your
+//! app's `McpAbilityBridge` (`features::authz::mcp`) as `dyn McpOperationGuard`
+//! so callers are authenticated and the ambient `Ability` is installed; return
+//! entity rows through `nest_rs_authz::masked_output_ambient` to apply
+//! field-level masking.
 use std::sync::Arc;
 
 use nest_rs_mcp::mcp;

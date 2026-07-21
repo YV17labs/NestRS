@@ -25,13 +25,16 @@ graphql = ["dep:async-graphql", "dep:nest-rs-graphql", "dep:uuid"]
 # WebSocket transport extractor: `WsDataContext` (the `SocketContext` that
 # re-installs the request executor + ability around each gateway message).
 ws = ["dep:nest-rs-ws"]
+# MCP transport extractor: `McpDataContext` (the `McpToolContext` that
+# re-installs the request executor + ability inside each tool dispatch).
+mcp = ["dep:nest-rs-mcp"]
 # Liveness/readiness pool ping (`DbHealthIndicator`) wired through
 # `nest-rs-health`'s `#[indicators]` registry. The connection's `ping`
 # round-trips a `SELECT 1`, so an unreachable DB drops the readiness probe
 # to `503`.
 health = ["dep:nest-rs-health"]
 # Convenience for tests and exemplars.
-full = ["http", "graphql", "ws", "health"]
+full = ["http", "graphql", "ws", "mcp", "health"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -79,7 +82,18 @@ nest-rs-resource = { workspace = true, optional = true }
 async-graphql = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
+nest-rs-mcp = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Self dev-dependency: turn on every transport binding for this crate's own test
+# targets. Without it `cargo nextest run --workspace` builds this crate with
+# `default = []`, the `[[test]] e2e` target's `required-features` below are
+# never satisfied, and the whole Postgres suite is skipped in silence — the
+# opposite of what the Definition of done's `-E 'binary(e2e)'` step reads as.
+# Dev-deps do not propagate, so no consumer gains a feature from this, and a
+# path-only dev-dep is stripped from the published manifest.
+nest-rs-seaorm = { path = ".", features = ["full"] }
 
 # The e2e suite imports feature-gated transport bridges: `DbContext` (`http`)
 # and `WsDataContext` (`ws`). Without this gate, a default-feature

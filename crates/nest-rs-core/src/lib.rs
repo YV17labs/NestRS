@@ -85,12 +85,23 @@ pub use container::{Container, ContainerBuilder, KeyedDependency, ProviderKey};
 pub use discoverable::Discoverable;
 pub use discovery::{AccessGraphSnapshot, Discovered, DiscoveryService};
 pub use layer::{Layer, LayerKind, LayerSite};
-pub use layer_chain::{ResolvedLayer, compose_chain, dedup_bucket};
+pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
 pub use metadata::{HandlerMetadata, MappedError, Public};
-pub use module::{__module_registered, DynamicModule, Module};
+pub use module::{DynamicModule, Module};
 pub use request_scope::RequestScope;
 pub use transport::{Transport, TransportContribution};
+
+// Cross-crate Layer-System wiring — `pub` for the five registry crates and
+// macro output, not public API. `LayerSpec` (above) is the one deliberate
+// vocabulary type; the chain-composition primitives around it are plumbing.
+#[doc(hidden)]
+pub use layer_chain::{ResolvedLayer, check_specs_resolvable, compose_chain, dedup_bucket};
+
+// Macro plumbing — `#[module]`-generated code names this to register a module in
+// the boot inventory. Hidden at its definition; kept off the curated list here.
+#[doc(hidden)]
+pub use module::__module_registered;
 
 // Re-exported so `#[hooks]`-generated `inventory::submit!` resolves through the
 // framework — apps never depend on `inventory` directly.

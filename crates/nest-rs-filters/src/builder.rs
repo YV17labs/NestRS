@@ -2,7 +2,7 @@
 //! [`AppBuilder`](nest_rs_core::AppBuilder).
 
 use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain};
-use nest_rs_core::{AppBuilder, Container};
+use nest_rs_core::{AppBuilder, Container, check_specs_resolvable};
 use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
 use poem::EndpointExt;
 
@@ -52,22 +52,12 @@ impl AppBuilderFiltersExt for AppBuilder {
                 let Some(specs) = container.get::<FilterSpecs>() else {
                     return Ok(());
                 };
-                let missing: Vec<&str> = specs
-                    .0
-                    .iter()
-                    .filter(|s| s.resolve(container).is_none())
-                    .map(|s| s.name)
-                    .collect();
-                if missing.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "global filter(s) not resolvable from the container: {} — import the \
-                         module that provides them; an unresolvable global filter would \
-                         silently drop its error mapping",
-                        missing.join(", "),
-                    ))
-                }
+                check_specs_resolvable(
+                    &specs.0,
+                    container,
+                    "filter",
+                    "an unresolvable global filter would silently drop its error mapping",
+                )
             }))
             .provide_meta(HttpEndpointWrap::with_priority(
                 endpoint_wrap_priority::FILTERS,

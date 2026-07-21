@@ -6,8 +6,8 @@
 //! - [`AppBuilderPipesExt::use_pipes_global`] — register
 //!   request-body pipes once, applied to every JSON HTTP handler.
 
-use nest_rs_core::AppBuilder;
 use nest_rs_core::layer_chain::ResolvedLayer;
+use nest_rs_core::{AppBuilder, check_specs_resolvable};
 use nest_rs_http::{GlobalGuardsActive, HttpBootCheck, SelfMountGuardWrap};
 use nest_rs_interceptors::InterceptorExt;
 use poem::EndpointExt;
@@ -104,20 +104,13 @@ impl AppBuilderGuardsExt for AppBuilder {
                 let Some(specs) = container.get::<GuardSpecs>() else {
                     return Ok(());
                 };
-                let missing: Vec<&str> = specs
-                    .0
-                    .iter()
-                    .filter(|s| s.resolve(container).is_none())
-                    .map(|s| s.name)
-                    .collect();
-                if !missing.is_empty() {
-                    return Err(format!(
-                        "global guard(s) not resolvable from the container: {} — import the \
-                         module that provides them; an unresolvable global guard would \
-                         silently drop and leave every route unguarded",
-                        missing.join(", "),
-                    ));
-                }
+                check_specs_resolvable(
+                    &specs.0,
+                    container,
+                    "guard",
+                    "an unresolvable global guard would silently drop and leave every route \
+                     unguarded",
+                )?;
                 // Declared-phase ordering + produced/expected principal
                 // cross-check on the global chain — a reversed or mismatched
                 // pairing fails boot here instead of answering 500 per request.
@@ -162,22 +155,12 @@ impl AppBuilderPipesExt for AppBuilder {
             let Some(specs) = container.get::<PipeSpecs>() else {
                 return Ok(());
             };
-            let missing: Vec<&str> = specs
-                .0
-                .iter()
-                .filter(|s| s.resolve(container).is_none())
-                .map(|s| s.name)
-                .collect();
-            if missing.is_empty() {
-                Ok(())
-            } else {
-                Err(format!(
-                    "global pipe(s) not resolvable from the container: {} — import the \
-                     module that provides them; an unresolvable global pipe would \
-                     silently drop its edge validation",
-                    missing.join(", "),
-                ))
-            }
+            check_specs_resolvable(
+                &specs.0,
+                container,
+                "pipe",
+                "an unresolvable global pipe would silently drop its edge validation",
+            )
         }))
     }
 }

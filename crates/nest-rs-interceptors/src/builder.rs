@@ -2,7 +2,7 @@
 //! [`AppBuilder`](nest_rs_core::AppBuilder).
 
 use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain};
-use nest_rs_core::{AppBuilder, Container};
+use nest_rs_core::{AppBuilder, Container, check_specs_resolvable};
 use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
 use poem::EndpointExt;
 
@@ -59,22 +59,12 @@ impl AppBuilderInterceptorsExt for AppBuilder {
                 let Some(specs) = container.get::<InterceptorSpecs>() else {
                     return Ok(());
                 };
-                let missing: Vec<&str> = specs
-                    .0
-                    .iter()
-                    .filter(|s| s.resolve(container).is_none())
-                    .map(|s| s.name)
-                    .collect();
-                if missing.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "global interceptor(s) not resolvable from the container: {} — import \
-                         the module that provides them; an unresolvable global interceptor \
-                         would silently drop",
-                        missing.join(", "),
-                    ))
-                }
+                check_specs_resolvable(
+                    &specs.0,
+                    container,
+                    "interceptor",
+                    "an unresolvable global interceptor would silently drop",
+                )
             }))
             .provide_meta(HttpEndpointWrap::with_priority(
                 endpoint_wrap_priority::POOL_INTERCEPTORS,

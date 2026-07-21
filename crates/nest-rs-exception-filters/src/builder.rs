@@ -1,7 +1,7 @@
 //! Adds [`AppBuilderExceptionFiltersExt::use_exception_filters_global`] to
 //! [`AppBuilder`](nest_rs_core::AppBuilder).
 
-use nest_rs_core::AppBuilder;
+use nest_rs_core::{AppBuilder, check_specs_resolvable};
 use nest_rs_http::HttpBootCheck;
 
 use crate::registry::{ExceptionFilterSpec, ExceptionFilterSpecs};
@@ -35,22 +35,12 @@ impl AppBuilderExceptionFiltersExt for AppBuilder {
                 let Some(specs) = container.get::<ExceptionFilterSpecs>() else {
                     return Ok(());
                 };
-                let missing: Vec<&str> = specs
-                    .0
-                    .iter()
-                    .filter(|s| s.resolve(container).is_none())
-                    .map(|s| s.name)
-                    .collect();
-                if missing.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "global exception filter(s) not resolvable from the container: {} — \
-                         import the module that provides them; an unresolvable global \
-                         exception filter would silently drop its typed catch",
-                        missing.join(", "),
-                    ))
-                }
+                check_specs_resolvable(
+                    &specs.0,
+                    container,
+                    "exception filter",
+                    "an unresolvable global exception filter would silently drop its typed catch",
+                )
             }))
     }
 }

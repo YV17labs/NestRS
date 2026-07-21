@@ -23,13 +23,91 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
+use crate::container::Container;
 use crate::layer::Layer;
 // Re-exported so downstream call sites (and macro-emitted code) can name the
 // site tag through this module without also importing `layer`.
 pub use crate::layer::LayerSite;
 
+/// A global-layer registration: the `TypeId` a chain dedups on, the type's
+/// name for boot logs and fail-secure diagnostics, and a `resolve` fn that
+/// recovers the concrete `Arc<L>` from the live container at configure time.
+///
+/// This is the single shared shape behind the five Layer-System families'
+/// `*Spec` types: `GuardSpec` / `PipeSpec` (`nest-rs-guards`), `FilterSpec`
+/// (`nest-rs-filters`), `InterceptorSpec` (`nest-rs-interceptors`) and
+/// `ExceptionFilterSpec` (`nest-rs-exception-filters`) are all
+/// `LayerSpec<dyn Trait>` aliases. Each crate keeps its own typed constructor
+/// (`guard::<G>()`, `filter::<F>()`, …) that builds one via [`LayerSpec::new`];
+/// the erased-trait target is the only thing that varies. `type_id` and `name`
+/// are public (the shapers read them when composing the chain); `resolve` is
+/// private, reached through [`LayerSpec::resolve`].
+pub struct LayerSpec<L: ?Sized> {
+    /// `TypeId` of the layer type — the dedup key across scopes.
+    pub type_id: TypeId,
+    /// The layer type's name, for boot logs and fail-secure diagnostics.
+    pub name: &'static str,
+    resolve: fn(&Container) -> Option<Arc<L>>,
+}
+
+impl<L: ?Sized> LayerSpec<L> {
+    /// Build a spec from its `type_id`, `name` and `resolve` fn — called by
+    /// each family's typed constructor, which supplies the container lookup that
+    /// erases the concrete layer type to `Arc<L>`.
+    pub fn new(
+        type_id: TypeId,
+        name: &'static str,
+        resolve: fn(&Container) -> Option<Arc<L>>,
+    ) -> Self {
+        Self {
+            type_id,
+            name,
+            resolve,
+        }
+    }
+
+    /// Resolve the layer instance from the live container, or `None` if its
+    /// provider was never registered (a fail-secure boot check flags this).
+    pub fn resolve(&self, container: &Container) -> Option<Arc<L>> {
+        (self.resolve)(container)
+    }
+}
+
+/// Fail-secure boot check shared by every global Layer-System family: name the
+/// specs whose provider is not resolvable from `container`, and build the
+/// boot-failure message listing them. `kind` is the family noun (`"guard"`,
+/// `"filter"`, …) and `consequence` the family-specific tail explaining what a
+/// silent drop would cost. `Ok(())` when every spec resolves. The five builders
+/// each wrap the returned `Result` in their transport's `HttpBootCheck`.
+#[doc(hidden)]
+pub fn check_specs_resolvable<L: ?Sized>(
+    specs: &[LayerSpec<L>],
+    container: &Container,
+    kind: &str,
+    consequence: &str,
+) -> Result<(), String> {
+    let missing: Vec<&str> = specs
+        .iter()
+        .filter(|s| s.resolve(container).is_none())
+        .map(|s| s.name)
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "global {kind}(s) not resolvable from the container: {} — import the \
+             module that provides them; {consequence}",
+            missing.join(", "),
+        ))
+    }
+}
+
 /// A layer that survived dedup, paired with its origin site and the name
 /// the shaper logged at mount.
+///
+/// Cross-crate wiring, not public API — hidden so it does not freeze at 1.0
+/// ([`LayerSpec`] is the one deliberate vocabulary type in this module).
+#[doc(hidden)]
 pub struct ResolvedLayer<L: ?Sized> {
     /// The layer type's identity — the key dedup collapsed duplicates on.
     pub type_id: TypeId,
@@ -66,6 +144,7 @@ impl<L: ?Sized> Clone for ResolvedLayer<L> {
 /// 3. Stable sort by [`Layer::priority`] only — declaration order survives
 ///    when priorities tie (the common case). No "category" ordering: the
 ///    framework runs one kind per chain.
+#[doc(hidden)]
 pub fn compose_chain<L>(
     global: Vec<ResolvedLayer<L>>,
     controller: Vec<ResolvedLayer<L>>,
@@ -182,6 +261,7 @@ fn leaf(segment: &str) -> &str {
 /// [`compose_chain`] at a per-route site: the duplicate was already warned
 /// about once at the site that executes the global sub-chain; re-warning on
 /// every route would be noise.
+#[doc(hidden)]
 pub fn dedup_bucket<L: ?Sized>(bucket: Vec<ResolvedLayer<L>>) -> Vec<ResolvedLayer<L>> {
     let mut seen: Vec<TypeId> = Vec::new();
     bucket

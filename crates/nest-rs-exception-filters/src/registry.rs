@@ -1,10 +1,14 @@
 //! Layer registration — typed specs the builder uses to seed the global
 //! exception-filter chain into the container.
+//!
+//! `ExceptionFilterSpec` is a [`LayerSpec`](nest_rs_core::LayerSpec) alias — the
+//! shared shape and its `resolve` method live in `nest-rs-core`; only the typed
+//! constructor and the erased trait differ per family.
 
 use std::any::{TypeId, type_name};
 use std::sync::Arc;
 
-use nest_rs_core::Container;
+use nest_rs_core::LayerSpec;
 
 use crate::ExceptionFilter;
 use crate::erased::ExceptionFilterErased;
@@ -14,13 +18,7 @@ use crate::erased::ExceptionFilterErased;
 ///
 /// `type_id` identifies the filter *type* (used for dedup against
 /// controller- and method-scope declarations), not the exception type.
-pub struct ExceptionFilterSpec {
-    /// `TypeId` of the filter type — the dedup key across scopes.
-    pub type_id: TypeId,
-    /// The filter type's name, for boot logs and fail-secure diagnostics.
-    pub name: &'static str,
-    pub(crate) resolve: fn(&Container) -> Option<Arc<dyn ExceptionFilterErased>>,
-}
+pub type ExceptionFilterSpec = LayerSpec<dyn ExceptionFilterErased>;
 
 /// Construct an [`ExceptionFilterSpec`] for the given filter type.
 ///
@@ -33,22 +31,10 @@ pub fn exception_filter<F>() -> ExceptionFilterSpec
 where
     F: ExceptionFilter + 'static,
 {
-    ExceptionFilterSpec {
-        type_id: TypeId::of::<F>(),
-        name: type_name::<F>(),
-        resolve: |c| {
-            c.get::<F>()
-                .map(|arc| arc as Arc<dyn ExceptionFilterErased>)
-        },
-    }
-}
-
-impl ExceptionFilterSpec {
-    /// Resolve the filter instance from the live container, or `None` if its
-    /// provider was never registered (a fail-secure boot check flags this).
-    pub fn resolve(&self, container: &Container) -> Option<Arc<dyn ExceptionFilterErased>> {
-        (self.resolve)(container)
-    }
+    LayerSpec::new(TypeId::of::<F>(), type_name::<F>(), |c| {
+        c.get::<F>()
+            .map(|arc| arc as Arc<dyn ExceptionFilterErased>)
+    })
 }
 
 /// The unresolved `Vec<ExceptionFilterSpec>` seeded into the container by

@@ -59,6 +59,9 @@ pub use scope::Scoped;
 pub use async_graphql;
 pub use async_graphql_poem;
 pub use async_trait::async_trait;
+// Hidden: macro plumbing — `#[resolver]`-generated `inventory::submit!`
+// resolves through the framework; apps never depend on `inventory` directly.
+#[doc(hidden)]
 pub use inventory;
 // Re-exported so `#[crud]`-generated create/update ops validate their input
 // (`::nest_rs_graphql::ValidateProbe`) without the consumer depending on

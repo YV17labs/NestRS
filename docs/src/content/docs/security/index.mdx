@@ -38,7 +38,7 @@ installs the ambient `Ability`.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -90,7 +90,7 @@ pub struct ApiModule;
 A handler opts **out** by not importing the transport's authz module —
 public endpoints do exactly that and lose every layer transitively.
 Visitor-rule policy then lives in your `AbilityFactory`, not in
-`AuthGuard`.
+`AuthnGuard`.
 </Aside>
 
 ## Where each piece lives
@@ -98,7 +98,7 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
 <FileTree>
 - security/
   - **authentication/**
-    - [index.mdx](/security/authentication/) — `Strategy`, `AuthGuard<S>`, reading the principal back with `Ctx<P>`
+    - [index.mdx](/security/authentication/) — `Strategy`, `AuthnGuard<S>`, reading the principal back with `Ctx<P>`
     - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, HS vs EdDSA keys, claims
     - [oauth2.mdx](/security/authentication/oauth2/) — authorization-code flow with PKCE
     - [password.mdx](/security/authentication/password/) — Argon2id hashing and `burn_verify`
@@ -121,4 +121,4 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
 - [Guards](/fundamentals/guards/) — the primitive every security layer
   builds on.
 - [Throttler](/rate-limiting/) — rate limiting as a guard, composes with
-  `AuthGuard`.
+  `AuthnGuard`.

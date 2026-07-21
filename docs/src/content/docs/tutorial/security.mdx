@@ -1,6 +1,6 @@
 ---
 title: Authenticate and authorize
-description: AuthGuard verifies the JWT, AppAbility decides what the caller may do, Repo filters every read, Bind enforces by-id access.
+description: AuthnGuard verifies the JWT, AppAbility decides what the caller may do, Repo filters every read, Bind enforces by-id access.
 sidebar:
   order: 9
 ---
@@ -22,7 +22,7 @@ their org, and the `email` column disappears from a non-admin listing.
 Authentication and authorization are different jobs handled by different
 crates. The reference feature wires both:
 
-- **`AuthGuard`** lives in
+- **`AuthnGuard`** lives in
   [**`nest-rs-authn`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authn).
   A `Strategy` turns the request into a principal — for a resource
   server, that's `JwtStrategy<Claims>` verifying a `Bearer` token.
@@ -41,7 +41,7 @@ A resource server pins a single alias once. The reference feature's
 back.
 
 ```rust title="crates/features/src/authn/core.rs"
-pub type AuthGuard = nest_rs_authn::AuthGuard<JwtStrategy<Claims>>;
+pub type AuthnGuard = nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>;
 ```
 
 `JwtStrategy<Claims>` is provided by `nest-rs-authn`. On a missing or
@@ -108,12 +108,12 @@ use poem::Result;
 use poem::web::Json;
 
 use crate::Claims;
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -143,8 +143,8 @@ Four things changed:
 
 | Change | Job |
 |--------|-----|
-| `#[use_guards(AuthGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
-| `auth: Ctx<Claims>` | Read the principal that `AuthGuard` attached to the request |
+| `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
+| `auth: Ctx<Claims>` | Read the principal that `AuthnGuard` attached to the request |
 | `_authz: Authorize<Create, UserEntity>` | Check the ability allows `Create` on `UserEntity` before the body runs |
 | `user: Bind<UsersService, Read>` | Parse the `:id`, load the row through the service, return `403` if the ability refuses it |
 
@@ -255,7 +255,7 @@ never had to know.
 
 ## What you have now
 
-- A `UsersController` guarded by `AuthGuard` + `AuthzGuard` — every
+- A `UsersController` guarded by `AuthnGuard` + `AuthzGuard` — every
   route requires a valid JWT and a matching ability.
 - An `AppAbility` policy that scopes reads to the caller's org and
   masks the email column for plain users.

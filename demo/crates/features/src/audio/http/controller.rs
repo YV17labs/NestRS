@@ -14,11 +14,11 @@ use super::extract::UploadedAudio;
 use super::guard::TranscodeGuard;
 use crate::audio::error::{queue_error, storage_error};
 use crate::audio::{AudioService, PresignedUrlDto, TranscodeDto, UploadRequestDto};
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 
 #[controller(path = "/audio")]
-#[use_guards(ThrottlerGuard, AuthGuard, AuthzGuard, TranscodeGuard)]
+#[use_guards(ThrottlerGuard, AuthnGuard, AuthzGuard, TranscodeGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,

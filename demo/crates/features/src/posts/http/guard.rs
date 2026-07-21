@@ -20,7 +20,7 @@ impl Guard for PostAuthorGuard {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         let author_id = {
             let claims = req.extensions().get::<Claims>().ok_or_else(|| {
-                Denial::internal("PostAuthorGuard requires AuthGuard to run first")
+                Denial::internal("PostAuthorGuard requires AuthnGuard to run first")
             })?;
             let Some(sub) = claims.sub else {
                 tracing::warn!(

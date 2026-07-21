@@ -4,7 +4,7 @@ use nest_rs_social::SocialModule;
 
 use super::config::IssuerConfig;
 use super::service::OAuthService;
-use super::strategies::{ClientAuthGuard, ClientCredentialsStrategy, OAuthGuard, OAuthStrategy};
+use super::strategies::{ClientAuthnGuard, ClientCredentialsStrategy, OAuthGuard, OAuthStrategy};
 use crate::users::UsersModule;
 
 #[module(
@@ -14,7 +14,7 @@ use crate::users::UsersModule;
         OAuthStrategy,
         OAuthGuard,
         ClientCredentialsStrategy,
-        ClientAuthGuard,
+        ClientAuthnGuard,
     ],
 )]
 pub struct OAuthModule;

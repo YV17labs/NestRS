@@ -412,7 +412,7 @@ fn generate_resource_guarded_emits_the_crud_and_guards_form() {
     let feature = dir.path().join("crates/features/src/posts");
     let controller = fs::read_to_string(feature.join("http/controller.rs")).unwrap();
     assert!(
-        controller.contains("#[use_guards(AuthGuard, AuthzGuard)]"),
+        controller.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
         "guarded controller binds the guards: {controller}"
     );
     assert!(

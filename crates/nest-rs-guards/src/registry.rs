@@ -27,7 +27,7 @@ pub struct GuardSpec {
 ///
 /// ```rust,ignore
 /// App::builder()
-///     .use_guards_global([guard::<AuthGuard>(), guard::<AuthzGuard>()])
+///     .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
 ///     .module::<AppModule>()
 /// ```
 pub fn guard<G: Guard + 'static>() -> GuardSpec {

@@ -16,7 +16,7 @@ use crate::{AbilityBuilder, AbilityFactory, current_ability};
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::async_graphql::Context as GraphqlContext;
 
-/// Bind after the auth guard: `#[use_guards(AuthGuard, AbilityGuard<AppAbility>)]`.
+/// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AppAbility>)]`.
 /// `F::Actor` is read from request extensions; its absence on a non-public
 /// route is a `500` (an authn guard must run first). On a `#[public]`
 /// route the guard builds an Ability for the anonymous (visitor) actor —

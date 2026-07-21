@@ -13,6 +13,6 @@ pub use module::OAuthModule;
 pub use nest_rs_authn::RegisteredClient;
 pub use scope::{role_from_db, roles_for_scope};
 pub use service::{AuthenticatedClient, Caller, OAuthService};
-pub use strategies::{ClientAuthGuard, ClientCredentialsStrategy, OAuthGuard, OAuthStrategy};
+pub use strategies::{ClientAuthnGuard, ClientCredentialsStrategy, OAuthGuard, OAuthStrategy};
 
 pub use http::{OAuthController, OAuthHttpModule};

@@ -75,7 +75,7 @@ impl Interceptor for OpenTelemetryHttp {
                 user_agent.original = %user_agent,
                 http.response.status_code = tracing::field::Empty,
                 http.response.body.size = tracing::field::Empty,
-                // Recorded by `AuthGuard` on successful authentication
+                // Recorded by `AuthnGuard` on successful authentication
                 // (`PrincipalIdentity::actor_id`) so every event under the
                 // request — denials included — carries who is calling.
                 actor_id = tracing::field::Empty,

@@ -17,7 +17,7 @@ back on you.
 
 | Layer | Catches | Does not catch |
 |-------|---------|----------------|
-| [`AuthGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens | Stolen-but-unexpired tokens, replay before expiry, key compromise |
+| [`AuthnGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens | Stolen-but-unexpired tokens, replay before expiry, key compromise |
 | [`OAuth2Client`](/security/authentication/oauth2/) | CSRF (state cookie), code-interception (PKCE), SSRF on token exchange (no redirects) | Phishing the provider, malicious provider, callback URL takeover |
 | [`hash_password` + `burn_verify`](/security/authentication/password/) | Timing-based account enumeration via login | Slow GPU farms cracking dumped hashes, weak passwords, password reuse |
 | [`AbilityGuard`](/security/authorization/) | Missing or malformed `Ability` (500), unauthenticated GraphQL/WS (403) | Logic bugs in your `AbilityFactory` itself |

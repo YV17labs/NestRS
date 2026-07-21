@@ -38,12 +38,12 @@ use nest_rs_graphql::{crud, resolver};
 use nest_rs_seaorm::graphql::bind;
 
 use crate::Claims;
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[resolver]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -99,7 +99,7 @@ are different:
 | `Bind<UsersService, Read>` extractor | `bind::<UsersService, Read>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
 | `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the authz bridge seeded |
 
-The same `#[use_guards(AuthGuard, AuthzGuard)]` declaration on the
+The same `#[use_guards(AuthnGuard, AuthzGuard)]` declaration on the
 resolver struct — the markers are the same, the access graph checks
 the same thing.
 

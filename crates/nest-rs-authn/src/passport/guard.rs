@@ -14,22 +14,22 @@ use crate::passport::Strategy;
 /// strategy `S`. Bind it via `#[use_guards]` / `use_guards_global`; on a
 /// `#[public]` route it authenticates opportunistically but never rejects.
 #[injectable]
-pub struct AuthGuard<S: Strategy> {
+pub struct AuthnGuard<S: Strategy> {
     #[inject]
     strategy: Arc<S>,
 }
 
-impl<S: Strategy> AuthGuard<S> {
+impl<S: Strategy> AuthnGuard<S> {
     /// Construct with an already-resolved strategy (container or tests).
     pub fn new(strategy: Arc<S>) -> Self {
         Self { strategy }
     }
 }
 
-impl<S: Strategy> Layer for AuthGuard<S> {}
+impl<S: Strategy> Layer for AuthnGuard<S> {}
 
 /// Layer-System impl — registers globally via
-/// `App::builder().use_guards_global([guard::<AuthGuard>(), ...])` and is the
+/// `App::builder().use_guards_global([guard::<AuthnGuard>(), ...])` and is the
 /// canonical path. `check_graphql` and `check_ws_message` keep the no-op
 /// defaults because the GraphQL POST and WS upgrade are both HTTP requests
 /// this `check_http` covers at the connection edge.
@@ -38,9 +38,9 @@ impl<S: Strategy> Layer for AuthGuard<S> {}
 /// authenticates if a token is present (attaches the principal so a
 /// downstream policy guard can see who's calling) but silently lets an
 /// anonymous request through. Visitor-rule policy belongs in the
-/// authorization layer, not in `AuthGuard`.
+/// authorization layer, not in `AuthnGuard`.
 #[async_trait]
-impl<S: Strategy> Guard for AuthGuard<S> {
+impl<S: Strategy> Guard for AuthnGuard<S> {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         let strategy = std::any::type_name::<S>();
         let is_public = Reflector::new(req).is_public();

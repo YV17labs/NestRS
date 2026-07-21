@@ -104,7 +104,7 @@ use poem::web::Json;
 use crate::{{snake}}::{{{create_op}}, {{entity}}, {{service}}};
 
 // SECURITY: scaffolded without guards so the slice compiles in any workspace.
-// Before exposing real data, bind #[use_guards(AuthGuard, AuthzGuard)] on this
+// Before exposing real data, bind #[use_guards(AuthnGuard, AuthzGuard)] on this
 // struct, import AuthzHttpModule in http/module.rs, and declare
 // `_authz: Authorize<Action, Entity>` per handler (the masking declaration) —
 // see crates/features/src/users/http/.
@@ -136,17 +136,17 @@ impl {{controller}} {
 
 /// The `--guarded` controller: the hardened `#[crud]` + guards form, mirroring
 /// `demo/crates/features/src/orgs/http/controller.rs`. Assumes the workspace
-/// provides `AuthGuard` / `AuthzGuard` (as `crate::authn` / `crate::authz`).
+/// provides `AuthnGuard` / `AuthzGuard` (as `crate::authn` / `crate::authz`).
 pub const HTTP_CONTROLLER_GUARDED: &str = r#"use std::sync::Arc;
 
 use nest_rs_http::{controller, crud};
 
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::{{snake}}::{{{create_op}}, Entity as {{entity}}Entity, {{entity}}, {{service}}, {{update_op}}};
 
 #[controller(path = "/{{kebab}}")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct {{controller}} {
     #[inject]
     svc: Arc<{{service}}>,

@@ -135,7 +135,7 @@ authenticate instead — bearer JWT, ability, row-level filtering — import
 [`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
 endpoint's `dyn McpOperationGuard` (mirroring `AuthzHttpModule`,
 `AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
-re-runs your `AuthGuard` + `AuthzGuard` chain on every MCP request and seeds the
+re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and seeds the
 resulting `Ability` into the per-call context — the same guards HTTP and GraphQL
 run, nothing re-implemented per transport.
 

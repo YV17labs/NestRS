@@ -153,7 +153,7 @@ nested field if you need it).
 
 The `GraphqlAbilityBridge` from `nest-rs-authz`'s `graphql` feature
 turns an `Ability` refusal into a `FORBIDDEN`-coded error before the
-resolver runs. A `GraphqlAuthGuard` does the same for missing or
+resolver runs. A `GraphqlAuthnGuard` does the same for missing or
 invalid principals (`UNAUTHENTICATED`).
 
 The handler doesn't write the mapping; it just declares

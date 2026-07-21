@@ -6,7 +6,7 @@
 //! Composable framework concerns (product wiring lives in `product`):
 //! - [`jwt`] — token sign/verify + [`AuthnModule`]
 //! - [`oauth`] — Authorization Code client + [`OAuth2Module`]
-//! - [`passport`] — [`Strategy`], [`AuthGuard`], [`JwtStrategy`]
+//! - [`passport`] — [`Strategy`], [`AuthnGuard`], [`JwtStrategy`]
 //! - [`password`] — Argon2 helpers (no DI module)
 //!
 //! **Naming convention.** A `*Service` is a singleton DI provider that holds
@@ -30,7 +30,7 @@ pub use oauth::{
     RegisteredClient, TokenError, TokenSet, authenticate_against_registry,
 };
 pub use passport::{
-    AuthGuard, JwtStrategy, PrincipalIdentity, Strategy, basic_credentials, bearer_token,
+    AuthnGuard, JwtStrategy, PrincipalIdentity, Strategy, basic_credentials, bearer_token,
 };
 pub use password::{PasswordError, burn_verify, hash_password, verify_password};
 

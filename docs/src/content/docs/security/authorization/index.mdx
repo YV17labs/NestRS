@@ -85,18 +85,18 @@ The `AuthzHttpModule` provides `AuthzGuard` — a **project type alias** for
 `AbilityGuard<AppAbility>` defined in `features/authz/http/guard.rs`, **not**
 exported from `nest_rs_authz`. Import `AuthzGuard` from your feature crate, or
 use `AbilityGuard<YourAbility>` directly from `nest_rs_authz::http`. Bind it
-after `AuthGuard`:
+after `AuthnGuard`:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
 }
 ```
 
-Order matters: `AuthGuard` attaches the principal; `AuthzGuard` reads
+Order matters: `AuthnGuard` attaches the principal; `AuthzGuard` reads
 it and builds the `Ability`. Every handler downstream sees an ambient
 `Ability` it does not have to thread.
 

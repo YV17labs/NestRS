@@ -4,4 +4,4 @@ use crate::Claims;
 
 pub type AppJwtStrategy = JwtStrategy<Claims>;
 
-pub type AuthGuard = nest_rs_authn::AuthGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs_authn::AuthnGuard<AppJwtStrategy>;

@@ -8,10 +8,10 @@ use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 
 #[injectable]
 #[derive(Default)]
-pub struct GraphqlAuthGuard;
+pub struct GraphqlAuthnGuard;
 
 #[async_trait]
-impl GraphqlResolverGuard for GraphqlAuthGuard {
+impl GraphqlResolverGuard for GraphqlAuthnGuard {
     async fn check(&self, ctx: &Context<'_>) -> Result<()> {
         match ctx.data_opt::<Arc<Ability>>() {
             Some(_) => Ok(()),

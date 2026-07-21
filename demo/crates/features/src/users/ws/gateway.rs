@@ -5,12 +5,12 @@ use nest_rs_seaorm::{CrudService, ServiceError};
 use nest_rs_ws::{gateway, messages};
 use serde_json::Value;
 
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::users::{Entity as UserEntity, User, UsersService};
 
 #[gateway(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersGateway {
     #[inject]
     svc: Arc<UsersService>,

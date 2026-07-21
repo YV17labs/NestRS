@@ -9,6 +9,15 @@ both new features and breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **`AuthGuard` is now `AuthnGuard`** (`nest_rs_authn::AuthnGuard<S>`). It was
+  the only half of the pair not carrying its concern's suffix, so
+  `#[use_guards(AuthGuard, AuthzGuard)]` read as if the two guards answered
+  different kinds of question. They don't: one establishes *who* (authn), the
+  other *what they may do* (authz). Rename the import; nothing else changes.
+  `OAuthGuard` and other `OAuth*` names are untouched — that `Auth` is OAuth's.
+
 ## [0.5.0] - 2026-07-19
 
 ### Changed

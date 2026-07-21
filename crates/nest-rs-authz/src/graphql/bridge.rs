@@ -25,7 +25,7 @@ pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
 impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
         Box::pin(async move {
-            // Each guard logs its own denial at the source layer — `AuthGuard`
+            // Each guard logs its own denial at the source layer — `AuthnGuard`
             // under `nest_rs::authn`, `AbilityGuard` under `nest_rs::authz` — so
             // the bridge only maps the denial to a response (the event is said
             // once, at its source).

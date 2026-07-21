@@ -6,18 +6,18 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Authentication for nestrs: a JwtService (sign/verify), a pluggable Strategy trait, and the request-scoped AuthGuard that establishes the caller's identity."
+description = "Authentication for nestrs: a JwtService (sign/verify), a pluggable Strategy trait, and the request-scoped AuthnGuard that establishes the caller's identity."
 
 
 [dependencies]
-# `AuthGuard` is `#[injectable]` (it resolves the app's `Strategy`); `AuthnModule`
+# `AuthnGuard` is `#[injectable]` (it resolves the app's `Strategy`); `AuthnModule`
 # is a `DynamicModule` that provides the configured `JwtService` as global infra.
 nest-rs-core.workspace = true
 # `AuthnModule`/`OAuth2Module` own their `#[config]` (`JwtConfig`/`OAuth2Config`,
 # namespace `authn`), loaded from `NESTRS_AUTHN__*`; `validator` backs the derives.
 nest-rs-config.workspace = true
 validator.workspace = true
-# `Strategy` reads the `poem::Request`; `AuthGuard` implements the `Guard` trait
+# `Strategy` reads the `poem::Request`; `AuthnGuard` implements the `Guard` trait
 # re-exported by the HTTP surface.
 nest-rs-http.workspace = true
 nest-rs-guards.workspace = true
@@ -45,7 +45,7 @@ subtle.workspace = true
 # `OAuth2Module::for_root` provides the client through the factory phase, whose
 # error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
-# `AuthGuard` logs the authentication outcome — a failure at `warn` so it is
+# `AuthnGuard` logs the authentication outcome — a failure at `warn` so it is
 # visible in production, the audit point every strategy shares.
 tracing.workspace = true
 

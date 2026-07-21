@@ -94,7 +94,7 @@ HTTP request
 DbContext              ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
                        ──→ installs Executor::Txn  (POST/PUT/PATCH/DELETE)
   ↓
-guards (AuthGuard, AbilityGuard, ...)
+guards (AuthnGuard, AbilityGuard, ...)
   ↓
 handler
   ↓

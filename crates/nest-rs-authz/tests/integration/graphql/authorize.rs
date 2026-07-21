@@ -93,7 +93,7 @@ impl WidgetResolver {
 }
 
 /// The same shape `crates/features` wires for the real app:
-/// `GraphqlAbilityBridge<AuthGuard, AuthzGuard> as dyn GraphqlOperationGuard`.
+/// `GraphqlAbilityBridge<AuthnGuard, AuthzGuard> as dyn GraphqlOperationGuard`.
 type TestOpGuard = GraphqlAbilityBridge<PassGuard, AbilityInjector>;
 
 #[module(

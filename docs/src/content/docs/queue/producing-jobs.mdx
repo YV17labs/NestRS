@@ -115,7 +115,7 @@ use poem::{Error, Result};
 use crate::audio::{AudioService, TranscodeDto};
 
 #[controller(path = "/audio")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,

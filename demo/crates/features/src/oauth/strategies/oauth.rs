@@ -10,7 +10,7 @@ use serde::Deserialize;
 use super::super::http::TRANSACTION_COOKIE;
 use super::super::service::{Caller, OAuthService};
 
-pub type OAuthGuard = nest_rs_authn::AuthGuard<OAuthStrategy>;
+pub type OAuthGuard = nest_rs_authn::AuthnGuard<OAuthStrategy>;
 
 #[derive(Debug, Default, Deserialize)]
 struct CallbackQuery {

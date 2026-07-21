@@ -102,7 +102,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             // none is registered — never at the HTTP edge (the self-mount is
             // `Exempt` below, so guards run exactly once, in-band). The
             // `Public` marker is load-bearing: the in-band chain reads it so
-            // an `AuthGuard` admits an anonymous request through to the
+            // an `AuthnGuard` admits an anonymous request through to the
             // resolver gates (GraphQL errors in a 200, not a blanket HTTP
             // 401) while a present bearer is still verified.
             let method = poem::EndpointExt::data(method, ::nest_rs_core::Public);

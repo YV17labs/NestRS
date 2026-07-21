@@ -27,14 +27,14 @@ teachable rule:
 > Global = around the whole HTTP process. Scoped = around your handler. Either
 > way, once.
 
-You can watch the dedup happen. Declare `AuthGuard` both globally
-(`use_guards_global`) and on a controller (`#[use_guards(AuthGuard, …)]`), and
+You can watch the dedup happen. Declare `AuthnGuard` both globally
+(`use_guards_global`) and on a controller (`#[use_guards(AuthnGuard, …)]`), and
 boot logs the redundant declaration it dropped — the guard still runs exactly
 once:
 
 ```text
 DEBUG nest_rs::layers: redundant layer declaration deduped
-  layer="AuthGuard<JwtStrategy<Claims>>" kept="global" skipped="controller"
+  layer="AuthnGuard<JwtStrategy<Claims>>" kept="global" skipped="controller"
   hint="broadest scope wins; use `#[force_*]` to re-run"
 ```
 

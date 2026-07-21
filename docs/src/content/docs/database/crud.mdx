@@ -22,12 +22,12 @@ use std::sync::Arc;
 
 use nest_rs_http::{controller, crud};
 
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::orgs::{CreateOrg, Entity as OrgEntity, Org, OrgsService, UpdateOrg};
 
 #[controller(path = "/orgs")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,
@@ -96,7 +96,7 @@ the ones that need custom logic — the rest are filled in:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -142,7 +142,7 @@ type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 #[resolver]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,

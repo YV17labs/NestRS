@@ -25,11 +25,11 @@ A resource-server app declares a type alias and a tiny module:
 
 ```rust title="crates/features/src/authn/mod.rs"
 pub type AppJwtStrategy = JwtStrategy<Claims>;
-pub type AuthGuard = nest_rs_authn::AuthGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs_authn::AuthnGuard<AppJwtStrategy>;
 
 #[module(
     imports = [nest_rs_authn::AuthnModule::for_root(None)],
-    providers = [AppJwtStrategy, AuthGuard],
+    providers = [AppJwtStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
 ```
@@ -47,7 +47,7 @@ export NESTRS_AUTHN__SECRET='a-32-byte-minimum-development-secret!!'
 ```
 
 With that set, `JwtService` signs and verifies against the same
-secret: `AuthGuard` returns a 401 without a valid
+secret: `AuthnGuard` returns a 401 without a valid
 `Authorization: Bearer` token and attaches the claims otherwise.
 Every other knob is optional — the full env table and the
 HS256-vs-EdDSA decision come [later on this page](#configuration).
@@ -65,7 +65,7 @@ HS256-vs-EdDSA decision come [later on this page](#configuration).
 
 A missing header yields `AuthError::MissingCredentials`; a bad
 signature yields `AuthError::InvalidSignature`; an expired token
-yields `AuthError::Expired`. `AuthGuard` maps every variant to a 401
+yields `AuthError::Expired`. `AuthnGuard` maps every variant to a 401
 with `WWW-Authenticate: Bearer`.
 
 ## Claims — your shape, your business rules

@@ -12,12 +12,12 @@ use super::exception_filter::PostProblemFilter;
 use super::guard::{PostAuthor, PostAuthorGuard};
 use super::interceptor::PostAuditInterceptor;
 use crate::Claims;
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::posts::{CreatePost, Entity as PostEntity, Post, PostsService, UpdatePost};
 
 #[controller(path = "/posts")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 #[use_interceptors(PostAuditInterceptor)]
 pub struct PostsController {
     #[inject]

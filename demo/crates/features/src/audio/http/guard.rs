@@ -19,7 +19,7 @@ impl Layer for TranscodeGuard {}
 impl Guard for TranscodeGuard {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         let ability = req.extensions().get::<Arc<Ability>>().ok_or_else(|| {
-            Denial::internal("TranscodeGuard requires AuthGuard + AuthzGuard to run first")
+            Denial::internal("TranscodeGuard requires AuthnGuard + AuthzGuard to run first")
         })?;
 
         if ability.can_class(Action::Manage, TypeId::of::<OrgEntity>()) {

@@ -1,17 +1,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
 use nest_rs_core::injectable;
-use nest_rs_queue::{JobProducerExt, QueueError};
+use nest_rs_queue::JobProducerExt;
 use nest_rs_redis::QueueConnection;
 use nest_rs_storage::Storage;
 use uuid::Uuid;
 
 use super::command::{AudioQueue, TranscodeCommand};
 use super::dto::{PresignedUrlDto, TranscodeEventDto, TranscodeState};
+use super::error::AudioError;
 
 const PRESIGN_TTL: Duration = Duration::from_secs(15 * 60);
 
@@ -33,14 +33,14 @@ impl AudioService {
         format!("transcoded/{source}")
     }
 
-    pub async fn presign_upload(&self, filename: &str) -> Result<PresignedUrlDto> {
+    pub async fn presign_upload(&self, filename: &str) -> Result<PresignedUrlDto, AudioError> {
         let key = format!("{}-{filename}", Uuid::now_v7());
         let url = self.storage.presign_put(&key, PRESIGN_TTL).await?;
         tracing::debug!(target: "features::audio", key, "minted presigned upload URL");
         Ok(PresignedUrlDto { key, url })
     }
 
-    pub async fn enqueue_transcode(&self, file: String) -> Result<(), QueueError> {
+    pub async fn enqueue_transcode(&self, file: String) -> Result<(), AudioError> {
         self.queue
             .push_to::<AudioQueue>(TranscodeCommand { file: file.clone() })
             .await?;
@@ -48,7 +48,7 @@ impl AudioService {
         Ok(())
     }
 
-    pub async fn seed_and_enqueue(&self, file: String) -> Result<()> {
+    pub async fn seed_and_enqueue(&self, file: String) -> Result<(), AudioError> {
         let bytes = format!("synthetic audio source for {file}").into_bytes();
         self.storage
             .put_bytes(&file, bytes, AUDIO_CONTENT_TYPE)
@@ -57,7 +57,7 @@ impl AudioService {
         Ok(())
     }
 
-    pub async fn transcode(&self, file: &str) -> Result<String> {
+    pub async fn transcode(&self, file: &str) -> Result<String, AudioError> {
         let source = self.storage.get_bytes(file).await?;
         let derived = Self::derived_key(file);
         self.storage
@@ -73,7 +73,11 @@ impl AudioService {
         Ok(derived)
     }
 
-    pub async fn store_upload(&self, filename: &str, bytes: Vec<u8>) -> Result<PresignedUrlDto> {
+    pub async fn store_upload(
+        &self,
+        filename: &str,
+        bytes: Vec<u8>,
+    ) -> Result<PresignedUrlDto, AudioError> {
         let key = format!("{}-{filename}", Uuid::now_v7());
         self.storage
             .put_bytes(&key, bytes, AUDIO_CONTENT_TYPE)
@@ -86,7 +90,10 @@ impl AudioService {
     pub async fn open_result(
         &self,
         file: &str,
-    ) -> Result<Option<impl Stream<Item = std::io::Result<Bytes>> + Send + 'static + use<>>> {
+    ) -> Result<
+        Option<impl Stream<Item = std::io::Result<Bytes>> + Send + 'static + use<>>,
+        AudioError,
+    > {
         let key = Self::derived_key(file);
         if self.storage.head(&key).await?.is_none() {
             return Ok(None);
@@ -99,12 +106,12 @@ impl AudioService {
         Ok(Some(stream))
     }
 
-    pub async fn result_ready(&self, file: &str) -> Result<bool> {
+    pub async fn result_ready(&self, file: &str) -> Result<bool, AudioError> {
         let key = Self::derived_key(file);
         Ok(self.storage.head(&key).await?.is_some())
     }
 
-    pub async fn presign_result(&self, file: &str) -> Result<Option<PresignedUrlDto>> {
+    pub async fn presign_result(&self, file: &str) -> Result<Option<PresignedUrlDto>, AudioError> {
         let key = Self::derived_key(file);
         if self.storage.head(&key).await?.is_none() {
             return Ok(None);

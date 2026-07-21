@@ -18,7 +18,7 @@ use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{FnArg, ImplItem, ItemImpl, PatType, ReturnType, Type, parse_macro_input};
 
-use nest_rs_codegen::impl_self_ident;
+use nest_rs_codegen::{impl_self_ident, snake_case};
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
@@ -38,7 +38,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let provider_name = provider_ident.to_string();
-    let provider_snake = to_snake(&provider_name);
+    let provider_snake = snake_case(&provider_name);
 
     let mut emissions: Vec<TokenStream2> = Vec::new();
 
@@ -88,7 +88,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         let method_ident = method.sig.ident.clone();
         let method_name = method_ident.to_string();
         let qualified_name = format!("{provider_name}::{method_name}");
-        let method_snake = to_snake(&method_name);
+        let method_snake = snake_case(&method_name);
         let wire_ident =
             format_ident!("__nestrs_listener_wire_{}_{}", provider_snake, method_snake);
 
@@ -170,15 +170,4 @@ fn extract_event_type(method: &syn::ImplItemFn) -> syn::Result<Type> {
             "an `#[on_event]` method takes exactly one `&self` receiver",
         )),
     }
-}
-
-fn to_snake(camel: &str) -> String {
-    let mut out = String::with_capacity(camel.len() + 4);
-    for (i, ch) in camel.chars().enumerate() {
-        if ch.is_uppercase() && i != 0 {
-            out.push('_');
-        }
-        out.extend(ch.to_lowercase());
-    }
-    out
 }

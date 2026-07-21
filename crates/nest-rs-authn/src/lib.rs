@@ -1,7 +1,6 @@
 //! Authentication for nestrs — establishing *who* the caller is.
 //!
-//! Integration tests: `tests/authn.rs` + paths mirroring `src/` (see CLAUDE.md).
-//! Gaps: `jwt/module.rs`, `oauth/module.rs` (app e2e); live OAuth HTTP (app e2e).
+//! Integration tests: `tests/integration/main.rs`, with paths mirroring `src/`.
 //!
 //! Composable framework concerns (product wiring lives in `product`):
 //! - [`jwt`] — token sign/verify + [`AuthnModule`]

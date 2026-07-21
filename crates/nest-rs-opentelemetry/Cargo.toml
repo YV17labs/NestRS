@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "OpenTelemetry for nestrs: logs, traces, metrics, W3C propagation, OTLP export."
+description = "OpenTelemetry for NestRS: logs, traces, metrics, W3C propagation, OTLP export."
 keywords = ["framework", "nestjs", "opentelemetry", "tracing", "otlp"]
 categories = ["development-tools::debugging", "asynchronous"]
 

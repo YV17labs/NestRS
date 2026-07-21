@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "WebSocket gateways for nestrs: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport, built on poem's WebSocket upgrade."
+description = "WebSocket gateways for NestRS: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport, built on poem's WebSocket upgrade."
 keywords = ["framework", "nestjs", "websocket", "web", "poem"]
 categories = ["web-programming::websocket", "asynchronous"]
 

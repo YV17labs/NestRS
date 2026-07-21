@@ -62,7 +62,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.95'
+          toolchain: '1.96'
 
       # .cargo/config.toml selects mold on Linux for faster local/devcontainer
       # links; install it here too or gcc fails with "cannot find 'ld'".

@@ -65,3 +65,13 @@ pub use worker::WorkerDbContext;
 pub use health::{DatabaseHealthModule, DbHealthIndicator};
 #[cfg(feature = "http")]
 pub use http::{Bind, DbContext};
+
+/// Re-exported so a consumer names one `sea_orm` — the framework's — instead of
+/// carrying its own dependency and hand-mirroring the exact pin. SeaORM types
+/// saturate the ORM public surface (`Repo` bounds, `Executor`, `DbErr`, the
+/// entity / `ActiveModel` derives), so its version is part of this crate's API
+/// contract: the workspace exact-pins it (`=2.0`) and apps should resolve it
+/// through this re-export to stay in lockstep (the same rationale
+/// `nest-rs-http` re-exports `poem` and `nest-rs-graphql` re-exports
+/// `async_graphql`).
+pub use sea_orm;

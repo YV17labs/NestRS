@@ -101,8 +101,8 @@ subtle = "2"
 
 # GraphQL. `dataloader` gives us async-graphql's batching loader, surfaced via
 # the `#[dataloader]` decorator to kill field-resolver N+1s.
-async-graphql = { version = "7", features = ["dataloader"] }
-async-graphql-poem = "7"
+async-graphql = { version = "=7.2.1", features = ["dataloader"] }
+async-graphql-poem = "=7.2.1"
 # Link-time registry: each `#[resolver]` submits its query/mutation objects so
 # the schema composes itself at boot with no central list.
 inventory = "0.3"
@@ -117,13 +117,15 @@ validator = { version = "0.20", features = ["derive"] }
 # response masker and JSON responses.
 uuid = { version = "1", features = ["v7", "serde"] }
 
-# ORM. SeaORM 2.0 — the latest published is the `2.0.0-rc` line (the 2.0.0 final
-# is not yet on crates.io, so the pre-release is pinned explicitly). Postgres
-# over the rustls toolchain already used across the workspace.
-sea-orm = { version = "2.0.0-rc.43", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
-# Migration runner + schema builder. Same release line as sea-orm; the bundled
+# ORM. SeaORM 2.0 — exact-pinned to match the framework's `=2.0` contract; the
+# framework's `Repo`/`Executor`/`DbErr` surface (re-exported as
+# `nest_rs_seaorm::sea_orm`) must resolve to the same version this app derives
+# its entities against. Postgres over the rustls toolchain used across the
+# workspace.
+sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
+# Migration runner + schema builder. Same exact pin as sea-orm; the bundled
 # `cli` feature gives the `migrate` binary its up/down/fresh/status subcommands.
-sea-orm-migration = { version = "2.0.0-rc.43", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 
 # HTTP client (rustls so we avoid an OpenSSL system dep)
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

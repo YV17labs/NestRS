@@ -5,7 +5,7 @@ use syn::parse::{ParseStream, Parser};
 use syn::{Expr, ExprLit, Ident, Lit, LitStr, Token};
 
 /// Parse a decorator's sole `<key> = "..."` string argument from its attribute
-/// tokens — `#[controller(path = "…")]`, `#[cron_job(every = "…")]`, etc. `key`
+/// tokens — `#[controller(path = "…")]`, `#[mcp(path = "…")]`, etc. `key`
 /// is the expected argument name, `attr` the attribute; both appear in the error.
 pub fn parse_named_str_arg(args: TokenStream2, key: &str, attr: &str) -> syn::Result<LitStr> {
     let parser = |input: ParseStream| -> syn::Result<LitStr> {

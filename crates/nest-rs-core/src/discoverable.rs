@@ -7,7 +7,7 @@ use crate::container::{ContainerBuilder, KeyedDependency};
 
 /// Anything a `#[module]` can pull in via `providers = [...]`.
 ///
-/// Decorator macros (`#[injectable]`, `#[interceptor]`, `#[cron_job]`,
+/// Decorator macros (`#[injectable]`, `#[interceptor]`, `#[scheduled]`,
 /// `#[mcp]`, `#[routes]`, …) emit a single `impl Discoverable for Self` that
 /// either registers a provider or attaches discovery metadata.
 pub trait Discoverable {

@@ -1,6 +1,6 @@
 //! Drive `Scheduler` end-to-end against a hand-built container. Metadata is
 //! attached directly (`attach_meta` only needs a `'static` host type), so the
-//! test needs neither `#[cron_job]` nor a module tree.
+//! test needs neither `#[scheduled]` nor a module tree.
 
 use std::future::Future;
 use std::pin::Pin;

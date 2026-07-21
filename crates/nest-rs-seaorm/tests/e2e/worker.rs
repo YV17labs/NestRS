@@ -1,5 +1,5 @@
 //! `WorkerDbContext` installs a live pool executor around a job so a
-//! `#[cron_job]`/`#[processor]` queries through `Repo` without an injected
+//! `#[scheduled]`/`#[processor]` queries through `Repo` without an injected
 //! connection. Driven against the dev Postgres.
 
 use std::future::Future;

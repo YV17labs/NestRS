@@ -16,6 +16,15 @@
 //! [`MappedError`](nest_rs_core::MappedError) (an error a filter mapped)
 //! rolls back even when its status reads as success.
 //!
+//! The safe/mutating split is the HTTP **method**, which is all this layer
+//! knows. A transport that can prove more about the operation steps back out
+//! of the transaction itself through
+//! [`Executor::non_transactional`](nest_rs_database::Executor::non_transactional):
+//! every GraphQL operation is a POST, so the `/graphql` endpoint routes a batch
+//! whose every operation parses as a `query` onto the pool for its duration
+//! (DATA-S5). The lazy transaction installed here is then never opened and
+//! finalizes as a no-op.
+//!
 //! ### Serialization conflict observability
 //!
 //! This interceptor does **not** retry — it cannot: a poem `Request` is

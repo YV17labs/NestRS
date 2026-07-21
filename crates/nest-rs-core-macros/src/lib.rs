@@ -121,7 +121,9 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `Foo as dyn Trait` (a trait-object binding stored via `provide_dyn`).
 ///
 /// Registration is idempotent: a diamond import builds its providers exactly
-/// once. Dynamic imports carry their own config and are not deduplicated.
+/// once. Dynamic imports carry their own config and are not deduplicated — but
+/// each import expression is **evaluated once**, in the collect phase, and the
+/// value it produced is what the register phase installs.
 ///
 /// Imports register first, then providers register via a fixpoint pass — each
 /// declares its dependencies through `Discoverable::dependencies` and the

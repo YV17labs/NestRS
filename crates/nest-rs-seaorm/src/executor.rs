@@ -356,6 +356,31 @@ mod tests {
         Executor::Pool(DatabaseConnection::default())
     }
 
+    /// Downcast a `dyn nest_rs_database::Executor` back to the SeaORM enum.
+    fn as_seaorm(executor: &Arc<dyn nest_rs_database::Executor>) -> &Executor {
+        executor
+            .as_any()
+            .downcast_ref::<Executor>()
+            .expect("the handle is a SeaORM Executor")
+    }
+
+    #[test]
+    fn an_unopened_lazy_transaction_hands_out_its_pool() {
+        // DATA-S5: the GraphQL endpoint steps a proven read-only operation out
+        // of the transaction the POST boundary installed.
+        let lazy = Executor::Lazy(Arc::new(
+            LazyTransaction::new(DatabaseConnection::default()),
+        ));
+        let handle = nest_rs_database::Executor::non_transactional(&lazy)
+            .expect("an unopened lazy transaction can step out");
+        assert!(matches!(as_seaorm(&handle), Executor::Pool(_)));
+    }
+
+    #[test]
+    fn a_pool_has_nothing_to_step_out_of() {
+        assert!(nest_rs_database::Executor::non_transactional(&pool()).is_none());
+    }
+
     #[tokio::test]
     async fn no_ambient_executor_outside_a_scope() {
         assert!(current_executor().is_none());

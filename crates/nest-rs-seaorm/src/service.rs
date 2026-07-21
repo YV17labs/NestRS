@@ -432,15 +432,13 @@ pub trait Deletable: CrudService {
 }
 
 /// First primary-key column value of a model, formatted for log correlation on
-/// denial/mutation events. Generic over the entity; every entity has at least
-/// one primary-key column (mirrors the `page` cursor's `expect`).
-fn model_pk<E: EntityTrait>(model: &E::Model) -> sea_orm::Value {
+/// denial/mutation events, or `None` for a primary-key-less entity (SeaORM
+/// permits them — views, raw tables). Logging-only, so a missing key logs as
+/// `None` rather than panicking on this mutation hot path.
+fn model_pk<E: EntityTrait>(model: &E::Model) -> Option<sea_orm::Value> {
     use sea_orm::{Iterable, ModelTrait, PrimaryKeyToColumn};
-    let pk_col = E::PrimaryKey::iter()
-        .next()
-        .expect("an entity has at least one primary-key column")
-        .into_column();
-    model.get(pk_col)
+    let pk_col = E::PrimaryKey::iter().next()?.into_column();
+    Some(model.get(pk_col))
 }
 
 /// Equality condition over **all** of a model's primary-key columns, used to

@@ -124,10 +124,22 @@ where
         let conn = Self::conn()?;
         let limit = clamp_page_size(first);
 
-        let pk_col = E::PrimaryKey::iter()
-            .next()
-            .expect("an entity has at least one primary-key column")
-            .into_column();
+        // SeaORM permits primary-key-less entities (views, raw tables). Keyset
+        // pagination needs a key to page by, so return a typed `DbErr` naming
+        // the entity instead of panicking on this query hot path — the layer's
+        // contract is "never panic, return `DbErr`".
+        let Some(pk) = E::PrimaryKey::iter().next() else {
+            let entity = std::any::type_name::<E>();
+            tracing::error!(
+                target: "nest_rs::orm",
+                entity,
+                "entity has no primary-key column — keyset pagination requires one",
+            );
+            return Err(DbErr::Custom(format!(
+                "entity `{entity}` has no primary-key column; keyset pagination requires one"
+            )));
+        };
+        let pk_col = pk.into_column();
 
         let mut cursor = E::find()
             .filter(scope_for::<E>(Action::Read))

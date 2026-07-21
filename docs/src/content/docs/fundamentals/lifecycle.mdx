@@ -101,7 +101,7 @@ lifecycle treat failure differently, and deliberately:
   message naming the provider, method, and phase. Nothing is listening
   yet, so a failed warm-up never leaves a half-started server accepting
   traffic.
-- **Shutdown is best-effort.** The three teardown phases run every hook
+- **Shutdown is exhaustive.** The three teardown phases run every hook
   even if one fails — a failure is logged at `error` on the
   `nest_rs::lifecycle` target and the next hook still runs, so one
   provider's botched cleanup can't skip another's.
@@ -121,7 +121,7 @@ build container
 → on_application_bootstrap  ┘
 → serve (until SIGINT / SIGTERM, or a transport errors)
 → on_module_destroy            ┐
-→ before_application_shutdown  │ best-effort — every hook runs, errors logged
+→ before_application_shutdown  │ exhaustive — every hook runs, errors logged
 → on_application_shutdown      ┘
 ```
 

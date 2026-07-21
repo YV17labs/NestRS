@@ -25,6 +25,7 @@ export default defineConfig({
   // that ever shipped.
   redirects: {
     '/graphql/dataloader/': '/database/dataloaders/',
+    '/graphql/subscriptions/': '/websockets/',
     '/throttler/': '/rate-limiting/',
   },
   // GFM tables/strikethrough/task-lists must be enabled for .mdx — Astro 6.4+

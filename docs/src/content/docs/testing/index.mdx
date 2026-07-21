@@ -97,9 +97,9 @@ persistence. `nestrs run test e2e` covers the rest. The full suite is
 - **Every app ships a `tests/e2e/main.rs`** booting its real top-level module —
   it proves the route table, the DI graph, the access-graph check, the
   authn/authz layers, and the data path are all wired.
-- **HTTP/GraphQL changes** require `nestrs run dev <app>` + `curl` against the
-  affected endpoint. If you cannot run the binary, say so explicitly
-  rather than claiming green.
+- **HTTP/GraphQL changes** are confirmed against a running binary:
+  `nestrs run dev <app>` plus a `curl` on the affected endpoint. The e2e suite
+  proves the wiring; the curl proves the wire shape.
 - **No DB mocking in e2e tests** — real Postgres via `EphemeralDatabase`
   (testcontainers in CI). Unit tests of *pure* logic need no DB.
 

@@ -1,6 +1,6 @@
 ---
 title: Why not axum?
-description: The honest comparison — axum routes HTTP; NestRS adds the multi-tenant isolation you cannot forget.
+description: axum routes HTTP; NestRS adds the multi-tenant isolation you cannot forget.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -143,19 +143,18 @@ NestRS sits on top of hyper, tokio, and poem — the same native core the
 fastest Rust frameworks use. So performance is not the axis that separates the
 two; both are compiled and both are fast. It is a benefit, not the argument.
 
-For context, our own measurements on the demo API — a single instance, the
+For context, the demo API — a single instance, the
 full JWT plus authz plus row-level plus masking pipeline, Postgres included —
 land around 23k req/s with a p99 under 4.5 ms in roughly 32 MB of resident
 memory. The binary ships in the 11–20 MB range and boots in tens of
-milliseconds. We measured these ourselves in a Linux Docker container capped
-at 4 cores and 8 GB, with the load generator competing for the same cores —
-conditions that understate the result; on dedicated hardware the figures
-go up.
+milliseconds. Measured in a Linux Docker container capped at 4 cores and 8 GB,
+with the load generator competing for the same cores — conditions that
+understate the result; on dedicated hardware the figures go up.
 
 <Aside type="caution">
-  Do not choose NestRS for the throughput number. Choose it for the
-  guarantees. If the guarantees do not apply to your service, the throughput
-  alone does not justify the framework over a router you already know.
+  Throughput is the floor here, not the argument. Both stacks compile to the
+  same native core; what NestRS adds on top is the isolation guarantee. Pick it
+  for the guarantee and take the performance as given.
 </Aside>
 
 ## Where axum is still the right call
@@ -173,7 +172,8 @@ NestRS earns its keep the moment you have cross-cutting concerns —
 authentication, authorization, tenancy, transactions — repeated across many
 features. That is exactly where hand-wired correctness drifts, and exactly what
 the framework is built to make structural. If your service does not have that
-shape, axum is the honest answer.
+shape, a bare router is the right size — and NestRS is still there the day it
+does.
 
 ## Going further
 

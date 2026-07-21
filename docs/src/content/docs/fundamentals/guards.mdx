@@ -332,11 +332,14 @@ flowchart TB
   PC -. "debug at boot, zero extra cost" .-> RUN
 ```
 
-## HTTP, GraphQL, and WebSockets
+## HTTP, GraphQL, WebSockets, and MCP
 
 For most apps the global HTTP declaration is enough: GraphQL
-`POST /graphql` and the WS upgrade are both HTTP requests that pass
-through the global chain.
+`POST /graphql`, `POST /mcp` and the WS upgrade are all HTTP requests that pass
+through the global chain. `/graphql` and `/mcp` are `Exempt` at the HTTP edge
+and gate **in-band** instead, but with no bridge registered each folds the same
+global pool per operation — so `use_guards_global([...])` reaches every
+transport, and a global `ThrottlerGuard` rate-limits a tool call.
 
 Each transport method runs at a different seam:
 
@@ -347,13 +350,17 @@ Each transport method runs at a different seam:
 - `check_ws_message` — once per inbound message, after the connection
   upgrade.
 
-GraphQL and WS need a bridge one level above the resolver / gateway
+GraphQL, WS and MCP need a bridge one level above the resolver / gateway / tool
 because the per-operation context does not carry the poem request:
 
 - **GraphQL** — a `GraphqlOperationGuard` (e.g. `GraphqlAbilityBridge`)
-  re-runs the HTTP guard chain on `POST /graphql` and seeds `Ability`
+  re-runs the HTTP guard chain on `POST /graphql` and installs `Ability`
   for the operation. Per-resolver gating uses a marker like
   `GraphqlAuthnGuard`.
+- **MCP** — an `McpOperationGuard` (e.g. `McpAbilityBridge`), the exact twin:
+  same chain, same `around` installing `Ability` — here *inside* rmcp's
+  spawned dispatch. With none registered the endpoint falls back to the global
+  pool, and with no pool either it is deny-all.
 - **WS** — a `SocketContext` (e.g. `WsDataContext`) captures pool +
   `Ability` on upgrade and re-installs them around each message.
   Per-message gating goes through `check_ws_message`.

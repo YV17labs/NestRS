@@ -15,8 +15,8 @@ handler. Over the limit, the response is `429 Too Many Requests` with
 a `Retry-After` header.
 
 `ThrottlerGuard` must be a **per-route** guard, never a global one — a global
-guard runs before routing, so the route's `#[meta(Throttle)]` is not yet
-attached.
+guard runs before routing has resolved a handler, so no route metadata is
+attached at that point.
 
 ## Install
 
@@ -132,11 +132,10 @@ it back off cleanly and resume on the same window.
 
 ## Alternative stores — Redis, sliding window, anywhere
 
-The counter is hidden behind a **`ThrottlerStore`** trait. The default
-`InMemoryThrottler` (fixed-window, process-local) is what ships with the
-module; a third-party crate can implement the trait against any backend —
-the canonical use case is `nest-rs-throttler-redis` for a distributed
-counter shared across replicas:
+The counter sits behind a **`ThrottlerStore`** trait. `InMemoryThrottler`
+(fixed-window, process-local) ships with the module and covers a single
+replica; a distributed counter shared across replicas is the same trait over
+Redis, and the implementation below is the whole of it:
 
 ```rust
 use std::net::IpAddr;
@@ -165,16 +164,13 @@ await point for the in-memory default. A Redis implementor either fronts
 the call with `tokio::task::block_in_place`, or — preferable — wraps a
 non-async driver (`redis::Commands`) on a dedicated thread pool.
 
-<Aside type="caution">
-**Data model trade-off.** Today the trait works against
-`Throttle { limit, window }` — a **fixed-window** rate-limit description.
-That maps cleanly to a counter+TTL backend, but a sliding-window or
-token-bucket implementation needs richer state per key (a list of
-timestamps, or a `(tokens, refilled_at)` pair). Implementing those
-algorithms against the current `Throttle` shape is possible but lossy;
-a future iteration may carry a richer rate-limit type so the wire shape
-matches the algorithm. Stick with fixed-window backends until then, or
-extend the trait in a downstream crate.
+<Aside type="note">
+**Fixed-window by design.** `Throttle { limit, window }` maps one-to-one onto
+a counter plus a TTL — the shape every distributed store implements cheaply,
+and the reason a Redis store is a dozen lines. Sliding-window and token-bucket
+algorithms need per-key state the trait deliberately does not carry (a list of
+timestamps, or a `(tokens, refilled_at)` pair); implement them in a downstream
+crate with their own store type.
 </Aside>
 
 ## Going further

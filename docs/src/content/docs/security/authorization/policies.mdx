@@ -183,8 +183,9 @@ Two boot-time guards close the gap that type erasure opens — both
 panic at rule-definition time, never a silently-wrong filter:
 
 - the relation must point at `R` (its target table is checked);
-- the relation must be single-column (composite keys are unsupported;
-  denormalize the tenant key instead).
+- the relation must be single-column — a tenant key is one column by
+  design; denormalize it onto the child rather than scoping through a
+  composite key.
 
 One consequence for the read-back path: the in-memory check cannot
 traverse the relation without loading the parent, so row visibility
@@ -269,9 +270,9 @@ in-memory check refuses if any denial matches even when grants do.
 The framework's authz engine is **CASL-style**, but a rule's evaluation
 is independent of every other rule's. There is no inheritance, no
 precedence between non-denial rules — every matching grant
-contributes to the union. Keep rules orthogonal; if you find yourself
-writing rules that have to be evaluated in order, the policy probably
-wants to be expressed as a stronger predicate, not a longer chain.
+contributes to the union. Keep rules orthogonal: rules that have to be
+evaluated in order belong in one stronger predicate, not in a longer
+chain.
 </Aside>
 
 ## Where the policy lives

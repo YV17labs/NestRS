@@ -47,9 +47,10 @@ $ curl -s http://localhost:3000/health/startup
 ```
 
 With no indicators registered every probe reports `up` with empty
-buckets — useful for the first ten minutes; not for production. See
-[Indicators](/health/indicators/) for the framework-shipped ones and
-how to write your own.
+buckets — the right answer for a first boot, since there is nothing yet
+to be unhealthy. Register indicators to make the probes speak for your
+dependencies: see [Indicators](/health/indicators/) for the
+framework-shipped ones and how to write your own.
 
 ## The three probes
 

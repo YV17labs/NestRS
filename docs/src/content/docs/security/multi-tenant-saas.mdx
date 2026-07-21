@@ -1,6 +1,6 @@
 ---
 title: Multi-tenant SaaS in production
-description: What tenant isolation the framework guarantees, the escape hatches that bypass it, and the review checklist that keeps them honest.
+description: The tenant isolation the framework guarantees, the explicit escape hatches, and the review checklist that pins them.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -105,9 +105,10 @@ impl PostsProcessor {
 }
 ```
 
-This is by design, not a defect. But it must be said plainly: the
-compiler does not remind you to filter inside a processor. A job that
-loads by id alone crosses tenants.
+A processor has no caller, so it has no scope to inherit — the tenant
+boundary travels as data, in the job payload, and the `org_id` predicate
+is yours to write. Treat every `#[processor]` as its own boundary: a
+load-by-id with no tenant predicate is the bug to grep for.
 
 ### 3. The Postgres RLS backstop
 
@@ -151,9 +152,11 @@ read:
 <Aside type="caution">
 The most probable failure is not a missing guard — the framework makes
 that loud. It is a logic bug in your `AbilityFactory` (wrong `org_id`
-scope, a grant on the wrong subject). No escape-hatch audit catches
-that. Pin the matrix with unit tests against `Ability::can` and
-`Ability::condition_for`.
+scope, a grant on the wrong subject), which is exactly why the policy is
+one file and one pure function: pin the matrix with
+[policy tests](/testing/policy/) against `Ability::can` and
+`Ability::condition_for`, and the whole tenant boundary is covered by
+microsecond unit tests.
 </Aside>
 
 ## Limits

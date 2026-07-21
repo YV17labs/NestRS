@@ -81,9 +81,9 @@ auto-resolve through dataloaders when the relation field carries `#[expose]`
 REST/OpenAPI adopters can compile without pulling in GraphQL:
 
 ```toml title="Cargo.toml"
-nest-rs-resource = { version = "0.2", default-features = false }
-nest-rs-seaorm = { version = "0.2", features = ["http"] }
-nest-rs-authz = { version = "0.2", features = ["http"] }
+nest-rs-resource = { version = "1.0", default-features = false }
+nest-rs-seaorm = { version = "1.0", features = ["http"] }
+nest-rs-authz = { version = "1.0", features = ["http"] }
 ```
 
 ```rust title="src/posts/entity.rs"
@@ -99,7 +99,7 @@ pub struct Model {
 GraphQL surface when you need it:
 
 ```toml
-nest-rs-resource = { version = "0.2", features = ["graphql"] }
+nest-rs-resource = { version = "1.0", features = ["graphql"] }
 ```
 
 ```rust
@@ -108,7 +108,7 @@ nest-rs-resource = { version = "0.2", features = ["graphql"] }
 
 <Aside type="note">
 An **exposed** SeaORM relation without the `graphql` flag is a **compile error**
-— use scalar FK columns for HTTP-first Phase 0, or leave relation fields
+— use scalar FK columns on a REST-only resource, or leave relation fields
 unexposed (no `#[expose]`).
 </Aside>
 
@@ -217,10 +217,10 @@ slice inherits, without writing any of them:
   the `DbContext` interceptor, the contextless-path escape hatch.
 - [Dataloaders](/database/dataloaders/) — `#[dataloader]` batches, the
   auto-emitted PK and FK loaders, the relations that resolve themselves.
-- [Pagination](/database/pagination/) — keyset `Page<M>` and `PageArgs`,
-  REST vs GraphQL.
+- [Pagination](/database/pagination/) — the keyset `Page<M>` cursor, REST
+  and GraphQL.
 - [Transactions](/database/transactions/) — auto-commit, the
-  `retry_serialization_conflicts` flag, the `retry_on_conflict` primitive.
+  `observe_serialization_conflicts` flag, the `retry_on_conflict` primitive.
 - [Health](/database/health/) — `DatabaseHealthModule` and the readiness
   probe.
 - [CRUD](/database/crud/) — `#[crud(...)]` on a controller or resolver.

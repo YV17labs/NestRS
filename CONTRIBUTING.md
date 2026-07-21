@@ -1,8 +1,8 @@
 # Contributing to NestRS
 
-First off — thank you. NestRS is young and moving fast, and early contributors
-shape what it becomes. This guide is the shortest path from *I want to help* to
-*my change is merged*.
+First off — thank you. NestRS ships at `1.0` under a semver contract, so you
+are contributing to a codebase whose public API is frozen for the `1.x` line.
+This guide is the shortest path from *I want to help* to *my change is merged*.
 
 New here? Browse the
 [`good first issue`](https://github.com/YV17labs/NestRS/labels/good%20first%20issue)
@@ -73,13 +73,12 @@ Before opening a PR, make sure these pass:
 nestrs run fmt && nestrs run lint && nestrs run test unit
 ```
 
-Routing and wiring bugs don't surface in **unit** tests — the **e2e** tests
-catch most of them in `nestrs run test e2e`. For **HTTP, GraphQL, or MCP changes** that is
-still not sufficient: start the app (`nestrs run dev <app>`), exercise the affected
-endpoints (`curl`, an MCP client, the GraphQL playground), and confirm the
-behaviour live (real socket and external services the in-process harness can't
-reach). A GraphQL change should
-regenerate the committed SDL by running the dev server (see CLAUDE.md).
+Unit tests cover logic; the **e2e** suite (`nestrs run test e2e`) covers routing
+and wiring against live infra. For **HTTP, GraphQL, or MCP changes**, close the
+loop on a real socket too: start the app (`nestrs run dev <app>`), exercise the
+affected endpoints (`curl`, an MCP client, the GraphQL playground), and note it
+in the PR. A GraphQL change regenerates the committed SDL by running the dev
+server (see CLAUDE.md).
 
 ## Pull requests
 
@@ -97,18 +96,18 @@ regenerate the committed SDL by running the dev server (see CLAUDE.md).
    add `Type::new(...)` so integration tests can construct providers without boot.
 4. **Update the docs.** If you change behaviour, update the crate README, the
    docs site, and — if you made a design decision — CLAUDE.md. Crate READMEs
-   stay minimal (description from `Cargo.toml`, link to the matching
-   [nestrs.dev](https://nestrs.dev) page, link to the GitHub repo) — put
-   everything else on the docs site.
+   stay tight (the `Cargo.toml` description, the install line, and links to the
+   matching [nestrs.dev](https://nestrs.dev) page and the repo) — anything
+   longer belongs on the docs site.
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 
-There is no test CI: the *Definition of done* is enforced locally, by you,
-before every PR. Run `cargo clippy --workspace --all-targets -- -D warnings`,
+The *Definition of done* is a green local gate, and it is part of the PR. Run
+`cargo clippy --workspace --all-targets -- -D warnings`,
 `cargo fmt --all --check`, and `cargo nextest run --workspace` (plus the
-`demo/` equivalents via `nestrs run` when you touch the product) and paste the
-output in your PR description. A PR that has not passed them locally is not
-ready for review.
+`demo/` equivalents via `nestrs run` when you touch the product), then paste
+the output in your PR description. A PR that has not passed them is not ready
+for review.
 
 ### Commit messages
 

@@ -96,8 +96,9 @@ Exactly once per process, on the first call that needs it:
   [custom `ConfigSource`](/configuration/sources/) never triggers it —
   the process env stays untouched.
 
-The guard is process-wide, so multiple calls are safe. The cascade is
-best-effort: missing files are silently skipped.
+The guard is process-wide, so multiple calls are safe. Every layer is
+optional: a file that does not exist contributes nothing, which is what
+lets the same cascade run unchanged in a container with no `.env` at all.
 
 ## Variable naming
 

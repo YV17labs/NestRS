@@ -1,6 +1,6 @@
 ---
 title: Transactions
-description: Mutating routes commit on 2xx/3xx, roll back otherwise — and the honest retry primitive for serialization conflicts.
+description: Mutating routes commit on 2xx/3xx, roll back otherwise — plus the retry primitive for serialization conflicts.
 sidebar:
   order: 8
 ---
@@ -11,8 +11,8 @@ A mutating request runs inside a transaction with no boilerplate. The
 `DbContext` interceptor — auto-installed by `DatabaseModule` — opens it on
 the way in, hands the handler the transactional executor, and decides
 commit or rollback based on the response. The hard cases — serialization
-conflicts, deadlocks — get their own primitive, and the docs are honest
-about what each primitive can and can't do.
+conflicts, deadlocks — get their own primitive, with a defined boundary
+between what the interceptor handles and what the service owns.
 
 The conflict classifier matches against
 [sqlx](https://github.com/launchbadge/sqlx)'s typed `DatabaseError::code()`
@@ -45,30 +45,32 @@ a typed 4xx body from a `thiserror`-derived error. See
 [Repo and executor](/database/repo-and-executor/) for the full sequence,
 including the escape-on-spawn case.
 
-## Why the body cannot be retried at the interceptor
+## Why retrying belongs to the service, not the interceptor
 
 A poem `Request` is consumed by `next.run` — the body bytes are gone past
 the handler call. The interceptor cannot replay the same handler on a
 fresh transaction; the `DatabaseTransaction` handle is already aborted by
 the time a conflict surfaces. Two consequences:
 
-1. **The interceptor can retry the commit, not the body.** And a commit
-   that failed with a SQLSTATE conflict has already consumed its handle,
-   so even that retry is bounded.
-2. **A handler-time conflict is the service's job to retry.** The
-   replayable closure has to own the transaction boundary itself.
+1. **The interceptor observes the conflict, it does not retry it.** The
+   failed commit has already consumed its handle, and the handler's
+   non-transactional side effects — a queued job, an emitted event, an
+   object written to storage — would replay with it.
+2. **Retrying is the service's job.** Only the service knows which
+   boundary is replayable, so the replayable closure owns that boundary
+   itself.
 
 The framework exposes two pieces, deliberately split:
 
 ## The observability flag
 
 ```bash frame="terminal"
-NESTRS_DATABASE__RETRY_SERIALIZATION_CONFLICTS=true
+NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS=true
 ```
 
 ```rust
 DatabaseModule::for_root(DatabaseConfig {
-    retry_serialization_conflicts: true,
+    observe_serialization_conflicts: true,
     ..Default::default()
 })
 ```
@@ -78,14 +80,14 @@ conflict against the SQLSTATE markers below and logs it at `warn` with
 the conflict tag (target `nest_rs::orm`) so ops sees the failure mode
 distinctly from a generic commit error.
 
-<Aside type="caution">
-**The flag does not actually retry the commit today.** SeaORM's
-`DatabaseTransaction` handle is consumed by the failed commit — the
-interceptor cannot replay it, and the request body is no longer available
-to re-run the handler from scratch. So the response still surfaces as
-`500` after the warn line; the flag is currently an **observability tag**,
-not a retry mechanism. Treat it as "I want to see serialization conflicts
-in my logs", not "I want them invisible".
+<Aside type="note">
+**The flag observes; it never retries** — which is why it is named for what
+it does. Replaying a commit-time conflict means re-running the whole handler,
+and a handler may already have pushed a job, emitted an event, or written an
+object. None of those roll back with the transaction, so a transparent retry
+would duplicate them silently. The framework will not make that call on your
+behalf; the response fails closed with a `500` after the `warn` line, and
+retrying is the service's decision at a boundary it knows is replayable.
 </Aside>
 
 ## The working retry primitive
@@ -166,7 +168,7 @@ classifier reads the typed code only, never the display string.
 
 ## When retries don't help
 
-Be honest about the failure modes a retry cannot fix:
+The failure modes a retry cannot fix:
 
 - **A unique constraint violation.** Retrying inserts the same row again,
   same failure. The classifier rejects these.

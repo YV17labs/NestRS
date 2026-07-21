@@ -227,7 +227,7 @@ $ curl -i http://localhost:3005/posts
 HTTP/1.1 500 Internal Server Error
 ```
 
-The `500` is honest — the route exists and ran; there is just no pool to
+The route table is mounted; the data layer is not — the route exists and ran, with no pool to
 reach. [Persist through Postgres](/tutorial/database/) plugs
 `DatabaseModule` in, and the same curl returns a post.
 

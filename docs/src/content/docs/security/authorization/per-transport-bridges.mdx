@@ -19,7 +19,8 @@ The bridges live in:
 
 - `nest_rs_authz::http` — feature `http`
 - `nest_rs_authz::graphql` — feature `graphql`
-- `nest_rs_authz::mcp` — feature `mcp`
+- `nest_rs_authz::mcp` — feature `mcp`; the matching data context is
+  `nest_rs_seaorm::mcp::McpDataContext` (feature `mcp`)
 - `nest_rs_seaorm::ws` — the WS data-context (split avoids a
   circular dep)
 
@@ -36,7 +37,7 @@ below).
 | `AuthzHttpModule` | `AuthzGuard` (`AbilityGuard<AppAbility>`) | The HTTP request — guard runs on `&mut Request`, attaches `Arc<Ability>` |
 | `AuthzGraphqlModule` | `AppGraphqlGuard` (`dyn OperationGuard`), `GraphqlAuthnGuard` (resolver marker), `LoaderScope` (`dyn BatchContext`) | Re-runs the HTTP guard chain on `/graphql`, scopes the operation, snapshots ability around dataloader batches |
 | `AuthzWsModule` | `WsDataContext` (`dyn SocketContext`) | Re-establishes the pool + ability per WS message |
-| `AuthzMcpModule` | `AppMcpGuard` (`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard` | Re-runs the HTTP guard chain on the MCP endpoint, installs ambient ability for the tool call |
+| `AuthzMcpModule` | `AppMcpGuard` (`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `McpDataContext` as `dyn McpToolContext` | Re-runs the HTTP guard chain on the MCP endpoint and installs the ability *inside* each tool dispatch; the data context adds the executor + per-operation transaction |
 
 A controller imports the matching module along with its feature
 module. The transports transitively bring every layer the feature
@@ -116,8 +117,8 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
 ```
 
 `before` runs the same HTTP guard chain (`AuthnGuard`, then
-`AbilityGuard`) on the GraphQL request — best-effort: a failed authn
-leaves no ability and the resolvers' `authorize`/`bind` refuse.
+`AbilityGuard`) on the GraphQL request and fails closed: a failed authn
+leaves no ability, so every `authorize`/`bind` in the operation refuses.
 `around` installs the resulting ability via `with_ability` for the
 duration of the operation. The marker itself is a
 `dyn GraphqlResolverGuard` that fails closed if `Arc<Ability>` is
@@ -189,12 +190,13 @@ a 401-shaped error frame, never silently passed through.
 ## MCP — same shape as HTTP
 
 `AuthzMcpModule` registers `AppMcpGuard`
-(`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard` —
-on each MCP HTTP request it runs the same `A` then `G` chain
-controllers use, then installs the caller's ambient `Ability` for the
-tool call. A failed authn yields 401; a failed authz returns the
-guard's denial. Import `AuthzMcpModule` beside the feature module, the
-same shape as the other transports.
+(`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, plus
+`McpDataContext` as `dyn McpToolContext` — on each MCP HTTP request it runs the same `A` then `G` chain
+controllers use (`run_ability_chain`, the same function the GraphQL bridge
+calls), then installs the caller's ambient `Ability` for the tool call. Either
+leg's denial is returned **as raised**, so a `401`, a `403` and a throttler's
+`429` + `Retry-After` all reach the client intact. Import `AuthzMcpModule`
+beside the feature module, the same shape as the other transports.
 
 ```rust
 #[injectable]
@@ -204,15 +206,49 @@ pub struct McpAbilityBridge<A: Guard, G: Guard> {
 }
 ```
 
-For apps that wrap the endpoint beyond `before`,
-`with_request_ability(req, inner)` re-installs the ambient ability
-around the inner future:
+The ability is installed by the guard's `around`, which runs *inside* rmcp's
+spawned dispatch — the same seam `GraphqlOperationGuard` uses, so "who scopes
+the operation" has one answer on both transports. A tool body is therefore
+scoped whether or not the app also registered `McpDataContext` (the data context
+adds the executor and the per-operation transaction; it is not what installs the
+ability). Any custom `McpOperationGuard` can wrap the dispatch the same way —
+the default impl is a pass-through:
 
 ```rust
-let response = with_request_ability(&req, async move {
-    handle_tool_call(...).await
-}).await;
+// Snapshot on the request, while it still exists…
+fn capture(&self, req: &Request) -> Option<Captured> {
+    req.extensions()
+        .get::<Arc<Ability>>()
+        .cloned()
+        .map(|ability| ability as Captured)
+}
+
+// …install it inside rmcp's dispatch, where the request is long gone.
+fn around<'a>(
+    &'a self,
+    captured: &'a Captured,
+    inner: BoxFuture<'a, OperationOutcome>,
+) -> BoxFuture<'a, OperationOutcome> {
+    Box::pin(async move {
+        match captured.clone().downcast::<Ability>() {
+            Ok(ability) => with_ability(ability, inner).await,
+            Err(_) => inner.await,
+        }
+    })
+}
 ```
+
+Both default to "install nothing" (`capture` returns `None`, `around` is a
+pass-through), so an existing guard is unaffected. The split is the same one
+`McpToolContext` uses — capture on the request, install inside the dispatch — so
+the two seams in the crate have one shape.
+
+**With no bridge registered** the endpoint falls back to the global guard pool
+(`use_guards_global(...)`) rather than going straight to deny-all — so a global
+`ThrottlerGuard` rate-limits tool calls, exactly as it does on `/graphql`. With
+no pool either, `/mcp` stays deny-all: the fallback only ever widens what the
+app declared, and unlike `/graphql` the MCP endpoint carries no `Public` marker,
+so a pooled `AuthnGuard` still refuses an anonymous tool call.
 
 ## Public handlers — opt out per transport
 

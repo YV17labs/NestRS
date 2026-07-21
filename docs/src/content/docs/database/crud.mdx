@@ -238,19 +238,13 @@ without calling `bind_required` itself.
 |-------------------|-------------|-------------------------------------------------|
 | `paginate = cursor` (default) | HTTP + GraphQL | `Vec<T>` body + `x-next-cursor` header (REST); `[T]` + `first`/`after` arguments (GraphQL) |
 | `paginate = none`   | HTTP + GraphQL | full ability-scoped collection, hard-capped by `CrudService::list` |
-| `paginate = page`   | not wired yet  | compile error pointing here — hand-write against `<T>Page` |
 
 Keyset pagination (`cursor`) is the default — stable under inserts, and the
-body stays a plain array so response masking works unchanged. For an
-offset envelope (page numbers + total), hand-write the operation against
-the `<T>Page` type the entity's `#[expose]` attribute emits when it
-declares `paginate`:
+body stays a plain array so response masking works unchanged. Those two
+values are the whole knob: there is no offset mode, and a consumer that
+needs page numbers plus a total hand-writes that operation on the service.
 
-```rust
-#[expose(name = "Post", complex, paginate)]
-```
-
-See [Pagination](/database/pagination/) for both shapes end to end.
+See [Pagination](/database/pagination/) for the shape end to end.
 
 ## By-id binding goes through the service
 
@@ -353,8 +347,9 @@ Custom queries that use `Repo::scoped` must AND
 [`live_condition::<E>()`](https://docs.rs/nest-rs-seaorm/latest/nest_rs_seaorm/fn.live_condition.html)
 when `E: SoftDeletable` (e.g. login-by-email paths).
 
-Entities **without** `soft_delete_column` keep today's hard-delete semantics
-(`orgs/` in Publish stays hard delete).
+An entity that does not declare `soft_delete_column` hard-deletes — the
+default, and the right shape for join tables and lookups (`orgs/` in Publish
+stays hard delete).
 
 ### Reference
 

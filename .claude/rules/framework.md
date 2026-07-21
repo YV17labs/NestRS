@@ -109,6 +109,27 @@ its `inventory` against it. Linked but unreachable ⇒ inert, with a boot
 `tracing::warn` so leftover code doesn't vanish silently. This is what
 makes per-app subsets work.
 
+**The gate is always the entry's owner** — what differs is who the owner
+*is*, and that follows from what the entry is:
+
+- **An entry that names a DI provider** — a method or role on something
+  `#[inject]`ed by type (`#[process]`, `#[on_event]`, `#[query]`,
+  `#[every]`, `HealthIndicator`) — is owned by **that provider**, so the
+  gate is `ReachableProviders`.
+- **An entry that names no provider** — a self-contained plugin the
+  registry builds from its own config, like `SocialProviderEntry` — is
+  owned by **the module providing the registry** (`SocialModule`), whose
+  presence in the import graph is the gate.
+
+Same rule either way, and it is why the second kind needs **no module of
+its own**: only something injected by type does.
+
+**Being buildable is not discovery.** Once an entry is discovered, its
+own config decides its fate on the dual-path `#[config]` rule: complete ⇒
+active, absent ⇒ inert + boot `warn`, partial/invalid ⇒ boot fails naming
+it. Never conflate the two — a capability that cannot be constructed is
+not "undiscovered".
+
 ### Lifecycle hooks
 
 `#[hooks]` submits phase-tagged methods (`#[on_module_init]`,
@@ -159,11 +180,19 @@ name order; init failure aborts boot, shutdown is best-effort.
   PKCE/CSRF flow (through `nest-rs-authn`'s `OAuth2Client`, whose
   `exchange` yields a `TokenSet`), so a standard provider implements
   only `profile`; a non-standard one (Apple's ES256 secret, id_token
-  identity) overrides a step **without changing the trait**. Registry
-  (`SocialProviders`) is inventory-discovered and module-gated via
-  `ReachableProviders` — an unimported provider is inert (boot `warn`);
-  a duplicate key, or a registry key disagreeing with the provider's own
-  `key()`, **fails boot**. Ships first-party GitHub + Google;
+  identity) overrides a step **without changing the trait**. A social
+  provider is **not a DI provider** — never `#[inject]`ed by type, only
+  reached through `SocialRegistry` as `Arc<dyn SocialProvider>` — so it
+  has **no per-provider module**: `SocialModule` owns every entry and is
+  the single import. Within that gate, credentials decide: complete ⇒
+  active, absent ⇒ inert + `warn`, partial/invalid ⇒ boot fails naming
+  the provider. A duplicate key, or a registry key disagreeing with the
+  provider's own `key()`, **fails boot**. Pinning config in code is the
+  ordinary config seam (provide the `GithubSocialConfig` value), not a
+  second module. A third-party provider crate is therefore exactly two
+  files: `config.rs` (`#[config]` + `SocialProviderConfig`) and
+  `provider.rs` (`SocialProvider` + `inventory::submit!` whose `build` is
+  one `resolve_provider` call). Ships first-party GitHub + Google;
   third-party provider crates are **encouraged** through the same public
   seam. Keyed injection (`#[inject(key)]`) stays the tool for **static,
   compile-time roles** (primary/replica pools).

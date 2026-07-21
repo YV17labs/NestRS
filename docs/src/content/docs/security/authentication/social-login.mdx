@@ -1,6 +1,6 @@
 ---
 title: Social login
-description: Open provider contract — mount GitHub/Google with a module import, or publish your own provider as an independent crate through the same discovery seam.
+description: Open provider contract — one module import activates every configured provider, and a third party publishes their own through the same discovery seam.
 sidebar:
   order: 6
 ---
@@ -9,29 +9,24 @@ import { Aside } from '@astrojs/starlight/components';
 
 Social login is an open provider contract. The framework ships the
 `SocialProvider` trait, an inventory-based registry, and first-party
-GitHub and Google providers; a deployment activates the ones it wants
-by importing their modules. A third party publishes a new provider as
-its own crate through the same seam — no fork, no framework change.
+GitHub and Google providers. One import activates the registry; each
+provider turns on when its credentials are configured. A third party
+publishes a new provider as its own crate through the same seam — no
+fork, no framework change.
 
 ```rust
-#[module(
-    imports = [
-        OAuthHttpModule,
-        GithubSocialProviderModule::default(),
-        GoogleSocialProviderModule::default(),
-    ],
-)]
+#[module(imports = [SocialModule, OAuthHttpModule])]
 pub struct AuthModule;
 ```
 
-The provider set is a composition decision: drop `GithubSocialProviderModule`
-and its routes return `404` with a boot `warn` naming the now-inert
-entry — nothing else changes.
+`SocialModule` owns every registry entry, so it is the module gate — no
+`SocialModule`, no social login. Which providers come up inside that gate
+is a config decision, not a second import.
 
 ## Wire it in
 
 Each provider reads its credentials from the dual-path config
-(`NESTRS_SOCIAL__<PROVIDER>__*` env **or** a pinned struct). Only the
+(`NESTRS_SOCIAL__<PROVIDER>__*` env **or** a provided struct). Only the
 client id, secret, and redirect URL are deployment config — the
 auth/token/userinfo endpoints are provider constants, and scopes
 default to each provider's canonical login set.
@@ -42,8 +37,18 @@ NESTRS_SOCIAL__GITHUB__CLIENT_SECRET=…
 NESTRS_SOCIAL__GITHUB__REDIRECT_URL=https://auth.example/social/github/callback
 ```
 
-Invalid or missing config fails boot naming the provider, so a
-misconfigured deployment never starts serving a broken login.
+Three outcomes per provider, and no fourth:
+
+| Config for `NESTRS_SOCIAL__<PROVIDER>__*` | Outcome |
+|---|---|
+| Complete | active |
+| Absent entirely | inert — one boot `warn`, its routes `404` like an unknown key |
+| Partial, or invalid | **boot fails**, naming the provider |
+
+Real credentials are a deployment's explicit intent, so a provider never
+activates by accident; and a half-configured login never starts serving
+silently. Pinning config in code is the ordinary config seam — provide a
+`GithubSocialConfig` value and it wins over the environment.
 
 ## The request flow
 
@@ -72,12 +77,12 @@ account; an unverified one never does.
 ## Write your own provider
 
 A provider is real code — the profile shape, and any provider quirk —
-behind a public trait, discovered at link time. Four steps.
+behind a public trait, discovered at link time. Two files, three steps.
 
 **1. Implement the trait.** `authorize` and `exchange` default to the
 shared flow, so a standard provider writes only `profile`:
 
-```rust
+```rust title="src/provider.rs"
 impl SocialProvider for AcmeProvider {
     fn key(&self) -> &'static str { "acme" }
     fn client(&self) -> &OAuth2Client { &self.client }
@@ -98,26 +103,47 @@ secret, or identity carried in the `TokenSet`'s id_token instead of a
 userinfo endpoint — overrides `exchange` too. The trait does not
 change.
 
-**2. Build it from config** in a `DynamicModule`, mirroring the
-first-party providers: a collect-phase factory reads the config, calls
-`OAuth2Client::new`, and provides the provider.
+**2. Declare the config.** A `#[config]` type plus the one question the
+registry asks before it separates *inert* from *misconfigured*:
 
-**3. Submit the registry entry** so discovery finds it:
-
-```rust
-nest_rs_core::inventory::submit! {
-    SocialProviderEntry {
-        key: "acme",
-        provider_type_id: || std::any::TypeId::of::<AcmeProvider>(),
-        provider_type_name: || std::any::type_name::<AcmeProvider>(),
-        resolve: |c| c.get::<AcmeProvider>().map(|p| p as Arc<dyn SocialProvider>),
+```rust title="src/config.rs"
+impl SocialProviderConfig for AcmeSocialConfig {
+    fn is_unconfigured(&self) -> bool {
+        self.client_id.is_empty()
+            && self.client_secret.is_empty()
+            && self.redirect_url.is_empty()
     }
 }
 ```
 
-**4. Import the module** in the app. An unimported provider module is
-inert by design — its entry is linked but skipped, and the registry
-logs a `warn` so leftover code never disappears silently.
+Report `false` for a *partially* set config — that is what makes it fail
+`validate` and abort boot instead of vanishing.
+
+**3. Submit the registry entry.** `resolve_provider` is the standard
+`build`: a provided instance wins, then a provided config, then the
+environment.
+
+```rust title="src/provider.rs"
+nest_rs_core::inventory::submit! {
+    SocialProviderEntry {
+        key: "acme",
+        provider_type_name: || std::any::type_name::<AcmeProvider>(),
+        config_namespace: AcmeSocialConfig::NAMESPACE,
+        build: |container| {
+            resolve_provider::<AcmeProvider, AcmeSocialConfig>(container, |config| {
+                let client = OAuth2Client::new(config.oauth2_config())
+                    .map_err(|e| anyhow::anyhow!("invalid Acme OAuth2 client config: {e}"))?;
+                Ok(AcmeProvider::new(client))
+            })
+        },
+    }
+}
+```
+
+There is no module to write. A social provider is never `#[inject]`ed by
+type — it is reached through the registry as `Arc<dyn SocialProvider>` —
+so it has nothing for a module of its own to own. Adding the crate to
+`Cargo.toml` and setting `NESTRS_SOCIAL__ACME__*` is the whole wiring.
 
 ## Configuration
 

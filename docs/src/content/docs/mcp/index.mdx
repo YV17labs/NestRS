@@ -32,7 +32,7 @@ The fastest way to see the shape: one tool, one string in, one string out.
 ```rust title="src/hello/tool.rs"
 use nest_rs_mcp::{
     mcp, tool, tool_handler, tool_router,
-    CallToolResult, Content, McpError, Parameters, ServerHandler,
+    CallToolResult, ContentBlock, McpError, Parameters, ServerHandler,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -53,7 +53,7 @@ impl HelloTool {
         &self,
         Parameters(params): Parameters<HelloParams>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Hello, {}!", params.name,
         ))]))
     }
@@ -63,10 +63,13 @@ impl HelloTool {
 impl ServerHandler for HelloTool {}
 ```
 
-That's a complete MCP server — but a bare `#[mcp]` endpoint is **deny-all by
-default**: mounted without a `dyn McpOperationGuard`, it answers every request
-`401`, so a schema-added tool can never leak unauthenticated. A *deliberately*
-public tool has to say so, by binding `AllowAllMcpGuard`:
+That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
+default**. The endpoint gates through the app's `dyn McpOperationGuard`; with
+none registered it falls back to the global guard pool
+(`App::builder().use_guards_global(...)`), and with no pool either it is
+**deny-all** — every request answers `401`, so a schema-added tool can never
+leak unauthenticated. A *deliberately* public tool has to say so, by binding
+`AllowAllMcpGuard`:
 
 ```rust title="src/hello/module.rs"
 use nest_rs_core::module;
@@ -135,9 +138,10 @@ authenticate instead — bearer JWT, ability, row-level filtering — import
 [`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
 endpoint's `dyn McpOperationGuard` (mirroring `AuthzHttpModule`,
 `AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
-re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and seeds the
-resulting `Ability` into the per-call context — the same guards HTTP and GraphQL
-run, nothing re-implemented per transport.
+re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
+the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
+in the same order, from the same `run_ability_chain`, nothing re-implemented per
+transport.
 
 ```rust title="src/module.rs"
 #[module(
@@ -153,7 +157,9 @@ pub struct AssistantModule;
 ```
 
 With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
-endpoint's guard, so the deny-all default is replaced, not silenced. Tools then
+endpoint's guard, so the closed default is replaced, not silenced (a registered
+bridge also replaces the global-pool fallback: it runs the same guards itself,
+so nothing runs twice). Tools then
 read the ambient ability the same way HTTP handlers do: through a service that
 goes through `Repo`, which applies the ability's row-level filter automatically.
 A tool that lists users gets only the users the caller is allowed to see — same
@@ -182,7 +188,7 @@ impl WeatherTool {
         Parameters(p): Parameters<CityParams>,
     ) -> Result<CallToolResult, McpError> {
         let t = self.svc.current(&p.city).await.map_err(internal)?;
-        Ok(CallToolResult::success(vec![Content::text(format!("{t:.1}°C"))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!("{t:.1}°C"))]))
     }
 
     #[tool(description = "Return the forecast for a city, N days out.")]
@@ -191,7 +197,7 @@ impl WeatherTool {
         Parameters(p): Parameters<ForecastParams>,
     ) -> Result<CallToolResult, McpError> {
         let f = self.svc.forecast(&p.city, p.days).await.map_err(internal)?;
-        Ok(CallToolResult::success(vec![Content::text(f.summary())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(f.summary())]))
     }
 }
 
@@ -239,7 +245,7 @@ async fn current_weather(
         .await
         .map_err(internal)?;
 
-    Ok(CallToolResult::success(vec![Content::text(report.summary())]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(report.summary())]))
 }
 ```
 
@@ -262,26 +268,22 @@ policy if you want one.
 pub struct AssistantModule;
 ```
 
-There is no per-server namespace primitive (no `WsServer<N>` analogue) —
-clients distinguish servers by URL: `/mcp` for `HelloTool`, `/weather` for
-`WeatherTool`. The MCP spec already namespaces tools per endpoint, so a second
-endpoint **is** the namespace.
+Namespacing is the URL: `/mcp` for `HelloTool`, `/weather` for `WeatherTool`.
+The MCP spec already namespaces tools per endpoint, so a second endpoint **is**
+the namespace — no extra primitive to learn.
 
 ## Resources and prompts
 
 MCP defines two primitives beyond tools: **resources** (read-only documents the
 model can fetch) and **prompts** (parameterized templates the user picks).
-Today, `nest-rs-mcp` ships only the tool surface — there is no `#[resource]`
-or `#[prompt]` decorator, and the `#[tool_handler]` macro leaves the
-`list_resources` / `read_resource` / `list_prompts` / `get_prompt` methods
-on rmcp's `ServerHandler` at their default (empty) impls.
+NestRS decorates the tool surface, which is the primitive the spec is built
+around; resources and prompts are reached through rmcp's `ServerHandler`,
+re-exported from `nest_rs_mcp`.
 
-If you need resources or prompts now, hand-implement the relevant
-`ServerHandler` methods on your `#[mcp]` struct directly — the
-`#[tool_handler]` macro is additive, not exclusive, and the raw rmcp surface
-is re-exported from `nest_rs_mcp`. When the decorators land they will follow
-the same shape as `#[tool]`: a method on the impl, schemars-derived input
-schema, ambient `Ability` honoured the same way.
+Implement `list_resources` / `read_resource` / `list_prompts` / `get_prompt`
+on your `#[mcp]` struct directly — `#[tool_handler]` is additive, not
+exclusive, so the decorated tools and the hand-written methods compose on one
+server.
 
 <Aside type="caution">
   Lean on tools first. The MCP spec is tool-centric: anything you can phrase as
@@ -344,5 +346,7 @@ the access graph rejects accidental coupling at boot.
 - `crates/nest-rs-mcp/` — `#[mcp]`, the streamable-HTTP endpoint factory,
   and the re-exported rmcp surface (`tool_router`, `tool`, `tool_handler`,
   `ServerHandler`, `McpError`, `Parameters`, `CallToolResult`, `Content`).
-- `crates/nest-rs-authz/` (with the `mcp` feature) — `McpAbilityBridge`,
+- `crates/nest-rs-authz/` (with the `mcp` feature) — `McpAbilityBridge`
+  (masking inside a tool body is `masked_output_ambient`);
+  `crates/nest-rs-seaorm/` (with the `mcp` feature) — `McpDataContext`. Both
   bound through `AuthzMcpModule`.

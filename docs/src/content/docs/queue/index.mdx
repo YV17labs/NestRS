@@ -15,9 +15,9 @@ the runtime at boot, drains the discovered methods, and spawns one
 worker per method. A producer-only app skips that import and only gets
 the connection — same crate, same types, one less module.
 
-There is no step-by-step tutorial for the queue yet. Read this section,
-then start from the working reference: the [`worker`](/publish/) app in
-Publish (audio transcoding jobs) and its `api` producer.
+Read this section, then start from the working reference: the
+[`worker`](/publish/) app in Publish — audio transcoding jobs, with the
+`api` app as the producer.
 
 The abstractions — `Job`, `Processor`, `ProcessMethod`, the `#[processor]`
 macro — ship in **`nest-rs-queue`**. The first-class storage, **Redis**,

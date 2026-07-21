@@ -16,8 +16,8 @@ app in the Publish workspace does, and what each module's adoption page
 means by `cargo add nest-rs-<crate>`. The
 [`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs)
 umbrella (one dependency, surface crates behind **Cargo features** such as
-`features = ["http", "seaorm", "graphql"]`, plus `nest_rs::prelude`) is an
-optional convenience for quick experiments — same crates underneath, less
+`features = ["http", "seaorm", "graphql"]`, plus `nest_rs::prelude`) is a
+single-dependency alternative — the same crates underneath, with less granular
 control over the graph.
 
 <Aside type="note">
@@ -168,16 +168,16 @@ shows. Then import the matching **modules** in `AppModule` — for example
 `GraphqlModule`, `AuthzHttpModule`. The [Publish workspace](/publish/) and
 [Getting started](/getting-started/) walk through a full composition.
 
-Prefer one dependency for a quick experiment? The umbrella collapses the
-list:
+Prefer a single dependency? The umbrella collapses the list:
 
 ```toml
 [dependencies]
-nest-rs = { version = "0.2", features = ["http", "seaorm", "graphql"] }
+nest-rs = { version = "1.0", features = ["http", "seaorm", "graphql"] }
 ```
 
-Same crates underneath; switch to per-crate dependencies when the app
-hardens.
+Same crates underneath — the umbrella is a packaging choice, not a different
+build. Name the crates individually when you want explicit control over the
+dependency graph.
 
 ## Going further
 

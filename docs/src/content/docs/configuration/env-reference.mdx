@@ -42,7 +42,7 @@ config struct, so anything here is also settable in code.
 | `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
 | `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds |
 | `SQLX_LOGGING` | log SQL statements |
-| `RETRY_SERIALIZATION_CONFLICTS` | retry on serialization failures |
+| `OBSERVE_SERIALIZATION_CONFLICTS` | tag commit-time serialization conflicts at `warn` |
 
 ## `queue` — `NESTRS_QUEUE__*`
 

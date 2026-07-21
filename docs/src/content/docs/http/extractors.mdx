@@ -284,7 +284,7 @@ Two rules pin the contract:
   distinct newtypes when they need to coexist.
 - A **route-bound** guard reads metadata via `Reflector`; a **global**
   guard (`use_guards_global`) runs before routing has resolved a handler,
-  so route metadata is not yet attached. A guard that varies its
+  so no route metadata is attached at that point. A guard that varies its
   decision per route must be bound per route.
 
 `Reflector` implements the framework-wide `HandlerMetadata` trait. The

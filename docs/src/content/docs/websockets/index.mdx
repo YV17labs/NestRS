@@ -14,9 +14,9 @@ server. Every frame rides one JSON envelope, `{ "event": "...", "data":
 event. List the gateway in `#[module(providers = [...])]` and you have
 real-time wired in.
 
-There is no step-by-step tutorial for WebSockets yet. Read this section,
-then start from the working reference: the [`live`](/publish/) app in
-Publish (a chat gateway plus org-scoped notifications).
+Read this section, then start from the working reference: the
+[`live`](/publish/) app in Publish — a chat gateway plus org-scoped
+notifications, running the exact shapes below.
 
 `nest-rs-ws` is a thin layer over [`poem`'s WebSocket
 support](https://docs.rs/poem/latest/poem/web/websocket/) — the same

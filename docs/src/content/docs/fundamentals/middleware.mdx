@@ -39,7 +39,7 @@ the difference.
 
 ## "But I want a middleware"
 
-You probably want one of three things. Pick the one that matches.
+Three shapes cover it. Pick the one that matches.
 
 ### "I want to see every request and add a header to the response."
 
@@ -125,13 +125,13 @@ limits, body-decoding — those things live on `HttpConfig` and are
 applied as poem middleware by the transport, not as NestRS Guards or
 Interceptors.
 
-If a third-party crate ships a `poem::Middleware`, there's no public
-hook to bolt it directly onto the transport — `nest-rs-http` doesn't
-expose the underlying poem endpoint. Reach for the framework's own
-primitives instead: an **Interceptor** wraps the handler the same way a
-`poem::Middleware` would, with DI and the access graph on top. The
-lower-level knobs poem middleware is often used for — CORS, TLS,
-body-size limits, request timeout — live on `HttpConfig`.
+`nest-rs-http` owns the poem endpoint, which is what makes every layer
+go through DI and the access graph — portable across controllers and
+checkable at boot. A third-party `poem::Middleware` ports to an
+**Interceptor** in a few lines and gains both: it wraps the handler the
+same way, with DI and the access graph on top. The lower-level knobs
+poem middleware is often reached for — CORS, TLS, body-size limits,
+request timeout — are already `HttpConfig` fields.
 
 <Aside>
 For cross-cutting work, write a Guard or an Interceptor; you get DI,

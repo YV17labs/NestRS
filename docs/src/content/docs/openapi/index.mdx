@@ -137,8 +137,7 @@ move together. No hand-written schema, no annotation, nothing to drift.
 
 ## Configure the document
 
-The `info` block — title, version, description — is the only header the
-framework writes today, and every field is settable from the
+The `info` block — title, version, description — is settable from the
 [`.env` cascade](/configuration/) **and** the pinned struct (the framework-wide
 dual-path rule):
 
@@ -164,37 +163,29 @@ OpenApiModule::for_root(OpenApiConfig {
 
 The pinned struct wins over the environment when both are present.
 
-## Not yet in the document
+## Limits
 
-Be honest about what the framework writes and what it doesn't. The current
-composer emits the `info` block, every operation under `paths`, and a shared
-`components.schemas`. It does **not** yet emit:
+The document composes from the route table, so everything in it is derived:
+the `info` block, `servers` from the transport's `global_prefix`, every
+operation under `paths`, a shared `components.schemas`, a `bearerAuth` entry in
+`components.securitySchemes` with per-operation `security` on guarded routes,
+and the error statuses an operation can actually produce (`400` / `404` / `429`
+alongside its success code) as RFC 9457 `ProblemDetails`.
 
-- **`components.securitySchemes`** — no `bearerAuth` block, no `securitySchemes`
-  entry, and no per-operation `security: [...]`. Protected routes still appear
-  in the spec, but Swagger UI's "Authorize" button has nothing to bind to. For
-  now, document the bearer requirement in the operation's `description`.
-- **Multi-response codes.** Every operation declares one `200` response with
-  the handler's `Json<T>` schema; a route that actually returns `404` / `422` /
-  `409` is not reflected. The handler's `Result` type carries the error
-  variants; the doc doesn't yet read them.
+What the composer does not derive, it leaves to you:
+
 - **`example` / `examples` on inputs and responses.** schemars derives the
-  shape; supplying concrete sample payloads is on the roadmap and not part of
-  `#[api]` today.
-- **Header parameters** — only path parameters are emitted; a `Header<T>`
-  extractor does not yet contribute a `parameters` entry.
-- **`contact` / `license` / `servers` / `externalDocs`** on the document
-  header — only `title`, `version`, and `description` are configurable.
+  shape; concrete sample payloads are a documentation choice, so they live in
+  the `#[api]` description rather than in a generated block.
+- **Header parameters** — path and query parameters are emitted from the
+  handler signature; a `Header<T>` extractor is described in the operation's
+  `description`.
+- **`contact` / `license` / `externalDocs`** on the document header — `title`,
+  `version`, and `description` are the configurable fields.
 
-These are framework gaps, not your gaps. When you hit one, file an issue rather
-than hand-patching the spec — the whole point of the module is that the spec
-composes from the code, and an out-of-band patch breaks that invariant.
-
-<Aside type="caution">
-  Need a security scheme today? Don't post-process the document client-side.
-  The spec is regenerated every request, so a manual patch is lost on the next
-  call. Open an issue against `nest-rs-openapi`; the missing surface is small.
-</Aside>
+Don't hand-patch the document: it is regenerated on every request, so an
+out-of-band edit is lost on the next call and breaks the no-drift invariant
+that makes the spec worth trusting.
 
 ## Going further
 

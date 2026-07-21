@@ -180,11 +180,12 @@ own services may reach for `can` directly when they cannot fit through
 other action. A grant on `Action::Read` does not imply `Update`.
 
 <Aside type="caution">
-A handler **without** the authz module imported loses the request
-`Ability` entirely — `Bind` returns 500, `Authorize` is a noop. The
-access graph will catch a controller's missing import at boot, but a
-**newly added controller** in an app that did not import the authz
-module of its transport boots silently exposed. Match every new
+A handler **without** the authz module imported has no request
+`Ability`, and every path fails closed rather than open: `Bind` returns
+500, and a `Repo` read on the request-scoped executor renders `1 = 0` —
+zero rows, plus a `warn` naming the entity and action. The access graph
+catches the missing import at boot, and a route that binds no guard at
+all is named in a boot `warn` on `nest_rs::layers`. Match every new
 controller with the transport's authz module, and write a
 [negative-path test](/testing/negative-path/) that pins the 403.
 </Aside>

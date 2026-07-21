@@ -156,10 +156,12 @@ async fn health(&self) -> &'static str { "ok" }
 ```
 
 <Aside>
-A controller without `#[use_guards(AuthnGuard, ...)]` silently exposes
-its routes. Default-deny is enforced by **convention** — write a
-[negative-path test](/testing/negative-path/) that asserts a missing
-guard returns 401, and a regression cannot ship.
+A controller that binds no guard is reported at boot: with no global
+guard pool active, every route that is neither guarded nor marked
+`#[public]` is named in a `warn` on `nest_rs::layers`, and a guard whose
+module is unreachable fails the boot outright. Pin the posture with a
+[negative-path test](/testing/negative-path/) asserting 401, and the
+decision is covered at three layers: boot, test, review.
 </Aside>
 
 ## Credential extractors

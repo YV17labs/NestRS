@@ -22,14 +22,13 @@ on the server.
 
 ## Editorial rules
 
-The three rules that keep the docs honest as the framework moves:
+Three rules keep the docs aligned with the code as the framework grows:
 
 1. **Every "Basics" section ends with a link to "All options".** Readers
    coming back after a few weeks want the exhaustive page; do not hide it.
-2. **Every code example must compile.** Snippets that are not lifted
-   directly from a crate or app under this workspace should be moved to
-   `examples/` and verified in CI before being included via
-   `<Code file="..." />`.
+2. **Every code example must compile.** A snippet lifted from a crate or
+   app in this workspace cites that file byte-for-byte; an illustrative
+   one carries a generic `src/…` title, never a real-looking path.
 3. **A "Why this design" subsection on every non-trivial concept.**
    NestRS's value is in the *decisions* — make them legible.
 

@@ -41,7 +41,7 @@ chooses the **execution site**, matched to the family's nature:
 
 | Family | Site (global scope) | Site (controller/method) |
 |---|---|---|
-| Guard | `RouteShaper` (post-routing — reads `#[public]`); `Guarded` self-mount edge; in-band `/graphql` op-guard | same sites |
+| Guard | `RouteShaper` (post-routing — reads `#[public]`); `Guarded` self-mount edge; in-band `/graphql` + `/mcp` op-guard | same sites |
 | Pipe | `RouteShaper` | `RouteShaper` |
 | ExceptionFilter | route site (typed catch, closest to handler) | route site |
 | Interceptor | **transport edge** (band 90) — sees 404s, denials, self-mounts; runs *before* auth (no principal/ability/executor) | around the handler, *inside* guards |
@@ -87,12 +87,16 @@ Self-mounts declare an `EdgePosture`: `Guarded` (default — WS upgrade)
 gets the global chain at its edge; `Exempt` (graphql / mcp / openapi)
 gates in-band or is deliberately public.
 
-`/graphql` stays fail-secure under `Exempt` through the **fallback
-operation guard**: with no registered `GraphqlOperationGuard`, the global
-guard pool runs in-band per operation (a registered bridge *replaces* it
-— it runs the same guards itself, so nothing double-runs). The graphql
-endpoint's `Public` data marker is load-bearing: it lets `AuthnGuard`
-admit anonymous operations through to resolver gates.
+`/graphql` and `/mcp` stay fail-secure under `Exempt` through their
+**fallback operation guard**: with no registered
+`GraphqlOperationGuard` / `McpOperationGuard`, the global guard pool runs
+in-band per operation (a registered bridge *replaces* it — it runs the
+same guards itself, so nothing double-runs). The graphql endpoint's
+`Public` data marker is load-bearing: it lets `AuthnGuard` admit
+anonymous operations through to resolver gates. `/mcp` carries no such
+marker (an unauthenticated tool call is refused) and its *no-pool* tail
+is deny-all, so the fallback only ever widens what `use_guards_global`
+declared.
 
 ## Mapped errors never commit
 

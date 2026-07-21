@@ -103,7 +103,7 @@ Reach for a custom `ConfigSource` only when:
 - A K8s ConfigMap mounts as a file tree rather than env vars.
 - A test needs a programmatic source decoupled from `std::env`.
 
-## Caveat — `for_namespace` and the `.env` cascade
+## What fails if you get it wrong — `for_namespace` and the `.env` cascade
 
 `ConfigService::for_namespace(ns)` is shorthand for `with_source(ns,
 Arc::new(EnvSource))`. The `EnvSource` triggers the `.env` cascade merge

@@ -195,10 +195,11 @@ for `tracing`. A rename of these strings breaks every conforming
 client — they are wire contracts, not display strings.
 
 <Aside>
-Native and SPA apps that cannot keep a `client_secret` should use the
-`code` flow with PKCE and a `client_id`-only setup — drop
-`client_secret` from `oauth2`'s `set_client_secret`. The current
-`OAuth2Client` always sets a secret; SPAs ship a thin proxy.
+`OAuth2Client` is a confidential client: it holds a `client_secret` and
+runs server-side. Native and SPA front-ends keep the secret out of the
+browser by routing their `code` exchange through your app — the
+recommended shape regardless of framework, since a public client cannot
+protect a secret.
 </Aside>
 
 ## Going further

@@ -151,12 +151,11 @@ connections may legitimately report `< N` while you race a slow
 disconnect.
 
 <Aside type="note">
-"Unbounded" here means the in-process channel is unbounded. A wildly
-slow client backed up by gigabytes of pending frames is a real concern
-for any real-time system; the framework leaves that policy to you
-(disconnect on outbox depth, drop on TTL, etc.). Today there is no
-built-in cap — track the channel size yourself if your traffic shape
-needs it.
+"Unbounded" here means the in-process channel is unbounded. Backpressure
+policy is yours to set, on purpose: the right answer differs per traffic
+shape — disconnect on outbox depth, drop on TTL, coalesce successive
+frames. The registry hands back the accepted-frame count, and
+`WsServer::connection_count` gives you the other half of the signal.
 </Aside>
 
 ## Going further

@@ -141,17 +141,24 @@ an `AbilityGuard`.
 Same transparency past HTTP via authz/ORM-agnostic seams. `nest-rs-authz`
 exposes authz bridges behind features — `http` (`Authorize`,
 `AbilityGuard`, `Scope`), `graphql` (`GraphqlAbilityBridge`, `authorize`,
-`ability`), `mcp` (`McpAbilityBridge`); data-layer bridges live in
-`nest-rs-seaorm` behind matching `http`/`graphql`/`ws` features (`Bind`,
-GraphQL `bind`, `LoaderScope`, `WsDataContext`) — **the split avoids a
-circular dep.**
+`ability`), `mcp` (`McpAbilityBridge`; masking inside a tool body is the
+transport-free `masked_output_ambient`); data-layer bridges live in `nest-rs-seaorm` behind matching
+`http`/`graphql`/`ws`/`mcp` features (`Bind`, GraphQL `bind`, `LoaderScope`,
+`WsDataContext`, `McpDataContext`) — **the split avoids a circular dep.**
 
-- GraphQL `OperationGuard` = `GraphqlAbilityBridge` (re-runs the guard
-  chain on `/graphql`).
+- GraphQL `OperationGuard` = `GraphqlAbilityBridge` and MCP
+  `McpOperationGuard` = `McpAbilityBridge` — both run the guard chain in-band
+  (`run_ability_chain`, the single authn→authz ordering) and install the
+  caller's ability from their `around`, so the **guard** is what scopes an
+  operation on either transport, with or without a data context.
 - `BatchContext` = `LoaderScope` (snapshots ability + pool executor
   around each off-task dataloader batch).
-- WS `SocketContext` = `WsDataContext` (pool + ability per message — no
-  per-message transaction).
+- WS `SocketContext` = `WsDataContext` and MCP `McpToolContext` =
+  `McpDataContext` — both re-install ability + a **lazy** executor per
+  dispatch through one shared `dispatch::with_data_context`, so their
+  commit/rollback semantics cannot drift apart. A read-only message or tool
+  opens no transaction; a writing one commits on success, rolls back on the
+  transport's error shape.
 - **Worker transports** install the pool via the orm-agnostic
   `JobContext` (`WorkerDbContext`, auto-bound by `DatabaseModule`) —
   system work ⇒ no ability ⇒ unscoped, correct.

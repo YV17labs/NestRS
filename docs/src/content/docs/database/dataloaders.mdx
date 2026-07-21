@@ -111,7 +111,7 @@ impl PostsService {
 }
 ```
 
-Three things make this honest:
+Three properties make this loader correct:
 
 - **Empty-keys short-circuit.** A frame with no keys returns the empty
   map without touching the executor — `Repo::conn()` would otherwise

@@ -130,11 +130,12 @@ The sanctioned ability-less reads (pre-authentication credential
 lookup, `CrudService::access`'s existence probe) stay inside `Repo`
 through `Repo::unscoped()` / `unscoped_by_id()` — an explicit, greppable
 opt-out of the row scope, never a raw `find()` around the choke point.
-A third such path — signature-verified webhook ingest — is **reserved
-but not yet implemented**; don't ship a `#[public]` + `Repo::unscoped`
-webhook until the framework provides the HMAC-verifying `Guard`
-exemplar (`subtle::ct_eq`, replay window, fail-closed secret, denial
-`warn!`).
+Signature-verified webhook ingest is the same shape: the signature *is*
+the credential, so it authenticates in a `Guard` ahead of the handler —
+verify the HMAC with `subtle::ct_eq`, enforce a replay window on the
+timestamp, fail closed when the secret is unset, and `warn!` on denial.
+With that guard bound, the route is `#[public]` to `AuthnGuard` and free
+to read through `Repo::unscoped`.
 
 ## SQL injection — not the threat
 

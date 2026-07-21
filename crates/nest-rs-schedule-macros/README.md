@@ -1,5 +1,7 @@
 # nest-rs-schedule-macros
 
-Internal — the #[scheduled] decorator macro; re-exported by nest-rs-schedule, not a direct dependency.
+Macro crate for the NestRS framework — the #[scheduled] decorator macro; re-exported by nest-rs-schedule: depend on that crate, not this one.
+
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at `1.0.0` in lockstep, under a semver contract: breaking changes wait for `2.0`.
 
 [Documentation](https://nestrs.dev/schedule/) · [GitHub](https://github.com/YV17labs/NestRS)

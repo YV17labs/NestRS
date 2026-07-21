@@ -101,7 +101,7 @@ the lookup behind a `#[dataloader]`. See [Dataloaders](/database/dataloaders/).
 ## The single-`ComplexObject` rule
 
 <Aside type="caution">
-**The one caveat to remember.** async-graphql allows at most one
+**One rule, enforced at compile time.** async-graphql allows at most one
 `#[ComplexObject]` impl per output type. A custom `#[field_resolver]`
 on a resolver, and the `#[ComplexObject]` block the `#[expose]` macro
 emits for an entity's auto-resolved relations, both target the same

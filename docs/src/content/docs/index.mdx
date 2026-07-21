@@ -155,7 +155,7 @@ to a native binary. Start here; grow into a **workspace** when you add more apps
   ]}
 />
 
-<p class="nestrs-firstbuild-note">The first <code>nestrs run dev</code> compiles the framework from source — a few minutes. Every run after is the sub-second incremental rebuild shown above.</p>
+<p class="nestrs-firstbuild-note">As with any Rust dependency, the first <code>nestrs run dev</code> compiles the crate graph once. Every run after is the sub-second incremental rebuild shown above.</p>
 
 </div>
 
@@ -267,8 +267,8 @@ understates both sides — measure on your own hardware.
   </Card>
 </CardGrid>
 
-Every capability above has a reference section on this site; nothing on
-this list is roadmap.
+Every capability above ships today, each with a reference section on this
+site.
 
 </div>
 
@@ -397,6 +397,6 @@ own replica count — no single "scale the monolith" knob.
 - [Getting started](/getting-started/) — scaffold and run your first app.
 - [Tutorial](/tutorial/) — build a posts feature end to end.
 - [Why NestRS](/why/) — the thesis and the structural properties behind it.
-- [Threat model](/security/threat-model/) — what each layer catches, what it
-  doesn't, and where the framework defers to your deployment.
+- [Threat model](/security/threat-model/) — the boundary each layer enforces,
+  and how it composes with your deployment's own controls.
 - [The Publish workspace](/publish/) — the product universe every example is drawn from.

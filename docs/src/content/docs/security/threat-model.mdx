@@ -1,6 +1,6 @@
 ---
 title: Threat model
-description: What each layer catches, what it doesn't, and where the framework defers to your deployment — honest, scoped.
+description: The boundary each layer enforces, and how it composes with your deployment's own controls.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -36,10 +36,10 @@ deployment, and they are not part of the framework's surface.
 A stolen JWT remains valid until `exp`. The framework's mitigation is
 **short access tokens** (default 1 hour, configurable via
 `JwtOptions::expires_in`) paired with a refresh-token endpoint your
-app exposes. Long-lived sessions need rotation; the auth crate has
-no built-in revocation list — if you need server-side revocation,
-write it as a `revoked_tokens` table the `Strategy` consults on
-verify.
+app exposes. Verification is stateless by design — no shared revocation
+store on the hot path, so a resource server needs nothing but the public
+key. Server-side revocation is a `revoked_tokens` table your `Strategy`
+consults on verify, read through the same `Repo` as everything else.
 
 ### CSRF
 
@@ -61,10 +61,11 @@ commit it, rotate on a schedule.
 
 ### TLS
 
-The HTTP transport ships TLS configuration via
-[`HttpConfig`](/http/configuration/). Configure it. The framework
-will not refuse to serve over plaintext, so an unconfigured app is
-plaintext by default.
+TLS terminates either at your edge — the common production shape: CDN,
+ingress, load balancer — or at the app itself, via
+[`HttpConfig`](/http/configuration/). The transport serves whichever you
+configure and does not assume an edge it cannot see, so pick one and pin
+it in your deployment checklist.
 
 ### Network-level DDoS
 

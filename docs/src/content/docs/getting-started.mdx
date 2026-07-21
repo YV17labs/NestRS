@@ -26,9 +26,9 @@ That's the only thing you install by hand. The first time you run a task with
 `cargo-nextest` for tests — once, then never again. Set `NESTRS_NO_BOOTSTRAP=1`
 (or pass `--no-bootstrap`) on CI to opt out and install them yourself.
 
-Budget a few minutes for the first build: `cargo install nest-rs-cli` and your
-first `nestrs run` compile the CLI and the framework from source. Every build
-after that is an incremental, sub-second rebuild.
+As with any Rust dependency, `cargo install nest-rs-cli` and your first
+`nestrs run` compile the crate graph once — a few minutes, cached from then on.
+Every build after that is an incremental, sub-second rebuild.
 
 ## Scaffold and start
 

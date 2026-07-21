@@ -141,8 +141,8 @@ The GraphQL surface fans out from here. Each page covers one concern:
   method for custom batched fetches, beyond what relations give you.
 - [Errors](/graphql/errors/) — `async_graphql::Error`, extensions,
   and mapping `ServiceError` to a GraphQL envelope.
-- [Subscriptions](/graphql/subscriptions/) — currently not supported;
-  the page documents the path forward.
+- [WebSockets](/websockets/) — realtime rides the gateway, not the
+  GraphQL root: typed channels, per-message guards, the same `Ability`.
 - [Configuration](/graphql/configuration/) — `GraphqlConfig`, SDL
   emission, playground toggle, mount path.
 

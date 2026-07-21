@@ -1,8 +1,7 @@
 # Code of Conduct
 
-NestRS is a small, volunteer-run project, and the goal here is simple: keep it
-a place where contributing — code, docs, questions, ideas — feels welcoming
-and worth the effort. Everyone interacting in the repository, the
+The goal here is simple: keep NestRS a place where contributing — code, docs,
+questions, ideas — feels welcoming and worth the effort. Everyone interacting in the repository, the
 [Discussions](https://github.com/YV17labs/NestRS/discussions), the issue tracker,
 and any other project space is expected to follow the rules below.
 
@@ -42,8 +41,8 @@ project, security advisories, conference talks, the whole surface.
 If something crosses the line — toward you or toward someone else — tell the
 maintainers. You do not have to be the target to report.
 
-The fastest private channel is a **GitHub direct message to
-[@yvanitou](https://github.com/yvanitou)**, or — if you prefer to keep it on
+The fastest private channel is a **GitHub direct message to a maintainer**
+([@yvanitou](https://github.com/yvanitou)), or — if you prefer to keep it on
 the repo — open a private advisory through the
 [Security tab](https://github.com/YV17labs/NestRS/security) and mark it as a
 Code of Conduct report; it stays confidential until a maintainer responds.
@@ -54,7 +53,7 @@ violation.
 
 ## What happens next
 
-This is a small project, so there is no formal SLA — but you can expect:
+Reports go straight to the maintainers. What you can expect:
 
 1. An acknowledgement that the report was received.
 2. A private review by the maintainers.

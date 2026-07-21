@@ -4,12 +4,37 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-While the public API is still stabilizing (`0.x`), the minor version carries
-both new features and breaking changes.
 
-## [Unreleased]
+## [1.0.0] - 2026-07-21
+
+The first stable release. Every crate ships at `1.0.0` in lockstep, and from
+here the public API follows semver: a breaking change waits for `2.0`.
+
+### Third-party surface, frozen for the 1.x line
+
+A handful of crates *are* the framework's public surface — their types appear
+in signatures the macros emit. Their majors are tied to the nestrs major and
+are frozen within 1.x: `poem = "3"`, `sea-orm = "=2.0"`,
+`async-graphql = "=7.2.1"`, `rmcp = "2.2"`, `inventory = "0.3"`,
+`validator = "0.20"`, `schemars = "1"`. sea-orm and async-graphql are
+exact-pinned (not caret) because the ORM bounds and the GraphQL registry
+codegen read enough of their surface that even a *minor* can shift generated
+code.
 
 ### Changed
+
+- **`DatabaseConfig::retry_serialization_conflicts` is now
+  `observe_serialization_conflicts`** (env
+  `NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS`). The flag never retried
+  — it tags a commit-time conflict (`40001` / `40P01` / `1213` / `1205`) as a
+  structured `warn` on `nest_rs::orm` so contention is distinguishable from a
+  generic commit error. The old name promised a transparency the framework
+  deliberately does not offer: replaying a conflict means re-running the whole
+  handler, and a handler may already have pushed a job, emitted an event, or
+  written an object — none of which roll back with the transaction. Retrying
+  stays the service's decision, at a boundary it knows is replayable
+  (`nest_rs_seaorm::retry::retry_on_conflict`). Renamed before the freeze
+  because a config key is public surface for the whole `1.x` line.
 
 - **`AuthGuard` is now `AuthnGuard`** (`nest_rs_authn::AuthnGuard<S>`). It was
   the only half of the pair not carrying its concern's suffix, so
@@ -17,6 +42,119 @@ both new features and breaking changes.
   different kinds of question. They don't: one establishes *who* (authn), the
   other *what they may do* (authz). Rename the import; nothing else changes.
   `OAuthGuard` and other `OAuth*` names are untouched — that `Auth` is OAuth's.
+
+- **Social providers activate from configuration, not from a per-provider
+  module import.** Importing `SocialModule` is now the whole wiring step: it
+  owns every registry entry, so it is the module gate, and inside that gate
+  each linked provider turns on when its credentials are set. A provider with
+  no credentials is inert with one boot `warn` (its routes `404` like an
+  unknown key); a *partially* set or invalid one **fails boot naming the
+  provider**, so a half-configured login is never silently dropped.
+  - `GithubSocialProviderModule` / `GoogleSocialProviderModule` and their
+    `Setup` types are **removed**. Delete those imports; pin config the
+    ordinary way by providing a `GithubSocialConfig` / `GoogleSocialConfig`
+    value, which still wins over the environment.
+  - `SocialProviders` is renamed **`SocialRegistry`** — it is the registry, not
+    the providers.
+  - `SocialProviderEntry` gains `env_namespace` and `build` (normally one
+    `resolve_provider` call) and drops `provider_type_id` / `resolve`. A
+    third-party provider crate is now two files, `config.rs` + `provider.rs`,
+    with no module to write: a social provider is never `#[inject]`ed by type,
+    so it has nothing for a module of its own to own.
+
+### Added
+
+- **Ambient request state now reaches an MCP tool body — `Repo` works on MCP.**
+  rmcp dispatches every tool call on its own spawned task, so the request
+  scope, ambient executor and ambient ability installed around the endpoint
+  never reached a tool. The new `PropagatingHandler` closes that gap: the
+  endpoint stashes the state in the HTTP request extensions, rmcp forwards them
+  as `http::request::Parts` into the operation's `RequestContext`, and the
+  handler re-installs them *inside* the dispatch. A tool method now resolves
+  `Scoped<T>` and reads through `Repo` with the caller's row filter applied —
+  the same transparency HTTP and GraphQL have, with no filtering written in the
+  tool.
+  - New `McpToolContext` seam (`nest-rs-mcp`) with the first-party
+    `nest_rs_seaorm::McpDataContext` behind seaorm's new `mcp` feature —
+    the MCP twin of `WsDataContext`. It installs a **lazy** per-operation
+    transaction: a read-only tool opens none, a writing tool commits on success
+    and rolls back on error. `AuthzMcpModule` provides it.
+  - Without a registered `McpToolContext` a `Repo`-backed tool still fails
+    **closed and loud**, never unscoped.
+  - `endpoint_with_guard` takes the context as a second argument (the `#[mcp]`
+    macro resolves it from the container; hand-written call sites pass `None`).
+
+- **MCP reaches the security sub-layer through the same wiring as GraphQL.**
+  Both transports are `EdgePosture::Exempt` and gate in-band, but only
+  `/graphql` had the surrounding seams; `/mcp` now has all of them, so the two
+  answer identically to one app wiring.
+  - **The global guard pool reaches `/mcp`.** With no `dyn McpOperationGuard`
+    registered, the endpoint folds the `use_guards_global(...)` chain in-band
+    (`FallbackMcpGuard` + `nest_rs_guards::GlobalPoolMcpGuard`, behind guards'
+    new `mcp` feature) instead of going straight to deny-all. A global
+    `ThrottlerGuard` now rate-limits a tool call — it previously could not.
+    The fallback only ever *widens* what the app declared: with no pool (or an
+    empty one) `/mcp` stays deny-all, and unlike `/graphql` it carries no
+    `Public` marker, so a pooled `AuthnGuard` still refuses an anonymous call.
+  - **`McpOperationGuard` gained `capture` + `around`** (both defaulted, so
+    existing impls are unaffected): snapshot on the request, install *inside*
+    rmcp's spawned dispatch — the same split `McpToolContext` already used for
+    the same crossing. `McpAbilityBridge` implements them, so the **guard**
+    installs the caller's ambient `Ability` on both transports and a tool body
+    is now scoped even when the app registers no `McpToolContext`.
+  - **One authn→authz chain.** `nest_rs_authz::run_ability_chain` holds the
+    ordering once; each bridge only maps the resulting `Denial` into its own
+    transport error. Side effect: an MCP denial keeps its status, so a `429`
+    from a throttler in the chain reaches the client as `429` with its
+    `Retry-After` instead of a flattened `401`.
+
+- **Three test suites that never ran now run.** `cargo nextest run --workspace`
+  builds every member with its *default* features, which silently excluded a
+  large part of the framework's own coverage: `nest-rs-authz`'s http / graphql /
+  mcp bridge tests compiled away behind `#[cfg(feature = …)]`, and the
+  `nest-rs-seaorm` and `nest-rs-redis` e2e targets were skipped outright
+  because their `required-features` were unsatisfied. Each crate now carries a
+  path-only **self dev-dependency** that turns its own features on for its test
+  targets (dev-deps do not propagate, and Cargo strips them from the published
+  manifest). The workspace-wide `-E 'binary(e2e)'` step went from 1 test to 21.
+  - Enabling them surfaced two real defects, both fixed: the `nest-rs-seaorm`
+    e2e harness `expect`ed `NESTRS_DATABASE__URL` instead of defaulting to the
+    dev container like its `nest-rs-redis` / `nest-rs-storage` siblings, and its
+    shared probe tables were guarded by a per-*process* `OnceCell` while nextest
+    runs each test in its own process — so a fresh database raced
+    `CREATE TABLE IF NOT EXISTS` against the Postgres catalog. The DDL now
+    serializes on a transaction advisory lock.
+
+- **Two macro diagnostics are pinned by compile-fail snapshots.** Arming the
+  `#[routes]` response shaper with a type that only *borrows* the
+  `Authorize`/`Bind` name now has a `trybuild` fixture, as does a
+  `for_root(...)` value that is not `Send` (the bound `#[module]`'s
+  construct-once dynamic imports introduced). Both errors were already
+  emitted; neither was guarded against silent regression.
+
+### Removed
+
+- **`nest_rs_authz::mcp::masked_output`.** It was a one-line delegation to
+  `nest_rs_authz::masked_output_ambient` — two public names for one behaviour,
+  against *one way to do a thing*. Call `masked_output_ambient` directly; the
+  signature and the fail-closed semantics are unchanged.
+
+- **The unfinished offset-pagination surface.** `PageArgs`, the `<Name>Page`
+  envelope emitted by `#[expose(..., paginate)]`, the `paginate` flag itself,
+  and the `paginate = page` mode of `#[crud]` are all gone. The mode was never
+  wired — both transports answered it with a compile error — so the types
+  documented a capability the framework refused to generate. Keyset
+  (`paginate = cursor`, the default) and `paginate = none` are the whole knob;
+  a consumer that genuinely needs page numbers plus a total hand-writes that
+  operation on its service. No caller in either workspace was affected.
+
+### Known for the 1.x line
+
+- **`Guard::check_http` sits on the base `Guard` trait**, so `nest-rs-guards`
+  depends unconditionally on `poem` and `nest-rs-http` — a queue-only binary
+  still compiles the HTTP stack. Build hygiene, with no runtime, security or
+  correctness effect; moving it to an extension trait touches every guard impl,
+  HTTP dispatch and the boot chain-validation, so it lands in `2.0`.
 
 ## [0.5.0] - 2026-07-19
 
@@ -442,6 +580,7 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
+[1.0.0]: https://github.com/YV17labs/NestRS/compare/v0.5.0...v1.0.0
 [0.5.0]: https://github.com/YV17labs/NestRS/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/YV17labs/NestRS/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/YV17labs/NestRS/compare/v0.2.0...v0.3.0

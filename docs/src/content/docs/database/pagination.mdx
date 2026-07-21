@@ -1,21 +1,16 @@
 ---
 title: Pagination
-description: Keyset pages over the primary key for REST, offset PageArgs for GraphQL — one entity flag, both surfaces wired.
+description: Keyset pages over the primary key — one cursor story, REST and GraphQL, on by default.
 sidebar:
   order: 7
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
-Two paginators ship in the box. **Keyset** (cursor over the primary key) is
-the default — O(1) on the index, stable under concurrent inserts, paired
+One paginator ships in the box: **keyset**, a cursor over the primary key.
+It is O(1) on the index, stable under concurrent inserts, and pairs
 naturally with UUID-v7 keys. Every `#[crud]`-generated list is
-keyset-paginated unless you opt out. **Offset** (`page` + `per_page`) is the
-classic shape admin tables expect; its wire types ship in the box and you
-wire them in a hand-written operation.
+keyset-paginated unless you opt out.
 
-[SeaORM](https://www.sea-ql.org/SeaORM/)'s `Cursor` API drives the keyset
-half; the offset side is plain `LIMIT` + `OFFSET`.
+[SeaORM](https://www.sea-ql.org/SeaORM/)'s `Cursor` API drives it.
 
 ## Pagination is the default
 
@@ -32,26 +27,12 @@ A `#[crud]` list — REST or GraphQL — is keyset-paginated out of the box:
 impl PostsController {}
 ```
 
-No `paginate` knob needed — `paginate = cursor` is the default. The two
-other values:
-
-- `paginate = none` opts out into the full (ability-scoped) collection in
-  one response. Even then the backstop holds: `CrudService::list` never
-  returns more than `LIST_CAP` (1 000) rows, and logs a `warn` when it
-  truncates. Reserve `none` for small, finite collections.
-- `paginate = page` (offset) is **not wired yet** on either surface — the
-  macro says so at compile time. The offset wire types below are for
-  hand-written operations.
-
-For the offset envelope, one more flag lives on the entity:
-
-```rust title="src/posts/entity.rs"
-#[expose(name = "Post", complex, paginate)]
-```
-
-On the entity, `paginate` emits the `PostPage` envelope and the shared
-`PageArgs` input type — the wire types a hand-written offset operation
-serializes to.
+No `paginate` knob needed — `paginate = cursor` is the default. The one
+other value is `paginate = none`, which opts out into the full
+(ability-scoped) collection in one response. Even then the backstop holds:
+`CrudService::list` never returns more than `LIST_CAP` (1 000) rows, and
+logs a `warn` when it truncates. Reserve `none` for small, finite
+collections.
 
 ## Keyset, the REST shape
 
@@ -91,30 +72,6 @@ UUID-v7 keys are time-ordered, so the cursor is just the previous
 page's last `id` — no opaque cursor type. An empty page means you reached
 the end.
 
-## Offset, the hand-written envelope
-
-For an admin table that genuinely needs page numbers and a total, write
-the operation yourself against the `PostPage` envelope and `PageArgs`
-input that `#[expose(paginate)]` emits:
-
-```graphql
-query {
-  postsPage(args: { page: 1, perPage: 20 }) {
-    items { id title }
-    total
-    page
-    perPage
-    totalPages
-    hasNextPage
-    hasPreviousPage
-  }
-}
-```
-
-`PageArgs` validates `page >= 1` and `1 <= per_page <= 100` at the
-boundary; `PostPage::new(items, total, &args)` derives the page-count and
-has-more flags so the math lives in one place.
-
 ## What `Page<M>` carries
 
 The keyset shape, before serialization:
@@ -127,10 +84,10 @@ pub struct Page<M> {
 }
 ```
 
-The keyset implementation fetches `limit + 1` rows, truncates the probe
-row from `items`, and uses its presence to set `has_more` and
-`next_cursor`. The cursor is the last visible row's primary key — present
-only when there is more to fetch.
+The implementation fetches `limit + 1` rows, truncates the probe row from
+`items`, and uses its presence to set `has_more` and `next_cursor`. The
+cursor is the last visible row's primary key — present only when there is
+more to fetch.
 
 `CrudService::page(first, after)` returns a `Page<E::Model>` directly;
 callers paginating a custom query reach for `Repo::<E>::page(first,
@@ -176,25 +133,23 @@ impl PostsService {
 `Repo::scoped(Action::Read)` is the entry point — the ability filter
 applies, and a request without one denies every row (fail-closed).
 
-## Picking between the two
+## Limits
 
-| Property                      | Keyset (default)  | Offset (hand-written) |
-|-------------------------------|-------------------|-----------------------|
-| Stable under concurrent inserts | yes             | no              |
-| O(1) on the PK index          | yes               | no (large offset = scan) |
-| Returns a total count         | no                | yes             |
-| Jump-to-page                  | no                | yes             |
-| REST shape                    | `[T]` + `x-next-cursor` | not wired today |
-| GraphQL shape                 | `[T]` + `first`/`after` args | `<T>Page` envelope + counts |
+Keyset buys stability under concurrent inserts and O(1) reads on the PK
+index by giving up two things: **no total count**, and **no jump-to-page**.
 
-Keep the keyset default. Reach for offset when the consumer genuinely needs
-page numbers and a total — typically an admin UI table — and hand-write
-that operation.
+There is no offset paginator in the framework, and no `paginate = page`
+mode — one pagination story, one wire shape per surface. A consumer that
+genuinely needs page numbers and a total (typically an admin table) writes
+that operation by hand: a `Repo::scoped(Action::Read)` query with
+`.offset()`/`.limit()` plus a `.count()`, returning a shape you own —
+accepting that `OFFSET n` makes the database walk and discard `n` rows, so
+past a few thousand it is a scan.
 
 ## Going further
 
-- [Database](/database/) — the entity that the `paginate` flag lives on.
+- [Database](/database/) — the entity behind the generated list.
 - [CRUD](/database/crud/) — the `paginate` knob on `#[crud(...)]`.
 - [Repo and executor](/database/repo-and-executor/) — `Repo::scoped` and
   `Repo::conn` behind the cursor query.
-- [GraphQL](/graphql/) — `PageArgs`, the `Page<T>` envelope on resolvers.
+- [GraphQL](/graphql/) — the list query on a resolver.

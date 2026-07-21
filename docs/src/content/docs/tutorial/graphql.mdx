@@ -244,8 +244,8 @@ type Query {
 }
 ```
 
-No standalone generator binary, no CI drift check — the dev loop emits
-the SDL when you ask for it.
+The dev run emits the SDL on demand — one env var, no extra binary to
+install. Commit the file and assert on it if you want a drift gate.
 
 ## What you have now
 

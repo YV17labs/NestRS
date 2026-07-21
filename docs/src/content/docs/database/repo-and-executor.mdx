@@ -112,8 +112,8 @@ or rolls back based on the response status:
 | `Err(_)` from the handler| rollback  |
 
 A failed mutation never half-persists. See
-[Transactions](/database/transactions/) for the conflict-retry knobs and the
-honest caveats around them.
+[Transactions](/database/transactions/) for the conflict-retry knobs and where
+each boundary sits.
 
 <Aside type="caution">
 **Fail-closed on escape.** If a handler `tokio::spawn`s a task that captures

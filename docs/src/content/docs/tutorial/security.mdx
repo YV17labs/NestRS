@@ -216,11 +216,11 @@ ability check. Three failure shapes:
 | The row exists but the ability refuses it | `403` |
 | The `:id` segment isn't a valid UUID | `400` |
 
-Returning `403` (not `404`) when the row exists but the ability refuses
-it does reveal that the row exists — nestrs accepts that leak
-deliberately; see [by-id
-binding](/security/authorization/by-id-binding/) for when to collapse
-the `403` path into a `404`. A `500` would mean the ambient ability
+`403` (rather than `404`) on a denied-but-existing row discloses that the
+row exists — the standard REST trade-off, chosen here so a client can
+tell "not yours" from "not there". Collapse the `403` into a `404` when
+existence itself is confidential: see [by-id
+binding](/security/authorization/by-id-binding/). A `500` would mean the ambient ability
 didn't install; that's a wiring bug.
 
 **Response masking on every body.** The masker runs after the handler

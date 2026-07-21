@@ -74,7 +74,7 @@ DB, **never RPC each other**.
 | `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>` — **alias in `features`, not in `nest-rs-authz`**), `AuthzHttpModule` |
 | `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthnGuard` (`ResolverGuard` marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
 | `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `AuthzWsModule` |
-| `authz/mcp/` | `AppMcpGuard` (`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `AuthzMcpModule` |
+| `authz/mcp/` | `AppMcpGuard` (`nest_rs_mcp::authz::McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `AuthzMcpModule` |
 
 **No app-side `authz/` folder** — bridges live with the rest of authz.
 
@@ -89,7 +89,7 @@ bring every layer they need).
 | HTTP | `#[controller]` | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct | `[<Feature>Module, AuthzHttpModule]` |
 | GraphQL | `#[resolver]` | `#[use_guards(...)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error** | `[<Feature>Module, AuthzGraphqlModule]` |
 | WS | `#[gateway]` + `#[messages]` | `#[use_guards(...)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
-| MCP | `#[mcp]` tool host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **no guard registered ⇒ deny-all** (`DenyAllMcpGuard`) — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint | `[<Feature>Module, AuthzMcpModule]` |
+| MCP | `#[mcp]` tool host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **none registered ⇒ the global guard pool, else deny-all** — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint | `[<Feature>Module, AuthzMcpModule]` |
 
 ### Why GraphQL uses a marker but WS binds real guards
 
@@ -112,6 +112,18 @@ per-message `Guard`s (bound beside a `#[subscribe_message]`, reusing
 `Guard::check_ws_message`) add event-level checks when needed. There is
 **no** `WsAuthnGuard`/`MessageGuard` marker type — WS reuses the HTTP
 `Guard` trait directly.
+
+**MCP mirrors GraphQL, one seam for one seam.** Both are
+`EdgePosture::Exempt`, so both gate in-band through their own operation
+guard: same authn→authz ordering (`nest_rs_authz::run_ability_chain` — one
+function, two error mappings), same global-pool fallback when no bridge is
+registered (`FallbackMcpGuard` / `FallbackOperationGuard`), and the *guard's*
+`around` installs the ambient ability on both. Two deliberate differences:
+`/graphql` carries the `Public` marker so a pooled `AuthnGuard` admits an
+anonymous operation through to the resolver gates, and `/mcp` does not — an
+unauthenticated tool call is refused; and MCP's *no-pool* tail is deny-all
+rather than pass-through, so the fallback can only ever widen what
+`use_guards_global` opted into.
 
 ## Bound mutations (GraphQL)
 

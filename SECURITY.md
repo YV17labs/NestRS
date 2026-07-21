@@ -1,6 +1,6 @@
 # Security Policy
 
-Security reports are taken seriously at any stage.
+Security is a first-class concern in NestRS, and reports are handled as such.
 
 ## Reporting a vulnerability
 
@@ -24,22 +24,19 @@ If you can, include:
 
 ## What to expect
 
-This is a small, volunteer-run project, so there is no formal SLA — but you can
-expect an initial acknowledgement and a good-faith effort to triage, fix, and
-credit the report (unless you prefer to stay anonymous).
+Reports are triaged on receipt. You can expect an acknowledgement, a disclosure
+timeline agreed with you, a fix shipped in the next patch of the latest `1.x`,
+and credit in the advisory — unless you prefer to stay anonymous.
 
 ## Supported versions
 
-Until the `1.0` release, only the latest `main` is supported — fixes land there.
+Every `nest-rs-*` crate versions in **lockstep** (one number across the
+workspace), and security fixes target the **latest `1.x`** release:
 
-From `1.0` on, every `nest-rs-*` crate versions in **lockstep** (one number
-across the workspace), and security fixes target the **latest `1.x`** release:
-
-| Version            | Supported                        |
-| ------------------ | -------------------------------- |
-| latest `1.x`       | ✅                                |
-| older `1.x`        | ⚠️ upgrade to the latest patch   |
-| `0.x` pre-releases | ❌                                |
+| Version      | Supported                      |
+| ------------ | ------------------------------ |
+| latest `1.x` | ✅                              |
+| older `1.x`  | ⚠️ upgrade to the latest patch |
 
 ## Advisories
 

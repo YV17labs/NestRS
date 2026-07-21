@@ -241,13 +241,13 @@ A service then writes `let exec = current_executor().ok_or(...)?;` and
 issues queries against whichever variant came back — your problem from
 here, against types your users already recognise.
 
-## What you don't get vs SeaORM
+## What the seam carries, and what stays store-native
 
-Be honest with readers. The SeaORM-typed primitives — `Repo<E>`'s ambient
+The SeaORM-typed primitives — `Repo<E>`'s ambient
 row-level filter via `Ability::condition_for`, the `#[expose]` response
 mask, `Bind<S, A>`, `CrudService` — all read SeaORM's typed `Column` /
-`EntityTrait` model layer. Your driver doesn't get them for free; if you
-need their equivalents, you ship them yourself in store-native terms
+`EntityTrait` model layer, so a driver ships their equivalents in
+store-native terms
 (e.g. Postgres RLS, an ability-derived filter document, a per-collection
 helper). What every driver does keep: transparent transactions on
 mutating requests, the ambient executor across HTTP and workers, the

@@ -215,15 +215,15 @@ The connection helper, the page service method, and the `User` wire
 DTO all stay where they belong — the resolver only translates between
 the two.
 
-## Advanced: compile-time caveats on complex graphs (Phase 0)
+## Advanced: bidirectional and multi-hop graphs
 
 You can skip this on a first read — it only matters once a schema grows
 bidirectional or multi-hop relations.
 
-Bidirectional or multi-hop graphs (`org ↔ membership ↔ user`) can produce
-conflicting auto-generated loader impls at compile time. Prefer **scalar FK
-columns** on early entities and add GraphQL relation fields once the schema
-stabilises.
+Bidirectional and multi-hop graphs (`org ↔ membership ↔ user`) are resolved
+explicitly rather than guessed: two relations that would generate the same
+loader impl are caught at compile time, so you pick which side owns the
+generated field and write the other by hand.
 
 When two `belongs_to` relations on the same entity target the **same** parent,
 the macro refuses with an actionable error — leave one side

@@ -7,8 +7,10 @@
 </p>
 
 <p align="center">
+  <a href="https://crates.io/crates/nest-rs"><img src="https://img.shields.io/crates/v/nest-rs?logo=rust&color=CE412B" alt="crates.io"></a>
+  <a href="https://docs.rs/nest-rs"><img src="https://img.shields.io/docsrs/nest-rs?logo=docsdotrs&logoColor=white" alt="docs.rs"></a>
   <a href="https://github.com/YV17labs/NestRS/stargazers"><img src="https://img.shields.io/github/stars/YV17labs/NestRS?style=flat&logo=github&color=555" alt="GitHub stars"></a>
-  <img src="https://img.shields.io/badge/built%20with-Rust-CE412B?logo=rust&logoColor=white" alt="Built with Rust">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 </p>
@@ -47,8 +49,8 @@ GraphQL, at boot on HTTP.
 
 And it stays lean. On the same hello-world service under identical `wrk` load,
 NestRS serves **~463k req/s** to NestJS 11's ~18k — **~25×** — in **4–6 MB** of
-RAM against ~80–120 MB. Our own measurements of the demo API — the full JWT +
-authz + row-level + masking pipeline, Postgres included — still land around
+RAM against ~80–120 MB. The demo API — the full JWT +
+authz + row-level + masking pipeline, Postgres included — still lands around
 **23k req/s**, **p99 < 4.5 ms**, in **~32 MB** of resident memory; the binary
 ships at 11–20 MB and boots in tens of milliseconds. (Measured in a Linux
 Docker container capped at 4 cores and 8 GB, with the load generator competing
@@ -66,6 +68,22 @@ nestrs run dev   # → Hello World on :3000
 → [Why not axum?](https://nestrs.dev/why-not-axum/) ·
 [Coming from NestJS](https://nestrs.dev/coming-from-nestjs/) ·
 [Why NestRS](https://nestrs.dev/why/)
+
+## Stability
+
+**NestRS is stable at `1.0` and ready for production.** The public API is
+frozen for the `1.x` line: breaking changes wait for `2.0`. Every `nest-rs-*`
+crate publishes at the same version in lockstep, so one NestRS version names
+exactly one compatible resolution.
+
+**The third-party types that appear in your code are frozen for the whole
+`1.x` line.** A handful of crates are part of the framework's public surface —
+their types show up in what the macros emit — so their majors are tied to the
+NestRS major: `poem 3`, `sea-orm 2.0`, `async-graphql 7.2`, `rmcp 2.2`,
+`inventory 0.3`, `validator 0.20`, `schemars 1`. The ORM and GraphQL pins are
+exact rather than caret, because the `Repo` bounds and the resolver codegen
+read enough of those surfaces that even a minor can shift generated code. One
+dependency resolution, for the life of `1.x`.
 
 ## Documentation
 
@@ -139,9 +157,10 @@ command table, the Publish map, and Docker.
 
 Adding an app means a directory under `demo/apps/`; a new feature means a folder
 under `demo/crates/features/src/`; a new framework capability means a `nest-rs-*`
-crate under `crates/`. Simple **hello**/**blog** layouts are CLI-scaffolded only
-— see [Getting started](https://nestrs.dev/getting-started/) and the
-[tutorial](https://nestrs.dev/tutorial/); they are not checked into this repo.
+crate under `crates/`. The **hello** and **blog** layouts are generated on
+demand by `nestrs new` rather than checked in, so they never drift from the
+framework — see [Getting started](https://nestrs.dev/getting-started/) and the
+[tutorial](https://nestrs.dev/tutorial/).
 
 ### Running the apps
 
@@ -152,8 +171,8 @@ app map, and the Docker build are documented in
 
 ## Community & contributing
 
-NestRS is young, and early contributors shape what it becomes — you don't have
-to write Rust to help.
+NestRS is stable at `1.0` and actively developed — contributors shape where it
+goes next, and you don't have to write Rust to help.
 
 - 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/YV17labs/NestRS/discussions).
 - 🐛 **Report a bug or request a feature** through [issues](https://github.com/YV17labs/NestRS/issues/new/choose).
@@ -161,8 +180,7 @@ to write Rust to help.
 - 🗺️ **See where it's heading** in the [roadmap](ROADMAP.md).
 - 🔒 **Found a vulnerability?** Follow [SECURITY.md](SECURITY.md) — please don't open a public issue for it.
 
-If NestRS resonates, a ⭐ helps others find it and tells us the direction is worth
-pushing.
+If NestRS is useful to you, a ⭐ helps other Rust teams find it.
 
 ## License
 

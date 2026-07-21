@@ -95,7 +95,6 @@ a set of bare flags.
 | `graphql` | flag | Emit the GraphQL object + input objects, and auto-resolve exposed relations through dataloaders. An exposed relation **without** `graphql` is a compile error. |
 | `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and `updated_at` on every save. Requires both columns. |
 | `soft_delete` | flag | Emit `impl SoftDeletable` so deletes set `deleted_at` and reads filter tombstoned rows. Requires a `deleted_at: Option<…>` column. |
-| `paginate` | flag | Emit a `<Name>Page` wrapper type for paginated list endpoints. See [Pagination](/database/pagination/). |
 | `complex` | flag | Force `#[graphql(complex)]` on the wire DTO. Auto-enabled when `graphql` is set and the entity has auto-resolved relations — you rarely set it by hand. |
 
 ## Recommended standard columns

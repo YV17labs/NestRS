@@ -291,6 +291,20 @@ impl nest_rs_database::Executor for Executor {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    /// Only a lazy transaction **nothing has opened yet** yields a pool handle:
+    /// `Pool` is already outside a transaction, `Txn` is a deliberate
+    /// programmatic boundary, and once a `BEGIN` has been issued the request
+    /// keeps its transaction (stepping out of live transaction state would buy
+    /// nothing and split the request's view of the data).
+    fn non_transactional(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
+        match self {
+            Executor::Lazy(lazy) if !lazy.is_opened() => {
+                Some(Arc::new(Executor::Pool(lazy.pool.clone())))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The SeaORM `Executor` installed in the ambient task-local for this

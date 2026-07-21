@@ -13,6 +13,7 @@ use anyhow::Result;
 
 use crate::RequestScope;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
+use crate::module::DynamicModule;
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
@@ -243,7 +244,17 @@ pub struct ContainerBuilder {
     /// Concrete/keyed registrations that replaced an earlier one — a wiring
     /// mistake the boot rejects (see [`duplicate_providers`](Self::duplicate_providers)).
     duplicates: Vec<DuplicateProvider>,
+    /// Dynamic imports (`Foo::for_root(opts)`) already constructed by the
+    /// collect phase, keyed by import site so the register phase consumes the
+    /// same value instead of re-evaluating the expression. Builder-only —
+    /// never copied into a [`Container`] or a [`snapshot`](Self::snapshot).
+    dynamic_registrars: HashMap<DynamicImportSite, Registrar>,
 }
+
+/// Identifies one `#[module(imports = [...])]` entry: the importing module's
+/// type plus its position in the list. Stable across the collect and register
+/// phases because both walk the same import list in order.
+type DynamicImportSite = (TypeId, usize);
 
 /// A bare concrete-type provider registered more than once. Surfaced by the
 /// boot as a fatal wiring error rather than a silent last-write-wins. (Keyed
@@ -429,6 +440,51 @@ impl ContainerBuilder {
     /// Collect-phase counterpart of [`mark_registered`](Self::mark_registered).
     pub fn mark_collected(&mut self, id: TypeId) -> bool {
         self.collected_modules.insert(id)
+    }
+
+    /// Collect phase for one dynamic import: run its
+    /// [`DynamicModule::collect`], then park the value so
+    /// [`register_dynamic_import`](Self::register_dynamic_import) can consume
+    /// it at the same site. The import expression is therefore evaluated
+    /// **once** for both phases.
+    ///
+    /// **Internal ABI** — emitted by `#[module]`, lockstep with
+    /// `nest-rs-core-macros`; do not call by hand.
+    #[doc(hidden)]
+    pub fn collect_dynamic_import<D>(mut self, module: TypeId, index: usize, value: D) -> Self
+    where
+        D: DynamicModule + Send + 'static,
+    {
+        self = value.collect(self);
+        self.dynamic_registrars.insert(
+            (module, index),
+            Box::new(move |builder| value.register(builder)),
+        );
+        self
+    }
+
+    /// Register phase for one dynamic import: consume the value the collect
+    /// phase parked at this site, or build one from `fallback` when there was
+    /// no collect phase (the synchronous [`App::new`](crate::App::new) path).
+    /// Either way the import expression runs exactly once.
+    ///
+    /// **Internal ABI** — emitted by `#[module]`, lockstep with
+    /// `nest-rs-core-macros`; do not call by hand.
+    #[doc(hidden)]
+    pub fn register_dynamic_import<D, F>(
+        mut self,
+        module: TypeId,
+        index: usize,
+        fallback: F,
+    ) -> Self
+    where
+        D: DynamicModule + Send + 'static,
+        F: FnOnce() -> D,
+    {
+        match self.dynamic_registrars.remove(&(module, index)) {
+            Some(registrar) => registrar(self),
+            None => fallback().register(self),
+        }
     }
 
     /// Queue an async factory whose awaited output is stored as a provider

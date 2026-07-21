@@ -9,6 +9,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use async_graphql::parser::types::{DocumentOperations, OperationType};
 use async_graphql::{BatchRequest, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
 use nest_rs_core::{Container, ReachableProviders, RequestScope};
@@ -228,6 +229,47 @@ impl<E> ContextEndpoint<E> {
     }
 }
 
+/// Whether **every** operation definition in **every** request of the batch is
+/// a `query` — the only shape that provably cannot write, and so the only one
+/// safe to run outside the request transaction (DATA-S5).
+///
+/// Conservative by construction: a `mutation` or `subscription` definition
+/// anywhere in the batch answers `false` even when `operationName` selects a
+/// query beside it, and so does any parse failure. Misreading a mutation as
+/// read-only would run it with no atomicity or rollback, so every uncertain
+/// case keeps the transaction.
+///
+/// Parsing here is not extra work: [`GqlRequest::parsed_query`] caches the
+/// document on the request and async-graphql's executor reuses it.
+fn is_read_only(batch: &mut BatchRequest) -> bool {
+    let requests: &mut [GqlRequest] = match batch {
+        BatchRequest::Single(request) => std::slice::from_mut(request),
+        BatchRequest::Batch(requests) => requests.as_mut_slice(),
+    };
+    requests
+        .iter_mut()
+        .all(|request| match request.parsed_query() {
+            Ok(document) => match &document.operations {
+                DocumentOperations::Single(op) => op.node.ty == OperationType::Query,
+                DocumentOperations::Multiple(ops) => {
+                    ops.values().all(|op| op.node.ty == OperationType::Query)
+                }
+            },
+            Err(_) => false,
+        })
+}
+
+/// Run `fut` on a non-transactional handle when the ambient executor can hand
+/// one out — see [`nest_rs_database::Executor::non_transactional`]. Nothing
+/// installed (no ORM, or already on the pool) ⇒ the future runs untouched on
+/// whatever the request boundary installed.
+async fn without_transaction(fut: BoxFuture<'_, Response>) -> Response {
+    match nest_rs_database::current_executor().and_then(|executor| executor.non_transactional()) {
+        Some(executor) => nest_rs_database::with_request_executor(executor, fut).await,
+        None => fut.await,
+    }
+}
+
 /// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
 /// with an `errors` array, the GraphQL wire convention (matching how a resolver
 /// error surfaces), with any field-level `details` under `extensions`.
@@ -272,20 +314,26 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
             Ok(batch) => batch,
             Err(resp) => return Ok(*resp),
         };
-        let batch = match batch {
+        let mut batch = match batch {
             BatchRequest::Single(r) => BatchRequest::Single(self.seed(&req, r)),
             BatchRequest::Batch(rs) => {
                 BatchRequest::Batch(rs.into_iter().map(|r| self.seed(&req, r)).collect())
             }
         };
-        let response = match &self.op_guard {
-            Some(guard) => {
-                let inner: BoxFuture<Response> = Box::pin(async {
-                    GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response()
-                });
-                guard.around(&req, inner).await
-            }
-            None => GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response(),
+        // Decided before execution and applied around the whole operation
+        // (guard included) so nothing under it opens the request transaction.
+        let read_only = is_read_only(&mut batch);
+        let inner: BoxFuture<Response> = Box::pin(async {
+            GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response()
+        });
+        let guarded = match &self.op_guard {
+            Some(guard) => guard.around(&req, inner),
+            None => inner,
+        };
+        let response = if read_only {
+            without_transaction(guarded).await
+        } else {
+            guarded.await
         };
         Ok(response)
     }
@@ -315,4 +363,83 @@ macro_rules! forward_principal {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn single(query: &str) -> BatchRequest {
+        BatchRequest::Single(GqlRequest::new(query))
+    }
+
+    fn batch(queries: &[&str]) -> BatchRequest {
+        BatchRequest::Batch(queries.iter().map(|q| GqlRequest::new(*q)).collect())
+    }
+
+    #[test]
+    fn a_query_is_read_only() {
+        assert!(is_read_only(&mut single("query { me { id } }")));
+    }
+
+    #[test]
+    fn an_anonymous_shorthand_operation_is_read_only() {
+        // The shorthand has no `query` keyword; the spec still makes it a query.
+        assert!(is_read_only(&mut single("{ me { id } }")));
+    }
+
+    #[test]
+    fn an_introspection_query_is_read_only() {
+        assert!(is_read_only(&mut single("{ __schema { types { name } } }")));
+    }
+
+    #[test]
+    fn a_mutation_is_not_read_only() {
+        assert!(!is_read_only(&mut single("mutation { createUser { id } }")));
+    }
+
+    #[test]
+    fn a_subscription_is_not_read_only() {
+        assert!(!is_read_only(&mut single(
+            "subscription { userAdded { id } }"
+        )));
+    }
+
+    #[test]
+    fn a_document_holding_a_mutation_beside_the_selected_query_is_not_read_only() {
+        // `operationName` picks `Read`, but the document still defines a
+        // mutation: we classify the whole document, never the selected
+        // operation, so a selection bug upstream cannot strand a write outside
+        // the transaction.
+        let request =
+            GqlRequest::new("query Read { me { id } } mutation Write { createUser { id } }")
+                .operation_name("Read");
+        assert!(!is_read_only(&mut BatchRequest::Single(request)));
+    }
+
+    #[test]
+    fn a_batch_of_queries_is_read_only() {
+        assert!(is_read_only(&mut batch(&["{ me { id } }", "query { a }"])));
+    }
+
+    #[test]
+    fn a_batch_holding_one_mutation_is_not_read_only() {
+        assert!(!is_read_only(&mut batch(&[
+            "{ me { id } }",
+            "mutation { bump }",
+        ])));
+    }
+
+    #[test]
+    fn an_unparsable_query_is_not_read_only() {
+        // The executor will reject it; until then it stays transactional.
+        assert!(!is_read_only(&mut single("{{{")));
+    }
+
+    #[test]
+    fn a_field_named_like_a_mutation_stays_read_only() {
+        // Pins the choice of parsing over text matching: a `mutation` substring
+        // in a field name must not cost the optimization.
+        assert!(is_read_only(&mut single("{ mutationLog { id } }")));
+    }
 }

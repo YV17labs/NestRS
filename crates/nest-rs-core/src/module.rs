@@ -56,16 +56,17 @@ pub trait Module {
 /// - [`register`](Self::register) — install synchronous providers, metadata,
 ///   or config.
 ///
-/// # The import expression must be a **pure** config constructor
+/// # The import expression is evaluated exactly once
 ///
-/// `#[module(imports = [Foo::for_root(opts)])]` expands the `Foo::for_root(opts)`
-/// expression **once per phase** — once for [`collect`] and again for
-/// [`register`] — so it is evaluated more than once (CORE-I9). A config
-/// constructor that merely packages its options into a value (every framework
-/// `for_root`) is idempotent and unaffected. Do **not** put side effects in it
-/// (generating an id, opening a connection, reading a clock): the two phases
-/// would then see divergent values. Keep `for_root` a pure builder and do such
-/// work in a `collect`ed async factory or a lifecycle hook instead.
+/// `#[module(imports = [Foo::for_root(opts)])]` builds the value in the
+/// [`collect`] phase and parks it on the [`ContainerBuilder`], so [`register`]
+/// consumes *that* value rather than re-running the expression; the
+/// synchronous [`App::new`](crate::App::new) path has no collect phase and
+/// builds it in `register` instead. Both phases therefore see the same value,
+/// and a `for_root` that is not idempotent still behaves (it runs once).
+///
+/// Because the value outlives its construction site, an implementor must be
+/// `Send + 'static` to be usable from `#[module(imports = [...])]`.
 ///
 /// [`collect`]: Self::collect
 /// [`register`]: Self::register
@@ -82,10 +83,9 @@ pub trait DynamicModule {
     }
 
     /// Queue an async factory (for resources like a DB pool that must be built
-    /// asynchronously) to be awaited in the factories phase. Takes `&self`
-    /// (borrowing, so a distinct value can still be `register`ed). Defaults to a
-    /// no-op. See the trait docs: the import expression is re-evaluated per
-    /// phase, so it must be a pure config constructor.
+    /// asynchronously) to be awaited in the factories phase. Takes `&self`, and
+    /// the very same value is handed to [`register`](Self::register) afterwards
+    /// (see the trait docs). Defaults to a no-op.
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         builder
     }

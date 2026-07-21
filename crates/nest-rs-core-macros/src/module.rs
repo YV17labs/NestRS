@@ -10,31 +10,57 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let name_str = name.to_string();
 
-    let import_calls = args.imports.iter().map(|import| match import {
-        // Bare type path → static `Module`.
-        Expr::Path(p) => {
-            let path = &p.path;
-            quote! { builder = <#path as ::nest_rs_core::Module>::register(builder); }
-        }
-        // Anything else → `DynamicModule` value (e.g. `Module::for_root(opts)`).
-        // The expression is re-evaluated in `collect` too (separate phase/method),
-        // so it must be a PURE config constructor — see `DynamicModule`'s docs
-        // (CORE-I9). Every framework `for_root` satisfies this.
-        other => {
-            quote! { builder = ::nest_rs_core::DynamicModule::register(#other, builder); }
-        }
-    });
+    let import_calls = args
+        .imports
+        .iter()
+        .enumerate()
+        .map(|(i, import)| match import {
+            // Bare type path → static `Module`.
+            Expr::Path(p) => {
+                let path = &p.path;
+                quote! { builder = <#path as ::nest_rs_core::Module>::register(builder); }
+            }
+            // Anything else → `DynamicModule` value (e.g. `Module::for_root(opts)`).
+            // The collect phase already built the value and parked it at this site,
+            // so register consumes *that* value; the fallback closure only runs on
+            // the synchronous `App::new` path, which has no collect phase. Either
+            // way the expression is evaluated exactly once (CORE-I9).
+            other => {
+                let idx = proc_macro2::Literal::usize_unsuffixed(i);
+                quote! {
+                    builder = ::nest_rs_core::ContainerBuilder::register_dynamic_import(
+                        builder,
+                        ::std::any::TypeId::of::<#name>(),
+                        #idx,
+                        || #other,
+                    );
+                }
+            }
+        });
 
-    // Collect phase only queues async factories; providers untouched here.
-    let collect_calls = args.imports.iter().map(|import| match import {
-        Expr::Path(p) => {
-            let path = &p.path;
-            quote! { builder = <#path as ::nest_rs_core::Module>::collect(builder); }
-        }
-        other => {
-            quote! { builder = ::nest_rs_core::DynamicModule::collect(&(#other), builder); }
-        }
-    });
+    // Collect phase only queues async factories; providers untouched here. The
+    // dynamic import is constructed here and parked for the register phase.
+    let collect_calls = args
+        .imports
+        .iter()
+        .enumerate()
+        .map(|(i, import)| match import {
+            Expr::Path(p) => {
+                let path = &p.path;
+                quote! { builder = <#path as ::nest_rs_core::Module>::collect(builder); }
+            }
+            other => {
+                let idx = proc_macro2::Literal::usize_unsuffixed(i);
+                quote! {
+                    builder = ::nest_rs_core::ContainerBuilder::collect_dynamic_import(
+                        builder,
+                        ::std::any::TypeId::of::<#name>(),
+                        #idx,
+                        #other,
+                    );
+                }
+            }
+        });
 
     // Access-graph descriptor submitted to the link-time registry. Only
     // statically-typed imports are recorded — a dynamic `for_root(...)`

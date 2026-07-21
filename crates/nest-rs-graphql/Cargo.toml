@@ -12,6 +12,11 @@ description = "GraphQL resolver discovery + schema composition for nestrs apps, 
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-graphql-macros.workspace = true
+# The ORM-agnostic ambient-executor seam. Every GraphQL operation is a POST, so
+# the HTTP boundary hands even a pure query a transaction; the endpoint routes
+# an operation it has proven read-only onto `Executor::non_transactional`
+# instead. No ORM is named — with no executor installed the lookup is a no-op.
+nest-rs-database.workspace = true
 # `GraphqlModule` owns its `#[config]` `GraphqlConfig` (namespace `graphql`),
 # loaded from `NESTRS_GRAPHQL__*`; serde + validator back its derives.
 nest-rs-config.workspace = true

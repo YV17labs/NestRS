@@ -22,6 +22,25 @@ pub trait Executor: Any + Send + Sync + 'static {
     /// Downcast handle. Used by an ORM-specific `Repo` to recover its
     /// concrete executor type from the ambient `Arc<dyn Executor>`.
     fn as_any(&self) -> &dyn Any;
+
+    /// A handle on the same database **outside** this executor's transaction,
+    /// or `None` when there is nothing to step out of (already a pool) or the
+    /// ORM cannot produce one.
+    ///
+    /// A transport that has *proven* an operation cannot write installs this
+    /// for the operation's duration, so the work runs without opening — and
+    /// without pinning a connection to — the request transaction. The one
+    /// caller today is the GraphQL endpoint: every operation arrives as a
+    /// POST, so the HTTP boundary hands even a pure query a transaction it
+    /// will never need.
+    ///
+    /// **Only ever pass work that cannot write.** A mutation on the returned
+    /// handle loses atomicity and rollback. The default `None` is therefore
+    /// the fail-closed answer: an ORM that ignores this keeps the request
+    /// executor it was given.
+    fn non_transactional(&self) -> Option<Arc<dyn Executor>> {
+        None
+    }
 }
 
 /// Whether the ambient executor belongs to a request or a worker job. An

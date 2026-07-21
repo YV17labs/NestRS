@@ -2789,6 +2789,7 @@ dependencies = [
  "inventory",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-graphql-macros",
  "nest-rs-guards",
  "nest-rs-http",

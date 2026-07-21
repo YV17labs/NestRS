@@ -2686,6 +2686,7 @@ dependencies = [
  "nest-rs-config-macros",
  "nest-rs-core",
  "thiserror 2.0.19",
+ "tracing",
  "trybuild",
  "validator",
 ]

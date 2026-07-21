@@ -315,7 +315,7 @@ pub fn layer_inject_keys<'a, T: ToTokens + 'a>(
 /// `::std::vec![...]` of `#[inject]` dependency `TypeId`s — body for
 /// [`dependencies_method`]/[`injected_method`] and for the inherent
 /// `__nestrs_injected()` a struct decorator emits.
-pub fn injected_keys_expr(dep_keys: &[TokenStream2]) -> TokenStream2 {
+pub(crate) fn injected_keys_expr(dep_keys: &[TokenStream2]) -> TokenStream2 {
     quote! { ::std::vec![ #(#dep_keys),* ] }
 }
 

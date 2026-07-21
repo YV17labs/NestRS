@@ -92,7 +92,11 @@ pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
 // Re-exported so macro-generated code resolves these through the framework.
 pub use async_trait::async_trait;
+// Hidden: macro plumbing, not public API — like `nest-rs-queue`'s treatment of
+// the same two re-exports.
+#[doc(hidden)]
 pub use serde_json;
+#[doc(hidden)]
 pub use tracing;
 
 pub use poem;

@@ -29,12 +29,9 @@ pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
 pub use client_ip::ClientIp;
 pub use config::HttpConfig;
 pub use context::Ctx;
-pub use controller::{
-    Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, SchemaFn, schema_of,
-};
+pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb};
 pub use cors::CorsConfig;
-pub use endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
-pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
+pub use endpoint::{EdgePosture, HttpEndpointMeta};
 pub use module::{HttpModule, HttpSetup};
 pub use pipe::{IntoInner, Piped, Valid};
 pub use problem::{ProblemDetails, normalize_error_response};
@@ -42,11 +39,21 @@ pub use raw_body::{RawBody, RawBodyLimit};
 pub use reflector::Reflector;
 pub use scope::{RequestScopeEndpoint, Scoped};
 pub use security_headers::SecurityHeadersConfig;
-pub use shaper::{
-    MaskProbe, MaskProbedEndpoint, RouteResponseShaper, ShapedEndpoint, mask_probed, shaped,
-};
+pub use shaper::{RouteResponseShaper, ShapedEndpoint};
 pub use tls::TlsConfig;
 pub use transport::{HttpTransport, join_path, version_path};
+
+// Cross-crate wiring seams — `pub` by necessity (sibling framework crates and
+// macro-emitted code name them) but not public API: `#[doc(hidden)]` so they do
+// not render as documented surface and freeze at 1.0.
+#[doc(hidden)]
+pub use controller::{SchemaFn, schema_of};
+#[doc(hidden)]
+pub use endpoint::SelfMountGuardWrap;
+#[doc(hidden)]
+pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
+#[doc(hidden)]
+pub use shaper::{MaskProbe, MaskProbedEndpoint, mask_probed, shaped};
 
 pub use poem;
 pub use schemars;

@@ -92,12 +92,15 @@
 //! Splitting it would mean duplicating the chain across crates or routing
 //! through a fifth — both worse than the asymmetry.
 //!
-//! **HTTP-coupled for 0.x, deliberately.** [`Guard`] requires `check_http`
-//! and this crate depends on the HTTP stack, so a worker-only binary drags
-//! HTTP in. Decided and accepted for now — one trait, one chain, zero
-//! duplicated dispatch beats a premature split; the transport-neutral core
-//! trait is scheduled before 1.0 (see ROADMAP, "Transport-neutral guard
-//! core").
+//! **HTTP-coupled by design.** [`Guard`] requires `check_http` and this
+//! crate depends on the HTTP stack, so a worker-only binary links HTTP even
+//! when it never serves a request. This is the deliberate 1.x shape: one
+//! trait, one chain, zero duplicated dispatch. The cost is binary size
+//! only — there is no runtime, security or correctness effect, and
+//! `check_graphql` / `check_ws_message` are already feature-gated. Moving
+//! `check_http` onto an `HttpGuard` extension trait touches every guard impl
+//! and the HTTP dispatch, so a transport-neutral guard core is a planned
+//! major-version evolution (see ROADMAP, "Transport-neutral guard core").
 #![warn(missing_docs)]
 
 mod builder;

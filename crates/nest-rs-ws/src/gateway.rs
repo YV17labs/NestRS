@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{Container, RequestScope};
 use nest_rs_pipes::PipeError;
+
+use crate::scope::with_request_scope;
 use poem::web::websocket::{Message, WebSocket, WebSocketConfig};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
@@ -112,6 +114,16 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             .ctx
             .as_ref()
             .map(|ctx| (ctx.clone(), ctx.capture(&req)));
+        // Capture the singleton container from the request scope the HTTP
+        // transport installs, so the connection loop can open a fresh
+        // `RequestScope` per message for `Scoped<T>` resolution — the upgrade
+        // request (and its scope) does not survive into the connection task.
+        // `None` when the gateway is not nested under the HTTP request scope, in
+        // which case per-message `Scoped<T>` resolves to `WsScopeError::NoScope`.
+        let root_container = req
+            .extensions()
+            .get::<Arc<RequestScope>>()
+            .map(|scope| scope.root().clone());
         // Resolve the WS config once per upgrade from the request scope the HTTP
         // transport installs. A missing scope or unregistered `WsConfig` falls
         // back to the (bounded) default — fail-secure, never a silently
@@ -134,17 +146,32 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         let gateway = Arc::clone(&self.gateway);
         let server = Arc::clone(&self.server);
         let guards = Arc::clone(&self.guards);
-        let data_pipe = self.data_pipe.clone();
+        let wiring = DispatchWiring {
+            ambient,
+            data_pipe: self.data_pipe.clone(),
+            root_container,
+        };
         let limits = SocketLimits {
             max_lifetime,
             max_message_bytes,
         };
         Ok(ws
             .on_upgrade(move |socket| {
-                serve_connection(gateway, server, guards, ambient, data_pipe, limits, socket)
+                serve_connection(gateway, server, guards, wiring, limits, socket)
             })
             .into_response())
     }
+}
+
+/// Per-connection dispatch wiring resolved once at upgrade and threaded into
+/// every message: the ambient (executor + ability) seam, the global data-pipe
+/// fold, and the singleton container each message's [`RequestScope`] is built
+/// over. Bundled so the connection loop and `handle_text` stay under the
+/// argument-count lint.
+struct DispatchWiring {
+    ambient: Option<(Arc<dyn SocketContext>, Captured)>,
+    data_pipe: Option<Arc<WsDataFold>>,
+    root_container: Option<Container>,
 }
 
 /// Per-socket limits resolved once at upgrade from [`WsConfig`], threaded into
@@ -181,8 +208,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     guards: Arc<EventLayerTable>,
-    ambient: Option<(Arc<dyn SocketContext>, Captured)>,
-    data_pipe: Option<Arc<WsDataFold>>,
+    wiring: DispatchWiring,
     limits: SocketLimits,
     socket: poem::web::websocket::WebSocketStream,
 ) {
@@ -254,15 +280,8 @@ async fn serve_connection<G: Gateway, N: 'static>(
                             }
                             continue;
                         }
-                        if let Some(reply) = handle_text(
-                            &*gateway,
-                            &guards,
-                            ambient.as_ref(),
-                            data_pipe.as_ref(),
-                            &client,
-                            &text,
-                        )
-                        .await
+                        if let Some(reply) =
+                            handle_text(&*gateway, &guards, &wiring, &client, &text).await
                         {
                             // Replies ride the same outbox as pushes so ordering
                             // with broadcasts the handler triggered is preserved.
@@ -308,8 +327,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
 async fn handle_text<G: Gateway>(
     gateway: &G,
     guards: &EventLayerTable,
-    ambient: Option<&(Arc<dyn SocketContext>, Captured)>,
-    data_pipe: Option<&Arc<WsDataFold>>,
+    wiring: &DispatchWiring,
     client: &WsClient,
     text: &str,
 ) -> Option<String> {
@@ -318,6 +336,7 @@ async fn handle_text<G: Gateway>(
         Err(_) => return Some(error_frame("error", "invalid envelope")),
     };
     let WsEnvelope { event, mut data } = envelope;
+    let data_pipe = wiring.data_pipe.as_ref();
     // Bundle guard + dispatch so `around` wraps both — a guard reading
     // `current_ability()` / `current_executor()` sees the captured state.
     let event_ref = event.clone();
@@ -345,9 +364,20 @@ async fn handle_text<G: Gateway>(
         }
         gateway.dispatch(client, &event_ref, data).await
     });
-    let reply = match ambient {
-        Some((ctx, captured)) => ctx.around(captured, inner).await,
-        None => inner.await,
+    // The ambient (executor + ability) seam wraps dispatch; the per-message
+    // request scope wraps that, so a handler resolves `Scoped<T>` and reads the
+    // captured task-locals together. A fresh `RequestScope` per message means an
+    // `#[injectable(scope = request)]` provider is rebuilt for each message.
+    let dispatch: BoxFuture<'_, WsReply> = match wiring.ambient.as_ref() {
+        Some((ctx, captured)) => ctx.around(captured, inner),
+        None => inner,
+    };
+    let reply = match wiring.root_container.as_ref() {
+        Some(container) => {
+            let scope = Arc::new(RequestScope::new(container.clone()));
+            with_request_scope(scope, dispatch).await
+        }
+        None => dispatch.await,
     };
     match reply {
         WsReply::Reply(data) => {

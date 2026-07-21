@@ -73,6 +73,49 @@ async fn gateway_echoes_messages_over_a_real_socket() {
 }
 
 #[tokio::test]
+async fn a_request_scoped_provider_is_reachable_per_message_over_ws() {
+    let bind = "127.0.0.1:13357";
+
+    let app = boot_builder()
+        .build_headless()
+        .await
+        .expect("LiveModule boots headless");
+    let handle = app
+        .spawn_transport(HttpTransport::new().bind(bind))
+        .await
+        .expect("HTTP transport serves");
+    let token = test_token().await;
+
+    let mut socket = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
+
+    // `seq` resolves an #[injectable(scope = request)] RequestSeq via
+    // nest_rs_ws::Scoped inside the handler. A fresh scope per message means the
+    // stamped sequence differs across messages — a singleton would repeat.
+    socket
+        .send(Message::Text(json!({ "event": "seq" }).to_string().into()))
+        .await
+        .expect("send first seq");
+    let first = next_json(&mut socket).await;
+    assert_eq!(first["event"], "seq");
+    let first_seq = first["data"].as_u64().expect("seq is a number");
+
+    socket
+        .send(Message::Text(json!({ "event": "seq" }).to_string().into()))
+        .await
+        .expect("send second seq");
+    let second = next_json(&mut socket).await;
+    let second_seq = second["data"].as_u64().expect("seq is a number");
+
+    assert_ne!(
+        first_seq, second_seq,
+        "each WS message must build its own request-scoped RequestSeq (per-message scope)",
+    );
+
+    socket.close(None).await.ok();
+    handle.shutdown().await.expect("transport shuts down");
+}
+
+#[tokio::test]
 async fn a_message_is_broadcast_to_every_connected_client() {
     let bind = "127.0.0.1:13345";
 

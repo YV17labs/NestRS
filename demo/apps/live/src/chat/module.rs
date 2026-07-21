@@ -4,9 +4,10 @@ use nest_rs_ws::WsModule;
 
 use crate::chat::gateway::ChatGateway;
 use crate::chat::guard::ModeratedGuard;
+use crate::chat::request_seq::{RequestSeq, SeqSource};
 use crate::chat::service::ChatService;
 
-#[module(imports = [WsModule, AuthnModule], providers = [ChatService, ModeratedGuard, ChatGateway])]
+#[module(imports = [WsModule, AuthnModule], providers = [ChatService, ModeratedGuard, ChatGateway, SeqSource, RequestSeq])]
 pub struct ChatModule;
 
 #[cfg(test)]

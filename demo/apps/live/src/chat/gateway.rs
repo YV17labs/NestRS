@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use nest_rs_ws::{WsClient, gateway, messages, serde_json};
+use nest_rs_ws::{Scoped, WsClient, WsScopeError, gateway, messages, serde_json};
 
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::guard::ModeratedGuard;
+use crate::chat::request_seq::RequestSeq;
 use crate::chat::service::ChatService;
 use features::authn::AuthnGuard;
 
@@ -42,6 +43,14 @@ impl ChatGateway {
     #[subscribe_message("presence")]
     async fn presence(&self) -> usize {
         self.svc.present()
+    }
+
+    /// Resolve a per-message `#[injectable(scope = request)]` provider through
+    /// `nest_rs_ws::Scoped` — the WS mirror of `nest_rs_http::Scoped<T>`. A fresh
+    /// `RequestSeq` per message means two `seq` calls return distinct values.
+    #[subscribe_message("seq")]
+    async fn seq(&self) -> Result<u64, WsScopeError> {
+        Ok(Scoped::<RequestSeq>::from_context()?.value())
     }
 
     #[subscribe_message("typing")]

@@ -78,6 +78,7 @@ mod envelope;
 mod gateway;
 mod guard;
 mod module;
+mod scope;
 mod server;
 
 pub use config::WsConfig;
@@ -88,6 +89,9 @@ pub use gateway::{
 };
 pub use guard::{EventLayerTable, WsMessageCheck};
 pub use module::{WsModule, WsSetup};
+/// Per-message accessor for `#[injectable(scope = request)]` providers inside a
+/// WS message handler — the WS mirror of `nest_rs_http::Scoped<T>`.
+pub use scope::{Scoped, WsScopeError};
 pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
 // Re-exported so macro-generated code resolves these through the framework.

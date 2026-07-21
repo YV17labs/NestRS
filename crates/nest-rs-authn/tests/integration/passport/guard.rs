@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nest_rs_authn::{AuthError, AuthGuard, Strategy};
+use nest_rs_authn::{AuthError, AuthnGuard, Strategy};
 use nest_rs_guards::{Denial, Guard};
 use poem::Request;
 
@@ -31,7 +31,7 @@ impl Strategy for FailWith {
 
 #[tokio::test]
 async fn attaches_principal_on_success() {
-    let guard = AuthGuard::new(Arc::new(AuthenticateAs("alice")));
+    let guard = AuthnGuard::new(Arc::new(AuthenticateAs("alice")));
     let mut req = crate::common::request(&[]);
 
     guard.check_http(&mut req).await.expect("guard passes");
@@ -40,7 +40,7 @@ async fn attaches_principal_on_success() {
 
 #[tokio::test]
 async fn strategy_error_denies_as_unauthorized() {
-    let guard = AuthGuard::new(Arc::new(FailWith));
+    let guard = AuthnGuard::new(Arc::new(FailWith));
     let mut req = crate::common::request(&[]);
 
     let denial = guard.check_http(&mut req).await.expect_err("auth failed");

@@ -91,7 +91,7 @@ gates in-band or is deliberately public.
 operation guard**: with no registered `GraphqlOperationGuard`, the global
 guard pool runs in-band per operation (a registered bridge *replaces* it
 — it runs the same guards itself, so nothing double-runs). The graphql
-endpoint's `Public` data marker is load-bearing: it lets `AuthGuard`
+endpoint's `Public` data marker is load-bearing: it lets `AuthnGuard`
 admit anonymous operations through to resolver gates.
 
 ## Mapped errors never commit

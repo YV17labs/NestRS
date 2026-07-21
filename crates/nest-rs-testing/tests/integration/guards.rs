@@ -326,14 +326,14 @@ async fn the_first_listed_guard_runs_before_the_second() {
 //
 // A `#[public]` route attaches a `Public` marker to its route metadata. The
 // framework never skips a guard on its behalf — a guard *reads* the marker (via
-// `Reflector::is_public`) and decides what public means for it. `AuthGuard` uses
+// `Reflector::is_public`) and decides what public means for it. `AuthnGuard` uses
 // exactly this to let an anonymous request through a public route; here a
 // minimal guard distills that posture: admit when public, deny otherwise. The
 // global guard runs post-routing in the `RouteShaper`, so the marker is already
 // attached by the time it reads it.
 
 /// Denies every request *unless* the route is `#[public]`, in which case it
-/// admits with no principal — the `AuthGuard` posture, distilled.
+/// admits with no principal — the `AuthnGuard` posture, distilled.
 #[injectable]
 #[derive(Default)]
 struct PublicAwareGuard;

@@ -230,7 +230,7 @@ the guard that should have set it never ran on this route (a wiring bug,
 not a client error). The value is cloned out of the request's
 extensions; store an `Arc<_>` if the value is large.
 
-The canonical use is the authenticated principal: `AuthGuard` runs the
+The canonical use is the authenticated principal: `AuthnGuard` runs the
 strategy, then inserts a `Claims` (or whatever the resource server's
 principal is) into the request. Every authenticated handler reads it as
 `auth: Ctx<Claims>`.
@@ -297,7 +297,7 @@ transports.
 `#[public]` is shorthand for `#[meta(Public)]` — it attaches the
 framework's only universal route marker. Guards read it through
 `HandlerMetadata::is_public()` and decide whether to honor it. The
-framework itself does *not* act on the marker — `AuthGuard`, for
+framework itself does *not* act on the marker — `AuthnGuard`, for
 example, still runs the strategy on a `#[public]` route, but lets an
 anonymous request through instead of returning `401`.
 

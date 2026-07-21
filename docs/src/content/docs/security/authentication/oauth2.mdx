@@ -68,7 +68,7 @@ impl OAuthController {
 ```
 
 Both routes are `#[public]` — the provider redirect lands without a
-bearer token, so `AuthGuard` would refuse. The `OAuthGuard` is your
+bearer token, so `AuthnGuard` would refuse. The `OAuthGuard` is your
 app's `Strategy<Principal = Caller>` running the flow.
 
 ## Configuration

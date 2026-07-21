@@ -9,7 +9,7 @@
 //! ambient `Ability`; row scoping and masking still require the bridge).
 //!
 //! The GraphQL endpoint carries the [`Public`](nest_rs_core::Public) marker
-//! as request data, so an `AuthGuard` in the pool admits anonymous callers
+//! as request data, so an `AuthnGuard` in the pool admits anonymous callers
 //! (resolver-level gates still apply) while a present bearer is verified —
 //! exactly once, here.
 
@@ -54,7 +54,7 @@ impl GraphqlOperationGuard for GlobalPoolOperationGuard {
             for entry in &self.chain {
                 if let Err(denial) = entry.layer.check_http(req).await {
                     // The denial is logged once at its source guard
-                    // (`AuthGuard`/`AuthzGuard`); re-warning here would emit the
+                    // (`AuthnGuard`/`AuthzGuard`); re-warning here would emit the
                     // same event twice. HTTP's `RouteShaper` doesn't re-log a
                     // pooled denial either — match it.
                     return Err(denial_to_http_response(denial));

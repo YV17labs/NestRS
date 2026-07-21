@@ -61,7 +61,7 @@ impl PrincipalClaim {
 /// `#[public]` marker is NOT a framework skip: it attaches the
 /// [`Public`](nest_rs_core::Public) data to the request and each guard
 /// decides whether to honor it. An `AbilityGuard` may want to apply
-/// visitor rules on public routes; an `AuthGuard` may want to skip
+/// visitor rules on public routes; an `AuthnGuard` may want to skip
 /// rejection when no token is present. Both are policy decisions the
 /// guard owns, not the framework.
 ///

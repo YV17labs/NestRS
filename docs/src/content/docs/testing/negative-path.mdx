@@ -18,7 +18,7 @@ For every endpoint that mutates or returns scoped data, four failures
 catch bugs the happy path can't:
 
 - **No auth → 401.** A controller missing
-  `#[use_guards(AuthGuard, …)]` silently exposes the route — this test
+  `#[use_guards(AuthnGuard, …)]` silently exposes the route — this test
   forces the regression to surface.
 - **Cross-tenant → 403, not 500.** The framework's posture is an honest
   `403`: the row exists but is off-limits, so `403` *confirms* existence by

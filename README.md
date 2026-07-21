@@ -25,7 +25,7 @@ is an empty `impl` block:
 
 ```rust
 #[controller(path = "/orgs")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,

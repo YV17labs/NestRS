@@ -149,7 +149,7 @@ pub struct ResourceTarget {
     pub target: GenTarget,
 
     /// Scaffold the hardened `#[crud]` + guards form instead of the
-    /// unguarded stub. Requires the workspace to provide `AuthGuard`,
+    /// unguarded stub. Requires the workspace to provide `AuthnGuard`,
     /// `AuthzGuard`, and `AuthzHttpModule` (as the `demo` does).
     #[arg(long)]
     pub guarded: bool,

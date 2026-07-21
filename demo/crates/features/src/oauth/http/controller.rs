@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::oauth::{
-    AccessTokenDto, AuthenticatedClient, Caller, ClientAuthGuard, LoginDto, OAuthGuard,
+    AccessTokenDto, AuthenticatedClient, Caller, ClientAuthnGuard, LoginDto, OAuthGuard,
     OAuthService, TokenRequestDto,
 };
 use nest_rs_authn::OAuth2Client;
@@ -23,7 +23,7 @@ pub struct OAuthController {
 #[routes]
 impl OAuthController {
     #[post("/token")]
-    #[use_guards(ThrottlerGuard, ClientAuthGuard)]
+    #[use_guards(ThrottlerGuard, ClientAuthnGuard)]
     #[meta(Throttle::per_minute(10))]
     #[api(summary = "OAuth2 token endpoint (client_credentials)", tags("OAuth2"))]
     async fn token(

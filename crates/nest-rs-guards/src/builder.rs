@@ -28,7 +28,7 @@ use nest_rs_ws::WsDataPipe;
 /// use nest_rs_guards::{AppBuilderGuardsExt, guard};
 ///
 /// App::builder()
-///     .use_guards_global([guard::<AuthGuard>(), guard::<AuthzGuard>()])
+///     .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
 ///     .module::<AppModule>()
 ///     .build().await?
 ///     .run().await
@@ -36,7 +36,7 @@ use nest_rs_ws::WsDataPipe;
 ///
 /// Declaration order matters — the runtime chain runs in the order you list
 /// the guards (with [`Layer::priority`](nest_rs_core::Layer::priority) as an
-/// optional tiebreaker). If you list `AuthzGuard` before `AuthGuard` you'll
+/// optional tiebreaker). If you list `AuthzGuard` before `AuthnGuard` you'll
 /// get an authorization check before authentication has attached the
 /// principal — usually a bug.
 pub trait AppBuilderGuardsExt: Sized {

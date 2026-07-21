@@ -16,7 +16,7 @@
 //! [`Public`](nest_rs_core::Public) marker via the same metadata channel
 //! as `#[meta(...)]`, and each guard decides whether to honor it. An
 //! `AbilityGuard` may still run on a public route to apply visitor rules;
-//! an `AuthGuard` may skip rejection when no token is present.
+//! an `AuthnGuard` may skip rejection when no token is present.
 //!
 //! ## Defining a guard
 //!
@@ -50,14 +50,14 @@
 //! use nest_rs_guards::{AppBuilderGuardsExt, guard};
 //!
 //! App::builder()
-//!     .use_guards_global([guard::<AuthGuard>(), guard::<AuthzGuard>()])
+//!     .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
 //!     .module::<AppModule>()
 //!     .build().await?
 //!     .run().await
 //! ```
 //!
 //! Declaration order is the runtime order. If you list `AuthzGuard` before
-//! `AuthGuard` the authorization check runs against an empty principal — a
+//! `AuthnGuard` the authorization check runs against an empty principal — a
 //! name-based heuristic logs a `warn` at boot.
 //!
 //! ## Marking a handler `#[public]`

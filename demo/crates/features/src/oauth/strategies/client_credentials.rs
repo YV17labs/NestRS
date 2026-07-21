@@ -7,7 +7,7 @@ use poem::Request;
 
 use super::super::service::{AuthenticatedClient, OAuthService};
 
-pub type ClientAuthGuard = nest_rs_authn::AuthGuard<ClientCredentialsStrategy>;
+pub type ClientAuthnGuard = nest_rs_authn::AuthnGuard<ClientCredentialsStrategy>;
 
 #[injectable]
 pub struct ClientCredentialsStrategy {

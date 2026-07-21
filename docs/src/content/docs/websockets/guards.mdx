@@ -40,17 +40,17 @@ request, like any HTTP guard:
 
 ```rust
 use nest_rs_ws::{gateway, messages};
-use crate::auth::AuthGuard;
+use crate::auth::AuthnGuard;
 
 #[gateway(path = "/ws")]
-#[use_guards(AuthGuard)]
+#[use_guards(AuthnGuard)]
 pub struct ChatGateway {
     #[inject]
     svc: Arc<RoomService>,
 }
 ```
 
-`AuthGuard` reads the `Authorization` header (or a cookie, or a query
+`AuthnGuard` reads the `Authorization` header (or a cookie, or a query
 parameter — your strategy decides), verifies the token, and attaches
 the principal to the request. A failed check returns the same
 `Denial` shape an HTTP route would return (`401`, `403`, etc.) — the
@@ -156,7 +156,7 @@ message-guard trait or marker type.
 
 WebSockets reuse the HTTP pair **directly** — there is no WS-specific
 guard type. The gateway struct binds
-`#[use_guards(AuthGuard, AuthzGuard)]`; both run once on the upgrade
+`#[use_guards(AuthnGuard, AuthzGuard)]`; both run once on the upgrade
 (an HTTP `GET`) and are access-graph-validated like any HTTP binding:
 omit `AuthzWsModule` and those guards are unreachable, so boot fails.
 Because the upgrade's task-locals unwind before message handlers run,

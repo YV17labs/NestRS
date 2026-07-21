@@ -16,7 +16,7 @@ controller, and the caller's org scope flows through every layer below.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -142,7 +142,7 @@ read:
 3. **Confirm every `#[processor]` re-scopes.** Trace the tenant id from
    the job payload into the query. A load-by-id with no `org_id`
    predicate is the bug.
-4. **Confirm every controller carries `#[use_guards(AuthGuard,
+4. **Confirm every controller carries `#[use_guards(AuthnGuard,
    AuthzGuard)]`.** A missing binding fails closed to empty results, but
    a [negative-path test](/testing/negative-path/) pins it.
 5. **Confirm RLS policies exist** on tenant tables if you enabled the

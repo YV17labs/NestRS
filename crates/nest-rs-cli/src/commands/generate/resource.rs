@@ -2,7 +2,7 @@
 //! a `CrudService`, and an HTTP adapter with explicit thin handlers. Missing
 //! workspace dependencies are spliced in automatically; the slice compiles as
 //! generated. `--guarded` emits the hardened `#[crud]` + guards form instead
-//! (the `orgs/` shape) — it needs the workspace to provide `AuthGuard`,
+//! (the `orgs/` shape) — it needs the workspace to provide `AuthnGuard`,
 //! `AuthzGuard`, and `AuthzHttpModule`.
 
 use std::path::PathBuf;
@@ -20,7 +20,7 @@ pub struct ResourceOptions {
     pub path: Option<PathBuf>,
     pub dry_run: bool,
     /// Scaffold the hardened `#[crud]` + guards form (needs the workspace to
-    /// provide `AuthGuard` / `AuthzGuard` / `AuthzHttpModule`).
+    /// provide `AuthnGuard` / `AuthzGuard` / `AuthzHttpModule`).
     pub guarded: bool,
 }
 
@@ -117,7 +117,7 @@ fn print_next_steps(ctx: &Context, names: &Names, wired_app: Option<PathBuf>, gu
     println!("  3. Add transports:  nestrs g graphql|ws {}", names.kebab);
     if guarded {
         println!(
-            "  Guarded form: needs AuthGuard/AuthzGuard/AuthzHttpModule in the \
+            "  Guarded form: needs AuthnGuard/AuthzGuard/AuthzHttpModule in the \
              workspace, and ability rules for {} in your AppAbility.",
             names.entity()
         );

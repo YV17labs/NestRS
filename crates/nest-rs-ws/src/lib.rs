@@ -9,7 +9,7 @@
 //!
 //! ```ignore
 //! #[gateway(path = "/ws")]
-//! #[use_guards(AuthGuard)]
+//! #[use_guards(AuthnGuard)]
 //! struct ChatGateway {
 //!     #[inject] svc: Arc<RoomService>,
 //! }

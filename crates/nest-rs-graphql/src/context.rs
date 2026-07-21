@@ -73,7 +73,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// `EdgePosture::Exempt` at the HTTP edge, so this in-band seam is the
 /// *only* place guards run on GraphQL operations. A registered guard
 /// **replaces** the fallback: it owns the chain (the canonical bridge runs
-/// the same `AuthGuard` + `AuthzGuard` itself, so nothing runs twice).
+/// the same `AuthnGuard` + `AuthzGuard` itself, so nothing runs twice).
 pub trait GraphqlOperationGuard: Send + Sync + 'static {
     /// Attach per-request state to the poem request before seeds forward it.
     /// Return `Err(Response)` to reject the operation before parsing.
@@ -343,7 +343,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 /// GraphQL context, so resolvers read it with `ctx.data::<T>()`.
 ///
 /// ```ignore
-/// nest_rs_graphql::forward_principal!(MyPrincipal, MyGraphqlAuthGuard);
+/// nest_rs_graphql::forward_principal!(MyPrincipal, MyGraphqlAuthnGuard);
 /// ```
 ///
 /// The second arg is the owner provider whose module gates the forward — pick

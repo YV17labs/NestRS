@@ -230,7 +230,7 @@ impl ProfileResolver {
 
 The principal type lands in `ctx` through `forward_principal!` —
 declared once per app, see [Security](/security/). On a public query
-the call returns an error; bind a `GraphqlAuthGuard` to refuse
+the call returns an error; bind a `GraphqlAuthnGuard` to refuse
 anonymous traffic before the method runs.
 
 ## Returning a `Result`
@@ -268,12 +268,12 @@ use nest_rs_graphql::resolver;
 use nest_rs_seaorm::graphql::bind;
 
 use crate::Claims;
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, User, UsersService};
 
 #[resolver]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -301,7 +301,7 @@ The service stays the single audited choke point to the database. The
 resolver only translates between the wire shape and the service —
 `#[authorize(Action, Entity)]` is each operation's access posture,
 gating the call against the ambient ability and masking the returned
-value automatically. The `#[use_guards(AuthGuard, AuthzGuard)]` binding
+value automatically. The `#[use_guards(AuthnGuard, AuthzGuard)]` binding
 on the struct is what runs authn + the ability chain per operation; its
 `AuthzGuard` marker is provided by `AuthzGraphqlModule`, which the
 feature's `UsersGraphqlModule` imports (omit it and boot fails naming

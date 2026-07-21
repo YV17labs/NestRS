@@ -1,5 +1,5 @@
 use anyhow::Result;
-use features::authn::AuthGuard;
+use features::authn::AuthnGuard;
 use nest_rs_config::Environment;
 use nest_rs_core::App;
 use nest_rs_guards::{AppBuilderGuardsExt, guard};
@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
     let _opentelemetry = OpenTelemetry::init("live")?;
 
     App::builder()
-        .use_guards_global([guard::<AuthGuard>()])
+        .use_guards_global([guard::<AuthnGuard>()])
         .module::<LiveModule>()
         .build()
         .await?

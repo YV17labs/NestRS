@@ -1,6 +1,6 @@
 ---
 title: Authentication
-description: A Strategy turns a request into a principal — bearer tokens, OAuth redirects, basic credentials. AuthGuard runs it and Ctx<P> reads it back.
+description: A Strategy turns a request into a principal — bearer tokens, OAuth redirects, basic credentials. AuthnGuard runs it and Ctx<P> reads it back.
 sidebar:
   order: 1
 ---
@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 Authentication answers one question: *who is calling*. The shape of
 the answer is up to the `Strategy` — a JWT in the `Authorization`
 header, an OAuth provider redirect, a basic-auth `client_id:secret`,
-something app-specific. `AuthGuard<S>` runs the strategy on every
+something app-specific. `AuthnGuard<S>` runs the strategy on every
 request its controller covers, returns a `401` when it fails, and
 attaches the principal to the request so the handler reads it back with
 `Ctx<Principal>`.
@@ -29,18 +29,18 @@ cargo add nest-rs-authn
 
 ## Bind the shipped JWT strategy
 
-The common case writes no strategy at all. `AuthGuard<S>` is generic
+The common case writes no strategy at all. `AuthnGuard<S>` is generic
 over the strategy, and the framework ships
 [`JwtStrategy`](/security/authentication/jwt/) — a resource-server app
 ships a single type alias and a tiny module:
 
 ```rust title="crates/features/src/authn/mod.rs"
 pub type AppJwtStrategy = JwtStrategy<Claims>;
-pub type AuthGuard = nest_rs_authn::AuthGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs_authn::AuthnGuard<AppJwtStrategy>;
 
 #[module(
     imports = [nest_rs_authn::AuthnModule::for_root(None)],
-    providers = [AppJwtStrategy, AuthGuard],
+    providers = [AppJwtStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
 ```
@@ -50,13 +50,13 @@ valid principal:
 
 ```rust
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController { /* ... */ }
 ```
 
 ## Reading the principal back
 
-`AuthGuard` attaches the principal to the request before the handler
+`AuthnGuard` attaches the principal to the request before the handler
 runs. The handler reads it with `Ctx<P>` — same primitive as any
 other guard-attached context.
 
@@ -71,7 +71,7 @@ async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
 `Ctx<Claims>` is a typed lookup into the request's extensions; missing
 the guard means missing the type, and the framework returns `500` —
 the access graph would already have failed the boot if the controller's
-import tree did not provide `AuthGuard`.
+import tree did not provide `AuthnGuard`.
 
 ## Advanced: write your own strategy
 
@@ -116,7 +116,7 @@ impl PrincipalIdentity for ApiKey {
 ```
 
 A custom strategy binds exactly like the shipped one:
-`AuthGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
+`AuthnGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
 bound with `#[use_guards(...)]`.
 
 ## One return type — principal or error
@@ -142,12 +142,12 @@ and reacts to the `Result`.
 
 ## Public routes opt out
 
-A `#[public]` route still runs `AuthGuard` — but the guard does not
+A `#[public]` route still runs `AuthnGuard` — but the guard does not
 reject. If a credential is present and valid, the principal is
 attached so a downstream policy guard can see who is calling. If
 nothing is present, or the credential fails, the request continues
 anonymously. Visitor-rule policy belongs in the authorization layer,
-not in `AuthGuard`.
+not in `AuthnGuard`.
 
 ```rust
 #[get("/health")]
@@ -156,7 +156,7 @@ async fn health(&self) -> &'static str { "ok" }
 ```
 
 <Aside>
-A controller without `#[use_guards(AuthGuard, ...)]` silently exposes
+A controller without `#[use_guards(AuthnGuard, ...)]` silently exposes
 its routes. Default-deny is enforced by **convention** — write a
 [negative-path test](/testing/negative-path/) that asserts a missing
 guard returns 401, and a regression cannot ship.

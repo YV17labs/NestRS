@@ -873,7 +873,7 @@ mod tests {
         assert!(guard_path_is_throttler(&qualified));
         assert!(guard_path_is_throttler(&absolute));
 
-        let other: Path = parse_quote!(AuthGuard);
+        let other: Path = parse_quote!(AuthnGuard);
         let lookalike: Path = parse_quote!(MyThrottlerGuardWrapper);
         let module_named: Path = parse_quote!(ThrottlerGuard::helper);
         assert!(!guard_path_is_throttler(&other));

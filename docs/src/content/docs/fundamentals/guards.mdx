@@ -18,7 +18,7 @@ Four steps on this page:
 
 1. **What a guard is** — one trait, three transports, `Ok(())` or
    [`Denial`](https://docs.rs/nest-rs-guards/latest/nest_rs_guards/enum.Denial.html).
-2. **Secure the post API** — `#[use_guards(AuthGuard, AuthzGuard)]` on
+2. **Secure the post API** — `#[use_guards(AuthnGuard, AuthzGuard)]` on
    `PostsController`, with the modules that provide those guards.
 3. **Three scopes** — global, controller, per-handler; additive, not
    substitutive.
@@ -27,7 +27,7 @@ Four steps on this page:
 
 ```mermaid
 flowchart LR
-  A["① Guard trait<br/>gate or pass"] --> B["② PostsController<br/>AuthGuard + AuthzGuard"]
+  A["① Guard trait<br/>gate or pass"] --> B["② PostsController<br/>AuthnGuard + AuthzGuard"]
   B --> C["③ three scopes<br/>global → controller → handler"]
   C --> D["④ declare on provider<br/>dedup, access graph"]
 ```
@@ -110,12 +110,12 @@ use poem::web::{Json, Path};
 use poem::Result;
 use uuid::Uuid;
 
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::posts::{AdminGuard, Post, PostsService};
 
 #[controller(path = "/posts")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct PostsController {
     #[inject]
     svc: Arc<PostsService>,
@@ -155,7 +155,7 @@ pub struct PostsHttpModule;
 ```rust title="crates/features/src/authn/module.rs"
 #[module(
     imports = [nest_rs_authn::AuthnModule::for_root(None)],
-    providers = [AppJwtStrategy, AuthGuard],
+    providers = [AppJwtStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
 ```
@@ -171,7 +171,7 @@ pub struct AuthzHttpModule;
 <FileTree>
 - crates/features/src/
   - authn/
-    - module.rs (AuthnModule — provides AuthGuard)
+    - module.rs (AuthnModule — provides AuthnGuard)
     - guard.rs
   - authz/
     - module.rs (AuthzModule — AppAbility)
@@ -181,12 +181,12 @@ pub struct AuthzHttpModule;
   - posts/
     - http/
       - module.rs (PostsHttpModule — imports AuthzHttpModule)
-      - controller.rs (#[use_guards(AuthGuard, AuthzGuard)])
+      - controller.rs (#[use_guards(AuthnGuard, AuthzGuard)])
 </FileTree>
 
 ```mermaid
 flowchart TB
-  REQ[HTTP request] --> AG[AuthGuard]
+  REQ[HTTP request] --> AG[AuthnGuard]
   AG --> AZ[AuthzGuard]
   AZ --> AD{AdminGuard?}
   AD -->|delete only| ADG[AdminGuard]
@@ -197,7 +197,7 @@ flowchart TB
 ```
 
 Solid arrows are the guard chain on `GET /posts/:id`. `DELETE` adds
-`AdminGuard` on top. `AuthGuard` attaches `Claims`; `AuthzGuard` builds
+`AdminGuard` on top. `AuthnGuard` attaches `Claims`; `AuthzGuard` builds
 the ambient `Ability` handlers and `Bind` read through.
 
 ## The three scopes
@@ -207,8 +207,8 @@ from the same provider — declare once, choose *where* it runs.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_guards_global([guard::<AuthGuard>()])` in `main` | Per-route shaper, post-routing (self-mount edge for gateways) |
-| **Controller / Resolver / Gateway** | `#[use_guards(AuthGuard, AuthzGuard)]` on the struct | Container, at mount |
+| **Global** | `App::builder().use_guards_global([guard::<AuthnGuard>()])` in `main` | Per-route shaper, post-routing (self-mount edge for gateways) |
+| **Controller / Resolver / Gateway** | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct | Container, at mount |
 | **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | Container, at mount |
 
 Multiple guards in one attribute run in **declaration order**, outermost
@@ -216,11 +216,11 @@ first — the first listed sees the request before the second.
 
 ```rust title="apps/blog/src/main.rs"
 use nest_rs_guards::{AppBuilderGuardsExt, guard};
-use crate::authn::AuthGuard;
+use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 
 App::builder()
-    .use_guards_global([guard::<AuthGuard>(), guard::<AuthzGuard>()])
+    .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
     .module::<BlogModule>()
 ```
 
@@ -246,7 +246,7 @@ Attach on the way in; read with `Ctx<T>`:
 
 ```rust
 #[async_trait]
-impl Guard for AuthGuard<MyStrategy> {
+impl Guard for AuthnGuard<MyStrategy> {
     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
         let claims = self.strategy.authenticate(req).await?;
         req.extensions_mut().insert(claims);
@@ -264,16 +264,16 @@ async fn me(&self, auth: Ctx<Claims>) -> Json<Post> {
 means the guard that should have set it never ran. Store an `Arc<_>` if
 the value is large.
 
-`AuthzGuard` reads `Claims` left by `AuthGuard` to build the ambient
+`AuthzGuard` reads `Claims` left by `AuthnGuard` to build the ambient
 `Ability`. That is why order matters:
-`#[use_guards(AuthGuard, AuthzGuard)]`, not the reverse.
+`#[use_guards(AuthnGuard, AuthzGuard)]`, not the reverse.
 
 For per-route policy — required roles, rate-limit quotas — `#[meta(...)]`
 attaches a typed payload; `Reflector` reads it inside the guard:
 
 ```rust
 #[get("/admin/audit")]
-#[use_guards(AuthGuard, RolesGuard)]
+#[use_guards(AuthnGuard, RolesGuard)]
 #[meta(Roles(&["admin", "auditor"]))]
 async fn audit(&self) -> &'static str { "ok" }
 ```
@@ -283,7 +283,7 @@ global guard reads `#[meta(...)]` too — the route data is attached before
 the chain runs, exactly as it is for `#[public]` below.
 
 `#[public]` uses the same channel. The framework does **not** act on it —
-each guard decides what "public" means (`AuthGuard` may authenticate when
+each guard decides what "public" means (`AuthnGuard` may authenticate when
 a token is present but not reject anonymous callers; `AuthzGuard` may
 still apply visitor rules). Marking a route public does not strip its
 guards; it tells them to relax.
@@ -298,17 +298,17 @@ the three scopes. When the same guard is declared at several levels, the
 
 ```rust title="apps/blog/src/main.rs"
 App::builder()
-    .use_guards_global([guard::<AuthGuard>(), guard::<AuthzGuard>()])
+    .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
     .module::<BlogModule>()
 ```
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[controller(path = "/posts")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct PostsController { /* ... */ }
 ```
 
-`AuthGuard` and `AuthzGuard` run **exactly once** per request, not twice.
+`AuthnGuard` and `AuthzGuard` run **exactly once** per request, not twice.
 The controller's two extra lines cost zero runtime overhead and one `debug`
 line at boot.
 
@@ -326,8 +326,8 @@ filters.
 
 ```mermaid
 flowchart TB
-  MAIN["main: use_guards_global([AuthGuard, AuthzGuard])"]
-  PC["PostsController: #[use_guards(AuthGuard, AuthzGuard)]"]
+  MAIN["main: use_guards_global([AuthnGuard, AuthzGuard])"]
+  PC["PostsController: #[use_guards(AuthnGuard, AuthzGuard)]"]
   MAIN -. "dedup — runs once" .-> RUN[per-request chain]
   PC -. "debug at boot, zero extra cost" .-> RUN
 ```
@@ -353,7 +353,7 @@ because the per-operation context does not carry the poem request:
 - **GraphQL** — a `GraphqlOperationGuard` (e.g. `GraphqlAbilityBridge`)
   re-runs the HTTP guard chain on `POST /graphql` and seeds `Ability`
   for the operation. Per-resolver gating uses a marker like
-  `GraphqlAuthGuard`.
+  `GraphqlAuthnGuard`.
 - **WS** — a `SocketContext` (e.g. `WsDataContext`) captures pool +
   `Ability` on upgrade and re-installs them around each message.
   Per-message gating goes through `check_ws_message`.
@@ -365,7 +365,7 @@ fails boot with a clear error naming the missing guard.
 
 ```rust
 #[resolver]
-#[use_guards(GraphqlAuthGuard)]
+#[use_guards(GraphqlAuthnGuard)]
 pub struct PostResolver { /* ... */ }
 ```
 
@@ -380,7 +380,7 @@ fail-closed, when no ambient ability is present.
 
 ```rust
 #[gateway(path = "/posts/live")]
-#[use_guards(AuthGuard, AuthzGuard)] // real guards — run once, at the upgrade
+#[use_guards(AuthnGuard, AuthzGuard)] // real guards — run once, at the upgrade
 pub struct PostGateway { /* ... */ }
 
 #[messages]
@@ -403,7 +403,7 @@ for the full HTTP / GraphQL / WS wiring, and
   per-handler is additive.
 - **Declare on the provider** — `#[use_guards(...)]` on `PostsController`
   binds security to the feature; global + controller dedup to one run.
-- **Order matters** — `AuthGuard` before `AuthzGuard`; global
+- **Order matters** — `AuthnGuard` before `AuthzGuard`; global
   interceptors outside global guards (`DbContext` before `AuthzGuard`).
 </Aside>
 
@@ -416,4 +416,4 @@ for the full HTTP / GraphQL / WS wiring, and
 - [Pipes](/fundamentals/pipes/) — input transform / validation.
 - [Error handling](/fundamentals/exception-filters/) — typed catch for
   handler errors.
-- [Security](/security/) — `AuthGuard`, `AbilityGuard`, the full chain.
+- [Security](/security/) — `AuthnGuard`, `AbilityGuard`, the full chain.

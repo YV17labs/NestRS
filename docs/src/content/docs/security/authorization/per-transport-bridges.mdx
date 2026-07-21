@@ -34,9 +34,9 @@ below).
 | Bridge | Provides | What it bridges |
 |--------|----------|------------------|
 | `AuthzHttpModule` | `AuthzGuard` (`AbilityGuard<AppAbility>`) | The HTTP request — guard runs on `&mut Request`, attaches `Arc<Ability>` |
-| `AuthzGraphqlModule` | `AppGraphqlGuard` (`dyn OperationGuard`), `GraphqlAuthGuard` (resolver marker), `LoaderScope` (`dyn BatchContext`) | Re-runs the HTTP guard chain on `/graphql`, scopes the operation, snapshots ability around dataloader batches |
+| `AuthzGraphqlModule` | `AppGraphqlGuard` (`dyn OperationGuard`), `GraphqlAuthnGuard` (resolver marker), `LoaderScope` (`dyn BatchContext`) | Re-runs the HTTP guard chain on `/graphql`, scopes the operation, snapshots ability around dataloader batches |
 | `AuthzWsModule` | `WsDataContext` (`dyn SocketContext`) | Re-establishes the pool + ability per WS message |
-| `AuthzMcpModule` | `AppMcpGuard` (`McpAbilityBridge<AuthGuard, AuthzGuard>`) as `dyn McpOperationGuard` | Re-runs the HTTP guard chain on the MCP endpoint, installs ambient ability for the tool call |
+| `AuthzMcpModule` | `AppMcpGuard` (`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard` | Re-runs the HTTP guard chain on the MCP endpoint, installs ambient ability for the tool call |
 
 A controller imports the matching module along with its feature
 module. The transports transitively bring every layer the feature
@@ -65,11 +65,11 @@ the handler:
 
 ```rust
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController { /* ... */ }
 ```
 
-`AbilityGuard` reads the `Claims` an `AuthGuard` attached, calls
+`AbilityGuard` reads the `Claims` an `AuthnGuard` attached, calls
 `AppAbility::define(&actor, &mut builder)`, and inserts
 `Arc<Ability>` into request extensions. The `Authorize` shaper later
 installs that ability as a task-local via `with_ability` so
@@ -84,7 +84,7 @@ you write is unchanged in spirit: import `AuthzGraphqlModule`, bind the
 
 ```rust
 #[resolver]
-#[use_guards(GraphqlAuthGuard)]
+#[use_guards(GraphqlAuthnGuard)]
 impl UsersResolver { /* #[authorize(Action, Entity)] or #[public] per op */ }
 ```
 
@@ -115,7 +115,7 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
 }
 ```
 
-`before` runs the same HTTP guard chain (`AuthGuard`, then
+`before` runs the same HTTP guard chain (`AuthnGuard`, then
 `AbilityGuard`) on the GraphQL request — best-effort: a failed authn
 leaves no ability and the resolvers' `authorize`/`bind` refuse.
 `around` installs the resulting ability via `with_ability` for the
@@ -166,7 +166,7 @@ binds a real `Guard` beside the message:
 
 ```rust
 #[gateway(path = "/ws")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct ChatGateway { /* ... */ }
 
 #[messages]
@@ -177,7 +177,7 @@ impl ChatGateway {
 }
 ```
 
-`AuthGuard` + `AuthzGuard` run at the upgrade. The upgrade's
+`AuthnGuard` + `AuthzGuard` run at the upgrade. The upgrade's
 task-locals unwind before any message handler runs, so `WsDataContext`
 re-seeds the executor and ability around each message; a guard bound
 beside a `#[subscribe_message]` then runs through
@@ -189,7 +189,7 @@ a 401-shaped error frame, never silently passed through.
 ## MCP — same shape as HTTP
 
 `AuthzMcpModule` registers `AppMcpGuard`
-(`McpAbilityBridge<AuthGuard, AuthzGuard>`) as `dyn McpOperationGuard` —
+(`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard` —
 on each MCP HTTP request it runs the same `A` then `G` chain
 controllers use, then installs the caller's ambient `Ability` for the
 tool call. A failed authn yields 401; a failed authz returns the
@@ -226,7 +226,7 @@ app lists `AuthzHttpModule` only if other handlers need it.
 async fn health(&self) -> &'static str { "ok" }
 ```
 
-`#[public]` makes `AuthGuard` non-rejecting (anonymous requests pass
+`#[public]` makes `AuthnGuard` non-rejecting (anonymous requests pass
 through with no claims). The `AbilityGuard` then builds an empty
 `Ability` for the visitor; the row-level filter returns nothing
 unless `AbilityFactory` granted the visitor branch explicitly. See

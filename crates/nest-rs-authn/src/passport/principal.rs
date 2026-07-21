@@ -3,7 +3,7 @@
 //! Security events (denials, auth failures) must be answerable under
 //! incident: *which actor was denied what?* The framework records
 //! `actor_id` on the request span the moment authentication succeeds
-//! ([`AuthGuard`](crate::AuthGuard)), so every downstream event — a
+//! ([`AuthnGuard`](crate::AuthnGuard)), so every downstream event — a
 //! row-level denial in the ORM, a masked response, a guard rejection —
 //! inherits the identity without each call site threading it.
 

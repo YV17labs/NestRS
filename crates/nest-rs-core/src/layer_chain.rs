@@ -155,8 +155,8 @@ fn report_redundant_scope(
 }
 
 /// Strip module paths from a `type_name`, keeping the leaf of each segment so
-/// generics survive: `a::b::AuthGuard<c::d::JwtStrategy<e::Claims>>` becomes
-/// `AuthGuard<JwtStrategy<Claims>>`. Diagnostic-only — the full path adds no
+/// generics survive: `a::b::AuthnGuard<c::d::JwtStrategy<e::Claims>>` becomes
+/// `AuthnGuard<JwtStrategy<Claims>>`. Diagnostic-only — the full path adds no
 /// information a reader scanning boot logs can act on.
 fn short_type_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());

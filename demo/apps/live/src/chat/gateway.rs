@@ -5,10 +5,10 @@ use nest_rs_ws::{WsClient, gateway, messages, serde_json};
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::guard::ModeratedGuard;
 use crate::chat::service::ChatService;
-use features::authn::AuthGuard;
+use features::authn::AuthnGuard;
 
 #[gateway(path = "/ws")]
-#[use_guards(AuthGuard)]
+#[use_guards(AuthnGuard)]
 pub struct ChatGateway {
     #[inject]
     svc: Arc<ChatService>,

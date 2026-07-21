@@ -65,7 +65,7 @@ edge.
 A missing ability is a 500 because it means the controller was not
 mounted with `AbilityGuard` — a wiring bug, never a client error.
 The access graph catches the bad import tree at boot, but a route
-that uses `Bind` and forgets `#[use_guards(AuthGuard, AuthzGuard)]`
+that uses `Bind` and forgets `#[use_guards(AuthnGuard, AuthzGuard)]`
 fails at request time with this 500.
 
 ## How `access` decides
@@ -193,7 +193,7 @@ The default `Bind` extractor is opinionated; the underlying `access`
 is not.
 
 <Aside type="caution">
-`Bind` requires `AuthGuard` and `AuthzGuard` bound on the controller.
+`Bind` requires `AuthnGuard` and `AuthzGuard` bound on the controller.
 The access graph catches the missing-import case at boot, but a
 **handler that uses `Bind` without binding `AbilityGuard`** at the
 route level returns 500 at request time. Pin every by-id route with a

@@ -50,7 +50,7 @@ posture, `#[crud]` generates the five routes, and one ability does the rest.
 
 ```rust title="crates/features/src/orgs/http/controller.rs (abridged)"
 #[controller(path = "/orgs")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,

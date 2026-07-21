@@ -4,7 +4,7 @@
 //! executor and authz ability the HTTP request installed are gone by the time
 //! a message handler runs. This implements `nest-rs-ws`'s [`SocketContext`] seam
 //! to re-install both around each dispatch. The connection-level guards
-//! (`AuthGuard` + `AbilityGuard`) attach the ability to the upgrade request;
+//! (`AuthnGuard` + `AbilityGuard`) attach the ability to the upgrade request;
 //! this bridge captures it once and re-installs it per message — it does **not**
 //! re-run the guard chain, unlike the GraphQL bridge.
 //!

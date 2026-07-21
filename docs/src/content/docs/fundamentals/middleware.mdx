@@ -27,7 +27,7 @@ covers — logging, request id, rate limiting, auth, opening a transaction
 |------|------------------|-----|
 | Logging the request | **Interceptor** | Needs both sides (start time, end time, status) |
 | Adding `X-Request-Id` to the response | **Interceptor** | Touches the response |
-| Authenticating the bearer token | **Guard** (`AuthGuard`) | Short-circuit on 401, attach `Claims` for the handler |
+| Authenticating the bearer token | **Guard** (`AuthnGuard`) | Short-circuit on 401, attach `Claims` for the handler |
 | Rate-limiting | **Guard** | Short-circuit on 429 before any work runs |
 | Parsing/normalizing the body | **Pipe** at the boundary | Pure transform, no DI |
 | Opening a database transaction | **Interceptor** (`DbContext`, auto-mounted) | Wraps the handler, commits/rolls back on exit |
@@ -102,7 +102,7 @@ A guard does that too. The guard borrows the request mutably:
 
 ```rust
 #[async_trait]
-impl Guard for AuthGuard {
+impl Guard for AuthnGuard {
     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
         let claims = verify_bearer(req).map_err(|_| Denial::unauthorized("invalid token"))?;
         req.extensions_mut().insert(claims);

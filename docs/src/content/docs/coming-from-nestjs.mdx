@@ -12,7 +12,7 @@ onto its NestRS equivalent, then shows where the machine underneath diverges.
 
 ```rust
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -112,7 +112,7 @@ route — written both ways. The NestJS sketch first:
 
 ```ts
 @Controller('users')
-@UseGuards(AuthGuard, AuthzGuard)
+@UseGuards(AuthnGuard, AuthzGuard)
 export class UsersController {
   constructor(private readonly svc: UsersService) {}
 
@@ -129,7 +129,7 @@ authorized row for the caller's org through the service:
 
 ```rust
 #[controller(path = "/users")]
-#[use_guards(AuthGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,

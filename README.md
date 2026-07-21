@@ -11,7 +11,6 @@
   <a href="https://docs.rs/nest-rs"><img src="https://img.shields.io/docsrs/nest-rs?logo=docsdotrs&logoColor=white" alt="docs.rs"></a>
   <a href="https://github.com/YV17labs/NestRS/stargazers"><img src="https://img.shields.io/github/stars/YV17labs/NestRS?style=flat&logo=github&color=555" alt="GitHub stars"></a>
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
-  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 </p>
 

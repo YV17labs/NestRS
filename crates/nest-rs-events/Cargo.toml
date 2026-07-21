@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Typed in-process event bus for nestrs: emit a typed event, dispatch to discovered #[on_event] methods grouped under #[listeners]."
+keywords = ["framework", "nestjs", "events", "event-bus", "pubsub"]
+categories = ["asynchronous", "rust-patterns"]
 
 
 [dependencies]

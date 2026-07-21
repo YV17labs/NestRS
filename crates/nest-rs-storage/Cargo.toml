@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "S3-compatible object storage for NestRS: a thin, injectable Storage client (presigned PUT/GET, head, byte read/write) built on the `object_store` crate. The AWS-S3 driver ships wired and runs against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style; the GCS, Azure, fs and memory drivers sit behind the same client."
+keywords = ["framework", "nestjs", "storage", "s3", "object-store"]
+categories = ["web-programming", "filesystem"]
 
 [dependencies]
 nest-rs-core.workspace = true

@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Internal — surface-agnostic nestrs decorators (#[injectable], #[module], #[hooks]); re-exported by nest-rs-core, not a direct dependency."
+keywords = ["framework", "nestjs", "macros", "proc-macro", "di"]
+categories = ["development-tools::procedural-macro-helpers", "rust-patterns"]
 
 [lib]
 proc-macro = true

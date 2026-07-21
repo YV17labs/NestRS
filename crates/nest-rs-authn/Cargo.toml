@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Authentication for nestrs: a JwtService (sign/verify), a pluggable Strategy trait, and the request-scoped AuthnGuard that establishes the caller's identity."
+keywords = ["framework", "nestjs", "authentication", "jwt", "oauth"]
+categories = ["authentication", "web-programming"]
 
 
 [dependencies]

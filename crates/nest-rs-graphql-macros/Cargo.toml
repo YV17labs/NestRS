@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Internal — GraphQL decorator macros (#[graphql], #[resolver]); re-exported by nest-rs-graphql, not a direct dependency."
+keywords = ["framework", "nestjs", "graphql", "macros", "proc-macro"]
+categories = ["development-tools::procedural-macro-helpers"]
 
 [lib]
 proc-macro = true

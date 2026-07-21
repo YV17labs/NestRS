@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Internal — shared syn/quote helpers every nestrs *-macros crate is built from; not a direct dependency (third-party macro crates may also use it)."
+keywords = ["framework", "nestjs", "macros", "proc-macro", "codegen"]
+categories = ["development-tools::procedural-macro-helpers"]
 
 
 [dependencies]

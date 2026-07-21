@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "In-process testing harness for nestrs: boot an app's real DI graph and drive its HTTP/GraphQL/MCP surfaces with poem's TestClient, with provider overrides and no socket bound."
+keywords = ["framework", "nestjs", "testing", "test", "harness"]
+categories = ["development-tools::testing"]
 
 
 [features]

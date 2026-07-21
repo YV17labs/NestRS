@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Rate limiting for NestRS: a per-route ThrottlerGuard reading a #[meta(Throttle)] override, over a fixed-window counter behind a pluggable ThrottlerStore trait."
+keywords = ["framework", "nestjs", "rate-limit", "throttle", "middleware"]
+categories = ["web-programming"]
 
 
 [dependencies]

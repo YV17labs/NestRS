@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Transport-spanning error-mapping filters for nestrs — one Layer System sub-trait that turns inner errors into responses on HTTP, GraphQL, and WS, declared globally via `use_filters_global` or per-scope through `#[use_filters]`."
+keywords = ["framework", "nestjs", "filters", "error-handling", "web"]
+categories = ["web-programming", "rust-patterns"]
 
 [dependencies]
 async-trait.workspace = true

@@ -7,6 +7,8 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Transport-spanning guards for nestrs — one trait, three transports (HTTP, GraphQL, WS), declared once with App::builder().use_guards_global(...)."
+keywords = ["framework", "nestjs", "guards", "authorization", "middleware"]
+categories = ["web-programming", "authentication"]
 
 [features]
 default = []

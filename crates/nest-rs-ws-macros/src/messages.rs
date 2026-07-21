@@ -16,7 +16,10 @@ use syn::{
     FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Path, ReturnType, Type, parse_macro_input,
 };
 
-use nest_rs_codegen::{impl_self_ident, injected_method_with_layers, layer_inject_keys};
+use nest_rs_codegen::{
+    impl_self_ident, injected_method_with_layers, layer_inject_keys, reject_http_only_layers,
+    take_path_list,
+};
 
 /// Split a `#[subscribe_message]` payload argument into (type to deserialize
 /// from the wire, pipe info). `Some((Some(pipe), inner))` for `Piped<P, T>`,
@@ -47,8 +50,6 @@ fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
     }
     (ty.clone(), None)
 }
-
-use crate::attr::{reject_http_only_layers, take_use_attr};
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
@@ -106,14 +107,14 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         };
         event_names.push(event.clone());
 
-        if let Err(err) = reject_http_only_layers(&method.attrs) {
+        if let Err(err) = reject_http_only_layers(&method.attrs, "WebSockets", "gateway") {
             return err.to_compile_error().into();
         }
-        let guards = match take_use_attr(&mut method.attrs, "use_guards") {
+        let guards = match take_path_list(&mut method.attrs, "use_guards", "entry") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        let force_guards = match take_use_attr(&mut method.attrs, "force_guards") {
+        let force_guards = match take_path_list(&mut method.attrs, "force_guards", "entry") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };

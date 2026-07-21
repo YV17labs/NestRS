@@ -13,7 +13,7 @@ use syn::{
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, forwarded_arg_idents, forwarded_idents,
     from_container_method, impl_self_ident, injected_keys_with_layers, injected_method_with_layers,
-    layer_inject_keys,
+    layer_inject_keys, reject_http_only_layers, take_flag_attr, take_path_list,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -44,7 +44,7 @@ pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// the struct). The impl-form macro reads the layer specs back at runtime
 /// via the inherent `__nestrs_resolver_*_specs()` helpers emitted here.
 fn resolver_struct(mut item: ItemStruct) -> TokenStream {
-    if let Err(err) = reject_http_only_layers(&item.attrs) {
+    if let Err(err) = reject_http_only_layers(&item.attrs, "GraphQL", "resolver") {
         return err.to_compile_error().into();
     }
     // Resolver-scope (provider) guard declarations — same shape and same
@@ -120,64 +120,14 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 /// The attribute is consumed so it never reaches the compiler as an unknown
 /// attribute. At most one per item.
 fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    take_path_list(attrs, "use_guards")
-}
-
-/// `#[use_interceptors(...)]` / `#[use_filters(...)]` are **HTTP-only** today:
-/// there is no per-operation GraphQL seam on those traits, so binding an
-/// interceptor or filter on a resolver would be a silent no-op. Reject it at
-/// compile time — a named error beats a capability that quietly does nothing.
-/// Guards *are* bridged (via the operation guard), so they stay.
-fn reject_http_only_layers(attrs: &[Attribute]) -> syn::Result<()> {
-    for attr in attrs {
-        for name in ["use_interceptors", "use_filters"] {
-            if attr.path().is_ident(name) {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    format!(
-                        "`#[{name}]` is not bridged on GraphQL yet — it would be a silent no-op on a \
-                         resolver. Remove it, or move the layer onto an HTTP `#[controller]` / \
-                         `#[routes]`, where interceptors and filters run. Guards work on both.",
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
+    take_path_list(attrs, "use_guards", "guard")
 }
 
 /// `#[force_guards(...)]` — the Layer-System opt-in that lets a per-method
 /// guard re-run even when the same `TypeId` is already in the global chain.
 /// Same shape as `#[use_guards]`.
 fn take_force_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    take_path_list(attrs, "force_guards")
-}
-
-fn take_path_list(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Vec<Path>> {
-    let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
-        return Ok(Vec::new());
-    };
-    let attr = attrs.remove(pos);
-    if attrs.iter().any(|a| a.path().is_ident(ident)) {
-        return Err(syn::Error::new_spanned(
-            &attr,
-            format!("at most one `#[{ident}(...)]` here; list every guard in it"),
-        ));
-    }
-    Ok(attr
-        .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?
-        .into_iter()
-        .collect())
-}
-
-/// Extract and remove a flag attribute (no args, no parens) like `#[public]`.
-/// Returns `true` when present (and removes it), `false` when absent.
-fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> bool {
-    let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
-        return false;
-    };
-    attrs.remove(pos);
-    true
+    take_path_list(attrs, "force_guards", "guard")
 }
 
 /// `#[authorize(Action, Entity)]` parsed off a `#[query]`/`#[mutation]`
@@ -576,7 +526,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
              uniform with `#[controller]` and `#[gateway]`",
         ));
     }
-    reject_http_only_layers(&item.attrs)?;
+    reject_http_only_layers(&item.attrs, "GraphQL", "resolver")?;
 
     let query_obj = format_ident!("__{}Query", base);
     let mutation_obj = format_ident!("__{}Mutation", base);
@@ -607,7 +557,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         let verb_attr = method.attrs.remove(idx);
 
-        reject_http_only_layers(&method.attrs)?;
+        reject_http_only_layers(&method.attrs, "GraphQL", "resolver")?;
         let method_guards = take_use_guards(&mut method.attrs)?;
         let force_method_guards = take_force_guards(&mut method.attrs)?;
         // The operation's access posture: `#[authorize(Action, Entity)]`

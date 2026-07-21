@@ -12,11 +12,11 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    forwarded_arg_idents, impl_self_ident, injected_method_with_layers, layer_inject_keys,
-    nth_generic_type,
+    expr_str, forwarded_arg_idents, impl_self_ident, injected_method_with_layers,
+    layer_inject_keys, nth_generic_type, take_flag_attr, take_path_list,
 };
 
-use crate::attr::{expr_str, opt_str, take_flag_attr, take_use_attr};
+use crate::attr::opt_str;
 
 /// One route handler, by named field — a positional tuple here once let a
 /// field-order slip silently swap e.g. `force_guards`/`pipes`.
@@ -112,7 +112,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { , #(#inputs),* }
         };
 
-        let guards = match take_use_attr(&mut method.attrs, "use_guards") {
+        let guards = match take_path_list(&mut method.attrs, "use_guards", "entry") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
@@ -124,24 +124,24 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         // `ThrottlerGuard` here, or a controller-level one via the runtime call
         // emitted below.
         let method_throttled = guards.iter().any(guard_path_is_throttler);
-        let force_guards = match take_use_attr(&mut method.attrs, "force_guards") {
+        let force_guards = match take_path_list(&mut method.attrs, "force_guards", "entry") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        let filters = match take_use_attr(&mut method.attrs, "use_filters") {
+        let filters = match take_path_list(&mut method.attrs, "use_filters", "entry") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        let interceptors = match take_use_attr(&mut method.attrs, "use_interceptors") {
+        let interceptors = match take_path_list(&mut method.attrs, "use_interceptors", "entry") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        let method_pipes = match take_use_attr(&mut method.attrs, "use_pipes") {
+        let method_pipes = match take_path_list(&mut method.attrs, "use_pipes", "entry") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
         let method_exception_filters =
-            match take_use_attr(&mut method.attrs, "use_exception_filters") {
+            match take_path_list(&mut method.attrs, "use_exception_filters", "entry") {
                 Ok(paths) => paths,
                 Err(err) => return err.to_compile_error().into(),
             };

@@ -8,7 +8,6 @@
 
 use proc_macro::TokenStream;
 
-mod attr;
 mod gateway;
 mod messages;
 

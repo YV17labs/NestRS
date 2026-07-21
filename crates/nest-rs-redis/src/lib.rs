@@ -46,7 +46,7 @@ mod worker;
 
 pub use config::QueueConfig;
 pub use connection::{Queue, QueueConnection};
-pub use error::ConnectionError;
+pub use error::RedisError;
 pub use module::{QueueModule, QueueSetup};
 #[cfg(feature = "throttler")]
 pub use throttler::{RedisThrottler, RedisThrottlerModule, RedisThrottlerSetup};

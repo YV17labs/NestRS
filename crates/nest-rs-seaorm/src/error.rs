@@ -16,6 +16,13 @@
 //! keep a constant wire string (detail stays for `tracing`); `Validation`
 //! forwards through so the field errors stay structured. `Display` is what both
 //! Poem's `ResponseError` and the WS reply put on the wire.
+//!
+//! **Naming decision (kept, do not re-flag):** this stays `ServiceError`, not a
+//! concern-prefixed `SeaOrmError`. It is developer vocabulary written in every
+//! app service signature (`Result<T, ServiceError>`) and is role-named like
+//! `Service` itself; a prefix would hurt exactly the ergonomics the framework
+//! sells, so the concern-prefix rule (`RedisError`, `StorageError`) is
+//! deliberately not applied here.
 
 use sea_orm::DbErr;
 use validator::ValidationErrors;

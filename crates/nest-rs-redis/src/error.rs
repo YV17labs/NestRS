@@ -11,9 +11,13 @@ use thiserror::Error;
 
 /// A failure opening the shared Redis
 /// [`QueueConnection`](crate::QueueConnection) from the configured URL.
+///
+/// Concern-prefixed (`RedisError`, not a generic `ConnectionError`) to match
+/// the house pattern — `ConfigError`, `StorageError`, `QueueError` — and avoid
+/// a name collision when an app imports several infra errors at once.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ConnectionError {
+pub enum RedisError {
     /// The Redis connection could not be established.
     #[error("failed to connect to Redis")]
     Connect(#[from] apalis_redis::RedisError),

@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use nest_rs_queue::{Job, JobProducer, QueueError, WIRE_FORMAT_VERSION};
 use serde_json::json;
 
-use crate::error::ConnectionError;
+use crate::error::RedisError;
 
 /// The app's shared Redis connection — queue-flavoured by history, not
 /// queue-only. It is seeded once by [`QueueModule`](crate::QueueModule) and
@@ -34,7 +34,7 @@ pub struct QueueConnection {
 
 impl QueueConnection {
     /// Open a multiplexed Redis connection to `redis_url`.
-    pub async fn connect(redis_url: &str) -> Result<Self, ConnectionError> {
+    pub async fn connect(redis_url: &str) -> Result<Self, RedisError> {
         let conn = apalis_redis::connect(redis_url).await?;
         Ok(Self { conn })
     }

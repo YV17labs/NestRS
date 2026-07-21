@@ -120,6 +120,10 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         // route's `scoped_guarded` flag (combined at runtime with any
         // controller-level guards) for the boot-time posture check.
         let method_guarded = !guards.is_empty();
+        // Likewise for the `throttled` flag (OAPI-O4): a method-level
+        // `ThrottlerGuard` here, or a controller-level one via the runtime call
+        // emitted below.
+        let method_throttled = guards.iter().any(guard_path_is_throttler);
         let force_guards = match take_use_attr(&mut method.attrs, "force_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
@@ -163,6 +167,10 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 Ok(d) => d,
                 Err(err) => return err.to_compile_error().into(),
             };
+        // The effective success status the OpenAPI document advertises for this
+        // route (OAPI-O3): a `#[redirect]`/`#[http_code(N)]` overrides the 200
+        // default.
+        let success_status = response_shapers.success_status();
 
         let call_expr = quote! { __ctrl.#method_name(#(#arg_idents),*).await };
         let returns_result = match &method.sig.output {
@@ -224,7 +232,26 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             .iter_mut()
             .find(|(path, _)| path.value() == route_path.value())
         {
-            Some((_, handlers)) => handlers.push(handler),
+            Some((_, handlers)) => {
+                // Two handlers for the same (verb, path) would collapse silently
+                // into `poem::get(h1).get(h2)` — the second wins and the first
+                // becomes dead, unroutable code. Reject it at the macro (HTTP-R2).
+                if handlers.iter().any(|h| h.verb == verb_ident) {
+                    return syn::Error::new_spanned(
+                        &verb_ident,
+                        format!(
+                            "duplicate route `{} {}` on this controller — two handlers for \
+                             the same verb+path collapse silently (the later one would win); \
+                             give one a distinct path or verb",
+                            verb_ident.to_string().to_uppercase(),
+                            route_path.value(),
+                        ),
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+                handlers.push(handler);
+            }
             None => routes_by_path.push((route_path.clone(), vec![handler])),
         }
 
@@ -302,6 +329,9 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 path_params: #path_params,
                 query_params: #query_params,
                 may_conflict: #may_conflict,
+                throttled: #method_throttled
+                    || <#self_ty>::__nestrs_controller_has_throttler(),
+                success_status: #success_status,
                 scoped_guarded: #method_guarded
                     || !<#self_ty>::__nestrs_controller_guard_specs().is_empty(),
                 public: #is_public,
@@ -470,7 +500,19 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     // the request fails closed instead of shipping an unmasked body.
     let mut expr = match shaper {
         Some(ty) => quote! {
-            ::nest_rs_http::shaped(#wrapper, ::core::marker::PhantomData::<#ty>)
+            {
+                // HTTP-D1: eagerly assert the armed type is a real response
+                // shaper, so a false-positive arm (a parameter whose type is
+                // *named* `Authorize`/`Bind` but does not implement the shaper
+                // trait) is a spanned compile error here — not a confusing
+                // transitive `Endpoint` bound failure when the route mounts, and
+                // not only the run-time `MaskProbe` net.
+                const _: fn() = || {
+                    fn __nestrs_assert_route_shaper<P: ::nest_rs_http::RouteResponseShaper>() {}
+                    __nestrs_assert_route_shaper::<#ty>();
+                };
+                ::nest_rs_http::shaped(#wrapper, ::core::marker::PhantomData::<#ty>)
+            }
         },
         None => quote! { ::nest_rs_http::mask_probed(#wrapper, #route_label_lit) },
     };
@@ -551,6 +593,20 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     }
 
     expr
+}
+
+/// Whether a guard path names the framework's `ThrottlerGuard` — the signal
+/// that a route is rate-limited and can answer `429`. Matched on the last path
+/// segment's ident so `nest_rs_throttler::ThrottlerGuard`, a `use`-imported
+/// `ThrottlerGuard`, and an aliased re-export all count. Name-based by design:
+/// the same lightweight detection the masking-arm check uses — a user guard
+/// *named* `ThrottlerGuard` that isn't the framework's is a
+/// pathological false-positive we accept over dragging a type dependency into
+/// the macro crate.
+pub(crate) fn guard_path_is_throttler(path: &Path) -> bool {
+    path.segments
+        .last()
+        .is_some_and(|seg| seg.ident == "ThrottlerGuard")
 }
 
 /// Build the `Vec<ScopedGuardSpec>` for the method-level guards. Each entry
@@ -797,4 +853,32 @@ fn response_payload(output: &ReturnType) -> Option<Type> {
     };
     let inner = result_inner(ty).unwrap_or(ty);
     nth_generic_type(inner, "Json", 0).cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    // The `429` OAPI-O4 signal is detected on the guard path's last segment, so
+    // it survives a fully-qualified path and a `use`-imported name alike, and a
+    // guard that merely *contains* the substring does not false-positive.
+    #[test]
+    fn guard_path_is_throttler_matches_the_last_segment_only() {
+        let plain: Path = parse_quote!(ThrottlerGuard);
+        let qualified: Path = parse_quote!(nest_rs_throttler::ThrottlerGuard);
+        let absolute: Path = parse_quote!(::nest_rs_throttler::ThrottlerGuard);
+        assert!(guard_path_is_throttler(&plain));
+        assert!(guard_path_is_throttler(&qualified));
+        assert!(guard_path_is_throttler(&absolute));
+
+        let other: Path = parse_quote!(AuthGuard);
+        let lookalike: Path = parse_quote!(MyThrottlerGuardWrapper);
+        let module_named: Path = parse_quote!(ThrottlerGuard::helper);
+        assert!(!guard_path_is_throttler(&other));
+        assert!(!guard_path_is_throttler(&lookalike));
+        // The *last* segment is `helper`, not the guard type — no match.
+        assert!(!guard_path_is_throttler(&module_named));
+    }
 }

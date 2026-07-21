@@ -71,7 +71,8 @@ pub struct Names {
     pub singular: String,
 }
 
-/// Reject path segments that would escape the features workspace.
+/// Reject path segments that would escape the features workspace, and names
+/// whose derived kebab form would not be a valid crate/package identifier.
 pub fn validate_feature_name(raw: &str) -> Result<(), String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -82,6 +83,30 @@ pub fn validate_feature_name(raw: &str) -> Result<(), String> {
     }
     if trimmed.starts_with('.') {
         return Err("feature name must not start with '.'".into());
+    }
+    // The derived kebab is the crate/package/module name, so it must be a valid
+    // identifier — otherwise the scaffold fails the next `cargo check` (CLI-I6).
+    validate_derived_kebab(&to_kebab(trimmed))?;
+    Ok(())
+}
+
+/// A derived kebab name must be a valid crate/package name: start with a
+/// lowercase ASCII letter, then only lowercase letters, digits, or hyphens.
+/// Catches `nestrs new "Bad Name!"` (→ `bad-name!`) or a digit-led name before
+/// it scaffolds a project that fails to compile (CLI-I6).
+pub fn validate_derived_kebab(kebab: &str) -> Result<(), String> {
+    if kebab.is_empty() {
+        return Err("the name has no letters or digits to form a package name".into());
+    }
+    let starts_with_letter = kebab.chars().next().is_some_and(|c| c.is_ascii_lowercase());
+    let rest_valid = kebab
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !starts_with_letter || !rest_valid {
+        return Err(format!(
+            "`{kebab}` is not a valid package name — the name must reduce to one that starts \
+             with a letter and uses only lowercase letters, digits, and hyphens"
+        ));
     }
     Ok(())
 }
@@ -337,6 +362,22 @@ mod tests {
         assert!(validate_feature_name("/tmp/pwn").is_err());
         assert!(validate_feature_name("../escape").is_err());
         assert!(validate_feature_name("valid_name").is_ok());
+    }
+
+    #[test]
+    fn rejects_names_that_derive_an_invalid_package_name() {
+        // `!` survives kebab derivation → `bad-name!`, which won't compile as a
+        // crate name — the scaffold must reject it up front (CLI-I6).
+        assert!(validate_feature_name("Bad Name!").is_err());
+        assert!(validate_feature_name("has space ok").is_ok()); // → has-space-ok
+        assert!(validate_derived_kebab("bad-name!").is_err());
+        assert!(
+            validate_derived_kebab("123-start").is_err(),
+            "must start with a letter"
+        );
+        assert!(validate_derived_kebab("").is_err());
+        assert!(validate_derived_kebab("good-name").is_ok());
+        assert!(validate_derived_kebab("blog-posts2").is_ok());
     }
 
     #[test]

@@ -8,7 +8,8 @@
 //! - `Strict-Transport-Security` — applied **only when TLS is active**, since
 //!   HSTS over plain HTTP is meaningless and a foot-gun on localhost.
 
-use nest_rs_config::{ConfigService, Result};
+use nest_rs_config::{ConfigError, ConfigService, Result};
+use poem::http::HeaderValue;
 
 /// HSTS default: one year, include subdomains. No `preload` (that is an explicit
 /// opt-in with real consequences — a developer who wants it sets it).
@@ -47,11 +48,18 @@ impl SecurityHeadersConfig {
     /// empty string drops that one header.
     pub fn from_env(env: &ConfigService) -> Result<Self> {
         let d = Self::default();
+        let frame_options = override_header(env.get("FRAME_OPTIONS"), d.frame_options);
+        let hsts = override_header(env.get("HSTS"), d.hsts);
+        // Reject a set-but-invalid header value at boot, naming the env var
+        // (HTTP-S4) — otherwise the response layer silently drops it and a
+        // stray char in `NESTRS_HTTP__HSTS` quietly removes HSTS in prod.
+        validate_header_value(env, "FRAME_OPTIONS", &frame_options)?;
+        validate_header_value(env, "HSTS", &hsts)?;
         Ok(Self {
             enabled: env.flag("SECURITY_HEADERS", d.enabled)?,
             content_type_options: env.flag("CONTENT_TYPE_OPTIONS", d.content_type_options)?,
-            frame_options: override_header(env.get("FRAME_OPTIONS"), d.frame_options),
-            hsts: override_header(env.get("HSTS"), d.hsts),
+            frame_options,
+            hsts,
         })
     }
 
@@ -73,6 +81,20 @@ impl SecurityHeadersConfig {
         }
         out
     }
+}
+
+/// Boot-fatal check that a non-empty header value parses as an HTTP header
+/// value, naming the offending env var so the misconfig is obvious (HTTP-S4).
+fn validate_header_value(env: &ConfigService, key: &str, value: &Option<String>) -> Result<()> {
+    if let Some(v) = non_empty(value) {
+        HeaderValue::from_str(&v).map_err(|_| {
+            ConfigError::parse(
+                env.var_name(key),
+                format!("`{v}` is not a valid HTTP header value"),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// An env value present (even empty) overrides the default; absent keeps it.
@@ -125,6 +147,23 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.headers(true).is_empty());
+    }
+
+    #[test]
+    fn an_invalid_header_value_fails_boot_naming_the_var() {
+        let cfg = ConfigService::with_vars("http", [("NESTRS_HTTP__FRAME_OPTIONS", "bad\nvalue")]);
+        let err = SecurityHeadersConfig::from_env(&cfg).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Parse { ref var, .. } if var == "NESTRS_HTTP__FRAME_OPTIONS"),
+            "expected a Parse error naming FRAME_OPTIONS, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn a_valid_override_still_loads() {
+        let cfg = ConfigService::with_vars("http", [("NESTRS_HTTP__FRAME_OPTIONS", "SAMEORIGIN")]);
+        let loaded = SecurityHeadersConfig::from_env(&cfg).expect("valid value loads");
+        assert_eq!(loaded.frame_options.as_deref(), Some("SAMEORIGIN"));
     }
 
     #[test]

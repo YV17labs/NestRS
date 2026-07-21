@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
-use nest_rs_authz::{AbilityBuilder, Action, Read};
+use nest_rs_authz::{AbilityBuilder, Action, MaskReplyError, Read, masked_reply, with_ability};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, resolver};
@@ -256,4 +256,73 @@ async fn public_posture_skips_gate_and_mask() {
     let app = boot().await;
     let json = query(&app, "", "{ motd }").await;
     assert_eq!(json["data"]["motd"], "hello");
+}
+
+// ── SEC-F1: `masked_reply` — the manual opt-in helper WS gateways must call ──
+
+#[tokio::test]
+async fn masked_reply_fails_closed_without_an_ambient_ability() {
+    // With no ambient ability installed (the transport's authz bridge missing
+    // or a handler that forgot to run inside it) the helper must error, never
+    // pass the unmasked wire value through.
+    let wire = serde_json::json!({ "id": 1, "name": "ada" });
+    let result = masked_reply::<widget::Entity>(Action::Read, wire);
+    assert!(
+        matches!(result, Err(MaskReplyError::NoAmbientAbility)),
+        "no ambient ability must fail closed, not passthrough",
+    );
+}
+
+#[tokio::test]
+async fn masked_reply_strips_unpermitted_fields_and_unexposed_columns() {
+    // A viewer may read only the `id` field: `name` is masked to null and the
+    // server-only `secret` column is strained out — the same semantics the HTTP
+    // shaper and GraphQL wrapper apply automatically.
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Read, widget::Entity)
+        .fields([widget::Column::Id]);
+    let ability = Arc::new(b.build().expect("valid ability"));
+    let wire = serde_json::json!({ "id": 1, "name": "ada" });
+
+    let masked = with_ability(ability, async move {
+        masked_reply::<widget::Entity>(Action::Read, wire)
+    })
+    .await
+    .expect("masks with an ambient ability");
+
+    assert_eq!(masked["id"], 1);
+    assert_eq!(
+        masked["name"],
+        serde_json::Value::Null,
+        "a field outside the grant is masked",
+    );
+    assert!(
+        masked.get("secret").is_none(),
+        "the server-only column is strained out",
+    );
+}
+
+#[tokio::test]
+async fn masked_reply_masks_every_row_of_an_array() {
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Read, widget::Entity)
+        .fields([widget::Column::Id]);
+    let ability = Arc::new(b.build().expect("valid ability"));
+    let wire = serde_json::json!([
+        { "id": 1, "name": "ada" },
+        { "id": 2, "name": "grace" },
+    ]);
+
+    let masked = with_ability(ability, async move {
+        masked_reply::<widget::Entity>(Action::Read, wire)
+    })
+    .await
+    .expect("masks an array");
+
+    let rows = masked.as_array().expect("array reply");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["name"], serde_json::Value::Null);
+        assert!(row.get("secret").is_none());
+    }
 }

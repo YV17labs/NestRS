@@ -273,6 +273,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                     // can never pull an unbounded result set into memory.
                     use ::sea_orm::{QueryOrder as _, QuerySelect as _};
                     let __cap = ::nest_rs_seaorm::RELATION_LOAD_CAP;
+                    let __limit = __cap.saturating_mul(__keys.len() as u64);
                     let __conn = ::nest_rs_seaorm::Repo::<Entity>::conn()?;
                     let __rows = ::nest_rs_seaorm::Repo::<Entity>::scoped(
                         ::nest_rs_authz::Action::Read,
@@ -287,9 +288,19 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                         // Group children of a parent contiguously so the batch
                         // cap truncates whole parents, not an arbitrary slice.
                         .order_by_asc(Column::#fk_col_pascal)
-                        .limit(__cap.saturating_mul(__keys.len() as u64))
+                        .limit(__limit)
                         .all(&__conn)
                         .await?;
+                    // Global-cap saturation ⇒ possible cross-parent STARVATION:
+                    // the `cap × keys` limit ordered by FK asc can be consumed by
+                    // early (low-FK) parents, leaving later parents with empty
+                    // buckets that are returned as `[]` — indistinguishable from
+                    // "no children". That silent wrong answer (DATA-R2) must be
+                    // surfaced loudly; the per-bucket truncation warn below only
+                    // catches a single parent *exceeding* the cap, never starved
+                    // siblings. (The real fix — a per-parent `ROW_NUMBER()` limit —
+                    // rides the roadmapped HasMany `Connection<T>` pagination.)
+                    let __saturated = __rows.len() as u64 == __limit;
                     let mut __raw: ::std::collections::HashMap<#fk_ty, ::std::vec::Vec<Model>> =
                         __keys
                             .iter()
@@ -326,12 +337,15 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                         }
                         __map.insert(__k, __wire);
                     }
-                    if __truncated {
+                    if __truncated || __saturated {
                         ::tracing::warn!(
                             target: "nest_rs::loader",
                             cap = __cap,
                             loader = #target_label,
-                            "relation load truncated at RELATION_LOAD_CAP",
+                            saturated = __saturated,
+                            "relation batch hit RELATION_LOAD_CAP — children were truncated, and \
+                             when `saturated` some parents may be MISSING children entirely \
+                             (starved); narrow the query or paginate this relation",
                         );
                     }
                     ::core::result::Result::Ok(__map)

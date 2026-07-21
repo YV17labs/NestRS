@@ -7,8 +7,10 @@ use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
 fn oauth_service() -> OAuthService {
-    let jwt_svc =
-        Arc::new(JwtService::new(JwtOptions::new("oauth-grant-test-secret")).expect("jwt service"));
+    let jwt_svc = Arc::new(
+        JwtService::new(JwtOptions::new("oauth-grant-test-secret-padded-32b"))
+            .expect("jwt service"),
+    );
     let providers = Arc::new(SocialProviders::default());
     let users_svc = Arc::new(features::users::UsersService::new(Arc::new(
         DatabaseConnection::default(),

@@ -55,6 +55,20 @@ pub trait Module {
 ///   a DB pool that must be built asynchronously).
 /// - [`register`](Self::register) — install synchronous providers, metadata,
 ///   or config.
+///
+/// # The import expression must be a **pure** config constructor
+///
+/// `#[module(imports = [Foo::for_root(opts)])]` expands the `Foo::for_root(opts)`
+/// expression **once per phase** — once for [`collect`] and again for
+/// [`register`] — so it is evaluated more than once (CORE-I9). A config
+/// constructor that merely packages its options into a value (every framework
+/// `for_root`) is idempotent and unaffected. Do **not** put side effects in it
+/// (generating an id, opening a connection, reading a clock): the two phases
+/// would then see divergent values. Keep `for_root` a pure builder and do such
+/// work in a `collect`ed async factory or a lifecycle hook instead.
+///
+/// [`collect`]: Self::collect
+/// [`register`]: Self::register
 pub trait DynamicModule {
     /// Install synchronous providers, metadata or config from this module's
     /// configuration. Consumes `self` — the config is moved into the providers.
@@ -68,9 +82,10 @@ pub trait DynamicModule {
     }
 
     /// Queue an async factory (for resources like a DB pool that must be built
-    /// asynchronously) to be awaited in the factories phase. Takes `&self` so
-    /// the config survives into [`register`](Self::register). Defaults to a
-    /// no-op.
+    /// asynchronously) to be awaited in the factories phase. Takes `&self`
+    /// (borrowing, so a distinct value can still be `register`ed). Defaults to a
+    /// no-op. See the trait docs: the import expression is re-evaluated per
+    /// phase, so it must be a pure config constructor.
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         builder
     }

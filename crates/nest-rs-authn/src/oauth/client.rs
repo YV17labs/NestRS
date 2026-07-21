@@ -230,7 +230,7 @@ mod tests {
     }
 
     fn jwt() -> JwtService {
-        JwtService::new(JwtOptions::new("oauth-client-tests")).expect("HMAC service")
+        JwtService::new(JwtOptions::new("oauth-client-tests-padded-to-32b")).expect("HMAC service")
     }
 
     #[test]

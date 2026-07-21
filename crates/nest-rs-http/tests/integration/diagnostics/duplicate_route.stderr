@@ -1,0 +1,5 @@
+error: duplicate route `GET /` on this controller — two handlers for the same verb+path collapse silently (the later one would win); give one a distinct path or verb
+  --> tests/integration/diagnostics/duplicate_route.rs:16:7
+   |
+16 |     #[get("/")]
+   |       ^^^

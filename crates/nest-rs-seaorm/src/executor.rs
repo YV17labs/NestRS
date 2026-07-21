@@ -91,6 +91,16 @@ impl LazyTransaction {
         self.cell.get().is_some()
     }
 
+    /// Force the request transaction open (if a data-layer touch has not
+    /// already) and start a **SAVEPOINT** on it. The nested transaction lets an
+    /// atomic insert + scope re-check roll back independently of the outer
+    /// request transaction, so a handler that swallows the denial cannot leave
+    /// an out-of-scope row to be committed with the rest of the request
+    /// (DATA-S1).
+    pub(crate) async fn begin_nested(&self) -> Result<DatabaseTransaction, DbErr> {
+        self.txn_ref().await?.begin().await
+    }
+
     /// Settle the boundary's lazily opened transaction: commit on `success`,
     /// roll back otherwise, do nothing when no data-layer touch ever opened
     /// one. This is the **single home** of the escape invariant — a lingering
@@ -146,7 +156,7 @@ impl LazyTransaction {
         if success {
             match txn.commit().await {
                 Ok(()) => FinalizeOutcome::Committed,
-                Err(err) => FinalizeOutcome::CommitFailed(err),
+                Err(err) => FinalizeOutcome::CommitFailed(CommitError(err)),
             }
         } else {
             if let Err(err) = txn.rollback().await {
@@ -179,7 +189,40 @@ pub enum FinalizeOutcome {
         opened: bool,
     },
     /// The commit itself failed — the caller classifies and logs it.
-    CommitFailed(DbErr),
+    CommitFailed(CommitError),
+}
+
+/// A commit-time database failure. Opaque over the ORM's `DbErr` so a sea-orm
+/// version bump is not a semver break through [`FinalizeOutcome`] (B-DATA): the
+/// public surface exposes only what a caller needs — a [`Display`] for logging
+/// and [`is_retryable_conflict`](CommitError::is_retryable_conflict) for
+/// classification — never the wrapped `DbErr` itself.
+///
+/// [`Display`]: std::fmt::Display
+#[derive(Debug)]
+pub struct CommitError(DbErr);
+
+impl CommitError {
+    /// Whether the commit failed on a retryable serialization/deadlock conflict
+    /// (a typed SQLSTATE `40001`/`40P01`/…), matched against the *typed* error
+    /// rather than message text. The interceptor tags these for observability;
+    /// the replay itself belongs at a programmatic transaction boundary
+    /// (`retry::retry_on_conflict`).
+    pub fn is_retryable_conflict(&self) -> bool {
+        crate::retry::is_retryable_conflict(&self.0)
+    }
+}
+
+impl std::fmt::Display for CommitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for CommitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
 }
 
 #[async_trait]

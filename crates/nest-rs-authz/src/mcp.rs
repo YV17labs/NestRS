@@ -14,7 +14,7 @@ use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::{Ability, ActionMarker, with_ability};
+use crate::ActionMarker;
 
 /// Runs `A` then `G` on each MCP HTTP request and scopes the handler to the
 /// resulting ability when present. Inject it as `dyn McpOperationGuard`.
@@ -41,18 +41,6 @@ impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
                 .await
                 .map_err(|denial| Error::from_response(denial_to_http_response(denial)))
         })
-    }
-}
-
-/// Re-install the caller's ability around the MCP handler when the guards attached
-/// one — used by apps that wrap the endpoint beyond `before`.
-pub async fn with_request_ability<F>(req: &Request, inner: F) -> Response
-where
-    F: std::future::Future<Output = Response>,
-{
-    match req.extensions().get::<Arc<Ability>>().cloned() {
-        Some(ability) => with_ability(ability, inner).await,
-        None => inner.await,
     }
 }
 

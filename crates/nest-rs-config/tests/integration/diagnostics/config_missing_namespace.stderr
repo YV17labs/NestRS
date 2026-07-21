@@ -1,0 +1,7 @@
+error: #[config] needs a namespace: `#[config(namespace = "database")]`
+ --> tests/integration/diagnostics/config_missing_namespace.rs:7:1
+  |
+7 | #[config]
+  | ^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `config` (in Nightly builds, run with -Z macro-backtrace for more info)

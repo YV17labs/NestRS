@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>API documentation</title>
-    <link rel="stylesheet" href="/api/swagger-ui.css" />
+    <link rel="stylesheet" href="api/swagger-ui.css" />
     <style>
       html { box-sizing: border-box; }
       *, *::before, *::after { box-sizing: inherit; }
@@ -13,12 +13,12 @@
   </head>
   <body>
     <div id="swagger-ui"></div>
-    <script src="/api/swagger-ui-bundle.js" charset="UTF-8"></script>
-    <script src="/api/swagger-ui-standalone-preset.js" charset="UTF-8"></script>
+    <script src="api/swagger-ui-bundle.js" charset="UTF-8"></script>
+    <script src="api/swagger-ui-standalone-preset.js" charset="UTF-8"></script>
     <script>
       window.onload = function () {
         window.ui = SwaggerUIBundle({
-          url: "/api-json",
+          url: "api-json",
           dom_id: "#swagger-ui",
           deepLinking: true,
           presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],

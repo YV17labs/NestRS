@@ -16,7 +16,10 @@ struct TestClaims {
     nbf: Option<u64>,
 }
 
-fn service(secret: &str) -> JwtService {
+fn service(label: &str) -> JwtService {
+    // Pad to ≥ 32 bytes so the HS256 min-secret guard (SEC-F3) passes, while the
+    // label keeps each test's secret distinct.
+    let secret = format!("{label}-padding-to-thirty-two-bytes-minimum");
     JwtService::new(JwtOptions::new(secret)).expect("HMAC service")
 }
 
@@ -27,6 +30,28 @@ fn claims(exp: u64, nbf: Option<u64>) -> TestClaims {
         aud: None,
         nbf,
     }
+}
+
+#[test]
+fn short_hmac_secret_is_rejected_by_the_service_constructor() {
+    // SEC-F3: the ≥256-bit rule must hold at the derivation point
+    // (`JwtService::new`), not only on the config-env path — so the documented
+    // honest-API constructor `JwtOptions::new` can't mint a forgeable-key service.
+    // `JwtService` has no `Debug` (secrets must not leak), so match rather than
+    // `.expect_err`.
+    let err = match JwtService::new(JwtOptions::new("too-short")) {
+        Ok(_) => panic!("a sub-32-byte HS256 secret must be refused"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(&err, AuthError::Failed(msg) if msg.contains("at least 32 bytes")),
+        "unexpected error: {err:?}",
+    );
+
+    // A 32-byte secret is accepted.
+    let ok = "0123456789abcdef0123456789abcdef"; // exactly 32 bytes
+    assert_eq!(ok.len(), 32);
+    JwtService::new(JwtOptions::new(ok)).expect("a 32-byte secret is accepted");
 }
 
 #[test]
@@ -92,7 +117,7 @@ fn invalid_pem_fails_at_construction() {
 
 #[test]
 fn audience_must_match_when_configured() {
-    let mut options = JwtOptions::new("aud-secret");
+    let mut options = JwtOptions::new("aud-secret-padded-to-thirty-two-bytes");
     options.audience = Some("api".into());
     let jwt = JwtService::new(options).expect("service");
     let mut ok = claims(jwt.expiry(), None);
@@ -114,7 +139,7 @@ fn audience_omitted_is_rejected_when_configured() {
     // Regression: a configured audience must be *mandatory*. A validly-signed
     // token that omits `aud` entirely was silently accepted (set_audience only
     // compares when the claim is present); it must now fail closed.
-    let mut options = JwtOptions::new("aud-required-secret");
+    let mut options = JwtOptions::new("aud-required-secret-padded-to-32-bytes");
     options.audience = Some("api".into());
     let jwt = JwtService::new(options).expect("service");
 

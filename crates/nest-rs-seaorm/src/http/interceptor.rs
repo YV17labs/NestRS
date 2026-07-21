@@ -18,13 +18,16 @@
 //!
 //! ### Serialization conflict observability
 //!
-//! When [`DatabaseConfig::retry_serialization_conflicts`] is on, a commit
-//! that fails with a SQLSTATE the [`retry`](crate::retry) module recognizes
-//! is retried up to [`DEFAULT_RETRY_ATTEMPTS`](crate::retry::DEFAULT_RETRY_ATTEMPTS)
-//! times with small exponential backoff. The handler body itself is not
-//! retried — a poem `Request` is consumed by `next.run` and not replayable
-//! at the interceptor layer; for that case use the [`retry_on_conflict`]
-//! primitive at the service's programmatic transaction boundary.
+//! This interceptor does **not** retry — it cannot: a poem `Request` is
+//! consumed by `next.run` and is not replayable at this layer. When
+//! [`DatabaseConfig::retry_serialization_conflicts`] is on, a commit that fails
+//! with a SQLSTATE the [`retry`](crate::retry) module recognizes is merely
+//! *tagged* — logged at `warn` as a serialization conflict for observability —
+//! then the request still fails closed (`500`). To actually retry a conflicting
+//! transaction, wrap the work in the [`retry_on_conflict`] primitive at the
+//! service's programmatic transaction boundary (where the body *is* replayable);
+//! the knob here only controls whether the conflict is surfaced distinctly in
+//! the logs.
 //!
 //! [`retry_on_conflict`]: crate::retry::retry_on_conflict
 
@@ -36,11 +39,12 @@ use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
-use sea_orm::{DatabaseConnection, DbErr};
+use sea_orm::DatabaseConnection;
 
 use crate::config::DatabaseConfig;
-use crate::executor::{Executor, FinalizeOutcome, LazyTransaction, with_request_executor};
-use crate::retry::{DEFAULT_INITIAL_BACKOFF, DEFAULT_RETRY_ATTEMPTS, is_retryable_conflict};
+use crate::executor::{
+    CommitError, Executor, FinalizeOutcome, LazyTransaction, with_request_executor,
+};
 
 /// The request interceptor that installs the ambient [`Executor`] — the pool for
 /// a safe method, a **lazily opened** per-request transaction (committed on
@@ -103,18 +107,18 @@ impl Interceptor for DbContext {
 }
 
 /// Classify a commit-time failure. When `retry_conflicts` is on, a typed
-/// SQLSTATE matched by [`is_retryable_conflict`] is logged at `warn` with the
-/// conflict tag (the handler body is not replayable at this layer — use
-/// `retry::retry_on_conflict` at a programmatic transaction boundary);
-/// anything else logs at `error`. Either way the response fails closed.
-fn commit_failure(err: DbErr, retry_conflicts: bool) -> Error {
-    if retry_conflicts && is_retryable_conflict(&err) {
+/// SQLSTATE matched by [`CommitError::is_retryable_conflict`] is tagged at
+/// `warn` for observability — the interceptor does **not** retry (the handler
+/// body is not replayable here; use `retry::retry_on_conflict` at a
+/// programmatic transaction boundary); anything else logs at `error`. Either
+/// way the response fails closed.
+fn commit_failure(err: CommitError, retry_conflicts: bool) -> Error {
+    if retry_conflicts && err.is_retryable_conflict() {
         tracing::warn!(
             target: "nest_rs::orm",
             error = %err,
-            attempts = DEFAULT_RETRY_ATTEMPTS,
-            initial_backoff_ms = DEFAULT_INITIAL_BACKOFF.as_millis() as u64,
-            hint = "handler is not replayable from the interceptor; use `retry::retry_on_conflict` at a programmatic transaction boundary",
+            hint = "not retried here (handler is not replayable from the interceptor); \
+                    use `retry::retry_on_conflict` at a programmatic transaction boundary",
             "serialization conflict at commit",
         );
     } else {

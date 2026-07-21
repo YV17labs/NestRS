@@ -97,8 +97,16 @@ impl RequestScope {
             let any = self.cache.lock().entry(id).or_insert(built).clone();
             return any.downcast::<T>().ok();
         }
-        // Transients route through `Container::get` so the re-entrancy guard
-        // catches a self-cycle, regardless of which surface initiates the call.
+        // Transient: rebuilt on every call, but resolved through **this** scope
+        // (not the bare root) so its `#[inject]` deps see the request — a
+        // request-scoped dep resolves to the request's shared instance rather
+        // than panicking or building a request-of-one. The shared re-entrancy
+        // guard inside `build_transient` still catches a self-cycle.
+        if let Some(factory) = self.root.transient_factory(id) {
+            let any = crate::container::build_transient(id, type_name::<T>(), &factory, self);
+            return any.downcast::<T>().ok();
+        }
+        // Neither scoped nor transient: a plain singleton falls through.
         self.root.get::<T>()
     }
 
@@ -209,6 +217,50 @@ mod tests {
             builds.load(Ordering::SeqCst),
             1,
             "the shared scoped dep is built exactly once per request",
+        );
+    }
+
+    #[test]
+    fn a_transient_can_depend_on_a_request_scoped_provider() {
+        // B-CORE: a transient whose `#[inject]` dep is request-scoped must
+        // resolve through the scope — not panic on a missing provider. Two
+        // resolutions in one request rebuild the transient but SHARE the single
+        // request-scoped instance (the transient's factory runs against `self`).
+        struct Dep;
+        struct Trans(Arc<Dep>);
+
+        let builds = Arc::new(AtomicU32::new(0));
+        let builds_factory = builds.clone();
+        let container = Container::builder()
+            .provide_scoped::<Dep, _>(move |_| {
+                builds_factory.fetch_add(1, Ordering::SeqCst);
+                Dep
+            })
+            .provide_transient::<Trans, _>(|scope| {
+                Trans(
+                    scope
+                        .get::<Dep>()
+                        .expect("the request-scoped dep resolves through the scope"),
+                )
+            })
+            .build();
+        let scope = RequestScope::new(container);
+
+        let a: Arc<Trans> = scope.get().expect("transient resolves");
+        let b: Arc<Trans> = scope.get().expect("transient resolves again");
+
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "a transient is rebuilt on every resolution",
+        );
+        assert!(
+            Arc::ptr_eq(&a.0, &b.0),
+            "both transients share the request's one request-scoped instance",
+        );
+        assert_eq!(
+            builds.load(Ordering::SeqCst),
+            1,
+            "the request-scoped dep is built exactly once per request",
         );
     }
 

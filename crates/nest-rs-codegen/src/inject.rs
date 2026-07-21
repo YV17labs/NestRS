@@ -59,6 +59,22 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 let field_name = field.ident.clone().expect("named field has an ident");
                 let inject_idx = field.attrs.iter().position(|a| a.path().is_ident("inject"));
                 let Some(idx) = inject_idx else {
+                    // CORE-I5: an `Arc<…>` (or `Option<Arc<…>>`) field with no
+                    // `#[inject]` is almost always a *forgotten* injection.
+                    // Silently `Default::default()`-ing it — an empty config, a
+                    // no-op guard/strategy — is a security footgun, so reject it.
+                    let is_arc = arc_inner(&field.ty).is_some();
+                    let is_opt_arc = nth_generic_type(&field.ty, "Option", 0)
+                        .is_some_and(|inner| arc_inner(inner).is_some());
+                    if is_arc || is_opt_arc {
+                        return Err(syn::Error::new_spanned(
+                            &field.ty,
+                            "an `Arc<…>` field without `#[inject]` would be silently \
+                             `Default::default()`-d (an empty config, a no-op guard/strategy) — \
+                             add `#[inject]` to resolve it from the container, or store the \
+                             default behind a non-`Arc` type if that is truly intended",
+                        ));
+                    }
                     field_inits.push(quote! {
                         #field_name: ::core::default::Default::default()
                     });

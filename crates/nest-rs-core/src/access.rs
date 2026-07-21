@@ -29,6 +29,13 @@ use crate::container::{KeyedDependency, ProviderKey};
 
 /// One provider declared in a module's `providers = [...]`, recorded by the
 /// `#[module]` macro for the access-graph check.
+///
+/// **Internal ABI.** Constructed by struct-literal in framework-macro output;
+/// the `nest-rs-*-macros` crates ship in lockstep with `nest-rs-core`, so a
+/// new field is added to the emitter and this struct in the same release and
+/// never breaks downstream (which never hand-constructs it). Do not construct
+/// it by hand.
+#[doc(hidden)]
 pub struct ProviderDescriptor {
     /// The provider type's name, used to name the offending consumer in a boot
     /// access error.
@@ -51,6 +58,10 @@ pub struct ProviderDescriptor {
 }
 
 /// Per-module descriptor submitted to the link-time registry by `#[module]`.
+///
+/// **Internal ABI** (see [`ProviderDescriptor`]) — macro-constructed, lockstep
+/// with `nest-rs-core`; do not hand-construct.
+#[doc(hidden)]
 pub struct ModuleDescriptor {
     /// `TypeId` of the `#[module]` struct — the graph node's identity, matched
     /// against other modules' [`imports`](Self::imports).
@@ -72,6 +83,10 @@ inventory::collect!(ModuleDescriptor);
 /// registry by the macro. A resolver self-composes into the GraphQL schema
 /// regardless of any module, so module membership is what brings its injected
 /// dependencies under the access contract.
+///
+/// **Internal ABI** (see [`ProviderDescriptor`]) — macro-constructed, lockstep
+/// with `nest-rs-core`; do not hand-construct.
+#[doc(hidden)]
 pub struct ResolverDescriptor {
     /// `TypeId` of the `#[resolver]` struct, matched against reachable modules'
     /// `providers = [...]` to decide whether the resolver is under the contract.
@@ -128,6 +143,7 @@ pub struct MissingDependencyError {
 /// The failure modes of the bare (non-keyed) access-graph pass: a cross-module
 /// reach that no import covers, or a dependency no module provides.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AccessError {
     /// A provider reached across modules for something no import covers.
     #[error(transparent)]

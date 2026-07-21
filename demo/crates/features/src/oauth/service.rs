@@ -207,7 +207,7 @@ mod tests {
     use std::time::Duration;
 
     fn jwt_with_ttl(ttl: Duration) -> JwtService {
-        let mut opts = JwtOptions::new("test-secret");
+        let mut opts = JwtOptions::new("test-secret-padded-to-thirty-two-b");
         opts.expires_in = ttl;
         JwtService::new(opts).expect("jwt service")
     }

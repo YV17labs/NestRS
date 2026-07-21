@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -27,12 +28,44 @@ use crate::rate::Throttle;
 /// Cap distinct throttle keys to resist unbounded memory growth.
 const MAX_KEYS: usize = 10_000;
 
+/// Amortize the O(n) expiry sweep: run the full-map `retain` only once every
+/// `SWEEP_INTERVAL` hits (and always at capacity), so the common per-request
+/// path is O(1) under the global mutex rather than an n-key scan (THROT-R1). A
+/// key's own window still resets on its next hit, so per-key correctness holds
+/// between sweeps — only *other* expired buckets linger briefly, bounded by
+/// `MAX_KEYS`.
+const SWEEP_INTERVAL: u32 = 128;
+
 /// The outcome of counting one request against a rate limit.
+///
+/// `#[non_exhaustive]`: construct it through [`Decision::allowed`] /
+/// [`Decision::denied`] so a future field (e.g. a `remaining` count) is not a
+/// breaking change for out-of-tree [`ThrottlerStore`] implementors.
+#[non_exhaustive]
 pub struct Decision {
     /// Whether the request is permitted.
     pub allowed: bool,
     /// When denied, time until the window resets (for the `Retry-After` header).
     pub retry_after: Duration,
+}
+
+impl Decision {
+    /// A permitted request.
+    pub fn allowed() -> Self {
+        Self {
+            allowed: true,
+            retry_after: Duration::ZERO,
+        }
+    }
+
+    /// A denied request; `retry_after` is the time until the window resets
+    /// (surfaced to the client as `Retry-After`).
+    pub fn denied(retry_after: Duration) -> Self {
+        Self {
+            allowed: false,
+            retry_after,
+        }
+    }
 }
 
 /// Contract a rate-limit backend fulfils so a [`crate::ThrottlerGuard`]-style
@@ -66,6 +99,20 @@ struct Window {
     /// compare against **this**, not the current caller's `limit.window`, so a
     /// short-window route can't expire a long-window route's counter.
     window: Duration,
+    /// The request cap this bucket was last opened/reset under. Stored so the
+    /// eviction pass can tell a *denying* bucket (`count` over the cap) from an
+    /// allowed one without the caller's `limit`, and never evict an active
+    /// denial (HTTP-S3).
+    limit: u32,
+}
+
+impl Window {
+    /// Whether this bucket is currently refusing requests — over its cap, or
+    /// saturated (`u32::MAX` counts as denial even when the cap is `u32::MAX`,
+    /// matching [`InMemoryThrottler::hit`]'s fail-closed overload rule).
+    fn is_denying(&self) -> bool {
+        self.count > self.limit || self.count == u32::MAX
+    }
 }
 
 /// The in-process default [`ThrottlerStore`] — fixed-window counters in a
@@ -74,6 +121,9 @@ pub struct InMemoryThrottler {
     default: Throttle,
     trusted_proxies: Vec<IpAddr>,
     windows: Mutex<HashMap<String, Window>>,
+    /// Hit counter driving the amortized expiry sweep (THROT-R1). Wraps
+    /// harmlessly — only its value mod [`SWEEP_INTERVAL`] matters.
+    hits: AtomicU32,
 }
 
 impl InMemoryThrottler {
@@ -83,6 +133,7 @@ impl InMemoryThrottler {
             default,
             trusted_proxies,
             windows: Mutex::new(HashMap::new()),
+            hits: AtomicU32::new(0),
         }
     }
 
@@ -108,44 +159,64 @@ impl InMemoryThrottler {
     pub fn hit(&self, key: &str, limit: Throttle) -> Decision {
         let now = Instant::now();
         let mut windows = self.windows.lock();
-        // Expire each bucket against **its own** window, not the current
-        // caller's — otherwise a hit on a short-window route purges counters
-        // opened under a long-window route (the cross-window eviction bypass).
-        windows.retain(|_, window| now.duration_since(window.start) < window.window);
-        if !windows.contains_key(key)
-            && windows.len() >= MAX_KEYS
-            && let Some(oldest) = windows
+        // Amortized expiry sweep (THROT-R1): the full-map `retain` is O(n) under
+        // the global mutex, so run it only every `SWEEP_INTERVAL` hits — and
+        // always at capacity, so the eviction pass below sees fresh liveness.
+        // Between sweeps a bucket still expires against **its own** window on its
+        // next hit (the reset below), so per-key correctness holds; only other
+        // expired buckets linger briefly, bounded by `MAX_KEYS`.
+        let due = self
+            .hits
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(SWEEP_INTERVAL);
+        if due || windows.len() >= MAX_KEYS {
+            windows.retain(|_, window| now.duration_since(window.start) < window.window);
+        }
+        // At capacity with a new key: make room by evicting the oldest bucket
+        // that is NOT actively denying. An over-limit in-window bucket must
+        // never be evicted — dropping it resets a live denial, exactly what an
+        // attacker minting fresh keys wants (this compounds the X-Forwarded-For
+        // keying fix: cheap fresh keys + evictable denials reset every strict
+        // counter — HTTP-S3). If every live bucket is denying, refuse the new
+        // key fail-closed rather than sacrifice a denial.
+        if !windows.contains_key(key) && windows.len() >= MAX_KEYS {
+            let victim = windows
                 .iter()
+                .filter(|(_, window)| !window.is_denying())
                 .min_by_key(|(_, window)| window.start)
-                .map(|(k, _)| k.clone())
-        {
-            windows.remove(&oldest);
+                .map(|(k, _)| k.clone());
+            match victim {
+                Some(oldest) => {
+                    windows.remove(&oldest);
+                }
+                None => {
+                    return Decision::denied(limit.window);
+                }
+            }
         }
         let window = windows.entry(key.to_owned()).or_insert(Window {
             start: now,
             count: 0,
             window: limit.window,
+            limit: limit.limit,
         });
         if now.duration_since(window.start) >= window.window {
             window.start = now;
             window.count = 0;
-            // Adopt the current limit's window in case the route's limit changed
-            // since this bucket was opened.
+            // Adopt the current limit's window/cap in case the route's limit
+            // changed since this bucket was opened.
             window.window = limit.window;
+            window.limit = limit.limit;
         }
         window.count = window.count.saturating_add(1);
         if window.count > limit.limit || window.count == u32::MAX {
-            Decision {
-                allowed: false,
-                retry_after: limit
+            Decision::denied(
+                limit
                     .window
                     .saturating_sub(now.duration_since(window.start)),
-            }
+            )
         } else {
-            Decision {
-                allowed: true,
-                retry_after: Duration::ZERO,
-            }
+            Decision::allowed()
         }
     }
 }
@@ -203,6 +274,7 @@ mod tests {
                     start: Instant::now(),
                     count: u32::MAX - 1,
                     window: Duration::from_secs(60),
+                    limit: u32::MAX,
                 },
             );
         }
@@ -266,6 +338,97 @@ mod tests {
         assert!(
             !throttler.hit("long", long).allowed,
             "long-window limit still enforced after the short-window hit",
+        );
+    }
+
+    #[test]
+    fn eviction_skips_a_denying_bucket_and_removes_an_allowed_one() {
+        // HTTP-S3: at MAX_KEYS the eviction pass must preserve a bucket that is
+        // actively denying — dropping it resets a live denial (what an attacker
+        // minting fresh keys wants). Here the OLDEST bucket is denying; the old
+        // oldest-start eviction would have chosen it. It must survive; an
+        // allowed bucket is evicted instead.
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let now = Instant::now();
+        {
+            let mut windows = throttler.windows.lock();
+            windows.insert(
+                "deny".to_owned(),
+                Window {
+                    start: now - Duration::from_secs(5), // oldest
+                    count: 5,
+                    window: Duration::from_secs(60),
+                    limit: 1, // count 5 > limit 1 ⇒ denying
+                },
+            );
+            for i in 0..(MAX_KEYS - 1) {
+                windows.insert(
+                    format!("ok{i}"),
+                    Window {
+                        start: now - Duration::from_secs(1), // newer than "deny"
+                        count: 1,
+                        window: Duration::from_secs(60),
+                        limit: 100, // allowed
+                    },
+                );
+            }
+        }
+
+        // A brand-new key at capacity triggers exactly one eviction.
+        let _ = throttler.hit("newcomer", Throttle::new(100, Duration::from_secs(60)));
+
+        let windows = throttler.windows.lock();
+        assert!(
+            windows.contains_key("deny"),
+            "an over-limit in-window bucket must never be evicted",
+        );
+        assert_eq!(
+            windows.get("deny").unwrap().count,
+            5,
+            "the denying bucket's counter must not be reset by eviction",
+        );
+        assert!(
+            windows.contains_key("newcomer"),
+            "the new key was admitted by evicting an allowed bucket",
+        );
+    }
+
+    #[test]
+    fn a_full_table_of_denying_buckets_refuses_new_keys_fail_closed() {
+        // HTTP-S3: when every live bucket is actively denying, a new key must be
+        // refused fail-closed rather than evict a denial to make room.
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let now = Instant::now();
+        {
+            let mut windows = throttler.windows.lock();
+            for i in 0..MAX_KEYS {
+                windows.insert(
+                    format!("deny{i}"),
+                    Window {
+                        start: now,
+                        count: 9,
+                        window: Duration::from_secs(60),
+                        limit: 1, // all denying
+                    },
+                );
+            }
+        }
+
+        let decision = throttler.hit("newcomer", Throttle::new(5, Duration::from_secs(30)));
+        assert!(
+            !decision.allowed,
+            "a new key must be refused fail-closed when every bucket is actively denying",
+        );
+
+        let windows = throttler.windows.lock();
+        assert_eq!(
+            windows.len(),
+            MAX_KEYS,
+            "the table stays full — no denial evicted, no newcomer admitted",
+        );
+        assert!(
+            !windows.contains_key("newcomer"),
+            "the refused key must not be inserted",
         );
     }
 

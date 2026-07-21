@@ -42,7 +42,7 @@ graphql = [
     "nest-rs-resource/graphql",
     "dep:poem",
 ]
-# MCP surface: HTTP operation guard (`McpAbilityBridge`) + `with_request_ability`.
+# MCP surface: the operation-guard ability bridge (`McpAbilityBridge`).
 mcp = [
     "dep:nest-rs-core",
     "dep:nest-rs-mcp",

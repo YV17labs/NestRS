@@ -17,6 +17,9 @@ async-trait.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+# FutureExt::catch_unwind isolates a panicking `fire` so one bad job never
+# silently kills its schedule (mirrors the queue's CatchPanicLayer).
+futures-util.workspace = true
 tracing.workspace = true
 croner.workspace = true
 chrono.workspace = true

@@ -43,8 +43,8 @@ pub mod ws;
 pub use config::DatabaseConfig;
 pub use error::ServiceError;
 pub use executor::{
-    Executor, ExecutorScope, LazyTransaction, current_executor, current_executor_scope,
-    with_executor, with_job_executor, with_request_executor,
+    CommitError, Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
+    current_executor_scope, with_executor, with_job_executor, with_request_executor,
 };
 pub use module::{DatabaseModule, DatabaseSetup, connect_from_env};
 pub use page::{LIST_CAP, Page, PageParams, RELATION_LOAD_CAP};

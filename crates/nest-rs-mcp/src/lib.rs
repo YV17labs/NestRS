@@ -6,6 +6,31 @@
 //! `endpoint()` factory that mounts under the HTTP server. Apps activate MCP
 //! by listing the `#[mcp]`-decorated provider — no `<Transport>Module`
 //! activation seam to import.
+//!
+//! # 1.0 limitation — request-scoped state does not reach a tool body
+//!
+//! The guard chain is fully enforced: an MCP endpoint is **deny-all** without
+//! an explicit [`McpOperationGuard`], and `McpAbilityBridge` returns `401`
+//! without a valid token. What does **not** work in 1.0 is *transparent
+//! per-operation ambient state inside a tool method*: rmcp dispatches each
+//! tool call inside its own spawned `serve_directly` loop (both stateful and
+//! stateless configs `tokio::spawn`), so the request-scope / ambient-executor /
+//! ambient-ability task-locals installed around the poem endpoint never reach
+//! the tool. In practice:
+//!
+//! * [`Scoped<T>::from_context`](Scoped) returns a clear `McpError` rather than
+//!   resolving a `#[injectable(scope = request)]` provider.
+//! * A `Repo`-backed tool (row-level filtering / masking) runs with **no
+//!   ambient executor or ability** — it fails **closed and loud** (`Repo::conn`
+//!   errors; `scope_for` denies every row with a `warn`), never a silent wrong
+//!   answer.
+//!
+//! The transparent fix — a `PropagatingHandler` that re-installs scope +
+//! executor + ability from the `http::request::Parts` rmcp injects into each
+//! message's `RequestContext` — is tracked for a later release (ROADMAP,
+//! *Transparent row-level filtering on MCP*). Until then, keep MCP tools to
+//! non-`Repo`, non-request-scoped work, or resolve dependencies from the
+//! singleton container.
 #![warn(missing_docs)]
 
 mod endpoint;

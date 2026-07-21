@@ -51,6 +51,26 @@ impl ResponseShapers {
     pub fn is_empty(&self) -> bool {
         self.http_code.is_none() && self.headers.is_empty() && self.redirect.is_none()
     }
+
+    /// The effective **success** status this handler emits, for the OpenAPI
+    /// document (OAPI-O3): a `#[redirect]`'s code (default `307`), else a
+    /// `#[http_code(N)]`'s `N`, else `200`. The literals are already validated
+    /// by [`take_response_shapers`], so a parse fallback is unreachable but kept
+    /// total.
+    pub fn success_status(&self) -> u16 {
+        if let Some(redirect) = &self.redirect {
+            redirect
+                .code
+                .as_ref()
+                .and_then(|c| c.base10_parse().ok())
+                .unwrap_or(307)
+        } else {
+            self.http_code
+                .as_ref()
+                .and_then(|c| c.base10_parse().ok())
+                .unwrap_or(200)
+        }
+    }
 }
 
 /// Drain `#[http_code]`, `#[response_header]`, and `#[redirect]` from the

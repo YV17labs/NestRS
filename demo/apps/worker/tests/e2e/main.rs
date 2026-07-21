@@ -46,7 +46,7 @@ impl ProbeConsumer {
 }
 
 #[module(
-    imports = [QueueModule::for_root(QueueConfig { url: redis_url() })],
+    imports = [QueueModule::for_root(QueueConfig { url: redis_url(), ..Default::default() })],
     providers = [ProbeConsumer],
 )]
 struct ProbeModule;

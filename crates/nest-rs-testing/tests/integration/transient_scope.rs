@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use nest_rs_core::{App, injectable, module};
+use nest_rs_core::{App, RequestScope, injectable, module};
 
 #[injectable]
 #[derive(Default)]
@@ -43,6 +43,48 @@ async fn transient_rebuilds_on_every_resolution_but_shares_its_singleton_dep() {
     assert!(
         Arc::ptr_eq(&first.counter, &second.counter),
         "a transient depends on the singleton root, not a fresh copy"
+    );
+}
+
+// B-CORE: a transient that injects a **request-scoped** provider. This is the
+// macro path (`#[injectable(scope = transient)]` now emits `from_scope`, which
+// resolves `#[inject]` deps through the `RequestScope`). Before the fix this
+// booted clean then panicked on first resolution.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct RequestState {
+    _n: AtomicU64,
+}
+
+#[injectable(scope = transient)]
+struct Handle {
+    #[inject]
+    state: Arc<RequestState>,
+}
+
+#[module(providers = [RequestState, Handle])]
+struct MixedScopeModule;
+
+#[tokio::test]
+async fn a_transient_injecting_a_request_scoped_provider_resolves_through_the_scope() {
+    let app = App::new::<MixedScopeModule>()
+        .expect("boots — a transient injecting a request-scoped dep is legal");
+    let scope = RequestScope::new(app.container().clone());
+
+    let first: Arc<Handle> = scope
+        .get()
+        .expect("transient resolves inside the request scope");
+    let second: Arc<Handle> = scope.get().expect("transient resolves again");
+
+    // Fresh transient each resolution...
+    assert!(
+        !Arc::ptr_eq(&first, &second),
+        "a transient is rebuilt on every resolution",
+    );
+    // ...but both share the request's single request-scoped instance.
+    assert!(
+        Arc::ptr_eq(&first.state, &second.state),
+        "the injected request-scoped provider is shared across the request",
     );
 }
 

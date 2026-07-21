@@ -22,6 +22,13 @@ type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
 /// check can name the endpoints that bypass the layer pool.
 type NamedMount = (String, MountFn);
 
+/// A bare `413 Payload Too Large` — the transport-edge body cap's rejection.
+fn payload_too_large() -> Response {
+    Response::builder()
+        .status(poem::http::StatusCode::PAYLOAD_TOO_LARGE)
+        .finish()
+}
+
 /// Join a controller prefix with a route path the way poem's nesting does:
 /// `("/health", "/live") -> "/health/live"`. Public so `nest-rs-openapi`
 /// composes paths identically to how this transport mounts them — the served
@@ -414,14 +421,40 @@ impl Transport for HttpTransport {
                 .map_to_response()
                 .boxed();
         }
-        // Apply the body-byte cap, if any, as a request-data entry the
-        // `RawBody` extractor reads back. Installed OUTSIDE the Layer
-        // System globals so every interceptor / filter / guard that
-        // inspects `req.extensions().get::<RawBodyLimit>()` before calling
-        // `next` sees the configured value — pre-v5 behavior, preserved.
-        // No `Interceptor` trait needed — `EndpointExt::data` is enough.
+        // Enforce the body-byte cap at the transport edge so EVERY extractor —
+        // a bare `Json`/`String`/`Vec<u8>`/`Multipart`, not just `RawBody` —
+        // sits under it (B-HTTP-2). Two gates: a fast `413` on an oversized
+        // declared `Content-Length` (rejects before reading a byte), then a
+        // streaming cap that buffers at most `limit` bytes and rejects a body
+        // that runs past it (covers `Transfer-Encoding: chunked` and a client
+        // lying about `Content-Length`). The `RawBodyLimit` data extension stays
+        // installed OUTSIDE the Layer System globals so every interceptor /
+        // filter / guard still sees the configured value, and `RawBody` /
+        // `extract_with_limit` can pin a *tighter* per-route cap under this
+        // ceiling.
         if let Some(limit) = self.max_body_bytes.take() {
-            endpoint = endpoint.data(RawBodyLimit(limit)).map_to_response().boxed();
+            endpoint = endpoint
+                .around(move |ep, mut req| async move {
+                    use poem::error::ReadBodyError;
+                    use poem::web::headers::{ContentLength, HeaderMapExt};
+                    if let Some(ContentLength(declared)) =
+                        req.headers().typed_get::<ContentLength>()
+                        && declared as usize > limit
+                    {
+                        return Ok(payload_too_large());
+                    }
+                    match req.take_body().into_bytes_limit(limit).await {
+                        Ok(bytes) => {
+                            req.set_body(bytes);
+                            ep.call(req).await
+                        }
+                        Err(ReadBodyError::PayloadTooLarge) => Ok(payload_too_large()),
+                        Err(err) => Err(err.into()),
+                    }
+                })
+                .data(RawBodyLimit(limit))
+                .map_to_response()
+                .boxed();
         }
         // Default security headers (nosniff / frame-deny / HSTS-under-TLS).
         // Applied inside CORS so a preflight isn't burdened, and overriding so a
@@ -430,11 +463,21 @@ impl Transport for HttpTransport {
         if !security_headers.is_empty() {
             let mut set = SetHeader::new();
             for (name, value) in security_headers {
-                if let (Ok(name), Ok(value)) = (
+                // Values are boot-validated (HTTP-S4) and names are static, so a
+                // failure here is a framework bug, not a config error — log it
+                // loudly rather than silently drop a security header.
+                match (
                     HeaderName::from_bytes(name.as_bytes()),
                     HeaderValue::from_str(&value),
                 ) {
-                    set = set.overriding(name, value);
+                    (Ok(header_name), Ok(header_value)) => {
+                        set = set.overriding(header_name, header_value);
+                    }
+                    _ => tracing::error!(
+                        target: "nest_rs::http",
+                        header = name,
+                        "failed to construct a security header despite boot validation",
+                    ),
                 }
             }
             endpoint = endpoint.with(set).map_to_response().boxed();

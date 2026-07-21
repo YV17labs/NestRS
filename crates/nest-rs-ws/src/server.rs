@@ -155,10 +155,16 @@ impl<N: 'static> Registry for WsServer<N> {
             return 0;
         };
         let conns = self.conns.lock();
-        conns
-            .values()
-            .filter(|conn| conn.outbox.try_send(frame.clone()).is_ok())
-            .count()
+        let (mut sent, mut shed) = (0usize, 0usize);
+        for conn in conns.values() {
+            if conn.outbox.try_send(frame.clone()).is_ok() {
+                sent += 1;
+            } else {
+                shed += 1;
+            }
+        }
+        warn_if_shed(event, "broadcast", sent, shed);
+        sent
     }
 
     fn emit_to_value(&self, room: &str, event: &str, data: serde_json::Value) -> usize {
@@ -166,11 +172,16 @@ impl<N: 'static> Registry for WsServer<N> {
             return 0;
         };
         let conns = self.conns.lock();
-        conns
-            .values()
-            .filter(|conn| conn.rooms.contains(room))
-            .filter(|conn| conn.outbox.try_send(frame.clone()).is_ok())
-            .count()
+        let (mut sent, mut shed) = (0usize, 0usize);
+        for conn in conns.values().filter(|conn| conn.rooms.contains(room)) {
+            if conn.outbox.try_send(frame.clone()).is_ok() {
+                sent += 1;
+            } else {
+                shed += 1;
+            }
+        }
+        warn_if_shed(event, "room", sent, shed);
+        sent
     }
 
     fn emit_value(&self, id: ConnId, event: &str, data: serde_json::Value) -> bool {
@@ -178,9 +189,33 @@ impl<N: 'static> Registry for WsServer<N> {
             return false;
         };
         let conns = self.conns.lock();
-        conns
+        let sent = conns
             .get(&id)
-            .is_some_and(|conn| conn.outbox.try_send(frame).is_ok())
+            .is_some_and(|conn| conn.outbox.try_send(frame).is_ok());
+        // A registered connection that couldn't take the frame has a full outbox.
+        if conns.contains_key(&id) && !sent {
+            warn_if_shed(event, "direct", 0, 1);
+        }
+        sent
+    }
+}
+
+/// Surface shed frames at `warn` — one aggregated event per send call (so a
+/// broadcast to N slow clients logs once, not N times), turning the previously
+/// silent server→client frame loss into a queryable signal (WS-I3). A shed
+/// frame means the recipient's bounded outbox is full: a slow or dead client
+/// not draining. The frame is dropped, not retried; the socket-lifetime ceiling
+/// and reply-path disconnect bound such clients over time.
+fn warn_if_shed(event: &str, kind: &'static str, sent: usize, shed: usize) {
+    if shed > 0 {
+        tracing::warn!(
+            target: "nest_rs::ws",
+            event,
+            kind,
+            sent,
+            shed,
+            "server→client frames shed: recipient outbox full (slow/dead client)",
+        );
     }
 }
 

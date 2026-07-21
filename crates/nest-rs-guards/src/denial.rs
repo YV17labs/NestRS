@@ -9,6 +9,7 @@ use std::borrow::Cow;
 
 /// What a [`Guard`](crate::Guard) returns on rejection.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Denial {
     /// 401 — authentication missing or invalid.
     Unauthorized(Cow<'static, str>),

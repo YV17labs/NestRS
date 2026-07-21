@@ -56,8 +56,10 @@ impl Storage {
             .with_access_key_id(&self.config.access_key)
             .with_secret_access_key(&self.config.secret_key)
             .with_bucket_name(&self.config.bucket)
-            // RustFS/MinIO dev servers are reached over plain `http://`.
-            .with_allow_http(true)
+            // Opt-in plain-HTTP (default on in dev/test, off in prod — STORAGE-ST2)
+            // so a RustFS/MinIO dev server is reachable while production refuses
+            // to send credentials over an unencrypted endpoint by omission.
+            .with_allow_http(self.config.allow_http)
             // `force_path_style` ⇒ path-style addressing, i.e. *not*
             // virtual-hosted-style.
             .with_virtual_hosted_style_request(!self.config.force_path_style)

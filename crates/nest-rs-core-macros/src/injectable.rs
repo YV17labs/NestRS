@@ -31,11 +31,14 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // Only a request-scoped provider needs the scope-aware constructor; emitting
-    // it elsewhere would reference `RequestScope` for no reason.
+    // Request-scoped and transient providers both resolve their `#[inject]` deps
+    // through a `RequestScope` (so a request-scoped dep is shared with the rest
+    // of the request), so both need the scope-aware constructor. A singleton
+    // never sees a scope, so emitting it there would reference `RequestScope`
+    // for no reason.
     let from_scope = match scope {
-        InjectableScope::Request => from_scope_method(&ctor),
-        InjectableScope::Singleton | InjectableScope::Transient => TokenStream2::new(),
+        InjectableScope::Request | InjectableScope::Transient => from_scope_method(&ctor),
+        InjectableScope::Singleton => TokenStream2::new(),
     };
     let injected = injected_method(&dep_keys);
     // Emitted for every scope (aligned with `injected`), so the access graph can
@@ -83,8 +86,8 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
                 fn register(
                     builder: ::nest_rs_core::ContainerBuilder,
                 ) -> ::nest_rs_core::ContainerBuilder {
-                    builder.provide_transient::<Self, _>(|__container| {
-                        Self::from_container(__container)
+                    builder.provide_transient::<Self, _>(|__scope| {
+                        Self::from_scope(__scope)
                     })
                 }
             },

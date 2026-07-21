@@ -24,7 +24,7 @@ mod queue_name;
 
 pub use consumer::JobConsumer;
 pub use error::QueueError;
-pub use inventory::{JobHandler, ProcessMethod, ProcessorMeta, WIRE_FORMAT_VERSION};
+pub use inventory::{JobError, JobHandler, ProcessMethod, ProcessorMeta, WIRE_FORMAT_VERSION};
 pub use processor::{FromContainer, Job, Processor};
 pub use producer::{JobProducer, JobProducerExt, QueueBackend};
 pub use queue_name::QueueName;

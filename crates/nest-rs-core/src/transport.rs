@@ -48,6 +48,10 @@ pub trait Transport: Send + Sync + 'static {
 ///
 /// A module that is not imported never runs its `register`, so its
 /// contribution never lands in the container — module-gating is free.
+///
+/// **Internal ABI** — macro/module-constructed, lockstep with `nest-rs-core`;
+/// do not hand-construct.
+#[doc(hidden)]
 pub struct TransportContribution {
     /// Human-readable label used in boot logs.
     pub name: &'static str,

@@ -264,35 +264,35 @@ pub trait Creatable: CrudService {
         active: <Self::Entity as EntityTrait>::ActiveModel,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
         let entity = Self::entity_name();
-        match Repo::<Self::Entity>::conn()? {
-            // Transactional shapes (the HTTP request transaction, eager or
-            // lazily opened): insert + re-check ride them; the interceptor
-            // rolls back on `RecordNotInserted`.
-            conn @ (Executor::Txn(_) | Executor::Lazy(_)) => {
-                insert_in_scope::<Self::Entity, _>(active, entity, &conn).await
+        // Insert + scope re-check run inside a **nested** transaction — a
+        // SAVEPOINT on an active request transaction (`Txn`/`Lazy`), or a
+        // top-level transaction on the pool. This makes the pair atomic
+        // regardless of the ambient shape AND regardless of whether the handler
+        // propagates the denial: a failed re-check rolls this local transaction
+        // back, so a swallowed `RecordNotInserted` (`let _ = svc.create(..)`)
+        // can never leave an out-of-scope row to be committed with the rest of
+        // the request (DATA-S1). Committing the SAVEPOINT keeps the inserted row
+        // in the outer request transaction, which still commits on 2xx.
+        let local = match Repo::<Self::Entity>::conn()? {
+            Executor::Pool(pool) => pool.begin().await?,
+            Executor::Txn(txn) => txn.begin().await?,
+            Executor::Lazy(lazy) => lazy.begin_nested().await?,
+        };
+        match insert_in_scope::<Self::Entity, _>(active, entity, &local).await {
+            Ok(model) => {
+                local.commit().await?;
+                Ok(model)
             }
-            // A plain pool executor (a bare `with_executor`): nothing ambient
-            // rolls back, so a local transaction keeps insert + re-check one
-            // atomic unit.
-            Executor::Pool(pool) => {
-                let txn = pool.begin().await?;
-                match insert_in_scope::<Self::Entity, _>(active, entity, &txn).await {
-                    Ok(model) => {
-                        txn.commit().await?;
-                        Ok(model)
-                    }
-                    Err(err) => {
-                        if let Err(rollback_err) = txn.rollback().await {
-                            tracing::error!(
-                                target: "nest_rs::orm",
-                                entity,
-                                error = %rollback_err,
-                                "rollback of the local create transaction failed",
-                            );
-                        }
-                        Err(err)
-                    }
+            Err(err) => {
+                if let Err(rollback_err) = local.rollback().await {
+                    tracing::error!(
+                        target: "nest_rs::orm",
+                        entity,
+                        error = %rollback_err,
+                        "rollback of the create SAVEPOINT/transaction failed",
+                    );
                 }
+                Err(err)
             }
         }
     }

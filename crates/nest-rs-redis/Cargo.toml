@@ -58,10 +58,23 @@ nest-rs-core = { path = "../nest-rs-core" }
 nest-rs-worker = { path = "../nest-rs-worker" }
 # Per-argument pipe on a `#[process]` job argument (`Piped<P, T>` / `Valid<T>`).
 nest-rs-pipes = { path = "../nest-rs-pipes" }
+# The live-Redis `e2e` binary names `Throttle`/`ThrottlerStore` to drive the
+# `RedisThrottler` store directly. Path-only (intra-workspace dev-dep) and only
+# built when the `throttler` feature is on — see the `[[test]]` below.
+nest-rs-throttler = { path = "../nest-rs-throttler" }
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
 tower = "0.5"
+
+# The `e2e` binary exercises the `RedisThrottler`, which only exists under the
+# `throttler` feature — so the target is skipped entirely unless that feature is
+# on (`cargo nextest run -p nest-rs-redis --features throttler -E 'binary(e2e)'`).
+# `tests/integration/main.rs` stays auto-discovered.
+[[test]]
+name = "e2e"
+path = "tests/e2e/main.rs"
+required-features = ["throttler"]
 
 [lints]
 workspace = true

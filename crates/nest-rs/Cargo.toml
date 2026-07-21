@@ -40,6 +40,19 @@ health = ["dep:nest-rs-health", "http"]
 throttler = ["dep:nest-rs-throttler", "http"]
 server-timing = ["dep:nest-rs-server-timing", "http"]
 testing = ["dep:nest-rs-testing"]
+# Layer-System extension-point crates. Writing a custom `Guard` (the mandated
+# authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` — or a
+# `#[resource]`/worker provider — should not force a direct per-crate dep
+# (FACADE-I11). `nest-rs-storage` is deliberately NOT re-exported: it stays
+# path-only and unpublished (O-4), so an optional dep on it would block
+# publishing this umbrella.
+guards = ["dep:nest-rs-guards"]
+pipes = ["dep:nest-rs-pipes"]
+interceptors = ["dep:nest-rs-interceptors"]
+filters = ["dep:nest-rs-filters"]
+exception-filters = ["dep:nest-rs-exception-filters"]
+resource = ["dep:nest-rs-resource"]
+worker = ["dep:nest-rs-worker"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -64,6 +77,13 @@ nest-rs-health = { workspace = true, optional = true }
 nest-rs-throttler = { workspace = true, optional = true }
 nest-rs-server-timing = { workspace = true, optional = true }
 nest-rs-testing = { workspace = true, optional = true }
+nest-rs-guards = { workspace = true, optional = true }
+nest-rs-pipes = { workspace = true, optional = true }
+nest-rs-interceptors = { workspace = true, optional = true }
+nest-rs-filters = { workspace = true, optional = true }
+nest-rs-exception-filters = { workspace = true, optional = true }
+nest-rs-resource = { workspace = true, optional = true }
+nest-rs-worker = { workspace = true, optional = true }
 
 [lints]
 workspace = true

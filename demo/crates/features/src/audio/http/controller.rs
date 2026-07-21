@@ -12,7 +12,6 @@ use poem::{Body, Error, Response, Result};
 
 use super::extract::UploadedAudio;
 use super::guard::TranscodeGuard;
-use crate::audio::error::{queue_error, storage_error};
 use crate::audio::{AudioService, PresignedUrlDto, TranscodeDto, UploadRequestDto};
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -43,12 +42,7 @@ impl AudioController {
         body: Valid<Json<UploadRequestDto>>,
     ) -> Result<Json<PresignedUrlDto>> {
         let req = body.into_inner();
-        let ticket = self
-            .svc
-            .presign_upload(&req.filename)
-            .await
-            .map_err(|e| storage_error("presign_upload", e))?;
-        Ok(Json(ticket))
+        Ok(Json(self.svc.presign_upload(&req.filename).await?))
     }
 
     #[get("/results")]
@@ -63,12 +57,7 @@ impl AudioController {
     )]
     async fn result(&self, query: Valid<Query<TranscodeDto>>) -> Result<Json<PresignedUrlDto>> {
         let file = query.into_inner().file;
-        match self
-            .svc
-            .presign_result(&file)
-            .await
-            .map_err(|e| storage_error("presign_result", e))?
-        {
+        match self.svc.presign_result(&file).await? {
             Some(ticket) => Ok(Json(ticket)),
             None => Err(Error::from_status(StatusCode::NOT_FOUND)),
         }
@@ -86,12 +75,11 @@ impl AudioController {
         tags("Audio")
     )]
     async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
-        let ticket = self
-            .svc
-            .store_upload(&upload.filename, upload.bytes)
-            .await
-            .map_err(|e| storage_error("store_upload", e))?;
-        Ok(Json(ticket))
+        Ok(Json(
+            self.svc
+                .store_upload(&upload.filename, upload.bytes)
+                .await?,
+        ))
     }
 
     #[get("/download")]
@@ -108,12 +96,7 @@ impl AudioController {
     )]
     async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
         let file = query.into_inner().file;
-        match self
-            .svc
-            .open_result(&file)
-            .await
-            .map_err(|e| storage_error("open_result", e))?
-        {
+        match self.svc.open_result(&file).await? {
             Some(stream) => Ok(Response::builder()
                 .content_type("audio/mpeg")
                 .body(Body::from_bytes_stream(stream))),
@@ -161,10 +144,7 @@ impl AudioController {
     )]
     async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<Json<TranscodeDto>> {
         let job = body.into_inner();
-        self.svc
-            .enqueue_transcode(job.file.clone())
-            .await
-            .map_err(|e| queue_error("enqueue_transcode", e))?;
+        self.svc.enqueue_transcode(job.file.clone()).await?;
         Ok(Json(job))
     }
 }

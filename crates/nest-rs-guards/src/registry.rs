@@ -1,24 +1,22 @@
 //! Layer registration — typed specs the builder uses to seed the global
 //! layer chain into the container. Each transport's shaper resolves them
 //! against the live container at configure time.
+//!
+//! `GuardSpec` and `PipeSpec` are [`LayerSpec`](nest_rs_core::LayerSpec)
+//! aliases — the shared shape and its `resolve` method live in `nest-rs-core`;
+//! only the typed constructor and the erased trait differ per family.
 
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::Container;
+use nest_rs_core::{Container, LayerSpec};
 use nest_rs_pipes::GlobalPipe;
 
 use crate::Guard;
 
-/// One entry in the `use_guards_global` list. Created by [`guard::<T>()`];
+/// One entry in the `use_guards_global` list. Created by [`guard::<T>()`](guard);
 /// resolved against the live container at configure time.
-pub struct GuardSpec {
-    /// `TypeId` of the guard type — the dedup key across scopes.
-    pub type_id: TypeId,
-    /// The guard type's name, for boot logs and fail-secure diagnostics.
-    pub name: &'static str,
-    pub(crate) resolve: fn(&Container) -> Option<Arc<dyn Guard>>,
-}
+pub type GuardSpec = LayerSpec<dyn Guard>;
 
 /// Construct a [`GuardSpec`] for the given guard type.
 ///
@@ -31,28 +29,13 @@ pub struct GuardSpec {
 ///     .module::<AppModule>()
 /// ```
 pub fn guard<G: Guard + 'static>() -> GuardSpec {
-    GuardSpec {
-        type_id: TypeId::of::<G>(),
-        name: std::any::type_name::<G>(),
-        resolve: |c| c.get::<G>().map(|arc| arc as Arc<dyn Guard>),
-    }
-}
-
-impl GuardSpec {
-    /// Resolve this spec against the live container.
-    pub fn resolve(&self, container: &Container) -> Option<Arc<dyn Guard>> {
-        (self.resolve)(container)
-    }
+    LayerSpec::new(TypeId::of::<G>(), std::any::type_name::<G>(), |c| {
+        c.get::<G>().map(|arc| arc as Arc<dyn Guard>)
+    })
 }
 
 /// One entry in the `use_pipes_global` list — same shape as [`GuardSpec`].
-pub struct PipeSpec {
-    /// `TypeId` of the pipe type — the dedup key across scopes.
-    pub type_id: TypeId,
-    /// The pipe type's name, for boot logs.
-    pub name: &'static str,
-    pub(crate) resolve: fn(&Container) -> Option<Arc<dyn GlobalPipe>>,
-}
+pub type PipeSpec = LayerSpec<dyn GlobalPipe>;
 
 /// Construct a [`PipeSpec`] for the given pipe type.
 ///
@@ -62,18 +45,9 @@ pub struct PipeSpec {
 ///     .module::<AppModule>()
 /// ```
 pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
-    PipeSpec {
-        type_id: TypeId::of::<P>(),
-        name: std::any::type_name::<P>(),
-        resolve: |c| c.get::<P>().map(|arc| arc as Arc<dyn GlobalPipe>),
-    }
-}
-
-impl PipeSpec {
-    /// Resolve this spec against the live container.
-    pub fn resolve(&self, container: &Container) -> Option<Arc<dyn GlobalPipe>> {
-        (self.resolve)(container)
-    }
+    LayerSpec::new(TypeId::of::<P>(), std::any::type_name::<P>(), |c| {
+        c.get::<P>().map(|arc| arc as Arc<dyn GlobalPipe>)
+    })
 }
 
 /// The unresolved `Vec<GuardSpec>` seeded into the container by

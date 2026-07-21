@@ -1,22 +1,20 @@
 //! Layer registration — typed specs the builder uses to seed the global
 //! filter chain into the container.
+//!
+//! `FilterSpec` is a [`LayerSpec`](nest_rs_core::LayerSpec) alias — the shared
+//! shape and its `resolve` method live in `nest-rs-core`; only the typed
+//! constructor and the erased trait differ per family.
 
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::Container;
+use nest_rs_core::LayerSpec;
 
 use crate::filter::Filter;
 
 /// One entry in the `use_filters_global` list. Resolved against the live
 /// container at configure time.
-pub struct FilterSpec {
-    /// `TypeId` of the filter type — the dedup key across scopes.
-    pub type_id: TypeId,
-    /// The filter type's name, for boot logs and fail-secure diagnostics.
-    pub name: &'static str,
-    pub(crate) resolve: fn(&Container) -> Option<Arc<dyn Filter>>,
-}
+pub type FilterSpec = LayerSpec<dyn Filter>;
 
 /// Construct a [`FilterSpec`] for the given filter type.
 ///
@@ -26,19 +24,9 @@ pub struct FilterSpec {
 ///     .module::<AppModule>()
 /// ```
 pub fn filter<F: Filter + 'static>() -> FilterSpec {
-    FilterSpec {
-        type_id: TypeId::of::<F>(),
-        name: std::any::type_name::<F>(),
-        resolve: |c| c.get::<F>().map(|arc| arc as Arc<dyn Filter>),
-    }
-}
-
-impl FilterSpec {
-    /// Resolve the filter instance from the live container, or `None` if its
-    /// provider was never registered (a fail-secure boot check flags this).
-    pub fn resolve(&self, container: &Container) -> Option<Arc<dyn Filter>> {
-        (self.resolve)(container)
-    }
+    LayerSpec::new(TypeId::of::<F>(), std::any::type_name::<F>(), |c| {
+        c.get::<F>().map(|arc| arc as Arc<dyn Filter>)
+    })
 }
 
 /// The unresolved `Vec<FilterSpec>` seeded into the container by

@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "GraphQL resolver discovery + schema composition for nestrs apps, on top of async-graphql."
+description = "GraphQL resolver discovery + schema composition for NestRS apps, on top of async-graphql."
 keywords = ["framework", "nestjs", "graphql", "async-graphql", "web"]
 categories = ["web-programming", "asynchronous"]
 

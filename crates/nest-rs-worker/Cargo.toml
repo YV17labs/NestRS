@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Worker-execution primitives for nestrs — the ambient-context seam every transport that runs jobs off the request path (schedulers, queue workers, stream consumers) plugs into."
+description = "Worker-execution primitives for NestRS — the ambient-context seam every transport that runs jobs off the request path (schedulers, queue workers, stream consumers) plugs into."
 keywords = ["framework", "nestjs", "worker", "jobs", "async"]
 categories = ["asynchronous"]
 

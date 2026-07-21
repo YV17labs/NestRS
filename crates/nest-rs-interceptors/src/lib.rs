@@ -35,8 +35,12 @@
 //!         let started = std::time::Instant::now();
 //!         let mut resp = next.run(req).await?;
 //!         let dur = started.elapsed().as_millis();
-//!         resp.headers_mut().insert("Server-Timing",
-//!             format!("total;dur={dur}").parse().unwrap());
+//!         resp.headers_mut().insert(
+//!             "Server-Timing",
+//!             format!("total;dur={dur}")
+//!                 .parse()
+//!                 .map_err(poem::error::InternalServerError)?,
+//!         );
 //!         Ok(resp)
 //!     }
 //! }

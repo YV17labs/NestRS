@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "W3C Server-Timing response header interceptor for nestrs apps (independent of OpenTelemetry)."
+description = "W3C Server-Timing response header interceptor for NestRS apps (independent of OpenTelemetry)."
 keywords = ["framework", "nestjs", "server-timing", "http", "metrics"]
 categories = ["web-programming::http-server"]
 

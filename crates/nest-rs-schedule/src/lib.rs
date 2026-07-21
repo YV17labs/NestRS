@@ -9,7 +9,8 @@
 //! boot naming the offending job.
 
 // Opts OUT of the workspace `unsafe_code = "forbid"` lint (no `[lints]
-// workspace = true` in Cargo.toml): its integration test (`tests/end_to_end.rs`)
+// workspace = true` in Cargo.toml): its integration test
+// (`tests/integration/end_to_end.rs`)
 // needs `unsafe { std::env::set_var }` for setup, and a Cargo `[lints]` forbid
 // also covers test targets and can't be overridden. This lib-level forbid keeps
 // the production guarantee (the lib itself has no `unsafe`) without breaking the

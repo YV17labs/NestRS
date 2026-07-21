@@ -59,21 +59,23 @@ impl PostsService {
         Ok(Post::from(&model))
     }
 
-    pub fn ensure_unpublished(&self, model: &Model) -> Result<(), PostError> {
+    /// Publish a draft. The "already published" invariant lives here — the one
+    /// place every transport reaches — so republishing is a conflict on HTTP,
+    /// GraphQL and MCP alike, never a duplicate `PostPublishedEvent`.
+    pub async fn publish(&self, model: Model) -> Result<Post, PostError> {
         if model.status == PostStatus::Published {
             return Err(PostError::AlreadyPublished { id: model.id });
         }
-        Ok(())
-    }
 
-    pub async fn publish(&self, model: Model) -> Result<Post, ServiceError> {
         let post_id = model.id;
         let org_id = model.org_id;
         let title = model.title.clone();
 
         let mut active = model.into_active_model();
         active.status = Set(PostStatus::Published);
-        let published = Repo::<Posts>::update(active).await?;
+        let published = Repo::<Posts>::update(active)
+            .await
+            .map_err(ServiceError::from)?;
 
         tracing::debug!(
             target: "features::posts",

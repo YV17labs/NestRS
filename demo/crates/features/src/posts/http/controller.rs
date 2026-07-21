@@ -5,7 +5,6 @@ use nest_rs_authz::{Create, Update};
 use nest_rs_http::{Ctx, Valid, controller, crud};
 use nest_rs_seaorm::Bind;
 use poem::Result;
-use poem::http::StatusCode;
 use poem::web::Json;
 
 use super::exception_filter::PostProblemFilter;
@@ -69,10 +68,6 @@ impl PostsController {
         _authz: Authorize<Update, PostEntity>,
         post: Bind<PostsService, Update>,
     ) -> Result<Json<Post>> {
-        let model = post.into_inner();
-        self.svc
-            .ensure_unpublished(&model)
-            .map_err(|err| poem::Error::new(err, StatusCode::CONFLICT))?;
-        Ok(Json(self.svc.publish(model).await?))
+        Ok(Json(self.svc.publish(post.into_inner()).await?))
     }
 }

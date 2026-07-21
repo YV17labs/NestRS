@@ -133,6 +133,27 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
         "PUBLISHED",
     );
 
+    // Republishing an already-published post is a conflict — the invariant now
+    // lives in `PostsService::publish`, so GraphQL enforces it like HTTP.
+    let republished = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &author_a)
+        .body_json(&publish(&post_a))
+        .send()
+        .await;
+    republished.assert_status_is_ok();
+    assert!(
+        republished
+            .json()
+            .await
+            .value()
+            .object()
+            .get_opt("errors")
+            .is_some(),
+        "republishing an already-published post must conflict",
+    );
+
     let by_id = json!({ "query": format!("{{ post(id: \"{post_a}\") {{ status }} }}") });
     let again = app
         .http()
@@ -212,28 +233,67 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         }
     };
 
-    let mut seen = false;
-    'outer: for _ in 0..5 {
-        let publish = json!({ "query": format!("mutation {{ publishPost(id: \"{post_a}\") {{ id status }} }}") });
-        app.http()
-            .post("/graphql")
-            .header(header::AUTHORIZATION, &author_a)
-            .body_json(&publish)
-            .send()
-            .await
-            .assert_status_is_ok();
+    let publish =
+        json!({ "query": format!("mutation {{ publishPost(id: \"{post_a}\") {{ id status }} }}") });
 
-        for _ in 0..20 {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            if notification_count(admin_a.clone()).await >= 1 {
-                seen = true;
-                break 'outer;
-            }
+    // The first publish succeeds and emits exactly one PostPublishedEvent.
+    let first = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &author_a)
+        .body_json(&publish)
+        .send()
+        .await;
+    first.assert_status_is_ok();
+    assert!(
+        first
+            .json()
+            .await
+            .value()
+            .object()
+            .get_opt("errors")
+            .is_none(),
+        "the first publish must succeed",
+    );
+
+    // Republishing is now a conflict on GraphQL too — no second event fires, so
+    // the worker never receives a duplicate notification.
+    let again = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, &author_a)
+        .body_json(&publish)
+        .send()
+        .await;
+    again.assert_status_is_ok();
+    assert!(
+        again
+            .json()
+            .await
+            .value()
+            .object()
+            .get_opt("errors")
+            .is_some(),
+        "republishing an already-published post must conflict",
+    );
+
+    let mut seen = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if notification_count(admin_a.clone()).await >= 1 {
+            seen = true;
+            break;
         }
     }
     assert!(
         seen,
         "the worker persisted a notification for org A that GET /notifications returns",
+    );
+
+    assert_eq!(
+        notification_count(admin_a.clone()).await,
+        1,
+        "the conflicting republish emitted no second event, so there is exactly one notification",
     );
 
     assert_eq!(

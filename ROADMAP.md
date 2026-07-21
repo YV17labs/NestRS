@@ -145,7 +145,7 @@ Not current priorities; these follow when a real app needs them.
   correctness effect. `check_graphql`/`check_ws_message` are already
   feature-gated; moving `check_http` into an `HttpGuard` extension trait touches
   every guard impl and the HTTP dispatch, so it lands in a major.
-- **Per-job transactions** — a `#[cron_job]`/`#[processor]` runs on the
+- **Per-job transactions** — a `#[scheduled]`/`#[processor]` runs on the
   connection **pool**: a worker job has no safe/mutating method to classify, the
   way an HTTP verb or a WebSocket message does. Deliberately deferred.
 - **Server-Sent Events & GraphQL subscriptions** — `@Sse` and a subscription

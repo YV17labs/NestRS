@@ -38,7 +38,7 @@ generalize*; otherwise it belongs in `demo/crates/features/`.
 
 Such an app-local feature **may flatten** — handler + `service.rs` +
 `module.rs` at the folder root, no port/adapter split (`live/chat/`,
-`assistant/weather/`). The hexagonal split is mandatory only in
+`live/notify/`). The hexagonal split is mandatory only in
 `crates/features/`, where a slice must serve many apps and transports; an
 app-local single-transport slice that only this binary uses keeps the
 lighter layout.

@@ -68,6 +68,10 @@ impl ProviderKey {
 /// container [`ProviderKey`] used to match it against the global keyed set,
 /// plus the injected type's name so a boot failure can name both the type and
 /// the key.
+///
+/// **Internal ABI** — constructed by `#[injectable]`'s codegen, lockstep with
+/// `nest-rs-core`; do not hand-construct.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
 pub struct KeyedDependency {
     /// The keyed container identity this dependency must match.
@@ -85,8 +89,13 @@ pub struct KeyedDependency {
 pub(crate) type ScopedFactory = Arc<dyn Fn(&RequestScope) -> AnyArc + Send + Sync>;
 
 /// Builds a fresh instance of a transient provider on every resolution.
-/// Emitted by `#[injectable(scope = transient)]`.
-pub(crate) type TransientFactory = Arc<dyn Fn(&Container) -> AnyArc + Send + Sync>;
+/// Emitted by `#[injectable(scope = transient)]`. Like [`ScopedFactory`] it
+/// receives the [`RequestScope`] (not the bare root [`Container`]) so a
+/// transient's `#[inject]` deps resolve through the request boundary: a
+/// request-scoped dep resolves to the request's shared instance, singletons
+/// forward to the root, and another transient rebuilds. Resolved outside a
+/// request (`Container::get`), the scope is a throwaway wrapping the root.
+pub(crate) type TransientFactory = Arc<dyn Fn(&RequestScope) -> AnyArc + Send + Sync>;
 
 thread_local! {
     /// Re-entrancy guard for transient resolution: a transient provider that
@@ -140,7 +149,12 @@ impl Container {
     pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         let id = TypeId::of::<T>();
         if let Some(factory) = self.transient.get(&id) {
-            let any = build_transient(id, std::any::type_name::<T>(), factory, self);
+            // No live request here (the escape-hatch path): wrap the root in a
+            // throwaway scope so the transient's factory can still resolve a
+            // request-scoped `#[inject]` dep (built fresh, request-of-one)
+            // instead of panicking on a missing provider.
+            let scope = RequestScope::new(self.clone());
+            let any = build_transient(id, std::any::type_name::<T>(), factory, &scope);
             return any.downcast::<T>().ok();
         }
         self.providers
@@ -175,6 +189,10 @@ impl Container {
     pub(crate) fn scoped_factory(&self, id: TypeId) -> Option<ScopedFactory> {
         self.scoped.get(&id).cloned()
     }
+
+    pub(crate) fn transient_factory(&self, id: TypeId) -> Option<TransientFactory> {
+        self.transient.get(&id).cloned()
+    }
 }
 
 /// Resolve a transient provider with re-entrancy detection. A transient that
@@ -184,18 +202,22 @@ impl Container {
 ///
 /// The push/pop pairing is panic-safe via [`CycleGuard`]: a factory that
 /// panics still pops the stack as the guard unwinds.
-fn build_transient(
+///
+/// The factory resolves its `#[inject]` deps through `scope`
+/// ([`RequestScope`]): a request-scoped dep resolves to the request's shared
+/// instance, singletons forward to the root, another transient rebuilds.
+pub(crate) fn build_transient(
     id: TypeId,
     type_name: &'static str,
     factory: &TransientFactory,
-    container: &Container,
+    scope: &RequestScope,
 ) -> AnyArc {
     let _guard = CycleGuard::push(&TRANSIENT_BUILDING, id, type_name).unwrap_or_else(|Cycle { chain }| {
         panic!(
             "transient provider cycle: {chain} — break the cycle by injecting `Arc<dyn Trait>` or picking a different scope"
         )
     });
-    factory(container)
+    factory(scope)
     // `_guard` drops here — pops the stack even if `factory` panics and the
     // value path above is skipped.
 }
@@ -465,13 +487,15 @@ impl ContainerBuilder {
     /// resolves it. There is no caching — same scope, multiple resolutions,
     /// different instances.
     ///
-    /// Emitted by `#[injectable(scope = transient)]`. A transient may depend
-    /// on singletons or request-scoped providers; a transient depending
-    /// (transitively) on itself panics at resolution with a cycle diagnostic.
+    /// Emitted by `#[injectable(scope = transient)]`. The factory receives the
+    /// [`RequestScope`], so a transient may depend on singletons **and** on
+    /// request-scoped providers (sharing the request's instance); a transient
+    /// depending (transitively) on itself panics at resolution with a cycle
+    /// diagnostic.
     pub fn provide_transient<T, F>(mut self, factory: F) -> Self
     where
         T: Any + Send + Sync,
-        F: Fn(&Container) -> T + Send + Sync + 'static,
+        F: Fn(&RequestScope) -> T + Send + Sync + 'static,
     {
         let id = TypeId::of::<T>();
         if self.transient.contains_key(&id) {
@@ -485,7 +509,7 @@ impl ContainerBuilder {
         self.warn_if_cross_kind_transient(id, std::any::type_name::<T>());
         self.transient.insert(
             id,
-            Arc::new(move |container| Arc::new(factory(container)) as AnyArc),
+            Arc::new(move |scope| Arc::new(factory(scope)) as AnyArc),
         );
         self
     }
@@ -819,6 +843,32 @@ mod tests {
         assert_eq!(a.0, 5);
         assert_eq!(b.0, 5);
         assert!(!Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn transient_depending_on_request_scoped_resolves_off_the_bare_container() {
+        // B-CORE: resolving a transient whose `#[inject]` dep is request-scoped
+        // through the bare `Container::get` escape hatch (no live request) must
+        // NOT panic on a missing provider. A throwaway scope builds the
+        // request-scoped dep fresh, so the transient resolves.
+        struct Dep(u32);
+        struct Trans(u32);
+        let container = Container::builder()
+            .provide_scoped::<Dep, _>(|_| Dep(9))
+            .provide_transient::<Trans, _>(|scope| {
+                Trans(
+                    scope
+                        .get::<Dep>()
+                        .expect("scoped dep builds request-of-one")
+                        .0,
+                )
+            })
+            .build();
+
+        let resolved: Arc<Trans> = container
+            .get()
+            .expect("the transient resolves off the bare container without panicking");
+        assert_eq!(resolved.0, 9);
     }
 
     #[test]

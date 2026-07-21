@@ -10,6 +10,13 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::error::AuthError;
 
+/// Minimum HS256 shared-secret length: 256 bits (32 bytes). HMAC-SHA256 derives
+/// all its security from the secret's entropy, so a shorter secret is
+/// brute-forceable and mints forgeable tokens. Enforced in [`JwtService::new`]
+/// — the derivation point every constructor funnels through (`JwtOptions::new`,
+/// the honest-API path, included), not only on the config-env path.
+pub(crate) const HS256_MIN_SECRET_BYTES: usize = 32;
+
 /// Key material backing a [`JwtService`].
 #[derive(Clone)]
 pub enum JwtKey {
@@ -109,6 +116,16 @@ impl JwtService {
     pub fn new(options: JwtOptions) -> Result<Self, AuthError> {
         let (encoding, decoding) = match &options.key {
             JwtKey::Hmac(secret) => {
+                // Fail closed at the derivation point: an HS256 secret under 256
+                // bits is brute-forceable. This guards every constructor path —
+                // `JwtOptions::new` (the documented honest-API) as much as the
+                // config-env path (SEC-F3).
+                if secret.len() < HS256_MIN_SECRET_BYTES {
+                    return Err(AuthError::Failed(format!(
+                        "HS256 secret must be at least {HS256_MIN_SECRET_BYTES} bytes (256 bits); got {}",
+                        secret.len()
+                    )));
+                }
                 let bytes = secret.as_bytes();
                 (
                     Some(EncodingKey::from_secret(bytes)),

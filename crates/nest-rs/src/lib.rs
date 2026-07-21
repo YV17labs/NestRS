@@ -70,6 +70,30 @@ pub use nest_rs_server_timing as server_timing;
 #[cfg(feature = "testing")]
 pub use nest_rs_testing as testing;
 
+// Layer-System extension-point crates — re-exported so writing a custom
+// `Guard`/`Pipe`/`Interceptor`/`Filter`/`ExceptionFilter` (or a `#[resource]`/
+// worker provider) needs no direct per-crate dep (FACADE-I11).
+#[cfg(feature = "guards")]
+pub use nest_rs_guards as guards;
+
+#[cfg(feature = "pipes")]
+pub use nest_rs_pipes as pipes;
+
+#[cfg(feature = "interceptors")]
+pub use nest_rs_interceptors as interceptors;
+
+#[cfg(feature = "filters")]
+pub use nest_rs_filters as filters;
+
+#[cfg(feature = "exception-filters")]
+pub use nest_rs_exception_filters as exception_filters;
+
+#[cfg(feature = "resource")]
+pub use nest_rs_resource as resource;
+
+#[cfg(feature = "worker")]
+pub use nest_rs_worker as worker;
+
 /// The everyday import — covers the decorators and types an app reaches for
 /// on every controller, service, and module.
 ///
@@ -91,6 +115,10 @@ pub mod prelude {
         http_code, input, redirect, response_header, routes,
     };
 
+    // `Json`/`Path`/`Query` are `poem` extractors re-exported through
+    // `nest_rs_http::poem`. This is a deliberate part of the declared
+    // poem-coupling contract (see the root `Cargo.toml` pinned-major policy:
+    // poem's major version is tied to the nestrs major), not an accidental leak.
     #[cfg(feature = "http")]
     pub use nest_rs_http::poem::web::{Json, Path, Query};
 

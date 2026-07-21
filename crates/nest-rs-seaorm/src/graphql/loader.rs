@@ -10,6 +10,19 @@
 //! request task, and reclaiming the txn `Arc` to commit would race the
 //! auto-commit's `Arc::try_unwrap`. Mirrors the WS data context for the same
 //! reason.
+//!
+//! # Read-your-writes limitation on a mutation response (DATA-S6)
+//!
+//! Because batches run on the pool — **outside** a mutation's lazy request
+//! transaction, which has not committed when the response is shaped — a
+//! relation auto-resolved *in the same mutation's response* sees the row's
+//! **pre-mutation** state (stale, or `null` for a just-created relation). The
+//! mutation itself is atomic and correct; only its response's auto-resolved
+//! relations can't observe its own uncommitted writes. If a client needs the
+//! post-write relation in the mutation payload, re-query it (a subsequent
+//! query, after commit, resolves correctly) rather than relying on the mutation
+//! response's nested relations. A future release may resolve relations
+//! post-commit or ride the request transaction.
 
 use std::sync::Arc;
 

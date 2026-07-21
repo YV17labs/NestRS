@@ -1,0 +1,13 @@
+error: an `Arc<…>` field without `#[inject]` would be silently `Default::default()`-d (an empty config, a no-op guard/strategy) — add `#[inject]` to resolve it from the container, or store the default behind a non-`Arc` type if that is truly intended
+  --> tests/integration/diagnostics/arc_field_without_inject.rs:14:13
+   |
+14 |     config: Arc<StripeConfig>,
+   |             ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+ --> tests/integration/diagnostics/arc_field_without_inject.rs:5:5
+  |
+5 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

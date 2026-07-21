@@ -2581,20 +2581,27 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-events",
+ "nest-rs-exception-filters",
+ "nest-rs-filters",
  "nest-rs-graphql",
+ "nest-rs-guards",
  "nest-rs-health",
  "nest-rs-http",
+ "nest-rs-interceptors",
  "nest-rs-mcp",
  "nest-rs-openapi",
  "nest-rs-opentelemetry",
+ "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
+ "nest-rs-resource",
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
  "nest-rs-social",
  "nest-rs-testing",
  "nest-rs-throttler",
+ "nest-rs-worker",
  "nest-rs-ws",
 ]
 
@@ -2676,6 +2683,7 @@ dependencies = [
  "nest-rs-config-macros",
  "nest-rs-core",
  "thiserror 2.0.18",
+ "trybuild",
  "validator",
 ]
 
@@ -2703,6 +2711,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "trybuild",
 ]
 
 [[package]]
@@ -3066,6 +3075,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
+ "futures-util",
  "libc",
  "nest-rs-core",
  "nest-rs-schedule-macros",

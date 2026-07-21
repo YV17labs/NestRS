@@ -1,3 +1,4 @@
+use std::panic::AssertUnwindSafe;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,6 +8,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use chrono_tz::Tz;
 use croner::Cron;
+use futures_util::FutureExt;
 use nest_rs_core::{Container, DiscoveryService, ReachableProviders, Transport, inventory};
 use nest_rs_worker::{JobContext, run_in_job_context};
 use tokio::task::JoinSet;
@@ -285,14 +287,39 @@ fn next_delay(schedule: &Cron, tz: Option<Tz>) -> Option<Duration> {
 }
 
 async fn fire(id: JobId, run: RunFn, container: &Container, ctx: &Option<Arc<dyn JobContext>>) {
-    let result = run_in_job_context(ctx.as_ref(), run(container)).await;
-    if let Err(err) = result {
-        tracing::error!(
+    // Isolate the fire: a panic in the user method (or the `.expect` the
+    // `#[scheduled]` macro emits when the provider is missing) would otherwise
+    // unwind this job's task and — since `serve` drops the `JoinError` — stop
+    // the schedule permanently while the process still reports healthy. Catch it,
+    // log at `error`, and let the loop schedule the next occurrence.
+    let outcome = AssertUnwindSafe(run_in_job_context(ctx.as_ref(), run(container)))
+        .catch_unwind()
+        .await;
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => tracing::error!(
             target: "nest_rs::schedule",
             provider = id.provider,
             method = id.method,
             error = %err,
             "scheduled job failed",
-        );
+        ),
+        Err(panic) => tracing::error!(
+            target: "nest_rs::schedule",
+            provider = id.provider,
+            method = id.method,
+            panic = panic_message(&panic),
+            "scheduled job panicked; the schedule continues",
+        ),
     }
+}
+
+/// Best-effort extraction of a panic payload's message — the common
+/// `&str`/`String` shapes a `panic!`/`unwrap`/`expect` produces.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&'static str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("<non-string panic payload>")
 }

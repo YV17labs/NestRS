@@ -1,0 +1,5 @@
+error: unknown #[module] key `exports` (expected `imports` or `providers`)
+ --> tests/integration/diagnostics/module_unknown_key.rs:9:10
+  |
+9 | #[module(exports = [Foo])]
+  |          ^^^^^^^

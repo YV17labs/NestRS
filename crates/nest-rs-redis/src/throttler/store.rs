@@ -95,10 +95,7 @@ impl ThrottlerStore for RedisThrottler {
                 // the in-memory store (`count > limit.limit`).
                 let allowed = count <= i64::from(limit.limit);
                 if allowed {
-                    Decision {
-                        allowed: true,
-                        retry_after: Duration::ZERO,
-                    }
+                    Decision::allowed()
                 } else {
                     // Prefer the real remaining TTL; fall back to the full
                     // window if Redis reported no expiry (defensive).
@@ -107,10 +104,7 @@ impl ThrottlerStore for RedisThrottler {
                     } else {
                         limit.window
                     };
-                    Decision {
-                        allowed: false,
-                        retry_after,
-                    }
+                    Decision::denied(retry_after)
                 }
             }
             // Fail-closed: a Redis outage must not open the rate limit. Deny and
@@ -123,10 +117,7 @@ impl ThrottlerStore for RedisThrottler {
                     error = %error,
                     "redis throttler unavailable; denying (fail-closed)",
                 );
-                Decision {
-                    allowed: false,
-                    retry_after: limit.window,
-                }
+                Decision::denied(limit.window)
             }
         }
     }

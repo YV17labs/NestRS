@@ -25,6 +25,10 @@ parking_lot.workspace = true
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
+# Snapshot-tests the core macro compile diagnostics (`#[injectable]`, `#[module]`)
+# — the exact error a developer sees is part of the contract (CORE-I10), the
+# same net the http/graphql/ws macros already have.
+trybuild.workspace = true
 
 [lints]
 workspace = true

@@ -27,3 +27,5 @@ nest-rs-config-macros.workspace = true
 [dev-dependencies]
 # `figment::Jail` isolates the process env + cwd for the loader/cascade tests.
 figment = { workspace = true, features = ["test"] }
+# trybuild pins the `#[config]` macro's compile diagnostics as a contract (CORE-I10).
+trybuild.workspace = true

@@ -23,7 +23,12 @@ use serde::Serialize;
 /// `type` is the only field a client may key on, so the URIs are stable across
 /// releases (and overridable via [`with_type`](Self::with_type) when an app
 /// wants to publish its own type registry).
+// `#[non_exhaustive]`: build via the constructors (`from_status`/`from_error`/
+// `bad_request`/…) + `with_*` builders, never a struct literal — so a new RFC
+// 9457 member can be added without a breaking change. Fields stay `pub` for
+// reading a response's problem body.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct ProblemDetails {
     /// Stable URI identifying the problem type. `about:blank` means the client
     /// should ignore the type and key on `status` + `title` instead.

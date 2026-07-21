@@ -18,7 +18,7 @@ fn client() -> OAuth2Client {
 }
 
 fn jwt() -> JwtService {
-    JwtService::new(JwtOptions::new("test-secret")).expect("HMAC JwtService")
+    JwtService::new(JwtOptions::new("test-secret-padded-to-thirty-two-b")).expect("HMAC JwtService")
 }
 
 #[test]

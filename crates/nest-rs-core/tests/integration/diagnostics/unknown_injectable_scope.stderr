@@ -1,0 +1,5 @@
+error: unknown scope `bogus` (expected `singleton`, `request`, or `transient`)
+ --> tests/integration/diagnostics/unknown_injectable_scope.rs:6:22
+  |
+6 | #[injectable(scope = bogus)]
+  |                      ^^^^^

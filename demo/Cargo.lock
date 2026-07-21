@@ -2927,6 +2927,7 @@ dependencies = [
  "poem",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -3137,6 +3138,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
+ "futures-util",
  "nest-rs-core",
  "nest-rs-schedule-macros",
  "nest-rs-worker",

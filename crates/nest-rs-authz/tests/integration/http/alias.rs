@@ -1,12 +1,15 @@
 //! Pins the current behavior of a **renamed** `Authorize` alias
 //! (`use Authorize as Az`) — the divergence `extractor.rs` documents: the
-//! class-level gate still runs (extraction is type-based), but `#[routes]`
-//! arms the response shaper by *textual* path-segment match, so the ambient
-//! ability install and response masking are silently skipped under a rename.
+//! class-level gate still runs (extraction is type-based), and `#[routes]` arms
+//! the response shaper by *textual* path-segment match, so the shaper is NOT
+//! armed under a rename.
 //!
-//! These tests lock that divergence in place until the ambient-context seam
-//! rework (owner decision: option (b), post-launch) makes arming alias-proof —
-//! at which point the "skips"/"unmasked" assertions below must flip.
+//! Crucially, that is no longer a silent leak: an unarmed route carries a
+//! `MaskProbe`, so a masking extractor (`Az`) running without an armed shaper
+//! **fails closed** — the response becomes a logged `500` instead of an
+//! unmasked body. These tests pin that fail-closed runtime net. When the
+//! ambient-context seam rework makes arming alias-proof, the aliased routes
+//! will succeed *and* mask, and these assertions flip again.
 
 use std::sync::Arc;
 
@@ -149,12 +152,11 @@ async fn an_aliased_authorize_still_gates_at_class_level() {
 }
 
 #[tokio::test]
-async fn an_aliased_authorize_skips_the_ambient_ability_install() {
-    // The shaper is armed by textual match, so the alias route runs without an
-    // ambient ability — which is exactly why the scoped data path stays
-    // fail-closed (a request-scoped executor with no ambient ability denies
-    // every row; pinned in nest-rs-seaorm's
-    // `request_scope_without_ability_denies_all_rows`).
+async fn an_aliased_authorize_fails_closed_instead_of_running_unshaped() {
+    // Under a rename the shaper is not armed, so the ambient ability is not
+    // installed. Rather than run the masking extractor unshaped (which would
+    // once have shipped an unmasked body), the `MaskProbe` fails the response
+    // closed with a `500`. The literal-name control still succeeds and masks.
     let app = boot().await;
 
     let aliased = app
@@ -163,12 +165,11 @@ async fn an_aliased_authorize_skips_the_ambient_ability_install() {
         .header("x-grant", "yes")
         .send()
         .await;
-    aliased.assert_status_is_ok();
-    aliased
-        .assert_json(&Probe {
-            ambient_ability: false,
-        })
-        .await;
+    assert_eq!(
+        aliased.0.status(),
+        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "an unarmed masking extractor (aliased Authorize) must fail closed, not run unshaped",
+    );
 
     let literal = app
         .http()
@@ -189,11 +190,12 @@ async fn an_aliased_authorize_skips_the_ambient_ability_install() {
 }
 
 #[tokio::test]
-async fn an_aliased_authorize_leaves_the_body_unmasked() {
-    // KNOWN GAP, deliberately pinned: with the shaper skipped, field-masking
-    // does not run, so a handler that builds its body outside the scoped
-    // executor ships unexposed columns. Tracked for the ambient-context seam
-    // rework (B4 option (b)); that fix must flip this assertion.
+async fn an_aliased_authorize_fails_closed_rather_than_shipping_an_unmasked_body() {
+    // KNOWN GAP with a fail-closed net: the shaper is skipped under a rename, so
+    // field-masking cannot run — but rather than ship the unexposed `secret`,
+    // the `MaskProbe` turns the response into a `500`. Tracked for the
+    // ambient-context seam rework, which will make the aliased route succeed AND
+    // mask (flip this to a masked `200` then).
     let app = boot().await;
     let resp = app
         .http()
@@ -201,11 +203,9 @@ async fn an_aliased_authorize_leaves_the_body_unmasked() {
         .header("x-grant", "yes")
         .send()
         .await;
-    resp.assert_status_is_ok();
-    let body = resp.0.into_body().into_string().await.expect("body");
-    assert!(
-        body.contains("secret"),
-        "current behavior: the alias route ships the raw body unmasked \
-         (flip this when arming becomes alias-proof): {body}",
+    assert_eq!(
+        resp.0.status(),
+        poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "an unarmed masking extractor must fail closed, never ship the raw unmasked body",
     );
 }

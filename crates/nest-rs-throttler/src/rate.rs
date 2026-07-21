@@ -5,6 +5,7 @@ use std::time::Duration;
 
 /// At most `limit` requests per `window`, per client.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Throttle {
     /// Maximum requests permitted per `window`, per client.
     pub limit: u32,

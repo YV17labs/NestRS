@@ -125,12 +125,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
             ) -> ::std::pin::Pin<
                 ::std::boxed::Box<
                     dyn ::std::future::Future<
-                        Output = ::std::result::Result<
-                            (),
-                            ::std::boxed::Box<
-                                dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
-                            >,
-                        >,
+                        Output = ::std::result::Result<(), ::nest_rs_queue::JobError>,
                     > + ::std::marker::Send,
                 >,
             > {
@@ -200,9 +195,11 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                                     #queue_str,
                                 )
                             };
-                            return ::std::result::Result::Err(::std::boxed::Box::<
-                                dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
-                            >::from(__msg));
+                            // Deterministic: a wrong wire version never succeeds
+                            // on retry — abort and dead-letter (QUEUE-I4).
+                            return ::std::result::Result::Err(
+                                ::nest_rs_queue::JobError::abort(__msg),
+                            );
                         }
                         __obj.remove("payload").unwrap_or(
                             ::nest_rs_queue::serde_json::Value::Null,
@@ -219,12 +216,14 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                     let __deser: #deser_ty = match ::nest_rs_queue::serde_json::from_value(__raw) {
                         ::std::result::Result::Ok(j) => j,
                         ::std::result::Result::Err(e) => {
-                            return ::std::result::Result::Err(::std::boxed::Box::<
-                                dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
-                            >::from(::std::format!(
-                                "failed to deserialize job for queue `{}`: {e}",
-                                #queue_str,
-                            )));
+                            // Deterministic: the same bytes never deserialize on
+                            // retry — abort and dead-letter (QUEUE-I4).
+                            return ::std::result::Result::Err(
+                                ::nest_rs_queue::JobError::abort(::std::format!(
+                                    "failed to deserialize job for queue `{}`: {e}",
+                                    #queue_str,
+                                )),
+                            );
                         }
                     };
                     // Identity when the argument is a plain job type; runs the
@@ -234,13 +233,15 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                     let __provider = match ::nest_rs_core::Container::get::<#self_ty>(&__container) {
                         ::std::option::Option::Some(p) => p,
                         ::std::option::Option::None => {
-                            return ::std::result::Result::Err(::std::boxed::Box::<
-                                dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
-                            >::from(::std::format!(
-                                "queue processor provider `{}` not registered in the running \
-                                 container — add it to a reachable module's `providers = [...]`",
-                                ::std::any::type_name::<#self_ty>(),
-                            )));
+                            // Deterministic: a missing provider stays missing on
+                            // retry — abort and dead-letter (QUEUE-I4).
+                            return ::std::result::Result::Err(
+                                ::nest_rs_queue::JobError::abort(::std::format!(
+                                    "queue processor provider `{}` not registered in the running \
+                                     container — add it to a reachable module's `providers = [...]`",
+                                    ::std::any::type_name::<#self_ty>(),
+                                )),
+                            );
                         }
                     };
                     let __job_context = ::nest_rs_core::Container::get_dyn::<
@@ -251,7 +252,9 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                         async move { <#self_ty>::#method_ident(&__provider, __job).await },
                     )
                     .await
-                    .map_err(::std::convert::Into::into)
+                    // The user `#[process]` method's `Err` is a transient fault —
+                    // retryable (the backend's retry budget applies).
+                    .map_err(|__e| ::nest_rs_queue::JobError::retry(__e))
                 })
             }
 
@@ -315,10 +318,10 @@ fn extract_job_type(method: &syn::ImplItemFn) -> syn::Result<Type> {
 /// `Valid<T>` the wire type is `T`, and the expression runs the pipe over
 /// `__deser`, surfacing a `PipeError` as the queue's boxed error.
 fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
+    // A pipe rejection is deterministic (the same payload fails the pipe again),
+    // so it aborts rather than retries (QUEUE-I4).
     let box_err = quote! {
-        |__e: ::nest_rs_pipes::PipeError| ::std::boxed::Box::<
-            dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
-        >::from(__e.message().to_string())
+        |__e: ::nest_rs_pipes::PipeError| ::nest_rs_queue::JobError::abort(__e.message().to_string())
     };
     if let Type::Path(tp) = job_ty
         && let Some(seg) = tp.path.segments.last()

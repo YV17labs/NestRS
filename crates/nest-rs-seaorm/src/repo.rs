@@ -49,8 +49,17 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
 pub struct Repo<E: EntityTrait>(PhantomData<fn() -> E>);
 
 impl<E: EntityTrait> Repo<E> {
-    /// The ambient executor (transaction when open, else the pool), for a write
-    /// or a custom query: `active.insert(&Repo::<E>::conn()?)`.
+    /// The ambient executor (transaction when open, else the pool). Prefer the
+    /// scoped helpers ([`all`](Self::all), [`find_by_id`](Self::find_by_id),
+    /// [`scoped`](Self::scoped)), which apply the ambient ability filter; reach
+    /// for the raw executor only for a **custom read** you then filter yourself,
+    /// e.g. `Repo::<E>::scoped(Action::Read).one(&Repo::<E>::conn()?)`.
+    ///
+    /// A **write** must go through the service write path
+    /// ([`create_from_active`](crate::CrudService::create_from_active) or the
+    /// `Creatable`/`Updatable`/`Deletable` traits), never
+    /// `active.insert(&Repo::<E>::conn()?)`: a raw insert skips the ability
+    /// pre-filter, committing an out-of-scope row (DATA-S4).
     pub fn conn() -> Result<Executor, DbErr> {
         current_executor().ok_or_else(|| {
             DbErr::Custom(

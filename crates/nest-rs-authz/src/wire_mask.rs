@@ -41,6 +41,17 @@ pub enum MaskReplyError {
 /// retain dance, with the same fail-closed semantics: rows the ability
 /// refuses are dropped, field grants strip columns, unexposed columns are
 /// strained out, and an irreconcilable body is an error, never a passthrough.
+///
+/// # WS masking is opt-in — unlike HTTP and GraphQL (SEC-F1)
+///
+/// HTTP arms an automatic response shaper (and a `MaskProbe` compile/boot net);
+/// GraphQL requires a `#[authorize]` that emits the mask. A WebSocket
+/// `#[subscribe_message]` handler has **no** such net: a reply returning entity
+/// data must call this helper itself and hand back the returned `Value`.
+/// **Forgetting it ships raw, unmasked rows** — treat every entity-bearing WS
+/// reply as requiring an explicit `masked_reply` call, and propagate the `Err`
+/// to an error frame (never fall back to the unmasked body). See the
+/// `demo/crates/features/src/users/ws/gateway.rs` exemplar.
 pub fn masked_reply<S>(action: Action, wire: Value) -> Result<Value, MaskReplyError>
 where
     S: EntityTrait + WireModelDefaults,

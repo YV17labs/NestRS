@@ -17,6 +17,9 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { builder = <#path as ::nest_rs_core::Module>::register(builder); }
         }
         // Anything else → `DynamicModule` value (e.g. `Module::for_root(opts)`).
+        // The expression is re-evaluated in `collect` too (separate phase/method),
+        // so it must be a PURE config constructor — see `DynamicModule`'s docs
+        // (CORE-I9). Every framework `for_root` satisfies this.
         other => {
             quote! { builder = ::nest_rs_core::DynamicModule::register(#other, builder); }
         }

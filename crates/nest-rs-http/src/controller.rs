@@ -57,6 +57,14 @@ pub fn schema_of<T: schemars::JsonSchema>(
 /// Declarative description of a handler in a controller — verb/path/name plus
 /// the OpenAPI facets `#[routes]` extracts, so a doc generator (nest-rs-openapi)
 /// builds a spec from discovery alone.
+///
+/// Built only by the `#[routes]` macro (struct literal) and read by the
+/// framework's own discovery consumers — its fields are effectively an internal
+/// ABI that versions in lockstep, not a stable hand-written surface. New facets
+/// land here as public fields (`success_status`, `throttled`, …); a later
+/// opaque-struct migration is slated to privatize the set behind accessors and
+/// add the OpenAPI `header_params` slot in one sweep — these additions are part
+/// of what it will carry.
 #[derive(Clone)]
 pub struct HttpRouteMeta {
     /// The method this route answers.
@@ -96,6 +104,18 @@ pub struct HttpRouteMeta {
     /// so the document advertises the conflict response their write-error mapper
     /// can actually produce. A hand-written handler leaves it `false`.
     pub may_conflict: bool,
+    /// A `ThrottlerGuard` (controller- or method-level) rate-limits this route,
+    /// so it can answer `429 Too Many Requests` with a `Retry-After` header —
+    /// the OpenAPI document advertises that response (OAPI-O4). Detected by the
+    /// guard's type name in `#[routes]`/`#[controller]` (the same name-based
+    /// detection the masking-arm check uses); a hand-written handler that
+    /// throttles by other means leaves it `false`.
+    pub throttled: bool,
+    /// The effective **success** HTTP status this route emits — `200` unless a
+    /// `#[http_code(N)]` or `#[redirect(_, code)]` overrides it. Used by the
+    /// OpenAPI document so the advertised success response matches the wire
+    /// (OAPI-O3), instead of a hard-coded `200`.
+    pub success_status: u16,
     /// A controller- or method-level `#[use_guards]` covers this route. Read at
     /// boot by the fail-secure posture check. A global guard pool covers every
     /// route regardless, so the check only consults this when no pool is active.
@@ -240,6 +260,8 @@ mod tests {
             path_params: &[],
             query_params: &[],
             may_conflict: false,
+            throttled: false,
+            success_status: 200,
             scoped_guarded: false,
             public: false,
         }];
@@ -284,6 +306,8 @@ mod tests {
             path_params: &[],
             query_params: &[],
             may_conflict: false,
+            throttled: false,
+            success_status: 200,
             scoped_guarded,
             public,
         }

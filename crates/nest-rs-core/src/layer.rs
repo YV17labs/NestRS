@@ -35,6 +35,7 @@ use std::sync::Arc;
 /// Pre-handler request shaping has no dedicated variant: it is expressed
 /// as an [`Interceptor`](../../nest_rs_interceptors/trait.Interceptor.html).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum LayerKind {
     /// Gates access.
     Guard,
@@ -56,6 +57,7 @@ pub enum LayerKind {
 /// the place it was *declared*; it has nothing to do with the DI scope of
 /// the Layer's provider.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum LayerSite {
     /// `App::builder().use_*_global(...)`.
     Global,

@@ -5,13 +5,10 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{Container, RequestScope};
 use nest_rs_pipes::PipeError;
-use poem::web::websocket::{Message, WebSocket};
+use poem::web::websocket::{Message, WebSocket, WebSocketConfig};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
 use crate::WsReply;
-
-/// Maximum UTF-8 bytes accepted for a single inbound text frame.
-const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 use crate::config::WsConfig;
 use crate::context::{BoxFuture, Captured, SocketContext};
 use crate::envelope::WsEnvelope;
@@ -57,6 +54,7 @@ pub type WsDataFold = dyn Fn(&str, &mut serde_json::Value) -> Result<(), PipeErr
 /// Defined here (the gateway calls it), provided by guards (which owns the
 /// `PipeSpecs` registry) — the same seeded-fn-pointer pattern as the GraphQL
 /// `GraphqlVariablePipe`, since guards depends on this crate, not the reverse.
+#[doc(hidden)] // Internal ABI — a seeded fn-pointer wired by the framework crates (lockstep).
 pub struct WsDataPipe(pub fn(&Container, &str, &mut serde_json::Value) -> Result<(), PipeError>);
 
 /// Resolve the [`WsDataPipe`] bridge at gateway mount into a runner with the
@@ -114,34 +112,49 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             .ctx
             .as_ref()
             .map(|ctx| (ctx.clone(), ctx.capture(&req)));
-        // Resolve the socket-lifetime ceiling once per upgrade from the request
-        // scope the HTTP transport installs. A missing scope or unregistered
-        // `WsConfig` falls back to the (bounded) default — fail-secure, never a
-        // silently unbounded socket.
-        let max_lifetime = req
+        // Resolve the WS config once per upgrade from the request scope the HTTP
+        // transport installs. A missing scope or unregistered `WsConfig` falls
+        // back to the (bounded) default — fail-secure, never a silently
+        // unbounded socket lifetime nor an unbounded message buffer.
+        let ws_config = req
             .extensions()
             .get::<Arc<RequestScope>>()
             .and_then(|scope| scope.root().get::<WsConfig>())
-            .unwrap_or_default()
-            .max_connection;
+            .unwrap_or_default();
+        let max_lifetime = ws_config.max_connection;
+        let max_message_bytes = ws_config.max_message_bytes;
+        // Enforce the per-message cap at the WebSocket protocol layer so an
+        // oversize frame is refused while reading — bounding buffering rather
+        // than letting tungstenite buffer up to its 64 MiB default first (WS-I1).
+        let ws = ws.config(
+            WebSocketConfig::default()
+                .max_message_size(Some(max_message_bytes))
+                .max_frame_size(Some(max_message_bytes)),
+        );
         let gateway = Arc::clone(&self.gateway);
         let server = Arc::clone(&self.server);
         let guards = Arc::clone(&self.guards);
         let data_pipe = self.data_pipe.clone();
+        let limits = SocketLimits {
+            max_lifetime,
+            max_message_bytes,
+        };
         Ok(ws
             .on_upgrade(move |socket| {
-                serve_connection(
-                    gateway,
-                    server,
-                    guards,
-                    ambient,
-                    data_pipe,
-                    max_lifetime,
-                    socket,
-                )
+                serve_connection(gateway, server, guards, ambient, data_pipe, limits, socket)
             })
             .into_response())
     }
+}
+
+/// Per-socket limits resolved once at upgrade from [`WsConfig`], threaded into
+/// the connection loop together.
+#[derive(Clone, Copy)]
+struct SocketLimits {
+    /// Socket-lifetime ceiling; `None` ⇒ unlimited.
+    max_lifetime: Option<Duration>,
+    /// Per-message byte cap (also enforced at the protocol layer).
+    max_message_bytes: usize,
 }
 
 /// RAII cleanup for a connection's [`WsServer`] registry entry. Its `Drop`
@@ -170,7 +183,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     guards: Arc<EventLayerTable>,
     ambient: Option<(Arc<dyn SocketContext>, Captured)>,
     data_pipe: Option<Arc<WsDataFold>>,
-    max_lifetime: Option<Duration>,
+    limits: SocketLimits,
     socket: poem::web::websocket::WebSocketStream,
 ) {
     let (mut sink, mut stream) = socket.split();
@@ -203,7 +216,9 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // once at the upgrade cannot outlive the ceiling (bounding the stale-privilege
     // window after token expiry/logout/revocation). `None` ⇒ unlimited, modeled
     // as an inert `select!` arm so an unbounded socket runs exactly as before.
-    let mut lifetime = max_lifetime.map(|ttl| Box::pin(tokio::time::sleep(ttl)));
+    let mut lifetime = limits
+        .max_lifetime
+        .map(|ttl| Box::pin(tokio::time::sleep(ttl)));
 
     loop {
         tokio::select! {
@@ -228,7 +243,11 @@ async fn serve_connection<G: Gateway, N: 'static>(
                 let Some(message) = message else { break };
                 match message {
                     Ok(Message::Text(text)) => {
-                        if text.len() > MAX_MESSAGE_BYTES {
+                        // Belt-and-suspenders: the protocol-layer cap
+                        // (`WebSocketConfig`) already refuses oversize frames
+                        // while reading; this second check covers the boundary
+                        // exactly at the limit and keeps the reply symmetric.
+                        if text.len() > limits.max_message_bytes {
                             let frame = error_frame("error", "message too large");
                             if outbox.try_send(frame).is_err() {
                                 break;
@@ -302,8 +321,19 @@ async fn handle_text<G: Gateway>(
     // Bundle guard + dispatch so `around` wraps both — a guard reading
     // `current_ability()` / `current_executor()` sees the captured state.
     let event_ref = event.clone();
+    let conn_id = client.id();
     let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
         if let Err(reason) = guards.check(client, &event_ref, &data).await {
+            // A per-message guard denial is a security event — it must be
+            // greppable at `warn`+ like every other transport's denial, not
+            // silently folded into the error reply (WS-I2).
+            tracing::warn!(
+                target: "nest_rs::layers",
+                conn_id,
+                event = %event_ref,
+                reason = %reason,
+                "websocket message denied by a guard",
+            );
             return WsReply::Error(reason);
         }
         // Global data pipes run after guards (which see the raw value), before

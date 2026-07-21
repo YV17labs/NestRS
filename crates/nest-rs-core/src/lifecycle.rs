@@ -19,6 +19,7 @@ use crate::container::Container;
 /// is built and transports configured, before serving; shutdown phases run
 /// after the transports stop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LifecyclePhase {
     /// First init phase — each module's own setup, before cross-cutting bootstrap.
     OnModuleInit,
@@ -35,6 +36,10 @@ pub enum LifecyclePhase {
 type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
 /// One lifecycle hook submitted to the link-time registry by `#[hooks]`.
+///
+/// **Internal ABI** — macro-constructed, lockstep with `nest-rs-core`; do not
+/// hand-construct.
+#[doc(hidden)]
 pub struct LifecycleHook {
     /// The phase this hook runs in.
     pub phase: LifecyclePhase,

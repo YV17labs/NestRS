@@ -46,6 +46,10 @@ pub fn effective_template(opts: &NewOptions) -> NewTemplate {
 }
 
 pub fn run(opts: NewOptions) -> CliResult<()> {
+    // Reject a name that would derive an invalid crate identifier (e.g.
+    // `"Bad Name!"` → `bad-name!`) before scaffolding a project that won't
+    // compile (CLI-I6).
+    crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
     let template = effective_template(&opts);
 

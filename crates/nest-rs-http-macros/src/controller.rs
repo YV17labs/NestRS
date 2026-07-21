@@ -82,6 +82,10 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let interceptor_specs = controller_interceptor_specs(&interceptors);
     let filter_specs = controller_filter_specs(&filters);
     let guard_specs = controller_guard_specs(&guards);
+    // Does a controller-level `#[use_guards]` include `ThrottlerGuard`? `#[routes]`
+    // reads this to advertise `429` for every route the controller throttles
+    // (OAPI-O4) — a compile-time bool, so the check is free at runtime.
+    let controller_has_throttler = guards.iter().any(crate::routes::guard_path_is_throttler);
     let pipe_specs = controller_pipe_specs(&pipes);
     let exception_filter_specs = controller_exception_filter_specs(&exception_filters);
 
@@ -129,6 +133,15 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
                 -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
             {
                 #guard_specs
+            }
+
+            /// Whether a controller-level `#[use_guards(...)]` includes
+            /// `ThrottlerGuard`, so `#[routes]` can advertise a `429` for every
+            /// route this controller throttles (OAPI-O4). A compile-time
+            /// constant folded into each route's `throttled` flag.
+            #[doc(hidden)]
+            pub fn __nestrs_controller_has_throttler() -> bool {
+                #controller_has_throttler
             }
 
             /// Controller-level `#[use_pipes(...)]`, exposed for the

@@ -16,6 +16,7 @@ type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
 /// default is [`Guarded`](EdgePosture::Guarded): a new self-mount is
 /// fail-secure until it opts out.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum EdgePosture {
     /// Run the global guard chain at the HTTP edge; a denial rejects the
     /// request (e.g. a WS upgrade GET — an unauthenticated upgrade is refused).

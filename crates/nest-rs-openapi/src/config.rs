@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{Config, ConfigService, Environment, Result, config};
 use validator::Validate;
 
 /// The OpenAPI document's `info` block plus the master enable switch, settable
@@ -12,19 +12,20 @@ use validator::Validate;
 #[config(namespace = "openapi")]
 #[derive(Clone, Debug, Validate)]
 pub struct OpenApiConfig {
-    /// Master switch for the documentation endpoints. Default `true`, for local
-    /// developer ergonomics.
+    /// Master switch for the documentation endpoints.
     ///
     /// Both `/api-json` (the document) and `/api` (Swagger UI) self-mount
     /// `EdgePosture::Exempt` — deliberately **public**, no auth — so while
     /// enabled the full document (every path, parameter, and schema linked into
-    /// the binary) is served to any anonymous caller. **Production deployments
-    /// should set `NESTRS_OPENAPI__ENABLED=false`** (or pin `enabled: false`, or
-    /// simply not import [`OpenApiModule`](crate::OpenApiModule) / expose it only
-    /// behind an internal ingress) so the API surface is not published publicly.
-    /// When `false`, [`OpenApiModule`](crate::OpenApiModule) mounts neither
+    /// the binary) is served to any anonymous caller. Because that surface is
+    /// public and unauthenticated, [`from_env`](Config::from_env) defaults it
+    /// **OFF outside a dev/test profile** (HTTP-S5): a dev run keeps the docs on
+    /// for ergonomics; staging/production must opt in with
+    /// `NESTRS_OPENAPI__ENABLED=true`, which is honored but logged loudly at
+    /// boot. When `false`, [`OpenApiModule`](crate::OpenApiModule) mounts neither
     /// endpoint. A set-but-unparseable `NESTRS_OPENAPI__ENABLED` fails boot
-    /// naming the variable — it never silently falls back to on.
+    /// naming the variable — it never silently falls back to on. (The struct
+    /// `Default` stays `true` for the pinned-config / dev path.)
     pub enabled: bool,
     /// The API title shown in the document `info` block and Swagger UI.
     pub title: String,
@@ -58,11 +59,22 @@ impl Default for OpenApiConfig {
 impl Config for OpenApiConfig {
     fn from_env(env: &ConfigService) -> Result<Self> {
         let d = Self::default();
+        let environment = Environment::from_env();
+        // Secure-by-default (HTTP-S5): the docs endpoints are public and
+        // unauthenticated, so outside a dev/test profile they default OFF. `flag`
+        // still returns `Err` (naming the var) on a set-but-unparseable value, so
+        // a typo'd `NESTRS_OPENAPI__ENABLED` stays boot-fatal — it never silently
+        // falls back to on.
+        let enabled = env.flag("ENABLED", docs_default_enabled(environment))?;
+        if enabled && !docs_default_enabled(environment) {
+            tracing::warn!(
+                target: "nest_rs::openapi",
+                environment = environment.as_str(),
+                "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+            );
+        }
         Ok(Self {
-            // `flag` returns `Err` (naming the var) on a set-but-unparseable
-            // value, so a typo'd `NESTRS_OPENAPI__ENABLED` is boot-fatal, never a
-            // silent default back to the public docs.
-            enabled: env.flag("ENABLED", d.enabled)?,
+            enabled,
             title: env.get("TITLE").unwrap_or(d.title),
             version: env.get("VERSION").unwrap_or(d.version),
             description: env.get("DESCRIPTION"),
@@ -73,6 +85,12 @@ impl Config for OpenApiConfig {
                 .unwrap_or(d.document_path),
         })
     }
+}
+
+/// HTTP-S5: the public, unauthenticated docs endpoints default ON only in a
+/// dev/test profile — OFF in staging/production unless explicitly enabled.
+fn docs_default_enabled(environment: Environment) -> bool {
+    !matches!(environment, Environment::Production | Environment::Staging)
 }
 
 #[cfg(test)]
@@ -125,6 +143,17 @@ mod tests {
         let on = ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "true")]);
         let cfg = OpenApiConfig::from_env(&on).expect("ok");
         assert!(cfg.enabled);
+    }
+
+    // HTTP-S5: the public, unauthenticated docs default OFF outside a dev/test
+    // profile — a deployed binary that forgets `NESTRS_OPENAPI__ENABLED` must not
+    // publish its API surface.
+    #[test]
+    fn docs_default_off_outside_dev() {
+        assert!(docs_default_enabled(Environment::Development));
+        assert!(docs_default_enabled(Environment::Test));
+        assert!(!docs_default_enabled(Environment::Staging));
+        assert!(!docs_default_enabled(Environment::Production));
     }
 
     // The set-but-unparseable contract: a bad boolean must fail boot naming the

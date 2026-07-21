@@ -18,8 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-type ProbeFuture =
-    Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>;
+type ProbeFuture = Pin<Box<dyn Future<Output = Result<(), nest_rs_queue::JobError>> + Send>>;
 
 // A link-time `ProcessMethod` so `QueueWorker::configure` sees at least one
 // processor in this test binary and exercises the missing-connection branch.
@@ -227,6 +226,13 @@ async fn newer_wire_version_returns_err_pointing_at_the_producer() {
     assert!(
         msg.contains("roll back this consumer") || msg.contains("wait for the producer"),
         "newer-version error tells the operator what to do: {msg}",
+    );
+    // QUEUE-I4: a wrong wire version is deterministic — retrying re-fails
+    // identically, so it must be classified NON-retryable (abort + dead-letter),
+    // not retried through the budget.
+    assert!(
+        !err.retryable,
+        "a deterministic wire-version failure must be non-retryable",
     );
     assert_eq!(
         ENVELOPE_LAST_N.load(Ordering::SeqCst),

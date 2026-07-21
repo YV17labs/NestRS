@@ -34,10 +34,13 @@ pub struct HttpConfig {
     /// (trim, drop empty/`"/"`, ensure leading `/`, strip trailing `/`) lives
     /// in [`HttpTransport::global_prefix`](crate::HttpTransport::global_prefix).
     pub global_prefix: Option<String>,
-    /// Cap on the request body size accepted by
-    /// [`RawBody`](crate::RawBody). `None` ⇒ the extractor's built-in default
-    /// (2 MiB). Read from `NESTRS_HTTP__MAX_BODY_BYTES`. Per-route overrides
-    /// keep using [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit).
+    /// Transport-wide cap on the request body size. Enforced at the transport
+    /// edge for **every** extractor — a bare `Json`/`String`/`Vec<u8>`/
+    /// `Multipart`, not only [`RawBody`](crate::RawBody) — via a fast `413` on
+    /// an oversized `Content-Length` plus a streaming cap for chunked bodies. A
+    /// per-route [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit)
+    /// can pin a *tighter* cap under this ceiling. `None` ⇒ the default (2 MiB).
+    /// Read from `NESTRS_HTTP__MAX_BODY_BYTES`.
     pub max_body_bytes: Option<usize>,
     /// Wall-clock budget for a single request. A handler exceeding it is
     /// aborted and the client gets `504 Gateway Timeout`, bounding how long a

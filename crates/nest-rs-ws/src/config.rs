@@ -25,6 +25,12 @@ use validator::Validate;
 /// credential keeps a live socket's privileges.
 const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 
+/// Default per-message byte cap: 64 KiB. Applied at the WebSocket *protocol*
+/// layer so an oversize frame is refused while reading rather than after
+/// tungstenite buffers it whole (its own default is 64 MiB — a ~1000×
+/// amplification, WS-I1).
+pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
 /// WebSocket transport options resolved at boot (namespace `ws`). See the
 /// module docs for why the socket-lifetime ceiling is a security control.
 #[config(namespace = "ws")]
@@ -37,12 +43,19 @@ pub struct WsConfig {
     /// `NESTRS_WS__MAX_CONNECTION_SECS` (whole seconds; `0` ⇒ unlimited);
     /// defaults to 4 hours.
     pub max_connection: Option<Duration>,
+    /// Maximum bytes accepted for a single inbound message, enforced at the
+    /// WebSocket protocol layer (both `max_message_size` and `max_frame_size`)
+    /// so buffering is bounded *before* a giant frame is fully read (WS-I1).
+    /// Read from `NESTRS_WS__MAX_MESSAGE_BYTES`; defaults to 64 KiB.
+    #[validate(range(min = 1, message = "must be at least 1 byte"))]
+    pub max_message_bytes: usize,
 }
 
 impl Default for WsConfig {
     fn default() -> Self {
         Self {
             max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
+            max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
         }
     }
 }
@@ -71,7 +84,13 @@ impl Config for WsConfig {
             Some(0) => None,
             Some(secs) => Some(Duration::from_secs(secs)),
         };
-        Ok(Self { max_connection })
+        let max_message_bytes = env
+            .parse::<usize>("MAX_MESSAGE_BYTES")?
+            .unwrap_or(DEFAULT_MAX_MESSAGE_BYTES);
+        Ok(Self {
+            max_connection,
+            max_message_bytes,
+        })
     }
 }
 
@@ -124,6 +143,21 @@ mod tests {
         ))
         .expect("ok");
         assert_eq!(cfg.max_connection, None, "0 is the unlimited sentinel");
+    }
+
+    #[test]
+    fn default_message_cap_is_64_kib() {
+        assert_eq!(WsConfig::default().max_message_bytes, 64 * 1024);
+    }
+
+    #[test]
+    fn from_env_reads_a_custom_message_cap() {
+        let cfg = WsConfig::from_env(&ConfigService::with_vars(
+            "ws",
+            [("NESTRS_WS__MAX_MESSAGE_BYTES", "1048576")],
+        ))
+        .expect("ok");
+        assert_eq!(cfg.max_message_bytes, 1_048_576);
     }
 
     #[test]

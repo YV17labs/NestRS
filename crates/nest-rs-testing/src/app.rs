@@ -50,8 +50,12 @@ impl TestApp {
         self.app.container()
     }
 
-    /// Runs the application's startup side effects: deliberately **not** run by
-    /// `build`, so a test harness can compile the app without triggering them.
+    /// Re-runs the application's startup init phases (`OnModuleInit` /
+    /// `OnApplicationBootstrap`). [`TestAppBuilder::build`] already runs them
+    /// once, so a `TestApp` is fully started on return — call this only to drive
+    /// the phases again after a mid-test change that must re-trigger bootstrap
+    /// wiring. (`HeadlessApp`, built without HTTP, does **not** auto-init — there
+    /// it is the required startup call.)
     pub async fn init(&self) -> Result<()> {
         self.app.init().await
     }

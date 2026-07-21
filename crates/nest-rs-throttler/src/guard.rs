@@ -74,7 +74,7 @@ impl Guard for ThrottlerGuard {
 }
 
 /// Direct peer IP unless the peer is a configured trusted proxy — then the
-/// leftmost `X-Forwarded-For` hop.
+/// **rightmost** `X-Forwarded-For` hop that is not itself a trusted proxy.
 fn client_key(req: &Request, trusted_proxies: &[IpAddr]) -> String {
     let peer = req.remote_addr().as_socket_addr().map(|addr| addr.ip());
     client_key_from(
@@ -86,23 +86,49 @@ fn client_key(req: &Request, trusted_proxies: &[IpAddr]) -> String {
     )
 }
 
+/// Resolve the rate-limit identity from the direct peer and the (untrusted)
+/// `X-Forwarded-For` chain.
+///
+/// `X-Forwarded-For` is only consulted when the direct peer is a configured
+/// trusted proxy — otherwise a client sets it freely. A proxy **appends** the
+/// address it received the request from to the *right* of the chain, so the
+/// genuine client is the rightmost hop that is not itself a trusted proxy: walk
+/// right-to-left, skip trusted hops, take the first non-trusted one. A client
+/// can only **prepend** spoofed entries (they land to the left of the genuine
+/// hop), so this keying can't be rotated to mint fresh buckets or forged to
+/// target a victim's bucket (B-HTTP-1).
 fn client_key_from(
     forwarded_for: Option<&str>,
     peer: Option<IpAddr>,
     trusted_proxies: &[IpAddr],
 ) -> String {
-    if let Some(peer) = peer {
-        if trusted_proxies.contains(&peer)
-            && let Some(client) = forwarded_for
-                .and_then(|chain| chain.split(',').next())
-                .map(str::trim)
-                .filter(|ip| !ip.is_empty() && ip.parse::<IpAddr>().is_ok())
-        {
-            return client.to_owned();
-        }
+    let Some(peer) = peer else {
+        return "global".to_owned();
+    };
+    // Anyone but a trusted proxy could forge X-Forwarded-For, so ignore it.
+    if !trusted_proxies.contains(&peer) {
         return peer.to_string();
     }
-    "global".to_owned()
+    if let Some(chain) = forwarded_for {
+        let hops: Vec<IpAddr> = chain
+            .split(',')
+            .map(str::trim)
+            .filter(|hop| !hop.is_empty())
+            .filter_map(|hop| hop.parse::<IpAddr>().ok())
+            .collect();
+        // Rightmost hop appended by infrastructure that isn't itself trusted.
+        if let Some(client) = hops.iter().rev().find(|ip| !trusted_proxies.contains(ip)) {
+            return client.to_string();
+        }
+        // Every recorded hop is itself a trusted proxy: fall back to the
+        // leftmost (outermost) recorded address rather than to nothing.
+        if let Some(outermost) = hops.first() {
+            return outermost.to_string();
+        }
+    }
+    // No usable forwarded hop (missing / empty / all-unparseable): the trusted
+    // proxy itself is the client.
+    peer.to_string()
 }
 
 #[cfg(test)]
@@ -125,11 +151,70 @@ mod tests {
         assert_eq!(key, "192.0.2.10");
     }
 
+    // B-HTTP-1: behind a single trusted proxy the real client is the hop the
+    // proxy APPENDED (the rightmost non-trusted), not the leftmost — the
+    // leftmost is the client-authored, spoofable value.
     #[test]
-    fn trusted_proxies_use_the_leftmost_forwarded_client() {
-        let proxy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+    fn trusted_proxy_uses_the_rightmost_untrusted_hop_as_the_client() {
+        let proxy = ip("10.0.0.1");
+        // The proxy received the request from 192.0.2.1 and appended it; the
+        // leftmost "203.0.113.50" is a header the client set.
         let key = client_key_from(Some("203.0.113.50, 192.0.2.1"), Some(proxy), &[proxy]);
+        assert_eq!(key, "192.0.2.1");
+    }
+
+    // B-HTTP-1 (the core exploit): an attacker prepends a random/victim IP to
+    // X-Forwarded-For. The genuine hop the trusted proxy appends sits to its
+    // right and is the one selected — the prepended value can neither mint a
+    // fresh bucket nor drain a victim's.
+    #[test]
+    fn a_prepended_spoofed_hop_cannot_change_the_key() {
+        let proxy = ip("10.0.0.1");
+        let real = client_key_from(Some("203.0.113.50"), Some(proxy), &[proxy]);
+        // Attacker rotates a random leading hop: the key is unchanged.
+        let spoofed = client_key_from(Some("1.2.3.4, 203.0.113.50"), Some(proxy), &[proxy]);
+        assert_eq!(real, "203.0.113.50");
+        assert_eq!(spoofed, "203.0.113.50");
+        // Attacker forges a victim's IP as the leading hop: still unchanged.
+        let targeted = client_key_from(Some("198.51.100.7, 203.0.113.50"), Some(proxy), &[proxy]);
+        assert_eq!(targeted, "203.0.113.50");
+    }
+
+    // A two-layer proxy chain (LB → nginx → app): both infra hops are trusted,
+    // so the client is the rightmost hop that is NOT a trusted proxy.
+    #[test]
+    fn two_layer_proxy_chain_selects_the_real_client() {
+        let nginx = ip("10.0.0.1");
+        let lb = ip("10.0.0.2");
+        // client(203.0.113.50) → lb appended it → nginx appended lb.
+        let key = client_key_from(Some("203.0.113.50, 10.0.0.2"), Some(nginx), &[nginx, lb]);
         assert_eq!(key, "203.0.113.50");
+    }
+
+    // Spoof inside a two-layer chain: the attacker prepends a hop, but every
+    // trusted infra hop is still skipped from the right and the first
+    // non-trusted hop below them is the genuine client.
+    #[test]
+    fn a_spoofed_hop_in_a_two_layer_chain_is_ignored() {
+        let nginx = ip("10.0.0.1");
+        let lb = ip("10.0.0.2");
+        let key = client_key_from(
+            Some("9.9.9.9, 203.0.113.50, 10.0.0.2"),
+            Some(nginx),
+            &[nginx, lb],
+        );
+        assert_eq!(key, "203.0.113.50");
+    }
+
+    // Degenerate: every recorded hop is itself a trusted proxy — fall back to
+    // the leftmost (outermost) recorded address rather than to nothing.
+    #[test]
+    fn all_trusted_hops_fall_back_to_the_outermost() {
+        let a = ip("10.0.0.1");
+        let b = ip("10.0.0.2");
+        let c = ip("10.0.0.3");
+        let key = client_key_from(Some("10.0.0.2, 10.0.0.3"), Some(a), &[a, b, c]);
+        assert_eq!(key, "10.0.0.2");
     }
 
     // When the peer is unknown (no socket addr — e.g. a UDS connection or a
@@ -154,34 +239,34 @@ mod tests {
         assert_eq!(key, "10.0.0.1");
     }
 
-    // Trusted proxy + empty X-Forwarded-For: an empty hop is rejected as an
-    // un-spoofable client claim — fall back to the proxy IP, not "".
+    // Trusted proxy + empty X-Forwarded-For: no usable hop ⇒ fall back to the
+    // proxy IP, not "".
     #[test]
     fn trusted_proxy_with_empty_forwarded_chain_falls_back_to_proxy_ip() {
         let proxy = ip("10.0.0.1");
         let key = client_key_from(Some(""), Some(proxy), &[proxy]);
         assert_eq!(key, "10.0.0.1");
         let key = client_key_from(Some(",,,"), Some(proxy), &[proxy]);
-        // First hop trims to "" — invalid IP — fall back.
         assert_eq!(key, "10.0.0.1");
     }
 
-    // Trusted proxy + unparseable first hop ⇒ fall back. Important: prevents
-    // accepting "user-supplied-string" as a client key.
+    // Trusted proxy + an unparseable prepended hop: it is skipped, and the
+    // valid appended hop is the client. Prevents accepting a user-supplied
+    // string as a client key.
     #[test]
-    fn trusted_proxy_with_unparseable_first_hop_falls_back_to_proxy_ip() {
+    fn trusted_proxy_skips_an_unparseable_hop() {
         let proxy = ip("10.0.0.1");
         let key = client_key_from(Some("not-an-ip, 192.0.2.1"), Some(proxy), &[proxy]);
-        assert_eq!(key, "10.0.0.1");
+        assert_eq!(key, "192.0.2.1");
     }
 
-    // Trusted proxy + IPv6 first hop. The parse accepts any `IpAddr` shape;
-    // this pins that v6 chains are handled too (a future regression that
-    // limited the parse to v4 would fail here).
+    // Trusted proxy + IPv6 client. The parse accepts any `IpAddr` shape; this
+    // pins that v6 chains are handled too (a future regression that limited the
+    // parse to v4 would fail here).
     #[test]
-    fn trusted_proxy_with_ipv6_first_hop_is_accepted() {
+    fn trusted_proxy_with_ipv6_client_is_accepted() {
         let proxy = ip("10.0.0.1");
-        let key = client_key_from(Some("2001:db8::1, 192.0.2.1"), Some(proxy), &[proxy]);
+        let key = client_key_from(Some("2001:db8::1"), Some(proxy), &[proxy]);
         assert_eq!(key, "2001:db8::1");
     }
 
@@ -198,12 +283,12 @@ mod tests {
         assert_eq!(key, "192.0.2.10");
     }
 
-    // Surrounding whitespace in the first hop is trimmed — RFC 7239 allows
-    // them and real proxies emit them.
+    // Surrounding whitespace around the selected hop is trimmed — RFC 7239
+    // allows it and real proxies emit it.
     #[test]
-    fn trusted_proxy_trims_whitespace_around_the_first_hop() {
+    fn trusted_proxy_trims_whitespace_around_the_selected_hop() {
         let proxy = ip("10.0.0.1");
-        let key = client_key_from(Some("   203.0.113.50  , 192.0.2.1"), Some(proxy), &[proxy]);
+        let key = client_key_from(Some("   203.0.113.50  "), Some(proxy), &[proxy]);
         assert_eq!(key, "203.0.113.50");
     }
 }

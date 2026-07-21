@@ -1,7 +1,8 @@
 //! Assemble an OpenAPI 3.1 document from the discovered HTTP controllers.
 
 use nest_rs_core::{Container, DiscoveryService};
-use nest_rs_http::{GlobalGuardsActive, HttpControllerMeta, HttpRouteMeta, join_path};
+use nest_rs_http::{GlobalGuardsActive, HttpConfig, HttpControllerMeta, HttpRouteMeta, join_path};
+use poem::http::StatusCode;
 use schemars::SchemaGenerator;
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
@@ -58,7 +59,12 @@ pub fn build_document(
         info.insert("description".into(), json!(description));
     }
 
-    json!({
+    // The transport mounts everything under `HttpConfig.global_prefix`, but the
+    // documented paths are relative to a controller's own prefix — so under a
+    // global prefix every path in the document is wrong. Declare the prefix as
+    // an OpenAPI `server` base URL: clients (and Swagger UI "Try it out")
+    // prepend it to each path, keeping the paths themselves prefix-free (OAPI-O5).
+    let mut document = json!({
         "openapi": "3.1.2",
         "info": info,
         "paths": Value::Object(paths),
@@ -75,7 +81,27 @@ pub fn build_document(
                 }
             },
         },
-    })
+    });
+
+    if let Some(base) = global_prefix_base(container)
+        && let Value::Object(obj) = &mut document
+    {
+        obj.insert("servers".into(), json!([{ "url": base }]));
+    }
+
+    document
+}
+
+/// The transport's `global_prefix`, normalized to a `server` base URL
+/// (`/api`) — leading slash, no trailing slash — or `None` when unset.
+fn global_prefix_base(container: &Container) -> Option<String> {
+    let prefix = container.get::<HttpConfig>()?.global_prefix.clone()?;
+    let trimmed = prefix.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(format!("/{trimmed}"))
+    }
 }
 
 /// The RFC 9457 `application/problem+json` schema referenced by every error
@@ -140,17 +166,30 @@ fn operation_object(
     }
 
     let mut responses = Map::new();
+    // The effective success status (OAPI-O3): `#[http_code(201)]`, a `#[crud]`
+    // delete's `204`, or a `#[redirect(_, 301)]` no longer masquerade as `200`.
+    let status = route.success_status;
     let mut ok = Map::new();
-    ok.insert("description".into(), json!("OK"));
-    if let Some(schema_fn) = route.response {
+    ok.insert("description".into(), json!(reason_phrase(status)));
+    // A `204 No Content` and a `3xx` redirect carry no response body.
+    let has_body = status != 204 && !(300..400).contains(&status);
+    if has_body && let Some(schema_fn) = route.response {
         ok.insert(
             "content".into(),
             json!({ "application/json": { "schema": schema_fn(generator).to_value() } }),
         );
     }
-    responses.insert("200".into(), Value::Object(ok));
+    responses.insert(status.to_string(), Value::Object(ok));
     for (status, title) in error_statuses(route, full_path, global_guards) {
-        responses.insert(status.into(), problem_response(title));
+        let mut response = problem_response(title);
+        // The throttler's `429` carries a `Retry-After` (seconds to window
+        // reset) — document it so generated clients can honour the back-off.
+        if status == "429"
+            && let Value::Object(map) = &mut response
+        {
+            map.insert("headers".into(), retry_after_header());
+        }
+        responses.insert(status.into(), response);
     }
     op.insert("responses".into(), Value::Object(responses));
 
@@ -238,7 +277,7 @@ fn resolve_ref(schema: &Value, defs: &Map<String, Value>) -> Value {
 
 /// The error responses an operation can actually produce, as `(status, title)`.
 /// Honest per route: auth codes only on a guarded route, `404` only where a
-/// path binds an id, `409` only on a `#[crud]` write, `422` only with a body.
+/// path binds an id, `409` only on a `#[crud]` write, `400` only with a body.
 fn error_statuses(
     route: &HttpRouteMeta,
     full_path: &str,
@@ -246,19 +285,45 @@ fn error_statuses(
 ) -> Vec<(&'static str, &'static str)> {
     let mut out = Vec::new();
     if route.request_body.is_some() {
-        out.push(("422", "Unprocessable Content"));
+        // The framework's edge validation (`Valid`/`Piped`) rejects with a `400`
+        // RFC-9457 problem+json (see `nest_rs_http::pipe::reject`), not `422` —
+        // the generated document must state the status clients will actually see
+        // (OAPI-O2).
+        out.push(("400", "Bad Request"));
     }
     if route_is_guarded(route, global_guards) {
         out.push(("401", "Unauthorized"));
         out.push(("403", "Forbidden"));
     }
-    if full_path.contains(":") {
+    // `404` where a path *segment* binds an id (`/users/:id`) — a lookup that
+    // can miss. Match a leading-`:` segment, not any `:` in the string, so a
+    // literal colon in a static segment doesn't spuriously advertise a `404`
+    // (OAPI-O4). Driven off the path rather than `path_params` on purpose: a
+    // `Bind<_, _>` route looks up its id and can 404 but carries no typed
+    // `Path<…>` param, so `path_params` would be empty for exactly those routes.
+    if full_path.split('/').any(|seg| seg.starts_with(':')) {
         out.push(("404", "Not Found"));
     }
     if route.may_conflict {
         out.push(("409", "Conflict"));
     }
+    // `429` on a `ThrottlerGuard`-covered route — the guard answers with a
+    // `Retry-After` header (added on the response below), so clients that read
+    // the document know to back off (OAPI-O4).
+    if route.throttled {
+        out.push(("429", "Too Many Requests"));
+    }
     out
+}
+
+/// Reason phrase for a success status, for the response `description`. Reuses
+/// the `http` crate's canonical table (the same source `nest_rs_http::problem`
+/// draws error phrases from) rather than a hand-kept copy that would drift.
+fn reason_phrase(status: u16) -> &'static str {
+    StatusCode::from_u16(status)
+        .ok()
+        .and_then(|code| code.canonical_reason())
+        .unwrap_or("Success")
 }
 
 /// A single `application/problem+json` error response referencing the shared
@@ -270,6 +335,17 @@ fn problem_response(title: &str) -> Value {
             "application/problem+json": {
                 "schema": { "$ref": "#/components/schemas/ProblemDetails" }
             }
+        }
+    })
+}
+
+/// The `Retry-After` response header a throttled route's `429` carries: the
+/// integer seconds a client should wait before retrying (RFC-9110 §10.2.3).
+fn retry_after_header() -> Value {
+    json!({
+        "Retry-After": {
+            "description": "Seconds to wait before retrying, until the rate-limit window resets.",
+            "schema": { "type": "integer", "format": "int32", "minimum": 0 }
         }
     })
 }
@@ -375,9 +451,53 @@ mod tests {
             path_params: &[],
             query_params: &[],
             may_conflict: false,
+            throttled: false,
+            success_status: 200,
             scoped_guarded: false,
             public: false,
         }
+    }
+
+    #[test]
+    fn a_path_param_segment_advertises_404_but_a_literal_colon_does_not() {
+        // OAPI-O4: `404` on a route that binds an id segment (`:id`) — Path OR
+        // Bind — but not on a static segment that merely contains a colon.
+        let bound = error_statuses(&route("get_user", "/users/:id"), "/users/:id", false);
+        assert!(
+            bound.iter().any(|(s, _)| *s == "404"),
+            "an `:id` route advertises 404",
+        );
+
+        let literal = error_statuses(&route("weird", "/a:b/list"), "/a:b/list", false);
+        assert!(
+            !literal.iter().any(|(s, _)| *s == "404"),
+            "a literal colon in a static segment must not advertise 404",
+        );
+    }
+
+    #[test]
+    fn a_throttled_route_advertises_429_with_a_retry_after_header() {
+        // OAPI-O4: a `ThrottlerGuard`-covered route can answer `429`, and the
+        // guard sends `Retry-After` — both must reach the document.
+        let mut g = generator();
+        let mut r = route("upload", "/audio/uploads");
+        r.throttled = true;
+        let op = operation_object(&r, "/audio/uploads", &mut g, false);
+        let too_many = &op["responses"]["429"];
+        assert_eq!(too_many["description"], "Too Many Requests");
+        assert!(
+            too_many["headers"]["Retry-After"]["schema"]["type"] == "integer",
+            "429 must document the Retry-After header: {too_many}",
+        );
+    }
+
+    #[test]
+    fn an_unthrottled_route_does_not_advertise_429() {
+        let statuses = error_statuses(&route("list", "/audio"), "/audio", false);
+        assert!(
+            !statuses.iter().any(|(s, _)| *s == "429"),
+            "a route with no ThrottlerGuard must not advertise 429",
+        );
     }
 
     #[test]
@@ -450,6 +570,39 @@ mod tests {
     }
 
     #[test]
+    fn a_non_200_success_status_replaces_the_200_response() {
+        // OAPI-O3: `#[http_code(201)]` advertises `201 Created`, not `200`, and
+        // still carries the body schema.
+        let mut g = generator();
+        let mut r = route("create_user", "/users");
+        r.success_status = 201;
+        r.response = Some(schema_for_dummy);
+        let op = operation_object(&r, "/users", &mut g, false);
+        assert!(op["responses"].get("200").is_none(), "no bogus 200");
+        assert_eq!(op["responses"]["201"]["description"], "Created");
+        assert!(op["responses"]["201"]["content"]["application/json"]["schema"].is_object());
+    }
+
+    #[test]
+    fn a_204_or_redirect_success_carries_no_body() {
+        // A `204 No Content` (a `#[crud]` delete) and a `3xx` redirect advertise
+        // no response body even when a return schema exists (OAPI-O3).
+        for (status, reason) in [(204, "No Content"), (307, "Temporary Redirect")] {
+            let mut g = generator();
+            let mut r = route("delete_user", "/users/:id");
+            r.success_status = status;
+            r.response = Some(schema_for_dummy);
+            let op = operation_object(&r, "/users/:id", &mut g, false);
+            let key = status.to_string();
+            assert_eq!(op["responses"][&key]["description"], reason);
+            assert!(
+                op["responses"][&key].get("content").is_none(),
+                "{status} must carry no response body",
+            );
+        }
+    }
+
+    #[test]
     fn a_global_guard_pool_marks_an_otherwise_unguarded_route_as_secured() {
         // scoped_guarded=false, public=false: no controller/method guard, but a
         // `use_guards_global` pool covers it — the document must reflect that.
@@ -488,5 +641,33 @@ mod tests {
         let container = Container::builder().build();
         let doc = build_document(&container, "X", "0", Some("a description"));
         assert_eq!(doc["info"]["description"], "a description");
+    }
+
+    #[test]
+    fn no_servers_field_without_a_global_prefix() {
+        let container = Container::builder().build();
+        let doc = build_document(&container, "X", "0", None);
+        assert!(
+            doc.get("servers").is_none(),
+            "with no global prefix the paths are absolute — no `servers` needed",
+        );
+    }
+
+    #[test]
+    fn global_prefix_is_declared_as_a_normalized_server_base_url() {
+        // OAPI-O5: under a global prefix the documented paths stay prefix-free
+        // and the prefix rides in `servers`, so a client (and Swagger UI) is
+        // prepended it correctly. The base is normalized (leading slash, no
+        // trailing slash) regardless of how the operator wrote the prefix.
+        for raw in ["api", "/api", "api/", "/api/"] {
+            let container = Container::builder()
+                .provide(HttpConfig::default().with_global_prefix(raw))
+                .build();
+            let doc = build_document(&container, "X", "0", None);
+            assert_eq!(
+                doc["servers"][0]["url"], "/api",
+                "prefix {raw:?} must normalize to `/api`",
+            );
+        }
     }
 }

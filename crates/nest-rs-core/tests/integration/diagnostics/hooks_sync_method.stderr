@@ -1,0 +1,5 @@
+error: #[hooks] methods must be `async fn`
+  --> tests/integration/diagnostics/hooks_sync_method.rs:11:5
+   |
+11 |     fn init(&self) {}
+   |     ^^^^^^^^^^^^^^

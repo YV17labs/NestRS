@@ -1,6 +1,12 @@
 //! Bundled Swagger UI and spec endpoint. Assets are vendored under `assets/`
-//! and embedded; `index.html` references them and the spec by absolute path
-//! (`/api/...`, `/api-json`), matching the mount paths in [`crate::module`].
+//! and embedded; `index.html` references them and the spec by **relative** path
+//! (`api/...`, `api-json`), so they resolve against whatever prefix the page is
+//! served under (OAPI-O6). The docs page mounts at `…/api` (no trailing slash),
+//! whose base directory is `…/`, so a relative `api-json` resolves to
+//! `…/api-json` and `api/swagger-ui.css` to `…/api/swagger-ui.css` — correct
+//! with an empty `global_prefix` (`/api-json`, `/api/…`) **and** under one
+//! (`/v1/api-json`, `/v1/api/…`), where an absolute `/api-json` would 404 and
+//! break "Try it out".
 
 use poem::endpoint::make_sync;
 use poem::{Endpoint, Response, handler};
@@ -55,18 +61,25 @@ mod tests {
 
     use super::*;
 
-    // The embedded index must point at the absolute mount paths the module
-    // also mounts — a rename of either side without the other turns the UI
-    // into a white page in prod. Pin the contract.
+    // The embedded index must reference the spec + assets **relatively** (no
+    // leading slash), so they resolve under any `global_prefix` (OAPI-O6). An
+    // absolute `/api-json` would 404 under a prefix and break "Try it out". A
+    // rename of the mount paths without the index (or vice versa) turns the UI
+    // into a white page in prod — pin both halves of the contract.
     #[test]
-    fn embedded_index_references_the_absolute_mount_paths() {
+    fn embedded_index_references_the_relative_mount_paths() {
+        // The spec fetch and every asset are relative — never rooted at `/`.
         assert!(
-            INDEX_HTML.contains("/api-json"),
-            "index.html must reference the spec endpoint at /api-json",
+            INDEX_HTML.contains("\"api-json\""),
+            "index.html must fetch the spec relatively (\"api-json\"), not \"/api-json\"",
         );
         assert!(
-            INDEX_HTML.contains("/api/"),
-            "index.html must reference assets under /api/",
+            INDEX_HTML.contains("\"api/swagger-ui.css\""),
+            "index.html must reference the stylesheet relatively (api/swagger-ui.css)",
+        );
+        assert!(
+            !INDEX_HTML.contains("\"/api-json\"") && !INDEX_HTML.contains("\"/api/"),
+            "no absolute (leading-slash) references — they break under a global_prefix",
         );
     }
 

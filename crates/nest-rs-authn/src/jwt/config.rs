@@ -7,11 +7,9 @@ use validator::Validate;
 
 use crate::error::AuthError;
 use crate::jwt::JwtOptions;
-
-/// Minimum HS256 secret length, in bytes. 256 bits matches the HMAC-SHA256
-/// output size — anything shorter weakens the signature below the algorithm's
-/// own security level.
-const HS256_MIN_SECRET_BYTES: usize = 32;
+// Single source of truth: the min-secret rule is enforced in `JwtService::new`;
+// the config path checks it too only to surface an env-var-named message.
+use crate::jwt::service::HS256_MIN_SECRET_BYTES;
 
 // No `Debug`: secrets must not leak through a derived format.
 /// Env-driven JWT key material (namespace `authn`). The combination of keys

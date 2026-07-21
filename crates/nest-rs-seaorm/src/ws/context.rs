@@ -8,6 +8,16 @@
 //! this bridge captures it once and re-installs it per message — it does **not**
 //! re-run the guard chain, unlike the GraphQL bridge.
 //!
+//! **The ability is frozen at the upgrade (DATA-S7).** A mid-connection
+//! revocation, logout, or token expiry does not propagate to an already-open
+//! socket — every message runs under the ability captured at connect. The bound
+//! on that stale-privilege window is the socket-lifetime ceiling
+//! (`nest_rs_ws::WsConfig::max_connection`, default 4h): when it elapses the
+//! server closes the socket, forcing a fresh upgrade and with it a fresh
+//! authn/authz + `exp` check. Tightening the ceiling per-connection to the
+//! token's own `exp` needs a transport-generic ambient-expiry seam the auth
+//! strategy populates — tracked as a post-1.0 enhancement, not a silent gap.
+//!
 //! **Per-message transactions, lazily.** Each dispatch installs an
 //! [`Executor::Lazy`]: `BEGIN` is deferred to the handler's first data-layer
 //! touch, so a read-only or non-querying message costs no transaction at all,

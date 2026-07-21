@@ -137,10 +137,10 @@ mod http {
         fn as_response(&self) -> Response {
             let status = self.status();
             let mut problem = ProblemDetails::from_status(status).with_detail(self.to_string());
-            if let ServiceError::Validation(errs) = self {
-                if let Ok(fields) = serde_json::to_value(errs) {
-                    problem = problem.with_extension("errors", fields);
-                }
+            if let ServiceError::Validation(errs) = self
+                && let Ok(fields) = serde_json::to_value(errs)
+            {
+                problem = problem.with_extension("errors", fields);
             }
             problem.into_response()
         }

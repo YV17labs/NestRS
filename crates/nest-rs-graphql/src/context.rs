@@ -94,6 +94,10 @@ pub trait GraphqlOperationGuard: Send + Sync + 'static {
 /// is registered. This is what keeps `/graphql` fail-secure under
 /// `EdgePosture::Exempt`: forgetting the authz bridge module does not leave
 /// operations unguarded — the global pool still gates them.
+///
+/// **Internal ABI** — a seeded fn-pointer wired by the framework crates
+/// (lockstep with `nest-rs-graphql`); not a user-constructed type.
+#[doc(hidden)]
 pub struct FallbackOperationGuard(pub fn(&Container) -> Arc<dyn GraphqlOperationGuard>);
 
 /// Bridge slot for global pipes on GraphQL operation **variables** — the
@@ -105,6 +109,10 @@ pub struct FallbackOperationGuard(pub fn(&Container) -> Arc<dyn GraphqlOperation
 /// guards (which owns the `PipeSpecs` registry) — the same seeded-fn-pointer
 /// pattern as [`FallbackOperationGuard`], since guards depends on this crate,
 /// not the reverse. A rejection becomes a GraphQL error response.
+///
+/// **Internal ABI** — a seeded fn-pointer wired by the framework crates
+/// (lockstep with `nest-rs-graphql`); not a user-constructed type.
+#[doc(hidden)]
 pub struct GraphqlVariablePipe(
     pub fn(&Container, &mut serde_json::Value) -> Result<(), nest_rs_pipes::PipeError>,
 );
@@ -250,6 +258,14 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
             return Ok(resp);
         }
         let batch = GraphQLBatchRequest::from_request(&req, &mut body).await?.0;
+        // Enforce the batch-size cap FIRST — before the variable pipes fold over
+        // every operation. Checking it only in the seed match below meant a
+        // 10k-op batch paid the full pipe cost before the 413 (GQL-I6).
+        if let BatchRequest::Batch(rs) = &batch
+            && rs.len() > self.max_batch_size
+        {
+            return Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
+        }
         // Global variable pipes (operation-level; `transform_graphql_variables`).
         // A rejection short-circuits with a GraphQL error response.
         let batch = match self.pipe_variables(batch) {
@@ -259,9 +275,6 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
         let batch = match batch {
             BatchRequest::Single(r) => BatchRequest::Single(self.seed(&req, r)),
             BatchRequest::Batch(rs) => {
-                if rs.len() > self.max_batch_size {
-                    return Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
-                }
                 BatchRequest::Batch(rs.into_iter().map(|r| self.seed(&req, r)).collect())
             }
         };

@@ -20,7 +20,9 @@ impl PrincipalIdentity for TestClaims {
 
 #[tokio::test]
 async fn authenticates_with_valid_bearer_token() {
-    let jwt = Arc::new(JwtService::new(JwtOptions::new("strategy-secret")).expect("jwt"));
+    let jwt = Arc::new(
+        JwtService::new(JwtOptions::new("strategy-secret-padded-to-thirty-two")).expect("jwt"),
+    );
     let strategy = JwtStrategy::<TestClaims>::new(jwt.clone());
     let token = jwt
         .sign(&TestClaims {
@@ -36,7 +38,9 @@ async fn authenticates_with_valid_bearer_token() {
 
 #[tokio::test]
 async fn missing_bearer_credentials_are_rejected() {
-    let jwt = Arc::new(JwtService::new(JwtOptions::new("strategy-secret")).expect("jwt"));
+    let jwt = Arc::new(
+        JwtService::new(JwtOptions::new("strategy-secret-padded-to-thirty-two")).expect("jwt"),
+    );
     let strategy = JwtStrategy::<TestClaims>::new(jwt);
     let mut req = crate::common::request(&[]);
 
@@ -48,7 +52,9 @@ async fn missing_bearer_credentials_are_rejected() {
 
 #[tokio::test]
 async fn invalid_bearer_token_is_rejected() {
-    let jwt = Arc::new(JwtService::new(JwtOptions::new("strategy-secret")).expect("jwt"));
+    let jwt = Arc::new(
+        JwtService::new(JwtOptions::new("strategy-secret-padded-to-thirty-two")).expect("jwt"),
+    );
     let strategy = JwtStrategy::<TestClaims>::new(jwt);
     let mut req = crate::common::request(&[("Authorization", "Bearer not-a-jwt")]);
 

@@ -1,8 +1,15 @@
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use nest_rs_core::{Container, ReachableProviders, injectable, inventory};
 
 use crate::indicator::{HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport};
+
+/// Per-indicator wall-clock ceiling. An indicator that probes a dead peer (a
+/// hung TCP connect, a stalled query) would otherwise block the public
+/// `/health/ready` response indefinitely — a slow indicator must report `Down`,
+/// not hang the whole probe (HEALTH-I7).
+const INDICATOR_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Aggregates every reachable [`HealthIndicator`] submitted via `#[indicators]`
 /// into a per-probe [`ProbeReport`]. Apps don't usually touch this directly —
@@ -58,20 +65,8 @@ impl HealthService {
                 continue;
             }
 
-            let (status, error) = match (entry.run)(container).await {
-                Ok(()) => (IndicatorStatus::Up, None),
-                Err(err) => {
-                    let detail = format!("{err:#}");
-                    tracing::warn!(
-                        target: "nest_rs::health",
-                        indicator = entry.name,
-                        ?kind,
-                        error = %detail,
-                        "health indicator failed",
-                    );
-                    (IndicatorStatus::Down, Some("check failed".into()))
-                }
-            };
+            let (status, error) =
+                run_with_timeout(entry.name, kind, (entry.run)(container), INDICATOR_TIMEOUT).await;
             reports.push(IndicatorReport {
                 name: entry.name,
                 status,
@@ -87,6 +82,42 @@ impl HealthService {
     }
 }
 
+/// Run one indicator future under a wall-clock ceiling, mapping success,
+/// failure, and timeout to a `(status, error)` pair. Extracted so the timeout
+/// branch (HEALTH-I7) is testable without an inventory indicator. Public
+/// probe responses carry only opaque reasons — never the indicator's internals.
+async fn run_with_timeout(
+    name: &'static str,
+    kind: ProbeKind,
+    fut: impl std::future::Future<Output = anyhow::Result<()>>,
+    timeout: Duration,
+) -> (IndicatorStatus, Option<String>) {
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(())) => (IndicatorStatus::Up, None),
+        Ok(Err(err)) => {
+            let detail = format!("{err:#}");
+            tracing::warn!(
+                target: "nest_rs::health",
+                indicator = name,
+                ?kind,
+                error = %detail,
+                "health indicator failed",
+            );
+            (IndicatorStatus::Down, Some("check failed".into()))
+        }
+        Err(_elapsed) => {
+            tracing::warn!(
+                target: "nest_rs::health",
+                indicator = name,
+                ?kind,
+                timeout_secs = timeout.as_secs(),
+                "health indicator timed out",
+            );
+            (IndicatorStatus::Down, Some("timed out".into()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Drives the inventory-aggregation path through the crate-private
@@ -95,6 +126,39 @@ mod tests {
 
     use super::*;
     use nest_rs_core::Container;
+
+    #[tokio::test]
+    async fn a_hanging_indicator_times_out_to_down() {
+        // HEALTH-I7: an indicator probing a dead peer must not hang the probe.
+        // A tiny real ceiling keeps the test fast while exercising the timeout
+        // branch against a never-resolving future.
+        let (status, error) = run_with_timeout(
+            "hang",
+            ProbeKind::Readiness,
+            std::future::pending::<anyhow::Result<()>>(),
+            Duration::from_millis(10),
+        )
+        .await;
+        assert_eq!(status, IndicatorStatus::Down);
+        assert_eq!(
+            error.as_deref(),
+            Some("timed out"),
+            "a timed-out indicator reports Down with an opaque reason",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fast_indicator_is_not_affected_by_the_ceiling() {
+        let (status, error) = run_with_timeout(
+            "ok",
+            ProbeKind::Readiness,
+            async { Ok(()) },
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(status, IndicatorStatus::Up);
+        assert!(error.is_none());
+    }
 
     struct UpHost;
     struct DownHost;

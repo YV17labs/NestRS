@@ -8,6 +8,7 @@ use crate::source::real_env_var;
 /// files to load, so it must come from the real process environment, not a
 /// `.env` file. Unset or unrecognised ⇒ [`Development`](Self::Development).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Environment {
     /// Local development — the default when `NESTRS_ENV` is unset or unrecognised.
     #[default]
@@ -38,12 +39,20 @@ impl Environment {
         // `NESTRS_ENV` selects the cascade, so it must come from the real
         // process env, never a `.env` file — read it without the dotenv
         // fallback (which would also recurse through `dotenv_values`).
-        match real_env_var("NESTRS_ENV").as_deref().map(str::trim) {
-            Some("production" | "prod") => Self::Production,
-            Some("staging" | "stage") => Self::Staging,
-            Some("test") => Self::Test,
-            _ => Self::Development,
+        let raw = real_env_var("NESTRS_ENV");
+        let (env, unrecognized) = classify(raw.as_deref());
+        // Set but UNRECOGNIZED (a typo like `producton`) must not silently load
+        // the dev cascade in production (CONF-I4). This runs at the top of
+        // `main`, before any tracing subscriber exists, so surface it on stderr
+        // where it is guaranteed visible rather than as a dropped log.
+        if let Some(value) = unrecognized {
+            eprintln!(
+                "nestrs: WARNING — unrecognized NESTRS_ENV={value:?}; falling back to \
+                 `development`. A misspelled production value loads the development `.env` \
+                 cascade in production. Use one of: development, test, staging, production."
+            );
         }
+        env
     }
 
     /// The lowercase name of this environment (`"development"`, `"production"`, …).
@@ -59,6 +68,21 @@ impl Environment {
     /// Whether this is [`Production`](Self::Production).
     pub fn is_production(&self) -> bool {
         matches!(self, Self::Production)
+    }
+}
+
+/// Classify a raw `NESTRS_ENV` value into an [`Environment`], returning
+/// `Some(value)` in the second slot when the value was **set but
+/// unrecognized** (so the caller can surface it) and `None` when it was unset,
+/// empty, or an explicit development alias. Pure, so it is testable without
+/// mutating the process environment.
+fn classify(raw: Option<&str>) -> (Environment, Option<String>) {
+    match raw.map(str::trim) {
+        Some("production" | "prod") => (Environment::Production, None),
+        Some("staging" | "stage") => (Environment::Staging, None),
+        Some("test") => (Environment::Test, None),
+        Some("development" | "dev" | "") | None => (Environment::Development, None),
+        Some(other) => (Environment::Development, Some(other.to_owned())),
     }
 }
 
@@ -85,5 +109,34 @@ mod tests {
     #[test]
     fn default_is_development() {
         assert_eq!(Environment::default(), Environment::Development);
+    }
+
+    #[test]
+    fn classify_recognizes_each_environment_and_its_aliases() {
+        assert_eq!(classify(Some("production")).0, Environment::Production);
+        assert_eq!(classify(Some("prod")).0, Environment::Production);
+        assert_eq!(classify(Some("staging")).0, Environment::Staging);
+        assert_eq!(classify(Some("stage")).0, Environment::Staging);
+        assert_eq!(classify(Some("test")).0, Environment::Test);
+        assert_eq!(classify(Some(" production ")).0, Environment::Production); // trimmed
+    }
+
+    #[test]
+    fn classify_treats_unset_empty_and_dev_aliases_as_silent_development() {
+        for raw in [None, Some(""), Some("  "), Some("development"), Some("dev")] {
+            let (env, unrecognized) = classify(raw);
+            assert_eq!(env, Environment::Development, "for {raw:?}");
+            assert!(unrecognized.is_none(), "must be silent for {raw:?}");
+        }
+    }
+
+    #[test]
+    fn classify_flags_a_set_but_unrecognized_value_while_defaulting_to_development() {
+        // CONF-I4: a typo like `producton` must fall back to development *and*
+        // report the offending value so the caller can warn, never silently
+        // load the dev cascade in production.
+        let (env, unrecognized) = classify(Some("producton"));
+        assert_eq!(env, Environment::Development);
+        assert_eq!(unrecognized.as_deref(), Some("producton"));
     }
 }

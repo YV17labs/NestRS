@@ -16,6 +16,8 @@ use tokio_util::sync::CancellationToken;
 static INTERVAL_HITS: AtomicU64 = AtomicU64::new(0);
 static TIMEOUT_HITS: AtomicU64 = AtomicU64::new(0);
 static CRON_HITS: AtomicU64 = AtomicU64::new(0);
+static PANIC_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static SURVIVOR_HITS: AtomicU64 = AtomicU64::new(0);
 
 type RunFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
@@ -100,6 +102,70 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
     assert!(
         CRON_HITS.load(Ordering::SeqCst) >= 1,
         "cron job fires at least once",
+    );
+}
+
+fn tick_panic(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        PANIC_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+        panic!("boom from a scheduled job");
+    })
+}
+
+fn tick_survivor(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        SURVIVOR_HITS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })
+}
+
+/// B-SCHED: a panicking job must not silently and permanently stop its own
+/// schedule, nor take a co-scheduled job's task down with it. Both jobs fire
+/// repeatedly and `serve` returns `Ok` rather than aborting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
+    struct PanicHost;
+    struct SurvivorHost;
+
+    let container = Container::builder()
+        .attach_meta::<PanicHost, CronJobMeta>(CronJobMeta {
+            provider: "PanicHost",
+            method: "panics",
+            trigger: Trigger::Interval(Duration::from_millis(100)),
+            run: tick_panic,
+        })
+        .attach_meta::<SurvivorHost, CronJobMeta>(CronJobMeta {
+            provider: "SurvivorHost",
+            method: "survives",
+            trigger: Trigger::Interval(Duration::from_millis(100)),
+            run: tick_survivor,
+        })
+        .build();
+
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(650)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins despite a panicking job")
+        .expect("serve returns Ok despite a panicking job");
+
+    assert!(
+        PANIC_ATTEMPTS.load(Ordering::SeqCst) >= 2,
+        "the panicking job is re-scheduled after each panic (attempts: {})",
+        PANIC_ATTEMPTS.load(Ordering::SeqCst),
+    );
+    assert!(
+        SURVIVOR_HITS.load(Ordering::SeqCst) >= 2,
+        "the co-scheduled job keeps firing while its neighbour panics (hits: {})",
+        SURVIVOR_HITS.load(Ordering::SeqCst),
     );
 }
 

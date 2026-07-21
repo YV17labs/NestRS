@@ -231,11 +231,15 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[delete("/:id")]
             #[api(summary = #summary, tags(#tag))]
             #[crud_write]
+            // A successful delete is `204 No Content`. Declared via `#[http_code]`
+            // (not a returned `StatusCode`) so `#[routes]` records it on the route
+            // and the OpenAPI document advertises `204`, not `200` (OAPI-O3).
+            #[http_code(204)]
             async fn delete(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Delete, #entity>,
                 __id: ::poem::web::Path<::uuid::Uuid>,
-            ) -> ::poem::Result<::poem::http::StatusCode> {
+            ) -> ::poem::Result<()> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
@@ -249,7 +253,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
                             .await
                             .map_err(#internal)?;
-                        ::core::result::Result::Ok(::poem::http::StatusCode::NO_CONTENT)
+                        ::core::result::Result::Ok(())
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
                         ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),

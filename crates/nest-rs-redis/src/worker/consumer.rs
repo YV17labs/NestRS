@@ -109,7 +109,16 @@ impl Transport for QueueWorker {
             monitor = build_worker(monitor, &connection, container.clone(), method);
         }
 
+        // Bound the post-signal drain so a hung `#[process]` can't block SIGTERM
+        // until the orchestrator SIGKILLs the pod (QUEUE-I5). The config is a
+        // factory output present in the container.
+        let shutdown_timeout = container
+            .get::<crate::QueueConfig>()
+            .map(|cfg| cfg.shutdown_timeout)
+            .unwrap_or_else(|| crate::QueueConfig::default().shutdown_timeout);
+
         monitor
+            .shutdown_timeout(shutdown_timeout)
             .run_with_signal(async move {
                 cancel.cancelled().await;
                 Ok(())
@@ -174,20 +183,43 @@ fn build_worker(
                     let started = ::std::time::Instant::now();
                     let result = handler(job, container).await;
                     let elapsed_ms = started.elapsed().as_millis() as u64;
-                    match &result {
-                        Ok(()) => tracing::info!(
-                            target: "nest_rs::queue",
-                            elapsed_ms,
-                            "job ok",
-                        ),
-                        Err(e) => tracing::warn!(
-                            target: "nest_rs::queue",
-                            elapsed_ms,
-                            error = %e,
-                            "job failed",
-                        ),
+                    // Map the classified `JobError` onto apalis's retry model
+                    // (QUEUE-I4). A NON-retryable failure (deterministic: bad
+                    // wire version, undeserializable payload, missing provider,
+                    // pipe rejection) is boxed as `Error::Abort` so `RetryLayer`
+                    // skips it and the job dead-letters at once — logged at
+                    // `error` (the previously-silent dead-letter). A retryable
+                    // failure (the user method's `Err`) stays a plain boxed error
+                    // → `Error::Failed`, which the retry budget re-attempts.
+                    type BoxDynError = ::std::boxed::Box<
+                        dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
+                    >;
+                    match result {
+                        Ok(()) => {
+                            tracing::info!(target: "nest_rs::queue", elapsed_ms, "job ok");
+                            ::std::result::Result::<(), BoxDynError>::Ok(())
+                        }
+                        Err(je) if !je.retryable => {
+                            tracing::error!(
+                                target: "nest_rs::queue",
+                                elapsed_ms,
+                                error = %je,
+                                "job dead-lettered: non-retryable failure",
+                            );
+                            ::std::result::Result::Err(::std::boxed::Box::new(
+                                ::apalis::prelude::Error::Abort(::std::sync::Arc::new(je.source)),
+                            ) as BoxDynError)
+                        }
+                        Err(je) => {
+                            tracing::warn!(
+                                target: "nest_rs::queue",
+                                elapsed_ms,
+                                error = %je,
+                                "job failed; will retry within the budget",
+                            );
+                            ::std::result::Result::Err(je.source)
+                        }
                     }
-                    result
                 }
                 .instrument(span)
             },

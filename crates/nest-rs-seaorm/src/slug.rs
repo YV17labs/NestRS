@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn slugify_basic() {
-        assert_eq!(slugify("Galerie Metropole"), "galerie-metropole");
+        assert_eq!(slugify("Galerie Métropole"), "galerie-metropole");
     }
 
     #[test]

@@ -32,3 +32,8 @@ Thumbs.db
 docs/node_modules/
 docs/dist/
 docs/.astro/
+
+# Bench harness — SUT build artifacts (results/ stays committed)
+/bench/sut/nestrs/target/
+/bench/sut/*/node_modules/
+/bench/sut/*/dist/

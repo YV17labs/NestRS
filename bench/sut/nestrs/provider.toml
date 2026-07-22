@@ -1,0 +1,6 @@
+name = "nestrs"
+variant = "poem"
+runtime = "rust"
+port = 3100
+build = "cargo build --release"
+start = "target/release/sut-nestrs"

@@ -1,0 +1,32 @@
+# Bench harness front door. `just` lists recipes.
+
+_default:
+    @just --list
+
+# Build every SUT (release / production build).
+build:
+    cd sut/nestrs && cargo build --release
+    cd sut/nestjs-express && npm ci && npm run build
+    cd sut/nestjs-fastify && npm ci && npm run build
+
+# Boot each SUT, check it against the contract golden files, stop it.
+conformance:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for p in sut/*/provider.toml; do GATE_ONLY=1 ./harness/run.sh "$(dirname "$p")"; done
+
+# Full run: every provider, then the report. One results dir per (day, host).
+bench:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="results/$(date +%Y-%m-%d)-$(hostname -s)"
+    for p in sut/*/provider.toml; do ./harness/run.sh "$(dirname "$p")" "$dir"; done
+    ./harness/report.sh "$dir"
+
+# One provider into the day's results dir: just bench-one nestrs
+bench-one provider:
+    ./harness/run.sh sut/{{provider}} "results/$(date +%Y-%m-%d)-$(hostname -s)"
+
+# Re-render REPORT.md for an existing results dir.
+report dir:
+    ./harness/report.sh {{dir}}

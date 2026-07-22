@@ -1,0 +1,6 @@
+name = "nestjs"
+variant = "fastify"
+runtime = "node"
+port = 3120
+build = "npm ci && npm run build"
+start = "node dist/main.js"

@@ -25,8 +25,22 @@ use parking_lot::Mutex;
 
 use crate::rate::Throttle;
 
-/// Cap distinct throttle keys to resist unbounded memory growth.
+/// Cap distinct throttle keys to resist unbounded memory growth. Held across
+/// the whole store: each of the [`SHARDS`] shards carries `MAX_KEYS / SHARDS`,
+/// so sharding buys concurrency without widening the memory bound.
 const MAX_KEYS: usize = 10_000;
+
+/// Number of independently locked shards.
+///
+/// One mutex over one map serialized **every** throttled request in the
+/// process, including requests for unrelated keys. Buckets are wholly
+/// independent, so they shard by key hash: a hit touches exactly one shard and
+/// contends only with hits that hash to the same one. Power of two, so the
+/// index is a mask rather than a division.
+const SHARDS: usize = 16;
+
+/// Per-shard key cap — see [`MAX_KEYS`].
+const MAX_KEYS_PER_SHARD: usize = MAX_KEYS / SHARDS;
 
 /// Amortize the O(n) expiry sweep: run the full-map `retain` only once every
 /// `SWEEP_INTERVAL` hits (and always at capacity), so the common per-request
@@ -120,10 +134,24 @@ impl Window {
 pub struct InMemoryThrottler {
     default: Throttle,
     trusted_proxies: Vec<IpAddr>,
+    shards: Box<[Shard]>,
+}
+
+/// One independently locked slice of the key space.
+struct Shard {
     windows: Mutex<HashMap<String, Window>>,
-    /// Hit counter driving the amortized expiry sweep (THROT-R1). Wraps
-    /// harmlessly — only its value mod [`SWEEP_INTERVAL`] matters.
+    /// Hit counter driving this shard's amortized expiry sweep (THROT-R1).
+    /// Wraps harmlessly — only its value mod [`SWEEP_INTERVAL`] matters.
     hits: AtomicU32,
+}
+
+impl Default for Shard {
+    fn default() -> Self {
+        Self {
+            windows: Mutex::new(HashMap::new()),
+            hits: AtomicU32::new(0),
+        }
+    }
 }
 
 impl InMemoryThrottler {
@@ -132,9 +160,22 @@ impl InMemoryThrottler {
         Self {
             default,
             trusted_proxies,
-            windows: Mutex::new(HashMap::new()),
-            hits: AtomicU32::new(0),
+            shards: (0..SHARDS).map(|_| Shard::default()).collect(),
         }
+    }
+
+    /// The shard owning `key`. Hashing here (rather than reusing the map's own
+    /// hash) keeps shard choice independent of `HashMap`'s internal seed, so a
+    /// key always lands in the same shard for the process's lifetime.
+    fn shard(&self, key: &str) -> &Shard {
+        use std::hash::{BuildHasher, RandomState};
+        use std::sync::LazyLock;
+
+        // One seed per process: shard placement must be stable across hits, and
+        // still unpredictable to a caller trying to pile keys onto one shard.
+        static SEED: LazyLock<RandomState> = LazyLock::new(RandomState::new);
+        let index = SEED.hash_one(key) as usize % SHARDS;
+        &self.shards[index]
     }
 
     /// IPs whose `X-Forwarded-For` is trusted to identify the real client.
@@ -158,18 +199,19 @@ impl InMemoryThrottler {
     /// itself `u32::MAX`.
     pub fn hit(&self, key: &str, limit: Throttle) -> Decision {
         let now = Instant::now();
-        let mut windows = self.windows.lock();
+        let shard = self.shard(key);
+        let mut windows = shard.windows.lock();
         // Amortized expiry sweep (THROT-R1): the full-map `retain` is O(n) under
         // the global mutex, so run it only every `SWEEP_INTERVAL` hits — and
         // always at capacity, so the eviction pass below sees fresh liveness.
         // Between sweeps a bucket still expires against **its own** window on its
         // next hit (the reset below), so per-key correctness holds; only other
         // expired buckets linger briefly, bounded by `MAX_KEYS`.
-        let due = self
+        let due = shard
             .hits
             .fetch_add(1, Ordering::Relaxed)
             .is_multiple_of(SWEEP_INTERVAL);
-        if due || windows.len() >= MAX_KEYS {
+        if due || windows.len() >= MAX_KEYS_PER_SHARD {
             windows.retain(|_, window| now.duration_since(window.start) < window.window);
         }
         // At capacity with a new key: make room by evicting the oldest bucket
@@ -179,7 +221,7 @@ impl InMemoryThrottler {
         // keying fix: cheap fresh keys + evictable denials reset every strict
         // counter — HTTP-S3). If every live bucket is denying, refuse the new
         // key fail-closed rather than sacrifice a denial.
-        if !windows.contains_key(key) && windows.len() >= MAX_KEYS {
+        if !windows.contains_key(key) && windows.len() >= MAX_KEYS_PER_SHARD {
             let victim = windows
                 .iter()
                 .filter(|(_, window)| !window.is_denying())
@@ -267,7 +309,7 @@ mod tests {
         // access — driving it there with billions of real hits would
         // dominate the test runtime.
         {
-            let mut windows = throttler.windows.lock();
+            let mut windows = throttler.shard("k").windows.lock();
             windows.insert(
                 "k".to_owned(),
                 Window {
@@ -293,7 +335,7 @@ mod tests {
         let next = throttler.hit("k", limit);
         assert!(!next.allowed, "saturated count must remain denied");
         assert_eq!(
-            throttler.windows.lock().get("k").unwrap().count,
+            throttler.shard("k").windows.lock().get("k").unwrap().count,
             u32::MAX,
             "saturating_add caps at u32::MAX",
         );
@@ -329,7 +371,7 @@ mod tests {
         // The long-window bucket survived: still present, still at its exhausted
         // count — so the client stays denied. The bypass is closed.
         {
-            let windows = throttler.windows.lock();
+            let windows = throttler.shard("long").windows.lock();
             let long_bucket = windows
                 .get("long")
                 .expect("long-window bucket must survive a short-window eviction pass");
@@ -350,8 +392,10 @@ mod tests {
         // allowed bucket is evicted instead.
         let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
         let now = Instant::now();
+        // Capacity is per shard, so fill the shard the newcomer will land in.
+        let shard = throttler.shard("newcomer");
         {
-            let mut windows = throttler.windows.lock();
+            let mut windows = shard.windows.lock();
             windows.insert(
                 "deny".to_owned(),
                 Window {
@@ -361,7 +405,7 @@ mod tests {
                     limit: 1, // count 5 > limit 1 ⇒ denying
                 },
             );
-            for i in 0..(MAX_KEYS - 1) {
+            for i in 0..(MAX_KEYS_PER_SHARD - 1) {
                 windows.insert(
                     format!("ok{i}"),
                     Window {
@@ -377,7 +421,7 @@ mod tests {
         // A brand-new key at capacity triggers exactly one eviction.
         let _ = throttler.hit("newcomer", Throttle::new(100, Duration::from_secs(60)));
 
-        let windows = throttler.windows.lock();
+        let windows = shard.windows.lock();
         assert!(
             windows.contains_key("deny"),
             "an over-limit in-window bucket must never be evicted",
@@ -399,9 +443,10 @@ mod tests {
         // refused fail-closed rather than evict a denial to make room.
         let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
         let now = Instant::now();
+        let shard = throttler.shard("newcomer");
         {
-            let mut windows = throttler.windows.lock();
-            for i in 0..MAX_KEYS {
+            let mut windows = shard.windows.lock();
+            for i in 0..MAX_KEYS_PER_SHARD {
                 windows.insert(
                     format!("deny{i}"),
                     Window {
@@ -420,11 +465,11 @@ mod tests {
             "a new key must be refused fail-closed when every bucket is actively denying",
         );
 
-        let windows = throttler.windows.lock();
+        let windows = shard.windows.lock();
         assert_eq!(
             windows.len(),
-            MAX_KEYS,
-            "the table stays full — no denial evicted, no newcomer admitted",
+            MAX_KEYS_PER_SHARD,
+            "the shard stays full — no denial evicted, no newcomer admitted",
         );
         assert!(
             !windows.contains_key("newcomer"),

@@ -18,13 +18,26 @@ use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, RequestBody, Res
 pub struct RequestScopeEndpoint<E> {
     inner: E,
     container: Container,
+    /// Present when the app registers **no** request-scoped or transient
+    /// provider. Such a scope can never cache anything — every resolution falls
+    /// through to the singleton container — so one shared instance is
+    /// indistinguishable from a fresh one, and costs an `Arc` clone instead of
+    /// an allocation on every request. The scope is still installed: singleton
+    /// lookups through `Scoped<T>` and `Bind` read it.
+    shared: Option<Arc<RequestScope>>,
 }
 
 impl<E> RequestScopeEndpoint<E> {
     /// Wrap `inner`, installing a per-request scope over `container` before each
     /// call.
     pub fn new(inner: E, container: Container) -> Self {
-        Self { inner, container }
+        let shared = (!container.has_dynamic_scopes())
+            .then(|| Arc::new(RequestScope::new(container.clone())));
+        Self {
+            inner,
+            container,
+            shared,
+        }
     }
 }
 
@@ -36,8 +49,11 @@ where
     type Output = Response;
 
     async fn call(&self, mut req: Request) -> Result<Self::Output> {
-        req.extensions_mut()
-            .insert(Arc::new(RequestScope::new(self.container.clone())));
+        let scope = match &self.shared {
+            Some(shared) => Arc::clone(shared),
+            None => Arc::new(RequestScope::new(self.container.clone())),
+        };
+        req.extensions_mut().insert(scope);
         self.inner.call(req).await.map(IntoResponse::into_response)
     }
 }

@@ -33,3 +33,10 @@ pub fn interceptor<I: Interceptor + 'static>() -> InterceptorSpec {
 /// `AppBuilder::use_interceptors_global(...)`. The HTTP shaper reads it at
 /// configure time and resolves against the live container.
 pub struct InterceptorSpecs(pub Vec<InterceptorSpec>);
+
+impl nest_rs_core::layer_chain::GlobalSpecs for InterceptorSpecs {
+    type Layer = dyn Interceptor;
+    fn specs(&self) -> &[InterceptorSpec] {
+        &self.0
+    }
+}

@@ -26,7 +26,7 @@ Authentication and authorization are decided in exactly one place: a
 per operation — by a **visible** `#[authorize(Action, Entity)]` or
 `#[public]` that `#[resolver]`/`#[routes]` turns into the gate.
 
-**A parameter type is never a posture.** `Authorized<E, A>`,
+**A parameter type is never a posture.** `Authorized<A, E>`,
 `Bind`/`bind`, and the ability-scoped data layer are *enforcement
 plumbing* the guard's decision flows into — load the authorized row,
 scope the query, mask the response — never the *decision* itself.
@@ -35,17 +35,23 @@ Every authn/authz check must therefore be greppable as an
 `#[authorize]` / `#[use_guards]` / `#[public]` site. Smuggling the
 decision into a parameter type, a service method, or a binding helper is
 a **framework defect to remove, not a shortcut**. (This is why a bare
-`Authorized<E, A>` parameter is **not** accepted as a standalone posture
+`Authorized<A, E>` parameter is **not** accepted as a standalone posture
 — write the `#[authorize]`, then bind the subject in the body.)
 
 **Non-CRUD routes: a capability-only guard IS the sanctioned pattern.**
 A route whose response is not an entity row (a presigned URL, a computed
 report) gates through a custom `Guard` that checks the ability
 imperatively (`ability.can_class(...)`), bound via `#[use_guards(...)]`
-— using `Authorize<A, S>` there would arm response masking against a
+— writing `#[authorize(...)]` there would arm response masking against a
 body that is no wire model and fail closed at 500. The check stays
 greppable (the `#[use_guards]` site) and the guard logs its denial at
 `warn`. Exemplar: `audio`'s `TranscodeGuard`.
+
+`Authorize<A, S>` is the extractor `#[authorize]` **desugars to** (the
+same one `#[crud]` emits) — enforcement plumbing, never written by hand:
+`#[routes]` recognises a shaper parameter by path-segment name, so a
+renamed import silently fails to arm masking, while the decorator writes
+the type itself.
 
 ## Strategy and principal
 
@@ -81,7 +87,7 @@ DB, **never RPC each other**.
 |---|---|
 | `authz/` (root) | `AppAbility`, `AuthzModule` |
 | `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>` — **alias in `features`, not in `nest-rs-authz`**), `AuthzHttpModule` |
-| `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthnGuard` (`ResolverGuard` marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
+| `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthnGuard` (context-seed owner marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
 | `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `AuthzWsModule` |
 | `authz/mcp/` | `AppMcpGuard` (`nest_rs_mcp::authz::McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `AuthzMcpModule` |
 
@@ -95,7 +101,7 @@ bring every layer they need).
 
 | Transport | Handler | Guard binding | Module import |
 |---|---|---|---|
-| HTTP | `#[controller]` | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct | `[<Feature>Module, AuthzHttpModule]` |
+| HTTP | `#[controller]` | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct + per-route posture `#[authorize(Action, Entity)]` / `#[public]` — optional (a non-CRUD route gates through a capability-only guard instead) | `[<Feature>Module, AuthzHttpModule]` |
 | GraphQL | `#[resolver]` | `#[use_guards(...)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error** | `[<Feature>Module, AuthzGraphqlModule]` |
 | WS | `#[gateway]` + `#[messages]` | `#[use_guards(...)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
 | MCP | `#[mcp]` tool host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **none registered ⇒ the global guard pool, else deny-all** — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint | `[<Feature>Module, AuthzMcpModule]` |
@@ -136,14 +142,14 @@ rather than pass-through, so the fallback can only ever widen what
 
 ## Bound mutations (GraphQL)
 
-A bound mutation receives its subject as an `Authorized<E, A>` parameter,
+A bound mutation receives its subject as an `Authorized<A, E>` parameter,
 but **the posture stays explicit**: write `#[authorize(Action, Entity)]`
-and load the subject in the body with `bind_required::<Service, A>(ctx,
+and load the subject in the body with `bind_required::<A, Service>(ctx,
 &id)`, or use the `#[authorize(A, bind = Service)]` form
-(container-resolved service) which binds the `Authorized<E, A>` subject
+(container-resolved service) which binds the `Authorized<A, E>` subject
 for you.
 
-A bound subject's `Authorized<E, A>` proof is **action-typed**: a `Read`
+A bound subject's `Authorized<A, E>` proof is **action-typed**: a `Read`
 proof cannot be passed where an `Update` proof is required — a compile
 error, not a runtime surprise.
 

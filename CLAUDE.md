@@ -45,7 +45,7 @@ to require it, **stop and ask**.
 
 - **No authn/authz decision outside a guard.** Only `#[use_guards]` + a
   visible `#[authorize]`/`#[public]` declare posture. A parameter type
-  (`Authorized<E, A>`), a service method, or a binding helper is never
+  (`Authorized<A, E>`), a service method, or a binding helper is never
   the check. Every check must be greppable as one of those three sites.
 - **No data access outside a service; no service reaching the DB outside
   `Repo`.** The named exceptions are listed in the data-layer rule;

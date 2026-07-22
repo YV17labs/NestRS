@@ -36,6 +36,14 @@ proof is compile-time: `nest-rs-macro-hygiene` (workspace,
 `publish = false`) consumes decorators with **zero** third-party deps —
 extend it when adding a decorator.
 
+**One naming exception, decided:** every host decorator is named for its
+role (`#[controller]` → `controller.rs`, `#[resolver]`, `#[gateway]`,
+`#[processor]`) **except `#[mcp]`**, whose file the role table names
+`tool.rs`. Deliberate: `nest-rs-mcp` re-exports rmcp's own `#[tool]`, and
+the tool host carries both — a `#[tools]` one letter away from the
+`#[tool]` beneath it reads as a typo. The role word lives in the file name
+and the module instead. Do not "fix" this by adding a second decorator.
+
 ### When (not) to write a decorator
 
 **Write one when all three hold:** the pattern appears in ≥ 3 places;

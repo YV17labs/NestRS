@@ -1,0 +1,94 @@
+---
+title: Benchmarks
+description: "How NestRS is measured against NestJS 11 on Express and Fastify — the contract, the protocol, and how to reproduce every figure."
+---
+
+NestRS is measured against **idiomatic NestJS 11 on both adapters** — Fastify
+(its best case) and Express (its default) — serving a **byte-identical HTTP
+contract** at the same stack depth. The harness ships in the repository; one
+command reproduces the table below on your hardware.
+
+```bash
+git clone https://github.com/YV17labs/NestRS && cd NestRS/bench
+just bench
+```
+
+## Results
+
+Tier T1 — a JSON response through the framework's router, DI container, an
+injected service, and its standard serialization path. Each server pinned to
+**one core** (the regime that favours Node: an event loop loses nothing to
+pinning), load generator on separate cores, medians of repeated timed runs.
+
+| 1 pinned core | NestRS | NestJS · Fastify | NestJS · Express | vs best |
+|---|---|---|---|---|
+| Throughput | **~154k req/s** | ~101k req/s | ~56k req/s | **×1.5** |
+| Latency p50 | **0.41 ms** | 0.61 ms | 1.08 ms | ×1.5 |
+| Latency p99 | **0.55 ms** | 1.21 ms | 2.16 ms | ×2.2 |
+| Memory under load | **9 MB** | 195 MB | 204 MB | ×22 |
+| Memory idle | **7 MB** | 86 MB | 84 MB | ×12 |
+| Cold start → first 200 | **18 ms** | 472 ms | 385 ms | ×21 |
+
+The comparison stays per-core on purpose. Scaling out, Node clusters — one
+~200 MB process per core — while one NestRS binary takes every core in a
+single process a few MB large: the per-core ratio is what each added vCPU
+buys you, on either side. The static tier (T0, no service call) tells the
+same story as T1 on both sides, so what you see is framework overhead, not
+serialization cost.
+
+Measured 2026-07-22 on a 4-core aarch64 Linux host — rustc 1.96, Node 24.18,
+`@nestjs/core` 11.1.28, [oha](https://github.com/hatoo/oha) 1.15; 64
+connections, discarded warmup, medians of 3 × 15 s runs. Absolute figures
+move with hardware; the **ratios are the claim** — every run embeds its
+machine fingerprint, and the one command above replays the full protocol on
+yours.
+
+## The contract
+
+Every contestant serves the exact same surface, verified before anything is
+measured:
+
+- **Same bytes.** Status, media type, and body compared **byte for byte**
+  against golden files by a conformance gate. A contestant that fails the
+  gate is never benchmarked.
+- **Same depth.** The measured route must traverse router → DI-built
+  controller → **injected** service → the framework's standard JSON path.
+  Inlining the response, bypassing DI, or hand-rolling serialization
+  disqualifies the contestant — enforced by review, and the sources are
+  deliberately small enough to read.
+- **Same posture.** Each side is written the way its own CLI scaffolds it —
+  release build vs `NODE_ENV=production`, framework defaults untouched, no
+  per-request telemetry on either side, no reverse proxy, no TLS.
+
+## The protocol
+
+- Server and load generator pinned to **disjoint CPU sets** — they never
+  share a core.
+- Per tier: a discarded warmup, then repeated timed runs; **medians**
+  reported, raw output kept.
+- Headline figures use the single-core regime — Node's best case. The
+  all-cores regime is reported separately, where tokio's multi-threaded
+  runtime pulls further ahead.
+- Every result embeds its **fingerprint**: CPU, kernel, toolchains, resolved
+  dependency versions, and the exact protocol parameters.
+
+## Limits
+
+- The harness compares **framework overhead** on a hello-world contract. It
+  does not claim your domain logic gets 1.5× faster — it claims the floor
+  under it is lower and the ceiling higher.
+- One asymmetry is accepted and disclosed: the NestRS scaffold ships
+  OpenTelemetry per-request tracing by default; NestJS ships none. The bench
+  runs both sides **without** per-request telemetry — measuring "telemetry
+  on" vs "telemetry absent" would compare features, not frameworks.
+- Adding a contestant is a directory with a manifest — the harness knows no
+  framework. The contract, the gate, and the how-to live in
+  [`bench/`](https://github.com/YV17labs/NestRS/tree/main/bench).
+
+## Going further
+
+- [Why NestRS](/why/) — what the framework carries beyond the numbers.
+- [Why not axum?](/why-not-axum/) — same native core; the comparison that
+  actually matters.
+- [Getting started](/getting-started/) — scaffold the same hello and measure
+  it yourself.

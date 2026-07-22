@@ -1,6 +1,6 @@
 ---
-title: NestRS — multi-tenant isolation you cannot forget
-description: A Rust backend framework where row-level filtering, masking, and transactions are structural — transparent, non-optional, verified at boot.
+title: NestRS — ~20× lighter, ×2.7 the throughput of NestJS
+description: "A Rust backend framework: ×2.7 the throughput of NestJS in ~20× less memory — multi-tenant isolation that is structural, non-optional, verified at boot."
 template: splash
 head:
   - tag: meta
@@ -11,8 +11,8 @@ hero:
   title: |
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
-    <span class="hero-lead">Multi-tenant isolation you <span class="lead-accent">cannot forget.</span></span>
-    <span class="hero-sub">Row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. You write a controller, a service, a module; decorators carry the security and the wiring. Native speed comes free: <strong>~25×</strong> Node's hello-world throughput in <strong>4–6 MB</strong> of RAM — the full auth + row-level + masking pipeline, Postgres included, holds <strong>~23k req/s</strong> at <strong>p99 &lt; 4.5 ms</strong> in <strong>~32 MB</strong>. Both measured below. Familiar if you come from NestJS, Spring, or Laravel.</span>
+    <span class="hero-lead">~20× less memory. ~20× faster cold starts. <span class="lead-accent">×2.7 the throughput of NestJS, core for core.</span></span>
+    <span class="hero-sub">Measured against NestJS 11 on a byte-identical contract, one pinned core each — <strong>×1.5</strong> its best case (Fastify), <strong>×2.7</strong> its default (Express), <strong>p99 halved</strong>, <a href="/benchmarks/">reproducible from the repo</a>. <small>Taken in a 4-core / 8 GB Docker VM — virtualized, so a floor rather than a ceiling.</small> And the part you cannot forget: row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. You write a controller, a service, a module; decorators carry the security and the wiring. Familiar if you come from NestJS, Spring, or Laravel.</span>
     <span class="hero-stack">
       <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
       <span>Database</span><span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
@@ -167,49 +167,44 @@ WebSockets, queues, scheduled jobs, MCP.
 
 ## How fast, exactly
 
-The same "Hello World" service — a provider, a controller, a module — built
-once in NestRS and once in NestJS 11 on Node.js 24, under identical `wrk` load
-(each server pinned to 2 cores, `-t2 -c64 -d20s`). Synthetic baseline: same
-handler shape and hardware — it isolates framework overhead, not a
-domain-heavy API.
+The same service written twice, each side the way its own CLI scaffolds it:
+NestRS as `nestrs new` generates it, NestJS 11 as `nest new` generates it —
+on **both Fastify and Express**, so the comparison targets Node's best case,
+not its slowest. Both serve a byte-identical HTTP contract — same route, same
+JSON body to the byte, same stack depth (router → DI container → injected
+service → framework serialization) — and a conformance gate verifies the
+bytes before anything is measured. A contestant that shortcuts the stack is
+disqualified, not benchmarked.
 
-Two different measurements, don't conflate them: the **~23k req/s in ~32 MB**
-in the hero is the demo API's **full pipeline** — JWT verification, ability
-build, a row-level-filtered Postgres query, response masking. The
-**~463k req/s and 4–6 MB** below are the **bare hello-world** — no database,
-no auth. The gap between the two is the cost of real work (crypto + Postgres),
-not of the framework.
-
-Both ran on the same machine: a Linux Docker container capped at **4 cores
-and 8 GB of RAM**, with the load generator competing for those same cores.
-That setup understates the framework — on dedicated hardware, with the
-client off-box, every figure on this page goes up. Measure it on yours.
-
-If your point of comparison is axum or Actix rather than Node: same native
-core, so the question is not speed — it is what the framework carries for you.
-See [Why not axum?](/why-not-axum/).
-
-**Read it the other way around: the fully-secured API still lands in the
-range Node reaches serving a bare hello-world.**
+The figures below are taken in the regime that **favours Node**: each server
+pinned to a single core — an event loop loses nothing to pinning — with the
+load generator on separate cores, warmup discarded, medians of repeated timed
+runs. Per-core is also the honest comparison: in production Node scales out
+by clustering — one ~200 MB process per core — while one NestRS binary takes
+every core in a single single-digit-MB process. The ratio you see below is
+the ratio you pay for, vCPU for vCPU. The published run comes from a
+**4-core / 8 GB Docker VM**
+(Apple Silicon) — virtualized, so these figures are a floor rather than a
+ceiling: bare metal only widens NestRS's side.
 
 <details>
 <summary>How these numbers were taken</summary>
 
-Both services ran on the same machine, inside a Linux Docker container
-capped at 4 cores and 8 GB of RAM, each server pinned to 2 cores, with the
-load generator sharing the remaining cores:
+The harness lives in [`bench/`](https://github.com/YV17labs/NestRS/tree/main/bench)
+— provider manifests, the byte-for-byte conformance gate, and the runner.
+Server and load generator ([oha](https://github.com/hatoo/oha)) are pinned to
+disjoint CPU sets; each tier gets a discarded warmup, then repeated timed runs
+whose medians are reported; every result embeds its machine fingerprint (CPU,
+kernel, toolchains, resolved dependency versions). Node runs `NODE_ENV=production`
+on Node 24; NestRS is a release build. One command reproduces the table on
+your hardware:
 
 ```bash
-wrk -t2 -c64 -d20s http://localhost:3000/
+cd bench && just bench
 ```
 
-The NestRS side is the scaffolded hello (`nestrs new hello --standalone`,
-built in release); the Node side is the equivalent NestJS 11 hello-world on
-Node.js 24 in production mode. The full-pipeline figures come from the same
-container driving the seeded Publish `api` app's `GET /users` with a member
-JWT — verification, ability build, row-level-filtered Postgres query, and
-response masking on every request. The client competing for the same cores
-understates both sides — measure on your own hardware.
+The [benchmark page](/benchmarks/) documents the contract, the full protocol
+and its limits.
 
 </details>
 
@@ -244,16 +239,15 @@ understates both sides — measure on your own hardware.
     boundaries, no runtime "undefined is not a function."
   </Card>
   <Card title="Native throughput" icon="rocket">
-    **~463k req/s** on 2 cores, **~231k per core**, sub-millisecond p99,
-    no GC pauses (hello-world baseline — conditions above). The same
-    `hyper`/`tokio` core as the fastest Rust web frameworks — with a
-    structure on top.
+    **×1.5** NestJS-on-Fastify — its best case — and **×2.7** Express, with
+    **sub-millisecond p99** and no GC pauses, on a single pinned core
+    ([benchmarks](/benchmarks/)). The same `hyper`/`tokio` core as the
+    fastest Rust web frameworks — with a structure on top.
   </Card>
   <Card title="An order of magnitude less RAM" icon="laptop">
-    **~4 MB idle, ~6 MB under load** for the hello-world baseline — versus
-    ~80–120 MB for an equivalent Node service; the full demo pipeline,
-    Postgres included, stays around ~32 MB. Smaller instances, higher
-    density, a materially lighter cloud bill.
+    **~9 MB under load** where the same NestJS service holds **~200 MB** —
+    about **22× less** ([benchmarks](/benchmarks/)). Smaller instances,
+    higher density, a materially lighter cloud bill.
   </Card>
   <Card title="Boots in milliseconds" icon="bars">
     Each deployable is a static native binary with no runtime to warm up —

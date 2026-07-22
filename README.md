@@ -3,7 +3,9 @@
 </p>
 
 <p align="center">
-  <strong>Scalable Rust backend apps with native performance.</strong>
+  <strong>~20× less memory · ~20× faster cold starts · ×2.7 the throughput of NestJS, core for core</strong><br>
+  Scalable Rust backend apps — measured on a byte-identical contract, <a href="bench/">reproducible from the repo</a>.<br>
+  <sub>Measured in a 4-core / 8 GB Docker VM (Apple Silicon) — virtualized, not peak native: bare-metal figures only go up.</sub>
 </p>
 
 <p align="center">
@@ -46,15 +48,19 @@ structural: the data layer applies it from the caller's ability, and an
 operation with no declared access posture is refused — at compile time on
 GraphQL, at boot on HTTP.
 
-And it stays lean. On the same hello-world service under identical `wrk` load,
-NestRS serves **~463k req/s** to NestJS 11's ~18k — **~25×** — in **4–6 MB** of
-RAM against ~80–120 MB. The demo API — the full JWT +
-authz + row-level + masking pipeline, Postgres included — still lands around
-**23k req/s**, **p99 < 4.5 ms**, in **~32 MB** of resident memory; the binary
-ships at 11–20 MB and boots in tens of milliseconds. (Measured in a Linux
-Docker container capped at 4 cores and 8 GB, with the load generator competing
-for the same cores — a setup that understates the numbers; dedicated hardware
-only pushes them up.)
+The numbers behind the tagline — against the same hello-world service in
+NestJS 11, idiomatic on both sides, byte-identical HTTP contract,
+conformance-gated: NestRS runs in **~20× less memory** (single-digit MB
+against ~200 MB), cold-starts **~20× faster** (milliseconds against near half
+a second), and — core for core, each server pinned to a single CPU — serves
+**×2.7 the throughput of NestJS on Express** (its default) — **×1.5 its best
+case, Fastify** — with **p99 latency halved**. Scaling out changes nothing:
+Node adds ~200 MB of process per core; one NestRS binary takes every core in
+a single single-digit-MB process.
+Where the Express service needs three boxes, one NestRS binary carries the
+load. Those figures come from a **4-core / 8 GB Docker VM** — virtualized,
+so they are a floor, not a ceiling. The harness lives in [`bench/`](bench/) —
+`cd bench && just bench` reproduces every figure on your own hardware.
 
 Try it on your machine:
 

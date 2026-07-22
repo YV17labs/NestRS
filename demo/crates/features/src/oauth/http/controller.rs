@@ -10,7 +10,7 @@ use nest_rs_pipes::Lowercase;
 use nest_rs_throttler::{Throttle, ThrottlerGuard};
 use poem::http::{StatusCode, header};
 use poem::web::{Form, Json, Path};
-use poem::{Request, Response, Result};
+use poem::{Response, Result};
 
 pub(crate) const TRANSACTION_COOKIE: &str = "oauth_tx";
 
@@ -47,24 +47,19 @@ impl OAuthController {
         summary = "Social login — redirects to the named provider",
         tags("OAuth2")
     )]
-    async fn social_authorize(
-        &self,
-        provider: Piped<Lowercase, Path<String>>,
-        req: &Request,
-    ) -> Result<Response> {
+    async fn social_authorize(&self, provider: Piped<Lowercase, Path<String>>) -> Result<Response> {
         let authorization = self
             .svc
             .authorize(&provider.into_inner())
             .ok_or_else(|| poem::Error::from_status(StatusCode::NOT_FOUND))?
             .map_err(poem::error::InternalServerError)?;
-        let secure = cookie_secure(req);
         Ok(Response::builder()
             .status(StatusCode::FOUND)
             .header(header::LOCATION, authorization.url)
             .header(
                 header::SET_COOKIE,
                 format!(
-                    "{TRANSACTION_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}{secure}",
+                    "{TRANSACTION_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}{COOKIE_SECURE}",
                     authorization.transaction,
                     OAuth2Client::TRANSACTION_TTL_SECS,
                 ),
@@ -102,12 +97,13 @@ impl OAuthController {
     }
 }
 
-fn cookie_secure(req: &Request) -> &'static str {
-    let https = req.uri().scheme_str() == Some("https")
-        || req
-            .headers()
-            .get("X-Forwarded-Proto")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.eq_ignore_ascii_case("https"));
-    if https { "; Secure" } else { "" }
-}
+/// The transaction cookie is **always** `Secure`.
+///
+/// The obvious alternative — deriving it from `X-Forwarded-Proto` — trusts a
+/// header any client can set, with no trusted-proxy gate (the throttler has one
+/// precisely because that header is forgeable). Marking it unconditionally
+/// costs nothing in development: browsers treat `http://localhost` as a secure
+/// context and accept `Secure` cookies there. A deployment serving plain HTTP
+/// on a non-loopback host is the only case this refuses to support — which is
+/// the correct answer for a cookie carrying a CSRF/PKCE binding.
+const COOKIE_SECURE: &str = "; Secure";

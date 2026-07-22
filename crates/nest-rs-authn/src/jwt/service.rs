@@ -106,6 +106,11 @@ pub struct JwtService {
     header: Header,
     validation: Validation,
     expires_in: Duration,
+    /// Stamped onto every minted token when configured — `validation` requires
+    /// them on the verifying side, so the signer must not leave them to the
+    /// app's claims struct.
+    audience: Option<String>,
+    issuer: Option<String>,
 }
 
 impl JwtService {
@@ -179,6 +184,8 @@ impl JwtService {
             header: Header::new(options.algorithm),
             validation,
             expires_in: options.expires_in,
+            audience: options.audience,
+            issuer: options.issuer,
         })
     }
 
@@ -188,7 +195,40 @@ impl JwtService {
         let encoding = self.encoding.as_ref().ok_or_else(|| {
             AuthError::Failed("this JwtService is verify-only — no signing key configured".into())
         })?;
-        encode(&self.header, claims, encoding).map_err(|e| AuthError::Failed(e.to_string()))
+        match self.stamped(claims)? {
+            Some(stamped) => encode(&self.header, &stamped, encoding),
+            None => encode(&self.header, claims, encoding),
+        }
+        .map_err(|e| AuthError::Failed(e.to_string()))
+    }
+
+    /// Stamp the configured `aud` / `iss` onto a claims object.
+    ///
+    /// Verification **requires** both when they are configured, so an app whose
+    /// claims struct omits them would mint tokens its own verifier rejects —
+    /// the kind of scoping the framework must carry rather than ask every
+    /// claims type to restate. Returns `None` when there is nothing to stamp
+    /// (neither configured), so the common path serializes exactly once. A
+    /// claims type that sets its own `aud`/`iss` wins: an explicit value is
+    /// never overwritten.
+    fn stamped<C: Serialize>(&self, claims: &C) -> Result<Option<serde_json::Value>, AuthError> {
+        if self.audience.is_none() && self.issuer.is_none() {
+            return Ok(None);
+        }
+        let mut value =
+            serde_json::to_value(claims).map_err(|e| AuthError::Failed(e.to_string()))?;
+        let Some(map) = value.as_object_mut() else {
+            // A non-object claims body cannot carry registered claims; leave it
+            // to the encoder, which fails it the same way it always has.
+            return Ok(None);
+        };
+        for (key, configured) in [("aud", &self.audience), ("iss", &self.issuer)] {
+            if let Some(v) = configured {
+                map.entry(key)
+                    .or_insert_with(|| serde_json::Value::String(v.clone()));
+            }
+        }
+        Ok(Some(value))
     }
 
     /// Verify `token` and deserialize its claims into `C`, applying the pinned

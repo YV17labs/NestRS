@@ -109,8 +109,10 @@ pub trait SocialProvider: Send + Sync + 'static {
 
     /// Begin the redirect leg. Default: the shared flow. Overriding this is
     /// almost never needed.
+    /// The transaction is bound to [`key`](Self::key), so a flow started here
+    /// cannot be completed on another provider's callback.
     fn authorize(&self, jwt: &JwtService) -> Result<Authorization, AuthError> {
-        self.client().authorize(jwt)
+        self.client().authorize(jwt, self.key())
     }
 
     /// Complete the code exchange. Default: the shared flow (CSRF check, PKCE,
@@ -124,7 +126,11 @@ pub trait SocialProvider: Send + Sync + 'static {
         state: &'a str,
         code: &'a str,
     ) -> TokenFuture<'a> {
-        Box::pin(async move { self.client().exchange(jwt, transaction, state, code).await })
+        Box::pin(async move {
+            self.client()
+                .exchange(jwt, self.key(), transaction, state, code)
+                .await
+        })
     }
 
     /// Fetch and normalize the provider's profile. Takes the full [`TokenSet`]

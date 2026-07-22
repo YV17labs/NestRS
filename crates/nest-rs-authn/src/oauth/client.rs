@@ -51,9 +51,27 @@ pub struct TokenSet {
     pub refresh_token: Option<String>,
 }
 
+/// Token-kind discriminant. Any other `typ` fails to deserialize, so a token
+/// minted for a different purpose by the same [`JwtService`] (an access token,
+/// say) can never be replayed as a transaction.
+#[derive(Serialize, Deserialize)]
+enum TransactionKind {
+    #[serde(rename = "oauth_tx")]
+    OauthTx,
+}
+
 /// Carried as a [`JwtService`]-signed cookie so the client cannot forge it.
+///
+/// `provider` binds the transaction to the flow that minted it. Apps store the
+/// cookie under a single name for every provider (the reference app does), so
+/// without that binding a transaction obtained from provider A would verify on
+/// provider B's callback — a code/login-confusion class that only PKCE would
+/// still stand in the way of, and PKCE is not mandatory for confidential
+/// clients at several real providers.
 #[derive(Serialize, Deserialize)]
 struct Transaction {
+    typ: TransactionKind,
+    provider: String,
     csrf: String,
     pkce: String,
     exp: u64,
@@ -126,7 +144,10 @@ impl OAuth2Client {
     /// Begin the flow: produce the provider redirect URL and the signed
     /// transaction token to set as a cookie. The transaction lives for
     /// [`Self::TRANSACTION_TTL_SECS`], not the full `JwtService` TTL.
-    pub fn authorize(&self, jwt: &JwtService) -> Result<Authorization, AuthError> {
+    ///
+    /// `provider` is the key this transaction is bound to; [`exchange`](Self::exchange)
+    /// refuses one minted for a different provider.
+    pub fn authorize(&self, jwt: &JwtService, provider: &str) -> Result<Authorization, AuthError> {
         let client = Self::basic_client(&self.config)?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let mut request = client.authorize_url(CsrfToken::new_random);
@@ -135,6 +156,8 @@ impl OAuth2Client {
         }
         let (url, csrf) = request.set_pkce_challenge(challenge).url();
         let transaction = jwt.sign(&Transaction {
+            typ: TransactionKind::OauthTx,
+            provider: provider.to_owned(),
             csrf: csrf.secret().clone(),
             pkce: verifier.secret().clone(),
             exp: jwt.expiry_in(Self::TRANSACTION_TTL_SECS),
@@ -145,17 +168,30 @@ impl OAuth2Client {
         })
     }
 
-    /// Complete the flow: validate the provider's `state` against the signed
-    /// `transaction`, then trade `code` for a [`TokenSet`]. CSRF check runs
-    /// before the exchange — never the other way around.
+    /// Complete the flow: check the signed `transaction` belongs to `provider`,
+    /// validate the provider's `state` against it, then trade `code` for a
+    /// [`TokenSet`]. Both checks run before the exchange — never the other way
+    /// around.
     pub async fn exchange(
         &self,
         jwt: &JwtService,
+        provider: &str,
         transaction: &str,
         state: &str,
         code: &str,
     ) -> Result<TokenSet, AuthError> {
         let tx: Transaction = jwt.verify(transaction)?;
+        // Provider binding first: a transaction replayed on another provider's
+        // callback is rejected before its CSRF value is ever compared.
+        if tx.provider != provider {
+            tracing::warn!(
+                target: "nest_rs::authn",
+                reason = "provider_mismatch",
+                expected = provider,
+                "OAuth callback rejected",
+            );
+            return Err(AuthError::Failed("OAuth provider mismatch".into()));
+        }
         // Constant-time compare (mirrors the client-credentials check); a length
         // mismatch reads as "not equal" via `subtle`'s slice `ct_eq`.
         if !bool::from(tx.csrf.as_bytes().ct_eq(state.as_bytes())) {
@@ -292,7 +328,7 @@ mod tests {
         config.auth_url = "not a url".into();
         let client = OAuth2Client::new(config).expect("new accepts non-empty fields");
         assert!(matches!(
-            client.authorize(&jwt()),
+            client.authorize(&jwt(), "acme"),
             Err(AuthError::Failed(_))
         ));
     }
@@ -311,6 +347,8 @@ mod tests {
 
         let transaction = jwt
             .sign(&Transaction {
+                typ: TransactionKind::OauthTx,
+                provider: "acme".into(),
                 csrf: "agreed-state".into(),
                 pkce: "verifier".into(),
                 exp: jwt.expiry(),
@@ -319,10 +357,37 @@ mod tests {
 
         assert!(matches!(
             client
-                .exchange(&jwt, &transaction, "agreed-state", "the-code")
+                .exchange(&jwt, "acme", &transaction, "agreed-state", "the-code")
                 .await,
             Err(AuthError::Failed(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn exchange_rejects_a_transaction_minted_for_another_provider() {
+        // Apps carry the transaction in one cookie for every provider, so this
+        // binding — not PKCE — is what keeps provider A's handshake from being
+        // completed on provider B's callback. Checked before the CSRF compare,
+        // so a matching state does not help the attacker.
+        let jwt = jwt();
+        let client = OAuth2Client::new(valid_config()).expect("new accepts a valid config");
+        let transaction = jwt
+            .sign(&Transaction {
+                typ: TransactionKind::OauthTx,
+                provider: "provider-a".into(),
+                csrf: "agreed-state".into(),
+                pkce: "verifier".into(),
+                exp: jwt.expiry(),
+            })
+            .expect("sign");
+
+        let Err(err) = client
+            .exchange(&jwt, "provider-b", &transaction, "agreed-state", "code")
+            .await
+        else {
+            panic!("a transaction from another provider is rejected");
+        };
+        assert!(err.to_string().contains("provider mismatch"), "{err}");
     }
 
     #[tokio::test]
@@ -334,6 +399,8 @@ mod tests {
         let client = OAuth2Client::new(valid_config()).expect("new accepts a valid config");
         let transaction = jwt
             .sign(&Transaction {
+                typ: TransactionKind::OauthTx,
+                provider: "acme".into(),
                 csrf: "the-signed-state".into(),
                 pkce: "verifier".into(),
                 exp: jwt.expiry(),
@@ -343,7 +410,7 @@ mod tests {
         // `TokenSet` is intentionally not `Debug` (it carries tokens), so match
         // rather than `expect_err`.
         let Err(err) = client
-            .exchange(&jwt, &transaction, "forged", "the-code")
+            .exchange(&jwt, "acme", &transaction, "forged", "the-code")
             .await
         else {
             panic!("a mismatched state is rejected");

@@ -14,7 +14,12 @@ use crate::error::AuthError;
 /// A machine client permitted to use the `client_credentials` grant, as loaded
 /// from configuration. Generic over the principal payload `P` the app attaches
 /// (deserialized from the `payload` field next to the credentials).
-#[derive(Debug, Clone, serde::Deserialize)]
+///
+/// [`Debug`] is hand-written and **redacts `client_secret`** — a registry is
+/// exactly the kind of value that ends up in a `{:?}` of an app config, and the
+/// sibling secret holders in this crate ([`OAuth2Config`](super::OAuth2Config),
+/// [`JwtConfig`](crate::JwtConfig)) drop `Debug` entirely for the same reason.
+#[derive(Clone, serde::Deserialize)]
 pub struct RegisteredClient<P> {
     /// The client's public identifier, matched in constant time.
     pub client_id: String,
@@ -25,6 +30,17 @@ pub struct RegisteredClient<P> {
     /// App-defined per-client data (tenant id, role set, …) carried onto the
     /// principal — nest-rs never inspects it.
     pub payload: P,
+}
+
+impl<P: std::fmt::Debug> std::fmt::Debug for RegisteredClient<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisteredClient")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .field("scopes", &self.scopes)
+            .field("payload", &self.payload)
+            .finish()
+    }
 }
 
 /// The principal established by authenticating a [`RegisteredClient`]. A machine
@@ -84,6 +100,16 @@ mod tests {
             scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
             payload: 7,
         }
+    }
+
+    #[test]
+    fn debug_redacts_the_client_secret() {
+        let rendered = format!("{:?}", client("ci", "s3cret", &["read"]));
+        assert!(
+            !rendered.contains("s3cret"),
+            "a registry `{{:?}}` must never print live secrets: {rendered}",
+        );
+        assert!(rendered.contains("ci"), "the public id stays: {rendered}");
     }
 
     #[test]

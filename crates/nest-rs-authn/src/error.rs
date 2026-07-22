@@ -62,6 +62,23 @@ impl From<CredentialError> for AuthError {
 }
 
 impl AuthError {
+    /// Stable, low-cardinality code for the `reason` field of a security log —
+    /// what an incident query groups on. Distinct from
+    /// [`client_message`](Self::client_message), which is what the *caller*
+    /// sees: the wire stays opaque, the log stays specific.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::MissingCredentials => "missing_credentials",
+            Self::InvalidToken => "invalid_token",
+            Self::InvalidSignature => "invalid_signature",
+            Self::InvalidAlgorithm => "invalid_algorithm",
+            Self::NotYetValid => "not_yet_valid",
+            Self::Expired => "expired",
+            Self::Failed(_) => "failed",
+            Self::Unavailable(_) => "unavailable",
+        }
+    }
+
     /// Message safe to return in an HTTP 401 body (no strategy/configuration detail).
     pub fn client_message(&self) -> String {
         match self {

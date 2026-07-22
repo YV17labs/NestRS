@@ -139,25 +139,76 @@ fn audience_omitted_is_rejected_when_configured() {
     // Regression: a configured audience must be *mandatory*. A validly-signed
     // token that omits `aud` entirely was silently accepted (set_audience only
     // compares when the claim is present); it must now fail closed.
-    let mut options = JwtOptions::new("aud-required-secret-padded-to-32-bytes");
+    let secret = "aud-required-secret-padded-to-32-bytes";
+    let mut options = JwtOptions::new(secret);
     options.audience = Some("api".into());
     let jwt = JwtService::new(options).expect("service");
 
-    // `TestClaims.aud` is `skip_serializing_if = Option::is_none`, so `None`
-    // produces a token with no `aud` claim at all.
+    // Forged with the raw encoder — another holder of the shared key minting a
+    // token that omits `aud`. `set_audience` alone only *compares* a present
+    // claim, so this is the case that must fail closed.
     let omitted = claims(jwt.expiry(), None);
     assert!(omitted.aud.is_none());
-    let token = jwt.sign(&omitted).expect("sign");
+    let forged = jsonwebtoken::encode(
+        &Header::new(Algorithm::HS256),
+        &omitted,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .expect("encode");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&forged),
         Err(AuthError::InvalidToken)
     ));
 
-    // A token that carries the matching audience is still accepted.
+    // Our own signer stamps the configured audience, so a claims struct that
+    // leaves `aud` unset still mints a token this service accepts — the app
+    // never has to restate the scoping its config already declares.
+    let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
+    let round_tripped: TestClaims = jwt.verify(&token).expect("stamped aud verifies");
+    assert_eq!(round_tripped.aud.as_deref(), Some("api"));
+
+    // An explicit audience in the claims is never overwritten.
     let mut present = claims(jwt.expiry(), None);
     present.aud = Some("api".into());
     let token = jwt.sign(&present).expect("sign");
     assert!(jwt.verify::<TestClaims>(&token).is_ok());
+}
+
+#[test]
+fn a_configured_issuer_is_stamped_and_required() {
+    let secret = "iss-required-secret-padded-to-32-bytes";
+    let mut options = JwtOptions::new(secret);
+    options.issuer = Some("auth".into());
+    let jwt = JwtService::new(options).expect("service");
+
+    #[derive(Serialize, Deserialize)]
+    struct IssClaims {
+        sub: String,
+        exp: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        iss: Option<String>,
+    }
+
+    let minted = IssClaims {
+        sub: "alice".into(),
+        exp: jwt.expiry(),
+        iss: None,
+    };
+    let token = jwt.sign(&minted).expect("sign");
+    let back: IssClaims = jwt.verify(&token).expect("stamped iss verifies");
+    assert_eq!(back.iss.as_deref(), Some("auth"));
+
+    // The same claims encoded without the stamp are refused.
+    let forged = jsonwebtoken::encode(
+        &Header::new(Algorithm::HS256),
+        &minted,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .expect("encode");
+    assert!(matches!(
+        jwt.verify::<IssClaims>(&forged),
+        Err(AuthError::InvalidToken)
+    ));
 }
 
 #[test]

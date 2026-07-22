@@ -164,8 +164,6 @@ impl UsersService {
         identity: &SocialIdentity,
         conn: &Executor,
     ) -> Result<(), AuthError> {
-        // Pre-principal provisioning: no ability exists yet, so the write
-        // goes through `Repo`'s sanctioned system-write escape.
         match Repo::<UserIdentities>::insert_unscoped(new_identity_active(user_id, identity), conn)
             .await
         {
@@ -203,7 +201,6 @@ impl UsersService {
             AuthError::Failed("identity resolution failed".into())
         })?;
 
-        // Same pre-principal bar as `link_identity`.
         let user = match Repo::<Users>::insert_unscoped(active, conn).await {
             Ok(user) => {
                 tracing::debug!(target: "features::users", id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
@@ -284,10 +281,6 @@ async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Mo
         .await
 }
 
-/// The identity shown in a login-failure log. Keeps the domain — what an ops
-/// query groups a credential-stuffing wave on — and drops the local part, the
-/// same deliberate redaction `SocialIdentity`'s `Debug` applies. A denial log is
-/// the one place a live address would otherwise be written in the clear.
 fn redact_email(email: &str) -> String {
     match email.split_once('@') {
         Some((_, domain)) => format!("***@{domain}"),
@@ -491,7 +484,6 @@ mod tests {
             active_into_get::<Uuid>(&active, entity::Column::OrgId),
             Some(org)
         );
-        // The enum column persists as its `string_value` — `UserRole::User` ⇒ `"user"`.
         assert_eq!(
             active_into_get::<String>(&active, entity::Column::Role).as_deref(),
             Some("user"),

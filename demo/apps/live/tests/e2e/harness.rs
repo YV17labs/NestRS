@@ -1,5 +1,3 @@
-//! Shared boot + token helpers for this suite.
-
 use features::Role;
 use futures_util::{SinkExt, StreamExt};
 use live::LiveModule;

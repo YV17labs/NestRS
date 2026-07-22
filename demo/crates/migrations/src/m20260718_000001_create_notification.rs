@@ -1,10 +1,5 @@
 use sea_orm_migration::prelude::*;
 
-// `notification` deviates from the house column pattern on purpose: it is an
-// **append-only log** (read-only service — no `Creatable`/`Updatable`/
-// `Deletable`, controller ops `[list, get]`, rows inserted by the queue worker
-// only), so `updated_at`/`deleted_at` would document lifecycle the table
-// deliberately does not have. Only `created_at` applies.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

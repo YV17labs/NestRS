@@ -97,13 +97,4 @@ impl OAuthController {
     }
 }
 
-/// The transaction cookie is **always** `Secure`.
-///
-/// The obvious alternative — deriving it from `X-Forwarded-Proto` — trusts a
-/// header any client can set, with no trusted-proxy gate (the throttler has one
-/// precisely because that header is forgeable). Marking it unconditionally
-/// costs nothing in development: browsers treat `http://localhost` as a secure
-/// context and accept `Secure` cookies there. A deployment serving plain HTTP
-/// on a non-loopback host is the only case this refuses to support — which is
-/// the correct answer for a cookie carrying a CSRF/PKCE binding.
 const COOKIE_SECURE: &str = "; Secure";

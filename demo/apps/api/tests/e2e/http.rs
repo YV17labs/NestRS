@@ -1,5 +1,3 @@
-//! Transport-wide behavior: compression, bearer rejection, RFC 9457 error bodies.
-
 use api::ApiModule;
 use nest_rs_authn::JwtConfig;
 use nest_rs_http::HttpTransport;

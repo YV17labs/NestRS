@@ -7,9 +7,6 @@ use nest_rs_seaorm::CrudService;
 
 use crate::posts::PostsService;
 
-/// Reads posts through `CrudService` — so the ambient executor and ability the
-/// MCP endpoint installs decide what this tool can see. A caller scoped to one
-/// org never gets another org's rows, with no filtering written here.
 #[mcp(path = "/posts/mcp")]
 #[derive(Clone)]
 pub struct PostsTool {

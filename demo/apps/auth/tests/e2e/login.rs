@@ -1,5 +1,3 @@
-//! Password login issuing tokens the resource server verifies.
-
 use features::{Claims, Role};
 use poem::http::StatusCode;
 use serde_json::json;

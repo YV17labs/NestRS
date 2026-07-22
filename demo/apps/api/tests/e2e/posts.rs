@@ -1,5 +1,3 @@
-//! Posts over GraphQL and the publish -> notification worker flow.
-
 use std::time::Duration;
 
 use features::notifications::NotificationsQueueModule;
@@ -133,8 +131,6 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
         "PUBLISHED",
     );
 
-    // Republishing an already-published post is a conflict — the invariant now
-    // lives in `PostsService::publish`, so GraphQL enforces it like HTTP.
     let republished = app
         .http()
         .post("/graphql")
@@ -236,7 +232,6 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
     let publish =
         json!({ "query": format!("mutation {{ publishPost(id: \"{post_a}\") {{ id status }} }}") });
 
-    // The first publish succeeds and emits exactly one PostPublishedEvent.
     let first = app
         .http()
         .post("/graphql")
@@ -256,8 +251,6 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         "the first publish must succeed",
     );
 
-    // Republishing is now a conflict on GraphQL too — no second event fires, so
-    // the worker never receives a duplicate notification.
     let again = app
         .http()
         .post("/graphql")

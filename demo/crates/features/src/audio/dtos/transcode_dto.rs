@@ -15,9 +15,6 @@ pub struct TranscodeDto {
     pub file: String,
 }
 
-/// Anti-traversal allowlist shared by every audio filename that crosses the
-/// edge — the presigned upload (`UploadRequestDto`) validates against the same
-/// rule.
 pub(super) fn validate_transcode_file(file: &str) -> Result<(), ValidationError> {
     if file.contains('/') || file.contains('\\') {
         return Err(ValidationError::new("transcode_file_has_path_separator"));

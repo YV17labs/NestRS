@@ -1,5 +1,3 @@
-//! Audio pipeline over queue + storage: presign, transcode, throttle, SSE.
-
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -41,15 +39,11 @@ async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {
     );
 }
 
-// `#[meta(Throttle::…)]` rides every audio route; this is the one e2e that
-// proves a declared limit actually answers `429` with a `Retry-After`.
 #[tokio::test]
 async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
     let (_db, app) = boot().await;
     let bearer = format!("Bearer {}", login().await);
 
-    // `Throttle::per_minute(20)` on POST /audio/transcode: the first 20
-    // requests in the window pass, the 21st is refused.
     for _ in 0..20 {
         app.http()
             .post("/audio/transcode")
@@ -80,8 +74,6 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
 struct AudioWorkerHarness;
 
 pub(crate) fn storage_client() -> Storage {
-    // The real config loader (`NESTRS_STORAGE__*` + in-code defaults) — no
-    // hand-copied env override list to drift from it.
     let config = StorageConfig::from_env(&ConfigService::for_namespace("storage"))
         .expect("storage config parses from env");
     Storage::new(Arc::new(config))

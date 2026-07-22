@@ -1,8 +1,3 @@
-//! The audio schedule genuinely fires: boot the real `AudioScheduleModule`
-//! under the `Scheduler` transport against live Redis + storage, and observe
-//! the `#[every("5s")]` task's `TranscodeCommand` arrive on the queue through
-//! a counting processor — schedule → service → storage seed → Redis → worker.
-
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,10 +12,6 @@ use nest_rs_testing::TestApp;
 
 static SCHEDULED_FIRES: AtomicUsize = AtomicUsize::new(0);
 
-/// Millisecond timestamp taken before the scheduler boots — the schedule
-/// names its synthetic files `track-<now-ms>.mp3`, so only commands minted
-/// after this instant count. Other suites push differently-named jobs onto
-/// the same shared Redis queue; they must not satisfy this test.
 fn started_ms() -> u128 {
     static STARTED: OnceLock<u128> = OnceLock::new();
     *STARTED.get_or_init(|| {
@@ -65,7 +56,6 @@ struct CountingWorkerHarness;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
-    // Pin the start instant before anything can fire.
     let _ = started_ms();
 
     let worker = TestApp::builder()
@@ -88,7 +78,6 @@ async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
         .await
         .expect("the Scheduler transport serves the discovered tasks");
 
-    // First `#[every("5s")]` fire lands at ~5s; give queue polling headroom.
     let deadline = Duration::from_secs(20);
     let poll = Duration::from_millis(250);
     let mut waited = Duration::ZERO;

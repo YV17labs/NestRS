@@ -120,9 +120,6 @@ impl AudioService {
         Ok(Some(PresignedUrlDto { key, url }))
     }
 
-    /// Poll the derived object until it exists (or the attempt budget runs
-    /// out), yielding one progress event per poll. The transport adapter only
-    /// maps each event onto its wire frame.
     pub fn transcode_events(
         self: Arc<Self>,
         file: String,

@@ -1,5 +1,3 @@
-//! The `client_credentials` token endpoint.
-
 use features::{Claims, Role};
 use poem::http::StatusCode;
 

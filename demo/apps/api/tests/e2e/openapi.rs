@@ -1,5 +1,3 @@
-//! The generated OpenAPI document.
-
 use serde_json::json;
 
 use super::harness::*;
@@ -44,8 +42,6 @@ async fn openapi_document_describes_the_routes() {
         "the :id path param is typed uuid",
     );
 
-    // `400` (not `422`) is the body-validation status the framework actually
-    // returns (OAPI-O2).
     let create = &doc["paths"]["/orgs"]["post"]["responses"];
     for status in ["400", "401", "403", "409"] {
         assert_eq!(
@@ -55,7 +51,6 @@ async fn openapi_document_describes_the_routes() {
         );
     }
 
-    // A `#[crud]` delete advertises `204 No Content` with no body (OAPI-O3).
     let delete = &doc["paths"]["/orgs/{id}"]["delete"]["responses"];
     assert!(
         delete.get("204").is_some() && delete.get("200").is_none(),
@@ -66,8 +61,6 @@ async fn openapi_document_describes_the_routes() {
         "the 204 response carries no body",
     );
 
-    // A `ThrottlerGuard`-covered route advertises `429` with a `Retry-After`
-    // header (OAPI-O4). `POST /audio/uploads` is throttled at the controller.
     let throttled = &doc["paths"]["/audio/uploads"]["post"]["responses"]["429"];
     assert_eq!(
         throttled["content"]["application/problem+json"]["schema"]["$ref"],

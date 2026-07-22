@@ -1,9 +1,5 @@
 use sea_orm::entity::prelude::*;
 
-/// The publish audit log — a plain, internal secondary entity of the posts
-/// feature (no `#[expose]`, no wire surface). `PostsService::publish` inserts
-/// one row per publish through `Repo`, in the same request transaction as the
-/// status update, so the two writes commit or roll back together.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "post_publication")]
 pub struct Model {

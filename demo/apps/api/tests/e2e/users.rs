@@ -1,5 +1,3 @@
-//! Users scoping, masking, by-id binding, CRUD round trips.
-
 use std::sync::Arc;
 
 use nest_rs_authz::{AbilityBuilder, Action, with_ability};

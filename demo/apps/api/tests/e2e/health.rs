@@ -1,5 +1,3 @@
-//! Health probes.
-
 use super::harness::*;
 
 #[tokio::test]

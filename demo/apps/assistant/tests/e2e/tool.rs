@@ -1,5 +1,3 @@
-//! The MCP audio tool: self-mount, auth gating, guarded transcode-status session.
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::DiscoveryService;
@@ -49,8 +47,6 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
     ensure_bucket().await;
     let auth = bearer();
 
-    // `open_session` runs initialize + notifications/initialized; a rejected
-    // handshake would surface as a failing `tools/call` below.
     let session = open_session(app.http(), "/mcp", Some(&auth)).await;
 
     let nonce = SystemTime::now()

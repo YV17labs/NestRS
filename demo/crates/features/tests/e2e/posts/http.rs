@@ -253,8 +253,6 @@ async fn re_publishing_returns_rfc9457_problem_json() {
     );
 }
 
-// Count the audit rows a publish should write for a post — asserted directly
-// against the connection, the same way this suite seeds its fixtures.
 async fn publication_count(db: &EphemeralDatabase, post_id: Uuid) -> usize {
     publication::Entity::find()
         .filter(publication::Column::PostId.eq(post_id))
@@ -313,7 +311,6 @@ async fn publish_writes_the_status_and_an_audit_row_atomically() {
         "published",
     );
 
-    // Both writes landed: the status flipped AND exactly one audit row exists.
     assert_eq!(
         publication_count(&db, id).await,
         1,
@@ -343,10 +340,6 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
         .to_owned();
     let id = Uuid::parse_str(&id_str).expect("valid post uuid");
 
-    // Pre-insert a conflicting audit row for this fresh draft. The post is not
-    // yet published, so `publish` clears the already-published check and reaches
-    // the SECOND write — where the unique `post_id` constraint rejects the
-    // duplicate with a real Postgres error (no DB mocking).
     publication::ActiveModel {
         id: Set(Uuid::now_v7()),
         post_id: Set(id),
@@ -366,10 +359,8 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
         )
         .send()
         .await;
-    // The audit insert failed, so the request errors.
     conflict.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
 
-    // The first write rolled back with it: the post is still a draft.
     let got = app
         .http()
         .get(format!("/posts/{id_str}"))
@@ -383,8 +374,6 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
         "the failed second write rolled back the status update",
     );
 
-    // And no orphan: only the pre-seeded row remains, the rolled-back insert
-    // left nothing behind.
     assert_eq!(
         publication_count(&db, id).await,
         1,

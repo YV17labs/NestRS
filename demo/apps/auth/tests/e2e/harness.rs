@@ -1,5 +1,3 @@
-//! Shared boot + token helpers for this suite.
-
 use auth::{AuthModule, IssuerConfig, RegisteredClient};
 use base64::Engine as _;
 use nest_rs_authn::{JwtConfig, JwtOptions, JwtService, hash_password};

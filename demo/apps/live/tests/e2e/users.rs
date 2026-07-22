@@ -1,5 +1,3 @@
-//! The users gateway: org-scoped, email-masked listing; unauthenticated upgrade refused.
-
 use features::Role;
 use futures_util::SinkExt;
 use nest_rs_http::HttpTransport;

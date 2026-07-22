@@ -1,5 +1,3 @@
-//! Shared boot + token + seeding helpers for the api e2e suite.
-
 use api::ApiModule;
 use nest_rs_authn::JwtConfig;
 use nest_rs_testing::{EphemeralDatabase, TestApp};

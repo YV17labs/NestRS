@@ -1,5 +1,3 @@
-//! GraphQL surface: JWT gating, org scoping, auto-resolved relations.
-
 use poem::http::header;
 use serde_json::json;
 use uuid::Uuid;

@@ -1,5 +1,3 @@
-//! Shared boot + token helpers for this suite.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,7 +27,6 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     (db, app)
 }
 
-/// A bearer for an arbitrary org — the row-scoping tests need two.
 pub(crate) fn bearer_for(org_id: &str) -> String {
     format!(
         "Bearer {}",
@@ -42,8 +39,6 @@ pub(crate) fn bearer() -> String {
 }
 
 pub(crate) fn storage_client() -> Storage {
-    // The real config loader (`NESTRS_STORAGE__*` + in-code defaults) — no
-    // hand-copied env override list to drift from it.
     let config = StorageConfig::from_env(&ConfigService::for_namespace("storage"))
         .expect("storage config parses from env");
     Storage::new(Arc::new(config))

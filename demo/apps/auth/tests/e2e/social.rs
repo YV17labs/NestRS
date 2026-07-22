@@ -1,5 +1,3 @@
-//! Social login: authorize redirect, provider registry, forged-state rejection.
-
 use poem::http::StatusCode;
 
 use super::harness::*;

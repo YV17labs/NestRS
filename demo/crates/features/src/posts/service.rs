@@ -61,15 +61,6 @@ impl PostsService {
         Ok(Post::from(&model))
     }
 
-    /// Publish a draft. The "already published" invariant lives here — the one
-    /// place every transport reaches — so republishing is a conflict on HTTP,
-    /// GraphQL and MCP alike, never a duplicate `PostPublishedEvent`.
-    ///
-    /// Two writes in one ambient request transaction: the status update **and**
-    /// a `post_publication` audit row. Either both commit (on a 2xx) or the
-    /// transaction rolls back — a failing audit insert (e.g. the unique
-    /// `post_id` constraint) unwinds the status update, so a post is never left
-    /// published without its audit row.
     pub async fn publish(&self, model: Model, actor_id: Uuid) -> Result<Post, PostError> {
         if model.status == PostStatus::Published {
             return Err(PostError::AlreadyPublished { id: model.id });
@@ -85,9 +76,6 @@ impl PostsService {
             .await
             .map_err(ServiceError::from)?;
 
-        // Second write, same transaction: the audit row. Through `Repo`'s
-        // ambient executor, so it rides the request transaction the status
-        // update opened and shares its commit/rollback fate.
         publication::ActiveModel {
             id: Set(Uuid::now_v7()),
             post_id: Set(post_id),

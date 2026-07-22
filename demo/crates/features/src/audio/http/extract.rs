@@ -5,10 +5,6 @@ use validator::Validate;
 
 use crate::audio::UploadRequestDto;
 
-/// The `file` part of a `multipart/form-data` upload, buffered and validated
-/// at the edge — the handler receives an already-checked value instead of
-/// walking the form itself. The filename runs through the same anti-traversal
-/// allowlist as the presigned path.
 pub struct UploadedAudio {
     pub filename: String,
     pub bytes: Vec<u8>,

@@ -45,9 +45,6 @@ impl ChatGateway {
         self.svc.present()
     }
 
-    /// Resolve a per-message `#[injectable(scope = request)]` provider through
-    /// `nest_rs_ws::Scoped` — the WS mirror of `nest_rs_http::Scoped<T>`. A fresh
-    /// `RequestSeq` per message means two `seq` calls return distinct values.
     #[subscribe_message("seq")]
     async fn seq(&self) -> Result<u64, WsScopeError> {
         Ok(Scoped::<RequestSeq>::from_context()?.value())

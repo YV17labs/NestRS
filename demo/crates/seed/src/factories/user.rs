@@ -115,10 +115,6 @@ pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
                 role.to_owned().into(),
                 password_hash.map(str::to_owned).into(),
             ])
-            // Conflict target `email`, not `id` like the other factories: the
-            // column carries its own UNIQUE constraint, so a re-run must stay
-            // idempotent even against a user row created outside the seed
-            // (e.g. social-login provisioning) under a different id.
             .on_conflict(OnConflict::column(User::Email).do_nothing().to_owned())
             .to_owned();
         inserted += db.execute(&stmt).await?.rows_affected();

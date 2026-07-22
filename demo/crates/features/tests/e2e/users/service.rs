@@ -99,10 +99,6 @@ async fn users_with_email(conn: &DatabaseConnection, email: &str) -> i64 {
     .await
 }
 
-// The whole point of the strict `UserRole` enum column: a DB value outside
-// `{"user","admin"}` must **fail to load**, not silently demote to `User`. This
-// inserts an out-of-range role behind the entity's back (raw SQL) and asserts
-// the typed load errors — the fail-closed posture the old `String` column lacked.
 #[tokio::test]
 async fn an_unknown_db_role_fails_to_load_rather_than_demoting_silently() {
     use sea_orm::EntityTrait;

@@ -1,10 +1,6 @@
 use crate::Role;
 use crate::users::UserRole;
 
-/// Map the persisted [`UserRole`] onto the JWT-scope [`Role`] **totally** — no
-/// catch-all. An unknown DB value can no longer reach here: a typed enum column
-/// fails to load (`DbErr`) before this point, so the silent demote-to-`User` is
-/// gone by construction.
 pub fn role_from_db(role: UserRole) -> Role {
     match role {
         UserRole::Admin => Role::Admin,

@@ -6,10 +6,6 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // The publish audit log. `PostsService::publish` inserts one row here in
-        // the same request transaction as the status update, so the pair is
-        // atomic — the unique constraint on `post_id` is what a rollback e2e
-        // trips to prove the status update unwinds with the failing insert.
         manager
             .create_table(
                 Table::create()

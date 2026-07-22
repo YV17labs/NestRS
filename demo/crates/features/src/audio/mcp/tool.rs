@@ -33,9 +33,6 @@ impl AudioTool {
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         let status = self.svc.presign_result(&params.file).await.map_err(|e| {
-            // The storage error's source chain carries endpoint hostnames and
-            // connection detail — that stays in tracing; the MCP wire sees only
-            // a constant client-facing message.
             tracing::error!(target: "features::audio", error = ?e, "audio tool status lookup failed");
             McpError::internal_error("audio operation failed", None)
         })?;

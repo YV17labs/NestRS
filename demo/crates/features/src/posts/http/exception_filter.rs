@@ -24,8 +24,6 @@ impl ExceptionFilter for PostProblemFilter {
                 "Post already published",
                 "https://nestrs.dev/problems/post-already-published",
             ),
-            // A `Repo`/service failure surfaced through `publish` keeps
-            // `ServiceError`'s own problem+json (opaque 5xx, structured 4xx).
             PostError::Service(svc) => return svc.as_response(),
         };
         let body = serde_json::json!({

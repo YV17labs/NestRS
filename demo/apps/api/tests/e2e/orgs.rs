@@ -1,5 +1,3 @@
-//! Orgs CRUD and org-scoped listings.
-
 use poem::http::{StatusCode, header};
 use serde_json::json;
 

@@ -1,7 +1,3 @@
-//! A `Repo`-backed MCP tool reads rows the caller's ability allows — and only
-//! those. This is the transport-transparency promise on MCP: `list_posts`
-//! writes no filter, yet a caller scoped to one org never sees another's rows.
-
 use nest_rs_testing::mcp::call_tool;
 use sea_orm::sea_query::Query;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
@@ -37,7 +33,6 @@ enum User {
     Role,
 }
 
-/// Seed one org with one author and one post; return the org id.
 async fn seed_org_with_post(db: &DatabaseConnection, org_name: &str, title: &str) -> Uuid {
     let org_id = Uuid::now_v7();
     let author_id = Uuid::now_v7();

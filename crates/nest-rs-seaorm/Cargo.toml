@@ -23,7 +23,7 @@ http = ["dep:uuid", "dep:nest-rs-resource", "nest-rs-authz/http"]
 # GraphQL transport extractors: the `bind` resolver helper and `LoaderScope`
 # (the `BatchContext` that re-installs the request executor + ability around
 # each `#[dataloader]` batch).
-graphql = ["dep:async-graphql", "dep:nest-rs-graphql", "dep:uuid"]
+graphql = ["dep:nest-rs-graphql", "dep:uuid"]
 # WebSocket transport extractor: `WsDataContext` (the `SocketContext` that
 # re-installs the request executor + ability around each gateway message).
 ws = ["dep:nest-rs-ws"]
@@ -81,7 +81,6 @@ tokio.workspace = true
 # Optional deps for transport-binding features.
 uuid = { workspace = true, optional = true }
 nest-rs-resource = { workspace = true, optional = true }
-async-graphql = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
 nest-rs-mcp = { workspace = true, optional = true }

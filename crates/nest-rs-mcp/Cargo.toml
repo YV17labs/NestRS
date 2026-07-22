@@ -36,7 +36,6 @@ nest-rs-guards = { path = "../nest-rs-guards", features = ["mcp"] }
 nest-rs-throttler = { path = "../nest-rs-throttler" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 poem = { workspace = true, features = ["test"] }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,3 +1,10 @@
+//! Relational row-level scoping against live Postgres: an `Ability` rule
+//! predicated on a **parent** entity (`related`) filters reads and by-id writes
+//! on the child, and `access` still distinguishes Found/Denied/Missing. Uses
+//! synthetic `rel_container`/`rel_item` entities — the framework names no
+//! product type — created once and shared across the suite's processes, each
+//! test isolating itself with fresh UUIDs.
+
 use std::sync::Arc;
 
 use nest_rs_authz::{Ability, AbilityBuilder, Action, with_ability};
@@ -5,9 +12,8 @@ use nest_rs_seaorm::{
     Access, Creatable, CreateModel, CrudService, Deletable, Executor, Updatable, UpdateModel,
     with_request_executor,
 };
-use nest_rs_testing::EphemeralDatabase;
-use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, Set};
-use uuid::Uuid;
+use sea_orm::prelude::Uuid;
+use sea_orm::{ActiveModelTrait, DatabaseConnection, DbErr, EntityTrait, Set};
 
 mod container {
     use sea_orm::entity::prelude::*;
@@ -93,17 +99,21 @@ impl Updatable for ItemsService {
 
 impl Deletable for ItemsService {}
 
+/// Create the synthetic tables once, serialized across nextest processes on a
+/// Postgres advisory lock (each test gets its own process, so a bare
+/// `CREATE TABLE IF NOT EXISTS` would race the catalog).
 async fn setup_tables(conn: &DatabaseConnection) {
-    conn.execute_unprepared(
-        "CREATE TABLE rel_container (id uuid PRIMARY KEY, org_id uuid NOT NULL); \
-         CREATE TABLE rel_item ( \
+    crate::harness::setup_shared_table(
+        conn,
+        "rel_container",
+        "CREATE TABLE IF NOT EXISTS rel_container (id uuid PRIMARY KEY, org_id uuid NOT NULL); \
+         CREATE TABLE IF NOT EXISTS rel_item ( \
              id uuid PRIMARY KEY, \
              container_id uuid NOT NULL REFERENCES rel_container(id), \
              label text NOT NULL \
          );",
     )
-    .await
-    .expect("create relational test tables");
+    .await;
 }
 
 async fn seed_container(conn: &DatabaseConnection, id: Uuid, org_id: Uuid) {
@@ -156,21 +166,18 @@ fn items_in_org(org: Uuid) -> Arc<Ability> {
 
 #[tokio::test]
 async fn list_returns_only_items_whose_parent_is_in_the_callers_org() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("ephemeral database");
-    let conn = db.connection();
-    setup_tables(conn.as_ref()).await;
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
 
     let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
     let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
     let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
-    seed_container(conn.as_ref(), cont_a, org_a).await;
-    seed_container(conn.as_ref(), cont_b, org_b).await;
-    seed_item(conn.as_ref(), item_a, cont_a, "in A").await;
-    seed_item(conn.as_ref(), item_b, cont_b, "in B").await;
+    seed_container(&conn, cont_a, org_a).await;
+    seed_container(&conn, cont_b, org_b).await;
+    seed_item(&conn, item_a, cont_a, "in A").await;
+    seed_item(&conn, item_b, cont_b, "in B").await;
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(Executor::Pool(conn.clone()), async {
         with_ability(items_in_org(org_a), async {
             let rows = ItemsService.list().await.expect("list succeeds");
             let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
@@ -187,21 +194,18 @@ async fn list_returns_only_items_whose_parent_is_in_the_callers_org() {
 
 #[tokio::test]
 async fn access_distinguishes_found_denied_and_missing() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("ephemeral database");
-    let conn = db.connection();
-    setup_tables(conn.as_ref()).await;
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
 
     let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
     let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
     let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
-    seed_container(conn.as_ref(), cont_a, org_a).await;
-    seed_container(conn.as_ref(), cont_b, org_b).await;
-    seed_item(conn.as_ref(), item_a, cont_a, "in A").await;
-    seed_item(conn.as_ref(), item_b, cont_b, "in B").await;
+    seed_container(&conn, cont_a, org_a).await;
+    seed_container(&conn, cont_b, org_b).await;
+    seed_item(&conn, item_a, cont_a, "in A").await;
+    seed_item(&conn, item_b, cont_b, "in B").await;
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(Executor::Pool(conn.clone()), async {
         with_ability(items_in_org(org_a), async {
             assert!(
                 matches!(
@@ -235,18 +239,15 @@ async fn access_distinguishes_found_denied_and_missing() {
 
 #[tokio::test]
 async fn create_under_an_out_of_scope_parent_is_rejected() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("ephemeral database");
-    let conn = db.connection();
-    setup_tables(conn.as_ref()).await;
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
 
     let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
     let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
-    seed_container(conn.as_ref(), cont_a, org_a).await;
-    seed_container(conn.as_ref(), cont_b, org_b).await;
+    seed_container(&conn, cont_a, org_a).await;
+    seed_container(&conn, cont_b, org_b).await;
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(Executor::Pool(conn.clone()), async {
         with_ability(items_in_org(org_a), async {
             let ok = ItemsService
                 .create(CreateItem {
@@ -278,28 +279,25 @@ async fn create_under_an_out_of_scope_parent_is_rejected() {
 
 #[tokio::test]
 async fn out_of_scope_update_is_denied_and_leaves_the_row_unchanged() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("ephemeral database");
-    let conn = db.connection();
-    setup_tables(conn.as_ref()).await;
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
 
     let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
     let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
     let item_b = Uuid::now_v7();
-    seed_container(conn.as_ref(), cont_a, org_a).await;
-    seed_container(conn.as_ref(), cont_b, org_b).await;
-    seed_item(conn.as_ref(), item_b, cont_b, "original").await;
+    seed_container(&conn, cont_a, org_a).await;
+    seed_container(&conn, cont_b, org_b).await;
+    seed_item(&conn, item_b, cont_b, "original").await;
 
     // Load the cross-org row directly (bypassing the ability), then try to
     // update it as an org_a caller — the scoped UPDATE must touch zero rows.
     let model = item::Entity::find_by_id(item_b)
-        .one(conn.as_ref())
+        .one(&conn)
         .await
         .expect("query")
         .expect("item_b exists");
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(Executor::Pool(conn.clone()), async {
         with_ability(items_in_org(org_a), async {
             let denied = ItemsService
                 .update(
@@ -320,7 +318,7 @@ async fn out_of_scope_update_is_denied_and_leaves_the_row_unchanged() {
 
     // The row is unchanged on disk — the denied update wrote nothing.
     let after = item::Entity::find_by_id(item_b)
-        .one(conn.as_ref())
+        .one(&conn)
         .await
         .expect("query")
         .expect("item_b still exists");
@@ -332,26 +330,23 @@ async fn out_of_scope_update_is_denied_and_leaves_the_row_unchanged() {
 
 #[tokio::test]
 async fn out_of_scope_delete_is_denied_and_leaves_the_row() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("ephemeral database");
-    let conn = db.connection();
-    setup_tables(conn.as_ref()).await;
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
 
     let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
     let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
     let item_b = Uuid::now_v7();
-    seed_container(conn.as_ref(), cont_a, org_a).await;
-    seed_container(conn.as_ref(), cont_b, org_b).await;
-    seed_item(conn.as_ref(), item_b, cont_b, "keep me").await;
+    seed_container(&conn, cont_a, org_a).await;
+    seed_container(&conn, cont_b, org_b).await;
+    seed_item(&conn, item_b, cont_b, "keep me").await;
 
     let model = item::Entity::find_by_id(item_b)
-        .one(conn.as_ref())
+        .one(&conn)
         .await
         .expect("query")
         .expect("item_b exists");
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(Executor::Pool(conn.clone()), async {
         with_ability(items_in_org(org_a), async {
             let denied = ItemsService.delete(model).await;
             assert!(
@@ -365,7 +360,7 @@ async fn out_of_scope_delete_is_denied_and_leaves_the_row() {
 
     // The row survives — the scoped DELETE affected zero rows.
     let survives = item::Entity::find_by_id(item_b)
-        .one(conn.as_ref())
+        .one(&conn)
         .await
         .expect("query");
     assert!(

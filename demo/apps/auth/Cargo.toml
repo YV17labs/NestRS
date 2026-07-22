@@ -18,13 +18,9 @@ features.workspace = true
 poem.workspace = true
 sea-orm.workspace = true
 tokio.workspace = true
-serde.workspace = true
-schemars.workspace = true
 anyhow.workspace = true
 uuid.workspace = true
 serde_json.workspace = true
-validator.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 # Enables `features::testing` (dev keypair, org id, token minting) for e2e.

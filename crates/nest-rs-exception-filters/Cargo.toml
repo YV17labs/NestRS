@@ -17,8 +17,6 @@ nest-rs-core.workspace = true
 # `use_exception_filters_global` attaches its boot-time resolvability check
 # via `HttpBootCheck`. Same safe direction as the sibling trait crates.
 nest-rs-http.workspace = true
-anyhow.workspace = true
-serde_json.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

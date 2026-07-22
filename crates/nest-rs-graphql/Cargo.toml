@@ -20,9 +20,8 @@ nest-rs-graphql-macros.workspace = true
 # instead. No ORM is named — with no executor installed the lookup is a no-op.
 nest-rs-database.workspace = true
 # `GraphqlModule` owns its `#[config]` `GraphqlConfig` (namespace `graphql`),
-# loaded from `NESTRS_GRAPHQL__*`; serde + validator back its derives.
+# loaded from `NESTRS_GRAPHQL__*`; `validator` backs its `#[validate]` derive.
 nest-rs-config.workspace = true
-serde.workspace = true
 # The `/graphql` endpoint round-trips operation variables through JSON to run
 # global variable pipes (`transform_graphql_variables`) over them.
 serde_json.workspace = true

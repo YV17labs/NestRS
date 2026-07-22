@@ -21,38 +21,16 @@ homepage = "https://nestrs.dev"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
 
 # Tracing / logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# OpenTelemetry stack. SDK pinned with rt-tokio so batch exporters run on our
-# async runtime; OTLP exporter uses HTTP/protobuf over reqwest so we reuse the
-# rustls toolchain already in the workspace (no tonic/openssl).
-opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-# Defaults give us http-proto + reqwest-blocking-client + trace/metrics/logs.
-# The batch processors run their HTTP exports from a dedicated thread that is
-# *not* a Tokio reactor, so the blocking reqwest client is the right pick —
-# the upstream-recommended pairing for batch exporters.
-opentelemetry-otlp = "0.32"
-opentelemetry-http = "0.32"
-opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
-opentelemetry-appender-tracing = "0.32"
-tracing-opentelemetry = "0.33"
 
 # Errors
 thiserror = "2"
 anyhow = "1"
 
-# JWT — HS/RS/ES algorithms for token signing and verification.
-# `rust_crypto` selects the pure-Rust backend (no aws-lc-rs C dependency), matching
-# the workspace's rustls posture; jsonwebtoken 10 requires picking one explicitly.
-jsonwebtoken = { version = "10", features = ["rust_crypto"] }
-# OAuth2 Authorization Code flow (+ PKCE); the `reqwest` backend below drives its
-# token exchange. The per-provider strategy lives in the app.
-oauth2 = "5"
 # HTTP Basic decoding for OAuth2 client authentication (`Authorization: Basic`).
 # The de-facto standard base64 crate, already in the tree transitively via
 # oauth2/jsonwebtoken; pulled up as a direct dep for the `basic_credentials` helper.
@@ -64,8 +42,6 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Config
-figment = { version = "0.10", features = ["toml", "env"] }
 
 # HTTP. The `anyhow` feature gives `poem::Error: From<anyhow::Error>` (→ 500), so a
 # handler can `?` a service's `anyhow::Result` straight through — no hand-written
@@ -76,10 +52,8 @@ poem = { version = "3", features = ["tower-compat", "anyhow", "rustls", "compres
 
 # Response-body plumbing for the access log: wrap poem's body stream in a byte
 # counter so the access event reports the exact size sent (poem stamps
-# Content-Length past the interceptor). `bytes::Bytes` is the chunk type,
-# `futures-core` the `Stream` trait the wrapper implements.
+# Content-Length past the interceptor). `bytes::Bytes` is the chunk type.
 bytes = "1"
-futures-core = "0.3"
 # `StreamExt`/`SinkExt` for driving poem's `WebSocketStream` (a `Stream` + `Sink`)
 # in the WebSocket gateway connection loop (`nest-rs-ws`).
 futures-util = "0.3"
@@ -94,21 +68,10 @@ async-trait = "0.1"
 # every framework crate shares one lock primitive.
 parking_lot = "0.12"
 
-# Constant-time byte comparison for the client-credentials grant. A hand-rolled
-# equality check leaks length via its early return; `subtle` is the audited
-# primitive (dalek). Already in the tree transitively; pulled up as a direct dep.
-subtle = "2"
 
 # GraphQL. `dataloader` gives us async-graphql's batching loader, surfaced via
 # the `#[dataloader]` decorator to kill field-resolver N+1s.
 async-graphql = { version = "=7.2.1", features = ["dataloader"] }
-async-graphql-poem = "=7.2.1"
-# Link-time registry: each `#[resolver]` submits its query/mutation objects so
-# the schema composes itself at boot with no central list.
-inventory = "0.3"
-
-# Password hashing (Argon2id). Used by `nest-rs-authn::password` for credential storage.
-argon2 = "0.5"
 
 # Input validation
 validator = { version = "0.20", features = ["derive"] }
@@ -138,24 +101,8 @@ rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-
 # be documented (and typed at the edge) rather than passed around as strings.
 schemars = { version = "1", features = ["uuid1"] }
 
-# Cron expression parsing for #[cron("...")] on #[scheduled] methods. croner accepts 5/6/7
-# fields (seconds optional), for flexible schedule expressions. chrono is its
-# time type; chrono-tz resolves an IANA name for the optional per-job timezone.
-croner = "3"
+# Timestamps on entity rows and job payloads.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-chrono-tz = "0.10"
-
-# Redis-backed job queues. apalis is the
-# background-task framework; apalis-redis is its Redis storage backend. Pinned to
-# the 0.7 stable line — 1.0 is still churning through release candidates and does
-# not clear our "no pre-release in a foundation dep" bar.
-apalis = "0.7"
-apalis-redis = "0.7"
-
-# Proc-macro dependencies
-syn = { version = "2", features = ["full"] }
-quote = "1"
-proc-macro2 = "1"
 
 # Dev-only. WebSocket client driving the live gateway in e2e tests.
 tokio-tungstenite = "0.27"
@@ -167,12 +114,11 @@ tokio-tungstenite = "0.27"
 # `module.rs`. Local to this workspace. See CLAUDE.md "Monorepo layout".
 features = { path = "crates/features" }
 
-# The product's database concern: schema (migrations) + demo data (seed).
-# Product crates like `features` — not framework — and the template a future
-# `nestrs new` would emit (the app's repo owns its schema). Local to this
-# workspace. See CLAUDE.md.
+# The product's database concern: the schema. A product crate like `features` —
+# not framework — and the template a future `nestrs new` would emit (the app's
+# repo owns its schema). Local to this workspace. See CLAUDE.md. (`seed` is a
+# member run as a binary, `cargo run -p seed`; nothing depends on it as a lib.)
 migrations = { path = "crates/migrations" }
-seed = { path = "crates/seed" }
 
 # Framework crates (consumed by relative path from the parent workspace).
 # Workspace keys, package names, and directory names are all `nest-rs-*` — the
@@ -184,35 +130,22 @@ nest-rs-core = { version = "1.0.0", path = "../crates/nest-rs-core" }
 nest-rs-authn = { version = "1.0.0", path = "../crates/nest-rs-authn" }
 nest-rs-throttler = { version = "1.0.0", path = "../crates/nest-rs-throttler" }
 nest-rs-config = { version = "1.0.0", path = "../crates/nest-rs-config" }
-nest-rs-config-macros = { version = "1.0.0", path = "../crates/nest-rs-config-macros" }
 nest-rs-events = { version = "1.0.0", path = "../crates/nest-rs-events" }
-nest-rs-events-macros = { version = "1.0.0", path = "../crates/nest-rs-events-macros" }
 nest-rs-authz = { version = "1.0.0", path = "../crates/nest-rs-authz" }
-nest-rs-codegen = { version = "1.0.0", path = "../crates/nest-rs-codegen" }
-nest-rs-core-macros = { version = "1.0.0", path = "../crates/nest-rs-core-macros" }
 nest-rs-graphql = { version = "1.0.0", path = "../crates/nest-rs-graphql" }
-nest-rs-graphql-macros = { version = "1.0.0", path = "../crates/nest-rs-graphql-macros" }
 nest-rs-guards = { version = "1.0.0", path = "../crates/nest-rs-guards" }
 nest-rs-health = { version = "1.0.0", path = "../crates/nest-rs-health" }
-nest-rs-health-macros = { version = "1.0.0", path = "../crates/nest-rs-health-macros" }
 nest-rs-http = { version = "1.0.0", path = "../crates/nest-rs-http" }
-nest-rs-http-macros = { version = "1.0.0", path = "../crates/nest-rs-http-macros" }
 nest-rs-mcp = { version = "1.0.0", path = "../crates/nest-rs-mcp" }
-nest-rs-mcp-macros = { version = "1.0.0", path = "../crates/nest-rs-mcp-macros" }
 nest-rs-interceptors = { version = "1.0.0", path = "../crates/nest-rs-interceptors" }
-nest-rs-filters = { version = "1.0.0", path = "../crates/nest-rs-filters" }
 nest-rs-exception-filters = { version = "1.0.0", path = "../crates/nest-rs-exception-filters" }
 nest-rs-openapi = { version = "1.0.0", path = "../crates/nest-rs-openapi" }
-nest-rs-database = { version = "1.0.0", path = "../crates/nest-rs-database" }
 nest-rs-seaorm = { version = "1.0.0", path = "../crates/nest-rs-seaorm" }
 nest-rs-pipes = { version = "1.0.0", path = "../crates/nest-rs-pipes" }
 nest-rs-queue = { version = "1.0.0", path = "../crates/nest-rs-queue" }
-nest-rs-queue-macros = { version = "1.0.0", path = "../crates/nest-rs-queue-macros" }
 nest-rs-redis = { version = "1.0.0", path = "../crates/nest-rs-redis" }
 nest-rs-resource = { version = "1.0.0", path = "../crates/nest-rs-resource" }
-nest-rs-resource-macros = { version = "1.0.0", path = "../crates/nest-rs-resource-macros" }
 nest-rs-schedule = { version = "1.0.0", path = "../crates/nest-rs-schedule" }
-nest-rs-schedule-macros = { version = "1.0.0", path = "../crates/nest-rs-schedule-macros" }
 nest-rs-server-timing = { version = "1.0.0", path = "../crates/nest-rs-server-timing" }
 nest-rs-social = { version = "1.0.0", path = "../crates/nest-rs-social" }
 nest-rs-storage = { version = "1.0.0", path = "../crates/nest-rs-storage" }
@@ -220,7 +153,6 @@ nest-rs-opentelemetry = { version = "1.0.0", path = "../crates/nest-rs-opentelem
 nest-rs-testing = { version = "1.0.0", path = "../crates/nest-rs-testing" }
 nest-rs-worker = { version = "1.0.0", path = "../crates/nest-rs-worker" }
 nest-rs-ws = { version = "1.0.0", path = "../crates/nest-rs-ws" }
-nest-rs-ws-macros = { version = "1.0.0", path = "../crates/nest-rs-ws-macros" }
 
 # Lints opted into by the apps (via `[lints] workspace = true`). Config literals
 # always close with `..Default::default()` — the house convention that keeps an

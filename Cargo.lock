@@ -2761,12 +2761,10 @@ dependencies = [
 name = "nest-rs-exception-filters"
 version = "1.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "nest-rs-core",
  "nest-rs-http",
  "poem",
- "serde_json",
  "thiserror 2.0.19",
  "tokio",
 ]
@@ -2780,7 +2778,6 @@ dependencies = [
  "nest-rs-http",
  "poem",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -2801,7 +2798,6 @@ dependencies = [
  "nest-rs-pipes",
  "nest-rs-testing",
  "poem",
- "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -2909,9 +2905,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-http",
  "poem",
- "serde_json",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -2938,7 +2932,6 @@ dependencies = [
  "poem",
  "rmcp",
  "schemars",
- "serde_json",
  "tokio",
  "tracing",
 ]
@@ -2948,7 +2941,6 @@ name = "nest-rs-mcp-macros"
 version = "1.0.0"
 dependencies = [
  "nest-rs-codegen",
- "proc-macro2",
  "quote",
  "syn 3.0.2",
 ]
@@ -3020,7 +3012,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -3123,7 +3114,6 @@ name = "nest-rs-seaorm"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "async-graphql",
  "async-trait",
  "chrono",
  "nest-rs-authz",
@@ -3173,7 +3163,6 @@ dependencies = [
  "nest-rs-core",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
  "validator",
 ]
@@ -3217,12 +3206,10 @@ dependencies = [
  "rmcp",
  "sea-orm",
  "sea-orm-migration",
- "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tokio-util",
- "tracing",
  "validator",
 ]
 

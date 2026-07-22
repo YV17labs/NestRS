@@ -193,7 +193,6 @@ name = "api"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "async-graphql",
  "features",
  "migrations",
  "nest-rs-authn",
@@ -207,7 +206,6 @@ dependencies = [
  "nest-rs-openapi",
  "nest-rs-opentelemetry",
  "nest-rs-redis",
- "nest-rs-resource",
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
@@ -216,15 +214,10 @@ dependencies = [
  "nest-rs-throttler",
  "poem",
  "reqwest 0.13.4",
- "schemars",
  "sea-orm",
- "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
- "tracing",
  "uuid",
- "validator",
 ]
 
 [[package]]
@@ -645,14 +638,10 @@ dependencies = [
  "nest-rs-testing",
  "nest-rs-throttler",
  "poem",
- "schemars",
  "sea-orm",
- "serde",
  "serde_json",
  "tokio",
- "tracing",
  "uuid",
- "validator",
 ]
 
 [[package]]
@@ -2669,7 +2658,6 @@ dependencies = [
  "sea-orm-migration",
  "tokio",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -2848,12 +2836,10 @@ dependencies = [
 name = "nest-rs-exception-filters"
 version = "1.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "nest-rs-core",
  "nest-rs-http",
  "poem",
- "serde_json",
 ]
 
 [[package]]
@@ -2864,7 +2850,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-http",
  "poem",
- "tracing",
 ]
 
 [[package]]
@@ -2882,7 +2867,6 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-pipes",
  "poem",
- "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -2984,8 +2968,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-http",
  "poem",
- "serde_json",
- "tracing",
 ]
 
 [[package]]
@@ -3006,7 +2988,6 @@ name = "nest-rs-mcp-macros"
 version = "1.0.0"
 dependencies = [
  "nest-rs-codegen",
- "proc-macro2",
  "quote",
  "syn 3.0.2",
 ]
@@ -3075,7 +3056,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tokio-util",
  "tracing",
 ]
 
@@ -3167,7 +3147,6 @@ name = "nest-rs-seaorm"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "async-graphql",
  "async-trait",
  "chrono",
  "nest-rs-authz",
@@ -3253,7 +3232,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
- "tracing",
 ]
 
 [[package]]

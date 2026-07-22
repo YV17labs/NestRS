@@ -13,7 +13,6 @@ categories = ["web-programming", "rust-patterns"]
 [dependencies]
 async-trait.workspace = true
 poem.workspace = true
-tracing.workspace = true
 nest-rs-core.workspace = true
 # `use_filters_global` attaches its transport-level wrap via
 # `HttpInterceptorMeta`. Safe direction.

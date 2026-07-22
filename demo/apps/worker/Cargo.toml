@@ -7,6 +7,8 @@ publish = false
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-config.workspace = true
+nest-rs-health.workspace = true
+nest-rs-http.workspace = true
 nest-rs-queue.workspace = true
 nest-rs-redis.workspace = true
 nest-rs-seaorm.workspace = true
@@ -16,7 +18,7 @@ tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-nest-rs-testing.workspace = true
+nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
 # `#[processor]` in the e2e test emits absolute `::nest_rs_worker::*` paths.
 nest-rs-worker.workspace = true
 serde.workspace = true

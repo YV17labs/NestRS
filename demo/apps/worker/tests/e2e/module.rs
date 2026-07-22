@@ -55,6 +55,7 @@ struct ProbeModule;
 async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
     let worker = TestApp::builder()
         .module::<WorkerModule>()
+        .with_test_telemetry()
         .build_headless()
         .await
         .expect("WorkerModule boots and connects to Redis");

@@ -2,8 +2,8 @@
 //!
 //! `nest-rs-queue` defines **what every queue backend must agree on**: the
 //! [`Job`] marker, the [`Processor`] trait, the [`ProcessMethod`] inventory
-//! entry the `#[processor]` macro submits, and the three pluggable seams a
-//! backend implements — [`QueueBackend`], [`JobProducer`], [`JobConsumer`].
+//! entry the `#[processor]` macro submits, and the [`JobProducer`] seam a
+//! backend implements to enqueue.
 //!
 //! The first-class backend is **Redis** (via apalis-redis), shipped as
 //! `nest-rs-redis`. Application code keeps writing `nest_rs_queue::*` for the
@@ -15,18 +15,16 @@
 //! directly — see this crate's README for the extension contract.
 #![warn(missing_docs)]
 
-mod consumer;
 mod error;
 mod inventory;
 mod processor;
 mod producer;
 mod queue_name;
 
-pub use consumer::JobConsumer;
 pub use error::QueueError;
-pub use inventory::{JobError, JobHandler, ProcessMethod, ProcessorMeta, WIRE_FORMAT_VERSION};
-pub use processor::{FromContainer, Job, Processor};
-pub use producer::{JobProducer, JobProducerExt, QueueBackend};
+pub use inventory::{JobError, JobHandler, ProcessMethod, WIRE_FORMAT_VERSION};
+pub use processor::{Job, Processor};
+pub use producer::{JobProducer, JobProducerExt};
 pub use queue_name::QueueName;
 
 // Re-export `async_trait` so backends and macros don't need to depend on it

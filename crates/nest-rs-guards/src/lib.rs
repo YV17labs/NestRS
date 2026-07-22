@@ -123,7 +123,6 @@ pub use guard::GuardAsWsMessageCheck;
 // home every execution site (route shaper, transport pool folds, graphql/ws
 // in-band chains) composes through. Re-exported for macro-emitted code.
 pub use nest_rs_core::layer_chain;
-pub use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer};
 pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
 // Re-export dispatch helpers for macro-emitted code.

@@ -1,6 +1,6 @@
 //! Ambient (context-free) field-level masking.
 //!
-//! The transport bindings ([`crate::graphql::masked_output_for`],
+//! The transport bindings ([`crate::graphql::masked_value_for`],
 //! [`crate::http::mask_entity_response`]) read the [`Ability`](crate::Ability)
 //! from a transport handle. Some paths have none: a `#[dataloader]` batch runs
 //! on a task async-graphql spawned off-request, and an MCP tool emits arbitrary

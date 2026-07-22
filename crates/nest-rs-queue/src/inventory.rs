@@ -89,26 +89,9 @@ pub type JobHandler = fn(
     container: Container,
 ) -> Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
 
-/// Runtime metadata for one consumer, surfaced via `DiscoveryService` for the
-/// classic struct-level `#[processor]` form. New code uses [`ProcessMethod`]
-/// directly; this type remains for backends that consume `ProcessorMeta` via
-/// `DiscoveryService::meta::<ProcessorMeta>()`.
-pub struct ProcessorMeta {
-    /// The processor type's name, for boot logs.
-    pub name: &'static str,
-    /// The queue name this consumer drains.
-    pub queue: &'static str,
-    /// How many jobs to process concurrently.
-    pub concurrency: usize,
-    /// Retry budget per job before it is considered failed.
-    pub retries: usize,
-    /// The type-erased handler the backend dispatches each job through.
-    pub handler: JobHandler,
-}
-
 /// Link-time inventory entry submitted by `#[processor]` for each
-/// `#[process]`-tagged method. A `JobConsumer` drains this registry at boot
-/// and filters by
+/// `#[process]`-tagged method. A backend's `Transport` drains this registry at
+/// boot and filters by
 /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so a method on a
 /// provider not reachable from the app's module tree is skipped with a boot
 /// `warn` (the consumer logs it, so leftover code stays visible).

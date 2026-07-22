@@ -36,11 +36,6 @@ impl HeadlessApp {
         let join = tokio::spawn(async move { Box::new(transport).serve(token).await });
         Ok(TransportHandle { cancel, join })
     }
-
-    /// Unwrap the underlying [`App`], for assertions that need the app by value.
-    pub fn into_app(self) -> App {
-        self.app
-    }
 }
 
 /// Dropping detaches the task; [`shutdown`](Self::shutdown) cancels and awaits.

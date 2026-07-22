@@ -41,11 +41,3 @@ where
 /// `AppBuilder::use_exception_filters_global(...)`. The HTTP shaper reads it
 /// at configure time and resolves against the live container.
 pub struct ExceptionFilterSpecs(pub Vec<ExceptionFilterSpec>);
-
-impl ExceptionFilterSpecs {
-    /// The `(TypeId, name)` of every spec, for deduping the global pool against
-    /// narrower-scope declarations.
-    pub fn type_ids(&self) -> Vec<(TypeId, &'static str)> {
-        self.0.iter().map(|s| (s.type_id, s.name)).collect()
-    }
-}

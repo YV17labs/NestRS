@@ -83,7 +83,7 @@ pub use access::{
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, KeyedDependency, ProviderKey};
 pub use discoverable::Discoverable;
-pub use discovery::{AccessGraphSnapshot, Discovered, DiscoveryService};
+pub use discovery::{Discovered, DiscoveryService};
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
@@ -96,7 +96,7 @@ pub use transport::{Transport, TransportContribution};
 // macro output, not public API. `LayerSpec` (above) is the one deliberate
 // vocabulary type; the chain-composition primitives around it are plumbing.
 #[doc(hidden)]
-pub use layer_chain::{ResolvedLayer, check_specs_resolvable, compose_chain, dedup_bucket};
+pub use layer_chain::{ResolvedLayer, check_specs_resolvable, compose_chain};
 
 // Macro plumbing — `#[module]`-generated code names this to register a module in
 // the boot inventory. Hidden at its definition; kept off the curated list here.

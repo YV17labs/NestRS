@@ -67,23 +67,9 @@ pub enum LayerSite {
     Controller,
     /// `#[use_*]` beside an individual handler/method.
     Method,
-    /// Not bound to any explicit site.
-    Inherited,
 }
 
 impl LayerSite {
-    /// Lower number = broader. Used to pick the winner when the same
-    /// [`TypeId`](std::any::TypeId) appears at several sites.
-    pub fn broadness(self) -> u8 {
-        match self {
-            Self::Global => 0,
-            Self::Module => 1,
-            Self::Controller => 2,
-            Self::Method => 3,
-            Self::Inherited => 4,
-        }
-    }
-
     /// Lowercase label for dedup diagnostics and boot logs.
     pub fn label(self) -> &'static str {
         match self {
@@ -91,7 +77,6 @@ impl LayerSite {
             Self::Module => "module",
             Self::Controller => "controller",
             Self::Method => "method",
-            Self::Inherited => "inherited",
         }
     }
 }
@@ -131,30 +116,5 @@ impl<T: Layer + ?Sized> Layer for Arc<T> {
 
     fn name(&self) -> &'static str {
         (**self).name()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn site_broadness_orders_global_to_method() {
-        let mut sites = [
-            LayerSite::Method,
-            LayerSite::Global,
-            LayerSite::Controller,
-            LayerSite::Module,
-        ];
-        sites.sort_by_key(|s| s.broadness());
-        assert_eq!(
-            sites,
-            [
-                LayerSite::Global,
-                LayerSite::Module,
-                LayerSite::Controller,
-                LayerSite::Method,
-            ]
-        );
     }
 }

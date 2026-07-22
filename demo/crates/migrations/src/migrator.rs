@@ -4,6 +4,7 @@ use super::{
     m20260526_000000_create_org, m20260526_000001_create_user, m20260609_000000_create_post,
     m20260610_000000_add_post_org_author, m20260714_000000_create_user_identity,
     m20260718_000000_add_post_status, m20260718_000001_create_notification,
+    m20260721_000000_create_post_publication,
 };
 
 pub struct Migrator;
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260714_000000_create_user_identity::Migration),
             Box::new(m20260718_000000_add_post_status::Migration),
             Box::new(m20260718_000001_create_notification::Migration),
+            Box::new(m20260721_000000_create_post_publication::Migration),
         ]
     }
 }

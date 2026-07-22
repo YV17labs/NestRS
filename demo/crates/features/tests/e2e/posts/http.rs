@@ -11,11 +11,11 @@ use features::authn::AuthnModule;
 use features::authz::AuthzHttpModule;
 use features::identity::Role;
 use features::orgs::ActiveModel as OrgActive;
-use features::posts::PostsHttpModule;
+use features::posts::{PostsHttpModule, publication};
 use features::testing::{DEV_PUBLIC_KEY, token};
 use features::users::ActiveModel as UserActive;
 use nest_rs_authn::JwtConfig;
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[module(
     imports = [
@@ -250,5 +250,144 @@ async fn re_publishing_returns_rfc9457_problem_json() {
     assert!(
         problem.get("detail").string().contains("already published"),
         "detail should describe the conflict"
+    );
+}
+
+// Count the audit rows a publish should write for a post — asserted directly
+// against the connection, the same way this suite seeds its fixtures.
+async fn publication_count(db: &EphemeralDatabase, post_id: Uuid) -> usize {
+    publication::Entity::find()
+        .filter(publication::Column::PostId.eq(post_id))
+        .all(db.connection().as_ref())
+        .await
+        .expect("query the publication audit log")
+        .len()
+}
+
+#[tokio::test]
+async fn publish_writes_the_status_and_an_audit_row_atomically() {
+    let (db, app, bearer, org_id) = boot().await;
+
+    let created = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body_json(&json!({ "title": "Draft", "body": "World" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+    let id_str = created
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+    let id = Uuid::parse_str(&id_str).expect("valid post uuid");
+
+    assert_eq!(
+        publication_count(&db, id).await,
+        0,
+        "a fresh draft has no audit row yet",
+    );
+
+    let published = app
+        .http()
+        .post(format!("/posts/{id_str}/publish"))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", admin_bearer(org_id)),
+        )
+        .send()
+        .await;
+    published.assert_status_is_ok();
+    assert_eq!(
+        published
+            .json()
+            .await
+            .value()
+            .object()
+            .get("status")
+            .string(),
+        "published",
+    );
+
+    // Both writes landed: the status flipped AND exactly one audit row exists.
+    assert_eq!(
+        publication_count(&db, id).await,
+        1,
+        "publish wrote exactly one audit row alongside the status update",
+    );
+}
+
+#[tokio::test]
+async fn a_failing_audit_insert_rolls_back_the_status_update() {
+    let (db, app, bearer, org_id) = boot().await;
+
+    let created = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body_json(&json!({ "title": "Draft", "body": "World" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+    let id_str = created
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+    let id = Uuid::parse_str(&id_str).expect("valid post uuid");
+
+    // Pre-insert a conflicting audit row for this fresh draft. The post is not
+    // yet published, so `publish` clears the already-published check and reaches
+    // the SECOND write — where the unique `post_id` constraint rejects the
+    // duplicate with a real Postgres error (no DB mocking).
+    publication::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        post_id: Set(id),
+        actor_id: Set(Uuid::now_v7()),
+        published_at: Set(chrono::Utc::now().fixed_offset()),
+    }
+    .insert(db.connection().as_ref())
+    .await
+    .expect("seed the conflicting publication row");
+
+    let conflict = app
+        .http()
+        .post(format!("/posts/{id_str}/publish"))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", admin_bearer(org_id)),
+        )
+        .send()
+        .await;
+    // The audit insert failed, so the request errors.
+    conflict.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+    // The first write rolled back with it: the post is still a draft.
+    let got = app
+        .http()
+        .get(format!("/posts/{id_str}"))
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .send()
+        .await;
+    got.assert_status_is_ok();
+    assert_eq!(
+        got.json().await.value().object().get("status").string(),
+        "draft",
+        "the failed second write rolled back the status update",
+    );
+
+    // And no orphan: only the pre-seeded row remains, the rolled-back insert
+    // left nothing behind.
+    assert_eq!(
+        publication_count(&db, id).await,
+        1,
+        "the rolled-back publish added no audit row",
     );
 }

@@ -26,7 +26,7 @@ pub enum PostStatus {
 
 #[expose(
     name = "Post",
-    service = super::service::PostsService,
+    service = super::super::service::PostsService,
     graphql,
     soft_delete,
     timestamps

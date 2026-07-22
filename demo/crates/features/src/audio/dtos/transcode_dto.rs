@@ -1,6 +1,6 @@
 use nest_rs_http::input;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use validator::ValidationError;
 
 const ALLOWED_AUDIO_EXTENSIONS: [&str; 6] = ["mp3", "wav", "flac", "aac", "ogg", "m4a"];
@@ -15,37 +15,10 @@ pub struct TranscodeDto {
     pub file: String,
 }
 
-#[input]
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct UploadRequestDto {
-    #[validate(
-        length(min = 1, max = 255),
-        custom(function = "validate_transcode_file")
-    )]
-    pub filename: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PresignedUrlDto {
-    pub key: String,
-    pub url: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum TranscodeState {
-    Pending,
-    Ready,
-    Error,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
-pub struct TranscodeEventDto {
-    pub state: TranscodeState,
-    pub attempt: u32,
-}
-
-fn validate_transcode_file(file: &str) -> Result<(), ValidationError> {
+/// Anti-traversal allowlist shared by every audio filename that crosses the
+/// edge — the presigned upload (`UploadRequestDto`) validates against the same
+/// rule.
+pub(super) fn validate_transcode_file(file: &str) -> Result<(), ValidationError> {
     if file.contains('/') || file.contains('\\') {
         return Err(ValidationError::new("transcode_file_has_path_separator"));
     }

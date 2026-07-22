@@ -1,9 +1,10 @@
 mod command;
 mod config;
-mod dto;
+mod dtos;
 mod error;
 mod module;
 mod service;
+mod state;
 
 pub mod http;
 pub mod mcp;
@@ -12,9 +13,10 @@ pub mod schedule;
 
 pub use command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
 pub use config::AudioConfig;
-pub use dto::{PresignedUrlDto, TranscodeDto, TranscodeEventDto, TranscodeState, UploadRequestDto};
+pub use dtos::{PresignedUrlDto, TranscodeDto, TranscodeEventDto, UploadRequestDto};
 pub use module::AudioModule;
 pub use service::AudioService;
+pub use state::TranscodeState;
 
 pub use http::{AudioController, AudioHttpModule};
 pub use mcp::{AudioMcpModule, AudioTool};

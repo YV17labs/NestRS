@@ -10,8 +10,8 @@ use nest_rs_storage::Storage;
 use uuid::Uuid;
 
 use super::command::{AudioQueue, TranscodeCommand};
-use super::dto::{PresignedUrlDto, TranscodeEventDto, TranscodeState};
 use super::error::AudioError;
+use super::{PresignedUrlDto, TranscodeEventDto, TranscodeState};
 
 const PRESIGN_TTL: Duration = Duration::from_secs(15 * 60);
 

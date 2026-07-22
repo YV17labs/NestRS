@@ -6522,6 +6522,8 @@ dependencies = [
  "features",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
  "nest-rs-opentelemetry",
  "nest-rs-queue",
  "nest-rs-redis",

@@ -20,7 +20,7 @@
 //! controller/method ones at the route). `priority` orders entries *within*
 //! a site; the site itself is chosen by the scope, never by priority.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::sync::Arc;
 
 use crate::container::Container;
@@ -71,6 +71,46 @@ impl<L: ?Sized> LayerSpec<L> {
     pub fn resolve(&self, container: &Container) -> Option<Arc<L>> {
         (self.resolve)(container)
     }
+}
+
+/// The container-registered global registry of one Layer-System family —
+/// `GuardSpecs`, `PipeSpecs`, `FilterSpecs`, `InterceptorSpecs`,
+/// `ExceptionFilterSpecs`. Implementing it is what lets a family reach
+/// [`resolve_global_layers`] instead of open-coding the resolve loop.
+pub trait GlobalSpecs: Any + Send + Sync {
+    /// The erased layer trait this family's specs resolve to.
+    type Layer: ?Sized;
+
+    /// The registered specs, in declaration order.
+    fn specs(&self) -> &[LayerSpec<Self::Layer>];
+}
+
+/// Resolve a family's global registry into [`LayerSite::Global`] entries.
+///
+/// **The** implementation: every execution site that folds a global pool — the
+/// route shaper, the transport-edge folds, the in-band GraphQL chain, the
+/// boot-time validation — goes through here, so their dedup inputs cannot
+/// drift. A spec whose provider is not registered is skipped (the fail-secure
+/// boot check in [`check_specs_resolvable`] is what turns that into a boot
+/// failure); an unregistered family yields an empty chain.
+pub fn resolve_global_layers<S: GlobalSpecs>(
+    container: &Container,
+) -> Vec<ResolvedLayer<S::Layer>> {
+    let Some(registry) = container.get::<S>() else {
+        return Vec::new();
+    };
+    registry
+        .specs()
+        .iter()
+        .filter_map(|spec| {
+            spec.resolve(container).map(|layer| ResolvedLayer {
+                type_id: spec.type_id,
+                name: spec.name,
+                source: LayerSite::Global,
+                layer,
+            })
+        })
+        .collect()
 }
 
 /// Fail-secure boot check shared by every global Layer-System family: name the

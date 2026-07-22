@@ -39,10 +39,10 @@ type WrapFn = Box<
 /// innermost. Guards have **no** band here: the guard pool executes inside
 /// the per-route shaper (post-routing, so it reads `#[public]`), at the
 /// self-mount edge (`SelfMountGuardWrap`), or in-band (GraphQL operation
-/// guard). Consequence carried deliberately: a mutating request opens its
-/// transaction *before* the guard chain denies it — the denial is a non-2xx
-/// response, so the empty transaction rolls back (fail-secure holds; the
-/// cost is a wasted `BEGIN`/`ROLLBACK`, to be removed by a lazy executor).
+/// guard). The `DbContext` band therefore wraps the guard chain — but its
+/// executor is **lazy**: `BEGIN` is deferred to the first data-layer touch, so
+/// a mutating request the guard chain denies never opens a transaction at all.
+/// Fail-secure holds at zero `BEGIN`/`ROLLBACK` cost.
 ///
 /// Insertion order is the tiebreaker, so calls within the same band keep
 /// the user's declared order.

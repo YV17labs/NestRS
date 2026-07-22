@@ -454,15 +454,23 @@ impl Transport for HttpTransport {
         }
         // Enforce the body-byte cap at the transport edge so EVERY extractor —
         // a bare `Json`/`String`/`Vec<u8>`/`Multipart`, not just `RawBody` —
-        // sits under it (B-HTTP-2). Two gates: a fast `413` on an oversized
-        // declared `Content-Length` (rejects before reading a byte), then a
-        // streaming cap that buffers at most `limit` bytes and rejects a body
-        // that runs past it (covers `Transfer-Encoding: chunked` and a client
-        // lying about `Content-Length`). The `RawBodyLimit` data extension stays
-        // installed OUTSIDE the Layer System globals so every interceptor /
-        // filter / guard still sees the configured value, and `RawBody` /
-        // `extract_with_limit` can pin a *tighter* per-route cap under this
-        // ceiling.
+        // sits under it (B-HTTP-2). Three cases, cheapest first:
+        //
+        // 1. `Content-Length` over the cap ⇒ `413` before a byte is read.
+        // 2. `Content-Length` within the cap ⇒ **pass the body through
+        //    untouched**. The framing already bounds it: an HTTP/1 body with a
+        //    declared length is length-delimited, so the decoder cannot hand a
+        //    handler more bytes than were declared. Buffering it here bought
+        //    nothing and cost every upload its streaming — a multipart going to
+        //    object storage was fully materialized in memory first.
+        // 3. No declared length (`Transfer-Encoding: chunked`) ⇒ the length is
+        //    unknown until the body ends, so buffer up to `limit` and reject
+        //    past it. This is the only case that needs the read.
+        //
+        // The `RawBodyLimit` data extension stays installed OUTSIDE the Layer
+        // System globals so every interceptor / filter / guard still sees the
+        // configured value, and `RawBody` / `extract_with_limit` can pin a
+        // *tighter* per-route cap under this ceiling.
         if let Some(limit) = self.max_body_bytes.take() {
             endpoint = endpoint
                 .around(move |ep, mut req| async move {
@@ -470,9 +478,11 @@ impl Transport for HttpTransport {
                     use poem::web::headers::{ContentLength, HeaderMapExt};
                     if let Some(ContentLength(declared)) =
                         req.headers().typed_get::<ContentLength>()
-                        && declared as usize > limit
                     {
-                        return Ok(payload_too_large());
+                        if declared as usize > limit {
+                            return Ok(payload_too_large());
+                        }
+                        return ep.call(req).await;
                     }
                     match req.take_body().into_bytes_limit(limit).await {
                         Ok(bytes) => {

@@ -81,7 +81,7 @@ pub use access::{
     validate_keyed_access_graph,
 };
 pub use app::{App, AppBuilder};
-pub use container::{Container, ContainerBuilder, KeyedDependency, ProviderKey};
+pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
 pub use discoverable::Discoverable;
 pub use discovery::{Discovered, DiscoveryService};
 pub use layer::{Layer, LayerKind, LayerSite};

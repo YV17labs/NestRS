@@ -6,6 +6,11 @@
 //! via its [`ExceptionFilter::Exception`] associated type and only catches
 //! matching errors. Non-matching errors keep flowing through any outer filter.
 //!
+//! **Pick this one by default**: a typed catch expresses the common intent
+//! (map *this* domain error to *that* status) and leaves everything else to
+//! flow outward. Reach for the untyped `Filter` only when the mapping is
+//! genuinely unconditional.
+//!
 //! Dispatch is via `poem::Error::downcast::<Exception>()` — anything carryable
 //! as a `Box<dyn std::error::Error + Send + Sync + 'static>` is catchable.
 //!

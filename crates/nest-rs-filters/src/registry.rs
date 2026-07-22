@@ -33,3 +33,10 @@ pub fn filter<F: Filter + 'static>() -> FilterSpec {
 /// `AppBuilder::use_filters_global(...)`. The HTTP shaper reads it at configure
 /// time and resolves against the live container.
 pub struct FilterSpecs(pub Vec<FilterSpec>);
+
+impl nest_rs_core::layer_chain::GlobalSpecs for FilterSpecs {
+    type Layer = dyn Filter;
+    fn specs(&self) -> &[FilterSpec] {
+        &self.0
+    }
+}

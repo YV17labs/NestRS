@@ -1,7 +1,7 @@
 //! Adds [`AppBuilderFiltersExt::use_filters_global`] to
 //! [`AppBuilder`](nest_rs_core::AppBuilder).
 
-use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain};
+use nest_rs_core::layer_chain::{ResolvedLayer, compose_chain, resolve_global_layers};
 use nest_rs_core::{AppBuilder, Container, check_specs_resolvable};
 use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
 use poem::EndpointExt;
@@ -79,18 +79,6 @@ impl AppBuilderFiltersExt for AppBuilder {
 /// Resolve `FilterSpecs` into the deduplicated, priority-ordered global
 /// chain — same `compose_chain` as every other Layer System site.
 fn global_chain(container: &Container) -> Vec<ResolvedLayer<dyn Filter>> {
-    let mut global: Vec<ResolvedLayer<dyn Filter>> = Vec::new();
-    if let Some(specs) = container.get::<FilterSpecs>() {
-        for spec in &specs.0 {
-            if let Some(layer) = spec.resolve(container) {
-                global.push(ResolvedLayer {
-                    type_id: spec.type_id,
-                    name: spec.name,
-                    source: LayerSite::Global,
-                    layer,
-                });
-            }
-        }
-    }
+    let global = resolve_global_layers::<FilterSpecs>(container);
     compose_chain::<dyn Filter>(global, Vec::new(), Vec::new(), &[], "transport")
 }

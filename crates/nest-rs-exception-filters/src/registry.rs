@@ -41,3 +41,10 @@ where
 /// `AppBuilder::use_exception_filters_global(...)`. The HTTP shaper reads it
 /// at configure time and resolves against the live container.
 pub struct ExceptionFilterSpecs(pub Vec<ExceptionFilterSpec>);
+
+impl nest_rs_core::layer_chain::GlobalSpecs for ExceptionFilterSpecs {
+    type Layer = dyn ExceptionFilterErased;
+    fn specs(&self) -> &[ExceptionFilterSpec] {
+        &self.0
+    }
+}

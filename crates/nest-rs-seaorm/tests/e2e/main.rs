@@ -9,6 +9,7 @@ mod harness;
 mod create;
 mod interceptor;
 mod lazy;
+mod relational_authz;
 mod scope;
 mod worker;
 #[cfg(feature = "ws")]

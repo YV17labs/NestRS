@@ -545,6 +545,22 @@
 }
 
 /* ---------------------------------------------------------------------------
+   Prose links inside landing `.not-content` wrappers
+   The splash blocks (.nestrs-reveal / .mono / .scale) opt out of
+   .sl-markdown-content for the reveal animation, which also drops Starlight's
+   link color — leaving raw browser anchors (blue, then purple once visited).
+   Restore the brand accent so they read like every other in-content link.
+   Interactive component anchors (code tabs, terminals, CTA buttons) keep their
+   own styling.
+   --------------------------------------------------------------------------- */
+.sl-markdown-content .not-content a:not(.sl-link-button):not(:where([role='tab'], .nestrs-code-tabs *, .nestrs-terminal *, .frame *, starlight-file-tree *)) {
+  color: var(--sl-color-text-accent);
+}
+.sl-markdown-content .not-content a:not(.sl-link-button):not(:where([role='tab'], .nestrs-code-tabs *, .nestrs-terminal *, .frame *, starlight-file-tree *)):hover {
+  color: var(--sl-color-white);
+}
+
+/* ---------------------------------------------------------------------------
    Benchmark — gradient meters instead of a flat table
    --------------------------------------------------------------------------- */
 

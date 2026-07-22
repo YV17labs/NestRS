@@ -7,81 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-A pre-1.0 conformance hardening pass across the framework and demo workspaces.
-
-### Fixed
-
-- **`nestrs g mcp` scaffolds compiling code again**: the MCP tool template
-  imported `Content`, an rmcp 1.x alias renamed `ContentBlock` in 2.x — the
-  generated file could not compile.
-- **The configured OpenTelemetry `service.name` now wins**: the SDK's
-  `SdkProvidedResourceDetector` always supplies a `service.name` (env override
-  or the `unknown_service:*` sentinel) and `with_schema_url` merged it *over*
-  the configured attrs; `build_resource` now applies the config after the
-  detector merge, with a regression test.
-- **`nest-rs-testing` decides `NESTRS_ENV` before any `.env` read**: the
-  set-if-absent `NESTRS_ENV=test` default moved from `TestAppBuilder::new`
-  into `load_project_env`'s `Once`, so a db-first harness
-  (`EphemeralDatabase::create` before `TestApp::builder`) no longer loads
-  `.env.local` and skips `.env.test.local`. `nestrs run test e2e` works on
-  bare metal again.
-- **Macro path hygiene**: `#[hooks]` emitted a bare `::anyhow` path,
-  `#[gateway]` a bare `::tracing`, `#[messages]` a bare `::nest_rs_http`, and
-  the http/resource macros bare `::poem`/`::serde_json`/`::tracing`/
-  `::async_trait` — all now route through their surface crate's re-exports
-  (`nest_rs_core::anyhow` is new), so a downstream app without those direct
-  deps compiles. Proven by the new `nest-rs-macro-hygiene` witness crate
-  (workspace-internal, `publish = false`), which consumes the decorators with
-  zero third-party dependencies.
-- **`Authorization: basic` (any case) is accepted**: `basic_credentials` now
-  matches the scheme case-insensitively per RFC 7235, mirroring
-  `bearer_token`.
-- **GraphQL/WS guard denials always log at `warn`**: the layered chain
-  runners emit the same structural floor as HTTP's `deny_http`, so a custom
-  guard that denies silently can no longer create an unobservable denial.
-- Assorted robustness: the health endpoints return 500 instead of an empty
-  body when the report fails to serialize; the authz predicate downcast,
-  password-timing dummy, response-masking defaults, pagination-cursor header
-  and conflict-retry exhaustion no longer `expect`/panic on request paths
-  (each fails closed or degrades with a logged error); a broken `JobContext`
-  is attributed to the new `nest_rs::worker` target instead of
-  `nest_rs::queue`.
-
-### Added
-
-- **`Repo::insert_unscoped`** — the write pendant of `Repo::unscoped()`, on
-  an explicit connection, for pre-principal provisioning (social login) and
-  principal-less system work. The social-login inserts and the slug
-  uniqueness probe now route through `Repo`, so "every data access lives in
-  `Repo`" holds by construction; each escape documents its bar in rustdoc.
-
-### Changed
-
-- **`nestrs new` scaffolds its smoke test into `tests/integration/`** (it
-  boots `TestApp` in process, no live infra — so it now runs on every
-  `nestrs run test unit` instead of hiding behind the `binary(e2e)` gate).
-  The scaffolded `e2e` recipe carries `--no-tests=pass` until the project
-  adds a real e2e suite.
-- **Capability-only guards are the documented pattern for non-CRUD routes**
-  (`authn-authz.md`): a route whose response is not an entity row gates
-  through a custom `Guard` checking the ability imperatively, bound via
-  `#[use_guards]` — `Authorize<A, S>` would arm response masking against a
-  body that is no wire model. Exemplar: `audio`'s `TranscodeGuard`.
-- Third-party pins consolidated in `[workspace.dependencies]` (`redis`,
-  `clap`, `toml_edit`, `tempfile`, `tower`, `libc`; `tokio-tungstenite` in
-  the demo workspace). `nest-rs-redis` names `redis::RedisError` /
-  `redis::aio::ConnectionManager` through the `redis` crate directly —
-  apalis stays an implementation detail. Dead framework deps dropped from
-  the demo apps' manifests; the worker enables the OTel `http` feature it
-  actually serves.
-
-## [1.0.0] - 2026-07-21
-
-The first stable release. Every crate ships at `1.0.0` in lockstep, and from
-here the public API follows semver: a breaking change waits for `2.0`.
-
-### Third-party surface, frozen for the 1.x line
-
 A handful of crates *are* the framework's public surface — their types appear
 in signatures the macros emit. Their majors are tied to the nestrs major and
 are frozen within 1.x: `poem = "3"`, `sea-orm = "=2.0"`,
@@ -138,6 +63,26 @@ code.
     third-party provider crate is now two files, `config.rs` + `provider.rs`,
     with no module to write: a social provider is never `#[inject]`ed by type,
     so it has nothing for a module of its own to own.
+
+- **`nestrs new` scaffolds its smoke test into `tests/integration/`** (it
+  boots `TestApp` in process, no live infra — so it now runs on every
+  `nestrs run test unit` instead of hiding behind the `binary(e2e)` gate).
+  The scaffolded `e2e` recipe carries `--no-tests=pass` until the project
+  adds a real e2e suite.
+
+- **Capability-only guards are the documented pattern for non-CRUD routes**
+  (`authn-authz.md`): a route whose response is not an entity row gates
+  through a custom `Guard` checking the ability imperatively, bound via
+  `#[use_guards]` — `Authorize<A, S>` would arm response masking against a
+  body that is no wire model. Exemplar: `audio`'s `TranscodeGuard`.
+
+- Third-party pins consolidated in `[workspace.dependencies]` (`redis`,
+  `clap`, `toml_edit`, `tempfile`, `tower`, `libc`; `tokio-tungstenite` in
+  the demo workspace). `nest-rs-redis` names `redis::RedisError` /
+  `redis::aio::ConnectionManager` through the `redis` crate directly —
+  apalis stays an implementation detail. Dead framework deps dropped from
+  the demo apps' manifests; the worker enables the OTel `http` feature it
+  actually serves.
 
 ### Added
 
@@ -235,6 +180,12 @@ code.
   construct-once dynamic imports introduced). Both errors were already
   emitted; neither was guarded against silent regression.
 
+- **`Repo::insert_unscoped`** — the write pendant of `Repo::unscoped()`, on
+  an explicit connection, for pre-principal provisioning (social login) and
+  principal-less system work. The social-login inserts and the slug
+  uniqueness probe now route through `Repo`, so "every data access lives in
+  `Repo`" holds by construction; each escape documents its bar in rustdoc.
+
 ### Fixed
 
 - **A primary-key-less entity no longer panics on the data hot path.** `Repo`'s
@@ -242,6 +193,42 @@ code.
   modeling a view or a keyless table hit a mid-request panic — in the layer
   whose written contract is "never panic, return `DbErr`". Both sites now return
   a typed error naming the entity, logged at `error`.
+
+- **`nestrs g mcp` scaffolds compiling code again**: the MCP tool template
+  imported `Content`, an rmcp 1.x alias renamed `ContentBlock` in 2.x — the
+  generated file could not compile.
+- **The configured OpenTelemetry `service.name` now wins**: the SDK's
+  `SdkProvidedResourceDetector` always supplies a `service.name` (env override
+  or the `unknown_service:*` sentinel) and `with_schema_url` merged it *over*
+  the configured attrs; `build_resource` now applies the config after the
+  detector merge, with a regression test.
+- **`nest-rs-testing` decides `NESTRS_ENV` before any `.env` read**: the
+  set-if-absent `NESTRS_ENV=test` default moved from `TestAppBuilder::new`
+  into `load_project_env`'s `Once`, so a db-first harness
+  (`EphemeralDatabase::create` before `TestApp::builder`) no longer loads
+  `.env.local` and skips `.env.test.local`. `nestrs run test e2e` works on
+  bare metal again.
+- **Macro path hygiene**: `#[hooks]` emitted a bare `::anyhow` path,
+  `#[gateway]` a bare `::tracing`, `#[messages]` a bare `::nest_rs_http`, and
+  the http/resource macros bare `::poem`/`::serde_json`/`::tracing`/
+  `::async_trait` — all now route through their surface crate's re-exports
+  (`nest_rs_core::anyhow` is new), so a downstream app without those direct
+  deps compiles. Proven by the new `nest-rs-macro-hygiene` witness crate
+  (workspace-internal, `publish = false`), which consumes the decorators with
+  zero third-party dependencies.
+- **`Authorization: basic` (any case) is accepted**: `basic_credentials` now
+  matches the scheme case-insensitively per RFC 7235, mirroring
+  `bearer_token`.
+- **GraphQL/WS guard denials always log at `warn`**: the layered chain
+  runners emit the same structural floor as HTTP's `deny_http`, so a custom
+  guard that denies silently can no longer create an unobservable denial.
+- Assorted robustness: the health endpoints return 500 instead of an empty
+  body when the report fails to serialize; the authz predicate downcast,
+  password-timing dummy, response-masking defaults, pagination-cursor header
+  and conflict-retry exhaustion no longer `expect`/panic on request paths
+  (each fails closed or degrades with a logged error); a broken `JobContext`
+  is attributed to the new `nest_rs::worker` target instead of
+  `nest_rs::queue`.
 
 ### Removed
 
@@ -691,7 +678,7 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
-[1.0.0]: https://github.com/YV17labs/NestRS/compare/v0.5.0...v1.0.0
+[Unreleased]: https://github.com/YV17labs/NestRS/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/YV17labs/NestRS/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/YV17labs/NestRS/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/YV17labs/NestRS/compare/v0.2.0...v0.3.0

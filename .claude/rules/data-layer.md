@@ -131,11 +131,12 @@ reaches the wire — **sound only where no ability rule predicates on that
 column** (else the mask decision would compare the placeholder, silently
 filtering rows).
 
-- **HTTP**: the `Authorize<A, E>` extractor in a handler's signature is
-  the arming declaration — `#[routes]` installs the response shaper
-  (ambient ability + masking) when it sees it. **It is not dead code:**
-  removing the `_authz: Authorize<…>` parameter disarms masking for that
-  route.
+- **HTTP**: `#[authorize(Action, Entity)]` beside the verb is the arming
+  declaration — `#[routes]` desugars it to the `Authorize<A, E>`
+  extractor (the same one `#[crud]` emits) and installs the response
+  shaper: ambient ability + masking. The extractor is enforcement
+  plumbing, not something to hand-write; the decorator is what makes the
+  posture greppable and impossible to disarm by renaming an import.
 - **GraphQL**: `#[authorize(Action, Entity)]` beside a
   `#[query]`/`#[mutation]` is the same declaration — `#[resolver]` emits
   the class gate before the call and `masked_value_for` around the
@@ -149,7 +150,7 @@ filtering rows).
 
 ## Extractors
 
-Two HTTP extractors: **`Bind<S, A>`** (parse id → load + authorize via
+Two HTTP extractors: **`Bind<A, S>`** (parse id → load + authorize via
 the service: 404 absent, 403 denied) and **`Scope<E, A>`** (explicit
 `Condition` for hand-built queries). Routes using `Bind` must also bind
 an `AbilityGuard`.

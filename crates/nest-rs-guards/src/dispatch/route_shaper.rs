@@ -9,7 +9,9 @@
 use std::any::TypeId;
 
 use async_trait::async_trait;
-use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
+use nest_rs_core::layer_chain::{
+    LayerSite, ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers,
+};
 use nest_rs_core::{Container, Layer};
 use nest_rs_http::poem::{Body, Request, Response, Result};
 use nest_rs_interceptors::{Interceptor, Next};
@@ -109,19 +111,7 @@ fn resolve_pipes(
     controller_pipes: &[ScopedPipeSpec],
     method_pipes: &[ScopedPipeSpec],
 ) -> Vec<ResolvedLayer<dyn GlobalPipe>> {
-    let mut global: Vec<ResolvedLayer<dyn GlobalPipe>> = Vec::new();
-    if let Some(specs) = container.get::<PipeSpecs>() {
-        for spec in &specs.0 {
-            if let Some(layer) = spec.resolve(container) {
-                global.push(ResolvedLayer {
-                    type_id: spec.type_id,
-                    name: spec.name,
-                    source: LayerSite::Global,
-                    layer,
-                });
-            }
-        }
-    }
+    let global = resolve_global_layers::<PipeSpecs>(container);
     let controller = resolve_specs(container, controller_pipes, LayerSite::Controller);
     let method = resolve_specs(container, method_pipes, LayerSite::Method);
     let chain =

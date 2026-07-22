@@ -39,26 +39,28 @@ impl<F: AbilityFactory> Layer for AbilityGuard<F> {}
 #[async_trait]
 impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        match req.extensions().get::<F::Actor>().cloned() {
-            Some(actor) => {
-                let mut builder = AbilityBuilder::new();
-                self.factory.define(&actor, &mut builder);
-                // A malformed rule fails construction (fail-closed): deny the
-                // request rather than install an ability whose denial evaporates.
-                match builder.build() {
-                    Ok(ability) => {
-                        req.extensions_mut().insert(Arc::new(ability));
-                        Ok(())
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            target: "nest_rs::authz",
-                            error = %err,
-                            "ability construction failed — denying the request",
-                        );
-                        Err(Denial::internal("authorization rules are misconfigured"))
-                    }
-                }
+        // Build against a *borrowed* actor: the rules are read from it and never
+        // outlive this block, so cloning the principal (claims, role list, …)
+        // on every request bought nothing. The borrow ends before the insert.
+        let built = req.extensions().get::<F::Actor>().map(|actor| {
+            let mut builder = AbilityBuilder::new();
+            self.factory.define(actor, &mut builder);
+            builder.build()
+        });
+        match built {
+            // A malformed rule fails construction (fail-closed): deny the
+            // request rather than install an ability whose denial evaporates.
+            Some(Ok(ability)) => {
+                req.extensions_mut().insert(Arc::new(ability));
+                Ok(())
+            }
+            Some(Err(err)) => {
+                tracing::error!(
+                    target: "nest_rs::authz",
+                    error = %err,
+                    "ability construction failed — denying the request",
+                );
+                Err(Denial::internal("authorization rules are misconfigured"))
             }
             None if Reflector::new(req).is_public() => {
                 // `#[public]`: no authenticated actor expected. Attach an

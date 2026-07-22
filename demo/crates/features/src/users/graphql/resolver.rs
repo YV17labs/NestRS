@@ -36,7 +36,7 @@ impl UsersResolver {
     #[query]
     #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<UsersService, Read>(ctx, &id)
+        Ok(bind::<Read, UsersService>(ctx, &id)
             .await?
             .as_ref()
             .map(User::from))

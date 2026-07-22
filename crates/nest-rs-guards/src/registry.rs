@@ -55,6 +55,13 @@ pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
 /// configure time and resolves against the live container.
 pub struct GuardSpecs(pub Vec<GuardSpec>);
 
+impl nest_rs_core::layer_chain::GlobalSpecs for GuardSpecs {
+    type Layer = dyn Guard;
+    fn specs(&self) -> &[GuardSpec] {
+        &self.0
+    }
+}
+
 impl GuardSpecs {
     /// Resolve every spec into the composed global chain — deduped and
     /// priority-ordered through the same `compose_chain` as every other
@@ -67,22 +74,17 @@ impl GuardSpecs {
         container: &Container,
         label: &str,
     ) -> Vec<nest_rs_core::ResolvedLayer<dyn Guard>> {
-        let global: Vec<nest_rs_core::ResolvedLayer<dyn Guard>> = self
-            .0
-            .iter()
-            .filter_map(|spec| {
-                spec.resolve(container)
-                    .map(|layer| nest_rs_core::ResolvedLayer {
-                        type_id: spec.type_id,
-                        name: spec.name,
-                        source: nest_rs_core::LayerSite::Global,
-                        layer,
-                    })
-            })
-            .collect();
+        let global = nest_rs_core::layer_chain::resolve_global_layers::<Self>(container);
         nest_rs_core::compose_chain(global, Vec::new(), Vec::new(), &[], label)
     }
 }
 
 /// The unresolved `Vec<PipeSpec>` seeded by `AppBuilder::use_pipes_global`.
 pub struct PipeSpecs(pub Vec<PipeSpec>);
+
+impl nest_rs_core::layer_chain::GlobalSpecs for PipeSpecs {
+    type Layer = dyn GlobalPipe;
+    fn specs(&self) -> &[PipeSpec] {
+        &self.0
+    }
+}

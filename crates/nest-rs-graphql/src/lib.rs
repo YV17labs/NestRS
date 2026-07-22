@@ -31,7 +31,6 @@
 
 mod config;
 mod context;
-mod guard;
 mod loader;
 mod module;
 mod resolver;
@@ -43,7 +42,6 @@ pub use context::GraphqlContextSeed;
 /// `nest_rs_authz::graphql`, bound with
 /// `providers = [MyBridge as dyn GraphqlOperationGuard]`.
 pub use context::{BoxFuture, FallbackOperationGuard, GraphqlOperationGuard, GraphqlVariablePipe};
-pub use guard::GraphqlResolverGuard;
 /// Re-establishes per-request ambient state inside a DataLoader batch (the
 /// batch runs on a spawned task where request task-locals are gone).
 /// Implemented by `nest_rs_seaorm::graphql::LoaderScope`.

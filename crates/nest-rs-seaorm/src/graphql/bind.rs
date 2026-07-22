@@ -29,7 +29,7 @@ fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
 /// error so a missing auth bridge cannot silently behave as anonymous.
 ///
 /// The service is resolved from the container by type `S`.
-pub async fn bind<S, A>(
+pub async fn bind<A, S>(
     ctx: &Context<'_>,
     id: &str,
 ) -> Result<Option<<S::Entity as EntityTrait>::Model>>
@@ -42,13 +42,13 @@ where
         .data_unchecked::<Container>()
         .get::<S>()
         .ok_or_else(|| Error::new("no provider registered for the bound service"))?;
-    bind_with::<S, A>(&service, ctx, id).await
+    bind_with::<A, S>(&service, ctx, id).await
 }
 
 /// Core of [`bind`] against a service instance: ambient-ability check, id parse,
 /// and the authorized load. [`bind`] resolves the service from the container,
 /// then delegates here.
-async fn bind_with<S, A>(
+async fn bind_with<A, S>(
     service: &S,
     ctx: &Context<'_>,
     id: &str,
@@ -87,23 +87,23 @@ where
 /// a missing row so a *query* resolves to null — a missing row is an error here
 /// (code `NOT_FOUND`): a mutation has no row to act on. Denied → `FORBIDDEN`;
 /// found → `Authorized`. Hand the result straight to the service method whose
-/// `Authorized<E, A>` parameter then carries the authorization — and the action
+/// `Authorized<A, E>` parameter then carries the authorization — and the action
 /// `A` — at the type level, so the method body cannot reach a row the caller was
 /// not allowed to load, nor act under an action it was not granted.
-pub async fn bind_required<S, A>(ctx: &Context<'_>, id: &str) -> Result<Authorized<S::Entity, A>>
+pub async fn bind_required<A, S>(ctx: &Context<'_>, id: &str) -> Result<Authorized<A, S::Entity>>
 where
     S: CrudService + 'static,
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     A: ActionMarker,
 {
-    not_found_to_err(bind::<S, A>(ctx, id).await?)
+    not_found_to_err(bind::<A, S>(ctx, id).await?)
 }
 
 /// A bound mutation subject must exist (a mutation has no row to act on
 /// otherwise); a missing row becomes a `NOT_FOUND` GraphQL error.
-fn not_found_to_err<E: EntityTrait, A: ActionMarker>(
+fn not_found_to_err<A: ActionMarker, E: EntityTrait>(
     model: Option<E::Model>,
-) -> Result<Authorized<E, A>> {
+) -> Result<Authorized<A, E>> {
     match model {
         Some(model) => Ok(Authorized::new(model)),
         None => Err(Error::new("not found").extend_with(|_, e| e.set("code", "NOT_FOUND"))),

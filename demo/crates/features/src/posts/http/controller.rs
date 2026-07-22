@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{Create, Update};
 use nest_rs_http::{Ctx, Valid, controller, crud};
 use nest_rs_seaorm::Bind;
@@ -32,6 +31,7 @@ pub struct PostsController {
 )]
 impl PostsController {
     #[post("/")]
+    #[authorize(Create, PostEntity)]
     #[use_guards(PostAuthorGuard)]
     #[api(
         summary = "Create a post in the caller's org",
@@ -41,7 +41,6 @@ impl PostsController {
     )]
     async fn create(
         &self,
-        _authz: Authorize<Create, PostEntity>,
         auth: Ctx<Claims>,
         author: Ctx<PostAuthor>,
         body: Valid<Json<CreatePost>>,
@@ -55,6 +54,7 @@ impl PostsController {
     }
 
     #[post("/:id/publish")]
+    #[authorize(Update, PostEntity)]
     #[use_guards(PostAuthorGuard)]
     #[use_exception_filters(PostProblemFilter)]
     #[api(
@@ -67,8 +67,7 @@ impl PostsController {
     )]
     async fn publish(
         &self,
-        _authz: Authorize<Update, PostEntity>,
-        post: Bind<PostsService, Update>,
+        post: Bind<Update, PostsService>,
         actor: Ctx<PostAuthor>,
     ) -> Result<Json<Post>> {
         let PostAuthor(actor_id) = *actor;

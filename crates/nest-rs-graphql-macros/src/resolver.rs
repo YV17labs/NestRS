@@ -11,10 +11,10 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    InjectableBody, build_injectable_body, force_guard_typeids, forwarded_arg_idents,
+    InjectableBody, PipeWrapper, build_injectable_body, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, impl_self_ident, injected_keys_with_layers,
-    injected_method_with_layers, layer_inject_keys, reject_http_only_layers, scoped_specs,
-    take_flag_attr, take_path_list,
+    injected_method_with_layers, layer_inject_keys, pipe_wrapper, reject_http_only_layers,
+    scoped_specs, take_flag_attr, take_path_list,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -148,8 +148,8 @@ struct AuthorizeSpec {
     unmasked: bool,
     /// `bind = Service`: the macro turns a by-id GraphQL argument into the
     /// loaded, authorized subject and hands it to the operation's
-    /// `Authorized<E, Action>` parameter — the GraphQL analog of the HTTP
-    /// `Bind<S, A>` extractor. The action in the proof is the one named here, so
+    /// `Authorized<Action, E>` parameter — the GraphQL analog of the HTTP
+    /// `Bind<A, S>` extractor. The action in the proof is the one named here, so
     /// the receiving method demands a proof for *exactly* that action. `None` ⇒
     /// the operation binds its subject itself (or has none).
     bind: Option<Path>,
@@ -255,9 +255,9 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     }))
 }
 
-/// The ident of a `#[query]`/`#[mutation]` parameter typed `Authorized<E, A>`
+/// The ident of a `#[query]`/`#[mutation]` parameter typed `Authorized<A, E>`
 /// (the subject `bind = Service` resolves). Matched on the last path segment so
-/// both `Authorized<E, A>` and a fully-qualified form are recognised.
+/// both `Authorized<A, E>` and a fully-qualified form are recognised.
 fn authorized_param_ident(sig: &Signature) -> Option<Ident> {
     sig.inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };
@@ -315,35 +315,15 @@ fn piped_args(sig: &Signature) -> Vec<PipedArg> {
             let syn::Pat::Ident(pi) = &*pt.pat else {
                 return None;
             };
-            let Type::Path(tp) = &*pt.ty else { return None };
-            let seg = tp.path.segments.last()?;
-            let syn::PathArguments::AngleBracketed(ab) = &seg.arguments else {
-                return None;
+            let (pipe, value_ty) = match pipe_wrapper(&pt.ty)? {
+                PipeWrapper::Piped { pipe, value } => (Some(pipe), value),
+                PipeWrapper::Valid { value } => (None, value),
             };
-            let tys: Vec<&Type> = ab
-                .args
-                .iter()
-                .filter_map(|a| match a {
-                    syn::GenericArgument::Type(t) => Some(t),
-                    _ => None,
-                })
-                .collect();
-            if seg.ident == "Piped" && tys.len() == 2 {
-                let Type::Path(p) = tys[0] else { return None };
-                Some(PipedArg {
-                    ident: pi.ident.clone(),
-                    pipe: Some(p.path.clone()),
-                    value_ty: tys[1].clone(),
-                })
-            } else if seg.ident == "Valid" && tys.len() == 1 {
-                Some(PipedArg {
-                    ident: pi.ident.clone(),
-                    pipe: None,
-                    value_ty: tys[0].clone(),
-                })
-            } else {
-                None
-            }
+            Some(PipedArg {
+                ident: pi.ident.clone(),
+                pipe,
+                value_ty,
+            })
         })
         .collect()
 }
@@ -442,14 +422,21 @@ fn layered_resolver_chain(
     }
     quote! {
         {
+            // Composed once per site against this container, then memoized —
+            // the GraphQL analog of `RouteShaper`'s mount-time composition.
+            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::GraphqlChainCell =
+                ::nest_rs_guards::GraphqlChainCell::new();
             let __container = #ctx.data_unchecked::<::nest_rs_core::Container>();
             ::nest_rs_guards::run_layered_graphql_chain(
                 #ctx,
                 __container,
-                &<#self_ty>::__nestrs_resolver_guard_specs(),
-                &#method_specs,
-                &#force_typeids,
+                &__NESTRS_GUARD_CHAIN,
                 #label_lit,
+                || ::nest_rs_guards::GraphqlChainSources {
+                    resolver: <#self_ty>::__nestrs_resolver_guard_specs(),
+                    method: #method_specs,
+                    force: #force_typeids,
+                },
             ).await?;
         }
     }
@@ -626,11 +613,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
             let is_query = verb_attr.path().is_ident("query");
             // `bind = Service`: the operation declares its subject as an
-            // `Authorized<E, Action>` parameter; the wrapper exposes a by-id
+            // `Authorized<Action, E>` parameter; the wrapper exposes a by-id
             // GraphQL argument in its place, binds it through `bind_required`
             // (which mints the proof for the attribute's action), and forwards
             // it — so the resolver body never parses an id or touches raw ORM.
-            // The HTTP `Bind<S, A>` extractor, expressed for GraphQL through the
+            // The HTTP `Bind<A, S>` extractor, expressed for GraphQL through the
             // posture attribute that already carries the action + entity
             // (declared once, no duplicate).
             // Pair the spec with its `bind` service only when set — carries the
@@ -644,9 +631,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         return Err(syn::Error::new_spanned(
                             &method_name,
                             "`#[authorize(Action, bind = Service)]` needs a parameter of type \
-                             `Authorized<E, Action>` to receive the bound subject — the action in \
+                             `Authorized<Action, E>` to receive the bound subject — the action in \
                              the type must match the one in the attribute (e.g. \
-                             `#[authorize(Update, bind = FilesService)]` ⇒ `Authorized<FileEntity, Update>`)",
+                             `#[authorize(Update, bind = FilesService)]` ⇒ `Authorized<Update, FileEntity>`)",
                         ));
                     };
                     let id_ident = spec.id_arg.clone().unwrap_or_else(|| format_ident!("id"));
@@ -659,7 +646,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 }
                 None => None,
             };
-            // The wrapper signature: with `bind`, the `Authorized<E, A>`
+            // The wrapper signature: with `bind`, the `Authorized<A, E>`
             // parameter (not a GraphQL `InputType`) is replaced by the `id`
             // string argument the SDL exposes; without `bind`, it is the
             // method's own.
@@ -668,7 +655,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // carrier — the resolver body only ever calls the service.
             let piped = piped_args(&sig);
             // The wrapper signature strips both bind and pipe wrappers from the
-            // wire: the `Authorized<E, A>` subject becomes the `id` string
+            // wire: the `Authorized<A, E>` subject becomes the `id` string
             // argument, and each `Piped<P, T>` / `Valid<T>` becomes its wire
             // value type `T`. Everything else is the method's own.
             let wrapper_sig = {
@@ -768,7 +755,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // the database. Missing row → NOT_FOUND, denied row → FORBIDDEN.
             let bind_prelude = bind_info.as_ref().map(|(service, _, id_ident, action)| {
                 quote! {
-                    let __subject = ::nest_rs_seaorm::graphql::bind_required::<#service, #action>(
+                    let __subject = ::nest_rs_seaorm::graphql::bind_required::<#action, #service>(
                         #gctx, &#id_ident,
                     ).await?;
                 }

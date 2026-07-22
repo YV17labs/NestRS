@@ -15,15 +15,18 @@
 //! mechanism as `#[meta(...)]`, and individual guards decide whether to
 //! honor it.
 //!
-//! ## GraphQL / WS — inline chain calls
+//! ## GraphQL — inline chain call, composed once per site
 //!
-//! The `#[resolver]` and `#[messages]` macros emit a call to
-//! `run_layered_graphql_chain` / [`run_layered_ws_chain`] at the start
-//! of every handler method.
+//! The `#[resolver]` macro emits a call to `run_layered_graphql_chain` at
+//! the start of every handler method, beside a `static` [`GraphqlChainCell`]
+//! that memoizes the composed chain per container — GraphQL has no mount seam
+//! to bake a shaper into, so the site is its own. WS has no inline runner: the
+//! `#[messages]` macro composes its per-event guard table at gateway
+//! mount, wrapping each guard via `GuardAsWsMessageCheck`.
 
-// The GraphQL / WS in-band chain runners live here; only compiled when at
-// least one of those transports is served.
-#[cfg(any(feature = "graphql", feature = "ws"))]
+// The GraphQL in-band chain runner lives here; only compiled when that
+// transport is served.
+#[cfg(feature = "graphql")]
 mod chain;
 mod denial_convert;
 // The two in-band fallback operation guards, one per `Exempt`-edge transport,
@@ -40,9 +43,7 @@ mod scoped_spec;
 mod validate;
 
 #[cfg(feature = "graphql")]
-pub use chain::run_layered_graphql_chain;
-#[cfg(feature = "ws")]
-pub use chain::run_layered_ws_chain;
+pub use chain::{GraphqlChainCell, GraphqlChainSources, run_layered_graphql_chain};
 #[cfg(feature = "graphql")]
 pub use denial_convert::denial_to_graphql_error;
 pub use denial_convert::denial_to_http_response;

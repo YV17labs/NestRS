@@ -95,6 +95,12 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Per-method attributes (all consumed; no imports needed):
 ///
+/// - `#[authorize(Action, Entity)]` — the route's authz posture, uniform with
+///   `#[resolver]`'s. Desugars to the `nest_rs_authz::http::Authorize<A, E>`
+///   extractor as the handler's first parameter: class gate before the body,
+///   automatic response masking after it. Mutually exclusive with `#[public]`.
+/// - `#[public]` — the route is reachable anonymously; global guards still run
+///   and read the marker.
 /// - `#[use_guards(...)]` — container-resolved guards, first listed outermost.
 /// - `#[use_filters(...)]` — exception filters, wrap *outside* the guards.
 /// - `#[use_interceptors(...)]` — container-resolved interceptors.
@@ -186,6 +192,8 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// impl UsersController {
 ///     #[get("/")]   #[api(summary = "List Users", tags("User"))]
 ///     async fn list(&self, _authz: Authorize<Read, Entity>, page: Query<PageParams>) -> Result<Response> {
+///         // `_authz` is what `#[authorize(Read, Entity)]` desugars to on a
+///         // hand-written route; `#[crud]` emits it directly.
 ///         let p = CrudService::page(&*self.svc, page.limit(), page.after_uuid())
 ///             .await.map_err(__nestrs_crud_internal_UsersController)?;
 ///         // Json(Vec<Dto>) + `x-next-cursor` header when p.next_cursor is Some

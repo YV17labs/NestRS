@@ -284,12 +284,23 @@ async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Mo
         .await
 }
 
+/// The identity shown in a login-failure log. Keeps the domain — what an ops
+/// query groups a credential-stuffing wave on — and drops the local part, the
+/// same deliberate redaction `SocialIdentity`'s `Debug` applies. A denial log is
+/// the one place a live address would otherwise be written in the clear.
+fn redact_email(email: &str) -> String {
+    match email.split_once('@') {
+        Some((_, domain)) => format!("***@{domain}"),
+        None => "***".to_owned(),
+    }
+}
+
 fn is_unique_violation(err: &DbErr) -> bool {
     matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
 }
 
 fn store_unavailable(email: &str, err: DbErr) -> AuthError {
-    tracing::error!(target: "features::users", %email, error = %err, "credential lookup failed");
+    tracing::error!(target: "features::users", identity = %redact_email(email), error = %err, "credential lookup failed");
     AuthError::Unavailable(err.to_string())
 }
 
@@ -316,24 +327,24 @@ pub(crate) fn verify_credentials(
 ) -> Result<entity::Model, CredentialError> {
     let Some(user) = user else {
         burn_verify(password);
-        tracing::warn!(target: "features::users", %email, reason = "unknown_email", "login failed");
+        tracing::warn!(target: "features::users", identity = %redact_email(email), reason = "unknown_email", "login failed");
         return Err(CredentialError);
     };
 
     let Some(ref hash) = user.password_hash else {
         burn_verify(password);
-        tracing::warn!(target: "features::users", %email, reason = "no_password_set", "login failed");
+        tracing::warn!(target: "features::users", identity = %redact_email(email), reason = "no_password_set", "login failed");
         return Err(CredentialError);
     };
 
     match verify_password(hash, password) {
         Ok(true) => Ok(user),
         Ok(false) => {
-            tracing::warn!(target: "features::users", %email, reason = "bad_password", "login failed");
+            tracing::warn!(target: "features::users", identity = %redact_email(email), reason = "bad_password", "login failed");
             Err(CredentialError)
         }
         Err(e) => {
-            tracing::error!(target: "features::users", %email, error = %e, reason = "unverifiable_hash", "login failed");
+            tracing::error!(target: "features::users", identity = %redact_email(email), error = %e, reason = "unverifiable_hash", "login failed");
             Err(CredentialError)
         }
     }

@@ -15,12 +15,12 @@ use syn::Path;
 pub fn scoped_specs(paths: &[Path], erased: TokenStream2) -> TokenStream2 {
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                resolve: |__c| ::nest_rs_core::Container::get::<#p>(__c)
+            ::nest_rs_guards::dispatch::ScopedLayerSpec::new(
+                ::core::any::TypeId::of::<#p>(),
+                ::core::any::type_name::<#p>(),
+                |__c| ::nest_rs_core::Container::get::<#p>(__c)
                     .map(|__arc| __arc as ::std::sync::Arc<#erased>),
-            }
+            )
         }
     });
     quote! { ::std::vec![#(#entries),*] }

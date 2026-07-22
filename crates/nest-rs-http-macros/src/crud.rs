@@ -12,7 +12,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
-use nest_rs_codegen::{Paginate, impl_self_ident, parse_crud_args};
+use nest_rs_codegen::{Paginate, UUID_V7_REQUIRED, impl_self_ident, parse_crud_args};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
@@ -49,11 +49,13 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     // Per-controller name avoids collisions between two controllers in one module.
     let internal = format_ident!("__nestrs_crud_internal_{}", base);
 
-    // Reject non-UUID-v7 ids before loading — validation half of route-model binding.
+    // Reject non-UUID-v7 ids before loading — validation half of route-model
+    // binding. The wording is shared with the GraphQL `#[crud]` so one edge rule
+    // reads identically whichever transport refused it.
     let id_v7_check: TokenStream2 = quote! {
         if __id.0.get_version_num() != 7 {
             return ::core::result::Result::Err(::nest_rs_http::poem::Error::from_string(
-                "path id must be a UUID v7",
+                #UUID_V7_REQUIRED,
                 ::nest_rs_http::poem::http::StatusCode::BAD_REQUEST,
             ));
         }

@@ -11,7 +11,7 @@
 use nest_rs_resource::WireModelDefaults;
 use sea_orm::EntityTrait;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
+use serde::de::{Deserialize, DeserializeOwned};
 use serde_json::Value;
 
 use crate::{Ability, Action};
@@ -157,17 +157,23 @@ where
 /// Deserialize a handler JSON object into `S::Model`, filling columns the wire
 /// DTO omits so policy can run. The placeholder defaults are stripped again by
 /// [`retain_static_keys`] before the response ships — they never reach the wire.
+///
+/// Defaults are filled **before** the single deserialize rather than after a
+/// speculative one: `fill_wire_defaults` only inserts keys the body is missing,
+/// so the outcome is identical, while the straight-attempt-first shape used to
+/// burn a whole clone and a doomed parse per row for every entity that hides a
+/// non-`Option` column (`password_hash` — the common case).
 fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
 where
     S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned,
 {
-    if let Ok(model) = serde_json::from_value(wire.clone()) {
-        return Ok(model);
-    }
-    let Value::Object(mut map) = wire.clone() else {
-        return serde_json::from_value(wire.clone());
+    let Value::Object(map) = wire else {
+        // Not an object — nothing to fill; borrow-deserialize so the error path
+        // costs no clone either.
+        return S::Model::deserialize(wire);
     };
+    let mut map = map.clone();
     S::fill_wire_defaults(&mut map);
     serde_json::from_value(Value::Object(map))
 }

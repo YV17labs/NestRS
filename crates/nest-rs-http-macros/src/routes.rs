@@ -96,7 +96,21 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         let method_name_lit = method_name.to_string();
         let wrapper_name = format_ident!("__nestrs_route_{}", method_name);
 
-        let inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
+        let mut inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
+        // `#[authorize(Action, Entity)]` — the route's posture, uniform with
+        // `#[resolver]`. Desugars to the shaper extractor the macro writes
+        // itself, so the arming can no longer be broken by how the developer
+        // spelled (or renamed) an import.
+        let authorize = match take_authorize(&mut method.attrs) {
+            Ok(spec) => spec,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        if let Some(spec) = &authorize {
+            match authorize_param(spec, &inputs) {
+                Ok(param) => inputs.insert(0, param),
+                Err(err) => return err.to_compile_error().into(),
+            }
+        }
         let arg_idents = match forwarded_arg_idents(&method.sig) {
             Ok(idents) => idents,
             Err(err) => return err.to_compile_error().into(),
@@ -149,6 +163,15 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         // `#[public]` marks the route as publicly reachable; global guards still
         // run and decide whether to admit anonymous callers.
         let is_public = take_flag_attr(&mut method.attrs, "public");
+        if is_public && let Some(spec) = &authorize {
+            return syn::Error::new_spanned(
+                &spec.action,
+                "a route is `#[public]` or `#[authorize(...)]`, never both — the two \
+                 declare opposite postures",
+            )
+            .to_compile_error()
+            .into();
+        }
         // `#[no_pipes]` opts out of every global pipe for this route.
         let no_pipes = take_flag_attr(&mut method.attrs, "no_pipes");
         // Internal marker the `#[crud]` macro stamps on its write ops (create /
@@ -438,11 +461,79 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// A route's `#[authorize(Action, Entity)]` posture.
+struct AuthorizeSpec {
+    action: Path,
+    entity: Path,
+}
+
+/// Take `#[authorize(Action, Entity)]` off a route method.
+///
+/// The HTTP twin of `#[resolver]`'s per-operation posture: one attribute,
+/// greppable, and — unlike a parameter the developer spells — impossible to
+/// disarm by renaming an import, because the macro writes the extractor type.
+fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
+    let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
+        return Ok(None);
+    };
+    let attr = attrs.remove(pos);
+    if attrs.iter().any(|a| a.path().is_ident("authorize")) {
+        return Err(syn::Error::new_spanned(
+            &attr,
+            "at most one `#[authorize(...)]` per route",
+        ));
+    }
+    let paths: Vec<Path> = attr
+        .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?
+        .into_iter()
+        .collect();
+    let [action, entity] = <[Path; 2]>::try_from(paths).map_err(|_| {
+        syn::Error::new_spanned(
+            &attr,
+            "expected `#[authorize(Action, Entity)]` — e.g. \
+             `#[authorize(Read, users::Entity)]`. Bind the subject with a \
+             `Bind<Service, Action>` parameter when the route loads one",
+        )
+    })?;
+    Ok(Some(AuthorizeSpec { action, entity }))
+}
+
+/// The extractor `#[authorize(Action, Entity)]` desugars to — the same
+/// parameter `#[crud]` emits on its generated ops, so both paths arm the class
+/// gate, the response mask and the `MaskProbe` through one mechanism.
+fn authorize_param(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<FnArg> {
+    if let Some(param) = inputs.iter().find(|arg| is_authorize_param(arg)) {
+        return Err(syn::Error::new_spanned(
+            param,
+            "this route already declares its posture with `#[authorize(...)]` — \
+             drop the `Authorize<...>` parameter (the decorator emits it)",
+        ));
+    }
+    let AuthorizeSpec { action, entity } = spec;
+    Ok(syn::parse_quote! {
+        __nestrs_authz: ::nest_rs_authz::http::Authorize<#action, #entity>
+    })
+}
+
+/// Whether a parameter is a hand-written `Authorize<..>` (not a `Bind<..>`,
+/// which stays a legitimate parameter — it loads the subject, it is not the
+/// posture).
+fn is_authorize_param(arg: &FnArg) -> bool {
+    let FnArg::Typed(pt) = arg else { return false };
+    let Type::Path(tp) = pt.ty.as_ref() else {
+        return false;
+    };
+    tp.path.segments.iter().any(|s| s.ident == "Authorize")
+}
+
 /// Response shaper type: `Authorize<A, S>` or `Bind<S, A>` anywhere in the
 /// handler parameter list, matched by path-segment **name** (any module
-/// qualification works; a *renamed* import does not). The blind spot is closed
-/// at run time: unarmed routes carry `nest_rs_http::mask_probed`, which fails
-/// the request closed when a masking extractor runs without an armed shaper.
+/// qualification works; a *renamed* import does not). `#[authorize(...)]` is
+/// immune — the macro inserts that parameter itself, fully qualified, at
+/// position 0. The residual blind spot (a hand-written, renamed `Bind`) is
+/// closed at run time: unarmed routes carry `nest_rs_http::mask_probed`, which
+/// fails the request closed when a masking extractor runs without an armed
+/// shaper.
 fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
     inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };

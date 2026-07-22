@@ -64,15 +64,44 @@ pub fn batch_spawner(container: &Container) -> GraphqlBatchSpawner {
 }
 
 /// Seeds every discovered DataLoader into each GraphQL request.
+/// The per-request seeding step of one reachable dataloader.
+type LoaderSeed = fn(&Container, Request) -> Request;
+
 pub(crate) struct LoaderExtensionFactory {
     container: Container,
+    /// The reachable loaders, resolved **once** at schema build. Reachability
+    /// is decided by the access graph and frozen from then on, so re-walking
+    /// link-time inventory and re-testing the gate per request was pure
+    /// repetition of a boot-time answer.
+    seeds: Arc<[LoaderSeed]>,
 }
 
 impl LoaderExtensionFactory {
     pub(crate) fn new(container: Container) -> Self {
         warn_unreachable_loaders(&container);
-        Self { container }
+        let seeds = reachable_seeds(&container);
+        Self { container, seeds }
     }
+}
+
+/// Freeze the reachable loader seeds. A missing `ReachableProviders` (only a
+/// hand-rolled container can produce one) seeds nothing: a loader whose owner
+/// module is absent would panic on `container.get::<Owner>()`, so skipping is
+/// the fail-closed answer — and it is reported here, once, rather than on
+/// every request.
+fn reachable_seeds(container: &Container) -> Arc<[LoaderSeed]> {
+    let Some(reachable) = container.get::<ReachableProviders>() else {
+        tracing::warn!(
+            target: "nest_rs::graphql",
+            hint = "build the schema via App::builder/App::new or seed ReachableProviders",
+            "loaders skipped: no ReachableProviders seeded"
+        );
+        return Arc::from(Vec::new());
+    };
+    inventory::iter::<GraphqlLoaderRegistration>()
+        .filter(|reg| reachable.0.contains(&(reg.owner_type_id)()))
+        .map(|reg| reg.seed)
+        .collect()
 }
 
 /// Boot-time visibility for the "linked but unreachable" case: a
@@ -88,8 +117,8 @@ impl LoaderExtensionFactory {
 /// resolver error (`nest-rs-resource-macros` emits `data_opt` + a named error,
 /// not the panicking `data_unchecked`).
 fn warn_unreachable_loaders(container: &Container) {
-    // No gate seeded (a hand-rolled container in a test): `prepare_request`
-    // already warns once and skips every loader — nothing to add at boot.
+    // No gate seeded (a hand-rolled container in a test): `reachable_seeds`
+    // warns once and seeds nothing — nothing to add here.
     let Some(reachable) = container.get::<ReachableProviders>() else {
         return;
     };
@@ -110,12 +139,14 @@ impl ExtensionFactory for LoaderExtensionFactory {
     fn create(&self) -> Arc<dyn Extension> {
         Arc::new(LoaderExtension {
             container: self.container.clone(),
+            seeds: Arc::clone(&self.seeds),
         })
     }
 }
 
 struct LoaderExtension {
     container: Container,
+    seeds: Arc<[LoaderSeed]>,
 }
 
 #[async_trait]
@@ -126,28 +157,8 @@ impl Extension for LoaderExtension {
         mut request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
-        // Module-gate: a loader from an unimported module would panic on
-        // `container.get::<Owner>()`. Fail closed when the gate is missing —
-        // a hand-rolled container is the only way for `ReachableProviders`
-        // to be unseeded, and we prefer skipping every loader to panicking
-        // on the first request that touches one.
-        let Some(reachable) = self.container.get::<ReachableProviders>() else {
-            tracing::warn!(
-                target: "nest_rs::graphql",
-                hint = "build the schema via App::builder/App::new or seed ReachableProviders",
-                "loaders skipped: no ReachableProviders seeded"
-            );
-            return next.run(ctx, request).await;
-        };
-        for reg in inventory::iter::<GraphqlLoaderRegistration>() {
-            if !reachable.0.contains(&(reg.owner_type_id)()) {
-                // Owner module unreachable: seeding would panic on
-                // `container.get::<Owner>()`, so skip per request (fail-closed).
-                // Not silent — the linked-but-unreachable set is surfaced once
-                // at boot by `warn_unreachable_loaders`.
-                continue;
-            }
-            request = (reg.seed)(&self.container, request);
+        for seed in self.seeds.iter() {
+            request = seed(&self.container, request);
         }
         next.run(ctx, request).await
     }

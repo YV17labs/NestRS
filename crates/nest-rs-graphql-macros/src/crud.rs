@@ -19,7 +19,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
-use nest_rs_codegen::{Paginate, parse_crud_args, singular_of};
+use nest_rs_codegen::{Paginate, UUID_V7_REQUIRED, parse_crud_args, singular_of};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
@@ -61,7 +61,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ))?;
         if __id.get_version_num() != 7 {
             return ::core::result::Result::Err(
-                ::nest_rs_graphql::async_graphql::Error::new("id must be a UUID v7"),
+                ::nest_rs_graphql::async_graphql::Error::new(#UUID_V7_REQUIRED),
             );
         }
     };

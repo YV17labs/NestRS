@@ -2,31 +2,22 @@
 //! resolver- / gateway- / method-scope layer declaration. Carries the
 //! `TypeId` so dedup against the global chain finds the same key.
 
-use std::any::TypeId;
-use std::sync::Arc;
-
 use nest_rs_core::Container;
 use nest_rs_exception_filters::ExceptionFilterErased;
 use nest_rs_filters::Filter;
 use nest_rs_interceptors::Interceptor;
 use nest_rs_pipes::GlobalPipe;
 
-use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer};
+use nest_rs_core::layer_chain::{LayerSite, LayerSpec, ResolvedLayer, resolve_global_layers};
 
 use crate::Guard;
 
-/// A scoped layer spec (controller / resolver / gateway / handler).
-/// Carries the `TypeId` so dedup against the global chain finds the same
-/// key, plus a `resolve` fn pointer that recovers the concrete `Arc<L>`
-/// from the container at first request.
-pub struct ScopedLayerSpec<L: ?Sized> {
-    /// `TypeId` of the layer type — the dedup key against the global chain.
-    pub type_id: TypeId,
-    /// The layer type's name, for boot logs.
-    pub name: &'static str,
-    /// Recovers the concrete `Arc<L>` from the container at first request.
-    pub resolve: fn(&Container) -> Option<Arc<L>>,
-}
+/// A scoped layer spec (controller / resolver / gateway / handler) — the same
+/// shape a global registration carries, only tagged with a narrower
+/// [`LayerSite`] when it is resolved, so dedup against the global chain finds
+/// the same `TypeId` key. It **is** [`LayerSpec`]: one type, one constructor,
+/// no second structure to keep in step.
+pub type ScopedLayerSpec<L> = LayerSpec<L>;
 
 /// A guard spec for a specific scope.
 pub type ScopedGuardSpec = ScopedLayerSpec<dyn Guard>;
@@ -47,21 +38,7 @@ pub type ScopedFilterSpec = ScopedLayerSpec<dyn Filter>;
 /// entries — the single implementation the route shaper and the boot-time
 /// chain validation both compose from, so their dedup inputs cannot drift.
 pub(crate) fn resolve_global_guards(container: &Container) -> Vec<ResolvedLayer<dyn crate::Guard>> {
-    let Some(specs) = container.get::<crate::registry::GuardSpecs>() else {
-        return Vec::new();
-    };
-    specs
-        .0
-        .iter()
-        .filter_map(|spec| {
-            spec.resolve(container).map(|layer| ResolvedLayer {
-                type_id: spec.type_id,
-                name: spec.name,
-                source: LayerSite::Global,
-                layer,
-            })
-        })
-        .collect()
+    resolve_global_layers::<crate::registry::GuardSpecs>(container)
 }
 
 pub(crate) fn resolve_specs<L: ?Sized>(
@@ -72,7 +49,7 @@ pub(crate) fn resolve_specs<L: ?Sized>(
     specs
         .iter()
         .filter_map(|spec| {
-            (spec.resolve)(container).map(|layer| ResolvedLayer {
+            spec.resolve(container).map(|layer| ResolvedLayer {
                 type_id: spec.type_id,
                 name: spec.name,
                 source,

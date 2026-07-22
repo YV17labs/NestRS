@@ -112,6 +112,19 @@ impl WidgetController {
         })
     }
 
+    // The decorator form: `#[authorize]` must arm exactly what the hand-written
+    // `Authorize<..>` parameter above arms — same gate, same response shaper —
+    // with nothing in the signature to delete by accident.
+    #[get("/decorated")]
+    #[authorize(Read, widget::Entity)]
+    async fn decorated(&self) -> Json<widget::Model> {
+        Json(widget::Model {
+            id: 1,
+            name: "ada".into(),
+            secret: "s1".into(),
+        })
+    }
+
     #[get("/")]
     async fn list(&self, _authz: Authorize<Read, widget::Entity>) -> Json<Vec<WidgetDto>> {
         Json(vec![
@@ -235,6 +248,39 @@ async fn a_raw_model_handler_cannot_leak_unexposed_columns() {
             .and_then(|v| v.as_str()),
         Some("ada"),
         "exposed columns survive: {body}",
+    );
+}
+
+#[tokio::test]
+async fn the_authorize_decorator_arms_the_same_gate_and_mask() {
+    // API-1: `#[authorize(Read, Entity)]` with an empty signature must behave
+    // exactly like the hand-written `Authorize<..>` parameter — masked on a
+    // grant, 403 without one — so posture never depends on how an import was
+    // spelled.
+    let app = boot().await;
+
+    let resp = app
+        .http()
+        .get("/widgets/decorated")
+        .header("x-role", "admin")
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("body");
+    assert!(
+        !body.contains("secret") && !body.contains("s1"),
+        "the decorator must arm the response shaper: {body}",
+    );
+
+    // …and the field restriction of a non-admin grant applies just the same.
+    let restricted = app.http().get("/widgets/decorated").send().await;
+    restricted.assert_status_is_ok();
+    let body = restricted.0.into_body().into_string().await.expect("body");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(json.get("name").and_then(|v| v.as_str()), Some("ada"));
+    assert!(
+        json.get("id").is_none() && json.get("secret").is_none(),
+        "a restricted grant masks down to its permitted fields: {body}",
     );
 }
 

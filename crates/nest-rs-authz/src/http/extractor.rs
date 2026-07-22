@@ -9,28 +9,37 @@ use poem::{Error, FromRequest, Request, RequestBody, Result};
 
 use crate::{Ability, ActionMarker, Subject};
 
-/// Declares that a handler requires action `A` on subject `S`:
-/// `_authz: Authorize<Read, users::Entity>`. 403 unless the request-scoped
-/// [`Ability`] grants it; 500 when the ability is missing (wiring bug, not a
-/// client error). Class-level only — the per-row filter and response mask
-/// enforce conditions.
+/// Enforcement plumbing for action `A` on subject `S`: 403 unless the
+/// request-scoped [`Ability`] grants it; 500 when the ability is missing
+/// (wiring bug, not a client error). Class-level only — the per-row filter and
+/// response mask enforce conditions. Its presence in a handler signature is
+/// also what makes `#[routes]` install the response shaper (automatic masking
+/// + ambient ability).
 ///
-/// **The parameter is load-bearing even bound as `_authz`** — it is the
-/// route's masking declaration, not dead code: its presence in the signature
-/// is what makes `#[routes]` install the response shaper (automatic response
-/// masking + ambient ability). Deleting the "unused" parameter disarms both.
-/// The GraphQL analog is `#[authorize(Action, Entity)]` on a
-/// `#[query]`/`#[mutation]`.
+/// # Don't write this — write `#[authorize(Action, Entity)]`
 ///
-/// `#[routes]` installs the response shaper (masking + ambient ability) by
-/// **textually** matching a handler-parameter type whose path has a segment
-/// literally named `Authorize` or `Bind` — so `nest_rs_authz::http::Authorize`
-/// or any module-qualified path works, but a **renamed** alias
-/// (`use ... as Az`) does **not**. The miss is caught at run time: this
+/// The posture of an HTTP route is declared by the decorator, exactly as on a
+/// `#[query]`/`#[mutation]`:
+///
+/// ```rust,ignore
+/// #[post("/")]
+/// #[authorize(Create, users::Entity)]
+/// async fn create(&self, body: Valid<Json<CreateUser>>) -> Result<Json<User>> { … }
+/// ```
+///
+/// `#[routes]` desugars that to this extractor, fully qualified, as the
+/// handler's first parameter — the same thing `#[crud]` emits for its
+/// generated ops. Writing the parameter by hand still works (it *is* the
+/// mechanism) but it is not a posture declaration: `#[routes]` recognises a
+/// shaper parameter by **path-segment name**, so a renamed import
+/// (`use ... as Az`) silently fails to arm masking. Going through the
+/// decorator removes that hazard entirely, and keeps every authz decision
+/// greppable as an `#[authorize]` / `#[use_guards]` / `#[public]` site.
+///
+/// The residual hand-written path is still fail-closed at run time: this
 /// extractor marks the route's `nest_rs_http::MaskProbe`, and an unarmed route
 /// whose probe was marked fails the request closed (a logged `500`) rather
-/// than shipping an unmasked body. Prefer a qualified path over a rename so
-/// masking arms normally.
+/// than shipping an unmasked body.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>

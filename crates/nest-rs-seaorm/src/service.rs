@@ -54,8 +54,8 @@ pub enum Access<M> {
 /// funnels through.
 ///
 /// The action is carried in the type, not just the binding site: an
-/// `Authorized<E, Update>` is a *different type* from an `Authorized<E, Read>`,
-/// so a service method that takes `Authorized<E, Update>` is statically
+/// `Authorized<Update, E>` is a *different type* from an `Authorized<Read, E>`,
+/// so a service method that takes `Authorized<Update, E>` is statically
 /// guaranteed its subject was authorized for **exactly that action** — a `Read`
 /// proof fed to a method expecting an `Update` proof is a type error, not a
 /// runtime surprise. Combined with the crate-private constructor (only the
@@ -66,9 +66,9 @@ pub enum Access<M> {
 /// [`into_inner`](Authorized::into_inner) takes ownership for the active-model
 /// write (which [`Repo`](crate::Repo) re-scopes by the ambient ability — defense
 /// in depth, not the only line).
-pub struct Authorized<E: EntityTrait, A: ActionMarker>(E::Model, PhantomData<fn() -> A>);
+pub struct Authorized<A: ActionMarker, E: EntityTrait>(E::Model, PhantomData<fn() -> A>);
 
-impl<E: EntityTrait, A: ActionMarker> Authorized<E, A> {
+impl<A: ActionMarker, E: EntityTrait> Authorized<A, E> {
     /// Mint the proof. **Crate-private on purpose**: only the binding seams that
     /// pass through [`CrudService::access`] may construct it, which is what makes
     /// the type a guarantee rather than a label. The only such seam is the
@@ -84,7 +84,7 @@ impl<E: EntityTrait, A: ActionMarker> Authorized<E, A> {
     }
 }
 
-impl<E: EntityTrait, A: ActionMarker> std::ops::Deref for Authorized<E, A> {
+impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
     type Target = E::Model;
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -176,12 +176,15 @@ where
     /// hidden as [`Access::Missing`] — the route-model-binding gateway the
     /// `Bind`/`bind` adapters delegate to.
     ///
-    /// Authorization is decided in **SQL**, by re-loading the same id under
+    /// Authorization is decided in **SQL**, by loading the id under
     /// `condition_for(action)` (the very `WHERE` the list path uses). This is
     /// one source of truth for every predicate kind: a relational rule —
     /// which an in-memory check cannot evaluate without loading the parent —
-    /// is enforced here exactly as it is on a list read. Cost is one extra
-    /// primary-key lookup on the binding path.
+    /// is enforced here exactly as it is on a list read.
+    ///
+    /// The authorized path costs **one** primary-key lookup; the second,
+    /// unscoped one runs only to separate `Denied` from `Missing` after the
+    /// scoped load came back empty.
     async fn access(
         &self,
         action: Action,
@@ -192,26 +195,31 @@ where
     {
         let conn = Repo::<Self::Entity>::conn()?;
         let live = Self::live_read_filter();
-        let Some(model) = Repo::<Self::Entity>::unscoped_by_id(id)
+        let entity = Self::entity_name();
+        // Ability-scoped first: an authorized load — the case every `Bind` and
+        // bound mutation takes — then costs **one** round-trip. The unscoped
+        // lookup below runs only when this one comes back empty, purely to tell
+        // "exists but forbidden" from "absent"; the previous order paid for that
+        // distinction on every successful access.
+        if let Some(model) = Repo::<Self::Entity>::unscoped_by_id(id)
+            .filter(scope_for::<Self::Entity>(action))
             .filter(live.clone())
             .one(&conn)
             .await?
-        else {
-            return Ok(Access::Missing);
-        };
-        let allowed = Repo::<Self::Entity>::unscoped_by_id(id)
-            .filter(scope_for::<Self::Entity>(action))
+        {
+            tracing::debug!(target: "nest_rs::orm", entity, %id, ?action, "access granted");
+            return Ok(Access::Found(model));
+        }
+        let exists = Repo::<Self::Entity>::unscoped_by_id(id)
             .filter(live)
             .one(&conn)
             .await?
             .is_some();
-        let entity = Self::entity_name();
-        if allowed {
-            tracing::debug!(target: "nest_rs::orm", entity, %id, ?action, "access granted");
-            Ok(Access::Found(model))
-        } else {
+        if exists {
             tracing::warn!(target: "nest_rs::orm", entity, %id, ?action, "access denied");
             Ok(Access::Denied)
+        } else {
+            Ok(Access::Missing)
         }
     }
 }

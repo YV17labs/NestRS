@@ -16,7 +16,7 @@
 //! `RelatedTo<Parent>` impl are emitted by the **FK-owning** entity (the side
 //! that declares `belongs_to`), keeping every emission local to one module.
 
-use nest_rs_codegen::pascal_case;
+use nest_rs_codegen::{last_segment_ident, pascal_case};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{Ident, Type};
@@ -533,14 +533,4 @@ fn wire_key_expr(ty: &Type, ident: &Ident) -> TokenStream2 {
     } else {
         quote! { ::core::clone::Clone::clone(&self.#ident) }
     }
-}
-
-/// Last segment of a `syn::Path`. `syn::Path::parse` guarantees at least one
-/// segment, so the index is infallible — kept as an inlined ident lookup.
-fn last_segment_ident(path: &syn::Path) -> &Ident {
-    &path
-        .segments
-        .last()
-        .expect("syn::Path has ≥ 1 segment")
-        .ident
 }

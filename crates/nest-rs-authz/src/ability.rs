@@ -144,24 +144,54 @@ impl Ability {
     /// Layer ③ — instance check: at least one grant matches this model and no
     /// denial does (a denial overrides).
     pub fn can<E: EntityTrait>(&self, action: Action, model: &E::Model) -> bool {
-        let mut allowed = false;
+        self.evaluate::<E>(action, model).allowed
+    }
+
+    /// The single rule scan behind [`can`](Self::can),
+    /// [`permitted_fields`](Self::permitted_fields) and
+    /// [`mask_many`](Self::mask_many) — both answers come from the same
+    /// predicates, so computing them together is one pass instead of two per
+    /// row (the masked-list path used to evaluate every predicate twice).
+    fn evaluate<E: EntityTrait>(&self, action: Action, model: &E::Model) -> Verdict {
+        let mut granted = false;
+        let mut denied = false;
+        let mut unrestricted = false;
+        let mut fields: HashSet<&'static str> = HashSet::new();
         for rule in self.rules_for(action, TypeId::of::<E>()) {
             let Some(predicate) = predicate_of::<E>(rule) else {
                 // Unreachable type mismatch (see `predicate_of`) — fail
                 // closed: a broken denial denies, a broken grant never widens.
-                if rule.inverted {
-                    return false;
-                }
+                denied |= rule.inverted;
                 continue;
             };
-            if predicate.matches(model) {
-                if rule.inverted {
-                    return false;
+            if !predicate.matches(model) {
+                continue;
+            }
+            if rule.inverted {
+                // A denial overrides every grant, whatever their order.
+                denied = true;
+                continue;
+            }
+            granted = true;
+            match &rule.fields {
+                FieldSet::All => unrestricted = true,
+                FieldSet::Only(cols) => {
+                    if !unrestricted {
+                        fields.extend(cols.iter().copied());
+                    }
                 }
-                allowed = true;
             }
         }
-        allowed
+        Verdict {
+            allowed: granted && !denied,
+            // Field grants are read from the matching grants alone — denials
+            // decide visibility, never which columns a visible row exposes.
+            fields: if unrestricted {
+                FieldSet::All
+            } else {
+                FieldSet::Only(fields)
+            },
+        }
     }
 
     /// Layer ③ — serialize a model and strip the fields this ability does not
@@ -169,6 +199,17 @@ impl Ability {
     /// query pre-filter this is defence in depth: the filter keeps the wrong
     /// rows out of the result, the mask keeps the wrong fields out of the body.
     pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
+    where
+        E: EntityTrait,
+        E::Model: serde::Serialize,
+    {
+        self.mask_with::<E>(action, model, self.permitted_fields::<E>(action, model))
+    }
+
+    /// [`mask`](Self::mask) with the field verdict already known — the seam
+    /// [`mask_many`](Self::mask_many) uses so a row's rules are evaluated once
+    /// for "may I see it?" and "which columns?" together.
+    fn mask_with<E>(&self, action: Action, model: &E::Model, fields: FieldSet) -> serde_json::Value
     where
         E: EntityTrait,
         E::Model: serde::Serialize,
@@ -191,7 +232,7 @@ impl Ability {
                 return serde_json::Value::Null;
             }
         };
-        if let FieldSet::Only(allowed) = self.permitted_fields::<E>(action, model)
+        if let FieldSet::Only(allowed) = fields
             && let serde_json::Value::Object(map) = &mut json
         {
             map.retain(|key, _| allowed.contains(key.as_str()));
@@ -213,30 +254,27 @@ impl Ability {
     {
         models
             .into_iter()
-            .filter(|model| self.can::<E>(action, model))
-            .map(|model| self.mask::<E>(action, model))
+            .filter_map(|model| {
+                let verdict = self.evaluate::<E>(action, model);
+                verdict
+                    .allowed
+                    .then(|| self.mask_with::<E>(action, model, verdict.fields))
+            })
             .collect()
     }
 
     /// Layer ③ — the union of permitted fields across the grants that match this
     /// model. An unrestricted matching grant permits every field.
     pub fn permitted_fields<E: EntityTrait>(&self, action: Action, model: &E::Model) -> FieldSet {
-        let mut acc: HashSet<&'static str> = HashSet::new();
-        for rule in self
-            .rules_for(action, TypeId::of::<E>())
-            .filter(|rule| !rule.inverted)
-        {
-            // A broken grant predicate contributes no fields — fail closed.
-            if !predicate_of::<E>(rule).is_some_and(|p| p.matches(model)) {
-                continue;
-            }
-            match &rule.fields {
-                FieldSet::All => return FieldSet::All,
-                FieldSet::Only(cols) => acc.extend(cols.iter().copied()),
-            }
-        }
-        FieldSet::Only(acc)
+        self.evaluate::<E>(action, model).fields
     }
+}
+
+/// What one rule scan concluded about a model: whether it is visible, and which
+/// of its columns the matching grants expose.
+struct Verdict {
+    allowed: bool,
+    fields: FieldSet,
 }
 
 /// Recover a rule's typed predicate. The downcast cannot fail in practice —

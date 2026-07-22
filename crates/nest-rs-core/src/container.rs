@@ -121,18 +121,67 @@ pub(crate) struct MetaEntry {
     pub(crate) meta: AnyArc,
 }
 
+/// Identity of one built [`Container`], handed out in construction order.
+///
+/// Clones of a container share their id (a clone *is* the same registry);
+/// every distinct construction — [`ContainerBuilder::build`],
+/// [`ContainerBuilder::snapshot`], [`Container::default`] — gets a fresh one.
+/// Ids are never recycled, so a cache may key on one without the address-reuse
+/// hazard a pointer identity carries. Used by mount-time caches that memoize a
+/// container-derived value (the GraphQL guard chains) and must not serve one
+/// app's value to another app in the same process.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ContainerId(u64);
+
 /// The single flat provider registry. Cheap to clone — every field is an
 /// [`Arc`], so a clone shares the same immutable maps. Built once by
 /// [`ContainerBuilder::build`] and thereafter read-only.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Container {
+    id: ContainerId,
     providers: Arc<HashMap<ProviderKey, AnyArc>>,
     metadata: Arc<HashMap<TypeId, Vec<MetaEntry>>>,
     scoped: Arc<HashMap<TypeId, ScopedFactory>>,
     transient: Arc<HashMap<TypeId, TransientFactory>>,
 }
 
+impl Default for Container {
+    fn default() -> Self {
+        Self {
+            id: next_container_id(),
+            providers: Arc::default(),
+            metadata: Arc::default(),
+            scoped: Arc::default(),
+            transient: Arc::default(),
+        }
+    }
+}
+
+/// Hands out [`ContainerId`]s. Monotonic and never reset — wrapping would take
+/// ~585 years at one container per nanosecond.
+fn next_container_id() -> ContainerId {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    ContainerId(NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
 impl Container {
+    /// This registry's identity — see [`ContainerId`].
+    pub fn id(&self) -> ContainerId {
+        self.id
+    }
+
+    /// Whether any provider is request-scoped or transient — i.e. whether a
+    /// [`RequestScope`] over this container has anything to build or cache.
+    ///
+    /// `false` for the common app that registers only singletons, which lets a
+    /// transport skip minting a fresh scope per request: with no dynamic
+    /// factory, every resolution falls through to this container and the
+    /// per-request cache stays empty for the request's whole life.
+    pub fn has_dynamic_scopes(&self) -> bool {
+        !self.scoped.is_empty() || !self.transient.is_empty()
+    }
+
     /// Start an empty [`ContainerBuilder`] to register providers into.
     pub fn builder() -> ContainerBuilder {
         ContainerBuilder::default()
@@ -616,6 +665,7 @@ impl ContainerBuilder {
     /// Freeze the accumulated registrations into the immutable [`Container`].
     pub fn build(self) -> Container {
         Container {
+            id: next_container_id(),
             providers: Arc::new(self.providers),
             metadata: Arc::new(self.metadata),
             scoped: Arc::new(self.scoped),
@@ -634,6 +684,7 @@ impl ContainerBuilder {
     /// (structurally shared) maps rather than optimizing call sites.
     pub fn snapshot(&self) -> Container {
         Container {
+            id: next_container_id(),
             providers: Arc::new(self.providers.clone()),
             metadata: Arc::new(self.metadata.clone()),
             scoped: Arc::new(self.scoped.clone()),

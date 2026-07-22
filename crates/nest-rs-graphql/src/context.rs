@@ -122,11 +122,18 @@ pub struct GraphqlVariablePipe(
 /// / batch handling but folds every [`GraphqlContextSeed`] over the request first.
 /// The upstream `accept: multipart/mixed` incremental-delivery path
 /// (`@defer` / `@stream`) is not reproduced.
+/// The per-request step one [`GraphqlContextSeed`] contributes.
+type ContextSeed = fn(&Request, &Container, GqlRequest) -> GqlRequest;
+
 pub(crate) struct ContextEndpoint<E> {
     executor: E,
     container: Container,
     op_guard: Option<Arc<dyn GraphqlOperationGuard>>,
     max_batch_size: usize,
+    /// The seeds that fire for this app, resolved **once** at mount. The
+    /// module gate is an access-graph fact frozen at boot, so re-walking
+    /// link-time inventory per request only re-answered it.
+    seeds: Arc<[ContextSeed]>,
 }
 
 impl<E> ContextEndpoint<E> {
@@ -162,11 +169,24 @@ impl<E> ContextEndpoint<E> {
                 }
             },
         };
+        // Module-gate the inventory once: framework-level seeds always fire;
+        // owner-keyed seeds fire only when the owner is reachable. A missing
+        // gate (hand-rolled container in a test) skips owner-keyed seeds —
+        // fail-closed.
+        let reachable = container.get::<ReachableProviders>();
+        let seeds: Arc<[_]> = inventory::iter::<GraphqlContextSeed>()
+            .filter(|reg| match (reg.owner_type_id)() {
+                None => true,
+                Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
+            })
+            .map(|reg| reg.seed)
+            .collect();
         Self {
             executor,
             container,
             op_guard,
             max_batch_size,
+            seeds,
         }
     }
 
@@ -215,17 +235,9 @@ impl<E> ContextEndpoint<E> {
     }
 
     fn seed(&self, req: &Request, gql: GqlRequest) -> GqlRequest {
-        // Module-gate the inventory: framework-level seeds always fire;
-        // owner-keyed seeds fire only when the owner is reachable. A missing
-        // gate (hand-rolled container in a test) skips owner-keyed seeds —
-        // fail-closed.
-        let reachable = self.container.get::<ReachableProviders>();
-        inventory::iter::<GraphqlContextSeed>()
-            .filter(|reg| match (reg.owner_type_id)() {
-                None => true,
-                Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
-            })
-            .fold(gql, |gql, reg| (reg.seed)(req, &self.container, gql))
+        self.seeds
+            .iter()
+            .fold(gql, |gql, seed| seed(req, &self.container, gql))
     }
 }
 

@@ -1,4 +1,4 @@
-//! [`Bind<S, A>`] — route-model binding for HTTP routes: turn a path id into
+//! [`Bind<A, S>`] — route-model binding for HTTP routes: turn a path id into
 //! the loaded, authorized entity. Outcomes: bad UUID → 400, absent → 404,
 //! denied → 403 (existence intentionally not hidden), else the loaded model.
 //!
@@ -22,25 +22,25 @@ use crate::error::log_by_id_load_failure;
 use crate::{Access, CrudService, ServiceError};
 
 /// The loaded, authorized entity bound from a path id, through service `S`.
-/// Declare as a handler parameter (`user: Bind<UsersService, Read>`); read the
+/// Declare as a handler parameter (`user: Bind<Read, UsersService>`); read the
 /// model via [`Deref`] or own it with [`into_inner`](Bind::into_inner).
-pub struct Bind<S: CrudService, A>(<S::Entity as EntityTrait>::Model, PhantomData<fn() -> A>);
+pub struct Bind<A, S: CrudService>(<S::Entity as EntityTrait>::Model, PhantomData<fn() -> A>);
 
-impl<S: CrudService, A> Bind<S, A> {
+impl<A, S: CrudService> Bind<A, S> {
     /// Take ownership of the loaded, authorized model.
     pub fn into_inner(self) -> <S::Entity as EntityTrait>::Model {
         self.0
     }
 }
 
-impl<S: CrudService, A> Deref for Bind<S, A> {
+impl<A, S: CrudService> Deref for Bind<A, S> {
     type Target = <S::Entity as EntityTrait>::Model;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<'a, S, A> FromRequest<'a> for Bind<S, A>
+impl<'a, A, S> FromRequest<'a> for Bind<A, S>
 where
     S: CrudService + 'static,
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
@@ -50,8 +50,11 @@ where
         nest_rs_http::MaskProbe::mark();
         let Path(id) = Path::<Uuid>::from_request(req, body).await?;
         if id.get_version_num() != 7 {
+            // Same wording as the `#[crud]`-generated gate
+            // (`nest_rs_codegen::UUID_V7_REQUIRED`), which this crate cannot
+            // name: codegen is a macro-time helper, not a runtime dependency.
             return Err(Error::from_string(
-                "path id must be a UUID v7",
+                "id must be a UUID v7",
                 StatusCode::BAD_REQUEST,
             ));
         }

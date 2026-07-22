@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 use super::Bind;
 use crate::CrudService;
 
-impl<S, A> RouteResponseShaper for Bind<S, A>
+impl<A, S> RouteResponseShaper for Bind<A, S>
 where
     S: CrudService,
     A: ActionMarker,

@@ -30,7 +30,7 @@ impl PostsResolver {
         let actor_id = ctx.data::<Claims>()?.sub.ok_or_else(|| {
             async_graphql::Error::new("publishing requires an authenticated subject")
         })?;
-        match bind::<PostsService, Update>(ctx, &id).await? {
+        match bind::<Update, PostsService>(ctx, &id).await? {
             Some(model) => Ok(Some(self.svc.publish(model, actor_id).await?)),
             None => Ok(None),
         }

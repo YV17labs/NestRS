@@ -34,9 +34,9 @@ async-graphql.workspace = true
 # re-exported `ValidateProbe` (global validation, the NestJS `ValidationPipe`
 # analog); re-exported so a crud consumer needs no direct nest-rs-pipes dep.
 nest-rs-pipes.workspace = true
-# `ResolverGuard` is an async trait dispatched concretely from the `#[resolver]`
-# macro; boxed via `async-trait` like `nest-rs-guards`' HTTP `Guard`, and
-# re-exported as `nest_rs_graphql::async_trait` for implementors.
+# Re-exported as `nest_rs_graphql::async_trait` for implementors of the async
+# guard seams (`Guard::check_graphql`, operation guards) — boxed like
+# `nest-rs-guards`' HTTP `Guard`.
 async-trait.workspace = true
 # Re-exported so the GraphqlModule mount code can name the poem integration
 # through the framework, keeping it out of every app's manifest.

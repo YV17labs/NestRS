@@ -24,7 +24,9 @@
 //!
 //! [`RouteShaper`]: crate::dispatch::RouteShaper
 
-use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
+use nest_rs_core::layer_chain::{
+    LayerSite, ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers,
+};
 use nest_rs_core::{Container, MappedError};
 use nest_rs_exception_filters::{ExceptionFilterErased, ExceptionFilterSpecs};
 use nest_rs_filters::{Filter, FilterEndpoint, FilterSpecs};
@@ -105,19 +107,7 @@ pub fn wrap_route_exception_filters(
     method: &[ScopedExceptionFilterSpec],
     route_label: &str,
 ) -> BoxEndpoint<'static, Response> {
-    let mut global: Vec<ResolvedLayer<dyn ExceptionFilterErased>> = Vec::new();
-    if let Some(specs) = container.get::<ExceptionFilterSpecs>() {
-        for spec in &specs.0 {
-            if let Some(layer) = spec.resolve(container) {
-                global.push(ResolvedLayer {
-                    type_id: spec.type_id,
-                    name: spec.name,
-                    source: LayerSite::Global,
-                    layer,
-                });
-            }
-        }
-    }
+    let global = resolve_global_layers::<ExceptionFilterSpecs>(container);
     let controller = resolve_specs(container, controller, LayerSite::Controller);
     let method = resolve_specs(container, method, LayerSite::Method);
     let chain = compose_chain::<dyn ExceptionFilterErased>(
@@ -141,38 +131,12 @@ pub fn wrap_route_exception_filters(
 /// Intra-bucket duplicates are dropped silently — the transport edge (the
 /// site that executes the global sub-chain) already warned once.
 fn resolve_global_interceptors(container: &Container) -> Vec<ResolvedLayer<dyn Interceptor>> {
-    let mut global: Vec<ResolvedLayer<dyn Interceptor>> = Vec::new();
-    if let Some(specs) = container.get::<InterceptorSpecs>() {
-        for spec in &specs.0 {
-            if let Some(layer) = spec.resolve(container) {
-                global.push(ResolvedLayer {
-                    type_id: spec.type_id,
-                    name: spec.name,
-                    source: LayerSite::Global,
-                    layer,
-                });
-            }
-        }
-    }
-    dedup_bucket(global)
+    dedup_bucket(resolve_global_layers::<InterceptorSpecs>(container))
 }
 
 /// Resolve the global filter bucket — see [`resolve_global_interceptors`].
 fn resolve_global_filters(container: &Container) -> Vec<ResolvedLayer<dyn Filter>> {
-    let mut global: Vec<ResolvedLayer<dyn Filter>> = Vec::new();
-    if let Some(specs) = container.get::<FilterSpecs>() {
-        for spec in &specs.0 {
-            if let Some(layer) = spec.resolve(container) {
-                global.push(ResolvedLayer {
-                    type_id: spec.type_id,
-                    name: spec.name,
-                    source: LayerSite::Global,
-                    layer,
-                });
-            }
-        }
-    }
-    dedup_bucket(global)
+    dedup_bucket(resolve_global_layers::<FilterSpecs>(container))
 }
 
 /// Runs the deduped exception-filter chain on the error path: first matching

@@ -37,7 +37,7 @@
 //! #[async_trait]
 //! impl Guard for AuditGuard {
 //!     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-//!         tracing::info!(target: "audit", method = %req.method(), path = %req.uri(), "request");
+//!         tracing::info!(target: "api::authn", method = %req.method(), path = %req.uri(), "request seen");
 //!         Ok(())
 //!     }
 //! }
@@ -74,9 +74,10 @@
 //!
 //! ## Architecture
 //!
-//! Each shaper macro (`#[routes]`, `#[resolver]`, `#[messages]`) emits a
-//! call to one of [`RouteShaper`] / `run_layered_graphql_chain`
-//! / [`run_layered_ws_chain`] at the start of every handler — the per-route
+//! `#[routes]` bakes a [`RouteShaper`] per route at mount; `#[resolver]`
+//! emits a `run_layered_graphql_chain` call at the start of every resolver
+//! method; `#[messages]` composes its per-event guard table at gateway
+//! mount (wrapping each guard via `GuardAsWsMessageCheck`) — the per-route
 //! entry is what gives TypeId-level dedup against the global chain. Guards
 //! have **no** transport-edge band: the pool executes in the shaper
 //! (post-routing, so it reads `#[public]`), at a `Guarded` self-mount's
@@ -88,7 +89,8 @@
 //! `nest-rs-filters` / `nest-rs-exception-filters` each carry only their own
 //! trait + a builder + a registry, this crate also owns the cross-transport
 //! [`dispatch`] machinery (the [`RouteShaper`] entry, the layer-chain helpers,
-//! the graphql/ws chain runners) that the other three trio members consume.
+//! the graphql chain runner and the WS message bridge) that the other three
+//! trio members consume.
 //! Splitting it would mean duplicating the chain across crates or routing
 //! through a fifth — both worse than the asymmetry.
 //!
@@ -126,8 +128,8 @@ pub use nest_rs_core::layer_chain;
 pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 
 // Re-export dispatch helpers for macro-emitted code.
-#[cfg(feature = "ws")]
-pub use dispatch::run_layered_ws_chain;
-pub use dispatch::{RouteShaper, denial_to_http_response};
 #[cfg(feature = "graphql")]
-pub use dispatch::{denial_to_graphql_error, run_layered_graphql_chain};
+pub use dispatch::{
+    GraphqlChainCell, GraphqlChainSources, denial_to_graphql_error, run_layered_graphql_chain,
+};
+pub use dispatch::{RouteShaper, denial_to_http_response};

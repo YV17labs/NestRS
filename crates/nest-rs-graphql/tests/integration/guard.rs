@@ -2,10 +2,8 @@
 //! harness.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::async_graphql::{Context, Error, Result};
-use nest_rs_graphql::{
-    GraphqlContextSeed, GraphqlModule, GraphqlResolverGuard, async_trait, resolver,
-};
+use nest_rs_graphql::async_graphql::{Context, Result};
+use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, async_trait, resolver};
 use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;
@@ -58,16 +56,6 @@ impl Guard for RequireAdmin {
         match ctx.data_opt::<Role>() {
             Some(role) if role.0 == "admin" => Ok(()),
             _ => Err(Denial::forbidden("forbidden")),
-        }
-    }
-}
-
-#[async_trait]
-impl GraphqlResolverGuard for RequireAdmin {
-    async fn check(&self, ctx: &Context<'_>) -> Result<()> {
-        match ctx.data_opt::<Role>() {
-            Some(role) if role.0 == "admin" => Ok(()),
-            _ => Err(Error::new("forbidden")),
         }
     }
 }

@@ -1,24 +1,10 @@
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use nest_rs_authz::Ability;
 use nest_rs_core::injectable;
-use nest_rs_graphql::GraphqlResolverGuard;
-use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 
+/// Marker provider owning the GraphQL principal forward — it carries no
+/// logic of its own. Authentication and ability-building run in-band per
+/// operation (`AppGraphqlGuard`); this marker's reachability is what gates
+/// `forward_principal!(Claims, GraphqlAuthnGuard)`: omit `AuthzGraphqlModule`
+/// and the principal is never seeded into resolver context.
 #[injectable]
 #[derive(Default)]
 pub struct GraphqlAuthnGuard;
-
-#[async_trait]
-impl GraphqlResolverGuard for GraphqlAuthnGuard {
-    async fn check(&self, ctx: &Context<'_>) -> Result<()> {
-        match ctx.data_opt::<Arc<Ability>>() {
-            Some(_) => Ok(()),
-            None => {
-                Err(Error::new("unauthenticated")
-                    .extend_with(|_, e| e.set("code", "UNAUTHENTICATED")))
-            }
-        }
-    }
-}

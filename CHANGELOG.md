@@ -23,6 +23,13 @@ code.
 
 ### Changed
 
+- **`nest_rs_redis::ConnectionError` is now `RedisError`** (re-exported at the
+  crate root). A generic infra-error name collides in an app that imports
+  several backends' error types; the house pattern is concern-prefixed
+  (`ConfigError`, `StorageError`, `QueueError`), and Redis was the last one out
+  of step. Rename the import; the variants and fail-closed semantics are
+  unchanged.
+
 - **`DatabaseConfig::retry_serialization_conflicts` is now
   `observe_serialization_conflicts`** (env
   `NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS`). The flag never retried
@@ -63,6 +70,32 @@ code.
     so it has nothing for a module of its own to own.
 
 ### Added
+
+- **`sea_orm` and `rmcp` are re-exported from their surface crates**
+  (`nest_rs_seaorm::sea_orm`, `nest_rs_mcp::rmcp`), the way `nest-rs-http`
+  already re-exports `poem` and `nest-rs-graphql` re-exports `async_graphql`. A
+  consumer no longer carries its own `sea-orm` dependency and hand-mirrors the
+  framework's exact `=2.0` pin — the lockstep version travels with the
+  framework. (rmcp's `#[tool*]` macros still expand to a crate-relative `rmcp::`
+  path, so a crate that *hosts* a tool keeps a direct `rmcp` dependency for that
+  expansion; the re-export covers every other use.)
+
+- **`nest_rs_ws::Scoped<T>`** resolves an `#[injectable(scope = request)]`
+  provider from inside a WebSocket message handler, opening a fresh request
+  scope per inbound message — the same seam the per-message guards already run
+  on. This closes the four-transport parity: HTTP, GraphQL and MCP already had
+  `Scoped`.
+
+- **`#[wire_default(...)]`** (`nest-rs-resource`) — an auditable opt-in
+  placeholder for an unexposed column whose type the response-masking
+  reconstruction cannot default on its own (a custom enum, `Uuid`, timestamp,
+  `Decimal`). Without it such a column fails the masked round-trip closed (a
+  `500`); with it the reconstruction succeeds and the placeholder is stripped by
+  the static expose set before the body ships — so it never reaches the wire.
+  Sound only for a column no ability rule predicates on, and the macro rejects
+  it on an exposed, PK or relation field. This is what lets a strict DB-backed
+  enum stand in for a hidden `String` column: an unknown stored value then fails
+  to load rather than being silently coerced to a default.
 
 - **Ambient request state now reaches an MCP tool body — `Repo` works on MCP.**
   rmcp dispatches every tool call on its own spawned task, so the request
@@ -131,6 +164,14 @@ code.
   `for_root(...)` value that is not `Send` (the bound `#[module]`'s
   construct-once dynamic imports introduced). Both errors were already
   emitted; neither was guarded against silent regression.
+
+### Fixed
+
+- **A primary-key-less entity no longer panics on the data hot path.** `Repo`'s
+  query and mutation paths `expect`ed at least one primary-key column, so a user
+  modeling a view or a keyless table hit a mid-request panic — in the layer
+  whose written contract is "never panic, return `DbErr`". Both sites now return
+  a typed error naming the entity, logged at `error`.
 
 ### Removed
 

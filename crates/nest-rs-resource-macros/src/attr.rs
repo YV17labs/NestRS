@@ -61,6 +61,14 @@ pub(crate) struct ResourceField {
     /// string (`complexity = "first * child_complexity"`). When `None`, the
     /// macro picks a safe default per relation kind (see `relations::emit`).
     pub complexity: Option<Expr>,
+    /// Audited opt-in for the masking placeholder of an **unexposed** column
+    /// whose type the emitter can't default (custom enum, `Uuid`, timestamp,
+    /// `Decimal`). `None` ⇒ absent; `Some(None)` ⇒ bare `#[wire_default]` (the
+    /// column type's `Default`); `Some(Some(expr))` ⇒ `#[wire_default(expr)]`.
+    /// See `wire.rs` for the safety contract (only sound when no `Ability` rule
+    /// predicates on the column, since the placeholder is stripped before the
+    /// body ships).
+    pub wire_default: Option<Option<Expr>>,
 }
 
 impl ResourceField {
@@ -262,6 +270,27 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
 
         field.attrs.retain(|a| !a.path().is_ident("expose"));
 
+        // The audited masking-placeholder opt-in. Bare `#[wire_default]` emits
+        // the column type's `Default`; `#[wire_default(expr)]` emits `expr`.
+        // Meaningful only for a column the wire DTO omits, so misuse on an
+        // exposed / PK / relation field is a hard error below, not a silent
+        // no-op. Strip it so the ORM derives never see it.
+        let mut wire_default: Option<Option<Expr>> = None;
+        for attr in field
+            .attrs
+            .iter()
+            .filter(|a| a.path().is_ident("wire_default"))
+        {
+            if wire_default.is_some() {
+                return Err(syn::Error::new_spanned(attr, "duplicate `#[wire_default]`"));
+            }
+            wire_default = Some(match &attr.meta {
+                syn::Meta::Path(_) => None,
+                _ => Some(attr.parse_args::<Expr>()?),
+            });
+        }
+        field.attrs.retain(|a| !a.path().is_ident("wire_default"));
+
         // Type-driven relation detection. `HasOne<T>` paired with `belongs_to`
         // ⇒ BelongsTo; `HasMany<T>` paired with `has_many` ⇒ HasMany. A type
         // marker without its matching sea_orm marker is a user mistake worth
@@ -308,6 +337,25 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             ));
         }
 
+        // `#[wire_default]` is only meaningful for a column the wire DTO omits.
+        // An exposed column reconstructs from the body; a PK is never
+        // fabricated; a relation is materialised by a field resolver. Refusing
+        // these loudly (solid > silent) keeps the placeholder auditable.
+        if wire_default.is_some() {
+            if read {
+                return Err(syn::Error::new_spanned(
+                    &field.ident,
+                    "`#[wire_default]` is only valid on an unexposed column — an exposed column reconstructs from the response body; drop `#[wire_default]` or remove `#[expose]`",
+                ));
+            }
+            if is_pk || relation.is_some() {
+                return Err(syn::Error::new_spanned(
+                    &field.ident,
+                    "`#[wire_default]` cannot be applied to a primary key or relation field",
+                ));
+            }
+        }
+
         fields.push(ResourceField {
             ident,
             ty,
@@ -318,6 +366,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             validate,
             relation,
             complexity,
+            wire_default,
         });
     }
 

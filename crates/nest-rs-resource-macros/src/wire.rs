@@ -9,8 +9,15 @@
 //! against the real value, silently filtering rows. So only types where the
 //! placeholder is structurally distinguishable (empty string, null, false, 0)
 //! get a default. For `Uuid`, timestamps, `Decimal`, custom enums, etc., emit
-//! nothing — the shaper fails `wire_to_model` with 500 unless the user
-//! hand-writes `impl WireModelDefaults for Entity` with an audited placeholder.
+//! nothing — the shaper fails `wire_to_model` with 500 unless the column carries
+//! `#[wire_default]` (bare ⇒ the column type's `Default`) or
+//! `#[wire_default(<expr>)]` (an explicit placeholder). That is the audited
+//! escape hatch — **not** a hand-written `impl WireModelDefaults`, which would
+//! collide (E0119) with the impl this module always emits for an `#[expose]`d
+//! entity. It is sound **only** for an unexposed column that **no** `Ability`
+//! rule predicates on: the placeholder is stripped by `wire_keys` before the
+//! body ships, so it is invisible on the wire but inert only when no rule ever
+//! compares against it.
 
 use quote::quote;
 use syn::Type;
@@ -26,6 +33,19 @@ fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStrea
     }
     let key = &field.ident;
     let ty = &field.ty;
+    // The audited opt-in wins over the built-in type match: a `#[wire_default]`
+    // column emits its explicit placeholder even for a type the match refuses.
+    if let Some(default) = &field.wire_default {
+        let value = match default {
+            Some(expr) => quote!(#expr),
+            None => quote!(<#ty as ::core::default::Default>::default()),
+        };
+        return Some(quote! {
+            map.entry(::std::string::String::from(stringify!(#key)))
+                .or_insert_with(|| ::serde_json::to_value(#value)
+                    .expect("wire_default value serializes"));
+        });
+    }
     let last = match ty {
         Type::Path(tp) => tp.path.segments.last()?.ident.to_string(),
         _ => return None,

@@ -8,8 +8,8 @@ pub mod ws;
 
 pub use entities::user::*;
 pub use module::UsersModule;
-pub use service::{SocialIdentity, UsersService, UsersServiceByName};
+pub use service::{SocialIdentity, UsersService};
 
-pub use graphql::{UsersGraphqlModule, UsersResolver};
-pub use http::{UsersController, UsersHttpModule};
-pub use ws::{UsersGateway, UsersWsModule};
+pub use graphql::UsersGraphqlModule;
+pub use http::UsersHttpModule;
+pub use ws::UsersWsModule;

@@ -18,7 +18,7 @@ pub use module::AudioModule;
 pub use service::AudioService;
 pub use state::TranscodeState;
 
-pub use http::{AudioController, AudioHttpModule};
-pub use mcp::{AudioMcpModule, AudioTool};
-pub use queue::{AudioProcessor, AudioQueueModule};
-pub use schedule::{AudioScheduleModule, AudioTasks};
+pub use http::AudioHttpModule;
+pub use mcp::AudioMcpModule;
+pub use queue::AudioQueueModule;
+pub use schedule::AudioScheduleModule;

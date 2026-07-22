@@ -2,4 +2,4 @@ mod module;
 mod strategy;
 
 pub use module::AuthnModule;
-pub use strategy::{AppJwtStrategy, AuthnGuard};
+pub use strategy::AuthnGuard;

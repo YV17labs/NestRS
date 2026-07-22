@@ -9,5 +9,5 @@ pub use entity::*;
 pub use module::OrgsModule;
 pub use service::*;
 
-pub use graphql::{OrgsGraphqlModule, OrgsResolver};
-pub use http::{OrgsController, OrgsHttpModule};
+pub use graphql::OrgsGraphqlModule;
+pub use http::OrgsHttpModule;

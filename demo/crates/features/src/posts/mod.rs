@@ -22,6 +22,6 @@ pub use event::PostPublishedEvent;
 pub use module::PostsModule;
 pub use service::PostsService;
 
-pub use graphql::{PostsGraphqlModule, PostsResolver};
-pub use http::{PostsController, PostsHttpModule};
-pub use mcp::{PostsMcpModule, PostsTool};
+pub use graphql::PostsGraphqlModule;
+pub use http::PostsHttpModule;
+pub use mcp::PostsMcpModule;

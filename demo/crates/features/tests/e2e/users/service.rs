@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use features::orgs::ActiveModel as OrgActiveModel;
-use features::users::{ActiveModel as UserActiveModel, SocialIdentity, UsersService};
+use features::users::{ActiveModel as UserActiveModel, SocialIdentity, UserRole, UsersService};
 use nest_rs_authn::AuthError;
 use nest_rs_seaorm::{Executor, with_request_executor};
 use nest_rs_testing::EphemeralDatabase;
@@ -25,7 +25,7 @@ async fn seed_user(conn: &DatabaseConnection, org_id: Uuid, email: &str) -> Uuid
         org_id: Set(org_id),
         name: Set("Seed".to_owned()),
         email: Set(email.to_owned()),
-        role: Set("user".to_owned()),
+        role: Set(UserRole::User),
         password_hash: Set(None),
         ..Default::default()
     }
@@ -97,6 +97,40 @@ async fn users_with_email(conn: &DatabaseConnection, email: &str) -> i64 {
         [Value::from(email.to_owned())],
     )
     .await
+}
+
+// The whole point of the strict `UserRole` enum column: a DB value outside
+// `{"user","admin"}` must **fail to load**, not silently demote to `User`. This
+// inserts an out-of-range role behind the entity's back (raw SQL) and asserts
+// the typed load errors — the fail-closed posture the old `String` column lacked.
+#[tokio::test]
+async fn an_unknown_db_role_fails_to_load_rather_than_demoting_silently() {
+    use sea_orm::EntityTrait;
+
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("ephemeral database");
+    let conn = db.connection();
+    let org_id = Uuid::now_v7();
+    seed_org(conn.as_ref(), org_id).await;
+
+    let rogue = Uuid::now_v7();
+    let stmt = Statement::from_sql_and_values(
+        conn.get_database_backend(),
+        "INSERT INTO \"user\" (id, org_id, name, email, role) VALUES ($1, $2, 'Rogue', 'rogue@acme.test', 'superuser')",
+        [Value::from(rogue), Value::from(org_id)],
+    );
+    conn.execute_raw(stmt)
+        .await
+        .expect("raw insert of a rogue role bypasses the enum");
+
+    let loaded = features::users::Entity::find_by_id(rogue)
+        .one(conn.as_ref())
+        .await;
+    assert!(
+        loaded.is_err(),
+        "an unknown role string must fail the typed load (DbErr), never coerce to User: {loaded:?}",
+    );
 }
 
 #[tokio::test]

@@ -2,6 +2,24 @@ use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// The user's authorization role, backed 1:1 by the existing `role` varchar
+/// (`"user"`/`"admin"`). Being a typed enum is what makes an unknown DB string
+/// **fail to load** (a `DbErr`) rather than silently demote to `User` — the
+/// fail-closed posture the plain `String` column could not give. Distinct from
+/// the JWT-scope [`crate::Role`]; `oauth::role_from_db` maps this into that.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, EnumIter, DeriveActiveEnum,
+)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "lowercase")]
+pub enum UserRole {
+    #[default]
+    #[sea_orm(string_value = "user")]
+    User,
+    #[sea_orm(string_value = "admin")]
+    Admin,
+}
+
 #[expose(
     name = "User",
     service = super::super::service::UsersService,
@@ -26,7 +44,8 @@ pub struct Model {
     #[sea_orm(unique)]
     #[expose(input(create, update), validate(email))]
     pub email: String,
-    pub role: String,
+    #[wire_default]
+    pub role: UserRole,
     pub password_hash: Option<String>,
     #[expose]
     pub created_at: DateTimeWithTimeZone,
@@ -53,9 +72,11 @@ mod tests {
         let mut body: Map<String, serde_json::Value> = Map::new();
         Entity::fill_wire_defaults(&mut body);
 
+        // `role` is a custom enum the built-in emitter can't default — the
+        // `#[wire_default]` opt-in supplies `UserRole::default()` ⇒ `"user"`.
         assert_eq!(
             body.get("role"),
-            Some(&serde_json::Value::String(String::new()))
+            Some(&serde_json::Value::String("user".into()))
         );
         assert_eq!(body.get("password_hash"), Some(&serde_json::Value::Null));
     }

@@ -74,7 +74,7 @@ impl OAuthService {
             .authenticate(email, password)
             .await
             .map_err(token_error_from_auth)?;
-        let roles = vec![role_from_db(&user.role)];
+        let roles = vec![role_from_db(user.role)];
         self.issue(Some(user.id), user.org_id, roles)
     }
 
@@ -117,7 +117,7 @@ impl OAuthService {
         Ok(Caller {
             user_id: user.id,
             org_id: user.org_id,
-            roles: vec![role_from_db(&user.role)],
+            roles: vec![role_from_db(user.role)],
         })
     }
 

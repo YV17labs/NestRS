@@ -83,7 +83,7 @@ mod tests {
             org_id,
             name: "Bob".into(),
             email: "bob@example.com".into(),
-            role: "user".into(),
+            role: user::UserRole::User,
             password_hash: Some("argon2id$...".into()),
             created_at: now,
             updated_at: now,

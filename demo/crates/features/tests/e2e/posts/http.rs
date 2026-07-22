@@ -13,7 +13,7 @@ use features::identity::Role;
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
 use features::testing::{DEV_PUBLIC_KEY, token};
-use features::users::ActiveModel as UserActive;
+use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs_authn::JwtConfig;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
@@ -48,7 +48,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
         org_id: Set(org_id),
         name: Set("Ada".into()),
         email: Set("ada@acme.test".into()),
-        role: Set("user".into()),
+        role: Set(UserRole::User),
         password_hash: Set(None),
         ..Default::default()
     }

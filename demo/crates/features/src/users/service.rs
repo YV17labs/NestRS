@@ -18,10 +18,10 @@ use uuid::Uuid;
 use validator::Validate;
 
 use super::entities::user as entity;
-use super::entities::user::{CreateUser, Entity as Users, UpdateUser, User};
+use super::entities::user::{CreateUser, Entity as Users, UpdateUser, User, UserRole};
 use super::entities::user_identity::{self, Entity as UserIdentities};
 
-const DEFAULT_ROLE: &str = "user";
+const DEFAULT_ROLE: UserRole = UserRole::User;
 
 #[injectable]
 pub struct UsersService {
@@ -342,7 +342,7 @@ pub(crate) fn active_for_new_user(
 ) -> entity::ActiveModel {
     let mut active = input.into_active_model();
     active.org_id = Set(org_id);
-    active.role = Set(DEFAULT_ROLE.to_owned());
+    active.role = Set(DEFAULT_ROLE);
     if password_hash.is_some() {
         active.password_hash = Set(password_hash);
     }
@@ -399,7 +399,7 @@ mod tests {
             org_id,
             name: name.into(),
             email: format!("{name}@example.com"),
-            role: "user".into(),
+            role: UserRole::User,
             password_hash: None,
             created_at: now,
             updated_at: now,
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn default_role_is_user() {
-        assert_eq!(DEFAULT_ROLE, "user");
+        assert_eq!(DEFAULT_ROLE, UserRole::User);
     }
 
     #[test]
@@ -474,9 +474,10 @@ mod tests {
             active_into_get::<Uuid>(&active, entity::Column::OrgId),
             Some(org)
         );
+        // The enum column persists as its `string_value` — `UserRole::User` ⇒ `"user"`.
         assert_eq!(
             active_into_get::<String>(&active, entity::Column::Role).as_deref(),
-            Some(DEFAULT_ROLE),
+            Some("user"),
         );
         let pw = active.get(entity::Column::PasswordHash);
         assert!(
@@ -564,7 +565,7 @@ mod tests {
             org_id: Uuid::now_v7(),
             name: "ada".into(),
             email: "ada@example.com".into(),
-            role: "user".into(),
+            role: UserRole::User,
             password_hash,
             created_at: now,
             updated_at: now,

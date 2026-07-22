@@ -1,0 +1,6 @@
+name = "nestjs"
+variant = "express"
+runtime = "node"
+port = 3110
+build = "npm ci && npm run build"
+start = "node dist/main.js"

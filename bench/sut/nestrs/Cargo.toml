@@ -1,0 +1,21 @@
+[package]
+name = "sut-nestrs"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
+nest-rs-core = { path = "../../../crates/nest-rs-core" }
+nest-rs-config = { path = "../../../crates/nest-rs-config" }
+nest-rs-guards = { path = "../../../crates/nest-rs-guards" }
+nest-rs-http = { path = "../../../crates/nest-rs-http" }
+nest-rs-interceptors = { path = "../../../crates/nest-rs-interceptors" }
+nest-rs-opentelemetry = { path = "../../../crates/nest-rs-opentelemetry", features = ["http"] }
+poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }

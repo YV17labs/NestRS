@@ -26,18 +26,6 @@ pub struct Page<M> {
     pub has_more: bool,
 }
 
-impl<M> Page<M> {
-    /// Empty page — no items, no cursor, no more rows. Used by callers that
-    /// short-circuit before hitting the DB (e.g. a deny-all scope).
-    pub fn empty() -> Self {
-        Self {
-            items: Vec::new(),
-            next_cursor: None,
-            has_more: false,
-        }
-    }
-}
-
 /// Clamp the requested page size to the `1..=100` window — the same bound
 /// [`PageParams::limit`] applies, kept here so callers passing a `u64` (e.g.
 /// the GraphQL pagination input) reuse one source of truth.
@@ -252,14 +240,6 @@ mod tests {
         let (items, more) = split_overfetched::<i32>(vec![], 10);
         assert!(items.is_empty());
         assert!(!more);
-    }
-
-    #[test]
-    fn empty_page_has_no_cursor_and_no_more() {
-        let page: Page<i32> = Page::empty();
-        assert!(page.items.is_empty());
-        assert_eq!(page.next_cursor, None);
-        assert!(!page.has_more);
     }
 
     #[test]

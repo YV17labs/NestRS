@@ -32,4 +32,4 @@ mod mask;
 pub use authorize::authorize;
 pub use bridge::GraphqlAbilityBridge;
 pub use context::ability;
-pub use mask::{masked_output, masked_output_for, masked_value_for};
+pub use mask::masked_value_for;

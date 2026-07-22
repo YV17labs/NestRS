@@ -33,10 +33,3 @@ pub fn interceptor<I: Interceptor + 'static>() -> InterceptorSpec {
 /// `AppBuilder::use_interceptors_global(...)`. The HTTP shaper reads it at
 /// configure time and resolves against the live container.
 pub struct InterceptorSpecs(pub Vec<InterceptorSpec>);
-
-impl InterceptorSpecs {
-    /// Type-ids paired with names, for dedup queries from the per-route shaper.
-    pub fn type_ids(&self) -> Vec<(TypeId, &'static str)> {
-        self.0.iter().map(|s| (s.type_id, s.name)).collect()
-    }
-}

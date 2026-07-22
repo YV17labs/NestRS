@@ -107,12 +107,6 @@ impl nest_rs_queue::Processor for ProbeProcessor {
     }
 }
 
-impl nest_rs_queue::FromContainer for ProbeProcessor {
-    fn from_container(_container: &Container) -> Self {
-        Self
-    }
-}
-
 #[tokio::test]
 async fn processors_run_inside_the_bound_job_context() {
     let container = Container::builder()

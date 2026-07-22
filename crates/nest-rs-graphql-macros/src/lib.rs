@@ -31,7 +31,8 @@ mod resolver;
 ///   wire DTO itself, `Option<…>` and `Vec<…>`; scalars pass through; an
 ///   irreconcilable value fails **closed**. Append `unmasked`
 ///   (`#[authorize(Read, E, unmasked)]`) to keep the gate but mask a custom
-///   shape (e.g. a cursor connection) yourself via `masked_output_for`.
+///   shape (e.g. a cursor connection) yourself via
+///   `nest_rs_authz::masked_output_ambient`.
 ///   Requires a `Result` return so denials can surface.
 /// - `#[public]` — deliberately ungated: no `#[authorize]` gate, no response
 ///   mask. Struct- and method-level `#[use_guards]` still run.

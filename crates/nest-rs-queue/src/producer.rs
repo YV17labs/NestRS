@@ -1,10 +1,10 @@
-//! Backend + producer seams.
+//! Producer seam.
 //!
-//! Every queue backend implements [`QueueBackend`] (the boot identity used by
-//! diagnostics) and exposes a [`JobProducer`] surface so any feature can
+//! Every queue backend exposes a [`JobProducer`] surface so any feature can
 //! enqueue without naming the backend. The first-class backend is `apalis-redis`
-//! (shipped as `nest-rs-queue`); third-party backends provide their own
-//! `*Module` that registers a `JobProducer` in the container the same way.
+//! (shipped as `nest-rs-redis`); third-party backends provide their own
+//! `*Module` that registers a `JobProducer` in the container the same way, plus
+//! a `Transport` that drains [`ProcessMethod`](crate::ProcessMethod).
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -12,21 +12,6 @@ use serde::Serialize;
 use crate::error::QueueError;
 use crate::processor::Job;
 use crate::queue_name::QueueName;
-
-/// A queue backend, identified by name for boot diagnostics. The actual
-/// runtime work happens through [`JobProducer`] (enqueue) and
-/// [`JobConsumer`](crate::consumer::JobConsumer) (drain `ProcessMethod` and
-/// dispatch). A backend's module typically:
-///
-/// 1. seeds an `Arc<dyn JobProducer>` in the container (so any service can
-///    inject it generically), and
-/// 2. contributes a `Transport` whose `serve` runs the backend's
-///    [`JobConsumer`](crate::consumer::JobConsumer) driver.
-pub trait QueueBackend: Send + Sync + 'static {
-    /// Stable display name (e.g. `"apalis-redis"`, `"sqs"`, `"in-memory"`).
-    /// Logged at boot when the consumer attaches.
-    fn name(&self) -> &'static str;
-}
 
 /// Backend-agnostic producer: push a JSON-serialized job onto a named queue.
 /// Concrete backends implement this; typed pushes are a convenience built on

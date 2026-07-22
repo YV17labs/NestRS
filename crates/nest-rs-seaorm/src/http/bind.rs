@@ -19,7 +19,7 @@ use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
 use crate::error::log_by_id_load_failure;
-use crate::{Access, Authorized, CrudService, ServiceError};
+use crate::{Access, CrudService, ServiceError};
 
 /// The loaded, authorized entity bound from a path id, through service `S`.
 /// Declare as a handler parameter (`user: Bind<UsersService, Read>`); read the
@@ -30,18 +30,6 @@ impl<S: CrudService, A> Bind<S, A> {
     /// Take ownership of the loaded, authorized model.
     pub fn into_inner(self) -> <S::Entity as EntityTrait>::Model {
         self.0
-    }
-}
-
-impl<S: CrudService, A: ActionMarker> Bind<S, A> {
-    /// Promote the bound model to an [`Authorized<E, A>`] proof for a service
-    /// method that takes one — the HTTP analog of
-    /// [`bind_required`](crate::graphql::bind_required). The action `A` carries
-    /// through, so the proof states *which* action was authorized. Sound because
-    /// `Bind` only ever holds a model returned by [`CrudService::access`] for
-    /// `A::ACTION`.
-    pub fn into_authorized(self) -> Authorized<S::Entity, A> {
-        Authorized::new(self.0)
     }
 }
 

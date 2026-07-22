@@ -66,13 +66,6 @@ impl WsConfig {
         self.max_connection = Some(ttl);
         self
     }
-
-    /// Remove the socket-lifetime ceiling (unlimited) — restores the
-    /// pre-ceiling behaviour explicitly.
-    pub fn unlimited(mut self) -> Self {
-        self.max_connection = None;
-        self
-    }
 }
 
 impl Config for WsConfig {
@@ -112,11 +105,6 @@ mod tests {
     fn with_max_connection_pins_the_ceiling_in_code() {
         let cfg = WsConfig::default().with_max_connection(Duration::from_secs(600));
         assert_eq!(cfg.max_connection, Some(Duration::from_secs(600)));
-    }
-
-    #[test]
-    fn unlimited_clears_the_ceiling() {
-        assert_eq!(WsConfig::default().unlimited().max_connection, None);
     }
 
     #[test]

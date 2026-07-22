@@ -1,7 +1,6 @@
 //! Job + Processor: the user-facing types every backend agrees on.
 
 use async_trait::async_trait;
-use nest_rs_core::Container;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -23,11 +22,4 @@ pub trait Processor: Send + Sync + 'static {
 
     /// Handle one job; returning `Err` fails it for the backend to retry.
     async fn process(&self, job: Self::Job) -> anyhow::Result<()>;
-}
-
-/// Queue analog of `#[injectable]`'s `from_container`, expressed as a trait so
-/// a backend can build any processor generically from the container.
-pub trait FromContainer: Sized {
-    /// Build the processor by resolving its `#[inject]` dependencies.
-    fn from_container(container: &Container) -> Self;
 }

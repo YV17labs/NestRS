@@ -3,10 +3,7 @@
 //!
 //! The framework-carried path is [`masked_value_for`], emitted automatically by
 //! `#[resolver]` after every `#[authorize(Action, Entity)]`-declared operation —
-//! a hand-written resolver never calls it. [`masked_output`] /
-//! [`masked_output_for`] remain the manual primitives for custom shapes the
-//! wrapper cannot see through (e.g. a cursor connection), paired with
-//! `#[authorize(…, unmasked)]`.
+//! a hand-written resolver never calls it.
 
 use nest_rs_graphql::async_graphql::{Context, Error};
 use nest_rs_resource::WireModelDefaults;
@@ -15,8 +12,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::ability;
+use crate::ActionMarker;
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
-use crate::{Ability, Action, ActionMarker};
 
 /// Mask a resolver's already-built wire value through the ambient ability —
 /// the GraphQL analog of the HTTP response shaper, sharing its value-level
@@ -71,38 +68,4 @@ where
             ))
         }
     }
-}
-
-/// Mask a loaded model into the wire output type using the ambient ability.
-pub fn masked_output<E, O>(ability: &Ability, action: Action, model: &E::Model) -> Result<O, Error>
-where
-    E: EntityTrait,
-    E::Model: Serialize,
-    O: DeserializeOwned,
-{
-    let masked = ability.mask::<E>(action, model);
-    serde_json::from_value(masked).map_err(|err| {
-        warn_mask_failure(
-            std::any::type_name::<E>(),
-            action,
-            "masked model did not match the output type",
-            &err,
-        );
-        Error::new(format!("response masking failed: {err}"))
-    })
-}
-
-/// Read the ambient ability and mask `model` into `O`.
-pub fn masked_output_for<A, E, O>(
-    ctx: &nest_rs_graphql::async_graphql::Context<'_>,
-    model: &E::Model,
-) -> Result<O, Error>
-where
-    A: ActionMarker,
-    E: EntityTrait,
-    E::Model: Serialize,
-    O: DeserializeOwned,
-{
-    let ability = ability(ctx)?;
-    masked_output::<E, O>(&ability, A::ACTION, model)
 }

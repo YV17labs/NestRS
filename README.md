@@ -81,15 +81,6 @@ frozen for the `1.x` line: breaking changes wait for `2.0`. Every `nest-rs-*`
 crate publishes at the same version in lockstep, so one NestRS version names
 exactly one compatible resolution.
 
-**The third-party types that appear in your code are frozen for the whole
-`1.x` line.** A handful of crates are part of the framework's public surface —
-their types show up in what the macros emit — so their majors are tied to the
-NestRS major: `poem 3`, `sea-orm 2.0`, `async-graphql 7.2`, `rmcp 2.2`,
-`inventory 0.3`, `validator 0.20`, `schemars 1`. The ORM and GraphQL pins are
-exact rather than caret, because the `Repo` bounds and the resolver codegen
-read enough of those surfaces that even a minor can shift generated code. One
-dependency resolution, for the life of `1.x`.
-
 ## Documentation
 
 **Using NestRS?** Head to **[nestrs.dev](https://nestrs.dev)** — getting started,

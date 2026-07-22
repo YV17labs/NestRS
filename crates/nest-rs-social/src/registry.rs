@@ -57,7 +57,7 @@ pub struct SocialProviderEntry {
     /// The provider config's [`Namespaced::NAMESPACE`](nest_rs_config::Namespaced)
     /// — write `GithubSocialConfig::NAMESPACE`, never a hand-typed copy. The
     /// "not configured" boot warning renders the env prefix from it
-    /// ([`env_prefix`]), so the namespace is spelled once, in the `#[config]`
+    /// (via the crate's `env_prefix` helper), so the namespace is spelled once, in the `#[config]`
     /// attribute, and a rename cannot leave a stale hint behind.
     pub config_namespace: &'static str,
     /// Build the provider from whatever configuration the deployment supplied.

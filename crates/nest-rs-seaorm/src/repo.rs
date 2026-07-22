@@ -56,7 +56,7 @@ impl<E: EntityTrait> Repo<E> {
     /// e.g. `Repo::<E>::scoped(Action::Read).one(&Repo::<E>::conn()?)`.
     ///
     /// A **write** must go through the service write path
-    /// ([`create_from_active`](crate::CrudService::create_from_active) or the
+    /// ([`create_from_active`](crate::Creatable::create_from_active) or the
     /// `Creatable`/`Updatable`/`Deletable` traits), never
     /// `active.insert(&Repo::<E>::conn()?)`: a raw insert skips the ability
     /// pre-filter, committing an out-of-scope row (DATA-S4).

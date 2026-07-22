@@ -112,8 +112,12 @@ can't leak unexposed columns). Handlers return the `#[expose]` output
 Reconstruction needs a default for every unexposed column: the macro
 provides one for safe scalars (`String`/`Option`/`bool`/numbers); a
 hidden column of a type it can't default (`Uuid`, timestamps, `Decimal`,
-custom enums) needs a hand-written `impl WireModelDefaults` — **so
-columns an ability rule predicates on are best left exposed.**
+custom enums) takes an explicit `#[wire_default(…)]` placeholder (bare
+`#[wire_default]` uses the column's `Default`). The placeholder is
+stripped by the static expose set before the body ships, so it never
+reaches the wire — **sound only where no ability rule predicates on that
+column** (else the mask decision would compare the placeholder, silently
+filtering rows).
 
 - **HTTP**: the `Authorize<A, E>` extractor in a handler's signature is
   the arming declaration — `#[routes]` installs the response shaper

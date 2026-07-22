@@ -24,7 +24,7 @@ nest-rs-config.workspace = true
 validator.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
-# Typed `ConnectionError` for the Redis backend (the producer surface speaks
+# Typed `RedisError` for the Redis backend (the producer surface speaks
 # `nest_rs_queue::QueueError`); framework crates surface `thiserror`, not `anyhow`.
 thiserror.workspace = true
 serde.workspace = true

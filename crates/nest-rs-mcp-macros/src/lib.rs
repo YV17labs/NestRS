@@ -17,6 +17,17 @@ mod mcp;
 /// struct MyHandler { #[inject] svc: Arc<MyService> }
 /// ```
 ///
+/// # Why not `#[tools]`?
+///
+/// Every other host decorator is named for its role — `#[controller]`,
+/// `#[resolver]`, `#[gateway]`, `#[processor]` — which would argue for
+/// `#[tools]` on a `tool.rs`. It is **deliberately** `#[mcp]`: this crate
+/// re-exports rmcp's own `#[tool]`, and the tool host file carries both. A
+/// `#[tools]` sitting one letter from the `#[tool]` beneath it would read as a
+/// typo at every glance, while `#[mcp]` cannot be confused with anything. The
+/// role word stays where it is unambiguous — the file name (`tool.rs`) and the
+/// module (`<Feature>McpModule`). Accepted asymmetry, not an oversight.
+///
 /// # Expands to
 ///
 /// The struct unchanged, a `from_container` constructor, and an `impl

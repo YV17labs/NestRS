@@ -16,11 +16,21 @@ pub struct WsEnvelope {
 impl WsEnvelope {
     /// Serialize `data` into the `{ event, data }` wire frame for a given event
     /// name.
-    pub fn encode<T: Serialize>(event: &str, data: &T) -> Result<String, serde_json::Error> {
-        serde_json::to_string(&WsEnvelope {
-            event: event.to_string(),
-            data: serde_json::to_value(data)?,
-        })
+    ///
+    /// Writes the payload straight into the frame: going through an owned
+    /// `WsEnvelope` first would allocate the event `String` and a whole
+    /// intermediate `Value` per frame — and for a broadcast, whose payload is
+    /// *already* a `Value`, that intermediate was a full deep clone.
+    pub fn encode<T: Serialize + ?Sized>(
+        event: &str,
+        data: &T,
+    ) -> Result<String, serde_json::Error> {
+        #[derive(Serialize)]
+        struct Frame<'a, T: ?Sized> {
+            event: &'a str,
+            data: &'a T,
+        }
+        serde_json::to_string(&Frame { event, data })
     }
 }
 

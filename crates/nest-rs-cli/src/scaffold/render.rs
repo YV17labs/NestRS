@@ -30,6 +30,7 @@ impl Renderer {
         put("resolver", names.resolver());
         put("gateway", names.gateway());
         put("processor", names.processor());
+        put("queue_name", names.queue_name());
         put("tasks", names.tasks());
         put("tool", names.tool());
         put("entity", names.entity());

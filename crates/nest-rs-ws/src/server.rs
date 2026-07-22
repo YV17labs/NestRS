@@ -36,8 +36,13 @@ pub(crate) const OUTBOX_CAPACITY: usize = 256;
 /// Default namespace marker for [`WsServer`].
 pub struct Global;
 
+/// An encoded outbound frame. Shared rather than owned: a broadcast hands the
+/// *same* bytes to every recipient, so cloning a `String` per connection made
+/// fan-out cost O(recipients × frame size) instead of O(recipients).
+pub(crate) type Frame = Arc<str>;
+
 struct Conn {
-    outbox: Sender<String>,
+    outbox: Sender<Frame>,
     rooms: HashSet<String>,
 }
 
@@ -67,7 +72,7 @@ impl<N: 'static> Default for WsServer<N> {
 }
 
 impl<N: 'static> WsServer<N> {
-    pub(crate) fn connect(&self, outbox: Sender<String>) -> ConnId {
+    pub(crate) fn connect(&self, outbox: Sender<Frame>) -> ConnId {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.conns.lock().insert(
             id,
@@ -81,6 +86,20 @@ impl<N: 'static> WsServer<N> {
 
     pub(crate) fn disconnect(&self, id: ConnId) {
         self.conns.lock().remove(&id);
+    }
+
+    /// Snapshot the outboxes of the connections matching `select`, releasing
+    /// the registry lock before anything is pushed — see [`fan_out`].
+    fn recipients(&self, select: impl Fn(&Conn) -> bool) -> Vec<Sender<Frame>> {
+        let conns = self.conns.lock();
+        let mut out = Vec::with_capacity(conns.len());
+        out.extend(
+            conns
+                .values()
+                .filter(|conn| select(conn))
+                .map(|conn| conn.outbox.clone()),
+        );
+        out
     }
 
     /// Send `data` under `event` to every live connection. Returns the number
@@ -154,15 +173,7 @@ impl<N: 'static> Registry for WsServer<N> {
         let Ok(frame) = WsEnvelope::encode(event, &data) else {
             return 0;
         };
-        let conns = self.conns.lock();
-        let (mut sent, mut shed) = (0usize, 0usize);
-        for conn in conns.values() {
-            if conn.outbox.try_send(frame.clone()).is_ok() {
-                sent += 1;
-            } else {
-                shed += 1;
-            }
-        }
+        let (sent, shed) = fan_out(self.recipients(|_| true), frame.into());
         warn_if_shed(event, "broadcast", sent, shed);
         sent
     }
@@ -171,15 +182,8 @@ impl<N: 'static> Registry for WsServer<N> {
         let Ok(frame) = WsEnvelope::encode(event, &data) else {
             return 0;
         };
-        let conns = self.conns.lock();
-        let (mut sent, mut shed) = (0usize, 0usize);
-        for conn in conns.values().filter(|conn| conn.rooms.contains(room)) {
-            if conn.outbox.try_send(frame.clone()).is_ok() {
-                sent += 1;
-            } else {
-                shed += 1;
-            }
-        }
+        let recipients = self.recipients(|conn| conn.rooms.contains(room));
+        let (sent, shed) = fan_out(recipients, frame.into());
         warn_if_shed(event, "room", sent, shed);
         sent
     }
@@ -191,13 +195,31 @@ impl<N: 'static> Registry for WsServer<N> {
         let conns = self.conns.lock();
         let sent = conns
             .get(&id)
-            .is_some_and(|conn| conn.outbox.try_send(frame).is_ok());
+            .is_some_and(|conn| conn.outbox.try_send(frame.into()).is_ok());
         // A registered connection that couldn't take the frame has a full outbox.
         if conns.contains_key(&id) && !sent {
             warn_if_shed(event, "direct", 0, 1);
         }
         sent
     }
+}
+
+/// Push one frame to each recipient, returning `(sent, shed)`.
+///
+/// Deliberately takes an already-snapshotted list: the registry lock is held
+/// only long enough to clone the `Sender`s (a pointer bump each), never across
+/// the O(N) push loop — so a broadcast to a large fleet cannot stall a
+/// concurrent connect or disconnect.
+fn fan_out(recipients: Vec<Sender<Frame>>, frame: Frame) -> (usize, usize) {
+    let (mut sent, mut shed) = (0usize, 0usize);
+    for outbox in recipients {
+        if outbox.try_send(Arc::clone(&frame)).is_ok() {
+            sent += 1;
+        } else {
+            shed += 1;
+        }
+    }
+    (sent, shed)
 }
 
 /// Surface shed frames at `warn` — one aggregated event per send call (so a
@@ -305,14 +327,14 @@ mod tests {
     use tokio::sync::mpsc::Receiver;
 
     /// Test outbox: matches the production bounded channel.
-    fn unbounded_channel() -> (Sender<String>, Receiver<String>) {
+    fn unbounded_channel() -> (Sender<Frame>, Receiver<Frame>) {
         tokio::sync::mpsc::channel(OUTBOX_CAPACITY)
     }
 
-    fn recv_all(rx: &mut Receiver<String>) -> Vec<String> {
+    fn recv_all(rx: &mut Receiver<Frame>) -> Vec<String> {
         let mut out = Vec::new();
         while let Ok(frame) = rx.try_recv() {
-            out.push(frame);
+            out.push(frame.to_string());
         }
         out
     }

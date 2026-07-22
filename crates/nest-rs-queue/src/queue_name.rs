@@ -1,9 +1,9 @@
 //! Compile-time queue identity.
 //!
-//! A queue's name is otherwise a bare string repeated on both sides —
-//! `#[process(queue = "audio")]` on the consumer, `push_json("audio", …)` on
-//! the producer — with nothing linking the two literals or the payload type
-//! either side agrees on. [`QueueName`] turns that identity into a **type**
+//! A queue's name would otherwise be a bare string repeated on both sides —
+//! one literal on the consumer, another in `push_json("audio", …)` on the
+//! producer — with nothing linking the two, nor the payload type either side
+//! agrees on. [`QueueName`] turns that identity into a **type**
 //! that carries both facts: the wire name ([`QueueName::NAME`]) and the job
 //! type ([`QueueName::Job`]). Declared once at the feature port next to the
 //! [`Job`] payload with the [`queue`](crate::queue) attribute macro, it is the
@@ -35,7 +35,7 @@ use crate::processor::Job;
 /// error naming both types.
 pub trait QueueName: 'static {
     /// The wire name apalis (or any backend) namespaces storage under — the
-    /// exact string a legacy `#[process(queue = "…")]` literal would carry.
+    /// exact string that reaches the wire and the worker registry.
     const NAME: &'static str;
 
     /// The payload type pushed onto and drained off this queue. The producer's

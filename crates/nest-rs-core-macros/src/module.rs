@@ -1,3 +1,4 @@
+use nest_rs_codegen::last_segment_ident;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -299,10 +300,7 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Last path segment for readable boot-time panics.
 fn path_tail(p: &Path) -> String {
-    p.segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_else(|| quote!(#p).to_string())
+    last_segment_ident(p).to_string()
 }
 
 /// Last path segment of a `dyn Trait` for the access-graph descriptor label.

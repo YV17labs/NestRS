@@ -10,7 +10,7 @@ mod processor;
 mod queue;
 
 /// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
-/// tagged with `#[process(queue = "...", concurrency, retries)]` becomes a
+/// tagged with `#[process(queue = <Queue>, concurrency, retries)]` becomes a
 /// queue consumer the `QueueWorker` spawns at boot.
 ///
 /// A single provider may carry several `#[process]` methods (different
@@ -18,22 +18,22 @@ mod queue;
 /// dependencies — pooling related queue handlers on one service keeps
 /// shared state (clients, repositories) in one place.
 ///
-/// The `queue` is named either by a raw string literal (legacy form) or by a
-/// `QueueName` **type** — the preferred form,
-/// declared with [`queue`](macro@crate::queue) at the feature port:
-/// `#[process(queue = AudioQueue)]`. The type form reads
+/// The `queue` is named by its `QueueName` **type**, declared with
+/// [`queue`](macro@crate::queue) at the feature port. The macro reads
 /// `<AudioQueue as QueueName>::NAME` into the inventory entry **and** asserts,
 /// at compile time, that this method's job argument is
 /// `<AudioQueue as QueueName>::Job` — a mismatch is a build error naming both
-/// types, not a job that silently never drains.
+/// types, not a job that silently never drains. A bare string is refused with
+/// that diagnostic: naming the queue without naming its payload is the exact
+/// mistake the typed form exists to catch.
 ///
 /// Per-method attributes (exactly one `#[process]` per method):
 ///
-/// - `#[process(queue = "audio")]` — minimal, defaults `concurrency = 1`,
+/// - `#[process(queue = AudioQueue)]` — minimal, defaults `concurrency = 1`,
 ///   `retries = 0`.
-/// - `#[process(queue = "audio", concurrency = 5)]` — bound the in-flight jobs
-///   per worker.
-/// - `#[process(queue = "audio", concurrency = 5, retries = 3)]` — apalis
+/// - `#[process(queue = AudioQueue, concurrency = 5)]` — bound the in-flight
+///   jobs per worker.
+/// - `#[process(queue = AudioQueue, concurrency = 5, retries = 3)]` — apalis
 ///   retries before the job lands on the queue's failed list.
 ///
 /// The method signature is `async fn(&self, job: T) -> anyhow::Result<()>`,

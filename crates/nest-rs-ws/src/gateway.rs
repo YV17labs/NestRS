@@ -213,11 +213,12 @@ async fn serve_connection<G: Gateway, N: 'static>(
     socket: poem::web::websocket::WebSocketStream,
 ) {
     let (mut sink, mut stream) = socket.split();
-    let (outbox, mut rx) = tokio::sync::mpsc::channel::<String>(crate::server::OUTBOX_CAPACITY);
+    let (outbox, mut rx) =
+        tokio::sync::mpsc::channel::<crate::server::Frame>(crate::server::OUTBOX_CAPACITY);
 
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
-            if sink.send(Message::Text(frame)).await.is_err() {
+            if sink.send(Message::Text(frame.to_string())).await.is_err() {
                 break;
             }
         }
@@ -275,7 +276,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                         // exactly at the limit and keeps the reply symmetric.
                         if text.len() > limits.max_message_bytes {
                             let frame = error_frame("error", "message too large");
-                            if outbox.try_send(frame).is_err() {
+                            if outbox.try_send(frame.into()).is_err() {
                                 break;
                             }
                             continue;
@@ -287,7 +288,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                             // with broadcasts the handler triggered is preserved.
                             // A full outbox means the peer is not draining —
                             // disconnect it rather than buffer without bound.
-                            if outbox.try_send(reply).is_err() {
+                            if outbox.try_send(reply.into()).is_err() {
                                 break;
                             }
                         }

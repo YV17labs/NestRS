@@ -135,6 +135,7 @@ export default defineConfig({
             { label: 'Introduction', slug: 'index' },
             { label: 'Why NestRS', slug: 'why' },
             { label: 'Why not axum?', slug: 'why-not-axum' },
+            { label: 'Benchmarks', slug: 'benchmarks' },
             { label: 'Coming from NestJS', slug: 'coming-from-nestjs' },
             { label: 'Getting started', slug: 'getting-started' },
             { label: 'CLI', slug: 'cli' },

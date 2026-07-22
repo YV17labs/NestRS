@@ -55,19 +55,23 @@ impl PostsController {
     }
 
     #[post("/:id/publish")]
+    #[use_guards(PostAuthorGuard)]
     #[use_exception_filters(PostProblemFilter)]
     #[api(
         summary = "Publish a draft post",
-        description = "Transitions a draft to published. The id is bound to the loaded, \
-                       `Update`-authorized post through the service. Re-publishing an already \
-                       published post returns RFC 9457 `application/problem+json` (409).",
+        description = "Transitions a draft to published and writes a publication audit row in the \
+                       same transaction. The id is bound to the loaded, `Update`-authorized post \
+                       through the service. Re-publishing an already published post returns RFC \
+                       9457 `application/problem+json` (409).",
         tags("Post")
     )]
     async fn publish(
         &self,
         _authz: Authorize<Update, PostEntity>,
         post: Bind<PostsService, Update>,
+        actor: Ctx<PostAuthor>,
     ) -> Result<Json<Post>> {
-        Ok(Json(self.svc.publish(post.into_inner()).await?))
+        let PostAuthor(actor_id) = *actor;
+        Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
     }
 }

@@ -40,8 +40,23 @@ fn respond(report: ProbeReport) -> Response {
         IndicatorStatus::Up => StatusCode::OK,
         IndicatorStatus::Down => StatusCode::SERVICE_UNAVAILABLE,
     };
-    Response::builder()
-        .status(status)
-        .content_type("application/json")
-        .body(serde_json::to_vec(&report).unwrap_or_default())
+    // A report that fails to serialize (out-of-memory territory — the shape is
+    // plain strings/maps) must not ship a silent empty 200: an orchestrator
+    // would read that as healthy. Fail loud with a 500 instead.
+    match serde_json::to_vec(&report) {
+        Ok(body) => Response::builder()
+            .status(status)
+            .content_type("application/json")
+            .body(body),
+        Err(error) => {
+            tracing::error!(
+                target: "nest_rs::health",
+                %error,
+                "health report failed to serialize",
+            );
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .finish()
+        }
+    }
 }

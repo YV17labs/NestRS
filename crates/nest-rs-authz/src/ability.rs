@@ -146,7 +146,15 @@ impl Ability {
     pub fn can<E: EntityTrait>(&self, action: Action, model: &E::Model) -> bool {
         let mut allowed = false;
         for rule in self.rules_for(action, TypeId::of::<E>()) {
-            if predicate_of::<E>(rule).matches(model) {
+            let Some(predicate) = predicate_of::<E>(rule) else {
+                // Unreachable type mismatch (see `predicate_of`) — fail
+                // closed: a broken denial denies, a broken grant never widens.
+                if rule.inverted {
+                    return false;
+                }
+                continue;
+            };
+            if predicate.matches(model) {
                 if rule.inverted {
                     return false;
                 }
@@ -218,7 +226,8 @@ impl Ability {
             .rules_for(action, TypeId::of::<E>())
             .filter(|rule| !rule.inverted)
         {
-            if !predicate_of::<E>(rule).matches(model) {
+            // A broken grant predicate contributes no fields — fail closed.
+            if !predicate_of::<E>(rule).is_some_and(|p| p.matches(model)) {
                 continue;
             }
             match &rule.fields {
@@ -230,10 +239,19 @@ impl Ability {
     }
 }
 
-/// Recover a rule's typed predicate. The downcast cannot fail: the rule was
-/// stored under `TypeId::of::<E>()`, so its predicate is a `Predicate<E>`.
-fn predicate_of<E: EntityTrait>(rule: &Rule) -> &Predicate<E> {
-    rule.predicate
-        .downcast_ref::<Predicate<E>>()
-        .expect("rule predicate type matches the subject it is keyed under")
+/// Recover a rule's typed predicate. The downcast cannot fail in practice —
+/// the rule was stored under `TypeId::of::<E>()`, so its predicate is a
+/// `Predicate<E>` — but this is a per-request authz path, so a mismatch fails
+/// **closed** at the call sites (deny / no grant) instead of panicking,
+/// mirroring `Predicate::to_condition`'s defense-in-depth posture.
+fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
+    let predicate = rule.predicate.downcast_ref::<Predicate<E>>();
+    if predicate.is_none() {
+        tracing::error!(
+            target: "nest_rs::authz",
+            reason = "predicate_type_mismatch",
+            "ability rule predicate does not match its keyed subject — failing closed",
+        );
+    }
+    predicate
 }

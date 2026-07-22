@@ -139,7 +139,8 @@ Snake_case, no dotted variants. **One role → one file per folder.**
 
 - **Span targets dotted, lowercase, framework-prefixed**: `nest_rs::http`,
   `nest_rs::orm`, `nest_rs::authn`, … One target per concern per crate.
-  App spans use the app name (`api::users`).
+  App spans use the app name (`api::users`); the shared feature library
+  uses `features::<snake>` (the style the CLI scaffolds).
 - **Level per layer.** Controllers/resolvers/gateways: `info` on success.
   Services: `debug`. `Repo`: `trace`. Denials/security: `warn`+.
   Unexpected errors: `error`.

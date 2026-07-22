@@ -206,7 +206,6 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-openapi",
  "nest-rs-opentelemetry",
- "nest-rs-queue",
  "nest-rs-redis",
  "nest-rs-resource",
  "nest-rs-schedule",
@@ -636,7 +635,6 @@ dependencies = [
  "features",
  "migrations",
  "nest-rs-authn",
- "nest-rs-authz",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-health",
@@ -3102,6 +3100,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-queue",
+ "redis",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3116,10 +3115,12 @@ name = "nest-rs-resource"
 version = "1.0.0"
 dependencies = [
  "async-graphql",
+ "async-trait",
  "nest-rs-graphql",
  "nest-rs-resource-macros",
  "sea-orm",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

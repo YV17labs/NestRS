@@ -157,6 +157,9 @@ syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 
+# Dev-only. WebSocket client driving the live gateway in e2e tests.
+tokio-tungstenite = "0.27"
+
 # The product's functional core (not framework — no `nest-rs-` prefix). All
 # shared business logic, contracts, policy, and the transport adapters that
 # expose them — features compose a port + edge modules (HTTP, GraphQL, WS,

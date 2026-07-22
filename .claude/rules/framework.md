@@ -18,8 +18,23 @@ decorator — if it clears the bar below.
 A `proc-macro` crate can only export macros, so each decorator lives in
 a companion `*-macros` crate re-exported by its home crate. Shared token
 helpers in `nest-rs-codegen`. A `*-macros` crate **must not** depend on
-its surface crate — emit absolute-path tokens (`::nest_rs_core::*`,
-`::std::sync::Arc`); never rely on call-site scope.
+its surface crate — emit absolute-path tokens; never rely on call-site
+scope. Testable form: **a `*-macros` crate emits only `::std`/`::core`
+paths or paths routed through its surface crate's re-exports
+(`::nest_rs_<x>::<dep>`) — never a bare third-party path** (`::anyhow`,
+`::tracing`, …), which resolves against the *consumer's* extern prelude
+and breaks any app lacking that direct dep. Three sanctioned exceptions,
+all deps the use site must already own: **emitted derives**
+(`::serde`/`::validator`/`::schemars` — a derive's own expansion targets
+the call-site prelude, so re-export routing would be false hygiene);
+**the entity-site trio** `::sea_orm`/`::uuid`/`::chrono` emitted by
+resource/crud macros (an entity crate owns those by definition); and
+**the HTTP handler surface** — `#[routes]`/`#[crud]` wrap each verb in
+poem's own `#[handler]`, whose expansion targets the call-site prelude,
+so a controller crate owns `poem` (and `nest-rs-interceptors`). The
+proof is compile-time: `nest-rs-macro-hygiene` (workspace,
+`publish = false`) consumes decorators with **zero** third-party deps —
+extend it when adding a decorator.
 
 ### When (not) to write a decorator
 

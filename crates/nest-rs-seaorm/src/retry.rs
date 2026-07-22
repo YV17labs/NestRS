@@ -91,29 +91,39 @@ where
     Fut: std::future::Future<Output = Result<T, DbErr>>,
 {
     let attempts = attempts.clamp(1, MAX_RETRY_ATTEMPTS);
-    let mut last_err: Option<DbErr> = None;
-    for attempt in 0..attempts {
+    // Single `op()` call site: a non-retryable error returns immediately; a
+    // retryable one on the last attempt returns the error itself (no `expect`
+    // for an "impossible" empty budget), and never sleeps past the budget.
+    let mut attempt = 0;
+    loop {
         match op().await {
             Ok(value) => return Ok(value),
             Err(err) => {
                 if !is_retryable_conflict(&err) {
                     return Err(err);
                 }
+                attempt += 1;
+                if attempt >= attempts {
+                    tracing::warn!(
+                        target: "nest_rs::orm",
+                        attempt,
+                        attempts,
+                        error = %err,
+                        "transaction conflict — retry budget exhausted",
+                    );
+                    return Err(err);
+                }
                 tracing::warn!(
                     target: "nest_rs::orm",
-                    attempt = attempt + 1,
+                    attempt,
                     attempts,
                     error = %err,
                     "transaction conflict — retrying",
                 );
-                last_err = Some(err);
-                if attempt + 1 < attempts {
-                    tokio::time::sleep(backoff_for(initial_backoff, attempt)).await;
-                }
+                tokio::time::sleep(backoff_for(initial_backoff, attempt - 1)).await;
             }
         }
     }
-    Err(last_err.expect("retry budget exhausted ⇒ at least one error observed"))
 }
 
 /// Saturating exponential backoff, capped at [`MAX_BACKOFF`]. `1u32 <<

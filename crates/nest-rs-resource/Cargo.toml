@@ -24,6 +24,10 @@ async-graphql = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 sea-orm.workspace = true
 serde_json.workspace = true
+# Re-exported for `#[expose]`-generated code (lifecycle impl, loader logs) so
+# the consuming crate needs no direct dep on either.
+async-trait.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 # `#[expose]` emits `::serde::`/`::schemars::`/`::validator::` paths that resolve
@@ -37,7 +41,6 @@ schemars.workspace = true
 nest-rs-seaorm = { path = "../nest-rs-seaorm" }
 sea-orm.workspace = true
 uuid.workspace = true
-async-trait.workspace = true
 validator.workspace = true
 
 [lints]

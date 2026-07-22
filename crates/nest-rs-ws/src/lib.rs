@@ -105,6 +105,11 @@ pub use tracing;
 
 pub use poem;
 
+// Re-exported so `#[messages]`-generated discovery metadata
+// (`HttpEndpointMeta` — the WS upgrade is an HTTP GET) resolves through this
+// crate: a WS-only gateway crate needs no direct `nest-rs-http` dependency.
+pub use nest_rs_http;
+
 pub use nest_rs_ws_macros::messages;
 
 /// The gateway decorator. `#[use_interceptors(...)]` / `#[use_filters(...)]`

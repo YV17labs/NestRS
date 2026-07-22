@@ -35,10 +35,20 @@ pub fn env_var(name: &str) -> Option<String> {
 fn env_var_from(name: &str, dotenv: &HashMap<String, String>) -> Option<String> {
     match env::var(name) {
         Ok(v) if !v.is_empty() => Some(v),
-        // Present but empty — or present but non-UTF-8 — in the real env: treat
-        // as unset, and do not fall back. An explicit real-env entry shadows
-        // the cascade, matching the set-if-absent semantics of `load_cascade`.
-        Ok(_) | Err(env::VarError::NotUnicode(_)) => None,
+        // Present but empty in the real env: treat as unset, and do not fall
+        // back. An explicit real-env entry shadows the cascade, matching the
+        // set-if-absent semantics of `load_cascade`.
+        Ok(_) => None,
+        // Same shadowing semantics, but a non-UTF-8 value is far more likely
+        // a mistake than a deliberate unset — never swallow it silently.
+        Err(env::VarError::NotUnicode(_)) => {
+            tracing::warn!(
+                target: "nest_rs::config",
+                name,
+                "environment variable is not valid UTF-8 — treated as unset, cascade suppressed",
+            );
+            None
+        }
         Err(env::VarError::NotPresent) => dotenv.get(name).filter(|v| !v.is_empty()).cloned(),
     }
 }

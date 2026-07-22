@@ -199,11 +199,31 @@ chrono-tz = "0.10"
 # not clear our "no pre-release in a foundation dep" bar.
 apalis = "0.7"
 apalis-redis = "0.7"
+# Direct Redis client (same 0.32 line apalis-redis pins, so one connection
+# type). Used by nest-rs-redis for the connection manager it exposes and the
+# atomic fixed-window Lua script of the `throttler` feature. The single
+# workspace pin guarantees version unification with apalis-redis — a semver
+# divergence would break the `#[from]` conversion at compile time (wanted).
+redis = { version = "0.32", default-features = false, features = [
+    "aio",
+    "connection-manager",
+    "script",
+    "tokio-comp",
+] }
+
+# CLI (nest-rs-cli)
+clap = { version = "4", features = ["derive", "env"] }
+toml_edit = "0.25"
 
 # Proc-macro dependencies
 syn = { version = "3.0", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
+
+# Dev-only (test targets)
+tempfile = "3"
+tower = "0.5"
+libc = "0.2"
 
 # Internal crates (framework).
 # Workspace keys, package names, and directory names are all `nest-rs-*` — the
@@ -259,9 +279,9 @@ nest-rs-cli = { version = "1.0.0", path = "crates/nest-rs-cli" }
 # import site forward-compatible as an options struct gains fields — so the
 # `needless_update` lint (which fires when every field happens to be specified
 # today) is deliberately silenced for that deliberate style.
-# Compiler-enforced unsafe-freedom: 39 of 42 crates opt in via `[lints]
-# workspace = true`, so `unsafe` is a compile error across all their targets
-# (lib AND integration tests). Config tests stay hermetic without `unsafe` by
+# Compiler-enforced unsafe-freedom: every crate opts in via `[lints]
+# workspace = true` — so `unsafe` is a compile error across all their targets
+# (lib AND integration tests) — except the 3 documented below. Config tests stay hermetic without `unsafe` by
 # injecting a `nest_rs_config::MapSource` (or `figment::Jail` for the two configs
 # that read raw env) instead of mutating process env. Only 3 crates keep a
 # source-level attribute, each for a single documented `unsafe` a workspace lint
@@ -269,7 +289,8 @@ nest-rs-cli = { version = "1.0.0", path = "crates/nest-rs-cli" }
 #   • nest-rs-config   — `#![cfg_attr(not(test), deny)]` + `#[allow]` at
 #                        `load_cascade` (the sole production env-write bootstrapper).
 #   • nest-rs-testing  — `#![cfg_attr(not(test), deny)]` + `#[allow]` at
-#                        `TestAppBuilder::new` (`NESTRS_ENV=test`, a lib fn).
+#                        `load_project_env` (`NESTRS_ENV=test` set-if-absent
+#                        inside the cascade `Once`, a lib fn).
 #   • nest-rs-schedule — `#![forbid]` (lib only) — its integration test needs
 #                        `unsafe { libc::raise(SIGINT) }` to drive the real
 #                        shutdown-signal path; a `[lints]` forbid would also

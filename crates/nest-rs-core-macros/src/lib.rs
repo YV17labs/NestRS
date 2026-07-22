@@ -86,7 +86,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// impl Foo { async fn ready(&self) { /* … */ } }   // phase attr removed
 ///
 /// fn __nestrs_hook_Foo_ready(c: &::nest_rs_core::Container)
-///     -> Pin<Box<dyn Future<Output = ::anyhow::Result<()>> + Send + '_>>
+///     -> Pin<Box<dyn Future<Output = ::nest_rs_core::anyhow::Result<()>> + Send + '_>>
 /// {
 ///     Box::pin(async move {
 ///         match ::nest_rs_core::Container::get::<Foo>(c) {

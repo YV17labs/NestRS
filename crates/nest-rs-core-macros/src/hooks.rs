@@ -80,7 +80,7 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
             fn #run_fn(
                 __container: &::nest_rs_core::Container,
             ) -> ::std::pin::Pin<::std::boxed::Box<
-                dyn ::std::future::Future<Output = ::anyhow::Result<()>>
+                dyn ::std::future::Future<Output = ::nest_rs_core::anyhow::Result<()>>
                     + ::std::marker::Send
                     + '_,
             >> {

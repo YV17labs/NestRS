@@ -28,7 +28,7 @@ nest-rs-authn.workspace = true
 nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
 uuid.workspace = true
 futures-util.workspace = true
-tokio-tungstenite = "0.27"
+tokio-tungstenite.workspace = true
 sea-orm.workspace = true
 serde_json.workspace = true
 

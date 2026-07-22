@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::command::{AudioQueue, TranscodeCommand};
 use super::error::AudioError;
-use super::{PresignedUrlDto, TranscodeEventDto, TranscodeState};
+use super::{PresignedUrlDto, TranscodeProgressDto, TranscodeState};
 
 const PRESIGN_TTL: Duration = Duration::from_secs(15 * 60);
 
@@ -126,7 +126,7 @@ impl AudioService {
     pub fn transcode_events(
         self: Arc<Self>,
         file: String,
-    ) -> impl Stream<Item = TranscodeEventDto> + Send + 'static {
+    ) -> impl Stream<Item = TranscodeProgressDto> + Send + 'static {
         stream::unfold(0u32, move |attempt| {
             let svc = self.clone();
             let file = file.clone();
@@ -134,7 +134,7 @@ impl AudioService {
                 if attempt >= TRANSCODE_POLL_ATTEMPTS {
                     return None;
                 }
-                let event = |state: TranscodeState| TranscodeEventDto { state, attempt };
+                let event = |state: TranscodeState| TranscodeProgressDto { state, attempt };
                 match svc.result_ready(&file).await {
                     Ok(true) => Some((event(TranscodeState::Ready), u32::MAX)),
                     Ok(false) => {

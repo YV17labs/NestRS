@@ -300,8 +300,8 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                 let builder = <#self_ty>::__nestrs_provide_registry(builder);
                 // Self-mount on HTTP: a WS upgrade is an HTTP `GET`, so a
                 // gateway is just another `HttpEndpointMeta` at boot.
-                builder.attach_meta::<#self_ty, ::nest_rs_http::HttpEndpointMeta>(
-                    ::nest_rs_http::HttpEndpointMeta::new(
+                builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
+                    ::nest_rs_ws::nest_rs_http::HttpEndpointMeta::new(
                         <#self_ty>::PATH,
                         "ws",
                         |__container, __route| {

@@ -71,19 +71,10 @@ pub struct TestAppBuilder {
 
 impl TestAppBuilder {
     fn new() -> Self {
-        // Default to NESTRS_ENV=test so `.env.local` is skipped (hermetic) and
-        // env-aware defaults (GraphQL playground / SDL emit) stay off. An
-        // explicit value wins (e.g. CI asserting prod behaviour).
-        if std::env::var_os("NESTRS_ENV").is_none() {
-            // SAFETY: runs during single-threaded harness bootstrap, before any
-            // app task or transport spawns — no concurrent env reader exists.
-            // Test-harness env setup on the (non-test) lib build: the sole sanctioned unsafe.
-            #[allow(unsafe_code)]
-            unsafe {
-                std::env::set_var("NESTRS_ENV", "test")
-            };
-        }
         // Every e2e boot (any transport) sees the project's own `.env`.
+        // `load_project_env` also defaults `NESTRS_ENV=test` (set-if-absent)
+        // *inside* its `Once`, so the invariant holds whichever entry point
+        // ran first — see `env.rs`.
         crate::env::load_project_env();
         Self {
             inner: App::builder(),

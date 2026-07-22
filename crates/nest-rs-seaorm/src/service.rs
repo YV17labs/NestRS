@@ -302,6 +302,12 @@ pub trait Creatable: CrudService {
 /// then re-check the fresh row against `condition_for(Create)` **in SQL** on
 /// the same connection. Generic over the connection so the ambient executor
 /// and a local `DatabaseTransaction` use one implementation.
+///
+/// Deliberate asymmetry with `Repo`: reads and by-id writes pre-filter by
+/// ability, but an insert has no existing row to filter, so there is no
+/// `Repo::create` — the raw `insert` below is the one authorized-write entry
+/// and the post-insert scope re-check (inside the caller's SAVEPOINT) is its
+/// gate. `Repo::insert_unscoped` is the separate, principal-less escape.
 async fn insert_in_scope<E, C>(
     active: E::ActiveModel,
     entity: &'static str,

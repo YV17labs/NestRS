@@ -52,9 +52,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     // Reject non-UUID-v7 ids before loading — validation half of route-model binding.
     let id_v7_check: TokenStream2 = quote! {
         if __id.0.get_version_num() != 7 {
-            return ::core::result::Result::Err(::poem::Error::from_string(
+            return ::core::result::Result::Err(::nest_rs_http::poem::Error::from_string(
                 "path id must be a UUID v7",
-                ::poem::http::StatusCode::BAD_REQUEST,
+                ::nest_rs_http::poem::http::StatusCode::BAD_REQUEST,
             ));
         }
     };
@@ -72,11 +72,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 async fn list(
                     &self,
                     _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
-                ) -> ::poem::Result<::poem::web::Json<::std::vec::Vec<#output>>> {
+                ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<::std::vec::Vec<#output>>> {
                     let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
                         .await
                         .map_err(#internal)?;
-                    ::core::result::Result::Ok(::poem::web::Json(
+                    ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(
                         __rows.iter().map(#output::from).collect(),
                     ))
                 }
@@ -89,8 +89,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 async fn list(
                     &self,
                     _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
-                    __page: ::poem::web::Query<::nest_rs_seaorm::PageParams>,
-                ) -> ::poem::Result<::poem::Response> {
+                    __page: ::nest_rs_http::poem::web::Query<::nest_rs_seaorm::PageParams>,
+                ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
                     let __p = ::nest_rs_seaorm::CrudService::page(
                         &*self.#service,
                         __page.0.limit(),
@@ -100,14 +100,19 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     .map_err(#internal)?;
                     let __items: ::std::vec::Vec<#output> =
                         __p.items.iter().map(#output::from).collect();
-                    let mut __resp = ::poem::IntoResponse::into_response(::poem::web::Json(__items));
-                    if let ::core::option::Option::Some(__cursor) = __p.next_cursor {
-                        __resp.headers_mut().insert(
-                            ::poem::http::HeaderName::from_static("x-next-cursor"),
-                            ::poem::http::HeaderValue::from_str(
+                    let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(::nest_rs_http::poem::web::Json(__items));
+                    // Infallible by construction (a UUID renders ASCII), but
+                    // never `expect` on the per-request path: a failure just
+                    // omits the pagination header.
+                    if let ::core::option::Option::Some(__cursor) = __p.next_cursor
+                        && let ::core::result::Result::Ok(__value) =
+                            ::nest_rs_http::poem::http::HeaderValue::from_str(
                                 &::std::string::ToString::to_string(&__cursor),
                             )
-                            .expect("a UUID renders as a valid header value"),
+                    {
+                        __resp.headers_mut().insert(
+                            ::nest_rs_http::poem::http::HeaderName::from_static("x-next-cursor"),
+                            __value,
                         );
                     }
                     ::core::result::Result::Ok(__resp)
@@ -125,8 +130,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             async fn get(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
-                __id: ::poem::web::Path<::uuid::Uuid>,
-            ) -> ::poem::Result<::poem::web::Json<#output>> {
+                __id: ::nest_rs_http::poem::web::Path<::uuid::Uuid>,
+            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
@@ -137,13 +142,13 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 .map_err(#internal)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::core::result::Result::Ok(::poem::web::Json(#output::from(&__m)))
+                        ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__m)))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
+                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
                     ),
                     ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
+                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
                     ),
                 }
             }
@@ -161,15 +166,15 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             async fn create(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Create, #entity>,
-                __body: ::nest_rs_http::Valid<::poem::web::Json<#create>>,
-            ) -> ::poem::Result<::poem::web::Json<#output>> {
+                __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#create>>,
+            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
                 let __row = ::nest_rs_seaorm::Creatable::create(
                     &*self.#service,
                     __body.into_inner(),
                 )
                 .await
                 .map_err(#internal)?;
-                ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
+                ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__row)))
             }
         });
     }
@@ -185,9 +190,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             async fn update(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Update, #entity>,
-                __id: ::poem::web::Path<::uuid::Uuid>,
-                __body: ::nest_rs_http::Valid<::poem::web::Json<#update>>,
-            ) -> ::poem::Result<::poem::web::Json<#output>> {
+                __id: ::nest_rs_http::poem::web::Path<::uuid::Uuid>,
+                __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#update>>,
+            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
@@ -205,13 +210,13 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         )
                         .await
                         .map_err(#internal)?;
-                        ::core::result::Result::Ok(::poem::web::Json(#output::from(&__row)))
+                        ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__row)))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
+                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
                     ),
                     ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
+                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
                     ),
                 }
             }
@@ -231,8 +236,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             async fn delete(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Delete, #entity>,
-                __id: ::poem::web::Path<::uuid::Uuid>,
-            ) -> ::poem::Result<()> {
+                __id: ::nest_rs_http::poem::web::Path<::uuid::Uuid>,
+            ) -> ::nest_rs_http::poem::Result<()> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
@@ -249,10 +254,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         ::core::result::Result::Ok(())
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::poem::Error::from_status(::poem::http::StatusCode::FORBIDDEN),
+                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
                     ),
                     ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::poem::Error::from_status(::poem::http::StatusCode::NOT_FOUND),
+                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
                     ),
                 }
             }
@@ -274,23 +279,23 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         // the raw driver message never reaches the client.
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        fn #internal(__e: ::sea_orm::DbErr) -> ::poem::Error {
+        fn #internal(__e: ::sea_orm::DbErr) -> ::nest_rs_http::poem::Error {
             let __status = match ::sea_orm::DbErr::sql_err(&__e) {
                 ::core::option::Option::Some(
                     ::sea_orm::SqlErr::UniqueConstraintViolation(_),
-                ) => ::poem::http::StatusCode::CONFLICT,
+                ) => ::nest_rs_http::poem::http::StatusCode::CONFLICT,
                 _ => match __e {
                     ::sea_orm::DbErr::RecordNotInserted => {
-                        ::poem::http::StatusCode::FORBIDDEN
+                        ::nest_rs_http::poem::http::StatusCode::FORBIDDEN
                     }
                     ::sea_orm::DbErr::RecordNotUpdated
                     | ::sea_orm::DbErr::RecordNotFound(_) => {
-                        ::poem::http::StatusCode::NOT_FOUND
+                        ::nest_rs_http::poem::http::StatusCode::NOT_FOUND
                     }
-                    _ => ::poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    _ => ::nest_rs_http::poem::http::StatusCode::INTERNAL_SERVER_ERROR,
                 },
             };
-            ::poem::Error::from_status(__status)
+            ::nest_rs_http::poem::Error::from_status(__status)
         }
     })
 }

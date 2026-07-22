@@ -16,7 +16,6 @@ nest-rs-http.workspace = true
 nest-rs-openapi.workspace = true
 nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
 nest-rs-resource = { workspace = true, features = ["graphql"] }
-nest-rs-queue.workspace = true
 nest-rs-redis.workspace = true
 nest-rs-schedule.workspace = true
 nest-rs-server-timing.workspace = true

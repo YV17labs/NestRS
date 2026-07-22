@@ -41,8 +41,24 @@ pub fn verify_password(encoded_hash: &str, password: &str) -> Result<bool, Passw
 
 /// Run a verify against a dummy hash — call when the account is absent so the
 /// work factor matches a real login attempt.
+///
+/// The dummy initializes on first use; hashing a constant can only fail on an
+/// Argon2 internal error. That failure degrades to a logged no-op burn rather
+/// than a request panic — the timing equalization is best-effort hardening,
+/// not a correctness gate.
 pub fn burn_verify(password: &str) {
-    let dummy = TIMING_DUMMY_HASH
-        .get_or_init(|| hash_password("nestrs-timing-dummy").expect("dummy hash initializes once"));
-    let _ = verify_password(dummy, password);
+    let dummy = TIMING_DUMMY_HASH.get_or_init(|| match hash_password("nestrs-timing-dummy") {
+        Ok(hash) => hash,
+        Err(error) => {
+            tracing::error!(
+                target: "nest_rs::authn",
+                %error,
+                "timing dummy hash failed to initialize — absent-account burn degrades to no-op",
+            );
+            String::new()
+        }
+    });
+    if !dummy.is_empty() {
+        let _ = verify_password(dummy, password);
+    }
 }

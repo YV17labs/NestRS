@@ -62,7 +62,9 @@ fn new_standalone_hello_template() {
     assert!(app.join("src/main.rs").is_file());
     assert!(app.join("src/lib.rs").is_file());
     assert!(app.join("src/controller.rs").is_file());
-    assert!(app.join("tests/e2e/main.rs").is_file());
+    // The scaffolded smoke test needs no live infra ⇒ `integration` suite.
+    assert!(app.join("tests/integration/main.rs").is_file());
+    assert!(!app.join("tests/e2e").exists());
     assert!(app.join("Cargo.toml").is_file());
     assert!(app.join("Dockerfile").is_file());
     assert!(app.join(".dockerignore").is_file());
@@ -128,7 +130,9 @@ fn new_workspace_greenfield() {
     // The default app and demo feature are both named `hello`.
     assert!(root.join("apps/hello/src/module.rs").is_file());
     assert!(!root.join("apps/hello/src/controller.rs").exists());
-    assert!(root.join("apps/hello/tests/e2e/main.rs").is_file());
+    // The scaffolded smoke test needs no live infra ⇒ `integration` suite.
+    assert!(root.join("apps/hello/tests/integration/main.rs").is_file());
+    assert!(!root.join("apps/hello/tests/e2e").exists());
     assert!(root.join("Justfile").is_file());
     let justfile = fs::read_to_string(root.join("Justfile")).unwrap();
     assert!(justfile.contains("dev app=\"hello\""));

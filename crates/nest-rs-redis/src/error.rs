@@ -20,5 +20,5 @@ use thiserror::Error;
 pub enum RedisError {
     /// The Redis connection could not be established.
     #[error("failed to connect to Redis")]
-    Connect(#[from] apalis_redis::RedisError),
+    Connect(#[from] redis::RedisError),
 }

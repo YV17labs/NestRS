@@ -37,10 +37,11 @@ The port lives at the **root** — not in a `core/` sub-folder. Deliberate.
 | `users/` (root) | `entity.rs`/`entities/`, `service.rs`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `error.rs`, `module.rs` | `UsersModule` (port) |
 | `users/http/` | `controller.rs` | `UsersHttpModule` |
 | `users/graphql/` | `resolver.rs` (field + root merged into `UsersResolver`) | `UsersGraphqlModule` |
-| `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `WsModule` too) |
+| `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `AuthzWsModule`, which brings `WsModule` transitively) |
 | `users/queue/` | `processor.rs` (payload lives at the port) | `UsersQueueModule` |
 | `users/schedule/` | `tasks.rs` (`#[scheduled]` host) | `UsersScheduleModule` |
 | `users/mcp/` | `tool.rs` | `UsersMcpModule` |
+| `users/events/` | `listener.rs` (event listener host) | `UsersEventsModule` |
 
 **Each adapter imports `UsersModule` explicitly** — composition, not
 inheritance. Importing only the port mounts no endpoint. **No umbrella

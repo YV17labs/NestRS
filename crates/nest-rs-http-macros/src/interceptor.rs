@@ -95,7 +95,7 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
                     ::nest_rs_http::HttpEndpointWrap::with_priority(
                         #priority,
                         move |_container, __endpoint| {
-                        ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(
+                        ::nest_rs_http::poem::EndpointExt::boxed(::nest_rs_http::poem::EndpointExt::map_to_response(
                             ::nest_rs_interceptors::InterceptorExt::interceptor(
                                 __endpoint,
                                 ::std::sync::Arc::clone(&__arc),

@@ -38,7 +38,11 @@ pub fn scaffold(
     queue_sources(&mut s, &root.join("src"), &r, template);
 
     if matches!(template, NewTemplate::Hello) {
-        s.create(root.join("tests/e2e/main.rs"), r.render(standalone::E2E));
+        // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
+        s.create(
+            root.join("tests/integration/main.rs"),
+            r.render(standalone::SMOKE),
+        );
     }
 
     let report = s.apply(dry_run)?;

@@ -14,9 +14,10 @@
 use std::marker::PhantomData;
 
 use apalis::prelude::Storage;
-use apalis_redis::{Config, ConnectionManager, RedisStorage};
+use apalis_redis::{Config, RedisStorage};
 use async_trait::async_trait;
 use nest_rs_queue::{Job, JobProducer, QueueError, WIRE_FORMAT_VERSION};
+use redis::aio::ConnectionManager;
 use serde_json::json;
 
 use crate::error::RedisError;

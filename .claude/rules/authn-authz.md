@@ -38,6 +38,15 @@ a **framework defect to remove, not a shortcut**. (This is why a bare
 `Authorized<E, A>` parameter is **not** accepted as a standalone posture
 — write the `#[authorize]`, then bind the subject in the body.)
 
+**Non-CRUD routes: a capability-only guard IS the sanctioned pattern.**
+A route whose response is not an entity row (a presigned URL, a computed
+report) gates through a custom `Guard` that checks the ability
+imperatively (`ability.can_class(...)`), bound via `#[use_guards(...)]`
+— using `Authorize<A, S>` there would arm response masking against a
+body that is no wire model and fail closed at 500. The check stays
+greppable (the `#[use_guards]` site) and the guard logs its denial at
+`warn`. Exemplar: `audio`'s `TranscodeGuard`.
+
 ## Strategy and principal
 
 **`Strategy`** turns a request into a principal (plain `#[injectable]`,

@@ -15,8 +15,8 @@ use std::marker::PhantomData;
 use nest_rs_authz::{Action, current_ability};
 use sea_orm::sea_query::{Condition, Expr};
 use sea_orm::{
-    ActiveModelTrait, DbErr, Delete, DeleteResult, EntityTrait, IntoActiveModel, PrimaryKeyTrait,
-    QueryFilter, Select, Update, Value,
+    ActiveModelBehavior, ActiveModelTrait, ConnectionTrait, DbErr, Delete, DeleteResult,
+    EntityTrait, IntoActiveModel, PrimaryKeyTrait, QueryFilter, Select, Update, Value,
 };
 
 use crate::executor::{Executor, ExecutorScope, current_executor, current_executor_scope};
@@ -98,9 +98,9 @@ impl<E: EntityTrait> Repo<E> {
         E::find().filter(scope_for::<E>(action))
     }
 
-    /// A [`Select`] that **bypasses the ambient ability filter** — for the two
-    /// sanctioned ability-less query paths (a third is reserved but unbuilt —
-    /// see below):
+    /// A [`Select`] that **bypasses the ambient ability filter** — for the
+    /// three sanctioned ability-less query paths (a fourth is reserved but
+    /// unbuilt — see below):
     ///
     /// 1. **Pre-authentication** credential lookup, which runs before any
     ///    principal (hence any ability) exists — routing it through
@@ -109,8 +109,12 @@ impl<E: EntityTrait> Repo<E> {
     /// 2. **Access binding** (`CrudService::access`), which is deliberately
     ///    unscoped so a denied-but-existing row reports `Denied` rather than
     ///    `Missing`; the ability check is then applied explicitly per row.
+    /// 3. **Global uniqueness probes**
+    ///    ([`resolve_unique_slug`](crate::resolve_unique_slug)) — uniqueness
+    ///    is a property of *every* live row, including ones the caller cannot
+    ///    see; an ability-scoped probe would allocate colliding values.
     ///
-    /// A third path — **signature-authenticated ingress** (a public webhook
+    /// A fourth path — **signature-authenticated ingress** (a public webhook
     /// endpoint trusting a verified payload signature, not a principal) — is
     /// **reserved but NOT implemented**: no webhook route, signature check, or
     /// webhook DB access exists in this codebase. Do **not** ship a
@@ -134,6 +138,32 @@ impl<E: EntityTrait> Repo<E> {
     /// the soft-delete / live filter and execute against [`Repo::conn`].
     pub fn unscoped_by_id(id: <E::PrimaryKey as PrimaryKeyTrait>::ValueType) -> Select<E> {
         E::find_by_id(id)
+    }
+
+    /// System **write** — the write pendant of [`unscoped`](Self::unscoped): a
+    /// raw insert with no ability filter, on an **explicit** connection so the
+    /// caller composes it into a transaction it already holds.
+    ///
+    /// Bar: **pre-principal provisioning** (social-login user/identity
+    /// inserts — no principal ⇒ no ability ⇒ nothing to scope) and
+    /// principal-less system work. Nothing else: every authorized create goes
+    /// through the service write path
+    /// ([`Creatable::create_from_active`](crate::Creatable), which re-checks
+    /// the fresh row against the ambient ability in SQL). No post-insert
+    /// re-check happens here — there is deliberately no ability that could
+    /// predicate one.
+    pub async fn insert_unscoped<C>(active: E::ActiveModel, conn: &C) -> Result<E::Model, DbErr>
+    where
+        C: ConnectionTrait,
+        E::ActiveModel: ActiveModelBehavior + Send,
+        E::Model: IntoActiveModel<E::ActiveModel>,
+    {
+        tracing::trace!(
+            target: "nest_rs::orm",
+            entity = E::default().table_name(),
+            "insert unscoped",
+        );
+        active.insert(conn).await
     }
 
     /// Update a row, gated by `condition_for(Update)` ANDed with the primary

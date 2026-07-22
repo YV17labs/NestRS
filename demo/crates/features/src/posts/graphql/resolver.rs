@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use async_graphql::{Context, Error, Result};
-use nest_rs_authz::{Action, Update};
+use async_graphql::{Context, Result};
+use nest_rs_authz::Update;
 use nest_rs_graphql::{crud, resolver};
-use nest_rs_seaorm::{Access, CrudService};
-use uuid::Uuid;
+use nest_rs_seaorm::graphql::bind;
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -26,12 +25,10 @@ pub struct PostsResolver {
 impl PostsResolver {
     #[mutation]
     #[authorize(Update, PostEntity)]
-    async fn publish_post(&self, _ctx: &Context<'_>, id: String) -> Result<Option<Post>> {
-        let post_id = Uuid::parse_str(&id).map_err(|e| Error::new(e.to_string()))?;
-        match CrudService::access(&*self.svc, Action::Update, post_id).await? {
-            Access::Found(model) => Ok(Some(self.svc.publish(model).await?)),
-            Access::Denied => Err(Error::new("forbidden")),
-            Access::Missing => Ok(None),
+    async fn publish_post(&self, ctx: &Context<'_>, id: String) -> Result<Option<Post>> {
+        match bind::<PostsService, Update>(ctx, &id).await? {
+            Some(model) => Ok(Some(self.svc.publish(model).await?)),
+            None => Ok(None),
         }
     }
 }

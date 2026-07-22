@@ -180,7 +180,7 @@ pub const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 use std::sync::Arc;
 
 use nest_rs_mcp::mcp;
-use nest_rs_mcp::{CallToolResult, Content, McpError, ServerHandler, tool, tool_handler, tool_router};
+use nest_rs_mcp::{CallToolResult, ContentBlock, McpError, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::{{snake}}::{{service}};
 
@@ -195,7 +195,7 @@ pub struct {{tool}} {
 impl {{tool}} {
     #[tool(description = "Count {{kebab}} items.")]
     async fn count(&self) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             self.svc.count().to_string(),
         )]))
     }

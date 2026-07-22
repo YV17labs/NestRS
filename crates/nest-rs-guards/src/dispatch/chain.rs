@@ -66,6 +66,15 @@ pub async fn run_layered_graphql_chain(
     );
     for entry in &chain {
         if let Err(denial) = entry.layer.check_graphql(ctx).await {
+            // Structural floor mirroring `deny_http`: every denial visible at
+            // warn+ regardless of what the individual guard logged.
+            tracing::warn!(
+                target: "nest_rs::layers",
+                guard = entry.name,
+                route = route_label,
+                status = denial.http_status(),
+                "guard denied the operation",
+            );
             return Err(denial_to_graphql_error(denial));
         }
     }
@@ -117,6 +126,15 @@ pub async fn run_layered_ws_chain(
     );
     for entry in &chain {
         if let Err(denial) = entry.layer.check_ws_message(client, event, data).await {
+            // Structural floor mirroring `deny_http`: every denial visible at
+            // warn+ regardless of what the individual guard logged.
+            tracing::warn!(
+                target: "nest_rs::layers",
+                guard = entry.name,
+                event,
+                status = denial.http_status(),
+                "guard denied the message",
+            );
             return Err(denial.message().to_owned());
         }
     }

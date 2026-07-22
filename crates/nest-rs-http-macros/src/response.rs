@@ -348,7 +348,7 @@ fn parse_redirect_args(attr: &Attribute) -> syn::Result<RedirectSpec> {
 /// the emitted code short-circuits on `Err` so the original error status
 /// (set by the error's `ResponseError`) survives and the `#[http_code]` /
 /// `#[response_header]` overrides only touch the success path. The returned
-/// tokens produce a `::poem::Result<::poem::Response>`.
+/// tokens produce a `::nest_rs_http::poem::Result<::nest_rs_http::poem::Response>`.
 pub(crate) fn apply_response_shapers(
     shapers: &ResponseShapers,
     call_expr: TokenStream2,
@@ -370,16 +370,16 @@ pub(crate) fn apply_response_shapers(
                 // One tuple discard makes the "read but unused" intent explicit
                 // at `cargo expand` time without N repetitive lines.
                 let _ = (#(&#wrapper_args,)*);
-                let mut __response: ::poem::Response =
-                    ::poem::Response::builder()
+                let mut __response: ::nest_rs_http::poem::Response =
+                    ::nest_rs_http::poem::Response::builder()
                         .status(
-                            ::poem::http::StatusCode::from_u16(#status_lit)
+                            ::nest_rs_http::poem::http::StatusCode::from_u16(#status_lit)
                                 .expect("redirect status validated at compile time"),
                         )
-                        .header(::poem::http::header::LOCATION, #url)
+                        .header(::nest_rs_http::poem::http::header::LOCATION, #url)
                         .finish();
                 #header_writes
-                ::poem::Result::<::poem::Response>::Ok(__response)
+                ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(__response)
             }
         };
     }
@@ -387,7 +387,7 @@ pub(crate) fn apply_response_shapers(
     let status_apply = match &shapers.http_code {
         Some(lit) => quote! {
             __response.set_status(
-                ::poem::http::StatusCode::from_u16(#lit)
+                ::nest_rs_http::poem::http::StatusCode::from_u16(#lit)
                     .expect("status validated at compile time"),
             );
         },
@@ -417,11 +417,11 @@ pub(crate) fn apply_response_shapers(
         {
             let __out = #call_expr;
             #unwrap_ok
-            let mut __response: ::poem::Response =
-                ::poem::IntoResponse::into_response(__ok);
+            let mut __response: ::nest_rs_http::poem::Response =
+                ::nest_rs_http::poem::IntoResponse::into_response(__ok);
             #status_apply
             #header_writes
-            ::poem::Result::<::poem::Response>::Ok(__response)
+            ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(__response)
         }
     }
 }
@@ -444,8 +444,8 @@ fn headers_tokens(headers: &[(LitStr, LitStr)]) -> TokenStream2 {
         };
         quote! {
             __response.headers_mut().#method(
-                ::poem::http::HeaderName::from_static(#name),
-                ::poem::http::HeaderValue::from_static(#value),
+                ::nest_rs_http::poem::http::HeaderName::from_static(#name),
+                ::nest_rs_http::poem::http::HeaderValue::from_static(#value),
             );
         }
     });

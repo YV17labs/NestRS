@@ -1,5 +1,5 @@
 //! HTTP attribute macros, re-exported by `nest-rs-http`. Generated code uses
-//! absolute paths (`::nest_rs_http::*`, `::poem::*`, `::nest_rs_core::*`), so
+//! absolute paths (`::nest_rs_http::*`, `::nest_rs_http::poem::*`, `::nest_rs_core::*`), so
 //! this crate has no dependency on its surface crate — they resolve at the
 //! call site.
 #![warn(missing_docs)]
@@ -121,16 +121,16 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```ignore
 /// impl UsersController { /* methods, verb attrs removed */ }
 ///
-/// #[::poem::handler]
+/// #[::nest_rs_http::poem::handler]
 /// async fn __nestrs_route_list(Data(ctrl): Data<&Arc<UsersController>> /* extractors */)
-///     -> /* return type or ::poem::Result<Response> when response shapers apply */
+///     -> /* return type or ::nest_rs_http::poem::Result<Response> when response shapers apply */
 /// { ctrl.list(/* forwarded args */).await }
 ///
 /// impl ::nest_rs_http::Controller for UsersController {
-///     fn mount(c: &Container, route: ::poem::Route) -> ::poem::Route {
+///     fn mount(c: &Container, route: ::nest_rs_http::poem::Route) -> ::nest_rs_http::poem::Route {
 ///         let ctrl = Arc::new(Self::from_container(c));
-///         let sub = ::poem::Route::new()
-///             .at("/", ::poem::get(/* RouteShaper-wrapped __nestrs_route_list */))   // per path
+///         let sub = ::nest_rs_http::poem::Route::new()
+///             .at("/", ::nest_rs_http::poem::get(/* RouteShaper-wrapped __nestrs_route_list */))   // per path
 ///             .data(ctrl);
 ///         route.nest(version_path(Self::VERSION, Self::PATH).as_str(), sub)
 ///     }
@@ -196,7 +196,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 ///
 /// #[doc(hidden)]
-/// fn __nestrs_crud_internal_UsersController<E: ToString>(e: E) -> ::poem::Error { /* 500 */ }
+/// fn __nestrs_crud_internal_UsersController<E: ToString>(e: E) -> ::nest_rs_http::poem::Error { /* 500 */ }
 /// ```
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {

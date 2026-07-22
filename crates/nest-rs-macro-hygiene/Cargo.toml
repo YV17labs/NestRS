@@ -1,0 +1,26 @@
+[package]
+name = "nest-rs-macro-hygiene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Compile-time witness that nest-rs decorators emit only ::std/::core paths or surface-crate re-exports: this crate consumes them with zero third-party dependencies."
+# Internal proof crate — never published; the proof is that it compiles.
+publish = false
+
+[dependencies]
+# Surface crates ONLY. Adding any third-party dependency here (anyhow, serde,
+# tracing, tokio, …) would defeat the crate's purpose: a decorator emitting a
+# bare third-party path must fail THIS crate's compile.
+nest-rs-core.workspace = true
+nest-rs-events.workspace = true
+# `ws`: `#[messages]` names `GuardAsWsMessageCheck`, gated behind that feature
+# — part of the documented consumer contract for WS gateways.
+nest-rs-guards = { workspace = true, features = ["ws"] }
+nest-rs-schedule.workspace = true
+nest-rs-ws.workspace = true
+
+[lints]
+workspace = true

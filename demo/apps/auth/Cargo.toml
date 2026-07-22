@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-authn.workspace = true
-nest-rs-authz.workspace = true
 nest-rs-config.workspace = true
 nest-rs-seaorm.workspace = true
 nest-rs-health.workspace = true

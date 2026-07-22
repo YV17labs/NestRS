@@ -199,7 +199,12 @@ use nest_rs_opentelemetry::OpenTelemetryModule;
 pub struct {{module}};
 "#;
 
-pub const APP_E2E: &str = r#"use {{snake}}::{{module}};
+pub const APP_SMOKE: &str = r#"//! In-process smoke test — boots the real DI graph through `TestApp`, no live
+//! infra, so it belongs to the `integration` suite and runs on every
+//! `nestrs run test unit`. Add a `tests/e2e/main.rs` suite when the app grows
+//! a database, queue or storage dependency.
+
+use {{snake}}::{{module}};
 use nest_rs_testing::TestApp;
 
 #[tokio::test]
@@ -299,9 +304,11 @@ unit:
     cargo nextest run --workspace -E 'not binary(e2e)'
     cargo test --workspace --doc          # nextest skips doctests; run them too
 
-# e2e tests — your `tests/e2e/main.rs` binary (live Postgres/Redis if the app needs them).
+# e2e tests — your `tests/e2e/main.rs` binaries (live Postgres/Redis if the
+# app needs them). None scaffolded yet, so `--no-tests=pass` keeps this green
+# until an app adds its suite.
 e2e:
-    cargo nextest run --workspace -E 'binary(e2e)'
+    cargo nextest run --workspace -E 'binary(e2e)' --no-tests=pass
 
 # Doctests only — the code examples inside `///` doc comments.
 doc:

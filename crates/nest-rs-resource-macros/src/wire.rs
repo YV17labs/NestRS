@@ -40,10 +40,16 @@ fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStrea
             Some(expr) => quote!(#expr),
             None => quote!(<#ty as ::core::default::Default>::default()),
         };
+        // Skip-on-error, never `expect`: a non-serializable placeholder (all
+        // but impossible — the value is a compile-time literal or `Default`)
+        // leaves the key missing, so `wire_to_model` errors and the masker
+        // fails **closed** (500) instead of panicking on the request path.
         return Some(quote! {
-            map.entry(::std::string::String::from(stringify!(#key)))
-                .or_insert_with(|| ::serde_json::to_value(#value)
-                    .expect("wire_default value serializes"));
+            if let ::core::result::Result::Ok(__v) =
+                ::nest_rs_resource::serde_json::to_value(#value)
+            {
+                map.entry(::std::string::String::from(stringify!(#key))).or_insert(__v);
+            }
         });
     }
     let last = match ty {
@@ -53,20 +59,20 @@ fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStrea
     Some(match last.as_str() {
         "String" => quote! {
             map.entry(::std::string::String::from(stringify!(#key)))
-                .or_insert_with(|| ::serde_json::Value::String(::std::string::String::new()));
+                .or_insert_with(|| ::nest_rs_resource::serde_json::Value::String(::std::string::String::new()));
         },
         "Option" => quote! {
             map.entry(::std::string::String::from(stringify!(#key)))
-                .or_insert(::serde_json::Value::Null);
+                .or_insert(::nest_rs_resource::serde_json::Value::Null);
         },
         "bool" => quote! {
             map.entry(::std::string::String::from(stringify!(#key)))
-                .or_insert(::serde_json::Value::Bool(false));
+                .or_insert(::nest_rs_resource::serde_json::Value::Bool(false));
         },
         "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
         | "usize" | "f32" | "f64" => quote! {
             map.entry(::std::string::String::from(stringify!(#key)))
-                .or_insert(::serde_json::json!(0));
+                .or_insert(::nest_rs_resource::serde_json::json!(0));
         },
         // See the module header — emit nothing, fail closed.
         _ => return None,
@@ -100,7 +106,7 @@ pub fn emit(model: &ResourceModel) -> proc_macro2::TokenStream {
     quote! {
         impl ::nest_rs_resource::WireModelDefaults for Entity {
             fn fill_wire_defaults(
-                #param: &mut ::serde_json::Map<::std::string::String, ::serde_json::Value>,
+                #param: &mut ::nest_rs_resource::serde_json::Map<::std::string::String, ::nest_rs_resource::serde_json::Value>,
             ) {
                 #(#entries)*
             }

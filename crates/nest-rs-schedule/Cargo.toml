@@ -29,4 +29,4 @@ chrono-tz.workspace = true
 
 [dev-dependencies]
 # Raising SIGINT to exercise App::run's graceful-shutdown path end-to-end.
-libc = "0.2"
+libc.workspace = true

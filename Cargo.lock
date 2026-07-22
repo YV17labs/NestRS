@@ -2915,6 +2915,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nest-rs-macro-hygiene"
+version = "1.0.0"
+dependencies = [
+ "nest-rs-core",
+ "nest-rs-events",
+ "nest-rs-guards",
+ "nest-rs-schedule",
+ "nest-rs-ws",
+]
+
+[[package]]
 name = "nest-rs-mcp"
 version = "1.0.0"
 dependencies = [
@@ -3062,6 +3073,7 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "tracing",
  "uuid",
  "validator",
 ]

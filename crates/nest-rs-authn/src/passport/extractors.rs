@@ -19,7 +19,13 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 /// secret may itself contain colons (RFC 6749 §2.3.1 client auth).
 pub fn basic_credentials(req: &Request) -> Option<(String, String)> {
     let value = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
-    let encoded = value.strip_prefix("Basic ")?.trim();
+    // Scheme match mirrors `bearer_token`: RFC 7235 auth schemes are
+    // case-insensitive, so `basic <b64>` is as valid as `Basic <b64>`.
+    let (scheme, encoded) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return None;
+    }
+    let encoded = encoded.trim();
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .ok()?;

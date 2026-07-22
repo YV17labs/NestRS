@@ -190,13 +190,16 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 &wrapper_args,
                 returns_result,
             );
-            (quote! { ::poem::Result<::poem::Response> }, body)
+            (
+                quote! { ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> },
+                body,
+            )
         };
 
         wrappers.push(quote! {
-            #[::poem::handler]
+            #[::nest_rs_http::poem::handler]
             async fn #wrapper_name(
-                ::poem::web::Data(__ctrl): ::poem::web::Data<&::std::sync::Arc<#self_ty>>
+                ::nest_rs_http::poem::web::Data(__ctrl): ::nest_rs_http::poem::web::Data<&::std::sync::Arc<#self_ty>>
                 #extra_inputs
             ) -> #wrapper_return_type {
                 #wrapper_body
@@ -367,7 +370,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             let first_label = format!("{} {}", first.verb, path.value());
             let first_ep = guarded_handler(first, &first_label, &self_ty);
             let first_verb = &first.verb;
-            let mut method = quote! { ::poem::#first_verb(#first_ep) };
+            let mut method = quote! { ::nest_rs_http::poem::#first_verb(#first_ep) };
             for handler in iter {
                 let label = format!("{} {}", handler.verb, path.value());
                 let ep = guarded_handler(handler, &label, &self_ty);
@@ -386,11 +389,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         impl ::nest_rs_http::Controller for #self_ty {
             fn mount(
                 container: &::nest_rs_core::Container,
-                route: ::poem::Route,
-            ) -> ::poem::Route {
-                use ::poem::EndpointExt;
+                route: ::nest_rs_http::poem::Route,
+            ) -> ::nest_rs_http::poem::Route {
+                use ::nest_rs_http::poem::EndpointExt;
                 let __ctrl = ::std::sync::Arc::new(<#self_ty>::from_container(container));
-                let __sub = ::poem::Route::new()
+                let __sub = ::nest_rs_http::poem::Route::new()
                     #(#route_entries)*
                     .data(__ctrl);
                 let __prefix = ::nest_rs_http::version_path(<#self_ty>::VERSION, <#self_ty>::PATH);
@@ -524,7 +527,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     expr = quote! {
         ::nest_rs_guards::dispatch::wrap_route_exception_filters(
             container,
-            ::poem::EndpointExt::boxed(::poem::EndpointExt::map_to_response(#expr)),
+            ::nest_rs_http::poem::EndpointExt::boxed(::nest_rs_http::poem::EndpointExt::map_to_response(#expr)),
             &<#self_ty>::__nestrs_controller_exception_filter_specs(),
             &#method_exception_filter_specs,
             #route_label_lit,
@@ -587,7 +590,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     // Metadata is attached *after* the RouteShaper so per-route
     // guards see the route's `#[meta]` value when the chain runs.
     for m in metas {
-        expr = quote! { ::poem::EndpointExt::data(#expr, #m) };
+        expr = quote! { ::nest_rs_http::poem::EndpointExt::data(#expr, #m) };
     }
 
     // `#[public]` attaches a `Public` marker as route data. The framework
@@ -595,7 +598,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     // adjust their own policy.
     if *is_public {
         expr = quote! {
-            ::poem::EndpointExt::data(#expr, ::nest_rs_core::Public)
+            ::nest_rs_http::poem::EndpointExt::data(#expr, ::nest_rs_core::Public)
         };
     }
 

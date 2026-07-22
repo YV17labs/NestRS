@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use super::cargo::{ensure_features_deps, ensure_workspace_deps, resource_deps};
-use super::{finish, resolve_start, wire_into_app};
+use super::support::{finish, resolve_start, wire_into_app};
 use crate::context::Context;
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;

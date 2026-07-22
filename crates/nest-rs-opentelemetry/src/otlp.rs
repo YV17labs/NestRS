@@ -114,8 +114,14 @@ fn build_resource(config: &OpenTelemetryConfig) -> Resource {
     if let Some(d) = &config.deployment_environment {
         attrs.push(KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, d.clone()));
     }
+    // Order is load-bearing. `with_schema_url` merges *under* the resource the
+    // builder seeded from its detectors (`SdkProvidedResourceDetector` always
+    // supplies a `service.name` — env override or the `unknown_service:*`
+    // sentinel), so attrs passed there would silently lose. `with_attributes`
+    // merges *over* the current state — the configured values must win.
     Resource::builder()
-        .with_schema_url(attrs, SCHEMA_URL)
+        .with_schema_url(Vec::<KeyValue>::new(), SCHEMA_URL)
+        .with_attributes(attrs)
         .build()
 }
 
@@ -130,12 +136,20 @@ mod tests {
     /// race for the slot. Serialize every `build()` invocation in this file.
     static GLOBAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    // NOTE: a regression-only test for `service.name` is intentionally omitted:
-    // `Resource::builder()` includes `SdkProvidedResourceDetector`, and the
-    // SDK's `with_schema_url` merges detectors *over* the supplied attrs, so the
-    // detector's `unknown_service:<binary>` sentinel currently wins over
-    // `config.service_name`. Track and fix in production code, not by asserting
-    // the buggy behaviour here.
+    /// Regression: `SdkProvidedResourceDetector` (seeded by
+    /// `Resource::builder()`) always supplies a `service.name` — the
+    /// `unknown_service:<binary>` sentinel when no `OTEL_SERVICE_NAME` env is
+    /// set. The configured `service.name` must win over it (`build_resource`
+    /// applies the config attrs *after* the detector merge).
+    #[test]
+    fn configured_service_name_wins_over_detector_sentinel() {
+        let cfg = OpenTelemetryConfig::new("configured-svc");
+        let r = build_resource(&cfg);
+        assert_eq!(
+            r.get(&Key::new(SERVICE_NAME)).map(|v| v.to_string()),
+            Some("configured-svc".to_string()),
+        );
+    }
 
     #[test]
     fn resource_omits_optional_attrs_when_unset() {

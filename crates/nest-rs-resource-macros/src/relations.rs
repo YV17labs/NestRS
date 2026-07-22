@@ -115,7 +115,7 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
                 if __keys.is_empty() {
                     return ::core::result::Result::Ok(::std::collections::HashMap::new());
                 }
-                ::tracing::debug!(
+                ::nest_rs_resource::tracing::debug!(
                     target: "nest_rs::loader",
                     count = __keys.len(),
                     #target_label,
@@ -261,7 +261,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                     if __keys.is_empty() {
                         return ::core::result::Result::Ok(::std::collections::HashMap::new());
                     }
-                    ::tracing::debug!(
+                    ::nest_rs_resource::tracing::debug!(
                         target: "nest_rs::loader",
                         count = __keys.len(),
                         #target_label,
@@ -338,7 +338,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                         __map.insert(__k, __wire);
                     }
                     if __truncated || __saturated {
-                        ::tracing::warn!(
+                        ::nest_rs_resource::tracing::warn!(
                             target: "nest_rs::loader",
                             cap = __cap,
                             loader = #target_label,

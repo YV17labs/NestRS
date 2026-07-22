@@ -27,23 +27,35 @@ writes by `condition_for` from the ambient ability (no ability ⇒ `TRUE`,
 unscoped). Route-model binding goes through the service (`Bind`/`bind`
 delegate to `CrudService::access`).
 
-### The only sanctioned bypasses — there are no others
+### Escapes live inside `Repo` — each documents its bar on the method
 
-- **`Repo::unscoped()` / `unscoped_by_id()`** (still *inside* `Repo`),
-  for exactly two paths: pre-authentication credential lookup (no
-  principal yet ⇒ no ability), and `CrudService::access` (must
-  distinguish `Denied` from `Missing`, so it filters by ability
-  explicitly after the unscoped load).
-- **A truly contextless path** (a shutdown hook) keeps an injected
-  `Arc<DatabaseConnection>` — the only `Repo`-*less* bypass, because
-  there is no executor at all.
+**Every access lives in `Repo`**; the ability filter is dropped only
+through a named `Repo` escape, and each escape's rustdoc states the
+exact bar its callers must clear — the doc on the method is the
+authority, not a list here:
+
+- **`Repo::unscoped()` / `unscoped_by_id()`** — ability-less *reads*:
+  pre-authentication credential lookup (no principal yet ⇒ no ability),
+  `CrudService::access` (must distinguish `Denied` from `Missing`, so it
+  filters by ability explicitly after the unscoped load), and global
+  uniqueness probes (`resolve_unique_slug` — uniqueness spans rows the
+  caller cannot see).
+- **`Repo::insert_unscoped()`** — the *write* pendant, on an explicit
+  connection: pre-principal provisioning (social-login user/identity
+  inserts) and principal-less system work. Authorized creates stay on
+  the service write path (`Creatable::create_from_active`).
 - **Signature-authenticated webhook ingress** is **reserved but
   unimplemented** — no webhook route or signature check exists. See
   `Repo::unscoped`'s doc for the bar a real one must clear before
   shipping a `#[public]` + `unscoped` webhook.
 
+The one `Repo`-*less* exception: **a truly contextless path** (a
+shutdown hook) keeps an injected `Arc<DatabaseConnection>`, because no
+executor exists at all.
+
 Every other read uses `scoped`/`all`/`find_by_id`, which apply the
-ambient ability `WHERE`.
+ambient ability `WHERE`. Auditing the escapes is one grep per method
+name.
 
 ## Two request-scoped `task_local!`s
 

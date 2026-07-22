@@ -11,8 +11,7 @@ use nest_rs_seaorm::{
     live_condition,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
-    QueryFilter, Set, SqlErr,
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, Set, SqlErr,
 };
 use uuid::Uuid;
 use validator::Validate;
@@ -165,7 +164,11 @@ impl UsersService {
         identity: &SocialIdentity,
         conn: &Executor,
     ) -> Result<(), AuthError> {
-        match new_identity_active(user_id, identity).insert(conn).await {
+        // Pre-principal provisioning: no ability exists yet, so the write
+        // goes through `Repo`'s sanctioned system-write escape.
+        match Repo::<UserIdentities>::insert_unscoped(new_identity_active(user_id, identity), conn)
+            .await
+        {
             Ok(_) => {
                 tracing::info!(
                     target: "features::users",
@@ -200,7 +203,8 @@ impl UsersService {
             AuthError::Failed("identity resolution failed".into())
         })?;
 
-        let user = match active.insert(conn).await {
+        // Same pre-principal bar as `link_identity`.
+        let user = match Repo::<Users>::insert_unscoped(active, conn).await {
             Ok(user) => {
                 tracing::debug!(target: "features::users", id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
                 user
@@ -390,6 +394,8 @@ fn group_users_by_name(names: &[String], rows: Vec<entity::Model>) -> HashMap<St
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::ActiveModelTrait;
+
     use super::*;
 
     fn row(name: &str, org_id: Uuid) -> entity::Model {

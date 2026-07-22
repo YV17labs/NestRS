@@ -12,9 +12,11 @@ paths:
 `demo/apps/<name>/` is **`main.rs` + `module.rs` only, by default**.
 Not `examples/`, not `services/`.
 
-`main` holds only `App::builder().module::<AppModule>()` (+ transports).
-`module.rs` is the canonical composition — the app lists the edges it
-serves.
+`main` holds only `App::builder().module::<AppModule>()` (+ transports),
+plus the imperative global-layer seams `request-layers.md` sanctions
+(`use_guards_global` / `use_*_global`) — declaring the transport-wide
+pool *is* composition, not business logic. `module.rs` is the canonical
+composition — the app lists the edges it serves.
 
 ## The exemplars
 

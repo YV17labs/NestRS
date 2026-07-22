@@ -24,7 +24,7 @@ pub trait JobContext: Send + Sync + 'static {
     /// completion means the job never ran, and there is then no result to hand
     /// back. [`run_in_job_context`] cannot synthesize one for an arbitrary
     /// output type, so it treats a broken impl as a failure of **that single
-    /// job** — it logs an error on `nest_rs::queue` and unwinds. The unwind is
+    /// job** — it logs an error on `nest_rs::worker` and unwinds. The unwind is
     /// isolated by the transport's per-job boundary (the queue worker's
     /// `CatchPanicLayer`, which turns it into a job abort; the scheduler's
     /// per-job task), so one bad impl fails its own job while the worker keeps
@@ -61,14 +61,18 @@ pub async fn run_in_job_context<T: Send>(
                 // the scheduler's per-job task) catches it, so the consumer
                 // loop keeps running instead of the whole worker going down.
                 None => {
+                    // `nest_rs::worker`, not `nest_rs::queue`: this seam is
+                    // shared by the queue worker AND the scheduler — a broken
+                    // context in a *scheduled* job must not be misattributed
+                    // to the queue concern.
                     tracing::error!(
-                        target: "nest_rs::queue",
+                        target: "nest_rs::worker",
                         job_context = ::std::any::type_name::<dyn JobContext>(),
                         "job context returned without running the job to completion; failing this job",
                     );
                     panic!(
                         "JobContext::scope contract violation: the impl must drive `inner` to \
-                         completion before returning (see the nest_rs::queue error event)"
+                         completion before returning (see the nest_rs::worker error event)"
                     );
                 }
             }

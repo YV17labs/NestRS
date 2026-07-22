@@ -33,6 +33,24 @@ fn basic_credentials_decodes_id_and_secret() {
 }
 
 #[test]
+fn basic_credentials_matches_scheme_case_insensitively() {
+    // RFC 7235: auth schemes are case-insensitive — `basic`/`BASIC` must
+    // decode exactly like `Basic` (mirrors `bearer_token`).
+    let encoded = base64::engine::general_purpose::STANDARD.encode(b"client-id:client-secret");
+    for scheme in ["basic", "BASIC", "BaSiC"] {
+        let req = crate::common::request(&[("Authorization", &format!("{scheme} {encoded}"))]);
+        assert_eq!(
+            basic_credentials(&req),
+            Some(("client-id".into(), "client-secret".into())),
+            "scheme `{scheme}` must be accepted",
+        );
+    }
+    // A different scheme still refuses.
+    let req = crate::common::request(&[("Authorization", &format!("Bearer {encoded}"))]);
+    assert_eq!(basic_credentials(&req), None);
+}
+
+#[test]
 fn basic_credentials_allows_colons_in_secret() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"id:sec:ret:with:colons");
     let req = crate::common::request(&[("Authorization", &format!("Basic {encoded}"))]);

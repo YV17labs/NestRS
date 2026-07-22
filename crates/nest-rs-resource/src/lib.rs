@@ -34,3 +34,12 @@ pub mod graphql {
 pub use exposures::relations::{PkLoadable, RelatedTo};
 pub use exposures::wire::WireModelDefaults;
 pub use nest_rs_resource_macros::expose;
+
+// Re-exported so `#[expose]`-generated code resolves these through this crate
+// instead of the consumer's extern prelude. Only the *derive* paths the macro
+// emits (`::serde`, `::validator`, `::schemars`) remain call-site deps — a
+// derive's own expansion targets the consuming crate's prelude, so routing the
+// derive path through a re-export would be false hygiene.
+pub use async_trait::async_trait;
+pub use serde_json;
+pub use tracing;

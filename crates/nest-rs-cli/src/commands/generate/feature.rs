@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use super::{finish, resolve_start};
+use super::support::{finish, resolve_start};
 use crate::context::Context;
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;

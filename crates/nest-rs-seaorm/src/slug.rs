@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use sea_orm::sea_query::Condition;
 use sea_orm::{ColumnTrait, ConnectionTrait, QueryFilter};
 
-use crate::{ServiceError, SoftDeletable, live_condition};
+use crate::{Repo, ServiceError, SoftDeletable, live_condition};
 
 /// How many `base`, `base-2`, `base-3`, … candidates to try before giving up.
 const MAX_ATTEMPTS: u32 = 100;
@@ -24,10 +24,12 @@ const MAX_ATTEMPTS: u32 = 100;
 /// Returns the first free candidate (`base`, then `base-2`, `base-3`, …), or a
 /// [`ServiceError`] after `MAX_ATTEMPTS` collisions.
 ///
-/// Queries the connection directly (not [`Repo`](crate::Repo)) so the probe is
-/// **unscoped by ability**: a slug must be unique across every live row,
-/// including ones the caller cannot see. Per-tenant uniqueness is opted into
-/// explicitly via `extra`, never inferred from the ambient ability.
+/// Probes through [`Repo::unscoped`] (the sanctioned system-probe escape) on
+/// the **explicit** `conn`, because uniqueness is a global property: a slug
+/// must be free across every live row, including ones the caller cannot see —
+/// scoping the probe by ability would be a correctness bug. Per-tenant
+/// uniqueness is opted into explicitly via `extra`, never inferred from the
+/// ambient ability.
 pub async fn resolve_unique_slug<E, C>(
     conn: &C,
     slug_column: E::Column,
@@ -44,7 +46,7 @@ where
 
     for attempt in 1..=MAX_ATTEMPTS {
         let candidate = with_suffix(base, attempt);
-        let taken = E::find()
+        let taken = Repo::<E>::unscoped()
             .filter(live_condition::<E>())
             .filter(extra.clone())
             .filter(slug_column.eq(candidate.clone()))

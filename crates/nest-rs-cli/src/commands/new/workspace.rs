@@ -139,9 +139,10 @@ fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, with_hello: bool,
     s.create(app_root.join("src/module.rs"), r.render(module_src));
 
     if with_hello {
+        // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
         s.create(
-            app_root.join("tests/e2e/main.rs"),
-            r.render(workspace::APP_E2E),
+            app_root.join("tests/integration/main.rs"),
+            r.render(workspace::APP_SMOKE),
         );
     }
 }

@@ -107,6 +107,11 @@ pub use module::__module_registered;
 // framework — apps never depend on `inventory` directly.
 pub use inventory;
 
+// Re-exported so the `#[hooks]`-generated run-fn signature
+// (`anyhow::Result<()>`) resolves through the framework — a downstream app
+// using `#[hooks]` without a direct `anyhow` dependency must still compile.
+pub use anyhow;
+
 pub use nest_rs_core_macros::{hooks, module};
 
 /// The provider decorator. Every `#[inject]` field must be an `Arc<T>` or

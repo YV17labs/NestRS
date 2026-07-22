@@ -33,7 +33,7 @@ fn emit_soft_deletable() -> TokenStream2 {
 
 fn emit_timestamps() -> TokenStream2 {
     quote! {
-        #[::async_trait::async_trait]
+        #[::nest_rs_resource::async_trait]
         impl ::sea_orm::ActiveModelBehavior for ActiveModel {
             async fn before_save<C>(
                 mut self,

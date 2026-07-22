@@ -3,4 +3,3 @@
 mod extractors;
 mod guard;
 mod strategies;
-mod strategy;

@@ -143,13 +143,11 @@ NestRS sits on top of hyper, tokio, and poem — the same native core the
 fastest Rust frameworks use. So performance is not the axis that separates the
 two; both are compiled and both are fast. It is a benefit, not the argument.
 
-For context, the demo API — a single instance, the
-full JWT plus authz plus row-level plus masking pipeline, Postgres included —
-land around 23k req/s with a p99 under 4.5 ms in roughly 32 MB of resident
-memory. The binary ships in the 11–20 MB range and boots in tens of
-milliseconds. Measured in a Linux Docker container capped at 4 cores and 8 GB,
-with the load generator competing for the same cores — conditions that
-understate the result; on dedicated hardware the figures go up.
+For context, against the same service in NestJS 11 — idiomatic on both sides,
+byte-identical contract, conformance-gated — NestRS measures **×1.5** the
+throughput of the Fastify adapter (Node's best case) with p99 halved, in
+**~22× less resident memory**, cold-starting **~21× faster**. Protocol,
+figures and reproduction steps on the [benchmarks page](/benchmarks/).
 
 <Aside type="caution">
   Throughput is the floor here, not the argument. Both stacks compile to the

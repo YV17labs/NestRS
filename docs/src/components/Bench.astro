@@ -1,29 +1,33 @@
 ---
-// Benchmark comparison — NestRS vs Node as two competing bars per metric.
+// Benchmark comparison — NestRS vs NestJS 11 (both adapters) per metric.
 //
-// Bar length reflects the real measured value on a per-row shared scale (each
-// row's larger value = 100%), so the picture stays honest in both directions:
-// for throughput NestRS is the long bar; for memory/latency (lower is better)
-// Node becomes the long bar and NestRS a short one — exactly the right read.
-// NestRS is always the brand gradient, Node always muted, so colour means
-// "who", never "good/bad". Bars grow once on scroll-in (see the inline script).
+// Data: bench/ harness, tier T1 (JSON through DI + injected service), one
+// pinned core, medians of repeated runs — the regime that favours Node (a
+// single event loop loses nothing to pinning). Bar length reflects the real
+// measured value on a per-row shared scale (each row's larger value = 100%),
+// so the picture stays honest in both directions: for throughput NestRS is
+// the long bar; for memory/latency/cold-start (lower is better) the Node bars
+// grow long — exactly the right read. NestRS is always the brand gradient,
+// both Node adapters muted, so colour means "who", never "good/bad". The
+// multiplier column compares NestRS to NestJS's best adapter on that row.
 interface Row {
   label: string;
   unit: string;
   nestrs: number;
-  node: number;
+  fastify: number;
+  express: number;
   nestrsLabel: string;
-  nodeLabel: string;
-  mult: number;
+  fastifyLabel: string;
+  expressLabel: string;
+  mult: string;
 }
 
 const rows: Row[] = [
-  { label: 'Throughput', unit: '2 cores · req/s', nestrs: 463000, node: 18000, nestrsLabel: '~463k', nodeLabel: '~18k', mult: 25 },
-  { label: 'Throughput', unit: 'per core · req/s', nestrs: 231000, node: 17000, nestrsLabel: '~231k', nodeLabel: '~17k', mult: 13 },
-  { label: 'Latency p50', unit: 'lower is better', nestrs: 0.13, node: 3.2, nestrsLabel: '0.13 ms', nodeLabel: '3.2 ms', mult: 24 },
-  { label: 'Latency p99', unit: 'lower is better', nestrs: 0.57, node: 6.4, nestrsLabel: '0.57 ms', nodeLabel: '6.4 ms', mult: 11 },
-  { label: 'Memory idle', unit: 'lower is better', nestrs: 4, node: 80, nestrsLabel: '4 MB', nodeLabel: '80 MB', mult: 20 },
-  { label: 'Memory under load', unit: 'lower is better', nestrs: 6, node: 118, nestrsLabel: '6 MB', nodeLabel: '118 MB', mult: 18 },
+  { label: 'Throughput', unit: '1 core · req/s', nestrs: 154000, fastify: 101000, express: 56000, nestrsLabel: '~154k', fastifyLabel: '~101k', expressLabel: '~56k', mult: '×1.5' },
+  { label: 'Latency p50', unit: 'lower is better', nestrs: 0.41, fastify: 0.61, express: 1.08, nestrsLabel: '0.41 ms', fastifyLabel: '0.61 ms', expressLabel: '1.08 ms', mult: '×1.5' },
+  { label: 'Latency p99', unit: 'lower is better', nestrs: 0.55, fastify: 1.21, express: 2.16, nestrsLabel: '0.55 ms', fastifyLabel: '1.21 ms', expressLabel: '2.16 ms', mult: '×2.2' },
+  { label: 'Memory under load', unit: 'lower is better', nestrs: 9, fastify: 195, express: 204, nestrsLabel: '9 MB', fastifyLabel: '195 MB', expressLabel: '204 MB', mult: '×22' },
+  { label: 'Cold start', unit: 'lower is better', nestrs: 18, fastify: 472, express: 385, nestrsLabel: '18 ms', fastifyLabel: '472 ms', expressLabel: '385 ms', mult: '×21' },
 ];
 
 // Width as a share of the row's larger value, with a small floor so the tiny
@@ -34,12 +38,12 @@ const width = (v: number, max: number) => `${Math.max(3, (v / max) * 100)}%`;
 <div class="bench">
   <div class="bench-legend">
     <span class="bench-key nestrs">NestRS</span>
-    <span class="bench-key node">NestJS 11 · Node 24</span>
+    <span class="bench-key node">NestJS 11 · Node 24 (Fastify & Express)</span>
   </div>
 
   {
     rows.map((r, i) => {
-      const max = Math.max(r.nestrs, r.node);
+      const max = Math.max(r.nestrs, r.fastify, r.express);
       return (
         <div class="bench-row">
           <div class="bench-label">
@@ -56,15 +60,22 @@ const width = (v: number, max: number) => `${Math.max(3, (v / max) * 100)}%`;
               <span class="bench-num nestrs">{r.nestrsLabel}</span>
             </div>
             <div class="bench-line">
-              <span class="bench-who">Node</span>
+              <span class="bench-who">Fastify</span>
               <span class="bench-meter">
-                <i class="bench-fill node" style={`--w:${width(r.node, max)};--d:${i * 0.07 + 0.05}s`} />
+                <i class="bench-fill node" style={`--w:${width(r.fastify, max)};--d:${i * 0.07 + 0.05}s`} />
               </span>
-              <span class="bench-num">{r.nodeLabel}</span>
+              <span class="bench-num">{r.fastifyLabel}</span>
+            </div>
+            <div class="bench-line">
+              <span class="bench-who">Express</span>
+              <span class="bench-meter">
+                <i class="bench-fill node" style={`--w:${width(r.express, max)};--d:${i * 0.07 + 0.1}s`} />
+              </span>
+              <span class="bench-num">{r.expressLabel}</span>
             </div>
           </div>
 
-          <div class="bench-mult">~{r.mult}×</div>
+          <div class="bench-mult">{r.mult}</div>
         </div>
       );
     })

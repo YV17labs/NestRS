@@ -149,9 +149,10 @@ module reachability. A binary that imports only the queue adapter does not
 mount HTTP routes or GraphQL resolvers — even when those files live in the
 same shared feature crate. One codebase, multiple deployable shapes.
 
-On the [introduction page](/#how-fast-exactly), the same Hello World service
-benchmarks at roughly **25×** the throughput and **~20×** less RAM than an
-equivalent Node stack on identical hardware.
+On the [benchmarks page](/benchmarks/), the same service — idiomatic on both
+sides, byte-identical contract — measures at **×1.5** the throughput of
+NestJS on Fastify (its best case), **×2.7** on Express, in **~22× less RAM**,
+cold-starting **~21× faster**.
 
 ## What this is not
 

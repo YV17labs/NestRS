@@ -4997,6 +4997,8 @@ dependencies = [
  "nest-rs-testing",
  "sea-orm",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

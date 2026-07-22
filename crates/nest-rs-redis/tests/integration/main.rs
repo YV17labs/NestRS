@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use nest_rs_core::{Container, Transport, injectable};
-use nest_rs_queue::{ProcessMethod, Processor, WIRE_FORMAT_VERSION, processor};
+use nest_rs_queue::{ProcessMethod, Processor, WIRE_FORMAT_VERSION, processor, queue};
 use nest_rs_redis::QueueWorker;
 use nest_rs_worker::JobContext;
 use serde::{Deserialize, Serialize};
@@ -138,13 +138,18 @@ struct EnvelopeCommand {
     n: u32,
 }
 
+// The queue's identity — wire name and payload type in one artifact, named by
+// both sides.
+#[queue(name = "envelope-test", job = EnvelopeCommand)]
+struct EnvelopeTestQueue;
+
 #[injectable]
 #[derive(Default)]
 struct EnvelopeProc;
 
 #[processor]
 impl EnvelopeProc {
-    #[process(queue = "envelope-test", concurrency = 1, retries = 0)]
+    #[process(queue = EnvelopeTestQueue, concurrency = 1, retries = 0)]
     async fn handle(&self, job: EnvelopeCommand) -> anyhow::Result<()> {
         ENVELOPE_LAST_N.store(job.n, Ordering::SeqCst);
         Ok(())
@@ -315,6 +320,11 @@ const PIPE_QUEUE: &str = "pipe-arg-test";
 
 static PIPE_SEEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+// The pipe carrier is the *handler* type; the queue's `job` is the wire payload
+// the pipe runs on.
+#[queue(name = "pipe-arg-test", job = String)]
+struct PipeArgTestQueue;
+
 #[injectable]
 #[derive(Default)]
 struct PipeProc;
@@ -323,7 +333,7 @@ struct PipeProc;
 impl PipeProc {
     // `Piped<Trim, String>`: the wire payload is a `String`; the handler body
     // receives it already trimmed — the queue analog of the HTTP / GraphQL form.
-    #[process(queue = "pipe-arg-test", concurrency = 1, retries = 0)]
+    #[process(queue = PipeArgTestQueue, concurrency = 1, retries = 0)]
     async fn handle(
         &self,
         name: nest_rs_pipes::Piped<nest_rs_pipes::Trim, String>,
@@ -379,13 +389,16 @@ struct StrictCommand {
     id: u32,
 }
 
+#[queue(name = "strict-envelope-test", job = StrictCommand)]
+struct StrictEnvelopeTestQueue;
+
 #[injectable]
 #[derive(Default)]
 struct StrictProc;
 
 #[processor]
 impl StrictProc {
-    #[process(queue = "strict-envelope-test", concurrency = 1, retries = 0)]
+    #[process(queue = StrictEnvelopeTestQueue, concurrency = 1, retries = 0)]
     async fn handle(&self, job: StrictCommand) -> anyhow::Result<()> {
         STRICT_LAST_V.store(job.v, Ordering::SeqCst);
         STRICT_LAST_PAYLOAD.store(job.payload, Ordering::SeqCst);

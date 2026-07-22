@@ -39,9 +39,89 @@ pub(crate) fn arc_inner(ty: &Type) -> Option<&Type> {
     Some(inner)
 }
 
+/// The last path segment's ident and its angle-bracketed type arguments, when
+/// `ty` is a path type with generics: `a::b::Piped<P, T>` ⇒ `("Piped", [P, T])`.
+///
+/// The primitive under [`nth_generic_type`] and [`pipe_wrapper`] — matching on
+/// the *last* segment is what makes a fully-qualified spelling work everywhere
+/// a bare one does.
+pub fn generic_args(ty: &Type) -> Option<(&Ident, Vec<&Type>)> {
+    let Type::Path(tp) = ty else { return None };
+    let seg = tp.path.segments.last()?;
+    let PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    let tys = args
+        .args
+        .iter()
+        .filter_map(|arg| match arg {
+            GenericArgument::Type(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    Some((&seg.ident, tys))
+}
+
+/// A per-argument pipe binding read off a parameter's type — the shape
+/// `#[resolver]`, `#[messages]` and `#[processor]` each need to strip before
+/// deserializing the wire value.
+pub enum PipeWrapper {
+    /// `Piped<P, T>` — run pipe `P` over the wire value `T`.
+    Piped {
+        /// The pipe type to apply.
+        pipe: syn::Path,
+        /// The value that crosses the wire, and what the pipe consumes.
+        value: Type,
+    },
+    /// `Valid<T>` — validate the wire value `T`.
+    Valid {
+        /// The value that crosses the wire.
+        value: Type,
+    },
+}
+
+impl PipeWrapper {
+    /// The wire value the transport deserializes, whichever wrapper this is.
+    pub fn value(&self) -> &Type {
+        match self {
+            Self::Piped { value, .. } | Self::Valid { value } => value,
+        }
+    }
+}
+
+/// Recognise `Piped<P, T>` / `Valid<T>` on `ty`'s last path segment.
+///
+/// The three non-HTTP transports bind pipes per argument with exactly this
+/// pair of wrappers (HTTP wraps an extractor instead — orphan rule), and each
+/// macro used to re-derive the match from scratch. `None` ⇒ a plain payload,
+/// deserialized as-is.
+pub fn pipe_wrapper(ty: &Type) -> Option<PipeWrapper> {
+    let (ident, tys) = generic_args(ty)?;
+    match (ident.to_string().as_str(), tys.as_slice()) {
+        ("Piped", [Type::Path(pipe), value]) => Some(PipeWrapper::Piped {
+            pipe: pipe.path.clone(),
+            value: (*value).clone(),
+        }),
+        ("Valid", [value]) => Some(PipeWrapper::Valid {
+            value: (*value).clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// The last segment's ident of a path — the readable name in a diagnostic or a
+/// generated identifier. `syn::Path` always has at least one segment.
+pub fn last_segment_ident(path: &syn::Path) -> &Ident {
+    &path
+        .segments
+        .last()
+        .expect("syn::Path has ≥ 1 segment")
+        .ident
+}
+
 /// Short label for a dependency type in diagnostics: last path segment, or
 /// `dyn Trait` for a trait object, or the token rendering otherwise.
-pub(crate) fn type_label(ty: &Type) -> String {
+pub fn type_label(ty: &Type) -> String {
     match ty {
         Type::Path(tp) => tp
             .path
@@ -83,3 +163,71 @@ pub fn nth_generic_type<'a>(ty: &'a Type, name: &str, idx: usize) -> Option<&'a 
         })
         .nth(idx)
 }
+
+/// The single payload argument of an orchestrator method: `&self` receiver,
+/// then exactly one typed parameter.
+///
+/// `#[on_event]` and `#[process]` impose the identical signature and produced
+/// identical diagnostics up to one noun; `decorator` (`"#[process]"`) and
+/// `payload` (`"job"`) are what actually differed. Extra dependencies belong on
+/// the host struct as `#[inject]` fields, which is why more than one argument
+/// is refused rather than resolved.
+pub fn payload_arg_type(
+    method: &syn::ImplItemFn,
+    decorator: &str,
+    payload: &str,
+) -> syn::Result<Type> {
+    use syn::spanned::Spanned;
+    use syn::{FnArg, PatType};
+
+    let mut iter = method.sig.inputs.iter();
+    match iter.next() {
+        Some(FnArg::Receiver(_)) => {}
+        Some(other) => {
+            return Err(syn::Error::new(
+                other.span(),
+                format!("a `{decorator}` method must take `&self` as its first argument"),
+            ));
+        }
+        None => {
+            return Err(syn::Error::new(
+                method.sig.span(),
+                format!("a `{decorator}` method must take `&self` and one {payload} argument"),
+            ));
+        }
+    }
+    let Some(arg) = iter.next() else {
+        return Err(syn::Error::new(
+            method.sig.span(),
+            format!(
+                "a `{decorator}` method needs a {payload} argument: \
+                 `async fn(&self, {payload}: T)`"
+            ),
+        ));
+    };
+    if iter.next().is_some() {
+        return Err(syn::Error::new(
+            method.sig.span(),
+            format!(
+                "a `{decorator}` method takes exactly one {payload} argument — extra \
+                 dependencies belong on the host struct as `#[inject]` fields"
+            ),
+        ));
+    }
+    match arg {
+        FnArg::Typed(PatType { ty, .. }) => Ok((**ty).clone()),
+        FnArg::Receiver(r) => Err(syn::Error::new(
+            r.span(),
+            format!("a `{decorator}` method takes exactly one `&self` receiver"),
+        )),
+    }
+}
+
+/// The shared **message** for the edge rule "a resource id is a UUID v7".
+///
+/// The rule is one edge decision, but each transport rejects in its own error
+/// type — so what is genuinely shared is the wording, and that is what had
+/// drifted (`"path id must be a UUID v7"` on HTTP against `"id must be a UUID
+/// v7"` on GraphQL, for the same rejection). Each `#[crud]` builds its own
+/// `return Err(...)` around this constant.
+pub const UUID_V7_REQUIRED: &str = "id must be a UUID v7";

@@ -102,9 +102,15 @@ impl {{gateway}} {
 
 pub const QUEUE_PROCESSOR: &str = r#"use anyhow::Result;
 use nest_rs_core::injectable;
-use nest_rs_queue::processor;
+use nest_rs_queue::{processor, queue};
 
 use crate::{{snake}}::{{command}};
+
+// The queue's identity — wire name + payload type in one artifact both the
+// producer and this consumer name, so a typo or a payload mismatch is a
+// compile error rather than a job that never drains.
+#[queue(name = "{{kebab}}", job = {{command}})]
+pub struct {{queue_name}};
 
 #[injectable]
 #[derive(Default)]
@@ -112,7 +118,7 @@ pub struct {{processor}};
 
 #[processor]
 impl {{processor}} {
-    #[process(queue = "{{kebab}}", concurrency = 1, retries = 3)]
+    #[process(queue = {{queue_name}}, concurrency = 1, retries = 3)]
     async fn handle(&self, job: {{command}}) -> Result<()> {
         tracing::info!(target: "features::{{snake}}", id = %job.id, "processing job");
         Ok(())

@@ -149,6 +149,12 @@ impl Names {
         format!("{}Processor", self.pascal)
     }
 
+    /// The `QueueName` type both sides of the queue import — the wire name and
+    /// the payload type in one artifact.
+    pub fn queue_name(&self) -> String {
+        format!("{}Queue", self.pascal)
+    }
+
     pub fn tasks(&self) -> String {
         format!("{}Tasks", self.pascal)
     }

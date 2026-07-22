@@ -14,15 +14,12 @@
 //! emission targets through the same import root regardless of which
 //! backend integration (nest-rs-redis, …) is wired in.
 
-use nest_rs_codegen::{impl_self_ident, snake_case};
+use nest_rs_codegen::{PipeWrapper, impl_self_ident, payload_arg_type, pipe_wrapper, snake_case};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::spanned::Spanned;
-use syn::{
-    FnArg, Ident, ImplItem, ItemImpl, LitInt, LitStr, PatType, Token, Type, parse_macro_input,
-};
+use syn::{Ident, ImplItem, ItemImpl, LitInt, LitStr, Token, Type, parse_macro_input};
 
 pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as ItemImpl);
@@ -57,7 +54,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
             retries,
         } = args;
 
-        let job_ty = match extract_job_type(method) {
+        let job_ty = match payload_arg_type(method, "#[process]", "job") {
             Ok(ty) => ty,
             Err(err) => return err.to_compile_error().into(),
         };
@@ -66,21 +63,18 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
         // handler receives the carrier. Matches the HTTP / GraphQL forms.
         let (deser_ty, job_wrap) = pipe_binding(&job_ty);
 
-        // The queue name is either a raw string literal (legacy form) or a
-        // `QueueName` type path (`#[process(queue = AudioQueue)]`). The type
-        // form yields `<Q as QueueName>::NAME` — a `&'static str` const usable
-        // everywhere the literal was — and additionally asserts, at compile
-        // time, that the method's wire payload is exactly `<Q as
-        // QueueName>::Job`. A mismatch is an error naming both types.
+        // The queue is named by its `QueueName` type
+        // (`#[process(queue = AudioQueue)]`), which yields
+        // `<Q as QueueName>::NAME` — a `&'static str` const — and additionally
+        // asserts, at compile time, that the method's wire payload is exactly
+        // `<Q as QueueName>::Job`. A mismatch is an error naming both types.
         let queue_str: TokenStream2 = match &queue {
-            QueueId::Literal(s) => quote!(#s),
             QueueId::Type(ty) => {
                 let ty: &Type = ty;
                 quote!(<#ty as ::nest_rs_queue::QueueName>::NAME)
             }
         };
         let queue_assert: TokenStream2 = match &queue {
-            QueueId::Literal(_) => quote!(),
             QueueId::Type(ty) => {
                 let ty: &Type = ty;
                 quote! {
@@ -278,40 +272,6 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
     out.into()
 }
 
-/// Extract the second parameter's type — the job payload. Errors out crisply
-/// when the signature is wrong (no `&self`, or no job arg).
-fn extract_job_type(method: &syn::ImplItemFn) -> syn::Result<Type> {
-    let mut iter = method.sig.inputs.iter();
-    match iter.next() {
-        Some(FnArg::Receiver(_)) => {}
-        Some(other) => {
-            return Err(syn::Error::new(
-                other.span(),
-                "a `#[process]` method must take `&self` as its first argument",
-            ));
-        }
-        None => {
-            return Err(syn::Error::new(
-                method.sig.span(),
-                "a `#[process]` method must take `&self` and one job argument",
-            ));
-        }
-    }
-    let Some(arg) = iter.next() else {
-        return Err(syn::Error::new(
-            method.sig.span(),
-            "a `#[process]` method needs a job argument: `async fn(&self, job: T)`",
-        ));
-    };
-    match arg {
-        FnArg::Typed(PatType { ty, .. }) => Ok((**ty).clone()),
-        FnArg::Receiver(r) => Err(syn::Error::new(
-            r.span(),
-            "a `#[process]` method takes exactly one `&self` receiver",
-        )),
-    }
-}
-
 /// Split a job argument into (type to deserialize from the wire, expression that
 /// yields the value the handler receives). For a plain type both are trivial:
 /// deserialize `T`, hand over `__deser`. For a per-argument pipe `Piped<P, T>` /
@@ -323,45 +283,33 @@ fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
     let box_err = quote! {
         |__e: ::nest_rs_pipes::PipeError| ::nest_rs_queue::JobError::abort(__e.message().to_string())
     };
-    if let Type::Path(tp) = job_ty
-        && let Some(seg) = tp.path.segments.last()
-        && let syn::PathArguments::AngleBracketed(ab) = &seg.arguments
-    {
-        let tys: Vec<&Type> = ab
-            .args
-            .iter()
-            .filter_map(|a| match a {
-                syn::GenericArgument::Type(t) => Some(t),
-                _ => None,
-            })
-            .collect();
-        if seg.ident == "Piped" && tys.len() == 2 {
-            let (pipe, inner) = (tys[0], tys[1]);
-            return (
-                inner.clone(),
-                quote! {
-                    ::nest_rs_pipes::Piped::<#pipe, #inner>::apply(__deser).map_err(#box_err)?
-                },
-            );
-        }
-        if seg.ident == "Valid" && tys.len() == 1 {
-            let inner = tys[0];
-            return (
-                inner.clone(),
-                quote! {
-                    ::nest_rs_pipes::Valid::<#inner>::apply(__deser).map_err(#box_err)?
-                },
-            );
-        }
+    match pipe_wrapper(job_ty) {
+        Some(PipeWrapper::Piped { pipe, value }) => (
+            value.clone(),
+            quote! {
+                ::nest_rs_pipes::Piped::<#pipe, #value>::apply(__deser).map_err(#box_err)?
+            },
+        ),
+        Some(PipeWrapper::Valid { value }) => (
+            value.clone(),
+            quote! {
+                ::nest_rs_pipes::Valid::<#value>::apply(__deser).map_err(#box_err)?
+            },
+        ),
+        None => (job_ty.clone(), quote!(__deser)),
     }
-    (job_ty.clone(), quote!(__deser))
 }
 
-/// How a `#[process]` names its queue: the legacy raw string, or a `QueueName`
-/// type path (`#[process(queue = AudioQueue)]`) that links the name and payload
-/// type to the shared handle at the feature port.
+/// How a `#[process]` names its queue: a `QueueName` type path
+/// (`#[process(queue = AudioQueue)]`) that links the wire name and the payload
+/// type to the shared handle declared at the feature port.
+///
+/// A bare string used to be accepted too. It is gone: it named the queue
+/// without naming its payload, so a consumer could deserialize a type the
+/// producer never sends and the job would simply never drain — the typed form
+/// turns exactly that into a compile error, which makes the string form a
+/// strictly worse second way to say the same thing.
 enum QueueId {
-    Literal(LitStr),
     // Boxed: `syn::Type` is a large enum, so an unboxed variant would bloat
     // every `QueueId` to its size (clippy::large_enum_variant).
     Type(Box<Type>),
@@ -370,7 +318,17 @@ enum QueueId {
 impl Parse for QueueId {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         if input.peek(LitStr) {
-            Ok(QueueId::Literal(input.parse()?))
+            let lit: LitStr = input.parse()?;
+            Err(syn::Error::new_spanned(
+                &lit,
+                format!(
+                    "name the queue by its `QueueName` type, not a string: declare \
+                     `#[queue(name = {:?}, job = <Payload>)] struct <Name>Queue;` at the \
+                     feature port and write `#[process(queue = <Name>Queue)]` — the type \
+                     form also checks this method's payload against the queue's",
+                    lit.value(),
+                ),
+            ))
         } else {
             Ok(QueueId::Type(Box::new(input.parse()?)))
         }

@@ -15,10 +15,9 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::spanned::Spanned;
-use syn::{FnArg, ImplItem, ItemImpl, PatType, ReturnType, Type, parse_macro_input};
+use syn::{ImplItem, ItemImpl, ReturnType, parse_macro_input};
 
-use nest_rs_codegen::{impl_self_ident, snake_case};
+use nest_rs_codegen::{impl_self_ident, payload_arg_type, snake_case};
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
@@ -80,7 +79,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
             .into();
         }
 
-        let event_ty = match extract_event_type(method) {
+        let event_ty = match payload_arg_type(method, "#[on_event]", "event") {
             Ok(ty) => ty,
             Err(err) => return err.to_compile_error().into(),
         };
@@ -129,45 +128,4 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         #(#emissions)*
     };
     out.into()
-}
-
-/// Extract the second parameter's type — the event payload.
-fn extract_event_type(method: &syn::ImplItemFn) -> syn::Result<Type> {
-    let mut iter = method.sig.inputs.iter();
-    match iter.next() {
-        Some(FnArg::Receiver(_)) => {}
-        Some(other) => {
-            return Err(syn::Error::new(
-                other.span(),
-                "an `#[on_event]` method must take `&self` as its first argument",
-            ));
-        }
-        None => {
-            return Err(syn::Error::new(
-                method.sig.span(),
-                "an `#[on_event]` method must take `&self` and one event argument",
-            ));
-        }
-    }
-    let Some(arg) = iter.next() else {
-        return Err(syn::Error::new(
-            method.sig.span(),
-            "an `#[on_event]` method needs an event argument: \
-             `async fn(&self, event: T)`",
-        ));
-    };
-    if iter.next().is_some() {
-        return Err(syn::Error::new(
-            method.sig.span(),
-            "an `#[on_event]` method takes exactly one event argument — \
-             extra dependencies belong on the host struct as `#[inject]` fields",
-        ));
-    }
-    match arg {
-        FnArg::Typed(PatType { ty, .. }) => Ok((**ty).clone()),
-        FnArg::Receiver(r) => Err(syn::Error::new(
-            r.span(),
-            "an `#[on_event]` method takes exactly one `&self` receiver",
-        )),
-    }
 }

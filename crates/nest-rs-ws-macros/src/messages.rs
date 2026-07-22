@@ -17,8 +17,8 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    impl_self_ident, injected_method_with_layers, layer_inject_keys, reject_http_only_layers,
-    take_path_list,
+    PipeWrapper, impl_self_ident, injected_method_with_layers, layer_inject_keys, pipe_wrapper,
+    reject_http_only_layers, take_flag_attr, take_path_list,
 };
 
 /// Split a `#[subscribe_message]` payload argument into (type to deserialize
@@ -26,29 +26,11 @@ use nest_rs_codegen::{
 /// `Some((None, inner))` for `Valid<T>`, `None` for a plain payload deserialized
 /// as-is.
 fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
-    if let Type::Path(tp) = ty
-        && let Some(seg) = tp.path.segments.last()
-        && let syn::PathArguments::AngleBracketed(ab) = &seg.arguments
-    {
-        let tys: Vec<&Type> = ab
-            .args
-            .iter()
-            .filter_map(|a| match a {
-                syn::GenericArgument::Type(t) => Some(t),
-                _ => None,
-            })
-            .collect();
-        if seg.ident == "Piped"
-            && tys.len() == 2
-            && let Type::Path(p) = tys[0]
-        {
-            return (tys[1].clone(), Some((Some(p.path.clone()), tys[1].clone())));
-        }
-        if seg.ident == "Valid" && tys.len() == 1 {
-            return (tys[0].clone(), Some((None, tys[0].clone())));
-        }
+    match pipe_wrapper(ty) {
+        Some(PipeWrapper::Piped { pipe, value }) => (value.clone(), Some((Some(pipe), value))),
+        Some(PipeWrapper::Valid { value }) => (value.clone(), Some((None, value))),
+        None => (ty.clone(), None),
     }
-    (ty.clone(), None)
 }
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -77,14 +59,14 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        if strip_marker(method, "on_connect") {
+        if take_flag_attr(&mut method.attrs, "on_connect") {
             on_connect = Some(match hook_override("on_connect", method) {
                 Ok(tokens) => tokens,
                 Err(err) => return err.to_compile_error().into(),
             });
             continue;
         }
-        if strip_marker(method, "on_disconnect") {
+        if take_flag_attr(&mut method.attrs, "on_disconnect") {
             on_disconnect = Some(match hook_override("on_disconnect", method) {
                 Ok(tokens) => tokens,
                 Err(err) => return err.to_compile_error().into(),
@@ -388,15 +370,6 @@ fn classify_return(output: &ReturnType) -> ReturnKind {
         return ReturnKind::ResultUnit;
     }
     ReturnKind::Result
-}
-
-fn strip_marker(method: &mut ImplItemFn, ident: &str) -> bool {
-    if let Some(pos) = method.attrs.iter().position(|a| a.path().is_ident(ident)) {
-        method.attrs.remove(pos);
-        true
-    } else {
-        false
-    }
 }
 
 /// Emit the `Gateway` override for `on_connect` / `on_disconnect` delegating

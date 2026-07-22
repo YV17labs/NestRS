@@ -29,4 +29,7 @@ pub use inject::{
     injected_names_method, layer_inject_keys, optional_dependencies_method,
 };
 pub use specs::{force_guard_typeids, scoped_specs};
-pub use ty::{impl_self_ident, nth_generic_type};
+pub use ty::{
+    PipeWrapper, UUID_V7_REQUIRED, generic_args, impl_self_ident, last_segment_ident,
+    nth_generic_type, payload_arg_type, pipe_wrapper, type_label,
+};

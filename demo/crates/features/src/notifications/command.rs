@@ -1,4 +1,4 @@
-use nest_rs_queue::{QueueName, queue};
+use nest_rs_queue::queue;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -10,5 +10,3 @@ pub struct NotifyCommand {
 
 #[queue(name = "notifications", job = NotifyCommand)]
 pub struct NotifyQueue;
-
-pub const NOTIFICATIONS_QUEUE: &str = <NotifyQueue as QueueName>::NAME;

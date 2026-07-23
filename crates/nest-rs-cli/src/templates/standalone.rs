@@ -20,24 +20,32 @@ nest-rs-config = "{{nestrs_version}}"
 nest-rs-guards = "{{nestrs_version}}"
 nest-rs-http = "{{nestrs_version}}"
 nest-rs-interceptors = "{{nestrs_version}}"
-nest-rs-opentelemetry = { version = "{{nestrs_version}}", features = ["http"] }
 poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
 
 [dev-dependencies]
-nest-rs-testing = { version = "{{nestrs_version}}", features = ["opentelemetry"] }
+nest-rs-testing = "{{nestrs_version}}"
+
+# Release: the smallest, fastest single binary — production defaults.
+[profile.release]
+opt-level = 3       # maximum runtime performance
+lto = "fat"         # whole-program optimisation across all crates
+codegen-units = 1   # give the optimiser the whole crate at once
+strip = true        # drop symbols for a smaller binary
+
+# Dev: fastest iterative rebuilds; keep file:line in backtraces.
+[profile.dev]
+debug = "line-tables-only"
 "#;
 
 pub const MAIN: &str = r#"use anyhow::Result;
 use nest_rs_config::Environment;
 use nest_rs_core::App;
-use nest_rs_opentelemetry::OpenTelemetry;
 
 use {{snake}}::{{module}};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
-    let _telemetry = OpenTelemetry::init("{{kebab}}")?;
 
     App::builder()
         .module::<{{module}}>()
@@ -62,14 +70,12 @@ pub use module::{{module}};
 
 pub const MODULE_HELLO: &str = r#"use nest_rs_core::module;
 use nest_rs_http::HttpModule;
-use nest_rs_opentelemetry::OpenTelemetryModule;
 
 use crate::controller::{{controller}};
 use crate::service::{{service}};
 
 #[module(
     imports = [
-        OpenTelemetryModule,
         HttpModule::for_root(None),
     ],
     providers = [{{service}}, {{controller}}],
@@ -79,10 +85,8 @@ pub struct {{module}};
 
 pub const MODULE_EMPTY: &str = r#"use nest_rs_core::module;
 use nest_rs_http::HttpModule;
-use nest_rs_opentelemetry::OpenTelemetryModule;
 
 #[module(imports = [
-    OpenTelemetryModule,
     HttpModule::for_root(None),
 ])]
 pub struct {{module}};
@@ -133,7 +137,6 @@ use nest_rs_testing::TestApp;
 #[tokio::test]
 async fn hello_endpoint_greets() {
     let app = TestApp::builder()
-        .with_test_telemetry()
         .module::<{{module}}>()
         .build()
         .await

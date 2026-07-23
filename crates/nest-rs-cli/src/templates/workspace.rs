@@ -23,9 +23,19 @@ nest-rs-config = "{{nestrs_version}}"
 nest-rs-guards = "{{nestrs_version}}"
 nest-rs-http = "{{nestrs_version}}"
 nest-rs-interceptors = "{{nestrs_version}}"
-nest-rs-opentelemetry = { version = "{{nestrs_version}}", features = ["http"] }
 nest-rs-testing = "{{nestrs_version}}"
 poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
+
+# Release: the smallest, fastest single binary — production defaults.
+[profile.release]
+opt-level = 3       # maximum runtime performance
+lto = "fat"         # whole-program optimisation across all crates
+codegen-units = 1   # give the optimiser the whole crate at once
+strip = true        # drop symbols for a smaller binary
+
+# Dev: fastest iterative rebuilds; keep file:line in backtraces.
+[profile.dev]
+debug = "line-tables-only"
 "#;
 
 pub const FEATURES_CARGO: &str = r#"[package]
@@ -137,12 +147,11 @@ features.workspace = true
 nest-rs-core.workspace = true
 nest-rs-config.workspace = true
 nest-rs-http.workspace = true
-nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
+nest-rs-testing.workspace = true
 "#;
 
 pub const APP_LIB: &str = r#"mod module;
@@ -153,14 +162,12 @@ pub use module::{{module}};
 pub const APP_MAIN: &str = r#"use anyhow::Result;
 use nest_rs_config::Environment;
 use nest_rs_core::App;
-use nest_rs_opentelemetry::OpenTelemetry;
 
 use {{snake}}::{{module}};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
-    let _telemetry = OpenTelemetry::init("{{kebab}}")?;
 
     App::builder()
         .module::<{{module}}>()
@@ -173,13 +180,11 @@ async fn main() -> Result<()> {
 
 pub const APP_MODULE_WITH_HELLO: &str = r#"use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_opentelemetry::OpenTelemetryModule;
 
 use features::hello::HelloHttpModule;
 
 #[module(
     imports = [
-        OpenTelemetryModule,
         HttpModule::for_root(HttpConfig { port: {{port}}, ..Default::default() }),
         HelloHttpModule,
     ],
@@ -190,10 +195,8 @@ pub struct {{module}};
 /// Thin workspace app — composition only; HTTP port pinned in code (see `apps/api`).
 pub const APP_MODULE: &str = r#"use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_opentelemetry::OpenTelemetryModule;
 
 #[module(imports = [
-    OpenTelemetryModule,
     HttpModule::for_root(HttpConfig { port: {{port}}, ..Default::default() }),
 ])]
 pub struct {{module}};

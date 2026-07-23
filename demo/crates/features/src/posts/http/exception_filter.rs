@@ -32,9 +32,22 @@ impl ExceptionFilter for PostProblemFilter {
             "status": status.as_u16(),
             "detail": err.to_string(),
         });
+        let bytes = match serde_json::to_vec(&body) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(
+                    target: "features::posts",
+                    error = %error,
+                    "problem+json body failed to serialize",
+                );
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .finish();
+            }
+        };
         Response::builder()
             .status(status)
             .content_type("application/problem+json")
-            .body(serde_json::to_vec(&body).unwrap_or_default())
+            .body(bytes)
     }
 }

@@ -168,7 +168,7 @@ impl UsersService {
             .await
         {
             Ok(_) => {
-                tracing::info!(
+                tracing::debug!(
                     target: "features::users",
                     provider = identity.provider,
                     %user_id,

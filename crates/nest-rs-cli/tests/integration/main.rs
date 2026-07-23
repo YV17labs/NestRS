@@ -72,21 +72,23 @@ fn new_standalone_hello_template() {
     assert!(app.join(".env").is_file());
     assert!(app.join(".env.development").is_file());
     let dev_env = fs::read_to_string(app.join(".env.development")).unwrap();
-    assert!(dev_env.contains("NESTRS_OPENTELEMETRY__LOG_LEVEL=debug"));
+    assert!(dev_env.contains("NESTRS_LOG=debug"));
     assert!(app.join(".env.example").is_file());
 
     let main_rs = fs::read_to_string(app.join("src/main.rs")).unwrap();
-    assert!(main_rs.contains("OpenTelemetry::init"));
+    // Baseline logging is nest-rs-core's job now — a scaffold must not pull
+    // the observability stack; it stays a documented opt-in.
+    assert!(!main_rs.contains("OpenTelemetry"));
     assert!(main_rs.contains("Environment::init"));
 
     let module_rs = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert!(module_rs.contains("OpenTelemetryModule"));
+    assert!(!module_rs.contains("OpenTelemetryModule"));
 
     let cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
     assert!(cargo.contains("[workspace]"));
     assert!(cargo.contains("nest-rs-guards"));
     assert!(cargo.contains("nest-rs-interceptors"));
-    assert!(cargo.contains("nest-rs-opentelemetry"));
+    assert!(!cargo.contains("nest-rs-opentelemetry"));
     assert!(app.join(".gitignore").is_file());
     assert!(app.join("Justfile").is_file());
     let justfile = fs::read_to_string(app.join("Justfile")).unwrap();
@@ -269,7 +271,7 @@ fn new_workspace_app_scaffold() {
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
     assert!(module.contains("HttpConfig { port: 3000"));
-    assert!(module.contains("OpenTelemetryModule"));
+    assert!(!module.contains("OpenTelemetryModule"));
 }
 
 #[test]

@@ -136,9 +136,9 @@ pub const ENV_DEVELOPMENT: &str = r#"# {{env_label}} — development-only overri
 # Committed; layered on top of `.env`, below `.env.local` and the real environment.
 
 # Verbose, human-readable logs while developing.
-NESTRS_OPENTELEMETRY__LOG_LEVEL=debug
-NESTRS_OPENTELEMETRY__LOG_FORMAT=text
-NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION=true
+NESTRS_LOG=debug
+NESTRS_LOG_FORMAT=text
+NESTRS_LOG_SOURCE_LOCATION=true
 "#;
 
 pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or secret-shaped settings:

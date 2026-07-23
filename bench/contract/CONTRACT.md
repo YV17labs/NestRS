@@ -39,17 +39,12 @@ review of the SUT source, which is deliberately small enough to read.
   `NODE_ENV=production`.
 - Framework defaults **as scaffolded by each framework's own CLI** —
   no tuning, no middleware removed or added beyond what the scaffold
-  ships. Two deliberate exceptions:
-  1. NestJS string responses default to `text/html`, so the T0 handler
-     pins `text/plain` via the documented `@Header` decorator.
-  2. **Observability parity**: the NestRS scaffold ships
-     `OpenTelemetryModule` (per-request span, access log, `X-Trace-Id`);
-     NestJS ships nothing comparable. The NestRS SUT drops that module
-     import so neither side does per-request telemetry work — measuring
-     "telemetry on" vs "telemetry absent" would compare features, not
-     frameworks.
-- No per-request logging or telemetry on either side. Boot-time logging
-  stays on — it is part of each framework's honest default.
+  ships. One deliberate exception: NestJS string responses default to
+  `text/html`, so the T0 handler pins `text/plain` via the documented
+  `@Header` decorator.
+- No per-request logging or telemetry on either side — both scaffolds
+  ship none. Boot-time logging stays on — it is part of each
+  framework's honest default.
 - No reverse proxy, no TLS, no compression (bodies are below any
   threshold anyway).
 

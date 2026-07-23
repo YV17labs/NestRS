@@ -56,6 +56,8 @@ impl App {
     /// panicking ahead of it; only a true provider cycle (invisible to the
     /// graph) still panics.
     pub fn new<M: Module + 'static>() -> Result<Self> {
+        #[cfg(feature = "logging")]
+        crate::logging::init_fallback()?;
         let builder = M::register(Container::builder());
         let roots = [TypeId::of::<M>()];
         // `ReachableProviders` is seeded after register but is global
@@ -359,6 +361,8 @@ impl AppBuilder {
     /// Run the four phases and return the assembled [`App`]. Propagates the
     /// first factory error.
     pub async fn build(self) -> Result<App> {
+        #[cfg(feature = "logging")]
+        crate::logging::init_fallback()?;
         let AppBuilder {
             mut builder,
             modules,

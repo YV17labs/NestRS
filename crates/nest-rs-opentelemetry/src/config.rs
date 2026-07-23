@@ -2,9 +2,12 @@ use nest_rs_config::env_var;
 
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///
-/// Env vars under the `NESTRS_OPENTELEMETRY__` prefix
-/// (`NESTRS_OPENTELEMETRY__{LOG_LEVEL,LOG_FORMAT,LOG_SOURCE_LOCATION,SERVICE_NAME,
-/// SERVICE_VERSION,SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO}`).
+/// Env vars: the console layer reads the framework-wide logging family
+/// (`NESTRS_LOG`, `NESTRS_LOG_FORMAT`, `NESTRS_LOG_SOURCE_LOCATION` — the same
+/// variables nest-rs-core's fallback logger honours); everything OTel-specific
+/// lives under the `NESTRS_OPENTELEMETRY__` prefix
+/// (`NESTRS_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,SERVICE_ENVIRONMENT,
+/// SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO}`).
 /// OTel exporter is wired only when `otlp_endpoint` is set; otherwise the
 /// subscriber stays console-only.
 #[derive(Clone, Debug)]
@@ -90,7 +93,7 @@ impl OpenTelemetryConfig {
             // Production output is OTLP/JSON; the human-readable pretty-print is
             // a dev affordance only. Default by build profile so a release deploy
             // that mounts `OpenTelemetryModule` emits JSON without needing
-            // `NESTRS_OPENTELEMETRY__LOG_FORMAT` set (which still overrides).
+            // `NESTRS_LOG_FORMAT` set (which still overrides).
             log_format: if cfg!(debug_assertions) {
                 LogFormat::Text
             } else {
@@ -113,15 +116,18 @@ impl OpenTelemetryConfig {
         cfg.deployment_environment = env_var("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT");
         cfg.service_instance_id = env_var("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID");
 
-        if let Some(v) = env_var("NESTRS_OPENTELEMETRY__LOG_LEVEL") {
+        // The console layer answers to the framework-wide logging family
+        // (`NESTRS_LOG*`, owned by nest-rs-core's fallback logger) — an app's
+        // log config survives adopting or dropping this crate unchanged.
+        if let Some(v) = env_var("NESTRS_LOG").or_else(|| env_var("RUST_LOG")) {
             cfg.log_filter = v;
         }
-        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__LOG_FORMAT")
+        if let Some(raw) = env_var("NESTRS_LOG_FORMAT")
             && let Some(fmt) = LogFormat::parse(&raw)
         {
             cfg.log_format = fmt;
         }
-        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION") {
+        if let Some(raw) = env_var("NESTRS_LOG_SOURCE_LOCATION") {
             cfg.log_source_location = parse_bool(&raw).unwrap_or(false);
         }
 
@@ -307,9 +313,9 @@ mod tests {
             jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_VERSION", "9.9.9");
             jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT", "prod");
             jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID", "pinned-1");
-            jail.set_env("NESTRS_OPENTELEMETRY__LOG_LEVEL", "debug,hyper=warn");
-            jail.set_env("NESTRS_OPENTELEMETRY__LOG_FORMAT", "json");
-            jail.set_env("NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION", "true");
+            jail.set_env("NESTRS_LOG", "debug,hyper=warn");
+            jail.set_env("NESTRS_LOG_FORMAT", "json");
+            jail.set_env("NESTRS_LOG_SOURCE_LOCATION", "true");
             jail.set_env("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT", "http://otel:4318");
             jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "0.25");
 
@@ -323,6 +329,28 @@ mod tests {
             assert!(cfg.log_source_location);
             assert_eq!(cfg.otlp_endpoint.as_deref(), Some("http://otel:4318"));
             assert!((cfg.trace_sample_ratio - 0.25).abs() < f64::EPSILON);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn from_env_falls_back_to_rust_log_when_nestrs_log_is_unset() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("RUST_LOG", "warn,tower=off");
+            assert_eq!(
+                OpenTelemetryConfig::from_env("svc").log_filter,
+                "warn,tower=off"
+            );
+            Ok(())
+        });
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_LOG", "debug");
+            jail.set_env("RUST_LOG", "warn");
+            assert_eq!(
+                OpenTelemetryConfig::from_env("svc").log_filter,
+                "debug",
+                "NESTRS_LOG wins over RUST_LOG"
+            );
             Ok(())
         });
     }
@@ -345,7 +373,7 @@ mod tests {
     fn from_env_ignores_unparseable_ratio_and_log_format() {
         figment::Jail::expect_with(|jail| {
             jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "not-a-number");
-            jail.set_env("NESTRS_OPENTELEMETRY__LOG_FORMAT", "console");
+            jail.set_env("NESTRS_LOG_FORMAT", "console");
             // Both stick to defaults — never panic on bad input.
             let cfg = OpenTelemetryConfig::from_env("svc");
             assert_eq!(cfg.trace_sample_ratio, 1.0);

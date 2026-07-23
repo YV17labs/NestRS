@@ -40,12 +40,18 @@ impl OpenTelemetry {
     }
 
     /// Console-only init for tests. Idempotent; first call wins. No flush
-    /// guard. Log level honours `RUST_LOG`, default `warn`.
+    /// guard. Log level honours `NESTRS_LOG` then `RUST_LOG`, default `warn`
+    /// (noise control) — an invalid directive falls through rather than
+    /// failing a test run over log config.
     pub fn init_for_tests() {
         if initialized() {
             return;
         }
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+        let filter = std::env::var("NESTRS_LOG")
+            .ok()
+            .and_then(|spec| EnvFilter::try_new(&spec).ok())
+            .or_else(|| EnvFilter::try_from_default_env().ok())
+            .unwrap_or_else(|| EnvFilter::new("warn"));
         let _ = Registry::default()
             .with(filter)
             .with(console_layer(LogFormat::Text, false))

@@ -5,7 +5,6 @@ use nest_rs_events::EventBus;
 use nest_rs_seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
 };
-use sea_orm::ActiveModelTrait;
 use sea_orm::IntoActiveModel;
 use sea_orm::Set;
 use uuid::Uuid;
@@ -76,13 +75,20 @@ impl PostsService {
             .await
             .map_err(ServiceError::from)?;
 
-        publication::ActiveModel {
-            id: Set(Uuid::now_v7()),
-            post_id: Set(post_id),
-            actor_id: Set(actor_id),
-            published_at: Set(chrono::Utc::now().fixed_offset()),
-        }
-        .insert(&Repo::<Posts>::conn().map_err(ServiceError::from)?)
+        // Audit side-effect riding the same request transaction: the post just
+        // cleared the scoped `Update` above, and `post_publication` carries no
+        // column an ability rule predicates on — a system write, not an
+        // authorized create.
+        let conn = Repo::<publication::Entity>::conn().map_err(ServiceError::from)?;
+        Repo::<publication::Entity>::insert_unscoped(
+            publication::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                post_id: Set(post_id),
+                actor_id: Set(actor_id),
+                published_at: Set(chrono::Utc::now().fixed_offset()),
+            },
+            &conn,
+        )
         .await
         .map_err(ServiceError::from)?;
 

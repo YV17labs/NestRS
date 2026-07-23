@@ -1,6 +1,6 @@
 use nest_rs_core::injectable;
 use nest_rs_seaorm::{CrudService, Repo, ServiceError};
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::Set;
 use uuid::Uuid;
 
 use super::command::NotifyCommand;
@@ -22,7 +22,8 @@ impl NotificationsService {
             message: Set(command.message),
             created_at: Set(chrono::Utc::now().fixed_offset()),
         };
-        let model = active.insert(&Repo::<Notifications>::conn()?).await?;
+        let conn = Repo::<Notifications>::conn()?;
+        let model = Repo::<Notifications>::insert_unscoped(active, &conn).await?;
         tracing::debug!(
             target: "features::notifications",
             id = %model.id,

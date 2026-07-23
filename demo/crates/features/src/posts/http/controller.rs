@@ -7,12 +7,13 @@ use poem::Result;
 use poem::web::Json;
 
 use super::exception_filter::PostProblemFilter;
-use super::guard::{PostAuthor, PostAuthorGuard};
 use super::interceptor::PostAuditInterceptor;
 use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
-use crate::posts::{CreatePost, Entity as PostEntity, Post, PostsService, UpdatePost};
+use crate::posts::{
+    CreatePost, Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostsService, UpdatePost,
+};
 
 #[controller(path = "/posts")]
 #[use_guards(AuthnGuard, AuthzGuard)]

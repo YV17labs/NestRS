@@ -1,0 +1,67 @@
+use async_graphql::Context;
+use nest_rs_core::{Layer, injectable};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::async_trait;
+use poem::Request;
+use uuid::Uuid;
+
+use crate::Claims;
+
+#[derive(Debug, Clone, Copy)]
+pub struct PostAuthor(pub Uuid);
+
+#[injectable]
+#[derive(Default)]
+pub struct PostAuthorGuard;
+
+impl Layer for PostAuthorGuard {}
+
+#[async_trait]
+impl Guard for PostAuthorGuard {
+    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+        let author_id = {
+            let claims = req.extensions().get::<Claims>().ok_or_else(|| {
+                Denial::internal("PostAuthorGuard requires AuthnGuard to run first")
+            })?;
+            let Some(sub) = claims.sub else {
+                tracing::warn!(
+                    target: "features::posts",
+                    org_id = %claims.org_id,
+                    "post write denied: token carries no subject",
+                );
+                return Err(Denial::forbidden(
+                    "a bearer token with a subject is required to write posts",
+                ));
+            };
+            sub
+        };
+        req.extensions_mut().insert(PostAuthor(author_id));
+        Ok(())
+    }
+
+    async fn check_graphql(&self, ctx: &Context<'_>) -> Result<(), Denial> {
+        match ctx.data_opt::<Claims>() {
+            Some(claims) if claims.sub.is_some() => Ok(()),
+            Some(claims) => {
+                tracing::warn!(
+                    target: "features::posts",
+                    org_id = %claims.org_id,
+                    "post write denied: token carries no subject",
+                );
+                Err(Denial::forbidden(
+                    "a bearer token with a subject is required to write posts",
+                ))
+            }
+            None => {
+                tracing::warn!(
+                    target: "features::posts",
+                    principal = "anonymous",
+                    "post write denied: token carries no subject",
+                );
+                Err(Denial::forbidden(
+                    "a bearer token with a subject is required to write posts",
+                ))
+            }
+        }
+    }
+}

@@ -1,6 +1,7 @@
 mod entities;
 mod error;
 mod event;
+mod guard;
 mod module;
 mod service;
 
@@ -12,6 +13,7 @@ pub use entities::post::*;
 pub use entities::publication;
 pub use error::PostError;
 pub use event::PostPublishedEvent;
+pub use guard::{PostAuthor, PostAuthorGuard};
 pub use module::PostsModule;
 pub use service::PostsService;
 

@@ -204,7 +204,6 @@ dependencies = [
  "nest-rs-health",
  "nest-rs-http",
  "nest-rs-openapi",
- "nest-rs-opentelemetry",
  "nest-rs-redis",
  "nest-rs-schedule",
  "nest-rs-seaorm",
@@ -424,7 +423,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-opentelemetry",
  "nest-rs-redis",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
@@ -1569,7 +1567,6 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-mcp",
- "nest-rs-opentelemetry",
  "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
@@ -2559,7 +2556,6 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-opentelemetry",
  "nest-rs-seaorm",
  "nest-rs-testing",
  "nest-rs-ws",
@@ -2792,6 +2788,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -6505,7 +6502,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-opentelemetry",
  "nest-rs-queue",
  "nest-rs-redis",
  "nest-rs-seaorm",

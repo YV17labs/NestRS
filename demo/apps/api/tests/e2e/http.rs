@@ -15,7 +15,6 @@ async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
     let app = TestApp::builder()
         .module::<ApiModule>()
         .http(HttpTransport::new().compression(true))
-        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

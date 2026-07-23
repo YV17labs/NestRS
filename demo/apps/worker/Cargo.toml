@@ -14,13 +14,12 @@ nest-rs-seaorm.workspace = true
 # `http` feature: the worker mounts an HTTP transport (health, port 3005), so
 # the per-request OTel interceptor must exist in a standalone build too — not
 # only when feature-unified with api/live in a workspace build.
-nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 features.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
+nest-rs-testing.workspace = true
 # The e2e test defines its own `#[processor]`/`#[queue]` types and drives
 # `JobProducerExt::push_to` — the binary itself only consumes the queue via
 # `nest_rs_redis::QueueModule`, so the abstractions crate is test-only here.

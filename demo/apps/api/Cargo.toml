@@ -19,7 +19,6 @@ nest-rs-redis.workspace = true
 nest-rs-schedule.workspace = true
 nest-rs-server-timing.workspace = true
 nest-rs-throttler.workspace = true
-nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 features.workspace = true
 poem.workspace = true
 tokio.workspace = true
@@ -32,7 +31,7 @@ serde_json.workspace = true
 # Enables `features::testing` (dev keypair, org id, token minting) for e2e.
 features = { workspace = true, features = ["test-support"] }
 poem = { workspace = true, features = ["test"] }
-nest-rs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
+nest-rs-testing = { workspace = true, features = ["orm"] }
 migrations = { workspace = true }
 # The audio-storage e2e boots a worker to drain the `audio` queue and talks to
 # real RustFS directly: `nest-rs-storage` builds the client that ensures the

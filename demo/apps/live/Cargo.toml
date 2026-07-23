@@ -14,7 +14,6 @@ nest-rs-http.workspace = true
 nest-rs-ws.workspace = true
 nest-rs-seaorm.workspace = true
 nest-rs-health.workspace = true
-nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 serde.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
@@ -25,7 +24,7 @@ parking_lot.workspace = true
 # Enables `features::testing` (dev keypair, org id, token minting) for e2e.
 features = { workspace = true, features = ["test-support"] }
 nest-rs-authn.workspace = true
-nest-rs-testing = { workspace = true, features = ["opentelemetry"] }
+nest-rs-testing.workspace = true
 uuid.workspace = true
 futures-util.workspace = true
 tokio-tungstenite.workspace = true

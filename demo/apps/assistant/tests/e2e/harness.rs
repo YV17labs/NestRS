@@ -15,7 +15,6 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
         .module::<AssistantModule>()
-        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

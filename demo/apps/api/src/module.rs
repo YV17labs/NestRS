@@ -4,7 +4,6 @@ use nest_rs_graphql::GraphqlModule;
 use nest_rs_health::HealthModule;
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_openapi::OpenApiModule;
-use nest_rs_opentelemetry::OpenTelemetryModule;
 use nest_rs_redis::QueueModule;
 use nest_rs_schedule::ScheduleModule;
 use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
@@ -22,7 +21,6 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
 #[module(
     imports = [
         ConfigModule::for_root(),
-        OpenTelemetryModule,
         DatabaseModule::for_root(None),
         DatabaseHealthModule,
         QueueModule::for_root(None),

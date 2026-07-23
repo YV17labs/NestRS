@@ -1,6 +1,5 @@
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_opentelemetry::OpenTelemetryModule;
 use nest_rs_seaorm::DatabaseModule;
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
@@ -19,7 +18,6 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[module(
     imports = [
-        OpenTelemetryModule,
         DatabaseModule::for_root(None),
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
         AuthnModule,
@@ -60,7 +58,6 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
 
     let app = TestApp::builder()
         .module::<PostsHttpTestModule>()
-        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

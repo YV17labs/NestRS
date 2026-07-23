@@ -22,7 +22,6 @@ pub(crate) async fn token_for_org(org_id: Uuid, role: Role) -> String {
 pub(crate) fn boot_builder() -> nest_rs_testing::TestAppBuilder {
     TestApp::builder()
         .module::<LiveModule>()
-        .with_test_telemetry()
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             ..Default::default()

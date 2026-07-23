@@ -69,6 +69,8 @@ pub mod discovery;
 pub mod layer;
 pub mod layer_chain;
 pub mod lifecycle;
+#[cfg(feature = "logging")]
+pub(crate) mod logging;
 pub mod metadata;
 pub mod module;
 pub mod request_scope;

@@ -230,7 +230,7 @@ libc = "0.2"
 # canonical kebab-case form on crates.io. Cargo's default hyphen→underscore
 # mapping makes the Rust import path `nest_rs_*` (no `[lib]` override needed), so
 # app code still writes `use nest_rs::prelude::*;` and proc-macros still emit
-# `::nest_rs_core::*`. See project_publishing_strategy memory.
+# `::nest_rs_core::*`.
 nest-rs-core = { version = "1.0.0", path = "crates/nest-rs-core" }
 nest-rs-authn = { version = "1.0.0", path = "crates/nest-rs-authn" }
 nest-rs-throttler = { version = "1.0.0", path = "crates/nest-rs-throttler" }

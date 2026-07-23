@@ -11,6 +11,14 @@ keywords = ["framework", "nestjs", "di", "dependency-injection", "ioc"]
 categories = ["rust-patterns", "asynchronous"]
 
 
+[features]
+default = ["logging"]
+# Baseline console subscriber (`logging.rs`) — a bare app logs out of the box;
+# a subscriber installed first (e.g. nest-rs-opentelemetry) wins. Disable for
+# an embedder that brings its own subscriber and wants the kernel free of
+# `tracing-subscriber` in its dependency tree.
+logging = ["dep:tracing-subscriber"]
+
 [dependencies]
 thiserror.workspace = true
 nest-rs-core-macros.workspace = true
@@ -19,6 +27,7 @@ tokio-util.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 # Link-time registry: each `#[hooks]` method submits a lifecycle hook so `App`
 # composes them at boot with no central list (same mechanism as GraphQL).
 inventory.workspace = true
@@ -26,7 +35,6 @@ inventory.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
-tracing-subscriber.workspace = true
 # Snapshot-tests the core macro compile diagnostics (`#[injectable]`, `#[module]`)
 # — the exact error a developer sees is part of the contract (CORE-I10), the
 # same net the http/graphql/ws macros already have.

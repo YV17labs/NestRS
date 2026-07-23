@@ -12,6 +12,23 @@ Every framework module reads its config from a namespaced env prefix
 page lists the variables; each maps one-to-one to a field on the module's
 config struct, so anything here is also settable in code.
 
+## Logging — `NESTRS_LOG*`
+
+The baseline console logger is part of `nest-rs-core` — no module to
+import, no config struct. It reads two process-level variables:
+
+| Key | Meaning |
+|---|---|
+| `NESTRS_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info` |
+| `NESTRS_LOG_FORMAT` | `json` (the release default) or `text` (the dev default) |
+| `NESTRS_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
+
+An app that installs its own subscriber first (e.g. through
+[OpenTelemetry](/opentelemetry/)) keeps it — the baseline logger only
+activates when none is set. The same three variables drive the console
+layer of the [OpenTelemetry](/opentelemetry/) subscriber too, so log
+config survives adopting or dropping the observability stack.
+
 ## `http` — `NESTRS_HTTP__*`
 
 | Key | Meaning |
@@ -65,12 +82,12 @@ config struct, so anything here is also settable in code.
 | Key | Meaning |
 |---|---|
 | `SERVICE_NAME` | service name; overrides the name passed to `OpenTelemetry::init` |
-| `LOG_LEVEL` | tracing filter (e.g. `info`, `debug`) |
-| `LOG_FORMAT` | `json` (production) or `text` (dev) |
-| `LOG_SOURCE_LOCATION` | include file:line on each event |
 | `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export) |
 | `SAMPLE_RATIO` | trace sampling ratio, `0.0`–`1.0` (default `1.0`) |
 | `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
+
+The console layer reads the [`NESTRS_LOG*` family](#logging--nestrs_log)
+above — there are no OTel-specific log variables.
 
 ## `authn` — `NESTRS_AUTHN__*`
 

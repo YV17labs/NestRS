@@ -77,10 +77,8 @@ measured:
 - The harness compares **framework overhead** on a hello-world contract. It
   does not claim your domain logic gets 1.5× faster — it claims the floor
   under it is lower and the ceiling higher.
-- One asymmetry is accepted and disclosed: the NestRS scaffold ships
-  OpenTelemetry per-request tracing by default; NestJS ships none. The bench
-  runs both sides **without** per-request telemetry — measuring "telemetry
-  on" vs "telemetry absent" would compare features, not frameworks.
+- Neither side ships per-request telemetry — measuring "telemetry on" vs
+  "telemetry absent" would compare features, not frameworks.
 - Adding a contestant is a directory with a manifest — the harness knows no
   framework. The contract, the gate, and the how-to live in
   [`bench/`](https://github.com/YV17labs/NestRS/tree/main/bench).

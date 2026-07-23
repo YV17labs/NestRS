@@ -38,7 +38,7 @@ Add the dev-dependencies the test needs:
 
 ```toml title="apps/blog/Cargo.toml"
 [dev-dependencies]
-nest-rs-testing = { workspace = true, features = ["opentelemetry", "orm"] }
+nest-rs-testing = { workspace = true, features = ["orm"] }
 migrations = { workspace = true }
 poem = { workspace = true, features = ["test"] }
 serde_json.workspace = true

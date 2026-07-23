@@ -27,16 +27,14 @@ The data layer crates are
 [**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm)
 (the SeaORM implementation, on top of [SeaORM](https://www.sea-ql.org/SeaORM/)).
 
-```rust title="apps/blog/src/module.rs" {6, 11}
+```rust title="apps/blog/src/module.rs" {3, 8}
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_opentelemetry::OpenTelemetryModule;
 use nest_rs_seaorm::DatabaseModule;
 
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    OpenTelemetryModule,
     DatabaseModule::for_root(None),
     HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
     PostsHttpModule,

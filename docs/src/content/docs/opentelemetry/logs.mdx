@@ -29,7 +29,7 @@ request.
 
 Controllers, resolvers, gateways log at `info` on success. Services at `debug`.
 `Repo` at `trace`. **Access denials and security events at `warn`+** so they
-appear under the default `RUST_LOG=info`. A production deploy should respect
+appear under the default `info` filter. A production deploy should respect
 `info` — no per-request `debug!` on the hot path.
 
 ## Structured fields
@@ -58,7 +58,7 @@ The console layer ships both formats. Default is `text` (pretty for dev). For
 prod, set:
 
 ```bash
-NESTRS_OPENTELEMETRY__LOG_FORMAT=json
+NESTRS_LOG_FORMAT=json
 ```
 
 JSON drops the `current_span` and `span_list` fields — the OTel export carries
@@ -70,7 +70,7 @@ To trace a console line back to the exact source that emitted it, enable source
 location:
 
 ```bash
-NESTRS_OPENTELEMETRY__LOG_SOURCE_LOCATION=true
+NESTRS_LOG_SOURCE_LOCATION=true
 ```
 
 Each event then carries the emitting `file:line`:
@@ -80,9 +80,8 @@ DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs: layer declared at
 ```
 
 Off by default — it widens every line and leaks source paths, so it stays out
-of production. **Scaffolded projects turn it on in `.env.development`** (next to
-`LOG_LEVEL=debug`), so a fresh `nestrs new` app ships with it on while
-developing and off everywhere else. Pin it explicitly with
+of production. Turn it on in `.env.development` (next to `NESTRS_LOG=debug`) so
+it is live while developing and off everywhere else, or pin it explicitly with
 `OpenTelemetryConfig::with_log_source_location(true)`.
 
 ## Access log

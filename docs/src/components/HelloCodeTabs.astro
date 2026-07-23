@@ -55,14 +55,12 @@ impl HelloService {
     file: 'hello/src/module.rs',
     code: `use nest_rs_core::module;
 use nest_rs_http::HttpModule;
-use nest_rs_opentelemetry::OpenTelemetryModule;
 
 use crate::controller::HelloController;
 use crate::service::HelloService;
 
 #[module(
     imports = [
-        OpenTelemetryModule,
         HttpModule::for_root(None),
     ],
     providers = [HelloService, HelloController],
@@ -76,14 +74,12 @@ pub struct HelloModule;`,
     code: `use anyhow::Result;
 use nest_rs_config::Environment;
 use nest_rs_core::App;
-use nest_rs_opentelemetry::OpenTelemetry;
 
 use hello::HelloModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
-    let _telemetry = OpenTelemetry::init("hello")?;
 
     App::builder()
         .module::<HelloModule>()

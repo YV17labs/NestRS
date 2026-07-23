@@ -12,13 +12,11 @@ environment, or pin `HttpConfig` in code:
 ```rust title="apps/hello/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_opentelemetry::OpenTelemetryModule;
 
 use features::hello::HelloHttpModule;
 
 #[module(
     imports = [
-        OpenTelemetryModule,
         HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
         HelloHttpModule,
     ],

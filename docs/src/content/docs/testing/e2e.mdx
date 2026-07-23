@@ -294,7 +294,7 @@ Drive non-HTTP transports through `HeadlessApp::spawn_transport`.
 ## Test telemetry
 
 `with_test_telemetry()` calls `OpenTelemetry::init_for_tests` — a
-console-only init honouring `RUST_LOG` (default `warn` for noise
+console-only init honouring `NESTRS_LOG` then `RUST_LOG` (default `warn` for noise
 control). It is idempotent; the first test to run wins, the rest no-op.
 Required when the module tree imports `OpenTelemetryModule` (the boot
 guard panics otherwise). Gated by the `opentelemetry` feature on

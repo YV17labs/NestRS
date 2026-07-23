@@ -168,12 +168,10 @@ edit `apps/blog/` needs beyond the scaffold from page 1.
 ```rust title="apps/blog/src/module.rs"
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_opentelemetry::OpenTelemetryModule;
 
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    OpenTelemetryModule,
     HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
     PostsHttpModule,
 ])]
@@ -187,7 +185,6 @@ Add `features` to `apps/blog/Cargo.toml`:
 nest-rs-core.workspace = true
 features.workspace = true
 nest-rs-http.workspace = true
-nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 anyhow.workspace = true
 tokio.workspace = true
 ```

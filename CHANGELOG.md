@@ -246,6 +246,19 @@ code.
   a consumer that genuinely needs page numbers plus a total hand-writes that
   operation on its service. No caller in either workspace was affected.
 
+- **`demo/.env.example`, and the `.env.local` the devcontainer seeded from it.**
+  The demo now commits its whole configuration in `.env` + `.env.development`:
+  it holds no real secret (its signing key is the dev keypair already committed
+  for the test suites, its OAuth credentials are fixtures), so the git-ignored
+  half had nothing legitimate to carry. It carried a `<REPLACE-ME>` placeholder
+  instead, which the `postCreateCommand` copied into every fresh container and
+  which the `auth` app refused to boot on. `git clone` then `nestrs run` now
+  works with nothing to prime. Existing clones can delete their `demo/.env.local`
+  — and their `demo/.env.test.local`, which pinned `localhost` backend URLs that
+  no process inside the devcontainer can reach. The secret-handling pattern is
+  unchanged where it belongs: `nestrs new` still scaffolds `.env.example` next
+  to a git-ignored `.env.local`.
+
 ### Known for the 1.x line
 
 - **`Guard::check_http` sits on the base `Guard` trait**, so `nest-rs-guards`

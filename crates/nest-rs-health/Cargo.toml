@@ -7,7 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Reusable Kubernetes-style liveness/readiness probe module for NestRS applications."
-keywords = ["framework", "nestjs", "health", "kubernetes", "readiness"]
+keywords = ["framework", "nestrs", "health", "kubernetes", "readiness"]
 categories = ["web-programming"]
 
 

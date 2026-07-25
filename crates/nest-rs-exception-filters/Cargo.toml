@@ -7,7 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Typed exception filters for NestRS — each filter declares the concrete error it claims and only catches matching errors; distinct from the unconditional error-mapping `Filter`."
-keywords = ["framework", "nestjs", "exception", "error-handling", "web"]
+keywords = ["framework", "nestrs", "exception", "error-handling", "web"]
 categories = ["web-programming", "rust-patterns"]
 
 [dependencies]

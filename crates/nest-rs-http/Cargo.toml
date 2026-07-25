@@ -7,7 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "HTTP transport for NestRS: HttpTransport, Controller trait and HttpControllerMeta, built on top of poem."
-keywords = ["framework", "nestjs", "http", "web", "poem"]
+keywords = ["framework", "nestrs", "http", "web", "poem"]
 categories = ["web-programming::http-server", "asynchronous"]
 
 

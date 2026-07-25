@@ -9,7 +9,7 @@ bench/
 ├── contract/        # the spec: CONTRACT.md + golden bytes + conformance.sh
 ├── sut/<provider>/  # one self-described SUT per framework×variant
 ├── harness/         # run.sh (measure) · fingerprint.sh · report.sh
-├── results/         # committed, fingerprinted runs + generated REPORT.md
+├── results/         # local, fingerprinted runs + generated REPORT.md (git-ignored)
 └── Justfile         # front door: just build | conformance | bench | report
 ```
 

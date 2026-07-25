@@ -1,4 +1,4 @@
-//! CASL-style authorization — transport-agnostic engine plus feature-gated
+//! Ability-based authorization — transport-agnostic engine plus feature-gated
 //! transport bindings.
 //!
 //! An [`AbilityFactory`] builds an [`Ability`] for the app's actor, which

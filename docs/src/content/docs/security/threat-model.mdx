@@ -105,7 +105,7 @@ For a production app:
    SIEM, do not silence them.
 
 <Aside type="caution">
-The framework's authz engine is **CASL-style** and runs in-process.
+The framework's authz engine is **ability-based** and runs in-process.
 A bug in your `AbilityFactory` (forgot to scope `org_id`, granted
 `Action::Manage` on the wrong subject) is the framework's most
 likely failure mode. Pin the matrix with unit tests against

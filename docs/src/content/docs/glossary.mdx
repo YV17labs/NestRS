@@ -113,13 +113,12 @@ deep on each.
 - **[Principal](/security/authentication/)** — the typed identity a
   strategy returns (`Claims` for JWT, a session for OAuth); read back
   in a handler through `Ctx<P>`.
-- **[Ability](/security/authorization/)** — the CASL-style policy
-  object the authz guard installs for the request; answers "may this
-  caller take this action on this subject?" against rules, predicates,
-  and field grants.
+- **[Ability](/security/authorization/)** — the policy object the authz
+  guard installs for the request; answers "may this caller take this
+  action on this subject?" against rules, predicates, and field grants.
 - **[Subject](/security/authorization/policies/)** — the entity an
   ability rule targets (`users::Entity`); how an action is scoped to a
-  type. CASL vocabulary: the subject is the *resource type* acted upon,
+  type. Note the vocabulary: the subject is the *resource type* acted upon,
   never the caller — the caller is the principal.
 - **[Action](/security/authorization/policies/)** — the verb a rule
   governs (`Read`, `Create`, `Update`, `Delete`, custom variants); the

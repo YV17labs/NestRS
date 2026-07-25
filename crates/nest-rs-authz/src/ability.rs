@@ -113,8 +113,8 @@ impl Ability {
     }
 
     /// Layer ① — the coarse, class-level gate the access guard/extractor uses:
-    /// is there *any* grant for this action on this subject? Optimistic like
-    /// CASL — instance conditions are enforced by layers ② and ③, not here.
+    /// is there *any* grant for this action on this subject? Optimistic —
+    /// instance conditions are enforced by layers ② and ③, not here.
     pub fn can_class(&self, action: Action, subject: TypeId) -> bool {
         self.rules_for(action, subject).any(|rule| !rule.inverted)
     }

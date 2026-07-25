@@ -9,10 +9,17 @@ head:
       content: website
 hero:
   title: |
-    <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
+    You write the logic.<br /><span class="accent">NestRS</span> carries the rest.
   tagline: |
-    <span class="hero-lead">~25× less memory. ~23× faster cold starts. <span class="lead-accent">×4 the throughput of NestJS, core for core.</span></span>
-    <span class="hero-sub">Measured against NestJS 11 on a byte-identical contract, one pinned core each — <strong>×2.5</strong> its best case (Fastify), <strong>×4.2</strong> its default (Express), <strong>p99 cut to a third</strong>, <a href="/benchmarks/">reproducible from the repo</a>. <small>Taken in a 4-core / 8 GB Docker VM — virtualized, so a floor rather than a ceiling.</small> And the part you cannot forget: row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. You write a controller, a service, a module; decorators carry the security and the wiring. Familiar if you come from NestJS, Spring, or Laravel.</span>
+    <span class="hero-sub">The Rust backend framework with NestJS-style decorators — authentication, tenant isolation, field masking and transactions, verified at boot.</span>
+    <span class="hero-stats">
+      <span class="stat"><b>×4.2</b><span class="stat-label">throughput</span><small>241k req/s on one core · ×2.5 vs Fastify</small></span>
+      <span class="stat"><b>×25</b><span class="stat-label">less memory</span><small>8 MB under load · NestJS ~200 MB</small></span>
+      <span class="stat"><b>×23</b><span class="stat-label">faster cold start</span><small>~15 ms · NestJS ~350 ms</small></span>
+      <span class="stat"><b>×3</b><span class="stat-label">lower p99</span><small>0.42 ms · no GC pauses</small></span>
+      <span class="stat stat--wide"><b>0</b><span class="stat-label">unguarded routes</span><small>an ungated, unmasked surface cannot ship</small></span>
+    </span>
+    <span class="hero-proof">Per core against NestJS 11, byte-identical contract — <a href="/benchmarks/">reproducible from the repo</a>.</span>
     <span class="hero-stack">
       <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
       <span>Database</span><span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
@@ -44,9 +51,9 @@ import TerminalSession from '../../components/TerminalSession.astro';
 
 <div class="nestrs-reveal not-content">
 
-This CRUD resource is authenticated, tenant-scoped, transactional, and
-field-masked. The `impl` block is empty on purpose: the two guards declare the
-posture, `#[crud]` generates the five routes, and one ability does the rest.
+Authenticated, tenant-scoped, transactional, field-masked — and the `impl`
+block is empty on purpose. The two guards declare the posture, `#[crud]`
+generates the five routes.
 
 ```rust title="crates/features/src/orgs/http/controller.rs (abridged)"
 #[controller(path = "/orgs")]
@@ -61,8 +68,7 @@ pub struct OrgsController {
 impl OrgsController {}
 ```
 
-The policy lives in one place. A member sees only their own org's users, and
-only the fields the ability grants:
+One ability decides the rows and the fields, in one place:
 
 ```rust title="crates/features/src/authz/ability.rs (abridged)"
 ab.can(Action::Read, user::Entity)
@@ -70,7 +76,7 @@ ab.can(Action::Read, user::Entity)
     .fields([user::Column::Id, user::Column::Name]);
 ```
 
-Same route, same handler — the caller's token decides the rows and the fields:
+Same route, same handler — the caller's token does the rest:
 
 <TerminalSession
   label="Two tokens, one route"
@@ -86,12 +92,9 @@ Same route, same handler — the caller's token decides the rows and the fields:
 
 Posture is mandatory, not a convention: a GraphQL operation with neither
 `#[authorize]` nor `#[public]` does not compile, and an HTTP controller whose
-guard wiring is missing fails at boot — an ungated, unmasked surface cannot
-ship.
-
-Behind the guards sits a full authentication stack — JWT on EdDSA keys, OAuth2
-with PKCE, Argon2id passwords with timing-safe verification, social login —
-each a module import, documented in [Security](/security/).
+guard wiring is missing fails at boot. Behind the guards sits the full stack — JWT on
+EdDSA keys, OAuth2 with PKCE, Argon2id passwords, social login — each a module
+import ([Security](/security/)).
 
 **[See it live — the security checkpoint →](/tutorial/checkpoint/)**
 
@@ -101,15 +104,9 @@ each a module import, documented in [Security](/security/).
 
 <div class="nestrs-reveal not-content">
 
-No wiring file. No config. No boilerplate. And if Rust's learning curve is
-what holds you back: the hard parts of framework Rust — lifetimes in
-middleware, trait gymnastics, generic bounds — live inside the framework.
-What's left in your files is structs, decorators, and async fns. Scaffold a **standalone** crate with
-the CLI, then follow the tabs from **Controller** (your HTTP surface) through
-**Service**, **Module**, and **Main** — that's a real, type-checked service.
-The dependency graph is built and **verified at boot**, and the crate compiles
-to a native binary. Start here; grow into a **workspace** when you add more apps
-— same decorators, shared `crates/features/`.
+No wiring file, no config, no boilerplate. The hard parts of framework Rust —
+lifetimes in middleware, trait gymnastics, generic bounds — stay inside the
+framework; your files hold structs, decorators and async fns.
 
 <div class="nestrs-hello-demo">
 
@@ -159,33 +156,21 @@ to a native binary. Start here; grow into a **workspace** when you add more apps
 
 </div>
 
-The same inject-and-decorate model carries every surface — HTTP, GraphQL,
-WebSockets, queues, scheduled jobs, MCP.
+Scaffold a standalone crate, grow into a workspace when you add apps — the same
+inject-and-decorate model carries every surface: HTTP, GraphQL, WebSockets,
+queues, scheduled jobs, MCP.
 **[Get started →](/getting-started/)** · **[Why NestRS →](/why/)**
 
 </div>
 
 ## How fast, exactly
 
-The same service written twice, each side the way its own CLI scaffolds it:
-NestRS as `nestrs new` generates it, NestJS 11 as `nest new` generates it —
-on **both Fastify and Express**, so the comparison targets Node's best case,
-not its slowest. Both serve a byte-identical HTTP contract — same route, same
-JSON body to the byte, same stack depth (router → DI container → injected
-service → framework serialization) — and a conformance gate verifies the
-bytes before anything is measured. A contestant that shortcuts the stack is
-disqualified, not benchmarked.
+The same service written twice, each side the way its own CLI scaffolds it, on
+**both Fastify and Express**. Both serve a byte-identical HTTP contract at the
+same stack depth, and a conformance gate verifies the bytes before anything is
+measured. One pinned core each — the regime that favours Node.
 
-The figures below are taken in the regime that **favours Node**: each server
-pinned to a single core — an event loop loses nothing to pinning — with the
-load generator on separate cores, warmup discarded, medians of repeated timed
-runs. Per-core is also the honest comparison: in production Node scales out
-by clustering — one ~200 MB process per core — while one NestRS binary takes
-every core in a single single-digit-MB process. The ratio you see below is
-the ratio you pay for, vCPU for vCPU. The published run comes from a
-**4-core / 8 GB Docker VM**
-(Apple Silicon) — virtualized, so these figures are a floor rather than a
-ceiling: bare metal only widens NestRS's side.
+<Bench />
 
 <details>
 <summary>How these numbers were taken</summary>
@@ -196,8 +181,13 @@ Server and load generator ([oha](https://github.com/hatoo/oha)) are pinned to
 disjoint CPU sets; each tier gets a discarded warmup, then repeated timed runs
 whose medians are reported; every result embeds its machine fingerprint (CPU,
 kernel, toolchains, resolved dependency versions). Node runs `NODE_ENV=production`
-on Node 24; NestRS is a release build. One command reproduces the table on
-your hardware:
+on Node 24; NestRS is a release build.
+
+Per-core is the honest comparison: in production Node scales out by clustering
+— one ~200 MB process per core — while one NestRS binary takes every core in a
+single single-digit-MB process. The published run comes from a 4-core / 8 GB
+Docker VM (Apple Silicon) — virtualized, so these figures are a floor rather
+than a ceiling. One command reproduces the table on your hardware:
 
 ```bash
 cd bench && just bench
@@ -208,8 +198,6 @@ and its limits.
 
 </details>
 
-<Bench />
-
 ## Why developers pick NestRS
 
 <div class="nestrs-reveal nestrs-reveal--stagger not-content">
@@ -217,69 +205,54 @@ and its limits.
 <CardGrid>
   <Card title="Secure & transactional by composition" icon="approve-check-circle">
     Authn, authorization, row-level filtering, response masking, transaction
-    scope — you turn them on by importing a module, never by remembering to
-    call them. Forgetting to redact a field becomes structurally hard.
+    scope — turned on by importing a module, never by remembering to call them.
   </Card>
   <Card title="Wiring you find out about at boot, not at 3am" icon="warning">
-    The DI graph is checked at boot — a bad import fails startup with a
-    clear error naming the missing wire. No reflection, no runtime
-    "cannot resolve dependency" five minutes after deploy. The check lives
-    in [`access.rs`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-core/src/access.rs).
+    The DI graph is checked at boot: a bad import fails startup with the missing
+    wire named. No reflection, no resolution error five minutes after deploy.
   </Card>
   <Card title="Declarative, decorator-driven" icon="puzzle">
-    `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`,
-    `#[gateway]`, `#[scheduled]`, `#[mcp]`. You write logic; the decorator
-    expands the boilerplate — into plain Rust you can read with
-    [`cargo expand`](/why-not-axum/#the-macro-question). No service locator,
-    no registration list to keep in sync.
+    `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`, `#[gateway]`,
+    `#[scheduled]`, `#[mcp]` — expanding to plain Rust you can read with
+    [`cargo expand`](/why-not-axum/#the-macro-question).
   </Card>
   <Card title="Types you don't fight" icon="approve-check">
-    Rust types end to end — entity, DTO, route handler, dataloader, GraphQL
-    schema, OpenAPI doc. No `any`, no `unknown`, no `as` casts at the
-    boundaries, no runtime "undefined is not a function."
+    Rust types end to end — entity, DTO, handler, dataloader, GraphQL schema,
+    OpenAPI doc. No `any`, no `unknown`, no casts at the boundaries.
   </Card>
   <Card title="Native throughput" icon="rocket">
     **×2.5** NestJS-on-Fastify — its best case — and **×4.2** Express, with
-    **sub-millisecond p99** and no GC pauses, on a single pinned core
-    ([benchmarks](/benchmarks/)). The same `hyper`/`tokio` core as the
-    fastest Rust web frameworks — with a structure on top.
+    **sub-millisecond p99** and no GC pauses ([benchmarks](/benchmarks/)).
   </Card>
   <Card title="An order of magnitude less RAM" icon="laptop">
-    **~8 MB under load** where the same NestJS service holds **~200 MB** —
-    about **25× less** ([benchmarks](/benchmarks/)). Smaller instances,
-    higher density, a materially lighter cloud bill.
+    **~8 MB under load** where the same NestJS service holds **~200 MB**.
+    Smaller instances, higher density, a materially lighter cloud bill.
   </Card>
   <Card title="Boots in milliseconds" icon="bars">
     Each deployable is a static native binary with no runtime to warm up —
     autoscaling and cold starts stop hurting.
   </Card>
   <Card title="Batteries included, opt-in by crate" icon="setting">
-    HTTP, GraphQL, OpenAPI, WebSockets, Redis-backed queues, scheduling,
-    an event bus, MCP, CASL-style authorization, health probes,
-    OpenTelemetry — each an opt-in crate, so a worker compiles no HTTP
-    stack at all. See the full list on [Packages](/packages/).
+    HTTP, GraphQL, OpenAPI, WebSockets, queues, scheduling, events, MCP,
+    authorization, health probes, OpenTelemetry — each an opt-in crate, so a
+    worker compiles no HTTP stack at all ([Packages](/packages/)).
   </Card>
 </CardGrid>
 
-Every capability above ships today, each with a reference section on this
-site.
+Every capability above ships today, each with a reference section on this site.
 
 </div>
 
 ## One domain, several workloads
 
-**Microservice scaling without the distributed-systems tax.** A **workload**
-is one deployable binary with one operational job — HTTP API, WebSocket
-gateway, queue worker, MCP server. **Entities, services, and policy are
-written once** in a shared `features` crate; each app under `apps/*` is a
-thin composition root importing only the transports it serves, so a worker
-never compiles the HTTP stack. One monorepo or several repositories —
-coupling stays loose either way: self-contained tokens and a shared
-database, no chatty RPC and no service mesh to get started.
+**Microservice scaling without the distributed-systems tax.** Entities,
+services and policy are written once in a shared `features` crate; each app
+under `apps/*` is a thin composition root importing only the transports it
+serves, so a worker never compiles the HTTP stack. Self-contained tokens and a
+shared database — no chatty RPC, no service mesh to get started.
 
-Who runs where is a composition choice in each app's `module.rs`, not a
-fork of entities and services. See [Getting started](/getting-started/)
-and the [CLI](/cli/) to scaffold the workspace layout — schematically:
+Who runs where is a composition choice in each app's `module.rs`, not a fork of
+entities and services — schematically:
 
 <div class="mono nestrs-reveal not-content">
   <div class="mono-deploy">
@@ -329,10 +302,9 @@ and the [CLI](/cli/) to scaffold the workspace layout — schematically:
 
 ## Scale each workload on its own signal
 
-In production you **scale horizontally per app** — the same binary, more
-replicas when *its* signal moves: a hot public surface follows **demand**,
-background apps follow **queue depth**. Each app under `apps/*` gets its
-own replica count — no single "scale the monolith" knob.
+Each app scales horizontally on **its own** signal — a hot public surface
+follows demand, background apps follow queue depth. Same binary, more replicas,
+per app; no single "scale the monolith" knob.
 
 <div class="scale nestrs-reveal not-content">
   <div class="scale-lanes scale-lanes--four">

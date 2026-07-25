@@ -14,7 +14,7 @@ pub enum Action {
     Update,
     /// Remove an instance.
     Delete,
-    /// CASL `manage` — matches every action.
+    /// The wildcard grant — matches every action.
     Manage,
 }
 

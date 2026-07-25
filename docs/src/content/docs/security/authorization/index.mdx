@@ -16,7 +16,7 @@ the handler returns. None of them are opt-in per route — they apply
 to every handler whose controller imports the transport's authz
 module.
 
-The engine is CASL-style — grants, conditional rules, fields — but
+The engine is ability-based — grants, conditional rules, fields — but
 backed by one shared `Predicate` AST so the SQL filter and the
 in-memory check can never disagree row by row.
 

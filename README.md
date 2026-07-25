@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>~20× less memory · ~20× faster cold starts · ×2.7 the throughput of NestJS, core for core</strong><br>
+  <strong>~25× less memory · ~23× faster cold starts · ×4 the throughput of NestJS, core for core</strong><br>
   Scalable Rust backend apps — measured on a byte-identical contract, <a href="bench/">reproducible from the repo</a>.<br>
   <sub>Measured in a 4-core / 8 GB Docker VM (Apple Silicon) — virtualized, not peak native: bare-metal figures only go up.</sub>
 </p>
@@ -50,11 +50,11 @@ GraphQL, at boot on HTTP.
 
 The numbers behind the tagline — against the same hello-world service in
 NestJS 11, idiomatic on both sides, byte-identical HTTP contract,
-conformance-gated: NestRS runs in **~20× less memory** (single-digit MB
-against ~200 MB), cold-starts **~20× faster** (milliseconds against near half
+conformance-gated: NestRS runs in **~25× less memory** (single-digit MB
+against ~200 MB), cold-starts **~23× faster** (milliseconds against near half
 a second), and — core for core, each server pinned to a single CPU — serves
-**×2.7 the throughput of NestJS on Express** (its default) — **×1.5 its best
-case, Fastify** — with **p99 latency halved**. Scaling out changes nothing:
+**×4.2 the throughput of NestJS on Express** (its default) — **×2.5 its best
+case, Fastify** — with **p99 latency cut to a third**. Scaling out changes nothing:
 Node adds ~200 MB of process per core; one NestRS binary takes every core in
 a single single-digit-MB process.
 Where the Express service needs three boxes, one NestRS binary carries the

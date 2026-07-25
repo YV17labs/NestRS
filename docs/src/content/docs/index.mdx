@@ -1,6 +1,6 @@
 ---
-title: NestRS — ~20× lighter, ×2.7 the throughput of NestJS
-description: "A Rust backend framework: ×2.7 the throughput of NestJS in ~20× less memory — multi-tenant isolation that is structural, non-optional, verified at boot."
+title: NestRS — ~25× lighter, ×4 the throughput of NestJS
+description: "A Rust backend framework: ×4 the throughput of NestJS in ~25× less memory — multi-tenant isolation that is structural, non-optional, verified at boot."
 template: splash
 head:
   - tag: meta
@@ -11,8 +11,8 @@ hero:
   title: |
     <span class="wordmark"><span class="wm-nest">Nest</span><span class="wm-rs">RS</span></span>
   tagline: |
-    <span class="hero-lead">~20× less memory. ~20× faster cold starts. <span class="lead-accent">×2.7 the throughput of NestJS, core for core.</span></span>
-    <span class="hero-sub">Measured against NestJS 11 on a byte-identical contract, one pinned core each — <strong>×1.5</strong> its best case (Fastify), <strong>×2.7</strong> its default (Express), <strong>p99 halved</strong>, <a href="/benchmarks/">reproducible from the repo</a>. <small>Taken in a 4-core / 8 GB Docker VM — virtualized, so a floor rather than a ceiling.</small> And the part you cannot forget: row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. You write a controller, a service, a module; decorators carry the security and the wiring. Familiar if you come from NestJS, Spring, or Laravel.</span>
+    <span class="hero-lead">~25× less memory. ~23× faster cold starts. <span class="lead-accent">×4 the throughput of NestJS, core for core.</span></span>
+    <span class="hero-sub">Measured against NestJS 11 on a byte-identical contract, one pinned core each — <strong>×2.5</strong> its best case (Fastify), <strong>×4.2</strong> its default (Express), <strong>p99 cut to a third</strong>, <a href="/benchmarks/">reproducible from the repo</a>. <small>Taken in a 4-core / 8 GB Docker VM — virtualized, so a floor rather than a ceiling.</small> And the part you cannot forget: row-level filtering, per-field masking, and transactions — transparent, non-optional, verified at boot. You write a controller, a service, a module; decorators carry the security and the wiring. Familiar if you come from NestJS, Spring, or Laravel.</span>
     <span class="hero-stack">
       <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
       <span>Database</span><span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
@@ -239,14 +239,14 @@ and its limits.
     boundaries, no runtime "undefined is not a function."
   </Card>
   <Card title="Native throughput" icon="rocket">
-    **×1.5** NestJS-on-Fastify — its best case — and **×2.7** Express, with
+    **×2.5** NestJS-on-Fastify — its best case — and **×4.2** Express, with
     **sub-millisecond p99** and no GC pauses, on a single pinned core
     ([benchmarks](/benchmarks/)). The same `hyper`/`tokio` core as the
     fastest Rust web frameworks — with a structure on top.
   </Card>
   <Card title="An order of magnitude less RAM" icon="laptop">
-    **~9 MB under load** where the same NestJS service holds **~200 MB** —
-    about **22× less** ([benchmarks](/benchmarks/)). Smaller instances,
+    **~8 MB under load** where the same NestJS service holds **~200 MB** —
+    about **25× less** ([benchmarks](/benchmarks/)). Smaller instances,
     higher density, a materially lighter cloud bill.
   </Card>
   <Card title="Boots in milliseconds" icon="bars">

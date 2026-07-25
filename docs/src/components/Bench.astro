@@ -23,11 +23,11 @@ interface Row {
 }
 
 const rows: Row[] = [
-  { label: 'Throughput', unit: '1 core · req/s', nestrs: 154000, fastify: 101000, express: 56000, nestrsLabel: '~154k', fastifyLabel: '~101k', expressLabel: '~56k', mult: '×1.5' },
-  { label: 'Latency p50', unit: 'lower is better', nestrs: 0.41, fastify: 0.61, express: 1.08, nestrsLabel: '0.41 ms', fastifyLabel: '0.61 ms', expressLabel: '1.08 ms', mult: '×1.5' },
-  { label: 'Latency p99', unit: 'lower is better', nestrs: 0.55, fastify: 1.21, express: 2.16, nestrsLabel: '0.55 ms', fastifyLabel: '1.21 ms', expressLabel: '2.16 ms', mult: '×2.2' },
-  { label: 'Memory under load', unit: 'lower is better', nestrs: 9, fastify: 195, express: 204, nestrsLabel: '9 MB', fastifyLabel: '195 MB', expressLabel: '204 MB', mult: '×22' },
-  { label: 'Cold start', unit: 'lower is better', nestrs: 18, fastify: 472, express: 385, nestrsLabel: '18 ms', fastifyLabel: '472 ms', expressLabel: '385 ms', mult: '×21' },
+  { label: 'Throughput', unit: '1 core · req/s', nestrs: 241000, fastify: 97000, express: 58000, nestrsLabel: '~241k', fastifyLabel: '~97k', expressLabel: '~58k', mult: '×2.5' },
+  { label: 'Latency p50', unit: 'lower is better', nestrs: 0.24, fastify: 0.62, express: 1.06, nestrsLabel: '0.24 ms', fastifyLabel: '0.62 ms', expressLabel: '1.06 ms', mult: '×2.6' },
+  { label: 'Latency p99', unit: 'lower is better', nestrs: 0.42, fastify: 1.27, express: 2.11, nestrsLabel: '0.42 ms', fastifyLabel: '1.27 ms', expressLabel: '2.11 ms', mult: '×3.0' },
+  { label: 'Memory under load', unit: 'lower is better', nestrs: 8, fastify: 198, express: 206, nestrsLabel: '8 MB', fastifyLabel: '198 MB', expressLabel: '206 MB', mult: '×25' },
+  { label: 'Cold start', unit: 'lower is better', nestrs: 15, fastify: 360, express: 330, nestrsLabel: '~15 ms', fastifyLabel: '~360 ms', expressLabel: '~330 ms', mult: '×23' },
 ];
 
 // Width as a share of the row's larger value, with a small floor so the tiny

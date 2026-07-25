@@ -22,12 +22,12 @@ pinning), load generator on separate cores, medians of repeated timed runs.
 
 | 1 pinned core | NestRS | NestJS · Fastify | NestJS · Express | vs best |
 |---|---|---|---|---|
-| Throughput | **~154k req/s** | ~101k req/s | ~56k req/s | **×1.5** |
-| Latency p50 | **0.41 ms** | 0.61 ms | 1.08 ms | ×1.5 |
-| Latency p99 | **0.55 ms** | 1.21 ms | 2.16 ms | ×2.2 |
-| Memory under load | **9 MB** | 195 MB | 204 MB | ×22 |
-| Memory idle | **7 MB** | 86 MB | 84 MB | ×12 |
-| Cold start → first 200 | **18 ms** | 472 ms | 385 ms | ×21 |
+| Throughput | **~241k req/s** | ~97k req/s | ~58k req/s | **×2.5** |
+| Latency p50 | **0.24 ms** | 0.62 ms | 1.06 ms | ×2.6 |
+| Latency p99 | **0.42 ms** | 1.27 ms | 2.11 ms | ×3.0 |
+| Memory under load | **8 MB** | 198 MB | 206 MB | ×25 |
+| Memory idle | **6 MB** | 86 MB | 85 MB | ×14 |
+| Cold start → first 200 | **~15 ms** | ~360 ms | ~330 ms | ×23 |
 
 The comparison stays per-core on purpose. Scaling out, Node clusters — one
 ~200 MB process per core — while one NestRS binary takes every core in a
@@ -36,9 +36,11 @@ buys you, on either side. The static tier (T0, no service call) tells the
 same story as T1 on both sides, so what you see is framework overhead, not
 serialization cost.
 
-Measured 2026-07-22 on a 4-core aarch64 Linux host — rustc 1.96, Node 24.18,
-`@nestjs/core` 11.1.28, [oha](https://github.com/hatoo/oha) 1.15; 64
-connections, discarded warmup, medians of 3 × 15 s runs. Absolute figures
+Measured 2026-07-25 on a 4-core aarch64 Linux host — rustc 1.96.1, Node
+24.18, `@nestjs/core` 11.1.28, [oha](https://github.com/hatoo/oha) 1.15; 64
+connections, discarded warmup, medians of 3 × 15 s runs; cold start is the
+median of repeated boots, the one figure the harness samples once per run.
+Absolute figures
 move with hardware; the **ratios are the claim** — every run embeds its
 machine fingerprint, and the one command above replays the full protocol on
 yours.

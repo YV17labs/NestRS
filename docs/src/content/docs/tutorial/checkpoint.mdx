@@ -27,21 +27,21 @@ build by hand later in
 
 1. Clone the reference repo and open it in the devcontainer — VS Code
    offers **Reopen in Container**, which brings up Postgres and Redis
-   beside the workspace and installs the `nestrs` CLI. Then generate
-   the JWT signing key the `auth` issuer refuses to boot without:
+   beside the workspace and installs the `nestrs` CLI. The demo commits
+   its whole configuration, dev keypair included, so there is nothing
+   to prime before the first run.
 
    ```bash frame="terminal"
    $ git clone https://github.com/YV17labs/NestRS && code NestRS
    # accept "Reopen in Container", then in the container terminal:
    $ cd demo
-   $ printf 'NESTRS_AUTHN__PRIVATE_KEY="%s"\n' \
-       "$(openssl genpkey -algorithm ed25519 | sed ':a;N;$!ba;s/\n/\\n/g')" >> .env.local
    ```
 
    Without VS Code, start the same services from the repo's compose
    file (`docker compose -f .devcontainer/docker-compose.yml up -d
    postgres redis rustfs`) and point `NESTRS_DATABASE__URL` /
-   `NESTRS_QUEUE__URL` at `localhost` in `demo/.env.local`.
+   `NESTRS_QUEUE__URL` at `localhost` in a git-ignored
+   `demo/.env.local`.
 
 2. Load the demo tenants and start both apps.
 

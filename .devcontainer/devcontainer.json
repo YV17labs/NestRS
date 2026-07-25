@@ -3,7 +3,7 @@
 	"dockerComposeFile": "docker-compose.yml",
 	"service": "dev",
 	"workspaceFolder": "/workspaces/nestrs",
-	"postCreateCommand": "cargo install --locked --path crates/nest-rs-cli && ([ -f demo/.env.local ] || cp demo/.env.example demo/.env.local)",
+	"postCreateCommand": "cargo install --locked --path crates/nest-rs-cli",
 	"customizations": {
 		"vscode": {
 			"extensions": [

@@ -4,6 +4,8 @@
 //! catch chains on every transport.
 
 use std::any::{TypeId, type_name};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -53,7 +55,9 @@ where
     }
 }
 
-#[async_trait]
+// Manual forward, not `#[async_trait]`: the macro would wrap the inner
+// (already boxed) future in a second box, taxing every call made through an
+// `Arc<dyn ExceptionFilterErased>` without `.as_ref()`.
 impl<T: ExceptionFilterErased + ?Sized> ExceptionFilterErased for Arc<T> {
     fn exception_type_id(&self) -> TypeId {
         (**self).exception_type_id()
@@ -63,8 +67,15 @@ impl<T: ExceptionFilterErased + ?Sized> ExceptionFilterErased for Arc<T> {
         (**self).exception_type_name()
     }
 
-    async fn try_catch(&self, err: Error) -> Result<Response, Error> {
-        (**self).try_catch(err).await
+    fn try_catch<'s, 'fut>(
+        &'s self,
+        err: Error,
+    ) -> Pin<Box<dyn Future<Output = Result<Response, Error>> + Send + 'fut>>
+    where
+        's: 'fut,
+        Self: 'fut,
+    {
+        (**self).try_catch(err)
     }
 }
 

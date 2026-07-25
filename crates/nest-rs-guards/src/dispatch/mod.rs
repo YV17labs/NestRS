@@ -52,8 +52,8 @@ pub(crate) use denial_convert::deny_http;
 pub use graphql_operation_guard::GlobalPoolOperationGuard;
 #[cfg(feature = "mcp")]
 pub use mcp_operation_guard::GlobalPoolMcpGuard;
-pub use route_layers::{wrap_route_exception_filters, wrap_route_filters, wrap_route_interceptors};
-pub use route_shaper::RouteShaper;
+pub use route_layers::{RouteEndpoint, wrap_route_response_layers};
+pub use route_shaper::{RouteShaper, ShapedRoute, wrap_route_shaper};
 pub use scoped_spec::{
     ScopedExceptionFilterSpec, ScopedFilterSpec, ScopedGuardSpec, ScopedInterceptorSpec,
     ScopedLayerSpec, ScopedPipeSpec,

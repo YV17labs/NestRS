@@ -11,7 +11,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use nest_rs_authz::{Ability, ActionMarker, with_ability};
-use nest_rs_core::RequestScope;
 use poem::http::StatusCode;
 use poem::web::Path;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
@@ -66,9 +65,9 @@ where
             )
         })?;
 
-        let scope = req.extensions().get::<Arc<RequestScope>>().ok_or_else(|| {
+        let scope = nest_rs_http::current_request_scope().ok_or_else(|| {
             Error::from_string(
-                "request scope not installed — RequestScopeEndpoint must wrap the route tree",
+                "request scope not installed — the transport edge must wrap the route tree",
                 StatusCode::INTERNAL_SERVER_ERROR,
             )
         })?;

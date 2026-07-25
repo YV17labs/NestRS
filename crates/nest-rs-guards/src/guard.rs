@@ -2,6 +2,8 @@
 //! Layer System (dedup-by-`TypeId`, declaration-order chain).
 
 use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -114,25 +116,52 @@ pub trait Guard: Layer {
     }
 }
 
-#[async_trait]
+// Manual forwards, not `#[async_trait]`: the macro would wrap each inner
+// (already boxed) future in a second box, taxing every check made through an
+// `Arc<dyn Guard>` without `.as_ref()` — the double-box the dispatch sites
+// individually dodge today.
 impl<T: Guard + ?Sized> Guard for Arc<T> {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        (**self).check_http(req).await
+    fn check_http<'s, 'r, 'fut>(
+        &'s self,
+        req: &'r mut HttpRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
+    where
+        's: 'fut,
+        'r: 'fut,
+        Self: 'fut,
+    {
+        (**self).check_http(req)
     }
 
     #[cfg(feature = "graphql")]
-    async fn check_graphql(&self, ctx: &GraphqlContext<'_>) -> Result<(), Denial> {
-        (**self).check_graphql(ctx).await
+    fn check_graphql<'s, 'c, 'g, 'fut>(
+        &'s self,
+        ctx: &'c GraphqlContext<'g>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
+    where
+        's: 'fut,
+        'c: 'fut,
+        'g: 'fut,
+        Self: 'fut,
+    {
+        (**self).check_graphql(ctx)
     }
 
     #[cfg(feature = "ws")]
-    async fn check_ws_message(
-        &self,
-        client: &WsClient,
-        event: &str,
-        data: &Value,
-    ) -> Result<(), Denial> {
-        (**self).check_ws_message(client, event, data).await
+    fn check_ws_message<'s, 'c, 'e, 'd, 'fut>(
+        &'s self,
+        client: &'c WsClient,
+        event: &'e str,
+        data: &'d Value,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
+    where
+        's: 'fut,
+        'c: 'fut,
+        'e: 'fut,
+        'd: 'fut,
+        Self: 'fut,
+    {
+        (**self).check_ws_message(client, event, data)
     }
 
     fn phase(&self) -> GuardPhase {

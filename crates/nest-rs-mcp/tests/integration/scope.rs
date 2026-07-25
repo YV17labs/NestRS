@@ -21,7 +21,7 @@ use nest_rs_mcp::{
 };
 use nest_rs_testing::mcp::call_tool;
 use poem::test::TestClient;
-use poem::{Endpoint, EndpointExt, IntoEndpoint, Request};
+use poem::{Endpoint, EndpointExt, IntoEndpoint};
 
 /// A request-scoped provider the tool tries to resolve. Its presence is the
 /// signal; nothing reads the payload.
@@ -48,16 +48,17 @@ impl ScopeProbeTool {
 #[tool_handler]
 impl ServerHandler for ScopeProbeTool {}
 
-/// Mirrors `RequestScopeEndpoint`: put an `Arc<RequestScope>` in the request
-/// extensions so the MCP endpoint installs it as the task-local.
+/// Mirrors the HTTP transport edge: run the inner endpoint under the ambient
+/// request context so the MCP endpoint re-installs it across rmcp's spawn.
 fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
     let container = Container::builder()
         .provide_scoped::<Probe, _>(|_| Probe)
         .build();
-    inner.into_endpoint().before(move |mut req: Request| {
+    let inner = Arc::new(inner.into_endpoint().map_to_response());
+    poem::endpoint::make(move |req| {
+        let inner = Arc::clone(&inner);
         let scope = Arc::new(RequestScope::new(container.clone()));
-        req.extensions_mut().insert(scope);
-        async move { Ok(req) }
+        async move { nest_rs_core::with_request_scope(scope, None, inner.call(req)).await }
     })
 }
 

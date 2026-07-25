@@ -145,7 +145,9 @@ pub async fn run_layered_graphql_chain(
 ) -> std::result::Result<(), GraphqlError> {
     let chain = cell.chain(container, route_label, &sources);
     for entry in chain.iter() {
-        if let Err(denial) = entry.layer.check_graphql(ctx).await {
+        // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
+        // blanket would nest a second boxed future per check.
+        if let Err(denial) = entry.layer.as_ref().check_graphql(ctx).await {
             // Structural floor mirroring `deny_http`: every denial visible at
             // warn+ regardless of what the individual guard logged.
             tracing::warn!(

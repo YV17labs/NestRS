@@ -66,5 +66,5 @@ mod registry;
 
 pub use builder::AppBuilderFiltersExt;
 pub use ext::FilterExt;
-pub use filter::{Filter, FilterEndpoint, RequestSnapshot};
+pub use filter::{Filter, FilterChain, FilterEndpoint, RequestSnapshot};
 pub use registry::{FilterSpec, FilterSpecs, filter};

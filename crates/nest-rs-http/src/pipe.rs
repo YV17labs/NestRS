@@ -21,7 +21,7 @@ use poem::web::{Json, Path, Query};
 use poem::{Body, Error, FromRequest, Request, RequestBody, Result};
 use validator::Validate;
 
-use crate::{ProblemDetails, RawBody, RawBodyLimit};
+use crate::{ProblemDetails, RawBody};
 
 /// Owned-unwrap for poem extractors, so a pipe can take the value they carry
 /// without cloning.
@@ -82,17 +82,14 @@ where
 /// extractor reads it, so the framework's idiomatic JSON binding
 /// (`Valid<Json<T>>`, `Piped<P, Json<T>>`, and the `#[crud]` codegen that
 /// emits them) can never buffer an unbounded payload — poem's `Json` reads
-/// the body without consulting [`RawBodyLimit`] on its own. Returns `413` when
+/// the body without consulting the ambient cap on its own. Returns `413` when
 /// the payload exceeds the cap. A taken/absent body is a no-op.
 async fn cap_body(req: &Request, body: &mut RequestBody) -> Result<()> {
     if body.is_none() {
         return Ok(());
     }
-    let limit = req
-        .extensions()
-        .get::<RawBodyLimit>()
-        .map(|l| l.0)
-        .unwrap_or(RawBody::DEFAULT_LIMIT);
+    let _ = req;
+    let limit = crate::current_body_limit().unwrap_or(RawBody::DEFAULT_LIMIT);
     let taken = body.take().map_err(Error::from)?;
     let bytes = match taken.into_bytes_limit(limit).await {
         Ok(bytes) => bytes,
@@ -175,6 +172,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_scope() -> std::sync::Arc<nest_rs_core::RequestScope> {
+        std::sync::Arc::new(nest_rs_core::RequestScope::new(
+            nest_rs_core::Container::builder().build(),
+        ))
+    }
 
     #[tokio::test]
     async fn reject_emits_a_problem_json_400_with_the_message() {
@@ -359,13 +362,18 @@ mod tests {
         let payload = Greeting {
             msg: "well over four bytes".into(),
         };
-        let mut req = Request::builder()
+        let (req, mut body) = Request::builder()
             .content_type("application/json")
-            .body(Body::from_json(&payload).expect("body serializes"));
-        req.extensions_mut().insert(RawBodyLimit(4));
-        let (req, mut body) = req.split();
+            .body(Body::from_json(&payload).expect("body serializes"))
+            .split();
 
-        let err = match Valid::<Json<Greeting>>::from_request(&req, &mut body).await {
+        let err = match crate::with_request_scope(
+            test_scope(),
+            Some(4),
+            Valid::<Json<Greeting>>::from_request(&req, &mut body),
+        )
+        .await
+        {
             Ok(_) => panic!("body exceeds the cap"),
             Err(e) => e,
         };
@@ -375,15 +383,18 @@ mod tests {
     #[tokio::test]
     async fn valid_accepts_a_body_within_the_configured_limit() {
         let payload = Greeting { msg: "hi".into() };
-        let mut req = Request::builder()
+        let (req, mut body) = Request::builder()
             .content_type("application/json")
-            .body(Body::from_json(&payload).expect("body serializes"));
-        req.extensions_mut().insert(RawBodyLimit(4096));
-        let (req, mut body) = req.split();
+            .body(Body::from_json(&payload).expect("body serializes"))
+            .split();
 
-        let v: Valid<Json<Greeting>> = Valid::from_request(&req, &mut body)
-            .await
-            .expect("body fits under the cap");
+        let v: Valid<Json<Greeting>> = crate::with_request_scope(
+            test_scope(),
+            Some(4096),
+            Valid::from_request(&req, &mut body),
+        )
+        .await
+        .expect("body fits under the cap");
         assert_eq!(v.into_inner(), payload);
     }
 

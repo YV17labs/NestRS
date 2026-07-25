@@ -24,6 +24,49 @@ use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
+/// The ambient per-request context a transport edge installs around its
+/// inner tree. A task-local instead of request extensions: an extension
+/// costs one boxed insert each — and the first insert allocates the whole
+/// per-request anymap — while a task-local scope is a stack cell. Guards,
+/// extractors and handlers all run inside the transport's endpoint task, so
+/// the scope provably covers them (the same pattern as the ambient executor
+/// and ability).
+struct RequestCtx {
+    scope: Arc<RequestScope>,
+    /// The transport's byte budget for whole-body readers; `None` when the
+    /// transport enforces no cap (readers fall back to their own default).
+    body_limit: Option<usize>,
+}
+
+tokio::task_local! {
+    static REQUEST_CTX: RequestCtx;
+}
+
+/// The current request's [`RequestScope`], installed by the transport edge.
+/// `None` off the request task (or before the edge — a transport wiring bug).
+pub fn current_request_scope() -> Option<Arc<RequestScope>> {
+    REQUEST_CTX.try_with(|ctx| Arc::clone(&ctx.scope)).ok()
+}
+
+/// The transport's configured whole-body byte cap, when one is installed.
+/// Body readers fall back to their own default on `None`.
+pub fn current_body_limit() -> Option<usize> {
+    REQUEST_CTX.try_with(|ctx| ctx.body_limit).ok().flatten()
+}
+
+/// Run `fut` under an ambient request context — the transport edges' installer,
+/// and the seam for driving handlers outside a transport (in-process test
+/// harnesses, a transport's mirror of the edge).
+pub async fn with_request_scope<F: std::future::Future>(
+    scope: Arc<RequestScope>,
+    body_limit: Option<usize>,
+    fut: F,
+) -> F::Output {
+    REQUEST_CTX
+        .scope(RequestCtx { scope, body_limit }, fut)
+        .await
+}
+
 thread_local! {
     /// Re-entrancy guard for request-scoped resolution: a scoped provider that
     /// (transitively) depends on itself would recurse forever. We catch the

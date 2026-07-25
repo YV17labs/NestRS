@@ -120,17 +120,13 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         // request (and its scope) does not survive into the connection task.
         // `None` when the gateway is not nested under the HTTP request scope, in
         // which case per-message `Scoped<T>` resolves to `WsScopeError::NoScope`.
-        let root_container = req
-            .extensions()
-            .get::<Arc<RequestScope>>()
-            .map(|scope| scope.root().clone());
+        let root_container =
+            nest_rs_http::current_request_scope().map(|scope| scope.root().clone());
         // Resolve the WS config once per upgrade from the request scope the HTTP
         // transport installs. A missing scope or unregistered `WsConfig` falls
         // back to the (bounded) default — fail-secure, never a silently
         // unbounded socket lifetime nor an unbounded message buffer.
-        let ws_config = req
-            .extensions()
-            .get::<Arc<RequestScope>>()
+        let ws_config = nest_rs_http::current_request_scope()
             .and_then(|scope| scope.root().get::<WsConfig>())
             .unwrap_or_default();
         let max_lifetime = ws_config.max_connection;

@@ -1,66 +1,19 @@
-//! HTTP binding for request-scoped providers — [`RequestScopeEndpoint`] installs
-//! a fresh [`RequestScope`] per request; [`Scoped<T>`] reads it back to resolve
-//! an `#[injectable(scope = request)]` provider (or, falling through, a
-//! singleton — prefer plain `#[inject]` for those).
+//! HTTP binding for request-scoped providers — the transport edge
+//! (`EdgeEndpoint`) installs a [`RequestScope`] per request; [`Scoped<T>`]
+//! reads it back to resolve an `#[injectable(scope = request)]` provider
+//! (or, falling through, a singleton — prefer plain `#[inject]` for those).
 
 use std::any::type_name;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use nest_rs_core::{Container, RequestScope};
 use poem::http::StatusCode;
-use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, RequestBody, Response, Result};
-
-/// Installs a fresh [`RequestScope`] (over the singleton container) into each
-/// request's extensions before delegating inward, so guards and handlers can
-/// resolve request-scoped providers via [`Scoped<T>`]. Applied outermost by
-/// [`HttpTransport`](crate::HttpTransport).
-pub struct RequestScopeEndpoint<E> {
-    inner: E,
-    container: Container,
-    /// Present when the app registers **no** request-scoped or transient
-    /// provider. Such a scope can never cache anything — every resolution falls
-    /// through to the singleton container — so one shared instance is
-    /// indistinguishable from a fresh one, and costs an `Arc` clone instead of
-    /// an allocation on every request. The scope is still installed: singleton
-    /// lookups through `Scoped<T>` and `Bind` read it.
-    shared: Option<Arc<RequestScope>>,
-}
-
-impl<E> RequestScopeEndpoint<E> {
-    /// Wrap `inner`, installing a per-request scope over `container` before each
-    /// call.
-    pub fn new(inner: E, container: Container) -> Self {
-        let shared = (!container.has_dynamic_scopes())
-            .then(|| Arc::new(RequestScope::new(container.clone())));
-        Self {
-            inner,
-            container,
-            shared,
-        }
-    }
-}
-
-impl<E> Endpoint for RequestScopeEndpoint<E>
-where
-    E: Endpoint,
-    E::Output: IntoResponse,
-{
-    type Output = Response;
-
-    async fn call(&self, mut req: Request) -> Result<Self::Output> {
-        let scope = match &self.shared {
-            Some(shared) => Arc::clone(shared),
-            None => Arc::new(RequestScope::new(self.container.clone())),
-        };
-        req.extensions_mut().insert(scope);
-        self.inner.call(req).await.map(IntoResponse::into_response)
-    }
-}
+use poem::{Error, FromRequest, Request, RequestBody, Result};
 
 /// Resolves a provider of type `T` from the current request's
-/// [`RequestScope`]. Rejects with `500` if the scope is absent (a transport
-/// wiring bug) or if no provider is registered for `T`.
+/// [`RequestScope`] the transport edge installed. Rejects with `500` if the
+/// scope is absent (a transport wiring bug) or if no provider is registered
+/// for `T`.
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {
@@ -78,10 +31,10 @@ impl<T> Deref for Scoped<T> {
 }
 
 impl<'a, T: Send + Sync + 'static> FromRequest<'a> for Scoped<T> {
-    async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        let scope = req.extensions().get::<Arc<RequestScope>>().ok_or_else(|| {
+    async fn from_request(_req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
+        let scope = crate::current_request_scope().ok_or_else(|| {
             Error::from_string(
-                "request scope not installed — RequestScopeEndpoint must wrap the route tree",
+                "request scope not installed — the transport edge must wrap the route tree",
                 StatusCode::INTERNAL_SERVER_ERROR,
             )
         })?;
@@ -100,9 +53,9 @@ impl<'a, T: Send + Sync + 'static> FromRequest<'a> for Scoped<T> {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::{Container, RequestScope};
+
     use super::*;
-    use poem::Body;
-    use poem::handler;
 
     struct Marker(&'static str);
 
@@ -122,41 +75,6 @@ mod tests {
         assert_eq!((*scoped).0, "bye");
     }
 
-    #[handler]
-    async fn observe(req: &Request) -> &'static str {
-        assert!(
-            req.extensions().get::<Arc<RequestScope>>().is_some(),
-            "RequestScopeEndpoint installed an Arc<RequestScope> per request",
-        );
-        "ok"
-    }
-
-    #[tokio::test]
-    async fn endpoint_installs_a_request_scope_into_the_request_extensions() {
-        let container = Container::builder().build();
-        let endpoint = RequestScopeEndpoint::new(observe, container);
-
-        let req = Request::builder().body(Body::empty());
-        let resp = endpoint.call(req).await.expect("handler runs");
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn endpoint_propagates_the_inner_response_unchanged() {
-        // `IntoResponse::into_response` is invoked on the inner endpoint output —
-        // a plain `&str` becomes a 200 with that body.
-        let container = Container::builder().build();
-        let endpoint = RequestScopeEndpoint::new(observe, container);
-
-        let resp = endpoint
-            .call(Request::builder().body(Body::empty()))
-            .await
-            .expect("ok");
-        assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        assert_eq!(bytes.as_ref(), b"ok");
-    }
-
     #[tokio::test]
     async fn scoped_from_request_resolves_a_registered_provider() {
         // A singleton falls through `RequestScope::get`, the documented escape
@@ -164,13 +82,11 @@ mod tests {
         let container = Container::builder().provide(Marker("registered")).build();
         let scope = Arc::new(RequestScope::new(container));
 
-        let mut req = Request::default();
-        req.extensions_mut().insert(scope);
-        let (req, mut body) = req.split();
-
-        let scoped: Scoped<Marker> = Scoped::from_request(&req, &mut body)
-            .await
-            .expect("resolves via singleton fallback");
+        let (req, mut body) = Request::default().split();
+        let scoped: Scoped<Marker> =
+            crate::with_request_scope(scope, None, Scoped::from_request(&req, &mut body))
+                .await
+                .expect("resolves via singleton fallback");
         assert_eq!(scoped.0.0, "registered");
     }
 
@@ -180,7 +96,7 @@ mod tests {
         let (req, mut body) = req.split();
 
         let err = match Scoped::<Marker>::from_request(&req, &mut body).await {
-            Ok(_) => panic!("no Arc<RequestScope> in extensions should reject"),
+            Ok(_) => panic!("no ambient request scope should reject"),
             Err(e) => e,
         };
         let resp = err.into_response();
@@ -199,11 +115,14 @@ mod tests {
         let container = Container::builder().build();
         let scope = Arc::new(RequestScope::new(container));
 
-        let mut req = Request::default();
-        req.extensions_mut().insert(scope);
-        let (req, mut body) = req.split();
-
-        let err = match Scoped::<Marker>::from_request(&req, &mut body).await {
+        let (req, mut body) = Request::default().split();
+        let err = match crate::with_request_scope(
+            scope,
+            None,
+            Scoped::<Marker>::from_request(&req, &mut body),
+        )
+        .await
+        {
             Ok(_) => panic!("no provider for Marker should reject"),
             Err(e) => e,
         };

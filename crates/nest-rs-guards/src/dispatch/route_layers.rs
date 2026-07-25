@@ -22,6 +22,15 @@
 //! around the handler), so **all three scopes** execute here, closest to the
 //! handler — before generic filters get a chance to map the error away.
 //!
+//! The three families compose in **one** call ([`wrap_route_response_layers`])
+//! rather than three nested generic wrappers, deliberately: every enum level
+//! an `async fn call` awaits through adds a `Request`-sized slot (~500 B) to
+//! the route's future — rustc does not overlap moved-out locals — and poem's
+//! route table boxes that future per request for *every* route, bare
+//! included. One level keeps the bare route's future at its previous size;
+//! a route that declared a layer goes through a single boxed endpoint whose
+//! inside stays fully inline (chain runners, no per-entry boxing).
+//!
 //! [`RouteShaper`]: crate::dispatch::RouteShaper
 
 use nest_rs_core::layer_chain::{
@@ -29,8 +38,8 @@ use nest_rs_core::layer_chain::{
 };
 use nest_rs_core::{Container, MappedError};
 use nest_rs_exception_filters::{ExceptionFilterErased, ExceptionFilterSpecs};
-use nest_rs_filters::{Filter, FilterEndpoint, FilterSpecs};
-use nest_rs_interceptors::{Interceptor, InterceptorExt, InterceptorSpecs};
+use nest_rs_filters::{Filter, FilterChain, FilterSpecs};
+use nest_rs_interceptors::{Interceptor, InterceptorChain, InterceptorSpecs};
 use poem::endpoint::BoxEndpoint;
 use poem::{Endpoint, EndpointExt, Request, Response};
 
@@ -38,105 +47,148 @@ use crate::dispatch::scoped_spec::{
     ScopedExceptionFilterSpec, ScopedFilterSpec, ScopedInterceptorSpec, resolve_specs,
 };
 
-/// Wrap `endpoint` in the route-scoped part of the interceptor pool. The full
-/// chain (global + controller + method) is composed for dedup; only the
-/// controller / method survivors wrap here — global interceptors execute at
-/// the transport edge. First-listed ends up outermost. Called by the
-/// `#[routes]` macro at mount time.
-pub fn wrap_route_interceptors(
-    container: &Container,
-    endpoint: BoxEndpoint<'static, Response>,
-    controller: &[ScopedInterceptorSpec],
-    method: &[ScopedInterceptorSpec],
-    route_label: &str,
-) -> BoxEndpoint<'static, Response> {
-    let global = resolve_global_interceptors(container);
-    let controller = resolve_specs(container, controller, LayerSite::Controller);
-    let method = resolve_specs(container, method, LayerSite::Method);
-    let chain = compose_chain::<dyn Interceptor>(global, controller, method, &[], route_label);
-    // `compose_chain` orders the list outermost-first; wrapping applies the
-    // last entry innermost, so iterate in reverse to keep the first entry
-    // outermost.
-    let mut ep = endpoint;
-    for entry in chain
-        .into_iter()
-        .filter(|e| e.source != LayerSite::Global)
-        .rev()
-    {
-        ep = InterceptorExt::interceptor(ep, entry.layer)
-            .map_to_response()
-            .boxed();
-    }
-    ep
+/// One HTTP route's endpoint as it leaves [`wrap_route_response_layers`]:
+/// still the macro-emitted handler type, or behind the one box its
+/// response-side layer stack composes over.
+pub enum RouteEndpoint<E> {
+    /// No response-side layer reached this route — the endpoint passes
+    /// through untouched; poem's `RouteMethod` boxes it once at mount.
+    Plain(E),
+    /// At least one interceptor / filter / exception-filter — the composed
+    /// stack (interceptors outside filters outside the typed catches)
+    /// executes behind a single boxed endpoint.
+    Layered(BoxEndpoint<'static, Response>),
 }
 
-/// Wrap `endpoint` in the route-scoped part of the filter pool (error path).
-/// Same site rule as interceptors: the full chain composes for dedup, global
-/// filters execute at the transport edge, controller / method survivors wrap
-/// here. First-listed ends up outermost on the error path.
-pub fn wrap_route_filters(
-    container: &Container,
-    endpoint: BoxEndpoint<'static, Response>,
-    controller: &[ScopedFilterSpec],
-    method: &[ScopedFilterSpec],
-    route_label: &str,
-) -> BoxEndpoint<'static, Response> {
-    let global = resolve_global_filters(container);
-    let controller = resolve_specs(container, controller, LayerSite::Controller);
-    let method = resolve_specs(container, method, LayerSite::Method);
-    let chain = compose_chain::<dyn Filter>(global, controller, method, &[], route_label);
-    let mut ep = endpoint;
-    for entry in chain
-        .into_iter()
-        .filter(|e| e.source != LayerSite::Global)
-        .rev()
-    {
-        ep = FilterEndpoint::new(ep, entry.layer).boxed();
+impl<E> Endpoint for RouteEndpoint<E>
+where
+    E: Endpoint<Output = Response> + 'static,
+{
+    type Output = Response;
+
+    async fn call(&self, req: Request) -> poem::Result<Response> {
+        match self {
+            Self::Plain(ep) => ep.call(req).await,
+            Self::Layered(ep) => ep.call(req).await,
+        }
     }
-    ep
 }
 
-/// Wrap `endpoint` in the **full** exception-filter pool (global +
-/// controller + method, deduped). Exception-filters are typed `try_catch`es
-/// around the handler — every scope executes here, closest to the handler,
-/// so a typed catch gets the error before a generic `Filter` maps it away.
-pub fn wrap_route_exception_filters(
+/// Compose the route-scoped response-side stack around `endpoint` — the
+/// exception-filter pool (typed catches, innermost), the controller / method
+/// filter survivors, then the controller / method interceptor survivors
+/// (outermost; first-listed outermost within each family). Global
+/// interceptors / filters participate in the dedup only — they execute at
+/// the transport edge. Called by the `#[routes]` macro at mount time; with
+/// every chain empty the endpoint passes through untouched.
+#[allow(clippy::too_many_arguments)]
+pub fn wrap_route_response_layers<E>(
     container: &Container,
-    endpoint: BoxEndpoint<'static, Response>,
+    endpoint: E,
+    controller_exception_filters: &[ScopedExceptionFilterSpec],
+    method_exception_filters: &[ScopedExceptionFilterSpec],
+    controller_filters: &[ScopedFilterSpec],
+    method_filters: &[ScopedFilterSpec],
+    controller_interceptors: &[ScopedInterceptorSpec],
+    method_interceptors: &[ScopedInterceptorSpec],
+    route_label: &str,
+) -> RouteEndpoint<E>
+where
+    E: Endpoint<Output = Response> + 'static,
+{
+    let exception_filters = compose_exception_filters(
+        container,
+        controller_exception_filters,
+        method_exception_filters,
+        route_label,
+    );
+    let filters = compose_route_filters(container, controller_filters, method_filters, route_label);
+    let interceptors = compose_route_interceptors(
+        container,
+        controller_interceptors,
+        method_interceptors,
+        route_label,
+    );
+    if exception_filters.is_empty() && filters.is_empty() && interceptors.is_empty() {
+        return RouteEndpoint::Plain(endpoint);
+    }
+    // An empty stage inside a non-empty stack is a cheap pass-through branch
+    // in its runner — boxing once here beats naming all eight stage
+    // combinations.
+    RouteEndpoint::Layered(
+        InterceptorChain::new(
+            FilterChain::new(
+                ExceptionFiltersEndpoint {
+                    inner: endpoint,
+                    chain: exception_filters,
+                },
+                filters,
+            ),
+            interceptors,
+        )
+        .boxed(),
+    )
+}
+
+/// Compose the full exception-filter pool (global + controller + method,
+/// deduped) — every scope executes at the route site, closest to the
+/// handler, so a typed catch gets the error before a generic `Filter` maps
+/// it away.
+fn compose_exception_filters(
+    container: &Container,
     controller: &[ScopedExceptionFilterSpec],
     method: &[ScopedExceptionFilterSpec],
     route_label: &str,
-) -> BoxEndpoint<'static, Response> {
+) -> Vec<ResolvedLayer<dyn ExceptionFilterErased>> {
     let global = resolve_global_layers::<ExceptionFilterSpecs>(container);
     let controller = resolve_specs(container, controller, LayerSite::Controller);
     let method = resolve_specs(container, method, LayerSite::Method);
-    let chain = compose_chain::<dyn ExceptionFilterErased>(
+    compose_chain::<dyn ExceptionFilterErased>(
         dedup_bucket(global),
         controller,
         method,
         &[],
         route_label,
-    );
-    if chain.is_empty() {
-        return endpoint;
-    }
-    ExceptionFiltersEndpoint {
-        inner: endpoint,
-        chain,
-    }
-    .boxed()
+    )
 }
 
-/// Resolve the global interceptor bucket for the route-site dedup.
-/// Intra-bucket duplicates are dropped silently — the transport edge (the
-/// site that executes the global sub-chain) already warned once.
-fn resolve_global_interceptors(container: &Container) -> Vec<ResolvedLayer<dyn Interceptor>> {
-    dedup_bucket(resolve_global_layers::<InterceptorSpecs>(container))
+/// Compose the route-scoped filter survivors: the full chain (global +
+/// controller + method) is composed for dedup; only controller / method
+/// survivors run here — global filters execute at the transport edge.
+fn compose_route_filters(
+    container: &Container,
+    controller: &[ScopedFilterSpec],
+    method: &[ScopedFilterSpec],
+    route_label: &str,
+) -> Vec<ResolvedLayer<dyn Filter>> {
+    let global = dedup_bucket(resolve_global_layers::<FilterSpecs>(container));
+    let controller = resolve_specs(container, controller, LayerSite::Controller);
+    let method = resolve_specs(container, method, LayerSite::Method);
+    let chain = compose_chain::<dyn Filter>(global, controller, method, &[], route_label);
+    chain
+        .into_iter()
+        .filter(|e| e.source != LayerSite::Global)
+        .collect()
 }
 
-/// Resolve the global filter bucket — see [`resolve_global_interceptors`].
-fn resolve_global_filters(container: &Container) -> Vec<ResolvedLayer<dyn Filter>> {
-    dedup_bucket(resolve_global_layers::<FilterSpecs>(container))
+/// Compose the route-scoped interceptor survivors — same site rule as
+/// [`compose_route_filters`]. Intra-global duplicates are dropped silently
+/// by `dedup_bucket`: the transport edge (the site that executes the global
+/// sub-chain) already warned once.
+fn compose_route_interceptors(
+    container: &Container,
+    controller: &[ScopedInterceptorSpec],
+    method: &[ScopedInterceptorSpec],
+    route_label: &str,
+) -> Vec<ResolvedLayer<dyn Interceptor>> {
+    let global = dedup_bucket(resolve_global_layers::<InterceptorSpecs>(container));
+    let controller = resolve_specs(container, controller, LayerSite::Controller);
+    let method = resolve_specs(container, method, LayerSite::Method);
+    let chain = compose_chain::<dyn Interceptor>(global, controller, method, &[], route_label);
+    chain
+        .into_iter()
+        .filter(|e| e.source != LayerSite::Global)
+        .collect()
 }
 
 /// Runs the deduped exception-filter chain on the error path: first matching
@@ -144,12 +196,15 @@ fn resolve_global_filters(container: &Container) -> Vec<ResolvedLayer<dyn Filter
 /// tagged [`MappedError`] so the ambient transaction rolls back — the
 /// handler failed; a typed catch shapes the client answer, it does not bless
 /// the handler's writes.
-struct ExceptionFiltersEndpoint {
-    inner: BoxEndpoint<'static, Response>,
+struct ExceptionFiltersEndpoint<E> {
+    inner: E,
     chain: Vec<ResolvedLayer<dyn ExceptionFilterErased>>,
 }
 
-impl Endpoint for ExceptionFiltersEndpoint {
+impl<E> Endpoint for ExceptionFiltersEndpoint<E>
+where
+    E: Endpoint<Output = Response>,
+{
     type Output = Response;
 
     async fn call(&self, req: Request) -> poem::Result<Response> {
@@ -158,7 +213,10 @@ impl Endpoint for ExceptionFiltersEndpoint {
             Err(err) => {
                 let mut current = err;
                 for entry in &self.chain {
-                    match entry.layer.try_catch(current).await {
+                    // `as_ref()`: dispatch on the erased filter — the
+                    // `ExceptionFilterErased for Arc<T>` blanket would nest a
+                    // second boxed future around the call.
+                    match entry.layer.as_ref().try_catch(current).await {
                         Ok(mut resp) => {
                             resp.extensions_mut().insert(MappedError);
                             return Ok(resp);

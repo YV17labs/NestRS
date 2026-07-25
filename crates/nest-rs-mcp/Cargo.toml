@@ -7,7 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Model Context Protocol server support for NestRS — wraps the rmcp SDK behind the NestRS DI container and exposes a poem endpoint."
-keywords = ["framework", "nestjs", "mcp", "rmcp", "ai"]
+keywords = ["framework", "nestrs", "mcp", "rmcp", "ai"]
 categories = ["web-programming", "api-bindings"]
 
 [dependencies]

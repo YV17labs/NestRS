@@ -7,7 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "NestRS framework umbrella — re-exports the core and the surface crates an app reaches for, with a `prelude` for the common case."
-keywords = ["framework", "nestjs", "web", "backend", "async"]
+keywords = ["framework", "nestrs", "web", "backend", "async"]
 categories = ["web-programming", "asynchronous"]
 
 

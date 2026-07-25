@@ -7,7 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Core building blocks (DI container, module trait, lifecycle, access graph) for the NestRS framework."
-keywords = ["framework", "nestjs", "di", "dependency-injection", "ioc"]
+keywords = ["framework", "nestrs", "di", "dependency-injection", "ioc"]
 categories = ["rust-patterns", "asynchronous"]
 
 

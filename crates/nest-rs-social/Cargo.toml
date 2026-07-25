@@ -7,7 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Open social-login provider contract for NestRS: a flow-owning SocialProvider trait, inventory-based registry, and first-party GitHub/Google providers. Third-party providers plug in as independent crates through the same public seam."
-keywords = ["framework", "nestjs", "oauth", "social-login", "github"]
+keywords = ["framework", "nestrs", "oauth", "github", "google"]
 categories = ["authentication", "web-programming"]
 
 

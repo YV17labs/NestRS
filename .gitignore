@@ -33,7 +33,10 @@ docs/node_modules/
 docs/dist/
 docs/.astro/
 
-# Bench harness — SUT build artifacts (results/ stays committed)
+# Bench harness — SUT build artifacts, and the runs themselves: a result is
+# only meaningful with the machine that produced it, so runs stay local.
 /bench/sut/nestrs/target/
 /bench/sut/*/node_modules/
 /bench/sut/*/dist/
+/bench/results/*
+!/bench/results/.gitkeep

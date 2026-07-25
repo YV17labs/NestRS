@@ -1,11 +1,11 @@
 //! Raw request body extractor with a size guard.
 //!
 //! [`RawBody`] reads the whole body into [`Bytes`], capped at
-//! [`RawBody::DEFAULT_LIMIT`] (2 MiB) unless the request carries a
-//! [`RawBodyLimit`] in its extensions (installed by `HttpModule` from
-//! `HttpConfig.max_body_bytes`). Past the limit the extractor rejects with
-//! `413 Payload Too Large` — never silently truncates, never buffers
-//! unbounded memory.
+//! [`RawBody::DEFAULT_LIMIT`] (2 MiB) unless the transport edge carries a
+//! configured cap (`HttpConfig.max_body_bytes`, read back through
+//! [`current_body_limit`](crate::current_body_limit)). Past the limit the
+//! extractor rejects with `413 Payload Too Large` — never silently
+//! truncates, never buffers unbounded memory.
 //!
 //! Webhook-style handlers (Stripe, GitHub, …) that need the exact byte string
 //! to verify a signature are the canonical use case; anything that can deserialize
@@ -20,15 +20,8 @@ use poem::error::ReadBodyError;
 use poem::http::StatusCode;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
 
-/// Per-request byte cap for [`RawBody`], read from the request extensions.
-/// `HttpModule` installs this from `HttpConfig.max_body_bytes`; absent ⇒ the
-/// extractor falls back to [`RawBody::DEFAULT_LIMIT`]. Public so middleware
-/// can pin a per-route cap by inserting it into `req.extensions_mut()`.
-#[derive(Debug, Clone, Copy)]
-pub struct RawBodyLimit(pub usize);
-
-/// Whole request body as `Bytes`, bounded by [`RawBody::DEFAULT_LIMIT`] (or by
-/// the [`RawBodyLimit`] in the request extensions, when installed).
+/// Whole request body as `Bytes`, bounded by [`RawBody::DEFAULT_LIMIT`] (or
+/// by the transport edge's configured cap, when one is installed).
 #[derive(Debug, Clone)]
 pub struct RawBody(pub Bytes);
 
@@ -64,12 +57,8 @@ impl Deref for RawBody {
 }
 
 impl<'a> FromRequest<'a> for RawBody {
-    async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
-        let limit = req
-            .extensions()
-            .get::<RawBodyLimit>()
-            .map(|l| l.0)
-            .unwrap_or(Self::DEFAULT_LIMIT);
+    async fn from_request(_req: &'a Request, body: &mut RequestBody) -> Result<Self> {
+        let limit = crate::current_body_limit().unwrap_or(Self::DEFAULT_LIMIT);
         Self::extract_with_limit(body, limit).await
     }
 }
@@ -133,34 +122,46 @@ mod tests {
         assert_eq!(raw.0.len(), 32);
     }
 
+    fn test_scope() -> std::sync::Arc<nest_rs_core::RequestScope> {
+        std::sync::Arc::new(nest_rs_core::RequestScope::new(
+            nest_rs_core::Container::builder().build(),
+        ))
+    }
+
     #[tokio::test]
-    async fn request_extension_limit_overrides_the_default() {
-        // 64-byte payload, 32-byte extension cap → 413, mirroring the
+    async fn ambient_limit_overrides_the_default() {
+        // 64-byte payload, 32-byte ambient cap → 413, mirroring the
         // `extract_with_limit` behaviour driven through the extractor.
-        let mut req = Request::builder().body(vec![b'x'; 64]);
-        req.extensions_mut().insert(RawBodyLimit(32));
-        let (req, mut body) = req.split();
-        let err = RawBody::from_request(&req, &mut body)
-            .await
-            .expect_err("over the extension cap");
+        let (req, mut body) = Request::builder().body(vec![b'x'; 64]).split();
+        let err = crate::with_request_scope(
+            test_scope(),
+            Some(32),
+            RawBody::from_request(&req, &mut body),
+        )
+        .await
+        .expect_err("over the ambient cap");
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
-    async fn request_extension_limit_passes_when_payload_fits() {
-        // Same 32-byte payload + cap, but threaded through the extension —
+    async fn ambient_limit_passes_when_payload_fits() {
+        // Same 32-byte payload + cap, threaded through the ambient context —
         // pins that the extractor reads the cap rather than the constant.
-        let mut req = Request::builder().body(vec![b'x'; 32]);
-        req.extensions_mut().insert(RawBodyLimit(32));
-        let (req, mut body) = req.split();
-        let raw = RawBody::from_request(&req, &mut body).await.expect("fits");
+        let (req, mut body) = Request::builder().body(vec![b'x'; 32]).split();
+        let raw = crate::with_request_scope(
+            test_scope(),
+            Some(32),
+            RawBody::from_request(&req, &mut body),
+        )
+        .await
+        .expect("fits");
         assert_eq!(raw.0.len(), 32);
     }
 
     #[tokio::test]
-    async fn missing_extension_falls_back_to_default_limit() {
-        // No `RawBodyLimit` in extensions ⇒ DEFAULT_LIMIT applies. A tiny
+    async fn missing_ambient_limit_falls_back_to_default() {
+        // No ambient cap ⇒ DEFAULT_LIMIT applies. A tiny
         // payload under the constant must still pass.
         let (req, mut body) = request_with_body("hi");
         let raw = RawBody::from_request(&req, &mut body).await.expect("fits");

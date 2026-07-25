@@ -6,8 +6,7 @@ use nest_rs_core::{AppBuilder, Container, check_specs_resolvable};
 use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
 use poem::EndpointExt;
 
-use crate::ext::InterceptorExt;
-use crate::interceptor::Interceptor;
+use crate::interceptor::{Interceptor, InterceptorChain};
 use crate::registry::{InterceptorSpec, InterceptorSpecs};
 
 /// Adds `.use_interceptors_global(...)` to [`AppBuilder`].
@@ -69,17 +68,13 @@ impl AppBuilderInterceptorsExt for AppBuilder {
             .provide_meta(HttpEndpointWrap::with_priority(
                 endpoint_wrap_priority::POOL_INTERCEPTORS,
                 |container, endpoint| {
+                    // `compose_chain` orders outermost-first — exactly the
+                    // order the chain runner executes, over one endpoint.
                     let chain = global_chain(container);
-                    // `compose_chain` orders outermost-first; wrapping
-                    // applies the last entry innermost, so reverse to keep
-                    // the first entry outermost.
-                    let mut ep = endpoint;
-                    for entry in chain.into_iter().rev() {
-                        ep = InterceptorExt::interceptor(ep, entry.layer)
-                            .map_to_response()
-                            .boxed();
+                    if chain.is_empty() {
+                        return endpoint;
                     }
-                    ep
+                    InterceptorChain::new(endpoint, chain).boxed()
                 },
             ))
     }

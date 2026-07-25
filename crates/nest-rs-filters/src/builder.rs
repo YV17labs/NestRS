@@ -6,7 +6,7 @@ use nest_rs_core::{AppBuilder, Container, check_specs_resolvable};
 use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
 use poem::EndpointExt;
 
-use crate::filter::{Filter, FilterEndpoint};
+use crate::filter::{Filter, FilterChain};
 use crate::registry::{FilterSpec, FilterSpecs};
 
 /// Adds `.use_filters_global(...)` to [`AppBuilder`].
@@ -62,15 +62,14 @@ impl AppBuilderFiltersExt for AppBuilder {
             .provide_meta(HttpEndpointWrap::with_priority(
                 endpoint_wrap_priority::FILTERS,
                 |container, endpoint| {
+                    // `compose_chain` orders outermost-first — the chain
+                    // runner's own order (first declared = outermost on the
+                    // error path), over one endpoint.
                     let chain = global_chain(container);
-                    // First declared = outermost on the error path.
-                    let mut ep = endpoint;
-                    for entry in chain.into_iter().rev() {
-                        ep = FilterEndpoint::new(ep, entry.layer)
-                            .map_to_response()
-                            .boxed();
+                    if chain.is_empty() {
+                        return endpoint;
                     }
-                    ep
+                    FilterChain::new(endpoint, chain).boxed()
                 },
             ))
     }

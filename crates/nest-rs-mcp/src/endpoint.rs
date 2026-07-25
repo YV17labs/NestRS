@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Container, RequestScope};
+use nest_rs_core::{Container, current_request_scope};
 use poem::endpoint::TowerCompatExt;
 use poem::{Endpoint, IntoEndpoint, Request, Response, Result, Route};
 use rmcp::ServerHandler;
@@ -109,7 +109,7 @@ where
         // `http::request::Parts`) into every operation's `RequestContext`, so
         // `PropagatingHandler` can re-install them *inside* the spawned
         // dispatch, where a task-local from this task would not reach.
-        let scope = req.extensions().get::<Arc<RequestScope>>().cloned();
+        let scope = current_request_scope();
         let captured = self.context.as_ref().map(|context| context.capture(&req));
         // The guard captures for its own `around` the same way — post-`before`,
         // so it sees the ability its chain just attached.

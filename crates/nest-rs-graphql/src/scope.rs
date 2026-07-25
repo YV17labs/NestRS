@@ -52,7 +52,7 @@ impl<T: Send + Sync + 'static> Scoped<T> {
         let scope = ctx.data::<Arc<RequestScope>>().map_err(|_| {
             Error::new(
                 "request scope not installed — serve the schema over the HTTP transport \
-                 (GraphqlModule) so RequestScopeEndpoint forwards it",
+                 (GraphqlModule) so the transport edge forwards it",
             )
         })?;
         match scope.get::<T>() {

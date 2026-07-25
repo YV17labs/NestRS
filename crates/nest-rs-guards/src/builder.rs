@@ -9,8 +9,8 @@
 use nest_rs_core::layer_chain::ResolvedLayer;
 use nest_rs_core::{AppBuilder, check_specs_resolvable};
 use nest_rs_http::{GlobalGuardsActive, HttpBootCheck, SelfMountGuardWrap};
-use nest_rs_interceptors::InterceptorExt;
 use poem::EndpointExt;
+use poem::endpoint::BoxEndpoint;
 
 use crate::Guard;
 #[cfg(feature = "mcp")]
@@ -93,9 +93,14 @@ impl AppBuilderGuardsExt for AppBuilder {
                     .get::<GuardSpecs>()
                     .map(|specs| specs.resolve_chain(container, "self-mount edge"))
                     .unwrap_or_default();
-                InterceptorExt::interceptor(endpoint, GuardsHttpFold { chain })
-                    .map_to_response()
-                    .boxed()
+                if chain.is_empty() {
+                    return endpoint;
+                }
+                SelfMountGuarded {
+                    chain,
+                    inner: endpoint,
+                }
+                .boxed()
             }))
             // A global guard whose provider was never registered would
             // resolve to `None` and silently drop — every route would lose
@@ -203,31 +208,30 @@ fn run_ws_data_pipes(
     Ok(())
 }
 
-/// Internal adapter — runs the composed global guard chain inside an
-/// `Interceptor`-shaped wrap. Used by `SelfMountGuardWrap` to apply the global
-/// guard chain at a `Guarded` self-mounted endpoint's edge (it has no
-/// per-route shaper). The chain is resolved eagerly at configure time — the
-/// container is final there, so a broken chain surfaces at boot, not on the
-/// first request.
-struct GuardsHttpFold {
+/// Runs the composed global guard chain at a `Guarded` self-mounted
+/// endpoint's edge (it has no per-route shaper), applied through
+/// `SelfMountGuardWrap`. A plain endpoint, not an `Interceptor` wrap — the
+/// chain is a linear short-circuit walk, so it needs no continuation and
+/// none of the interceptor plumbing's per-request boxing. Resolved eagerly
+/// at configure time — the container is final there, so a broken chain
+/// surfaces at boot, not on the first request.
+struct SelfMountGuarded {
     chain: Vec<ResolvedLayer<dyn Guard>>,
+    inner: BoxEndpoint<'static, poem::Response>,
 }
 
-impl nest_rs_core::Layer for GuardsHttpFold {}
+impl poem::Endpoint for SelfMountGuarded {
+    type Output = poem::Response;
 
-#[async_trait::async_trait]
-impl nest_rs_interceptors::Interceptor for GuardsHttpFold {
-    async fn intercept(
-        &self,
-        mut req: poem::Request,
-        next: nest_rs_interceptors::Next<'_>,
-    ) -> poem::Result<poem::Response> {
+    async fn call(&self, mut req: poem::Request) -> poem::Result<poem::Response> {
         for entry in &self.chain {
-            if let Err(denial) = entry.layer.check_http(&mut req).await {
+            // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
+            // blanket would nest a second boxed future per check.
+            if let Err(denial) = entry.layer.as_ref().check_http(&mut req).await {
                 return Ok(deny_http(entry.name, denial));
             }
         }
-        next.run(req).await
+        self.inner.call(req).await
     }
 }
 

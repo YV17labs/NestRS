@@ -12,7 +12,7 @@ use std::sync::Arc;
 use async_graphql::parser::types::{DocumentOperations, OperationType};
 use async_graphql::{BatchRequest, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
-use nest_rs_core::{Container, ReachableProviders, RequestScope};
+use nest_rs_core::{Container, ReachableProviders};
 use poem::http::StatusCode;
 use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, Response, Result};
 
@@ -37,7 +37,7 @@ pub struct GraphqlContextSeed {
 inventory::collect!(GraphqlContextSeed);
 
 // Framework-level seed (always fires): forward the per-request `RequestScope`
-// installed by the HTTP `RequestScopeEndpoint` (outermost over the whole route
+// installed by the HTTP transport edge (outermost over the whole route
 // tree, so a `/graphql` request already carries it) into the async-graphql
 // context. Resolvers then reach request-scoped providers via
 // [`crate::Scoped<T>`]. Absent (a hand-rolled executor in a test, or a non-HTTP
@@ -50,8 +50,8 @@ inventory::collect!(GraphqlContextSeed);
 inventory::submit! {
     GraphqlContextSeed {
         owner_type_id: || None,
-        seed: |req, _container, gql| match req.extensions().get::<Arc<RequestScope>>() {
-            Some(scope) => gql.data(Arc::clone(scope)),
+        seed: |_req, _container, gql| match nest_rs_http::current_request_scope() {
+            Some(scope) => gql.data(scope),
             None => gql,
         },
     }

@@ -1,20 +1,17 @@
-//! [`RouteShaper`] — the HTTP per-route shaper. Implements `Interceptor`
-//! so the `#[routes]` macro can wrap it around each route's endpoint at
-//! mount time. Orchestrates the request-side layer families — guards and
-//! pipes — at the route scope, deduplicating against the global chain by
-//! `TypeId`. The response-side families (exception-filters, filters,
-//! interceptors) wrap the endpoint *inside* the shaper — see
-//! [`route_layers`](crate::dispatch::route_layers).
+//! [`RouteShaper`] — the HTTP per-route shaper. A generic endpoint the
+//! `#[routes]` macro wraps around each route at mount time. Orchestrates the
+//! request-side layer families — guards and pipes — at the route scope,
+//! deduplicating against the global chain by `TypeId`. The response-side
+//! families (exception-filters, filters, interceptors) wrap the endpoint
+//! *inside* the shaper — see [`route_layers`](crate::dispatch::route_layers).
 
 use std::any::TypeId;
 
-use async_trait::async_trait;
 use nest_rs_core::layer_chain::{
     LayerSite, ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers,
 };
 use nest_rs_core::{Container, Layer};
-use nest_rs_http::poem::{Body, Request, Response, Result};
-use nest_rs_interceptors::{Interceptor, Next};
+use nest_rs_http::poem::{Body, Endpoint, Request, Response, Result};
 use nest_rs_pipes::GlobalPipe;
 use serde_json::Value;
 
@@ -25,57 +22,124 @@ use crate::dispatch::scoped_spec::{
 };
 use crate::registry::PipeSpecs;
 
-/// HTTP per-route shaper.
+/// HTTP per-route shaper: the deduped guard + pipe chains, wrapped around the
+/// route's inner endpoint.
 ///
-/// Constructed by the `#[routes]` macro at mount time with the
-/// controller / method scope specs. Resolves the global + per-route
-/// chain **eagerly against the mount-time container** (the container is
-/// final at `configure`; resolving lazily would only delay surfacing a
-/// broken chain to the first request), dedups by `TypeId`, runs every
-/// layer in declaration order. No `#[public]` skip — guards decide what
-/// `#[public]` means for them via the [`Public`](nest_rs_core::Public)
-/// marker attached as request data.
+/// Built by [`wrap_route_shaper`] at mount time with the controller / method
+/// scope specs. Resolves the global + per-route chain **eagerly against the
+/// mount-time container** (the container is final at `configure`; resolving
+/// lazily would only delay surfacing a broken chain to the first request),
+/// dedups by `TypeId`, runs every layer in declaration order. No `#[public]`
+/// skip — guards decide what `#[public]` means for them via the
+/// [`Public`](nest_rs_core::Public) marker attached as request data.
 ///
-/// Implements [`Layer`] only to satisfy the `Interceptor: Layer` bound;
-/// the shaper never participates in the dedup pass (it *is* the dedup
-/// pass), so default `priority()` / `name()` are correct.
-pub struct RouteShaper {
+/// Generic over the inner endpoint on purpose: the chains themselves stay
+/// erased (`dyn Guard` / `dyn GlobalPipe` — composition is a mount-time,
+/// runtime fact), but the wrap adds no per-request future boxing of its own.
+pub struct RouteShaper<E> {
     guards: Vec<ResolvedLayer<dyn Guard>>,
     pipes: Vec<ResolvedLayer<dyn GlobalPipe>>,
+    inner: E,
 }
 
-impl RouteShaper {
-    // Macros emit this — a parameter struct would only add indirection at
-    // call sites the user never reads.
-    /// Build the per-route guard/pipe shaper. Emitted by `#[routes]`; composes
-    /// the controller/method/global specs into one deduped chain around the
-    /// route.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        container: &Container,
-        route_label: &'static str,
-        controller_guards: Vec<ScopedGuardSpec>,
-        method_guards: Vec<ScopedGuardSpec>,
-        force_guards: Vec<TypeId>,
-        controller_pipes: Vec<ScopedPipeSpec>,
-        method_pipes: Vec<ScopedPipeSpec>,
-        no_pipes: bool,
-    ) -> Self {
-        let guards = resolve_guards(
-            container,
-            route_label,
-            &controller_guards,
-            &method_guards,
-            &force_guards,
-        );
-        let pipes = if no_pipes {
-            // `#[no_pipes]` skips every pipe — globals, controller, method.
-            Vec::new()
-        } else {
-            resolve_pipes(container, route_label, &controller_pipes, &method_pipes)
-        };
-        Self { guards, pipes }
+impl<E> Endpoint for RouteShaper<E>
+where
+    E: Endpoint<Output = Response>,
+{
+    type Output = Response;
+
+    async fn call(&self, mut req: Request) -> Result<Response> {
+        for entry in &self.guards {
+            // `as_ref()` dispatches straight on the erased guard: calling
+            // through the `Guard for Arc<T>` blanket would nest a second
+            // boxed future around every check, per guard, per request.
+            if let Err(denial) = entry.layer.as_ref().check_http(&mut req).await {
+                return Ok(deny_http(entry.name, denial));
+            }
+        }
+
+        if !self.pipes.is_empty() {
+            // Boxed on purpose: `apply_body_pipes` reads and rewrites the whole
+            // JSON body, so one allocation is noise on that path — while
+            // inlining its (large) state machine here would bloat the future of
+            // every route that threads through [`ShapedRoute`], bare included,
+            // and every such future is boxed per request by poem's route table.
+            Box::pin(apply_body_pipes(&mut req, &self.pipes)).await?;
+        }
+
+        self.inner.call(req).await
     }
+}
+
+/// One HTTP route as `#[routes]` mounts it: shaped when the composed guard
+/// **or** pipe chain is non-empty, bare (untouched) when both are empty.
+///
+/// The bare arm is not an access decision: with both chains empty the shaper's
+/// loop bodies would be provable no-ops paid on every request. Fail-secure
+/// posture is unchanged: the transport's unguarded-route scan warns at boot
+/// independently, and the moment any guard or pipe reaches the route (global
+/// pool, controller, method), the route mounts shaped.
+pub enum ShapedRoute<E> {
+    /// Both chains empty — the endpoint passes through untouched.
+    Bare(E),
+    /// At least one guard or pipe — the shaper runs before the inner endpoint.
+    Shaped(RouteShaper<E>),
+}
+
+impl<E> Endpoint for ShapedRoute<E>
+where
+    E: Endpoint<Output = Response> + 'static,
+{
+    type Output = Response;
+
+    async fn call(&self, req: Request) -> Result<Response> {
+        match self {
+            Self::Bare(ep) => ep.call(req).await,
+            Self::Shaped(ep) => ep.call(req).await,
+        }
+    }
+}
+
+/// Compose the route's guard / pipe chains and wrap `endpoint` in a
+/// [`RouteShaper`] — or return it untouched when both chains are empty.
+/// Emitted by `#[routes]` for every handler, mirroring the sibling
+/// `wrap_route_*` helpers.
+#[allow(clippy::too_many_arguments)]
+pub fn wrap_route_shaper<E>(
+    container: &Container,
+    endpoint: E,
+    route_label: &'static str,
+    controller_guards: Vec<ScopedGuardSpec>,
+    method_guards: Vec<ScopedGuardSpec>,
+    force_guards: Vec<TypeId>,
+    controller_pipes: Vec<ScopedPipeSpec>,
+    method_pipes: Vec<ScopedPipeSpec>,
+    no_pipes: bool,
+) -> ShapedRoute<E>
+where
+    E: Endpoint<Output = Response> + 'static,
+{
+    let guards = resolve_guards(
+        container,
+        route_label,
+        &controller_guards,
+        &method_guards,
+        &force_guards,
+    );
+    let pipes = if no_pipes {
+        // `#[no_pipes]` skips every pipe — globals, controller, method.
+        Vec::new()
+    } else {
+        resolve_pipes(container, route_label, &controller_pipes, &method_pipes)
+    };
+    if guards.is_empty() && pipes.is_empty() {
+        return ShapedRoute::Bare(endpoint);
+    }
+    ShapedRoute::Shaped(RouteShaper {
+        guards,
+        pipes,
+        inner: endpoint,
+    })
 }
 
 fn resolve_guards(
@@ -120,25 +184,6 @@ fn resolve_pipes(
     chain
 }
 
-impl Layer for RouteShaper {}
-
-#[async_trait]
-impl Interceptor for RouteShaper {
-    async fn intercept(&self, mut req: Request, next: Next<'_>) -> Result<Response> {
-        for entry in &self.guards {
-            if let Err(denial) = entry.layer.check_http(&mut req).await {
-                return Ok(deny_http(entry.name, denial));
-            }
-        }
-
-        if !self.pipes.is_empty() {
-            apply_body_pipes(&mut req, &self.pipes).await?;
-        }
-
-        next.run(req).await
-    }
-}
-
 pub(super) fn log_effective_chain<L: Layer + ?Sized>(
     route: &str,
     kind: &str,
@@ -176,11 +221,7 @@ async fn apply_body_pipes(
     if !content_type.contains("json") {
         return Ok(());
     }
-    let limit = req
-        .extensions()
-        .get::<nest_rs_http::RawBodyLimit>()
-        .map(|l| l.0)
-        .unwrap_or(nest_rs_http::RawBody::DEFAULT_LIMIT);
+    let limit = nest_rs_http::current_body_limit().unwrap_or(nest_rs_http::RawBody::DEFAULT_LIMIT);
     let body = req.take_body();
     let bytes = match body.into_bytes_limit(limit).await {
         Ok(b) => b,

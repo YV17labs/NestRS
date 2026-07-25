@@ -16,7 +16,7 @@
 //! }
 //! ```
 //!
-//! The scope is the one `RequestScopeEndpoint` installed outermost over the
+//! The scope is the one the HTTP transport edge installed outermost over the
 //! whole HTTP route tree (the MCP endpoint is nested under it), so an MCP
 //! operation shares the same per-request resolution model as HTTP and GraphQL.
 
@@ -43,7 +43,7 @@ pub(crate) async fn with_request_scope<F: Future>(scope: Arc<RequestScope>, fut:
 
 /// [`with_request_scope`] for the callers that may or may not have a scope —
 /// every mount path is optional here (an endpoint not nested under
-/// `RequestScopeEndpoint` has none). Kept next to the task-local so the
+/// the transport edge has none). Kept next to the task-local so the
 /// "no scope ⇒ just await" branch, which decides whether [`Scoped<T>`] resolves,
 /// exists once rather than at each dispatch site.
 pub(crate) async fn maybe_with_request_scope<F: Future>(
@@ -58,7 +58,7 @@ pub(crate) async fn maybe_with_request_scope<F: Future>(
 
 /// Resolves a provider of type `T` from the current MCP operation's
 /// [`RequestScope`]. `from_context` errors if the scope is absent (the endpoint
-/// is not nested under `RequestScopeEndpoint`, or the tool ran off the request
+/// is not nested under the transport edge, or the tool ran off the request
 /// task) or if no provider is registered for `T`.
 pub struct Scoped<T>(pub Arc<T>);
 

@@ -48,7 +48,9 @@ impl GlobalPoolChain {
     /// layer, and HTTP's `RouteShaper` doesn't re-log a pooled denial either.
     pub(crate) async fn check(&self, req: &mut Request) -> Result<(), Denial> {
         for entry in &self.chain {
-            entry.layer.check_http(req).await?;
+            // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
+            // blanket would nest a second boxed future per check.
+            entry.layer.as_ref().check_http(req).await?;
         }
         Ok(())
     }

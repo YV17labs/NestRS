@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
+use nest_rs_core::layer_chain::ResolvedLayer;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
 /// Wraps handler execution. An [`Interceptor`] sees the inputs before the
@@ -32,34 +33,117 @@ pub trait Interceptor: Layer {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
 }
 
-#[async_trait]
+// Manual forward, not `#[async_trait]`: the macro would wrap the inner
+// (already boxed) future in a second box, taxing every call made through an
+// `Arc<dyn Interceptor>` without `.as_ref()` — the erased form every
+// composition site holds.
 impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        (**self).intercept(req, next).await
+    fn intercept<'s, 'n, 'fut>(
+        &'s self,
+        req: Request,
+        next: Next<'n>,
+    ) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'fut>>
+    where
+        's: 'fut,
+        'n: 'fut,
+        Self: 'fut,
+    {
+        (**self).intercept(req, next)
     }
 }
 
 /// The continuation passed to an HTTP [`Interceptor::intercept`]. Call
-/// [`Next::run`] to delegate to the inner endpoint (handler or next
-/// interceptor).
+/// [`Next::run`] to delegate to the rest of the chain (the remaining
+/// interceptors, then the inner endpoint).
+///
+/// Internally a cursor over an interceptor slice plus the erased tail
+/// endpoint: delegating steps the cursor instead of nesting one wrapper
+/// endpoint per interceptor, so a chain of N interceptors costs N boxed
+/// `intercept` futures and a single boxed tail call — not the 3-4 boxed
+/// hops per link the former endpoint-per-interceptor composition paid.
 pub struct Next<'a> {
+    /// Interceptors still to run, outermost-first; empty when only the tail
+    /// endpoint remains.
+    chain: &'a [ResolvedLayer<dyn Interceptor>],
     inner: &'a (dyn ErasedEndpoint + Send + Sync + 'a),
 }
 
 impl<'a> Next<'a> {
-    /// Build a continuation over `endpoint` — the next link an interceptor may
-    /// delegate to.
+    /// Build a continuation over `endpoint` alone — the next link an
+    /// interceptor may delegate to.
     pub fn new<E>(endpoint: &'a E) -> Self
     where
         E: Endpoint + Send + Sync,
         E::Output: IntoResponse,
     {
-        Self { inner: endpoint }
+        Self {
+            chain: &[],
+            inner: endpoint,
+        }
     }
 
-    /// Delegate to the inner endpoint (handler or next interceptor) with `req`.
+    /// Delegate to the rest of the chain (next interceptor, then the inner
+    /// endpoint) with `req`.
     pub async fn run(self, req: Request) -> Result<Response> {
-        self.inner.call_boxed(req).await
+        match self.chain.split_first() {
+            // `as_ref()` dispatches straight on the erased interceptor:
+            // calling through the `Interceptor for Arc<T>` blanket would nest
+            // a second boxed future around every link, per request.
+            Some((entry, rest)) => {
+                entry
+                    .layer
+                    .as_ref()
+                    .intercept(
+                        req,
+                        Next {
+                            chain: rest,
+                            inner: self.inner,
+                        },
+                    )
+                    .await
+            }
+            None => self.inner.call_boxed(req).await,
+        }
+    }
+}
+
+/// A poem endpoint wrapped by a whole interceptor chain, run outermost-first
+/// through one [`Next`] cursor. The composition sites (per-route and
+/// transport edge) build one of these from the composed
+/// [`ResolvedLayer`] chain instead of nesting an
+/// [`InterceptorEndpoint`] per entry.
+pub struct InterceptorChain<E> {
+    chain: Vec<ResolvedLayer<dyn Interceptor>>,
+    inner: E,
+}
+
+impl<E> InterceptorChain<E> {
+    /// Wrap `inner` in `chain`, run in slice order (first entry outermost).
+    pub fn new(inner: E, chain: Vec<ResolvedLayer<dyn Interceptor>>) -> Self {
+        Self { chain, inner }
+    }
+}
+
+impl<E> Endpoint for InterceptorChain<E>
+where
+    E: Endpoint + Send + Sync,
+    E::Output: IntoResponse,
+{
+    type Output = Response;
+
+    async fn call(&self, req: Request) -> Result<Self::Output> {
+        // An empty chain (a composed stack whose interceptor stage is
+        // unused) delegates straight to the inner endpoint — no cursor, no
+        // boxed tail call.
+        if self.chain.is_empty() {
+            return self.inner.call(req).await.map(IntoResponse::into_response);
+        }
+        Next {
+            chain: &self.chain,
+            inner: &self.inner,
+        }
+        .run(req)
+        .await
     }
 }
 
@@ -169,5 +253,48 @@ mod tests {
         let ep = InterceptorEndpoint::new(ok_handler, ShortCircuit);
         let resp = ep.call(Request::default()).await.expect("short circuit");
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn resolved(
+        layer: std::sync::Arc<dyn Interceptor>,
+        name: &'static str,
+    ) -> ResolvedLayer<dyn Interceptor> {
+        ResolvedLayer {
+            type_id: std::any::TypeId::of::<Stamp>(),
+            name,
+            source: nest_rs_core::layer_chain::LayerSite::Method,
+            layer,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_chain_runs_every_interceptor_then_the_inner_endpoint() {
+        let ep = InterceptorChain::new(
+            ok_handler,
+            vec![resolved(std::sync::Arc::new(Stamp), "stamp")],
+        );
+        let resp = ep.call(Request::default()).await.expect("handler runs");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("x-stamp").map(|v| v.as_bytes()),
+            Some(&b"hit"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_chain_entry_may_short_circuit_the_rest() {
+        let ep = InterceptorChain::new(
+            ok_handler,
+            vec![
+                resolved(std::sync::Arc::new(ShortCircuit), "short"),
+                resolved(std::sync::Arc::new(Stamp), "stamp"),
+            ],
+        );
+        let resp = ep.call(Request::default()).await.expect("short circuit");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(
+            resp.headers().get("x-stamp").is_none(),
+            "the inner interceptor must be skipped by the short circuit",
+        );
     }
 }

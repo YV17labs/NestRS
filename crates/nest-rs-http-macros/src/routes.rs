@@ -34,6 +34,10 @@ struct RouteHandler {
     interceptors: Vec<Path>,
     /// The `Authorize<_, _>` / `Bind<_, _>` shaper type, if any.
     shaper: Option<Type>,
+    /// Whether the handler declares any extractor parameter. `false` proves
+    /// no masking extractor can ever run — the run-time mask probe is dead
+    /// weight and is not emitted.
+    has_extractors: bool,
     /// `#[meta(...)]` value expressions.
     metas: Vec<Expr>,
     /// The `#[public]` flag.
@@ -119,12 +123,6 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         let return_type = match &method.sig.output {
             ReturnType::Default => quote! { () },
             ReturnType::Type(_, ty) => quote! { #ty },
-        };
-
-        let extra_inputs = if inputs.is_empty() {
-            quote! {}
-        } else {
-            quote! { , #(#inputs),* }
         };
 
         let guards = match take_path_list(&mut method.attrs, "use_guards", "entry") {
@@ -219,13 +217,53 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             )
         };
 
+        // Mirrors poem's own `#[handler]` expansion (split → extract each
+        // parameter → call → `IntoResult` → `IntoResponse`), with one
+        // deliberate difference: the controller `Arc` is a **captured field**
+        // instead of a `Data<&Arc<Self>>` extractor. The `Data` route cost a
+        // per-request extension insert (`.data` middleware) plus the anymap
+        // it allocates — pure overhead on every request for a value that is
+        // fixed at mount time.
+        let extractor_stmts: Vec<TokenStream2> = inputs
+            .iter()
+            .filter_map(|arg| match arg {
+                FnArg::Typed(pt) => {
+                    let pat = &pt.pat;
+                    let ty = &pt.ty;
+                    Some(quote! {
+                        let #pat = <#ty as ::nest_rs_http::poem::FromRequest>::from_request(
+                            &req, &mut body,
+                        )
+                        .await?;
+                    })
+                }
+                FnArg::Receiver(_) => None,
+            })
+            .collect();
         wrappers.push(quote! {
-            #[::nest_rs_http::poem::handler]
-            async fn #wrapper_name(
-                ::nest_rs_http::poem::web::Data(__ctrl): ::nest_rs_http::poem::web::Data<&::std::sync::Arc<#self_ty>>
-                #extra_inputs
-            ) -> #wrapper_return_type {
-                #wrapper_body
+            #[allow(non_camel_case_types)]
+            struct #wrapper_name {
+                __ctrl: ::std::sync::Arc<#self_ty>,
+            }
+
+            impl ::nest_rs_http::poem::Endpoint for #wrapper_name {
+                type Output = ::nest_rs_http::poem::Response;
+
+                #[allow(unused_mut)]
+                async fn call(
+                    &self,
+                    mut req: ::nest_rs_http::poem::Request,
+                ) -> ::nest_rs_http::poem::Result<Self::Output> {
+                    let (req, mut body) = req.split();
+                    #(#extractor_stmts)*
+                    let __ctrl = &self.__ctrl;
+                    let res: #wrapper_return_type = async move { #wrapper_body }.await;
+                    let res = ::nest_rs_http::poem::error::IntoResult::into_result(res);
+                    ::std::result::Result::map(
+                        res,
+                        ::nest_rs_http::poem::IntoResponse::into_response,
+                    )
+                }
             }
         });
 
@@ -248,6 +286,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             filters,
             interceptors,
             shaper: shaper.clone(),
+            has_extractors: !inputs.is_empty(),
             metas,
             is_public,
             no_pipes,
@@ -400,7 +439,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 let verb = &handler.verb;
                 method = quote! { #method.#verb(#ep) };
             }
-            quote! { .at(#path, #method) }
+            quote! { .at(::nest_rs_http::join_path(&__prefix, #path), #method) }
         })
         .collect();
 
@@ -410,17 +449,22 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         #(#wrappers)*
 
         impl ::nest_rs_http::Controller for #self_ty {
+            // Routes mount FLAT on the transport's route tree
+            // (`.at("<prefix>/<path>")`), not as a nested sub-route: poem's
+            // `nest` re-slices the URI and re-routes on every request, and
+            // the sub-route's `.data(ctrl)` inserted an extension per
+            // request — both pure per-request overhead for a shape known at
+            // mount time. `join_path` is the same helper the transport's
+            // route log and the OpenAPI document use, so served, logged and
+            // documented paths cannot drift.
             fn mount(
                 container: &::nest_rs_core::Container,
                 route: ::nest_rs_http::poem::Route,
             ) -> ::nest_rs_http::poem::Route {
-                use ::nest_rs_http::poem::EndpointExt;
                 let __ctrl = ::std::sync::Arc::new(<#self_ty>::from_container(container));
-                let __sub = ::nest_rs_http::poem::Route::new()
-                    #(#route_entries)*
-                    .data(__ctrl);
                 let __prefix = ::nest_rs_http::version_path(<#self_ty>::VERSION, <#self_ty>::PATH);
-                route.nest(__prefix.as_str(), __sub)
+                route
+                    #(#route_entries)*
             }
         }
 
@@ -582,6 +626,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         filters,
         interceptors,
         shaper,
+        has_extractors,
         metas,
         is_public,
         no_pipes,
@@ -590,9 +635,16 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         exception_filters: method_exception_filters,
     } = handler;
     let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
+    // Constructed at mount time, inside `Controller::mount` where `__ctrl`
+    // is in scope — the wrapper endpoint captures the controller `Arc`
+    // directly instead of reading it back through a `Data` extension.
+    let wrapper_expr = quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl) } };
     // An unarmed route carries the run-time mask probe: if a masking extractor
     // (`Authorize`/`Bind` under a rename the name scan cannot see) runs anyway,
-    // the request fails closed instead of shipping an unmasked body.
+    // the request fails closed instead of shipping an unmasked body. A handler
+    // with no extractor parameters at all cannot run one — renamed or not —
+    // so the probe (a task-local scope per request) is provably dead and is
+    // not emitted.
     let mut expr = match shaper {
         Some(ty) => quote! {
             {
@@ -606,42 +658,36 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
                     fn __nestrs_assert_route_shaper<P: ::nest_rs_http::RouteResponseShaper>() {}
                     __nestrs_assert_route_shaper::<#ty>();
                 };
-                ::nest_rs_http::shaped(#wrapper, ::core::marker::PhantomData::<#ty>)
+                ::nest_rs_http::shaped(#wrapper_expr, ::core::marker::PhantomData::<#ty>)
             }
         },
-        None => quote! { ::nest_rs_http::mask_probed(#wrapper, #route_label_lit) },
+        None if *has_extractors => {
+            quote! { ::nest_rs_http::mask_probed(#wrapper_expr, #route_label_lit) }
+        }
+        None => quote! { #wrapper_expr },
     };
     let method_exception_filter_specs = scoped_specs(
         method_exception_filters,
         quote!(dyn ::nest_rs_exception_filters::ExceptionFilterErased),
     );
-    expr = quote! {
-        ::nest_rs_guards::dispatch::wrap_route_exception_filters(
-            container,
-            ::nest_rs_http::poem::EndpointExt::boxed(::nest_rs_http::poem::EndpointExt::map_to_response(#expr)),
-            &<#self_ty>::__nestrs_controller_exception_filter_specs(),
-            &#method_exception_filter_specs,
-            #route_label_lit,
-        )
-    };
     let method_filter_specs = scoped_specs(filters, quote!(dyn ::nest_rs_filters::Filter));
-    expr = quote! {
-        ::nest_rs_guards::dispatch::wrap_route_filters(
-            container,
-            #expr,
-            &<#self_ty>::__nestrs_controller_filter_specs(),
-            &#method_filter_specs,
-            #route_label_lit,
-        )
-    };
     let method_interceptor_specs = scoped_specs(
         interceptors,
         quote!(dyn ::nest_rs_interceptors::Interceptor),
     );
+    // The three response-side pools compose in ONE call: every additional
+    // generic wrapper level would add a `Request`-sized slot to the future
+    // poem's route table boxes per request, bare routes included. A route
+    // with no response-side layer passes through generic; a layered route
+    // goes behind a single box.
     expr = quote! {
-        ::nest_rs_guards::dispatch::wrap_route_interceptors(
+        ::nest_rs_guards::dispatch::wrap_route_response_layers(
             container,
             #expr,
+            &<#self_ty>::__nestrs_controller_exception_filter_specs(),
+            &#method_exception_filter_specs,
+            &<#self_ty>::__nestrs_controller_filter_specs(),
+            &#method_filter_specs,
             &<#self_ty>::__nestrs_controller_interceptor_specs(),
             &#method_interceptor_specs,
             #route_label_lit,
@@ -661,20 +707,16 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         quote!(false)
     };
     expr = quote! {
-        ::nest_rs_interceptors::InterceptorExt::interceptor(
+        ::nest_rs_guards::dispatch::wrap_route_shaper(
+            container,
             #expr,
-            ::std::sync::Arc::new(
-                ::nest_rs_guards::RouteShaper::new(
-                    container,
-                    #route_label_lit,
-                    <#self_ty>::__nestrs_controller_guard_specs(),
-                    #method_guard_specs,
-                    #force_guard_typeids,
-                    <#self_ty>::__nestrs_controller_pipe_specs(),
-                    #method_pipe_specs,
-                    #no_pipes_flag,
-                )
-            ),
+            #route_label_lit,
+            <#self_ty>::__nestrs_controller_guard_specs(),
+            #method_guard_specs,
+            #force_guard_typeids,
+            <#self_ty>::__nestrs_controller_pipe_specs(),
+            #method_pipe_specs,
+            #no_pipes_flag,
         )
     };
 

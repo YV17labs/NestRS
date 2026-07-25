@@ -91,7 +91,9 @@ pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
 pub use metadata::{HandlerMetadata, MappedError, Public};
 pub use module::{DynamicModule, Module};
-pub use request_scope::RequestScope;
+pub use request_scope::{
+    RequestScope, current_body_limit, current_request_scope, with_request_scope,
+};
 pub use transport::{Transport, TransportContribution};
 
 // Cross-crate Layer-System wiring — `pub` for the five registry crates and

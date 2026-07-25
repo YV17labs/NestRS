@@ -6,7 +6,7 @@ use nest_rs_core::{Container, DiscoveryService, Transport};
 use poem::endpoint::BoxEndpoint;
 use poem::http::header::{HeaderName, HeaderValue, SERVER};
 use poem::listener::{Listener, TcpListener};
-use poem::middleware::{Compression, Cors, SetHeader};
+use poem::middleware::{Compression, Cors};
 use poem::{EndpointExt, IntoEndpoint, Response, Route, Server};
 use tokio_util::sync::CancellationToken;
 
@@ -14,20 +14,12 @@ use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
 use crate::controller::HttpControllerMeta;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::interceptor::HttpEndpointWrap;
-use crate::raw_body::RawBodyLimit;
 use crate::tls::TlsConfig;
 
 type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
 /// Imperative mount paired with its path — kept so the fail-secure boot
 /// check can name the endpoints that bypass the layer pool.
 type NamedMount = (String, MountFn);
-
-/// A bare `413 Payload Too Large` — the transport-edge body cap's rejection.
-fn payload_too_large() -> Response {
-    Response::builder()
-        .status(poem::http::StatusCode::PAYLOAD_TOO_LARGE)
-        .finish()
-}
 
 /// Join a controller prefix with a route path the way poem's nesting does:
 /// `("/health", "/live") -> "/health/live"`. Public so `nest-rs-openapi`
@@ -185,8 +177,8 @@ impl HttpTransport {
     }
 
     /// Cap each request's raw body to `limit` bytes. Read back by the
-    /// [`RawBody`](crate::RawBody) extractor via the
-    /// [`RawBodyLimit`](crate::RawBodyLimit) request extension.
+    /// [`RawBody`](crate::RawBody) extractor via the ambient request
+    /// context ([`current_body_limit`](crate::current_body_limit)).
     pub fn max_body_bytes(mut self, limit: usize) -> Self {
         self.max_body_bytes = Some(limit);
         self
@@ -279,6 +271,12 @@ impl Transport for HttpTransport {
         // Catch it here instead, naming both controllers, so it reads like every
         // other nestrs boot failure rather than an opaque poem internal.
         let mut prefix_owner: HashMap<String, String> = HashMap::new();
+        // Controllers mount their routes FLAT (`.at("<prefix>/<path>")`), so
+        // two controllers whose prefix+path combine to the same full path
+        // would hit poem's opaque duplicate-path panic even though their
+        // prefixes differ. Claim full paths too — same-controller duplicates
+        // (several verbs on one path) are legal and share one entry.
+        let mut route_owner: HashMap<String, String> = HashMap::new();
 
         for d in discovery.meta::<HttpControllerMeta>() {
             let prefix = d.meta.effective_prefix();
@@ -290,6 +288,15 @@ impl Transport for HttpTransport {
             )?;
             for r in &d.meta.routes {
                 let path = join_path(&prefix, r.path);
+                if let Some(first) = route_owner.insert(path.clone(), d.meta.controller.to_owned())
+                    && first != d.meta.controller
+                {
+                    anyhow::bail!(
+                        "duplicate route path {path:?}: {first} and {} both mount there — give \
+                         each controller route a distinct full path",
+                        d.meta.controller,
+                    );
+                }
                 tracing::info!(
                     target: "nest_rs::routes",
                     controller = d.meta.controller,
@@ -416,7 +423,6 @@ impl Transport for HttpTransport {
             route = Route::new().nest(prefix, route);
         }
 
-        let mut endpoint: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
         // Layer-System globals (guards / interceptors / filters / pipes /
         // exception filters) attach a `HttpEndpointWrap` from their own
         // crate. The transport sorts by priority ascending so the
@@ -429,142 +435,109 @@ impl Transport for HttpTransport {
             .map(|d| d.meta)
             .collect();
         metas.sort_by_key(|m| m.priority());
-        for meta in metas {
-            endpoint = meta.wrap(container, endpoint);
-        }
-        // Wrap the whole Layer System in a wall-clock budget: a handler that
-        // overruns is aborted and the client gets `504`. Outside the globals
-        // so guards/interceptors are themselves bounded; inside body-limit /
-        // header / CORS so a preflight is still answered without the timer.
-        if let Some(timeout) = self.request_timeout.take() {
-            endpoint = endpoint
-                .around(move |ep, req| async move {
-                    match tokio::time::timeout(timeout, ep.call(req)).await {
-                        Ok(res) => res,
-                        Err(_) => {
-                            tracing::warn!(target: "nest_rs::http", ?timeout, "request timed out");
-                            Ok(Response::builder()
-                                .status(poem::http::StatusCode::GATEWAY_TIMEOUT)
-                                .finish())
-                        }
-                    }
-                })
-                .map_to_response()
-                .boxed();
-        }
-        // Enforce the body-byte cap at the transport edge so EVERY extractor —
-        // a bare `Json`/`String`/`Vec<u8>`/`Multipart`, not just `RawBody` —
-        // sits under it (B-HTTP-2). Three cases, cheapest first:
-        //
-        // 1. `Content-Length` over the cap ⇒ `413` before a byte is read.
-        // 2. `Content-Length` within the cap ⇒ **pass the body through
-        //    untouched**. The framing already bounds it: an HTTP/1 body with a
-        //    declared length is length-delimited, so the decoder cannot hand a
-        //    handler more bytes than were declared. Buffering it here bought
-        //    nothing and cost every upload its streaming — a multipart going to
-        //    object storage was fully materialized in memory first.
-        // 3. No declared length (`Transfer-Encoding: chunked`) ⇒ the length is
-        //    unknown until the body ends, so buffer up to `limit` and reject
-        //    past it. This is the only case that needs the read.
-        //
-        // The `RawBodyLimit` data extension stays installed OUTSIDE the Layer
-        // System globals so every interceptor / filter / guard still sees the
-        // configured value, and `RawBody` / `extract_with_limit` can pin a
-        // *tighter* per-route cap under this ceiling.
-        if let Some(limit) = self.max_body_bytes.take() {
-            endpoint = endpoint
-                .around(move |ep, mut req| async move {
-                    use poem::error::ReadBodyError;
-                    use poem::web::headers::{ContentLength, HeaderMapExt};
-                    if let Some(ContentLength(declared)) =
-                        req.headers().typed_get::<ContentLength>()
-                    {
-                        if declared as usize > limit {
-                            return Ok(payload_too_large());
-                        }
-                        return ep.call(req).await;
-                    }
-                    match req.take_body().into_bytes_limit(limit).await {
-                        Ok(bytes) => {
-                            req.set_body(bytes);
-                            ep.call(req).await
-                        }
-                        Err(ReadBodyError::PayloadTooLarge) => Ok(payload_too_large()),
-                        Err(err) => Err(err.into()),
-                    }
-                })
-                .data(RawBodyLimit(limit))
-                .map_to_response()
-                .boxed();
-        }
-        // Default security headers (nosniff / frame-deny / HSTS-under-TLS).
-        // Applied inside CORS so a preflight isn't burdened, and overriding so a
-        // handler that set one wins is a deliberate exception, not the default.
-        let security_headers = self.security_headers.headers(self.tls.is_some());
-        if !security_headers.is_empty() {
-            let mut set = SetHeader::new();
-            for (name, value) in security_headers {
-                // Values are boot-validated (HTTP-S4) and names are static, so a
-                // failure here is a framework bug, not a config error — log it
-                // loudly rather than silently drop a security header.
-                match (
-                    HeaderName::from_bytes(name.as_bytes()),
-                    HeaderValue::from_str(&value),
-                ) {
-                    (Ok(header_name), Ok(header_value)) => {
-                        set = set.overriding(header_name, header_value);
-                    }
-                    _ => tracing::error!(
-                        target: "nest_rs::http",
-                        header = name,
-                        "failed to construct a security header despite boot validation",
-                    ),
+        // The four per-request edge concerns — request scope, body cap,
+        // request timeout, default response headers (security + `Server`) —
+        // fuse into ONE layer (`EdgeEndpoint`) instead of one boxed wrap
+        // each: same semantics and relative order (scope outermost, body cap
+        // before the timer, the timer bounding guards/interceptors/handler,
+        // headers stamped on the way out — so a `413`/`504` still carries
+        // them), a single dispatch on the hot path. CORS / compression stay
+        // poem middlewares outside it; a preflight is answered before any of
+        // this runs, and without the timer.
+        let mut edge_headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
+        for (name, value) in self.security_headers.headers(self.tls.is_some()) {
+            // Values are boot-validated (HTTP-S4) and names are static, so a
+            // failure here is a framework bug, not a config error — log it
+            // loudly rather than silently drop a security header.
+            match (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(&value),
+            ) {
+                (Ok(header_name), Ok(header_value)) => {
+                    edge_headers.push((header_name, header_value));
                 }
+                _ => tracing::error!(
+                    target: "nest_rs::http",
+                    header = name,
+                    "failed to construct a security header despite boot validation",
+                ),
             }
-            endpoint = endpoint.with(set).map_to_response().boxed();
         }
-        // Server header is purely cosmetic — apply before CORS so the
-        // preflight short-circuit (no body) still carries it for observability.
         if let Some(value) = self.server_header.take() {
-            let header_value = HeaderValue::from_static(value);
-            let set = SetHeader::new().overriding(SERVER, header_value);
-            endpoint = endpoint.with(set).map_to_response().boxed();
+            edge_headers.push((SERVER, HeaderValue::from_static(value)));
         }
-        // Response compression, negotiated from `Accept-Encoding`. Inside CORS
-        // (a preflight carries no body to compress) and outside the handler /
-        // header layers so the encoded bytes are what leaves the process.
-        if self.compression {
-            endpoint = endpoint.with(Compression::new()).map_to_response().boxed();
-        }
-        // CORS wraps outermost, so a preflight is handled before guards run.
-        if let Some(cors) = self.cors.take() {
-            endpoint = endpoint.with(cors).map_to_response().boxed();
-        }
-        // Request scope installs before anything else so guards/handlers can
-        // resolve `#[injectable(scope = request)]` providers via `Scoped<T>`.
-        endpoint = crate::RequestScopeEndpoint::new(endpoint, container.clone())
-            .map_to_response()
-            .boxed();
+        // Transport-edge error boundary — outermost, so it normalizes
+        // whatever escapes the whole stack. Any `>= 400` response poem
+        // rendered as raw `text/plain` (an unmounted-route 404, a 413, a 405,
+        // an extractor's bad-path-id 400, a timeout 504) is lifted onto the
+        // single RFC-9457 `application/problem+json` envelope; a response
+        // already in `problem+json` (a `ServiceError`, a `ProblemDetails`, a
+        // guard denial, a domain exception filter) passes through untouched.
+        // `map_to_response` on the route tree collapses handler/extractor
+        // `Err`s into `Ok` responses before here, so the seam inspects the
+        // response, not `Err`. Without CORS / compression the edge is the
+        // outermost layer and runs the normalizer itself; with them the
+        // boundary stays a separate wrap outside both.
+        let fuse_normalize = !self.compression && self.cors.is_none();
+        let timeout = self.request_timeout.take();
+        let body_limit = self.max_body_bytes.take();
 
-        // Transport-edge error boundary — the outermost wrap, so it normalizes
-        // whatever escapes the whole stack. Any `>= 400` response poem rendered
-        // as raw `text/plain` (an unmounted-route 404, a 413, a 405, an
-        // extractor's bad-path-id 400, a timeout 504) is lifted onto the single
-        // RFC-9457 `application/problem+json` envelope; a response already in
-        // `problem+json` (a `ServiceError`, a `ProblemDetails`, a guard denial,
-        // a domain exception filter) passes through untouched. `map_to_response`
-        // on the route tree collapses handler/extractor `Err`s into `Ok`
-        // responses before here, so the seam inspects the response, not `Err`.
-        endpoint = endpoint
-            .around(|ep, req| async move {
-                let resp = match ep.call(req).await {
-                    Ok(resp) => resp,
-                    Err(err) => err.into_response(),
-                };
-                Ok(crate::problem::normalize_error_response(resp).await)
-            })
-            .map_to_response()
+        let endpoint: BoxEndpoint<'static, Response> = if metas.is_empty() && fuse_normalize {
+            // Fast path — no global wrap, no CORS, no compression: the edge
+            // sits directly on the (unboxed) route tree, monomorphized, and
+            // the whole transport stack is a single boxed endpoint.
+            crate::edge::EdgeEndpoint::new(
+                route.map_to_response(),
+                container.clone(),
+                timeout,
+                body_limit,
+                edge_headers,
+                true,
+            )
+            .boxed()
+        } else {
+            let mut endpoint: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
+            for meta in metas {
+                endpoint = meta.wrap(container, endpoint);
+            }
+            let mut endpoint: BoxEndpoint<'static, Response> = crate::edge::EdgeEndpoint::new(
+                endpoint,
+                container.clone(),
+                timeout,
+                body_limit,
+                edge_headers,
+                fuse_normalize,
+            )
             .boxed();
+            // Response compression, negotiated from `Accept-Encoding`. Inside
+            // CORS (a preflight carries no body to compress) and outside the
+            // handler / header layers so the encoded bytes are what leaves
+            // the process.
+            if self.compression {
+                endpoint = endpoint.with(Compression::new()).map_to_response().boxed();
+            }
+            // CORS wraps outermost, so a preflight is handled before guards
+            // run — and before the edge layer, so a preflight carries no
+            // request scope (nothing reads one: no extractor or guard runs on
+            // a preflight).
+            if let Some(cors) = self.cors.take() {
+                endpoint = endpoint.with(cors).map_to_response().boxed();
+            }
+            if fuse_normalize {
+                endpoint
+            } else {
+                endpoint
+                    .around(|ep, req| async move {
+                        let resp = match ep.call(req).await {
+                            Ok(resp) => resp,
+                            Err(err) => err.into_response(),
+                        };
+                        Ok(crate::problem::normalize_error_response(resp).await)
+                    })
+                    .map_to_response()
+                    .boxed()
+            }
+        };
 
         self.endpoint = Some(endpoint);
         Ok(())

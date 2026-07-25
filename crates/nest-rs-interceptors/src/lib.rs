@@ -66,5 +66,5 @@ mod registry;
 
 pub use builder::AppBuilderInterceptorsExt;
 pub use ext::InterceptorExt;
-pub use interceptor::{Interceptor, InterceptorEndpoint, Next};
+pub use interceptor::{Interceptor, InterceptorChain, InterceptorEndpoint, Next};
 pub use registry::{InterceptorSpec, InterceptorSpecs, interceptor};

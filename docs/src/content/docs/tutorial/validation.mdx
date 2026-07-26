@@ -80,13 +80,16 @@ content-type: application/problem+json
   "status": 400,
   "detail": "validation failed",
   "errors": {
-    "title": [{ "code": "length", "params": { "min": 1, "value": "" } }]
+    "title": [{ "code": "length", "message": null, "params": { "min": 1 } }]
   }
 }
 ```
 
 The failing field surfaces in `errors`. The client can render per-field
 messages from `errors.<field>[].code` without parsing the human message.
+`message` is `null` unless the rule sets one (`validate(length(min = 1, message
+= "…"))`), and `params` carries the rule's own arguments — not the rejected
+value, which never echoes back.
 
 <Aside type="tip">
 The shape is stable RFC 9457: `type`, `title`, `status`, `detail`, plus

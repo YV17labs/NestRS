@@ -96,14 +96,17 @@ Hello World
 
 ## What you just generated
 
-One thin controller over one service — the shape every feature follows:
+One thin controller over one service — the shape every feature follows, and the
+**same `hello` module in both layouts**. Every path out of `nestrs new` writes
+it, so a fresh project always proves itself with a browser hit instead of a
+`404`:
 
-```rust title="src/controller.rs"
+```rust title="crates/features/src/hello/http/controller.rs"
 use std::sync::Arc;
 
 use nest_rs_http::{controller, routes};
 
-use crate::service::HelloService;
+use crate::hello::HelloService;
 
 #[controller(path = "/")]
 pub struct HelloController {
@@ -113,12 +116,20 @@ pub struct HelloController {
 
 #[routes]
 impl HelloController {
+    // Every route declares a posture, and an unguarded one is flagged at boot.
+    // This greeting is deliberately open, so it says so.
     #[get("/")]
+    #[public]
     async fn hello(&self) -> String {
         self.svc.greeting()
     }
 }
 ```
+
+Standalone puts the same two files at `src/controller.rs` and `src/service.rs`,
+importing `crate::service::HelloService` instead. The `#[public]` is not
+decoration: a route with no posture is flagged at boot
+(`unguarded routes detected`), and this one is open on purpose.
 
 The scaffold depends on the individual `nest-rs-*` crates it needs — that
 is the recommended install path throughout these docs (each module page
@@ -127,10 +138,11 @@ is an optional shortcut; see [Packages](/packages/).
 
 ## Make your first change
 
-Edit the greeting in `src/service.rs`, save, and `nestrs run dev` hot-reloads —
-then curl again:
+Edit the greeting — `crates/features/src/hello/service.rs` in a workspace,
+`src/service.rs` standalone — save, and `nestrs run dev` hot-reloads. Then curl
+again:
 
-```rust title="src/service.rs"
+```rust title="crates/features/src/hello/service.rs"
 fn greeting(&self) -> String {
     "Hello, NestRS".to_string()   // was "Hello World"
 }

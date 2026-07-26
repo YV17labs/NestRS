@@ -6,10 +6,14 @@ sidebar:
 ---
 
 Demo data lives in the **`seed`** crate — a product crate under `crates/`,
-beside [`migrations`](/database/migrations/). Seeding is **idempotent**: every
-factory inserts with `ON CONFLICT DO NOTHING`, so `nestrs run db seed` can run any
-number of times and only ever fills gaps. `nestrs run db reset` chains a fresh
-migrate with a seed for a clean slate.
+scaffolded by `nestrs new` beside [`migrations`](/database/migrations/).
+Seeding is **idempotent**: every factory inserts with `ON CONFLICT DO NOTHING`,
+so `nestrs run db seed` can run any number of times and only ever fills gaps.
+`nestrs run db reset` chains a fresh migrate with a seed for a clean slate.
+
+A fresh workspace starts with a connected but empty `crates/seed/src/main.rs`.
+The `factories/` + `runner.rs` split below is what it grows into once there is
+more than one table to fill.
 
 ## A factory
 
@@ -101,9 +105,11 @@ nestrs run db seed     # load demo data (idempotent)
 nestrs run db reset    # fresh migrate, then seed
 ```
 
-`nestrs run db seed` runs the crate's `seed` binary, which reads
-`NESTRS_DATABASE__URL`, runs `seed::run`, and prints how many rows
-it inserted.
+`nestrs run db seed` runs the crate's `seed` binary. It connects through
+`nest_rs_seaorm::connect_from_env()` — the same connector
+[`migrate`](/database/migrations/#run-them) uses, resolving
+`NESTRS_DATABASE__*` through the `.env` cascade — then runs `seed::run` and
+prints how many rows it inserted.
 
 Because `run` is a plain function, tests call it directly. The crate's e2e
 migrates a throwaway database, seeds it, asserts rows landed, then seeds again

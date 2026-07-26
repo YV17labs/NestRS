@@ -33,36 +33,33 @@ catch bugs the happy path can't:
 
 ## Auth refused
 
-```rust title="apps/api/tests/e2e/users_negatives.rs"
-use crate::common::boot;
+```rust title="apps/api/tests/e2e/http.rs (abridged)"
 use poem::http::{StatusCode, header};
-use serde_json::json;
+
+use super::harness::*;
 
 #[tokio::test]
-async fn create_without_auth_returns_401() {
+async fn protected_route_rejects_a_missing_or_bogus_bearer_token() {
     let (_db, app) = boot().await;
-    let resp = app
-        .http()
-        .post("/users")
-        .body_json(&json!({ "name": "Bob" }))
-        .send()
-        .await;
-    resp.assert_status(StatusCode::UNAUTHORIZED);
-}
 
-#[tokio::test]
-async fn create_with_expired_token_returns_401() {
-    let (_db, app) = boot().await;
-    let resp = app
-        .http()
-        .post("/users")
-        .header(header::AUTHORIZATION, "Bearer expired.token.here")
-        .body_json(&json!({ "name": "Bob" }))
+    app.http()
+        .get("/orgs")
         .send()
-        .await;
-    resp.assert_status(StatusCode::UNAUTHORIZED);
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    app.http()
+        .get("/orgs")
+        .header(header::AUTHORIZATION, "Bearer not-a-real-jwt")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 }
 ```
+
+One test, both refusals: no credential at all and a credential that fails
+verification are the same `401` to the caller, and asserting them together is
+what catches a guard that only checks for the *presence* of a header.
 
 ## Cross-tenant refused
 
@@ -76,10 +73,10 @@ would mean `Ability::condition_for` never installed.
 #[tokio::test]
 async fn get_other_tenants_user_returns_403() {
     let (db, app) = boot().await;
-    let other_user = crate::common::seed_user_in_tenant(&db, "tenant-b").await;
+    let other_user = seed_user_in_org(&db, ORG_B).await;
     let bearer = format!(
         "Bearer {}",
-        crate::common::admin_token_for("tenant-a").await,
+        token_for(ORG_A, "admin").await,
     );
 
     let resp = app
@@ -98,7 +95,7 @@ async fn get_other_tenants_user_returns_403() {
 #[tokio::test]
 async fn create_with_invalid_email_returns_400_with_field_errors() {
     let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", crate::common::admin_token().await);
+    let bearer = format!("Bearer {}", login().await);
 
     let resp = app
         .http()
@@ -125,7 +122,7 @@ test next to it confirms it unwinds:
 #[tokio::test]
 async fn handler_error_rolls_back_the_create() {
     let (db, app) = boot().await;
-    let bearer = format!("Bearer {}", crate::common::admin_token().await);
+    let bearer = format!("Bearer {}", login().await);
 
     let resp = app
         .http()
@@ -136,7 +133,7 @@ async fn handler_error_rolls_back_the_create() {
         .await;
     resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
 
-    let count = crate::common::count_users_named(&db, "Bob").await;
+    let count = count_users_named(&db, "Bob").await;
     assert_eq!(count, 0, "the failed mutation must not have committed");
 }
 ```
@@ -147,23 +144,22 @@ unwinds on failure (failed 5xx leaves no trace).
 
 ## Where they live
 
-A separate module per feature, grouped under `tests/e2e/`, keeps the
-suite navigable:
+One module per feature under `tests/e2e/`, positives and negatives together —
+the reference suite interleaves them, because a `403` assertion reads best right
+beside the `200` it contrasts with:
 
 ```text frame="none"
 apps/api/tests/e2e/
-├── users.rs              ← happy paths
-├── users_negatives.rs    ← failure modes
+├── main.rs        ← mod harness; mod users; mod orgs; …
+├── harness.rs     ← boot(), token_for(), fixtures
+├── users.rs       ← scoping, masking, by-id 403/404
 ├── orgs.rs
-├── orgs_negatives.rs
-└── common/
-    └── mod.rs
+└── http.rs        ← 401s, the problem+json envelope, compression
 ```
 
-A small suite can interleave positives and negatives in one file
-instead — the split matters less than the coverage. What matters is
-that every endpoint with a mutation or scoped read has its four
-failure modes asserted somewhere.
+Splitting failure modes into their own `*_negatives.rs` files works too — the
+split matters less than the coverage. What matters is that every endpoint with a
+mutation or a scoped read has its four failure modes asserted somewhere.
 
 ## Going further
 

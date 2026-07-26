@@ -77,16 +77,16 @@ use nest_rs_http::ProblemDetails;
 use poem::Result;
 use poem::web::Json;
 
-#[get("/orders/:id")]
-async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Order>, ProblemDetails> {
-    let order = self.svc.find(id).await
+#[get("/posts/:id")]
+async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Post>, ProblemDetails> {
+    let post = self.svc.find(id).await
         .map_err(|e| ProblemDetails::internal().with_detail(e.to_string()))?
         .ok_or_else(|| {
             ProblemDetails::not_found()
-                .with_detail(format!("order {id} does not exist"))
-                .with_instance(format!("/orders/{id}"))
+                .with_detail(format!("post {id} does not exist"))
+                .with_instance(format!("/posts/{id}"))
         })?;
-    Ok(Json(order))
+    Ok(Json(post))
 }
 ```
 
@@ -98,9 +98,9 @@ section. Builders extend the body:
 | Builder | Field |
 |---------|-------|
 | `.with_detail("…")` | Free-form human-readable description |
-| `.with_instance("/orders/17")` | URI of the specific occurrence |
-| `.with_type("urn:problem:order-invalid")` | Override the type URI |
-| `.with_title("Order invalid")` | Override the title |
+| `.with_instance("/posts/17")` | URI of the specific occurrence |
+| `.with_type("urn:problem:post-invalid")` | Override the type URI |
+| `.with_title("Post invalid")` | Override the title |
 | `ProblemDetails::from_error(status, title, err)` | Build from any `Display`-impl |
 
 The response carries `Content-Type: application/problem+json`
@@ -112,8 +112,8 @@ automatically; an absent `detail` or `instance` is omitted from the body
   "type": "https://www.rfc-editor.org/rfc/rfc9110#status.404",
   "title": "Not Found",
   "status": 404,
-  "detail": "order 9c3d… does not exist",
-  "instance": "/orders/9c3d…"
+  "detail": "post 9c3d… does not exist",
+  "instance": "/posts/9c3d…"
 }
 ```
 

@@ -48,13 +48,13 @@ NESTRS_THROTTLER__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
 
 ## Guard a controller
 
-```rust title="src/items/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs_http::controller;
 use nest_rs_throttler::ThrottlerGuard;
 
-#[controller(path = "/items")]
+#[controller(path = "/posts")]
 #[use_guards(ThrottlerGuard)]
-pub struct ItemsController { /* … */ }
+pub struct PostsController { /* … */ }
 ```
 
 Every route on this controller now goes through the throttler. The
@@ -62,22 +62,22 @@ default limit applies unless a handler overrides it.
 
 ## Override per route
 
-```rust title="src/items/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs_http::{controller, routes};
 use nest_rs_throttler::{Throttle, ThrottlerGuard};
 
-#[controller(path = "/items")]
+#[controller(path = "/posts")]
 #[use_guards(ThrottlerGuard)]
-pub struct ItemsController { /* … */ }
+pub struct PostsController { /* … */ }
 
 #[routes]
-impl ItemsController {
+impl PostsController {
     #[post("/")]
     #[meta(Throttle::per_minute(10))]
-    async fn create(&self, /* … */) -> Result<Json<Item>> { /* … */ }
+    async fn create(&self, /* … */) -> Result<Json<Post>> { /* … */ }
 
     #[get("/")]
-    async fn list(&self, /* … */) -> Result<Json<Vec<Item>>> { /* … */ }
+    async fn list(&self, /* … */) -> Result<Json<Vec<Post>>> { /* … */ }
 }
 ```
 
@@ -119,7 +119,7 @@ Direct exposure: leave `TRUSTED_PROXIES` empty.
 ```bash frame="terminal"
 $ for i in {1..11}; do
     curl -s -o /dev/null -w "%{http_code} retry=%{header.retry-after}s\n" \
-      -X POST http://localhost:3000/items -d '{...}'
+      -X POST http://localhost:3002/posts -d '{...}'
   done
 200 retry=s
 200 retry=s

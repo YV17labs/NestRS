@@ -27,16 +27,20 @@ The data layer crates are
 [**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm)
 (the SeaORM implementation, on top of [SeaORM](https://www.sea-ql.org/SeaORM/)).
 
-```rust title="apps/blog/src/module.rs" {3, 8}
+```rust title="apps/blog/src/module.rs" {3, 10}
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_seaorm::DatabaseModule;
 
+use features::authn::AuthnModule;
+use features::authz::AuthzHttpModule;
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
     DatabaseModule::for_root(None),
     HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+    AuthnModule,
+    AuthzHttpModule,
     PostsHttpModule,
 ])]
 pub struct BlogModule;
@@ -53,15 +57,26 @@ needs when a controller reaches the DB through `Repo`.
 
 ## A migration for the post table
 
-The workspace ships a single `migrations` crate that holds every
-SeaORM migration. Add the `post` table.
+`nestrs new` ships a `migrations` crate holding every SeaORM migration, plus
+the `migrate` binary the `nestrs run db …` verbs drive. Generate the file — the
+CLI registers it in **both** `lib.rs` and `migrator.rs`, which is the pair
+people forget by hand:
+
+```bash
+nestrs g migration create_post
+```
 
 <FileTree>
 - crates/migrations/
   - src/
     - lib.rs
+    - migrator.rs
     - m20260609_000000_create_post.rs
+    - bin/
+      - migrate.rs
 </FileTree>
+
+Fill in the columns it stubbed:
 
 ```rust title="crates/migrations/src/m20260609_000000_create_post.rs"
 use sea_orm_migration::prelude::*;
@@ -101,21 +116,14 @@ enum Post {
 }
 ```
 
-Register it in the migrator:
+The generator already registered it. `lib.rs` is the `mod` list; `migrator.rs`
+is regenerated from that list, so the two can never disagree:
 
 ```rust title="crates/migrations/src/lib.rs"
 mod m20260609_000000_create_post;
+mod migrator;
 
-pub use sea_orm_migration::prelude::*;
-
-pub struct Migrator;
-
-#[async_trait::async_trait]
-impl MigratorTrait for Migrator {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20260609_000000_create_post::Migration)]
-    }
-}
+pub use migrator::{Migrator, migrate};
 ```
 
 The reference workspace lists other migrations (`org`, `user`, …) for
@@ -125,21 +133,25 @@ extend the workspace.
 ## Run Postgres
 
 `nestrs new` scaffolds a `compose.yml` with Postgres and Redis, and the
-committed `.env` already points `NESTRS_DATABASE__URL` at it
-(`postgres://blog:blog@localhost:5432/blog`). Bring the services up once:
+committed `.env` already points `NESTRS_DATABASE__URL` at it. The credentials
+are the **workspace** name, not the app's — a workspace scaffolded with
+`nestrs new hello` gets `postgres://hello:hello@localhost:5432/hello`, whatever
+its apps are called. Bring the services up once:
 
 ```bash frame="terminal"
 $ docker compose up -d
-✔ Container blog-postgres-1  Started
-✔ Container blog-redis-1     Started
+✔ Container hello-postgres-1  Started
+✔ Container hello-redis-1     Started
 
 $ nestrs run db up
-applied: m20260609_000000_create_post
+INFO sea_orm_migration::migrator::exec: Applying migration 'm20260609_000000_create_post'
+INFO sea_orm_migration::migrator::exec: Migration 'm20260609_000000_create_post' has been applied
 ```
 
-`nestrs run db up` runs `Migrator::up` against `NESTRS_DATABASE__URL` — the
-connection string comes from the `.env` cascade, so there is nothing else to
-configure.
+`nestrs run db up` runs `Migrator::up` against `NESTRS_DATABASE__URL`. The
+binary resolves it through `connect_from_env`, which reads the same `.env`
+cascade the apps do — a tool and its app can never end up pointed at different
+databases.
 
 ## Transactions wrap mutating routes automatically
 
@@ -159,24 +171,47 @@ in the service.
 
 ```bash frame="terminal"
 $ nestrs run dev blog
+INFO nest_rs::orm: connecting to database max_connections=None
 DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
-INFO nest_rs::orm: connected to postgres
 ```
 
-No bearer token — `blog` is public for the tutorial:
+Those lines come from `.env.development`, which sets `NESTRS_LOG=debug`.
+`connecting to database` is the only ORM boot line — the pool is lazy, so
+there is no "connected" confirmation to wait for; the first query is what
+proves the credentials.
+
+Every route is behind the guards you bound on the previous page, so it needs a
+bearer token signed with the `NESTRS_AUTHN__SECRET` that `nestrs g auth` wrote
+to `.env`. [Authenticate and authorize](/tutorial/security/) builds the login
+route that mints one; until then, sign a development token yourself:
+
+```bash
+TOKEN=$(python3 - <<'PY'
+import base64, hmac, hashlib, json, time
+b = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+secret = b"dev-only-insecure-secret-change-me-32b"    # NESTRS_AUTHN__SECRET, from .env
+h = b(b'{"alg":"HS256","typ":"JWT"}')
+p = b(json.dumps({"roles": ["user"], "exp": int(time.time()) + 3600}).encode())
+print(f"{h}.{p}." + b(hmac.new(secret, f"{h}.{p}".encode(), hashlib.sha256).digest()))
+PY
+)
+```
 
 ```bash frame="terminal"
-$ curl -s -X POST http://localhost:3005/posts \
-    -H 'Content-Type: application/json' \
-    -d '{"title":"Hello","body":"World"}'
-{"id":"018f…","title":"Hello","body":"World"}
+$ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' -d '{"title":"Hello","body":"World"}'
+{"id":"019f9bd5-725d-7ee2-8031-b45d3aa4cc7a","title":"Hello","body":"World"}
 
-$ curl -s http://localhost:3005/posts/018f…
-{"id":"018f…","title":"Hello","body":"World"}
-
-$ curl -s http://localhost:3005/posts
-[{"id":"018f…","title":"Hello","body":"World"}]
+$ curl -s http://localhost:3005/posts -H "Authorization: Bearer $TOKEN"
+[{"id":"019f9bd5-725d-7ee2-8031-b45d3aa4cc7a","title":"Hello","body":"World"}]
 ```
+
+**No row crosses the data layer without an ability.** `Repo` ANDs
+`Ability::condition_for` into every read and every by-id write, and a request
+with no ability at all is filtered to nothing rather than granted everything —
+fail-closed, deliberately. Drop the `ab.can(Action::Manage, post::Entity)` you
+added on the previous page and the same two calls answer `403` with an empty
+table behind them.
 
 Create a second post with the same title — there is no unique constraint
 on `title`, so both rows persist. Transaction rollback on a `5xx` is what
@@ -197,15 +232,14 @@ tags the interceptor span and the SQL spans.
 - A migration adding the `post` table, applied through
   `nestrs run db up`.
 - `POST /posts` persisting into Postgres inside an automatic
-  transaction — no auth filter, no row-level policy, just business
-  logic through `Repo`.
+  transaction, scoped by the caller's ability.
 
 <Aside type="note">
-Auth, row-level filtering, and response masking are the `api` layers you
-saw enforced on [See the security payoff](/tutorial/checkpoint/). You
-build them yourself in
-[Authenticate and authorize](/tutorial/security/); `blog` itself stays
-public HTTP CRUD.
+`blog` grants one blanket rule, so row-level filtering and response masking are
+present but not yet *doing* anything. [Authenticate and
+authorize](/tutorial/security/) replaces it with per-caller conditions and field
+grants — the layers you saw enforced on [See the security
+payoff](/tutorial/checkpoint/).
 </Aside>
 
 ## Going further

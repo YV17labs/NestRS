@@ -12,39 +12,32 @@ same thing.
 
 ## Mount one controller under a version
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs_http::{controller, routes};
 
-#[controller(path = "/items", version = "1")]
-pub struct ItemsV1Controller {
+#[controller(path = "/posts", version = "1")]
+pub struct PostsV1Controller {
     #[inject]
     svc: Arc<PostsService>,
 }
 
 #[routes]
-impl ItemsV1Controller {
+impl PostsV1Controller {
     #[get("/")]
-    async fn list(&self) -> Json<Vec<Item>> {
-        Json(self.svc.list())
-    }
-
-    #[get("/:id")]
-    async fn show(&self, Path(id): Path<u64>) -> Json<Item> {
-        Json(self.svc.find(id))
+    #[authorize(Read, posts::Entity)]
+    async fn list(&self) -> Result<Json<Vec<Post>>> {
+        Ok(Json(self.svc.list().await?.iter().map(Post::from).collect()))
     }
 }
 ```
 
-Routes mount under `/v1/items`. The boot log, the OpenAPI document, and
+Routes mount under `/v1/posts`. The boot log, the OpenAPI document, and
 the served path all route through the same `version_path` helper, so
 they cannot drift:
 
 ```bash frame="terminal"
-$ nestrs run dev
-…
-2026-06-03T10:14:22Z  INFO nest_rs::http: bound 2 routes on 0.0.0.0:3000
-  GET    /v1/items       (ItemsV1Controller::list)
-  GET    /v1/items/:id   (ItemsV1Controller::show)
+$ nestrs run dev api
+INFO nest_rs::routes: mounted route controller=PostsV1Controller method=GET path=/v1/posts handler=list
 ```
 
 The version string is opaque — `"1"`, `"2"`, `"beta"` all work; the
@@ -53,33 +46,39 @@ you have a reason not to.
 
 ## Run multiple versions side by side
 
-A controller per version, each module-listed in the app:
+A controller per version, both provided by the feature's HTTP module:
 
-```rust title="apps/api/src/module.rs"
+```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs_core::module;
 
-#[module(providers = [
-    ItemsV1Controller,
-    ItemsV2Controller,
-])]
-pub struct ItemsHttpModule;
+use super::controller::{PostsV1Controller, PostsV2Controller};
+use crate::authz::AuthzHttpModule;
+use crate::posts::PostsModule;
+
+#[module(
+    imports = [PostsModule, AuthzHttpModule],
+    providers = [PostsV1Controller, PostsV2Controller],
+)]
+pub struct PostsHttpModule;
 ```
 
-```rust title="apps/api/src/controllers/v1.rs"
-#[controller(path = "/items", version = "1")]
-pub struct ItemsV1Controller { /* ... */ }
+Both controllers live in the feature's `http/controller.rs` — a version is a
+wire concern, not a second feature, and the app crate holds no controllers at
+all.
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[controller(path = "/posts", version = "1")]
+pub struct PostsV1Controller { /* … */ }
+
+#[controller(path = "/posts", version = "2")]
+pub struct PostsV2Controller { /* … */ }
 ```
 
-```rust title="apps/api/src/controllers/v2.rs"
-#[controller(path = "/items", version = "2")]
-pub struct ItemsV2Controller { /* ... */ }
-```
-
-Two controllers, two mount paths (`/v1/items`, `/v2/items`), two
+Two controllers, two mount paths (`/v1/posts`, `/v2/posts`), two
 OpenAPI tags by default (the controller struct name groups routes), zero
 runtime overhead — the version is decided at boot, not per request.
 
-A common pattern: V2 delegates to the V1 service when the change is
+A common pattern: V2 delegates to the same `PostsService` when the change is
 purely on the wire (rename a field, add an optional field), and only
 the controller's `Json<T>` shape differs. The service stays one.
 
@@ -106,4 +105,4 @@ dispatches inside the handler.
   on every operation.
 - [Configuration](/http/configuration/) — `HttpTransport::global_prefix`
   for the orthogonal "everything under `/api`" case (versioning stacks
-  on top: `/api/v1/items`).
+  on top: `/api/v1/posts`).

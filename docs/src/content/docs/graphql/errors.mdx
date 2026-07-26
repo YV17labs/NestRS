@@ -22,17 +22,17 @@ use async_graphql::{Error, Result};
 use nest_rs_graphql::resolver;
 
 #[resolver]
-pub struct ItemsResolver;
+pub struct PostsResolver;
 
 #[resolver]
-impl ItemsResolver {
+impl PostsResolver {
     #[query]
     #[public]
-    async fn item(&self, id: String) -> Result<String> {
+    async fn post(&self, id: String) -> Result<String> {
         if id.is_empty() {
             return Err(Error::new("id must not be empty"));
         }
-        Ok(format!("item {id}"))
+        Ok(format!("post {id}"))
     }
 }
 ```
@@ -62,13 +62,13 @@ use async_graphql::{Error, Result};
 
 #[query]
 #[public]
-async fn item(&self, id: String) -> Result<String> {
+async fn post(&self, id: String) -> Result<String> {
     if id.is_empty() {
         return Err(Error::new("id must not be empty").extend_with(|_, e| {
             e.set("code", "INVALID_ARGUMENT");
         }));
     }
-    Ok(format!("item {id}"))
+    Ok(format!("post {id}"))
 }
 ```
 
@@ -109,10 +109,10 @@ use nest_rs_authz::Read;
 use nest_rs_graphql::resolver;
 
 #[resolver]
-impl ItemsResolver {
+impl PostsResolver {
     #[query]
-    #[authorize(Read, ItemEntity)]
-    async fn item(&self, id: String) -> Result<Item> {
+    #[authorize(Read, posts::Entity)]
+    async fn post(&self, id: String) -> Result<Post> {
         Ok(self.svc.find_by_id(&id).await?)
     }
 }
@@ -139,8 +139,8 @@ fn graphql_from_service(err: ServiceError) -> Error {
 }
 
 #[query]
-#[authorize(Read, ItemEntity)]
-async fn item(&self, id: String) -> Result<Item> {
+#[authorize(Read, posts::Entity)]
+async fn post(&self, id: String) -> Result<Post> {
     self.svc.find_by_id(&id).await.map_err(graphql_from_service)
 }
 ```

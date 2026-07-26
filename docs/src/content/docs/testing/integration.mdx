@@ -61,13 +61,17 @@ as the crate does — the path never changes.
 
 ## Shared helpers
 
-Helpers live **inside the suite directory**, next to `main.rs` — a
-plain file, since nothing under `tests/integration/` is compiled as a
-binary:
+Helpers live **inside the suite directory**, next to `main.rs` — as a plain
+file or a folder, since nothing under `tests/integration/` is compiled as a
+binary. `nest-rs-authn` uses the folder form because its helpers outgrew one
+screen:
 
-```rust title="crates/nest-rs-authn/tests/integration/common.rs"
-pub const DEV_PRIVATE_KEY: &str = include_str!("fixtures/dev.key");
-pub const DEV_PUBLIC_KEY: &str = include_str!("fixtures/dev.pub");
+```rust title="crates/nest-rs-authn/tests/integration/common/mod.rs (abridged)"
+/// Ed25519 key pair used across nestrs dev and e2e apps.
+pub const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\n…\n";
+pub const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\n…\n";
+
+pub fn request(headers: &[(&str, &str)]) -> Request { /* … */ }
 ```
 
 ```rust title="crates/nest-rs-authn/tests/integration/jwt/config.rs"

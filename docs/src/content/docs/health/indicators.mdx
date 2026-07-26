@@ -16,7 +16,7 @@ method's name becomes the indicator's key.
 
 ## A first indicator
 
-```rust title="crates/features/upstream/health/indicator.rs"
+```rust title="crates/features/src/upstream/health/indicator.rs"
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
@@ -39,7 +39,7 @@ impl UpstreamHealthIndicator {
 }
 ```
 
-```rust title="crates/features/upstream/health/module.rs"
+```rust title="crates/features/src/upstream/health/module.rs"
 use nest_rs_core::module;
 
 use crate::upstream::health::indicator::UpstreamHealthIndicator;

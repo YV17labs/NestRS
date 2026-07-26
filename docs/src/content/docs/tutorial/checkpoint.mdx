@@ -110,8 +110,9 @@ your `posts` feature persists and is tested.
 
 <Aside type="note">
 Living this needs the Publish repo (`auth` + `api` + seeded Postgres).
-Your own scaffolded `blog` stays public HTTP CRUD until you add the auth
-layer — the point here is to see the destination before you build toward
+Your own `blog` picks up the same two guards on the next page, but with a
+single blanket rule — conditions, field grants and cross-tenant denial are what
+you add later. The point here is to see the destination before you build toward
 it.
 </Aside>
 

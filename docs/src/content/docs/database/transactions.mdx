@@ -96,7 +96,7 @@ For an actually-retried operation, wrap a replayable closure in
 `retry_on_conflict` inside a service method that owns its programmatic
 transaction boundary:
 
-```rust title="src/orders/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 use std::time::Duration;
 use nest_rs_seaorm::retry::{
@@ -104,8 +104,8 @@ use nest_rs_seaorm::retry::{
 };
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-impl OrdersService {
-    pub async fn settle(&self, id: Uuid) -> Result<Order, OrderError> {
+impl PostsService {
+    pub async fn publish(&self, id: Uuid) -> Result<post::Model, ServiceError> {
         let db = self.db.clone();
         retry_on_conflict(DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF, || {
             let db = db.clone();
@@ -113,11 +113,11 @@ impl OrdersService {
                 let txn = db.begin().await?;
                 // read + update + insert against `txn`
                 txn.commit().await?;
-                Ok::<_, sea_orm::DbErr>(/* updated order */)
+                Ok::<_, sea_orm::DbErr>(/* the published row */)
             }
         })
         .await
-        .map_err(OrderError::from)
+        .map_err(ServiceError::from)
     }
 }
 ```

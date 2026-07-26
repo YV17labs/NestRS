@@ -95,6 +95,12 @@ nest-rs-health = { workspace = true, optional = true }
 # Dev-deps do not propagate, so no consumer gains a feature from this, and a
 # path-only dev-dep is stripped from the published manifest.
 nest-rs-seaorm = { path = ".", features = ["full"] }
+# The `public_visitor` e2e boots a real app: a `#[public]` controller behind
+# `AbilityGuard`, driven through the in-process harness. `#[routes]` expands to
+# `::nest_rs_guards::` paths, so a crate defining a controller owns that dep
+# directly (same reason `nest-rs-authz`'s bridge tests do).
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-testing = { path = "../nest-rs-testing" }
 
 # The e2e suite imports feature-gated transport bridges: `DbContext` (`http`)
 # and `WsDataContext` (`ws`). Without this gate, a default-feature

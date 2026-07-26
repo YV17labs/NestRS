@@ -79,6 +79,11 @@ A `RuleSpec` commits on drop — `ab.can(...).when(...).fields(...)` is
 one statement, no terminal `.add()` call. See
 [Policies](/security/authorization/policies/) for the full builder API.
 
+The trait has a second, defaulted branch — `define_visitor` — that the
+guard calls instead of `define` when a `#[public]` route is reached with
+no credential. It grants nothing until you write into it; see
+[Public reads](/security/authorization/public-reads/).
+
 ## Mount it on the controller
 
 The `AuthzHttpModule` provides `AuthzGuard` — a **project type alias** for
@@ -203,6 +208,8 @@ controller with the transport's authz module, and write a
   declare `Authorize<A, S>` and masking is automatic; the
   `mask`/`retain_wire_keys`/`WireModelDefaults` pipeline is documented
   as internals (skip on a first pass).
+- [Public reads](/security/authorization/public-reads/) —
+  `define_visitor`, the anonymous branch a `#[public]` route reads.
 - [Per-transport bridges](/security/authorization/per-transport-bridges/)
   — how GraphQL, WS, and MCP re-establish the ambient ability
   (explanation — useful once you add a second transport, not before).

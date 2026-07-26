@@ -26,10 +26,13 @@
 //! commit-on-success / rollback-on-error semantics as an HTTP mutation. Success
 //! is a [`WsReply::Reply`]/[`WsReply::None`]; a [`WsReply::Error`] rolls back.
 //!
-//! A guest connection has no `Ability`; `Repo`'s `scope_for` then denies every
-//! row on this request-tagged executor (fail-closed) — a handler that must
-//! serve guests reads through an explicitly public path, never silently
-//! unscoped.
+//! A guest connection carries whatever `AbilityGuard` built for the visitor at
+//! the upgrade: nothing at all when the upgrade was not `#[public]` (so
+//! `Repo`'s `scope_for` denies every row on this request-tagged executor,
+//! fail-closed), and the app's `AbilityFactory::define_visitor` rules when it
+//! was. Either way the ability is frozen at the upgrade like any other — and a
+//! visitor has no principal, so there is nothing to revoke mid-connection and
+//! no stale-privilege window beyond what the app granted anonymously.
 
 use std::sync::Arc;
 

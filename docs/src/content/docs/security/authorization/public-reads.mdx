@@ -1,0 +1,129 @@
+---
+title: Public reads
+description: A resource anyone may read is declared in AbilityFactory::define_visitor — the anonymous branch of the same policy, granting nothing until you write it.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A blog needs published posts readable without a login. The rules for
+that caller live in the same `AbilityFactory` as everything else, in a
+second branch: `define_visitor`. It receives no actor because there is
+none, and it grants nothing until you write a rule into it.
+
+```rust title="crates/features/src/authz/ability.rs"
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
+
+impl AbilityFactory for AppAbility {
+    type Actor = Claims;
+
+    fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) { /* … */ }
+
+    fn define_visitor(&self, ab: &mut AbilityBuilder) {
+        ab.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::Status, PostStatus::Published));
+    }
+}
+```
+
+Everything downstream is the machinery you already have: the grant
+becomes the `WHERE` clause on the visitor's query, the class-level gate
+on the route, and the field set the response mask keeps.
+
+## Wire it in
+
+The route declares two things, and it needs both.
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[get("/")]
+#[public]
+async fn list(&self, _authz: Authorize<Read, post::Entity>) -> Result<Json<Vec<Post>>> {
+    Ok(Json(self.svc.list().await?))
+}
+```
+
+`#[public]` is the posture. It tells `AuthnGuard` to admit a caller
+with no credential, and it tells `AuthzGuard` to build the ability from
+`define_visitor` instead of `define`.
+
+`Authorize<Read, post::Entity>` is the enforcement plumbing that
+posture needs: it installs the ambient ability the data layer reads and
+arms the response mask. This is the one route shape where you write the
+extractor by hand — `#[authorize(...)]` and `#[public]` declare opposite
+postures, so the decorator form is a compile error here.
+
+<Aside type="caution">
+Without that parameter the route answers `200` with an empty array. The
+visitor's ability reaches the request, but nothing installs it as the
+ambient one, so `Repo` falls back to its no-ability behavior and renders
+`1 = 0`. Fail-closed, and noisy — a `warn` on `nest_rs::orm` names the
+entity and action — but a caller reading the response sees "no posts",
+not "misconfigured". Reach for `Bind<Read, PostsService>` on a detail
+route; it is a shaper too.
+</Aside>
+
+## A token still takes the authenticated branch
+
+`define_visitor` answers for the anonymous caller only. On a `#[public]`
+route reached with a valid token, `AuthnGuard` attaches the principal
+and `AbilityGuard` calls `define` — the visitor rules are not a floor
+added under every caller.
+
+That is what makes one route serve both audiences without a branch in
+the handler: a visitor sees published posts because `define_visitor`
+grants them, and a signed-in author sees their drafts too because
+`define` grants those. The handler calls `self.svc.list()` either way.
+
+## Reviewing a `#[public]` route
+
+**The reach of `#[public]` grows with this feature, and that is the
+point of it.** Before, the marker could only widen authentication:
+`AuthzGuard` built an empty ability for the anonymous caller, so no
+`#[public]` route could return a row of a guarded entity, however it was
+written. Now the marker also selects which half of the policy runs.
+
+So reading the diff that adds `#[public]` no longer tells you what the
+route exposes. The pair does:
+
+1. the `#[public]` marker on the route, and
+2. what `define_visitor` grants for that entity.
+
+Both are greppable, both stay in one file each, and neither is inferred.
+A route that turns `#[public]` while `define_visitor` stays empty
+exposes nothing — it answers `403`. A grant added to `define_visitor`
+reaches only the routes marked `#[public]`. Review the two together, and
+treat an edit to `define_visitor` with the weight of a route-exposure
+change, because that is what it is.
+
+## Limits
+
+**The default grants nothing, on every transport.** An app that never
+implements `define_visitor` behaves exactly as it did before the method
+existed: an anonymous caller on a `#[public]` route gets an ability with
+no rules, and the class gate answers `403`.
+
+**One correction covers HTTP, GraphQL and WebSockets.** The GraphQL
+bridge and the WS upgrade both run `AbilityGuard::check_http`, so the
+visitor branch reaches a `#[public]` query and a guest socket the same
+way. On WebSockets the visitor ability is captured at the upgrade and
+frozen for the connection, like any other.
+
+**MCP refuses anonymous callers by design.** The `/mcp` endpoint carries
+no `Public` marker, so an unauthenticated tool call is denied before the
+factory is consulted. `define_visitor` does not open it, and adding the
+marker there is not the supported path.
+
+**A malformed visitor rule denies the request.** A rule whose relation
+predicate cannot be lowered fails ability construction, and the guard
+answers `500` rather than installing a degraded ability — the same
+fail-closed behavior the authenticated branch has.
+
+## Going further
+
+- [Policies](/security/authorization/policies/) — the builder API both
+  branches share.
+- [Row-level filtering](/security/authorization/row-level-filtering/) —
+  what the visitor's grant becomes in SQL.
+- [Response masking](/security/authorization/response-masking/) — how
+  `.fields([...])` narrows a visitor's response.

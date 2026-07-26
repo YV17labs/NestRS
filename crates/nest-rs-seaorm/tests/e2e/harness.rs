@@ -17,7 +17,7 @@ use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
 /// `demo/.env`.
 const DEFAULT_URL: &str = "postgres://nestrs:nestrs@postgres:5432/nestrs";
 
-fn url() -> String {
+pub(crate) fn url() -> String {
     std::env::var("NESTRS_DATABASE__URL").unwrap_or_else(|_| DEFAULT_URL.to_owned())
 }
 

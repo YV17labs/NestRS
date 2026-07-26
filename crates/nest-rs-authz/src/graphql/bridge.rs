@@ -40,7 +40,12 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
         inner: BoxFuture<'a, Response>,
     ) -> BoxFuture<'a, Response> {
         Box::pin(async move {
-            // No ability (anonymous) → unscoped; the resolvers' gate then refuses.
+            // `before` always attaches one: `/graphql` carries the `Public`
+            // marker, so an anonymous operation takes `AbilityGuard`'s visitor
+            // branch (`AbilityFactory::define_visitor`) rather than falling
+            // through. The `None` arm stays as a net for a mount that does not
+            // carry the marker — it runs unscoped only in the sense that no
+            // ability is installed, and `Repo` fails those reads closed.
             match req.extensions().get::<Arc<Ability>>().cloned() {
                 Some(ability) => with_ability(ability, inner).await,
                 None => inner.await,

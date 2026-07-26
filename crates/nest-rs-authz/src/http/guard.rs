@@ -42,11 +42,25 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         // Build against a *borrowed* actor: the rules are read from it and never
         // outlive this block, so cloning the principal (claims, role list, …)
         // on every request bought nothing. The borrow ends before the insert.
-        let built = req.extensions().get::<F::Actor>().map(|actor| {
-            let mut builder = AbilityBuilder::new();
-            self.factory.define(actor, &mut builder);
-            builder.build()
-        });
+        let built = match req.extensions().get::<F::Actor>() {
+            Some(actor) => {
+                let mut builder = AbilityBuilder::new();
+                self.factory.define(actor, &mut builder);
+                Some(builder.build())
+            }
+            // `#[public]`: no authenticated actor, so the factory's *visitor*
+            // branch decides. It grants nothing unless the app overrode
+            // `define_visitor`, which keeps an anonymous read fail-closed by
+            // default while making a genuinely public resource expressible.
+            // The result flows through the same match as the authenticated
+            // branch: a malformed visitor rule denies rather than degrading.
+            None if Reflector::new(req).is_public() => {
+                let mut builder = AbilityBuilder::new();
+                self.factory.define_visitor(&mut builder);
+                Some(builder.build())
+            }
+            None => None,
+        };
         match built {
             // A malformed rule fails construction (fail-closed): deny the
             // request rather than install an ability whose denial evaporates.
@@ -61,18 +75,6 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
                     "ability construction failed — denying the request",
                 );
                 Err(Denial::internal("authorization rules are misconfigured"))
-            }
-            None if Reflector::new(req).is_public() => {
-                // `#[public]`: no authenticated actor expected. Attach an
-                // empty Ability so downstream layers (DbContext etc.) have
-                // something to install, and visitor-scope reads end up
-                // empty by default. A dev that wants visitor *rules*
-                // grants them explicitly in their `AbilityFactory`'s
-                // visitor branch — out of scope here. An empty builder has no
-                // rules, so it never fails; fall back to a deny-all ability.
-                req.extensions_mut()
-                    .insert(Arc::new(AbilityBuilder::new().build().unwrap_or_default()));
-                Ok(())
             }
             None => {
                 tracing::warn!(
@@ -133,8 +135,56 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::TypeId;
+
+    use nest_rs_core::Public;
+
     use super::*;
-    use crate::{Ability, AbilityBuilder, with_ability};
+    use crate::{Ability, AbilityBuilder, Action, with_ability};
+
+    mod post {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "posts")]
+        pub struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub published: bool,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    // A second entity so a rule can carry a *malformed* relation predicate: the
+    // relation `Post` points at `post::Entity`, so naming `comment::Entity` as
+    // the related side trips the `Deny` sentinel `build` refuses.
+    mod comment {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "comments")]
+        pub struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub post_id: i32,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {
+            #[sea_orm(
+                belongs_to = "super::post::Entity",
+                from = "Column::PostId",
+                to = "super::post::Column::Id"
+            )]
+            Post,
+        }
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
 
     struct NoRules;
 
@@ -147,6 +197,98 @@ mod tests {
         AbilityGuard {
             factory: Arc::new(NoRules),
         }
+    }
+
+    fn public_request() -> Request {
+        let mut req = Request::default();
+        req.extensions_mut().insert(Public);
+        req
+    }
+
+    /// The ability the guard attached, or `None` when it attached nothing.
+    fn attached(req: &Request) -> Option<Arc<Ability>> {
+        req.extensions().get::<Arc<Ability>>().cloned()
+    }
+
+    // The fail-closed floor of `define_visitor`: a factory that does not
+    // override it must leave the visitor with nothing granted, so opening a
+    // route with `#[public]` can never widen what the app declared.
+    #[tokio::test]
+    async fn the_default_visitor_branch_grants_nothing() {
+        let mut req = public_request();
+        guard()
+            .check_http(&mut req)
+            .await
+            .expect("a public route admits the anonymous caller");
+
+        let ability = attached(&req).expect("the guard attaches an ability");
+        assert!(
+            !ability.can_class(Action::Read, TypeId::of::<post::Entity>()),
+            "the default `define_visitor` must grant nothing",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_visitor_grant_reaches_the_request() {
+        struct PublicReads;
+
+        impl AbilityFactory for PublicReads {
+            type Actor = ();
+            fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+            fn define_visitor(&self, ability: &mut AbilityBuilder) {
+                ability
+                    .can(Action::Read, post::Entity)
+                    .when(|p| p.eq(post::Column::Published, true));
+            }
+        }
+
+        let mut req = public_request();
+        AbilityGuard {
+            factory: Arc::new(PublicReads),
+        }
+        .check_http(&mut req)
+        .await
+        .expect("a public route admits the anonymous caller");
+
+        let ability = attached(&req).expect("the guard attaches an ability");
+        assert!(
+            ability.can_class(Action::Read, TypeId::of::<post::Entity>()),
+            "the visitor branch's grant must reach the request",
+        );
+    }
+
+    // The visitor branch flows through the same fail-closed match as the
+    // authenticated one: a malformed rule denies with a 500 instead of
+    // degrading to a deny-all ability that reads as an ordinary empty result.
+    #[tokio::test]
+    async fn a_malformed_visitor_rule_denies_instead_of_degrading() {
+        struct MalformedVisitor;
+
+        impl AbilityFactory for MalformedVisitor {
+            type Actor = ();
+            fn define(&self, _actor: &(), _builder: &mut AbilityBuilder) {}
+            fn define_visitor(&self, ability: &mut AbilityBuilder) {
+                ability.can(Action::Read, comment::Entity).when(|p| {
+                    p.related::<comment::Entity, _>(comment::Relation::Post, |c| {
+                        c.eq(comment::Column::Id, 1)
+                    })
+                });
+            }
+        }
+
+        let mut req = public_request();
+        let denial = AbilityGuard {
+            factory: Arc::new(MalformedVisitor),
+        }
+        .check_http(&mut req)
+        .await
+        .expect_err("a malformed visitor rule must deny");
+
+        assert_eq!(denial.http_status(), 500);
+        assert!(
+            attached(&req).is_none(),
+            "a denied request must carry no ability at all",
+        );
     }
 
     // The WS-auth fail-secure carry-over: a gateway module that imported

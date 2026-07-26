@@ -121,10 +121,11 @@ scope (`current_executor_scope()`):
   module, and write a [negative-path test](/testing/negative-path/)
   that pins the behavior.
 
-A public route uses `AbilityGuard` too: it builds an empty `Ability`
-for the visitor, so `Repo::scoped(Read)` returns nothing by default
-— visitor-rule policy belongs in `AbilityFactory`, not in the
-filter.
+A public route uses `AbilityGuard` too: it builds the visitor's
+`Ability` from `AbilityFactory::define_visitor`, which grants nothing
+until you write a rule into it — so `Repo::scoped(Read)` returns
+nothing by default. Visitor-rule policy belongs in the factory, not in
+the filter. See [Public reads](/security/authorization/public-reads/).
 
 The sanctioned ability-less reads (pre-authentication credential
 lookup, `CrudService::access`'s existence probe) stay inside `Repo`

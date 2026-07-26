@@ -5,6 +5,155 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-07-26
+
+Fixes from a crash-test of the 1.0.0 release: building an app by following the
+documentation end to end, on a pristine `nestrs new` scaffold. A minor rather
+than a patch — `nestrs g auth` is new, `g resource` emits a different slice, and
+two flags are gone (`g resource --guarded`, `new --template`).
+
+### Added
+
+- **Every `nestrs new` layout ships the same `hello` module** — a service with a
+  greeting and one `#[public] GET /` that returns it. Previously only two of the
+  four generation paths mounted a route: `nestrs new blog` **inside** a
+  workspace produced an app with an empty route table, and both `--template
+  empty` variants did too — while the CLI's own next-steps told you to open a
+  browser at a URL that answered `404`. A freshly created project has to prove
+  it started, and a `404` proves nothing to the developer looking at it.
+
+  Workspace mode writes the greeting as a feature named after the app
+  (`crates/features/src/blog/`), because the layout keeps no `service.rs` /
+  `controller.rs` in an app crate; standalone writes the same two files under
+  `src/`. `nestrs new <name>` now refuses when a feature already owns that name,
+  rather than overwriting product code.
+
+- **`nestrs g auth`** — the app-side authn/authz adapter (`Claims`,
+  `AuthnGuard`, `AppAbility`, `AuthzGuard`, and their modules) that roughly ten
+  documentation pages referenced and nothing generated. The framework is
+  generic over the principal and the policy, so these types cannot ship in a
+  `nest-rs-*` crate; every workspace wrote the same eight files by hand, from
+  crate sources, or not at all.
+
+- **`AbilityFactory::define_visitor`** — the anonymous branch of an app's
+  policy, consulted by `AbilityGuard` on a `#[public]` route. A DB-backed
+  resource anyone may read was previously not expressible: the public branch
+  installed an ability built from an *empty* `AbilityBuilder` and never asked
+  the app's factory, so `Authorize` answered `403` and `Repo` filtered every
+  row — whatever the developer wrote. The new method defaults to granting
+  nothing, so an app that does not implement it behaves exactly as before, and
+  a route opened with `#[public]` still exposes nothing until a rule is
+  written. One correction covers HTTP, GraphQL and the WebSocket upgrade: all
+  three run `AbilityGuard::check_http`. `/mcp` deliberately carries no `Public`
+  marker and keeps refusing anonymous callers.
+
+  **The reach of `#[public]` grows with this**: the marker now selects which
+  half of the policy runs, so reviewing a diff that adds it means reading
+  `define_visitor` too. Documented in
+  [Public reads](https://nestrs.dev/security/authorization/public-reads/).
+
+  Additive under semver, with one exception worth naming: an app that already
+  has an **inherent** `define_visitor` method on its `AppAbility` would see the
+  inherent one win at every call site, and the trait method silently keep its
+  empty default. The name is new, so the risk is close to zero — but it is a
+  real shadowing rule, not a rounding error.
+
+- **A malformed rule on a `#[public]` route now fails closed.** The public
+  branch used `unwrap_or_default()`, degrading a rule the builder rejected into
+  a deny-all ability — indistinguishable, to the caller, from an ordinary empty
+  result. It goes through the same `match` as the authenticated branch and
+  answers `Denial::internal`.
+
+- **`nestrs new` scaffolds `crates/migrations/` and `crates/seed/`**, with the
+  `migrate` binary behind every `nestrs run db …` verb. `nestrs g migration`
+  bootstraps them for a workspace scaffolded before this.
+
+- **`AuthError` and `CredentialError` implement poem's `ResponseError`**, so a
+  handler can `?`-propagate them as the exception-filter documentation
+  describes. `AuthError::Unavailable` keeps its distinct `500`.
+
+### Removed
+
+- **`nestrs new --template`.** With one starter that always serves `/`, the flag
+  had one remaining value (`empty`) whose only effect was a project answering
+  `404` on its first page. One way to do a thing.
+
+### Changed
+
+- **`nestrs g resource` emits the guarded `#[crud]` form** and scaffolds the
+  auth adapter when the workspace has none; **`--guarded` is removed** — it is
+  the only shape now. The unguarded slice it used to emit compiled but could
+  not serve a single row: `Repo` filters every read by the caller's ambient
+  `Ability`, which only an `AbilityGuard` installs, so every route answered
+  `500` (missing ability) or read an empty table forever.
+
+- **`Environment::init()` merges the `.env` cascade into `std::env`**, as its
+  documentation always said. Without it the scaffold's own
+  `NESTRS_LOG` / `NESTRS_LOG_FORMAT` / `NESTRS_LOG_SOURCE_LOCATION` in
+  `.env.development` were inert, and a `migrate`-style binary reading
+  `std::env::var("NESTRS_DATABASE__URL")` found nothing. It writes through
+  `set_var`, so the documented obligation stands: call it at the top of `main`,
+  never from a task.
+
+- **`#[crud]`'s error mapping moved into `nest_rs_seaorm::crud_error`.** The
+  status mapping is unchanged (409 on a unique violation, 403 on the ability
+  re-check's `RecordNotInserted`, 404 on a vanished row); it is now one
+  implementation instead of one copy per controller, and it logs the unexpected
+  `DbErr` it turns into an empty-bodied 500.
+
+### Fixed
+
+- **A `500` from the authz or ORM path is no longer silent.** `Authorize` logs
+  at `error` on `nest_rs::authz` when no ability guard ran, naming the action,
+  the subject and the fix; `ServiceError`'s opaque variants log their cause at
+  `error` on `nest_rs::orm` when they become a 5xx. Diagnosing one used to mean
+  a custom debug handler and reading three crates' sources — at `trace`, a `500`
+  produced zero records.
+
+- **`g resource` injects the dependencies the decorators expand to** —
+  `schemars` (`#[expose]` derives `JsonSchema`) and `nest-rs-authz` (`#[crud]`
+  emits `Authorize<A, E>` parameters). Without them the first `cargo check`
+  after generating was a wall of macro-expansion errors, invisible to
+  `cargo check` on the scaffold itself.
+
+- **`nestrs run db up` and `db seed` work on a fresh workspace.** Every
+  `db.just` recipe named the `migrations` and `seed` crates, and neither
+  existed.
+
+- **`nestrs run test unit` and `test e2e` work on a fresh scaffold.** Both
+  filter on `binary(e2e)`, and nextest rejects a filterset naming a binary the
+  workspace does not have — so every app is now scaffolded with an empty
+  `tests/e2e/main.rs`, which the docs already claimed.
+
+- **The scaffolded smoke test compiles.** It called
+  `TestAppBuilder::with_test_telemetry`, which lives behind
+  `nest-rs-testing`'s optional `opentelemetry` feature. The scaffold imports no
+  `OpenTelemetryModule`, so the call is simply gone.
+
+- **The `sea-orm` pin the generator writes is `2.0`**, not the `2.0.0-rc.38`
+  release-candidate floor, and its feature list matches what `nest-rs-seaorm`
+  itself resolves.
+
+- **Scaffold polish**: the hello route is `#[public]`, so a first run no longer
+  greets you with the framework warning about its own template; workspace mode
+  no longer writes a `.dockerignore` it ships no `Dockerfile` for; standalone
+  mode no longer ships database recipes that need a workspace; and the
+  generated `README.md` links resolve outside nestrs.dev.
+
+### Documentation
+
+- The tutorial carries the two guards from the HTTP page onward, and
+  `/database/` states plainly that no row crosses the data layer without an
+  ability — the previous narrative was not reproducible.
+- Tutorial page 1's checkpoint is a `200 Hello World` instead of a `404` it
+  taught you to expect, and `/cli/`'s template table is replaced by the one
+  starter.
+- 18 further corrections: wrong imports (`ServiceError` is in `nest_rs_seaorm`),
+  the missing `AbilityGuard` import path, the undocumented `connect_from_env`,
+  the two contradictory `Migrator` locations, `PATCH`'s whole-body semantics,
+  the exact validation-error body, the scaffolded file tree, and the boot log
+  lines.
+
 ## [1.0.0] - 2026-07-25
 
 A handful of crates *are* the framework's public surface — their types appear
@@ -691,6 +840,7 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
+[1.1.0]: https://github.com/YV17labs/NestRS/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/YV17labs/NestRS/compare/v0.5.0...v1.0.0
 [0.5.0]: https://github.com/YV17labs/NestRS/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/YV17labs/NestRS/compare/v0.3.0...v0.4.0

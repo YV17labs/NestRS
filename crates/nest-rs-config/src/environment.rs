@@ -22,15 +22,33 @@ pub enum Environment {
 }
 
 impl Environment {
-    /// Call at the top of `main` before anything that reads the env outside the
-    /// DI graph (e.g. `OpenTelemetry::init`). Idempotent with `ConfigModule::for_root`.
+    /// Call at the top of `main`, before anything that reads the environment
+    /// outside the DI graph. Idempotent with `ConfigModule::for_root`.
     ///
-    /// Parses the `.env` cascade into the in-crate map now (side-effect-free —
-    /// no process-env mutation), so later `env_var` reads see dotenv values and
-    /// the one-time file-read cost is paid at startup rather than mid-request.
+    /// Two effects, both one-shot:
+    ///
+    /// 1. the `.env` cascade is parsed into the in-crate map, so later
+    ///    `env_var` reads see dotenv values without paying the file read
+    ///    mid-request;
+    /// 2. the same values are merged into the **process environment**
+    ///    (set-if-absent — the real env always wins), so the many consumers
+    ///    that only know `std::env::var` behave as the cascade says: the
+    ///    framework's own `NESTRS_LOG*` logging setup, `OpenTelemetry::init`,
+    ///    and any `migrate`/`seed` binary of yours.
+    ///
+    /// # Threading
+    ///
+    /// The merge writes through `std::env::set_var`, which is unsound only when
+    /// it races a concurrent `getenv` on another thread. Calling this at the top
+    /// of `main` — before the runtime spawns anything — discharges that
+    /// obligation; calling it from a spawned task does not.
     pub fn init() -> Self {
         let env = Self::from_env();
-        let _ = crate::dotenv::dotenv_values();
+        // Parses the cascade once and publishes that same map — the one
+        // process-env write a running app makes, and the reason `init` belongs
+        // at the top of `main`: its soundness obligation is discharged by being
+        // single-threaded here, nowhere else.
+        crate::dotenv::publish_dotenv_values();
         env
     }
 
@@ -109,6 +127,37 @@ mod tests {
     #[test]
     fn default_is_development() {
         assert_eq!(Environment::default(), Environment::Development);
+    }
+
+    // The merge is what makes a raw `std::env::var` reader — the framework's own
+    // `NESTRS_LOG*` setup, a `migrate` binary — see the cascade at all, and it
+    // is the whole reason `init` belongs at the top of `main`. Every other test
+    // in this crate would still pass if that call vanished.
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn init_publishes_the_cascade_into_the_process_env() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "CASCADE_INIT_A=base\nCASCADE_INIT_B=base")?;
+            jail.create_file(".env.development", "CASCADE_INIT_B=dev")?;
+            jail.set_env("NESTRS_ENV", "development");
+            jail.set_env("CASCADE_INIT_C", "from_real_env");
+            jail.create_file(".env.development.local", "CASCADE_INIT_C=from_file")?;
+
+            assert_eq!(Environment::init(), Environment::Development);
+
+            assert_eq!(std::env::var("CASCADE_INIT_A").unwrap(), "base");
+            assert_eq!(
+                std::env::var("CASCADE_INIT_B").unwrap(),
+                "dev",
+                "the cascade's precedence carries into the process env",
+            );
+            assert_eq!(
+                std::env::var("CASCADE_INIT_C").unwrap(),
+                "from_real_env",
+                "set-if-absent: the real environment still wins",
+            );
+            Ok(())
+        });
     }
 
     #[test]

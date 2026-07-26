@@ -44,47 +44,63 @@ pub fn ensure_lines(new_lines: Vec<String>) -> Transform {
     })
 }
 
-/// Ensure a module is imported into a `#[module(imports = [ … ])]` block:
-/// inserts `use <use_path>;` among the top-of-file `use` lines and the bare
-/// `<ident>,` entry just before the closing `]` of the imports array.
-pub fn ensure_module_import(use_path: &str, ident: &str) -> Transform {
-    let use_line = format!("use {use_path};");
-    let ident = ident.to_string();
+/// Ensure every `(use_path, ident)` is imported into a
+/// `#[module(imports = [ … ])]` block: `use <use_path>;` among the top-of-file
+/// `use` lines, and the bare `<ident>,` entry before the closing `]`.
+///
+/// Takes a slice rather than one pair because a caller wiring two modules must
+/// land them in **one** transform: `Scaffold::apply` resolves every edit against
+/// the file on disk, so two edits of the same path would each start from the
+/// original and the second write would drop the first.
+pub fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
+    let imports: Vec<(String, String)> = imports
+        .iter()
+        .map(|(use_path, ident)| (format!("use {use_path};"), (*ident).to_owned()))
+        .collect();
     Box::new(move |content: &str| {
-        let mut changed = false;
         let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
-
-        // 1. The `use` import at the top of the file.
-        if !lines.iter().any(|l| l.trim() == use_line) {
-            let insert_at = lines
-                .iter()
-                .rposition(|l| l.trim_start().starts_with("use "))
-                .map(|i| i + 1)
-                .unwrap_or(0);
-            lines.insert(insert_at, use_line.clone());
-            changed = true;
-        }
-
-        // 2. The entry inside `imports = [ … ]`.
-        if let Some((start, end)) = imports_span(&lines) {
-            let already = lines[start..=end].iter().any(|l| entry_matches(l, &ident));
-            if !already {
-                if start == end {
-                    // Single-line `imports = [A, B]` — splice into the brackets.
-                    if let Some(spliced) = splice_inline(&lines[start], &ident) {
-                        lines[start] = spliced;
-                        changed = true;
-                    }
-                } else {
-                    let indent = entry_indent(&lines, end);
-                    lines.insert(end, format!("{indent}{ident},"));
-                    changed = true;
-                }
-            }
-        }
+        let changed = imports.iter().fold(false, |changed, (use_line, ident)| {
+            insert_module_import(&mut lines, use_line, ident) || changed
+        });
 
         changed.then(|| rejoin(&lines, content))
     })
+}
+
+/// One import into `lines`, in place. `true` when it wrote something.
+fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) -> bool {
+    let mut changed = false;
+
+    // 1. The `use` import at the top of the file.
+    if !lines.iter().any(|l| l.trim() == use_line) {
+        let insert_at = lines
+            .iter()
+            .rposition(|l| l.trim_start().starts_with("use "))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        lines.insert(insert_at, use_line.to_owned());
+        changed = true;
+    }
+
+    // 2. The entry inside `imports = [ … ]`.
+    if let Some((start, end)) = imports_span(lines) {
+        let already = lines[start..=end].iter().any(|l| entry_matches(l, ident));
+        if !already {
+            if start == end {
+                // Single-line `imports = [A, B]` — splice into the brackets.
+                if let Some(spliced) = splice_inline(&lines[start], ident) {
+                    lines[start] = spliced;
+                    changed = true;
+                }
+            } else {
+                let indent = entry_indent(lines, end);
+                lines.insert(end, format!("{indent}{ident},"));
+                changed = true;
+            }
+        }
+    }
+
+    changed
 }
 
 /// Two grouping buckets: module declarations (`mod`/`pub mod`) sit together,
@@ -180,8 +196,9 @@ mod tests {
     #[test]
     fn ensure_module_import_into_multiline_block() {
         let src = "use nest_rs_core::module;\nuse nest_rs_http::HttpModule;\n\n#[module(\n    imports = [\n        HttpModule::for_root(None),\n    ],\n)]\npub struct AppModule;\n";
-        let t = ensure_module_import("features::posts::PostsHttpModule", "PostsHttpModule");
-        let out = t(src).expect("inserts");
+        let one =
+            || ensure_module_imports(&[("features::posts::PostsHttpModule", "PostsHttpModule")]);
+        let out = one()(src).expect("inserts");
         assert!(out.contains("use features::posts::PostsHttpModule;"));
         assert!(out.contains("        PostsHttpModule,"));
         // entry sits inside the imports array, before the closing bracket
@@ -189,18 +206,33 @@ mod tests {
         let close = out.find("    ],").unwrap();
         assert!(entry < close);
         // idempotent
-        assert!(
-            ensure_module_import("features::posts::PostsHttpModule", "PostsHttpModule")(&out)
-                .is_none()
-        );
+        assert!(one()(&out).is_none());
     }
 
     #[test]
     fn ensure_module_import_single_line_block() {
         let src = "use nest_rs_http::HttpModule;\n\n#[module(imports = [HttpModule::for_root(None)])]\npub struct AppModule;\n";
-        let t = ensure_module_import("crate::posts::PostsHttpModule", "PostsHttpModule");
+        let t = ensure_module_imports(&[("crate::posts::PostsHttpModule", "PostsHttpModule")]);
         let out = t(src).expect("inserts");
         assert!(out.contains("PostsHttpModule"));
         assert!(out.contains("use crate::posts::PostsHttpModule;"));
+    }
+
+    // The reason this takes a slice: a caller wiring two modules gets one
+    // transform. Split across two `Scaffold::edit`s they would each resolve
+    // against the file on disk and the second write would drop the first.
+    #[test]
+    fn ensure_module_imports_lands_every_pair_in_one_pass() {
+        let src = "use nest_rs_core::module;\n\n#[module(\n    imports = [\n        HttpModule::for_root(None),\n    ],\n)]\npub struct AppModule;\n";
+        let pairs = [
+            ("features::authn::AuthnModule", "AuthnModule"),
+            ("features::authz::AuthzHttpModule", "AuthzHttpModule"),
+        ];
+        let out = ensure_module_imports(&pairs)(src).expect("inserts");
+        for (use_path, ident) in pairs {
+            assert!(out.contains(&format!("use {use_path};")), "{out}");
+            assert!(out.contains(&format!("        {ident},")), "{out}");
+        }
+        assert!(ensure_module_imports(&pairs)(&out).is_none(), "idempotent");
     }
 }

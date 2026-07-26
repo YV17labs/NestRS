@@ -150,3 +150,46 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 # NESTRS_DATABASE__URL=postgres://user:pass@localhost:5432/{{kebab}}
 # NESTRS_QUEUE__URL=redis://localhost:6379
 "#;
+
+/// The scaffolded smoke test, identical in both layouts: `{{snake}}` is the
+/// crate that owns the root module — the app crate in workspace mode, the
+/// single crate standalone. In-process through `TestApp`, no live infra, so it
+/// belongs to the `integration` suite.
+pub const SMOKE: &str = r#"//! In-process smoke test — boots the real DI graph through `TestApp`, no live
+//! infra, so it belongs to the `integration` suite and runs on every
+//! `nestrs run test unit`. Tests needing a database, queue or object store go
+//! next door in `tests/e2e/main.rs`.
+
+use {{snake}}::{{module}};
+use nest_rs_testing::TestApp;
+
+#[tokio::test]
+async fn hello_endpoint_greets() {
+    let app = TestApp::builder()
+        .module::<{{module}}>()
+        .build()
+        .await
+        .expect("{{module}} boots and mounts its routes");
+
+    let resp = app.http().get("/").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_text("Hello World").await;
+}
+"#;
+
+/// The `e2e` suite, scaffolded empty for every app in either layout.
+/// `nestrs run test unit` filters on `not binary(e2e)` and `test e2e` on
+/// `binary(e2e)` — nextest rejects a filterset naming a binary the workspace
+/// does not have, so the suite has to exist from day one for either command to
+/// run at all.
+pub const E2E: &str = r#"//! End-to-end suite — the tests that need live infrastructure (Postgres,
+//! Redis, object storage). `nestrs run test e2e` runs exactly this binary and
+//! `nestrs run test unit` excludes it, so the fast suite never needs a
+//! database up.
+//!
+//! Boot the app against a throwaway database with `nest_rs_testing`'s
+//! `EphemeralDatabase` (feature `orm`), then drive it through `TestApp` the
+//! same way `tests/integration/main.rs` does without one.
+//!
+//! No tests yet — `nestrs run test e2e` passes an empty suite.
+"#;

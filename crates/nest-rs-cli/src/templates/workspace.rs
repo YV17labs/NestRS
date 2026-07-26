@@ -17,14 +17,19 @@ rust-version = "1.96"
 [workspace.dependencies]
 anyhow = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 features = { path = "crates/features" }
+migrations = { path = "crates/migrations" }
 nest-rs-core = "{{nestrs_version}}"
 nest-rs-config = "{{nestrs_version}}"
 nest-rs-guards = "{{nestrs_version}}"
 nest-rs-http = "{{nestrs_version}}"
 nest-rs-interceptors = "{{nestrs_version}}"
+nest-rs-seaorm = { version = "{{nestrs_version}}", features = ["http"] }
 nest-rs-testing = "{{nestrs_version}}"
 poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
+sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
+sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 
 # Release: the smallest, fastest single binary — production defaults.
 [profile.release]
@@ -52,87 +57,13 @@ nest-rs-interceptors.workspace = true
 poem.workspace = true
 "#;
 
+/// The feature-crate root. Every workspace starts with the app's own `hello`
+/// feature declared here (see [`super::hello`]).
 pub const FEATURES_LIB: &str = r#"//! Product features — vertical slices shared across apps.
-//!
-//! Add one with: `nestrs g feature <name>` (port) or `nestrs g feature <name> --http`.
-"#;
 
-pub const FEATURES_LIB_WITH_HELLO: &str = r#"//! Product features — vertical slices shared across apps.
+pub mod {{snake}};
 
-pub mod hello;
-
-pub use hello::HelloHttpModule;
-"#;
-
-pub const HELLO_MOD: &str = r#"mod module;
-mod service;
-
-pub mod http;
-
-pub use http::HelloHttpModule;
-pub use module::HelloModule;
-pub use service::HelloService;
-"#;
-
-pub const HELLO_MODULE: &str = r#"use nest_rs_core::module;
-
-use super::service::HelloService;
-
-#[module(providers = [HelloService])]
-pub struct HelloModule;
-"#;
-
-pub const HELLO_SERVICE: &str = r#"use nest_rs_core::injectable;
-
-#[injectable]
-#[derive(Default)]
-pub struct HelloService;
-
-impl HelloService {
-    pub fn greeting(&self) -> String {
-        "Hello World".to_string()
-    }
-}
-"#;
-
-pub const HELLO_HTTP_MOD: &str = r#"mod controller;
-mod module;
-
-pub use controller::HelloController;
-pub use module::HelloHttpModule;
-"#;
-
-pub const HELLO_HTTP_MODULE: &str = r#"use nest_rs_core::module;
-
-use super::controller::HelloController;
-use crate::hello::HelloModule;
-
-#[module(
-    imports = [HelloModule],
-    providers = [HelloController],
-)]
-pub struct HelloHttpModule;
-"#;
-
-pub const HELLO_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
-
-use nest_rs_http::{controller, routes};
-
-use crate::hello::HelloService;
-
-#[controller(path = "/")]
-pub struct HelloController {
-    #[inject]
-    svc: Arc<HelloService>,
-}
-
-#[routes]
-impl HelloController {
-    #[get("/")]
-    async fn hello(&self) -> String {
-        self.svc.greeting()
-    }
-}
+pub use {{snake}}::{{http_module}};
 "#;
 
 /// Thin workspace app — composition only (`apps/api` shape).
@@ -178,51 +109,21 @@ async fn main() -> Result<()> {
 }
 "#;
 
-pub const APP_MODULE_WITH_HELLO: &str = r#"use nest_rs_core::module;
+/// Composition only — the app's own module name and the feature module it
+/// serves share a snake name, in two different crates (`BlogModule` in
+/// `apps/blog/src/module.rs`, `BlogModule` in `crates/features/src/blog/`).
+pub const APP_MODULE: &str = r#"use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
 
-use features::hello::HelloHttpModule;
+use features::{{snake}}::{{http_module}};
 
 #[module(
     imports = [
         HttpModule::for_root(HttpConfig { port: {{port}}, ..Default::default() }),
-        HelloHttpModule,
+        {{http_module}},
     ],
 )]
 pub struct {{module}};
-"#;
-
-/// Thin workspace app — composition only; HTTP port pinned in code (see `apps/api`).
-pub const APP_MODULE: &str = r#"use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
-
-#[module(imports = [
-    HttpModule::for_root(HttpConfig { port: {{port}}, ..Default::default() }),
-])]
-pub struct {{module}};
-"#;
-
-pub const APP_SMOKE: &str = r#"//! In-process smoke test — boots the real DI graph through `TestApp`, no live
-//! infra, so it belongs to the `integration` suite and runs on every
-//! `nestrs run test unit`. Add a `tests/e2e/main.rs` suite when the app grows
-//! a database, queue or storage dependency.
-
-use {{snake}}::{{module}};
-use nest_rs_testing::TestApp;
-
-#[tokio::test]
-async fn hello_endpoint_greets() {
-    let app = TestApp::builder()
-        .with_test_telemetry()
-        .module::<{{module}}>()
-        .build()
-        .await
-        .expect("{{module}} boots and mounts its routes");
-
-    let resp = app.http().get("/").send().await;
-    resp.assert_status_is_ok();
-    resp.assert_text("Hello World").await;
-}
 "#;
 
 pub const README: &str = r#"# {{kebab}}
@@ -244,17 +145,25 @@ Open **http://localhost:3000/** in your browser — `Hello World` from
 port is set in `apps/hello/src/module.rs`, not in `.env`.
 
 Need a single crate instead? Use
-[standalone mode](/cli/#layout-detection): `nestrs new <name> --standalone`.
+[standalone mode](https://nestrs.dev/cli/#layout-detection):
+`nestrs new <name> --standalone`.
 
 ## Grow the workspace
 
 ```bash
-nestrs new blog
-nestrs g resource posts
+nestrs new blog                    # another app + its own hello on GET /
+nestrs g resource posts            # DB-backed CRUD, behind the app's guards
+nestrs g migration create_posts    # its table
+docker compose up -d && nestrs run db up
 ```
 
+Every app is scaffolded with a `hello` feature named after it, so it answers on
+`/` from the first run — delete `crates/features/src/<app>/` once the app serves
+something real. `crates/migrations/` and `crates/seed/` back the
+`nestrs run db …` verbs.
+
 Import edge modules in each app's root `module.rs` — see
-[`users/`](https://github.com/YV17labs/NestRS/tree/main/crates/features/src/users)
+[`users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
 in the framework repo.
 "#;
 
@@ -307,9 +216,9 @@ unit:
     cargo nextest run --workspace -E 'not binary(e2e)'
     cargo test --workspace --doc          # nextest skips doctests; run them too
 
-# e2e tests — your `tests/e2e/main.rs` binaries (live Postgres/Redis if the
-# app needs them). None scaffolded yet, so `--no-tests=pass` keeps this green
-# until an app adds its suite.
+# e2e tests — the `tests/e2e/main.rs` suites (live Postgres/Redis if the app
+# needs them). Each app is scaffolded with an empty one, so `--no-tests=pass`
+# keeps this green until you write the first.
 e2e:
     cargo nextest run --workspace -E 'binary(e2e)' --no-tests=pass
 

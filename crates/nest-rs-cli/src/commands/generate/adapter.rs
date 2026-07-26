@@ -94,13 +94,8 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     s.edit(feature_root.join("mod.rs"), ensure_lines(port_lines));
 
     // Wire the adapter module into the current app, when the cursor is in one.
-    let wired_app = wire_into_app(
-        &ctx,
-        &mut s,
-        &format!("features::{}::{}", names.snake, tmodule),
-        &tmodule,
-        None,
-    );
+    let use_path = format!("features::{}::{}", names.snake, tmodule);
+    let wired_app = wire_into_app(&ctx, &mut s, &[(use_path.as_str(), tmodule.as_str())], None);
 
     finish(
         s,

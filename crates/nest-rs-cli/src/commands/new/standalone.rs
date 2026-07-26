@@ -3,16 +3,11 @@ use std::path::Path;
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, rustfmt};
-use crate::templates::{shared, standalone};
+use crate::templates::{hello, shared, standalone};
 
-use super::{NewTemplate, queue_env_files};
+use super::queue_env_files;
 
-pub fn scaffold(
-    output: &Path,
-    names: &Names,
-    template: NewTemplate,
-    dry_run: bool,
-) -> CliResult<()> {
+pub fn scaffold(output: &Path, names: &Names, dry_run: bool) -> CliResult<()> {
     let root = output.join(&names.kebab);
     if root.exists() {
         return Err(CliError::AlreadyExists(root));
@@ -30,20 +25,20 @@ pub fn scaffold(
     s.create(root.join(".dockerignore"), r.render(shared::DOCKERIGNORE));
     s.create(root.join("Justfile"), r.render(standalone::JUSTFILE));
     s.create(root.join("test.just"), r.render(standalone::TEST_JUSTFILE));
-    s.create(root.join("db.just"), r.render(shared::DB_JUSTFILE));
     s.create(root.join("README.md"), r.render(standalone::README));
     s.create(root.join("Dockerfile"), r.render(standalone::DOCKERFILE));
     queue_env_files(&mut s, &root, names, &names.kebab, shared::ENV);
 
-    queue_sources(&mut s, &root.join("src"), &r, template);
+    queue_sources(&mut s, &root.join("src"), names);
 
-    if matches!(template, NewTemplate::Hello) {
-        // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
-        s.create(
-            root.join("tests/integration/main.rs"),
-            r.render(standalone::SMOKE),
-        );
-    }
+    // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
+    s.create(
+        root.join("tests/integration/main.rs"),
+        r.render(shared::SMOKE),
+    );
+    // Empty, but present: the test recipes filter on `binary(e2e)`, which
+    // nextest refuses to parse when no such binary exists.
+    s.create(root.join("tests/e2e/main.rs"), r.render(shared::E2E));
 
     let report = s.apply(dry_run)?;
     if !dry_run {
@@ -51,30 +46,25 @@ pub fn scaffold(
     }
 
     println!("Created standalone nestrs app at {}", root.display());
-    println!("Template: {}", template.description());
     report.print(output);
     print_next_steps(&root);
     Ok(())
 }
 
-fn queue_sources(s: &mut Scaffold, src: &Path, r: &Renderer, template: NewTemplate) {
-    let lib = match template {
-        NewTemplate::Hello => standalone::LIB_HELLO,
-        NewTemplate::Empty => standalone::LIB_EMPTY,
-    };
-    s.create(src.join("lib.rs"), r.render(lib));
+fn queue_sources(s: &mut Scaffold, src: &Path, names: &Names) {
+    let r = Renderer::new(names);
+    s.create(src.join("lib.rs"), r.render(standalone::LIB));
     s.create(src.join("main.rs"), r.render(standalone::MAIN));
+    s.create(src.join("module.rs"), r.render(standalone::MODULE));
 
-    let module_src = match template {
-        NewTemplate::Hello => standalone::MODULE_HELLO,
-        NewTemplate::Empty => standalone::MODULE_EMPTY,
-    };
-    s.create(src.join("module.rs"), r.render(module_src));
-
-    if matches!(template, NewTemplate::Hello) {
-        s.create(src.join("service.rs"), r.render(standalone::SERVICE));
-        s.create(src.join("controller.rs"), r.render(standalone::CONTROLLER));
-    }
+    // The greeting is the shared `hello` module: same service, same `GET /`,
+    // laid out for a single crate instead of a feature folder.
+    let hello_r = r.with(
+        "service_use",
+        format!("crate::service::{}", names.service()),
+    );
+    s.create(src.join("service.rs"), hello_r.render(hello::SERVICE));
+    s.create(src.join("controller.rs"), hello_r.render(hello::CONTROLLER));
 }
 
 fn print_next_steps(root: &Path) {

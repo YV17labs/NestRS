@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn write_fake_workspace(root: &Path) {
@@ -26,6 +26,28 @@ version = "0.1.0"
         "[package]\nname = \"features\"\n\n[dependencies]\nnest-rs-core.workspace = true\n",
     )
     .unwrap();
+    fs::write(root.join(".env"), "NESTRS_DATABASE__URL=postgres://x\n").unwrap();
+}
+
+/// An app crate inside the fake workspace, carrying the
+/// `#[module(imports = [ … ])]` shape the auto-wiring anchors on.
+fn write_fake_app(root: &Path, name: &str) -> PathBuf {
+    let app = root.join("apps").join(name);
+    fs::create_dir_all(app.join("src")).unwrap();
+    fs::write(
+        app.join("Cargo.toml"),
+        format!("[package]\nname = \"{name}\"\n\n[dependencies]\nnest-rs-core.workspace = true\n"),
+    )
+    .unwrap();
+    fs::write(
+        app.join("src/module.rs"),
+        "use nest_rs_core::module;\nuse nest_rs_http::{HttpConfig, HttpModule};\n\n\
+         #[module(\n    imports = [\n        \
+         HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),\n    ],\n)]\n\
+         pub struct AppModule;\n",
+    )
+    .unwrap();
+    app
 }
 
 /// Run `nestrs <args...>` with cwd at `dir`, asserting success.
@@ -64,7 +86,9 @@ fn new_standalone_hello_template() {
     assert!(app.join("src/controller.rs").is_file());
     // The scaffolded smoke test needs no live infra ⇒ `integration` suite.
     assert!(app.join("tests/integration/main.rs").is_file());
-    assert!(!app.join("tests/e2e").exists());
+    // …and an empty `e2e` suite beside it: the test recipes filter on
+    // `binary(e2e)`, which nextest refuses to parse when nothing matches.
+    assert!(app.join("tests/e2e/main.rs").is_file());
     assert!(app.join("Cargo.toml").is_file());
     assert!(app.join("Dockerfile").is_file());
     assert!(app.join(".dockerignore").is_file());
@@ -95,17 +119,16 @@ fn new_standalone_hello_template() {
     assert!(justfile.contains("build:"));
     assert!(justfile.contains("cargo build --release"));
     assert!(justfile.contains("mod test"));
-    assert!(justfile.contains("mod db"));
+    // The db verbs drive the workspace's `migrations`/`seed` crates, which a
+    // single crate has nowhere to put — so neither the module nor the file.
+    assert!(!justfile.contains("mod db"));
+    assert!(!app.join("db.just").exists());
     assert!(app.join("test.just").is_file());
     let test_just = fs::read_to_string(app.join("test.just")).unwrap();
     assert!(test_just.contains("unit:"));
     assert!(test_just.contains("e2e:"));
     assert!(test_just.contains("doc:"));
     assert!(test_just.contains("cargo test --doc"));
-    assert!(app.join("db.just").is_file());
-    let db_just = fs::read_to_string(app.join("db.just")).unwrap();
-    assert!(db_just.contains("up:"));
-    assert!(db_just.contains("reset: fresh seed"));
 }
 
 #[test]
@@ -132,9 +155,21 @@ fn new_workspace_greenfield() {
     // The default app and demo feature are both named `hello`.
     assert!(root.join("apps/hello/src/module.rs").is_file());
     assert!(!root.join("apps/hello/src/controller.rs").exists());
-    // The scaffolded smoke test needs no live infra ⇒ `integration` suite.
+    // The scaffolded smoke test needs no live infra ⇒ `integration` suite,
+    // with an empty `e2e` suite beside it so the nextest filtersets resolve.
     assert!(root.join("apps/hello/tests/integration/main.rs").is_file());
-    assert!(!root.join("apps/hello/tests/e2e").exists());
+    assert!(root.join("apps/hello/tests/e2e/main.rs").is_file());
+    let smoke = fs::read_to_string(root.join("apps/hello/tests/integration/main.rs")).unwrap();
+    assert!(
+        !smoke.contains("with_test_telemetry"),
+        "that builder method is behind an optional feature the scaffold does not enable"
+    );
+    // The db verbs name these two crates in every recipe.
+    assert!(root.join("crates/migrations/src/bin/migrate.rs").is_file());
+    assert!(root.join("crates/migrations/src/migrator.rs").is_file());
+    assert!(root.join("crates/seed/src/main.rs").is_file());
+    // No Dockerfile ships in workspace mode, so nothing to ignore for.
+    assert!(!root.join(".dockerignore").exists());
     assert!(root.join("Justfile").is_file());
     let justfile = fs::read_to_string(root.join("Justfile")).unwrap();
     assert!(justfile.contains("dev app=\"hello\""));
@@ -184,11 +219,52 @@ fn new_app_inside_nestrs_workspace() {
     let app = dir.path().join("apps/demo-api");
     assert!(app.join("src/module.rs").is_file());
     assert!(app.join("src/main.rs").is_file());
+    // Logic never lands in an app crate — the greeting is a feature.
     assert!(!app.join("src/controller.rs").exists());
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
     assert!(module.contains("HttpConfig { port: 3000"));
     assert!(!module.contains("for_root(None)"));
+
+    // The norm: an app added to a workspace gets its own `hello` feature, so it
+    // answers on `/` the first time it runs rather than 404ing.
+    let feature = dir.path().join("crates/features/src/demo_api");
+    assert!(feature.join("service.rs").is_file());
+    let controller = fs::read_to_string(feature.join("http/controller.rs")).unwrap();
+    assert!(
+        controller.contains(r#"#[controller(path = "/")]"#) && controller.contains("#[public]"),
+        "the scaffolded app must mount a public GET /: {controller}"
+    );
+    assert!(
+        module.contains("DemoApiHttpModule") && module.contains("features::demo_api"),
+        "and the app must import it: {module}"
+    );
+
+    let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
+    assert!(lib.contains("pub mod demo_api;"), "features lib.rs: {lib}");
+    // The pre-existing feature declaration survives the edit.
+    assert!(lib.contains("pub mod users;"), "features lib.rs: {lib}");
+
+    // A smoke test ships with the greeting it asserts.
+    assert!(app.join("tests/integration/main.rs").is_file());
+}
+
+/// `nestrs new posts` where a `posts` feature already exists would clobber
+/// product code. Refuse instead — the app name is free to change.
+#[test]
+fn new_app_refuses_to_reuse_an_existing_feature_name() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    fs::create_dir_all(dir.path().join("crates/features/src/users")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["new", "users"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(!dir.path().join("apps/users").exists());
 }
 
 #[test]
@@ -314,14 +390,150 @@ fn generate_resource_creates_crud_slice_and_deps() {
     assert!(entity.contains("#[expose(name = \"Post\""));
     assert!(entity.contains("table_name = \"post\""));
 
-    // dependencies spliced into both manifests
+    // Dependencies spliced into both manifests. `schemars` and `nest-rs-authz`
+    // are what `#[expose]`/`#[crud]` expand to, so their absence would only
+    // surface as macro-expansion errors on the first `cargo check`.
     let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
     assert!(root_cargo.contains("nest-rs-seaorm"));
+    assert!(root_cargo.contains("schemars"));
+    assert!(root_cargo.contains("nest-rs-authz"));
+    assert!(
+        root_cargo.contains("sea-orm = { version = \"2.0\""),
+        "the generated pin tracks the released sea-orm, not a release candidate: {root_cargo}"
+    );
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(features_cargo.contains("nest-rs-seaorm"));
+    assert!(features_cargo.contains("schemars"));
+    assert!(features_cargo.contains("nest-rs-authz"));
 
     let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
     assert!(lib.contains("pub mod posts;"));
+}
+
+#[test]
+fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+
+    run_ok(
+        dir.path(),
+        &["g", "resource", "posts", "-p", dir.path().to_str().unwrap()],
+    );
+
+    let feature = dir.path().join("crates/features/src/posts");
+    let controller = fs::read_to_string(feature.join("http/controller.rs")).unwrap();
+    assert!(
+        controller.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        "a DB-backed controller serves nothing without an ability guard: {controller}"
+    );
+    assert!(
+        controller.contains("#[crud(") && controller.contains("entity = PostEntity"),
+        "the resource controller uses the #[crud] form: {controller}"
+    );
+
+    let module = fs::read_to_string(feature.join("http/module.rs")).unwrap();
+    assert!(
+        module.contains("AuthzHttpModule"),
+        "the http module imports AuthzHttpModule: {module}"
+    );
+
+    // The guards it names have to exist — so the adapter came with it.
+    let src = dir.path().join("crates/features/src");
+    assert!(src.join("authn/strategy.rs").is_file());
+    assert!(src.join("authz/ability.rs").is_file());
+    assert!(src.join("authz/http/guard.rs").is_file());
+    assert!(src.join("identity/claims.rs").is_file());
+
+    let env = fs::read_to_string(dir.path().join(".env")).unwrap();
+    assert!(env.contains("NESTRS_AUTHN__SECRET"));
+}
+
+#[test]
+fn generate_auth_scaffolds_the_adapter_once() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+
+    run_ok(
+        dir.path(),
+        &["g", "auth", "-p", dir.path().to_str().unwrap()],
+    );
+
+    let src = dir.path().join("crates/features/src");
+    let ability = fs::read_to_string(src.join("authz/ability.rs")).unwrap();
+    assert!(ability.contains("impl AbilityFactory for AppAbility"));
+    // Both branches are scaffolded empty: the authenticated policy and the
+    // visitor one a `#[public]` route reads. Leaving `define_visitor` out would
+    // hide the only place an anonymous read can be granted.
+    assert!(
+        ability.contains("fn define(") && ability.contains("fn define_visitor("),
+        "the scaffolded policy carries both branches: {ability}"
+    );
+    let guard = fs::read_to_string(src.join("authz/http/guard.rs")).unwrap();
+    assert!(guard.contains("AbilityGuard<AppAbility>"));
+
+    let lib = fs::read_to_string(src.join("lib.rs")).unwrap();
+    assert!(lib.contains("pub mod authn;"));
+    assert!(lib.contains("pub mod authz;"));
+    assert!(lib.contains("pub use identity::{Claims, Role};"));
+
+    // A workspace has exactly one auth adapter; a second run must not clobber
+    // the policy the developer has been editing.
+    let second = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(["g", "auth", "-p", dir.path().to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!second.status.success());
+}
+
+// Both auth roots have to reach the composition site from one run. They are two
+// imports into the same `module.rs`, and a scaffold transaction resolves every
+// edit against the file *on disk* — so queuing them as two edits would silently
+// drop the first, leaving an app that lists only half of what it serves.
+#[test]
+fn generate_auth_wires_both_roots_into_the_app() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let app = write_fake_app(dir.path(), "api");
+
+    run_ok(&app, &["g", "auth"]);
+
+    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    for (use_path, ident) in [
+        ("features::authn::AuthnModule", "AuthnModule"),
+        ("features::authz::AuthzHttpModule", "AuthzHttpModule"),
+    ] {
+        assert!(module.contains(&format!("use {use_path};")), "{module}");
+        assert!(
+            module.contains(&format!("{ident},")),
+            "the imports array must list {ident}: {module}"
+        );
+    }
+    // The pre-existing import is untouched.
+    assert!(module.contains("HttpModule::for_root"), "{module}");
+}
+
+// Same obligation on the bootstrap path: `g resource` scaffolds the adapter when
+// the workspace has none, so it owes the same composition site the same entries
+// — in the one edit it already spends on `module.rs` for its own module.
+#[test]
+fn generate_resource_wires_the_auth_roots_it_bootstrapped() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let app = write_fake_app(dir.path(), "api");
+    // `g resource` wires only into an app that already has a database.
+    let module_rs = app.join("src/module.rs");
+    let with_db = fs::read_to_string(&module_rs)
+        .unwrap()
+        .replace("    ],", "        DatabaseModule::for_root(None),\n    ],");
+    fs::write(&module_rs, with_db).unwrap();
+
+    run_ok(&app, &["g", "resource", "posts"]);
+
+    let module = fs::read_to_string(&module_rs).unwrap();
+    for ident in ["PostsHttpModule", "AuthnModule", "AuthzHttpModule"] {
+        assert!(module.contains(&format!("{ident},")), "{ident}: {module}");
+    }
 }
 
 fn write_fake_migrations_crate(root: &Path) {
@@ -399,39 +611,36 @@ fn generate_migration_registers_in_both_lib_and_migrator() {
 }
 
 #[test]
-fn generate_resource_guarded_emits_the_crud_and_guards_form() {
+fn generate_migration_bootstraps_the_crate_when_absent() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
 
+    // No `crates/migrations` — a workspace scaffolded before it shipped.
     run_ok(
         dir.path(),
         &[
             "g",
-            "resource",
-            "posts",
-            "--guarded",
+            "migration",
+            "create_widget",
             "-p",
             dir.path().to_str().unwrap(),
         ],
     );
 
-    let feature = dir.path().join("crates/features/src/posts");
-    let controller = fs::read_to_string(feature.join("http/controller.rs")).unwrap();
-    assert!(
-        controller.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
-        "guarded controller binds the guards: {controller}"
-    );
-    assert!(
-        controller.contains("#[crud(") && controller.contains("entity = PostEntity"),
-        "guarded controller uses the #[crud] form: {controller}"
-    );
-    // The unguarded stub's SECURITY comment must be gone.
-    assert!(!controller.contains("scaffolded without guards"));
+    let mig = dir.path().join("crates/migrations/src");
+    assert!(mig.join("lib.rs").is_file());
+    assert!(mig.join("bin/migrate.rs").is_file());
+    assert!(dir.path().join("crates/seed/src/main.rs").is_file());
 
-    let module = fs::read_to_string(feature.join("http/module.rs")).unwrap();
+    let lib = fs::read_to_string(mig.join("lib.rs")).unwrap();
     assert!(
-        module.contains("AuthzHttpModule"),
-        "guarded http module imports AuthzHttpModule: {module}"
+        lib.contains("_create_widget;"),
+        "lib.rs registers it: {lib}"
+    );
+    let migrator = fs::read_to_string(mig.join("migrator.rs")).unwrap();
+    assert!(
+        migrator.contains("_create_widget::Migration)"),
+        "migrator boxes it: {migrator}"
     );
 }
 

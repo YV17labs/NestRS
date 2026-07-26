@@ -1,22 +1,18 @@
 use std::path::Path;
 
+use crate::commands::queue_db_crates;
 use crate::context::NestrsWorkspace;
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;
 use crate::port::next_http_port;
-use crate::scaffold::{Renderer, Scaffold, rustfmt};
-use crate::templates::{shared, workspace};
+use crate::scaffold::{Renderer, Scaffold, ensure_lines, rustfmt};
+use crate::templates::{hello, shared, workspace};
 
-use super::{NewTemplate, queue_env_files};
+use super::queue_env_files;
 
 const HELLO_APP_PORT: u16 = 3000;
 
-pub fn scaffold_root(
-    output: &Path,
-    names: &Names,
-    template: NewTemplate,
-    dry_run: bool,
-) -> CliResult<()> {
+pub fn scaffold_root(output: &Path, names: &Names, dry_run: bool) -> CliResult<()> {
     let root = output.join(&names.kebab);
     if root.exists() {
         return Err(CliError::AlreadyExists(root));
@@ -35,28 +31,27 @@ pub fn scaffold_root(
         root.join("crates/features/Cargo.toml"),
         r.render(workspace::FEATURES_CARGO),
     );
-
-    let hello = Names::parse("hello");
+    queue_db_crates(&mut s, &root, &[]);
     queue_root_files(&mut s, &root, names);
-    let app_dir = root.join("apps").join(&hello.kebab);
 
-    match template {
-        NewTemplate::Hello => {
-            s.create(
-                root.join("crates/features/src/lib.rs"),
-                workspace::FEATURES_LIB_WITH_HELLO.to_string(),
-            );
-            queue_hello_feature(&mut s, &root.join("crates/features/src/hello"), &hello);
-            queue_app(&mut s, &app_dir, &hello, true, HELLO_APP_PORT);
-        }
-        NewTemplate::Empty => {
-            s.create(
-                root.join("crates/features/src/lib.rs"),
-                workspace::FEATURES_LIB.to_string(),
-            );
-            queue_app(&mut s, &app_dir, &hello, false, HELLO_APP_PORT);
-        }
-    }
+    // The first app is always `hello`, whatever the workspace is called.
+    let hello_names = Names::parse("hello");
+    let hello_r = Renderer::new(&hello_names);
+    s.create(
+        root.join("crates/features/src/lib.rs"),
+        hello_r.render(workspace::FEATURES_LIB),
+    );
+    queue_hello_feature(
+        &mut s,
+        &root.join("crates/features/src").join(&hello_names.snake),
+        &hello_names,
+    );
+    queue_app(
+        &mut s,
+        &root.join("apps").join(&hello_names.kebab),
+        &hello_names,
+        HELLO_APP_PORT,
+    );
 
     let report = s.apply(dry_run)?;
     if !dry_run {
@@ -64,7 +59,6 @@ pub fn scaffold_root(
     }
 
     println!("Created nestrs workspace at {}", root.display());
-    println!("Template: {}", template.description());
     report.print(output);
     print_root_next_steps(&root);
     Ok(())
@@ -78,10 +72,28 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
             path: root,
         });
     }
+    // Same shape as the root scaffold: the app gets a `hello` feature named
+    // after it, so `nestrs run dev <app>` answers on `/` the first time. A
+    // feature already owning that name would be clobbered, so refuse instead —
+    // the app name is the one thing the caller can change for free.
+    if ws.feature_exists(&names.snake) {
+        return Err(CliError::FeatureExists {
+            name: names.snake.clone(),
+            path: ws.feature_root(&names.snake),
+        });
+    }
 
     let port = next_http_port(ws)?;
     let mut s = Scaffold::new();
-    queue_app(&mut s, &root, names, false, port);
+    queue_hello_feature(&mut s, &ws.feature_root(&names.snake), names);
+    s.edit(
+        ws.features_lib(),
+        ensure_lines(vec![
+            format!("pub mod {};", names.snake),
+            format!("pub use {}::{};", names.snake, names.http_module()),
+        ]),
+    );
+    queue_app(&mut s, &root, names, port);
     queue_root_files(&mut s, &ws.root, names);
 
     let report = s.apply(dry_run)?;
@@ -100,51 +112,52 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
     Ok(())
 }
 
-fn queue_hello_feature(s: &mut Scaffold, feature_root: &Path, hello: &Names) {
-    let r = Renderer::new(hello);
-    s.create(feature_root.join("mod.rs"), r.render(workspace::HELLO_MOD));
+/// The app's `hello` feature — port (module + service) plus its HTTP adapter,
+/// the shared [`hello`] templates in the workspace's feature layout. Every
+/// identifier derives from `names`, so `hello` and any later app are one shape.
+fn queue_hello_feature(s: &mut Scaffold, feature_root: &Path, names: &Names) {
+    let r = Renderer::new(names).with(
+        "service_use",
+        format!("crate::{}::{}", names.snake, names.service()),
+    );
+    s.create(feature_root.join("mod.rs"), r.render(hello::FEATURE_MOD));
     s.create(
         feature_root.join("module.rs"),
-        r.render(workspace::HELLO_MODULE),
+        r.render(hello::FEATURE_MODULE),
     );
-    s.create(
-        feature_root.join("service.rs"),
-        r.render(workspace::HELLO_SERVICE),
-    );
+    s.create(feature_root.join("service.rs"), r.render(hello::SERVICE));
     s.create(
         feature_root.join("http/mod.rs"),
-        r.render(workspace::HELLO_HTTP_MOD),
+        r.render(hello::FEATURE_HTTP_MOD),
     );
     s.create(
         feature_root.join("http/module.rs"),
-        r.render(workspace::HELLO_HTTP_MODULE),
+        r.render(hello::FEATURE_HTTP_MODULE),
     );
     s.create(
         feature_root.join("http/controller.rs"),
-        r.render(workspace::HELLO_HTTP_CONTROLLER),
+        r.render(hello::CONTROLLER),
     );
 }
 
-fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, with_hello: bool, port: u16) {
+fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
     let r = Renderer::new(names).with("port", port.to_string());
     s.create(app_root.join("Cargo.toml"), r.render(workspace::APP_CARGO));
     s.create(app_root.join("src/lib.rs"), r.render(workspace::APP_LIB));
     s.create(app_root.join("src/main.rs"), r.render(workspace::APP_MAIN));
+    s.create(
+        app_root.join("src/module.rs"),
+        r.render(workspace::APP_MODULE),
+    );
 
-    let module_src = if with_hello {
-        workspace::APP_MODULE_WITH_HELLO
-    } else {
-        workspace::APP_MODULE
-    };
-    s.create(app_root.join("src/module.rs"), r.render(module_src));
-
-    if with_hello {
-        // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
-        s.create(
-            app_root.join("tests/integration/main.rs"),
-            r.render(workspace::APP_SMOKE),
-        );
-    }
+    // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
+    s.create(
+        app_root.join("tests/integration/main.rs"),
+        r.render(shared::SMOKE),
+    );
+    // Empty, but present: the test recipes filter on `binary(e2e)`, which
+    // nextest refuses to parse when no such binary exists.
+    s.create(app_root.join("tests/e2e/main.rs"), r.render(shared::E2E));
 }
 
 fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names) {
@@ -155,7 +168,8 @@ fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names) {
     s.create_if_missing(base.join("db.just"), r.render(shared::DB_JUSTFILE));
     s.create_if_missing(base.join("compose.yml"), r.render(shared::COMPOSE));
     s.create_if_missing(base.join(".gitignore"), r.render(shared::GITIGNORE));
-    s.create_if_missing(base.join(".dockerignore"), r.render(shared::DOCKERIGNORE));
+    // No `.dockerignore`: workspace mode ships no Dockerfile, so there is
+    // nothing for it to scope. Standalone mode, which does, writes one.
 }
 
 fn print_root_next_steps(root: &Path) {
@@ -165,7 +179,7 @@ fn print_root_next_steps(root: &Path) {
     println!("Next steps:");
     println!("  cd {}", root.display());
     println!("  nestrs run dev hello");
-    println!("  Open http://localhost:3000/ in your browser");
+    println!("  Open http://localhost:{HELLO_APP_PORT}/ in your browser");
     println!();
     println!("Add another app:  nestrs new <name>");
     println!("Add a feature:    nestrs g feature <name>   (then g http <name>)");

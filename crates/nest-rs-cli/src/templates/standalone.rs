@@ -56,19 +56,16 @@ async fn main() -> Result<()> {
 }
 "#;
 
-pub const LIB_HELLO: &str = r#"mod controller;
+pub const LIB: &str = r#"mod controller;
 mod module;
 mod service;
 
 pub use module::{{module}};
 "#;
 
-pub const LIB_EMPTY: &str = r#"mod module;
-
-pub use module::{{module}};
-"#;
-
-pub const MODULE_HELLO: &str = r#"use nest_rs_core::module;
+/// The single crate's root module. `service.rs` and `controller.rs` are the
+/// shared [`super::hello`] templates — one starter, both layouts.
+pub const MODULE: &str = r#"use nest_rs_core::module;
 use nest_rs_http::HttpModule;
 
 use crate::controller::{{controller}};
@@ -81,71 +78,6 @@ use crate::service::{{service}};
     providers = [{{service}}, {{controller}}],
 )]
 pub struct {{module}};
-"#;
-
-pub const MODULE_EMPTY: &str = r#"use nest_rs_core::module;
-use nest_rs_http::HttpModule;
-
-#[module(imports = [
-    HttpModule::for_root(None),
-])]
-pub struct {{module}};
-"#;
-
-pub const SERVICE: &str = r#"use nest_rs_core::injectable;
-
-#[injectable]
-#[derive(Default)]
-pub struct {{service}};
-
-impl {{service}} {
-    pub fn greeting(&self) -> String {
-        "Hello World".to_string()
-    }
-}
-"#;
-
-pub const CONTROLLER: &str = r#"use std::sync::Arc;
-
-use nest_rs_http::{controller, routes};
-
-use crate::service::{{service}};
-
-#[controller(path = "/")]
-pub struct {{controller}} {
-    #[inject]
-    svc: Arc<{{service}}>,
-}
-
-#[routes]
-impl {{controller}} {
-    #[get("/")]
-    async fn hello(&self) -> String {
-        self.svc.greeting()
-    }
-}
-"#;
-
-pub const SMOKE: &str = r#"//! In-process smoke test — boots the real DI graph through `TestApp`, no live
-//! infra, so it belongs to the `integration` suite and runs on every
-//! `nestrs run test unit`. Add a `tests/e2e/main.rs` suite when the app grows
-//! a database, queue or storage dependency.
-
-use {{snake}}::{{module}};
-use nest_rs_testing::TestApp;
-
-#[tokio::test]
-async fn hello_endpoint_greets() {
-    let app = TestApp::builder()
-        .module::<{{module}}>()
-        .build()
-        .await
-        .expect("{{module}} boots and mounts its routes");
-
-    let resp = app.http().get("/").send().await;
-    resp.assert_status_is_ok();
-    resp.assert_text("Hello World").await;
-}
 "#;
 
 pub const DOCKERFILE: &str = r#"# syntax=docker/dockerfile:1.7
@@ -193,8 +125,9 @@ check:
 # Tests — unit/integration/e2e/doctests. Usage: nestrs run test [unit|e2e|doc]
 mod test
 
-# Database lifecycle. Usage: nestrs run db up|down|fresh|status|seed|reset
-mod db
+# No database module here: those verbs drive the workspace's `migrations` and
+# `seed` crates, which a single-crate layout has nowhere to put. Scaffold a
+# workspace (`nestrs new <name>`) when this app grows a database.
 
 # Apply rustfmt.
 fmt:
@@ -218,8 +151,8 @@ unit:
     cargo nextest run -E 'not binary(e2e)'
     cargo test --doc          # nextest skips doctests; run them too
 
-# e2e tests — your `tests/e2e/main.rs` binary (live infra). None scaffolded
-# yet, so `--no-tests=pass` keeps this green until you add the suite.
+# e2e tests — the `tests/e2e/main.rs` suite (live infra). Scaffolded empty, so
+# `--no-tests=pass` keeps this green until you write the first one.
 e2e:
     cargo nextest run -E 'binary(e2e)' --no-tests=pass
 
@@ -243,13 +176,15 @@ nestrs run start    # build + run in release
 
 Open **http://localhost:3000/** in your browser — you should see `Hello World`.
 
-Need several apps sharing product code? Scaffold a
-[workspace](/cli/#layout-detection) instead:
-`nestrs new <name>`.
+Need several apps sharing product code — or a database? Scaffold a
+[workspace](https://nestrs.dev/cli/#layout-detection) instead:
+`nestrs new <name>`. The generators (`g resource`, `g migration`) and the
+`nestrs run db …` verbs are workspace-only.
 
 ## Configuration
 
-Environment variables load from the [`.env` cascade`](https://nestrs.dev/configuration/).
-Committed defaults live in `.env` and `.env.development`; copy `.env.example`
-to `.env.local` when you add Postgres or Redis later.
+Environment variables load from the
+[`.env` cascade](https://nestrs.dev/configuration/env-cascade/). Committed
+defaults live in `.env` and `.env.development`; copy `.env.example` to
+`.env.local` for anything machine-specific or secret.
 "#;

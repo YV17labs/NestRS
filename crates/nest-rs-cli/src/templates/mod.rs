@@ -1,5 +1,7 @@
 pub mod adapter;
+pub mod auth;
 pub mod feature;
+pub mod hello;
 pub mod migration;
 pub mod resource;
 pub mod shared;

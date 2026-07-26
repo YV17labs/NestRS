@@ -7,4 +7,4 @@ mod wiring;
 
 pub use render::Renderer;
 pub use transaction::{Scaffold, rustfmt};
-pub use wiring::{Transform, ensure_decl, ensure_lines, ensure_module_import};
+pub use wiring::{Transform, ensure_decl, ensure_lines, ensure_module_imports};

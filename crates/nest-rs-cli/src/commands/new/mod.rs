@@ -6,6 +6,6 @@ mod command;
 mod standalone;
 mod workspace;
 
-pub use command::{NewOptions, NewTemplate, project_dir_for_check, run, run_cargo_check};
+pub use command::{NewOptions, project_dir_for_check, run, run_cargo_check};
 
 pub(crate) use command::queue_env_files;

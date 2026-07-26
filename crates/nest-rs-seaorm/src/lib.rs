@@ -46,6 +46,8 @@ pub mod ws;
 
 pub use config::DatabaseConfig;
 pub use error::ServiceError;
+#[cfg(feature = "http")]
+pub use error::crud_error;
 pub use executor::{
     CommitError, Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
     current_executor_scope, with_executor, with_job_executor, with_request_executor,

@@ -65,12 +65,15 @@ types with their HTTP mapping already wired:
 | `ServiceError::Db(DbErr)` | `nest_rs_seaorm` | `500` (body: `"database error"`) |
 | `ServiceError::Validation(ValidationErrors)` | `nest_rs_seaorm` | `422` |
 | `AuthError::*` | `nest_rs_authn` | `401` + `WWW-Authenticate: Bearer` |
+| `AuthError::Unavailable` | `nest_rs_authn` | `500`, logged at `error` — an outage is not a credential signal |
 | `CredentialError` | `nest_rs_authn` | `401` (opaque `"invalid credentials"`) |
 | `TokenError::*` | `nest_rs_authn::oauth` | RFC 6749 wire codes (`400` / `401` / `500`) |
 
 A service returns the framework type directly; `?` flows it to the
-boundary; the impl decides status and body. No per-feature `error.rs`
-for these — the framework owns them once, every feature reuses them.
+boundary; the impl decides status and body. Every row above implements poem's
+`ResponseError`, which is what makes the `?` legal — a handler returning
+`Result<Json<T>>` propagates any of them with no `map_err`. No per-feature
+`error.rs` for these — the framework owns them once, every feature reuses them.
 
 ```rust
 use nest_rs_seaorm::ServiceError;

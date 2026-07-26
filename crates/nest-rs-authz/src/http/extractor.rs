@@ -50,6 +50,17 @@ where
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
         nest_rs_http::MaskProbe::mark();
         let ability = req.extensions().get::<Arc<Ability>>().ok_or_else(|| {
+            // A wiring bug, and the response body is an opaque problem+json: log
+            // it or the developer sees a 500 with nothing to grep for.
+            tracing::error!(
+                target: "nest_rs::authz",
+                action = ?A::ACTION,
+                subject = std::any::type_name::<S>(),
+                path = %req.original_uri().path(),
+                hint = "bind the ability guard (#[use_guards(AuthnGuard, AuthzGuard)]) \
+                        and import AuthzHttpModule in this feature's http/module.rs",
+                "missing request Ability — route is authorized but no ability guard ran",
+            );
             Error::from_string(
                 "missing request `Ability` — is the ability guard applied to this route?",
                 StatusCode::INTERNAL_SERVER_ERROR,

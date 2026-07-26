@@ -97,19 +97,8 @@ impl ServiceError {
     }
 }
 
-/// The one log line for a failed by-id access load — shared by the HTTP
-/// [`Bind`](crate::Bind) extractor and the GraphQL `bind` helper so the
-/// security/ops contract (full detail at `error` on `nest_rs::orm`, opaque
-/// wire) lives in a single place.
-#[cfg(any(feature = "http", feature = "graphql"))]
-pub(crate) fn log_by_id_load_failure(service: &'static str, err: &sea_orm::DbErr) {
-    tracing::error!(
-        target: "nest_rs::orm",
-        service,
-        error = %err,
-        "by-id access load failed",
-    );
-}
+#[cfg(feature = "http")]
+pub use http::crud_error;
 
 #[cfg(feature = "http")]
 mod http {
@@ -141,8 +130,14 @@ mod http {
         /// the `detail`, so a `DbErr`/internal message never reaches the wire;
         /// `Validation` additionally carries its field errors as an `errors`
         /// extension member.
+        ///
+        /// This is also the single place the opaque variants' detail is
+        /// **logged**: their whole contract is "wire sees a constant, `tracing`
+        /// sees the cause", and a 5xx nobody can grep for is the same defect as
+        /// no error handling at all.
         fn as_response(&self) -> Response {
             let status = self.status();
+            log_opaque(self);
             let mut problem = ProblemDetails::from_status(status).with_detail(self.to_string());
             if let ServiceError::Validation(errs) = self
                 && let Ok(fields) = serde_json::to_value(errs)
@@ -151,6 +146,59 @@ mod http {
             }
             problem.into_response()
         }
+    }
+
+    /// Emit the cause behind an opaque 5xx. The 4xx business variants are the
+    /// client's own doing and already carry their message on the wire, so they
+    /// stay silent here.
+    fn log_opaque(err: &ServiceError) {
+        // Borrow the cause rather than stringify it: the macro formats inside
+        // its own `if enabled`, so a filtered-out event costs nothing.
+        let (kind, detail): (&str, &dyn std::fmt::Display) = match err {
+            ServiceError::Db(e) => ("db", e),
+            ServiceError::Masking(e) => ("masking", e),
+            ServiceError::Internal(e) => ("internal", e),
+            _ => return,
+        };
+        tracing::error!(
+            target: "nest_rs::orm",
+            kind,
+            detail = %detail,
+            "service error surfaced as 500",
+        );
+    }
+
+    /// Map a `#[crud]` write failure to the status it deserves instead of a
+    /// blanket 500: a unique-constraint violation is a 409, a create the
+    /// ability re-check rolled back (`RecordNotInserted`) is a 403, a row that
+    /// vanished between the access check and the write is a 404. Only a
+    /// genuinely unexpected `DbErr` is a 500 — logged in full here, shipped as
+    /// an empty body so the driver message never reaches the client.
+    ///
+    /// Called by the `#[crud]` expansion; hand-written handlers use
+    /// [`ServiceError`] directly.
+    #[doc(hidden)]
+    pub fn crud_error(err: sea_orm::DbErr) -> poem::Error {
+        use sea_orm::{DbErr, SqlErr};
+
+        let sql_err = err.sql_err();
+        let status = match sql_err {
+            Some(SqlErr::UniqueConstraintViolation(_)) => StatusCode::CONFLICT,
+            _ => match err {
+                DbErr::RecordNotInserted => StatusCode::FORBIDDEN,
+                DbErr::RecordNotUpdated | DbErr::RecordNotFound(_) => StatusCode::NOT_FOUND,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+        };
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(
+                target: "nest_rs::orm",
+                kind = "db",
+                detail = %err,
+                "crud operation failed",
+            );
+        }
+        poem::Error::from_status(status)
     }
 
     #[cfg(test)]

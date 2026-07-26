@@ -96,7 +96,7 @@ isolate config loading from `std::env` entirely, build the
 `ConfigService` yourself with a [custom source](/configuration/sources/)
 and seed the loaded `Config`:
 
-```rust title="tests/config_from_map.rs"
+```rust title="tests/integration/config.rs"
 use std::collections::HashMap;
 use std::sync::Arc;
 use nest_rs_config::{Config, ConfigService, ConfigSource};

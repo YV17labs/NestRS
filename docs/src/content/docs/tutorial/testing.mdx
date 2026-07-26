@@ -39,24 +39,43 @@ Add the dev-dependencies the test needs:
 ```toml title="apps/blog/Cargo.toml"
 [dev-dependencies]
 nest-rs-testing = { workspace = true, features = ["orm"] }
+nest-rs-authn = { workspace = true }
 migrations = { workspace = true }
 poem = { workspace = true, features = ["test"] }
 serde_json.workspace = true
 ```
 
+`features = ["orm"]` is what brings `EphemeralDatabase` in. There is no
+telemetry feature to enable: `blog` imports no `OpenTelemetryModule`, so
+`TestApp` needs no `with_test_telemetry()` — that builder method exists only to
+satisfy that module's boot guard, and it lives behind
+`features = ["opentelemetry"]`.
+
 ## The boot harness
 
 `TestApp::builder()` runs the same four-phase boot as `main`,
-including the access-graph check. The harness seeds the connection so
-the module never reaches a real network — no JWT seeding, because
-`blog` has no auth layer.
+including the access-graph check. The harness seeds the connection, and
+because the controller is guarded, it also mints the bearer every request
+carries — the same `JwtService` the app verifies with.
 
 ```rust title="apps/blog/tests/e2e/main.rs"
+use nest_rs_authn::{JwtOptions, JwtService};
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use poem::http::StatusCode;
 use serde_json::json;
 
 use blog::BlogModule;
+use features::identity::{Claims, Role};
+
+const SECRET: &str = "dev-only-insecure-secret-change-me-32b";
+
+fn bearer() -> String {
+    let jwt = JwtService::new(JwtOptions::new(SECRET)).expect("the dev secret is long enough");
+    let token = jwt
+        .sign(&Claims { sub: None, roles: vec![Role::User], exp: jwt.expiry() })
+        .expect("sign the test token");
+    format!("Bearer {token}")
+}
 
 async fn boot() -> (EphemeralDatabase, TestApp) {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
@@ -64,7 +83,6 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
         .module::<BlogModule>()
-        .with_test_telemetry()
         .provide_arc(db.connection())
         .build()
         .await
@@ -73,21 +91,13 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
 }
 ```
 
-You need a `blog` library target to import `BlogModule`
-from the test binary. Add the lib alongside `main.rs`:
+The test binary imports `BlogModule` from a `blog` **library** target, which
+the scaffold already wrote — Cargo auto-detects `src/lib.rs` and `src/main.rs`,
+so the manifest needs no `[lib]` or `[[bin]]` section:
 
 ```rust title="apps/blog/src/lib.rs"
 mod module;
 pub use module::BlogModule;
-```
-
-```toml title="apps/blog/Cargo.toml"
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "blog"
-path = "src/main.rs"
 ```
 
 ## The round-trip test
@@ -100,10 +110,12 @@ wiring chain for a bare CRUD feature.
 #[tokio::test]
 async fn posts_round_trip() {
     let (_db, app) = boot().await;
+    let auth = bearer();
 
     let created = app
         .http()
         .post("/posts")
+        .header("authorization", &auth)
         .body_json(&json!({ "title": "Hello", "body": "World" }))
         .send()
         .await;
@@ -112,7 +124,12 @@ async fn posts_round_trip() {
     let id = body.value().object().get("id").string().to_owned();
     assert_eq!(body.value().object().get("title").string(), "Hello");
 
-    let got = app.http().get(format!("/posts/{id}")).send().await;
+    let got = app
+        .http()
+        .get(format!("/posts/{id}"))
+        .header("authorization", &auth)
+        .send()
+        .await;
     got.assert_status_is_ok();
     assert_eq!(got.json().await.value().object().get("body").string(), "World");
 }
@@ -133,20 +150,31 @@ async fn create_with_empty_title_returns_400() {
     let (_db, app) = boot().await;
     app.http()
         .post("/posts")
+        .header("authorization", bearer())
         .body_json(&json!({ "title": "", "body": "World" }))
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn create_without_a_token_returns_401() {
+    let (_db, app) = boot().await;
+    app.http()
+        .post("/posts")
+        .body_json(&json!({ "title": "Hello", "body": "World" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
 ```
 
 <Aside type="tip">
-The full negative-path matrix — `401` without a token, `403` across
-tenants, transaction rollback on a `5xx` — lives in
-[`api`](/testing/negative-path/) once auth and row-level policy
-are in play. Copy those patterns when you wire
-[`users`](/tutorial/security/); the tutorial stops at validation
-because `blog` stays public.
+The rest of the negative-path matrix — `403` across tenants, field masking,
+transaction rollback on a `5xx` — lives in
+[`api`](/testing/negative-path/) once row-level policy is in play. Copy those
+patterns when you wire [`users`](/tutorial/security/); `blog` grants one blanket
+rule, so it has no cross-tenant case to assert yet.
 </Aside>
 
 ## Run it
@@ -168,9 +196,10 @@ filter for the e2e file.
    ```bash frame="terminal"
    $ nestrs run test e2e
    ────────────
-        Starting 2 tests across 1 binary
+        Starting 3 tests across 1 binary
          PASS [   1.4s] blog::e2e posts_round_trip
          PASS [   0.8s] blog::e2e create_with_empty_title_returns_400
+         PASS [   0.7s] blog::e2e create_without_a_token_returns_401
    ```
 
 3. Run the rest of the workspace too — unit and integration tests
@@ -191,8 +220,8 @@ on `tests/e2e/main.rs`.
 
 - A `tests/e2e/main.rs` booting the real `BlogModule` against a
   throwaway Postgres provisioned by testcontainers.
-- A happy-path test and a validation failure — enough to catch a
-  wiring regression in any of the previous six pages.
+- A happy path, a validation failure and an unauthenticated call — enough to
+  catch a wiring regression in any of the previous six pages.
 - A `nestrs run test e2e` recipe running them green.
 
 ## Where you are now

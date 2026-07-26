@@ -32,14 +32,14 @@ use poem::web::Json;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, schemars::JsonSchema)]
-struct NewItem { name: String }
+struct CreatePost { title: String }
 
 #[derive(Serialize, schemars::JsonSchema)]
-struct Item { id: u64, name: String }
+struct Post { id: Uuid, title: String }
 
-#[post("/items")]
-async fn create(&self, Json(body): Json<NewItem>) -> Json<Item> {
-    Json(self.svc.create(body.name))
+#[post("/posts")]
+async fn create(&self, Json(body): Json<CreatePost>) -> Json<Post> {
+    Json(self.svc.create(body.title))
 }
 ```
 
@@ -84,8 +84,8 @@ use nest_rs_pipes::ParseUuid;
 use poem::web::Path;
 use uuid::Uuid;
 
-#[get("/orders/:id")]
-async fn show(&self, id: Piped<ParseUuid, Path<String>>) -> Json<Order> {
+#[get("/posts/:id")]
+async fn show(&self, id: Piped<ParseUuid, Path<String>>) -> Json<Post> {
     let id: Uuid = id.into_inner();
     Json(self.svc.find(id))
 }
@@ -183,9 +183,9 @@ use nest_rs_http::Scoped;
 #[injectable(scope = request)]
 pub struct PerRequestAudit { /* ... */ }
 
-#[get("/items")]
-async fn list(&self, audit: Scoped<PerRequestAudit>) -> Json<Vec<Item>> {
-    audit.note("list_items");
+#[get("/posts")]
+async fn list(&self, audit: Scoped<PerRequestAudit>) -> Json<Vec<Post>> {
+    audit.note("list_posts");
     Json(self.svc.list())
 }
 ```
@@ -215,12 +215,12 @@ that value back:
 use nest_rs_http::Ctx;
 use crate::Claims;
 
-#[post("/items")]
+#[post("/posts")]
 async fn create(
     &self,
     auth: Ctx<Claims>,
-    body: Valid<Json<NewItem>>,
-) -> Json<Item> {
+    body: Valid<Json<CreatePost>>,
+) -> Json<Post> {
     Json(self.svc.create_in_org(body.into_inner(), auth.org_id))
 }
 ```

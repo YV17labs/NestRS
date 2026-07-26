@@ -82,6 +82,11 @@ to fail closed when a request runs with no ambient ability, while a worker
 runs unscoped (no caller ⇒ no scope to apply). See
 [Security](/security/) for the ability half.
 
+An anonymous caller is a request, not a job: on a `#[public]` route the
+ability guard still installs one, built from `define_visitor`, and `Repo`
+filters by it like any other. Nothing here treats "no login" as "no filter"
+— see [Public reads](/security/authorization/public-reads/).
+
 ## The DbContext interceptor
 
 `DbContext` is auto-registered when you import `DatabaseModule`. It wraps

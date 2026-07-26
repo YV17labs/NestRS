@@ -1,6 +1,6 @@
 ---
 title: Scaffold the app
-description: Create apps/blog/ with nestrs new blog, start it with nestrs run dev blog, see a 404 on / — then read what the CLI generated.
+description: Create apps/blog/ with nestrs new blog, start it with nestrs run dev blog, get Hello World on / — then read what the CLI generated.
 sidebar:
   order: 2
 ---
@@ -9,8 +9,9 @@ import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
 You add the **`blog`** app to your workspace with the [`nestrs` CLI](/cli/) —
 the same tool from [Getting started](/getting-started/). By the end of this
-page, `nestrs run dev blog` listens on the port pinned in `module.rs` and replies
-`404` to `GET /` (no routes mounted yet — that's the next page).
+page, `nestrs run dev blog` listens on the port pinned in `module.rs` and
+answers `Hello World` on `GET /` — the scaffold proves itself before you write
+a line.
 
 <Aside type="note">
 The tutorial is **workspace-only**: shared features under `crates/features/`,
@@ -28,7 +29,7 @@ From the workspace root:
 
 <Steps>
 
-1. Scaffold a thin app — composition only, no routes yet.
+1. Scaffold the app and the feature it serves.
 
    ```bash
    nestrs new blog
@@ -47,9 +48,11 @@ From the workspace root:
 
 3. Hit the root route — use the port from `apps/blog/src/module.rs`.
 
-   ```bash
-   curl -i http://localhost:<port>/
-   # → 404 Not Found
+   ```bash frame="terminal"
+   $ curl -i http://localhost:3005/
+   HTTP/1.1 200 OK
+
+   Hello World
    ```
 
 </Steps>
@@ -61,9 +64,10 @@ See the [CLI reference](/cli/).
 
 `nestrs new blog` does not ask you to hand-edit the root `Cargo.toml`
 members list — workspace apps are discovered from `apps/*`. It writes a
-**thin** app: `main.rs` boots the framework, `module.rs` composes
-transports, no `controller.rs` or `service.rs` in the app crate (those
-land in `crates/features/` from page 2 onward).
+**thin** app plus the feature behind that greeting: `main.rs` boots the
+framework, `module.rs` composes transports and imports one feature module, and
+there is no `controller.rs` or `service.rs` in the app crate — those live in
+`crates/features/`, which is where `posts` lands from the next page onward.
 
 <FileTree>
 - apps/blog/
@@ -73,9 +77,20 @@ land in `crates/features/` from page 2 onward).
     - main.rs
     - module.rs
   - tests/
-    - e2e/
-      - main.rs
+    - integration/main.rs
+    - e2e/main.rs
+- crates/features/src/blog/
+  - mod.rs
+  - module.rs
+  - service.rs the greeting
+  - http/
+    - mod.rs
+    - module.rs
+    - controller.rs `#[public] GET /`
 </FileTree>
+
+The `blog` feature is a placeholder with one job: proving the wiring works
+end to end on the first run. Delete it once `posts` is serving something real.
 
 ```toml title="apps/blog/Cargo.toml"
 [package]
@@ -103,9 +118,14 @@ the listen port in code — not in `.env`:
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
 
-#[module(imports = [
-    HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-])]
+use features::blog::BlogHttpModule;
+
+#[module(
+    imports = [
+        HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+        BlogHttpModule,
+    ],
+)]
 pub struct BlogModule;
 ```
 
@@ -116,7 +136,9 @@ if other apps already exist in the workspace.
 `BlogModule` has no `providers = [...]` list. A root module composes
 feature modules and lets each own its providers — the
 [reference root](https://github.com/YV17labs/NestRS/blob/main/demo/apps/api/src/module.rs)
-carries only `imports`.
+carries only `imports`. Note the two `BlogModule`s: this one is the app's
+composition root, and `features::blog::BlogModule` is the feature's own. Two
+crates, no collision — the app only ever names the `…HttpModule` edge.
 
 ```rust title="apps/blog/src/main.rs"
 use anyhow::Result;
@@ -141,8 +163,10 @@ async fn main() -> Result<()> {
 `App::builder()` runs the four boot phases — seeds, collect, factories,
 register — verifies the access graph, then `.run()` blocks on the
 transports. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
-for the e2e test in [Test it end to end](/tutorial/testing/)) and a stub
-`tests/e2e/main.rs`.
+for the tests in [Test it end to end](/tutorial/testing/)), a smoke test that
+asserts the greeting, and an **empty** `tests/e2e/main.rs`. The e2e suite has to
+exist even while empty: `nestrs run test unit` filters on `not binary(e2e)`, and
+nextest rejects a filterset naming a binary the workspace does not have.
 
 ## Run it again
 
@@ -154,25 +178,29 @@ for the e2e test in [Test it end to end](/tutorial/testing/)) and a stub
    $ nestrs run dev blog
        Compiling blog v0.1.0
         Running `target/debug/blog`
+   INFO nest_rs::routes: mounted route controller=BlogController method=GET path=/ handler=hello
    DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
    ```
 
-   The log line shows the port from your `module.rs`.
+   The route table prints on every boot, and the `DEBUG` line shows the port
+   from your `module.rs`.
 
 2. In another terminal:
 
    ```bash frame="terminal"
    $ curl -i http://localhost:3005/
-   HTTP/1.1 404 Not Found
+   HTTP/1.1 200 OK
+
+   Hello World
    ```
 
 3. Stop the server with `Ctrl-C`.
 
 </Steps>
 
-A `404` is the right answer — the HTTP transport is mounted, the process
-is healthy, and no route table claims `/` yet. That's the gap the next
-page fills.
+That `200` is the checkpoint: the transport is mounted, the DI graph resolved,
+the access graph passed, and a controller reached your browser. Everything after
+this page replaces the greeting with real work.
 
 <Aside type="tip">
 `nestrs run dev blog` runs under `bacon` and restarts on every save.
@@ -181,9 +209,9 @@ page fills.
 ## What you have now
 
 - A `blog` app under `apps/blog/`, scaffolded by `nestrs new blog`.
-- A `BlogModule` that activates the HTTP transport.
-- A running binary returning `404` on the root route — proof the framework
-  boots end to end.
+- A `BlogModule` that activates the HTTP transport and imports one feature.
+- A `blog` feature answering `Hello World` on `/` — proof the framework boots
+  and serves end to end.
 
 ## Going further
 

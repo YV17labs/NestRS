@@ -26,19 +26,40 @@ same folder so the tutorial can extend it in place.
   - service.rs
 </FileTree>
 
-The `posts` module ships under the workspace's `features` crate. Add the
-dependencies the entity reaches for to `crates/features/Cargo.toml` —
-each rides the version pinned in the workspace root:
+The `posts` module ships under the workspace's `features` crate. Its
+dependencies ride versions pinned in the workspace root, so both manifests
+need an entry. Add the pins first:
+
+```toml title="Cargo.toml"
+[workspace.dependencies]
+nest-rs-authz = { version = "1.0", features = ["http"] }
+nest-rs-resource = "1.0"
+schemars = { version = "1", features = ["uuid1"] }
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+validator = { version = "0.20", features = ["derive"] }
+```
+
+`nest-rs-seaorm` and `sea-orm` are already there — the `migrations` crate the
+workspace ships uses them. Then the feature crate:
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
+nest-rs-authz.workspace = true
 nest-rs-resource.workspace = true
 nest-rs-seaorm.workspace = true
+schemars.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 uuid.workspace = true
 validator.workspace = true
 ```
+
+Two of those are call-site dependencies of the decorators rather than of your
+own code: `#[expose]` derives `schemars::JsonSchema`, and the `#[crud]` you add
+on the [HTTP page](/tutorial/http/) expands to `nest_rs_authz` types. A derive
+resolves against *your* crate's prelude, so the framework cannot supply them for
+you. `nestrs g resource posts` writes both manifests for you.
 
 ## The first cut
 

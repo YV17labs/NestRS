@@ -45,6 +45,17 @@ const CANON_BANLIST = [
   // are the reliable signal.
 ];
 
+/// Off-canon features leak in as *variants* of the banned identifiers —
+/// `ItemsController`, `ItemsResolver`, a `path = "/items"`, a `src/items/`
+/// snippet title. A word-list can't keep up; these shapes can.
+/// `items` as plain English ("items reachable from the root") is untouched.
+const CANON_SHAPES = [
+  [/\b(?:Item|Product|Order)s?(?:Controller|Resolver|Service|Entity|Module|Gateway|Processor)\b/,
+    'off-canon feature type'],
+  [/(?:path|title)\s*=\s*"[^"]*\/(?:items|products|orders)\b/, 'off-canon feature path'],
+  [/#\[(?:get|post|patch|put|delete)\("\/(?:items|products|orders)\b/, 'off-canon feature route'],
+];
+
 function walk(dir) {
   const out = [];
   for (const name of readdirSync(dir)) {
@@ -120,6 +131,10 @@ function lintFile(absPath) {
   // 6. Example-canon ban list.
   for (const term of CANON_BANLIST) {
     if (new RegExp(`\\b${term}\\b`).test(src)) add('canon', term);
+  }
+  for (const [re, label] of CANON_SHAPES) {
+    const hit = src.match(re);
+    if (hit) add('canon', `${label}: ${hit[0]}`);
   }
 
   return v;

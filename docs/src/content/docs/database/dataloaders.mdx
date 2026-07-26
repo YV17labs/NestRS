@@ -141,12 +141,12 @@ async fn items_named(
 ## The cross-entity rule
 
 A loader for entity `A` lives on `A`'s service. A service that reaches
-into entity `B` (e.g. `OrdersService` returning items) **injects
-`Arc<PostsService>` and calls its loader** — it does not write its own
-loader against the `item` table.
+into entity `B` (e.g. `NotificationsService` returning the post it
+announces) **injects `Arc<PostsService>` and calls its loader** — it does not
+write its own loader against the `post` table.
 
 The FK loader is part of the **owner's** service, never the consumer's.
-A resolver returning `Post` from an order field uses the auto-emitted
+A resolver returning `Post` from a notification field uses the auto-emitted
 `PostsServiceById`; the loader is the property of `PostsService` and any
 new feature reaches it through the existing one.
 

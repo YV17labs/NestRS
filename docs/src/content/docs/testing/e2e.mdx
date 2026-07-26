@@ -20,20 +20,19 @@ never trips.
 
 ## A round-trip e2e test
 
-```rust title="apps/api/tests/e2e/main.rs"
+```rust title="apps/api/tests/e2e/harness.rs (abridged)"
+use api::ApiModule;
 use nest_rs_authn::JwtConfig;
 use nest_rs_testing::{EphemeralDatabase, TestApp};
-use api::ApiModule;
 use poem::http::header;
 use serde_json::json;
 
-async fn boot() -> (EphemeralDatabase, TestApp) {
+pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
         .module::<ApiModule>()
-        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
@@ -44,17 +43,23 @@ async fn boot() -> (EphemeralDatabase, TestApp) {
         .expect("ApiModule boots against the throwaway database");
     (db, app)
 }
+```
+
+Each test module reaches for that `boot()` and the token helpers beside it:
+
+```rust title="apps/api/tests/e2e/users.rs (abridged)"
+use super::harness::*;
 
 #[tokio::test]
 async fn create_then_list_users() {
     let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", admin_token().await);
+    let bearer = format!("Bearer {}", login().await);
 
     let created = app
         .http()
         .post("/users")
         .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "name": "Bob", "email": "bob@example.com" }))
+        .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
         .send()
         .await;
     created.assert_status_is_ok();
@@ -87,49 +92,34 @@ the whole subtree links into one `e2e` binary that the nextest
 apps/api/
 └── tests/
     └── e2e/
-        ├── main.rs         ← the crate root: mod common; mod users; …
-        ├── common.rs       ← boot(), admin_token(), fixtures
+        ├── main.rs         ← the crate root: mod harness; mod users; …
+        ├── harness.rs      ← boot(), token_for(), fixtures
         ├── users.rs
         ├── orgs.rs
-        ├── auth.rs
+        ├── posts.rs
         └── graphql.rs
 ```
 
 `tests/e2e/main.rs` is a flat index:
 
 ```rust title="apps/api/tests/e2e/main.rs"
-mod common;
-mod users;
-mod orgs;
-mod auth;
+mod harness;
+
+mod audio;
 mod graphql;
+mod health;
+mod http;
+mod openapi;
+mod orgs;
+mod posts;
+mod users;
 ```
 
-Each module pulls shared setup from `crate::common`:
-
-```rust title="apps/api/tests/e2e/users.rs"
-use crate::common::{admin_token, boot};
-use poem::http::header;
-use serde_json::json;
-
-#[tokio::test]
-async fn create_then_list_users() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", admin_token().await);
-
-    let created = app
-        .http()
-        .post("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "name": "Bob", "email": "bob@example.com" }))
-        .send()
-        .await;
-    created.assert_status_is_ok();
-}
-```
+Each module pulls shared setup from the harness with one line —
+`use super::harness::*;`, as in the test above.
 
 Because `main.rs` is the crate root, `mod users;` resolves to a sibling
-`tests/e2e/users.rs` in the same directory — and `common.rs` needs no `mod.rs`
+`tests/e2e/users.rs` in the same directory — and `harness.rs` needs no `mod.rs`
 trick, since nothing under `tests/e2e/` is auto-discovered as a binary.
 
 <Aside type="caution">
@@ -142,7 +132,7 @@ unfiltered. The `tests/e2e/main.rs` directory form is what keeps it one binary.
 Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
 
 - The four-phase boot is the expensive part — sharing `boot()` through
-  `common` keeps it written once.
+  `harness` keeps it written once.
 - Cargo links the app crate once per binary; one binary means one link
   step instead of one per concern file.
 - `nestrs run test e2e` runs the whole suite from the workspace root.

@@ -58,6 +58,20 @@ Every handler delegates to the same `OrgsService` instance, which goes through
 `Repo` against the ambient executor — so reads are pool, mutations sit inside
 the request's transaction, and `Ability` filters every row.
 
+### `PATCH` takes a whole `Update<Name>`
+
+The verb is `PATCH`, but the body is not a partial one. `Update<Name>` mirrors
+the column types the entity exposed with `input(update)`, so a non-`Option`
+column is **required**:
+
+```bash frame="terminal"
+$ curl -X PATCH …/posts/$ID -d '{"title":"Updated"}'
+{"…":"…status.400","status":400,"detail":"parse error: missing field `body`"}
+```
+
+Make a column `Option<T>` on the entity when callers must be able to omit it —
+that is the one knob, and it makes the field nullable on the wire too.
+
 ## What `#[crud]` needs
 
 ```rust

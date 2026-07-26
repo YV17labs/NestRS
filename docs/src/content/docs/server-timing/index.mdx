@@ -37,7 +37,7 @@ Every response now carries a `Server-Timing` header. The minimum,
 unstructured form is one entry:
 
 ```bash frame="terminal"
-$ curl -i http://localhost:3000/items | grep -i server-timing
+$ curl -i http://localhost:3002/posts | grep -i server-timing
 server-timing: total;dur=12.34
 ```
 
@@ -51,23 +51,23 @@ Pull `Timings` out of the request extensions and call `record` (or
 recorded entry into the final header, with `total` appended on the way
 out:
 
-```rust title="src/items/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs"
 use std::time::Instant;
 
 use nest_rs_http::{controller, routes};
 use nest_rs_server_timing::Timings;
 use poem::Request;
 
-#[controller(path = "/items")]
-pub struct ItemsController {
+#[controller(path = "/posts")]
+pub struct PostsController {
     #[inject]
     svc: Arc<PostsService>,
 }
 
 #[routes]
-impl ItemsController {
+impl PostsController {
     #[get("/")]
-    async fn list(&self, req: &Request) -> Result<Json<Vec<Item>>> {
+    async fn list(&self, req: &Request) -> Result<Json<Vec<Post>>> {
         let timings = req.extensions().get::<Timings>().cloned().unwrap_or_default();
 
         let started = Instant::now();
@@ -75,7 +75,7 @@ impl ItemsController {
         timings.record("db", started.elapsed());
 
         let started = Instant::now();
-        let view: Vec<Item> = rows.iter().map(Item::from).collect();
+        let view: Vec<Post> = rows.iter().map(Post::from).collect();
         timings.record_with_desc("render", "wire transform", started.elapsed());
 
         Ok(Json(view))
@@ -84,7 +84,7 @@ impl ItemsController {
 ```
 
 ```bash frame="terminal"
-$ curl -i http://localhost:3000/items | grep -i server-timing
+$ curl -i http://localhost:3002/posts | grep -i server-timing
 server-timing: db;dur=7.82, render;dur=0.41;desc="wire transform", total;dur=8.96
 ```
 

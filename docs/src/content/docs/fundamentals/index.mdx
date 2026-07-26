@@ -42,9 +42,11 @@ every binary leans on:
 
 ## A minimal app, end to end
 
-Step ① of the `blog` story — handlers inline in the app root:
+Step ① of the `blog` story, in the **standalone** shape — one crate, handlers
+under `src/`. (A workspace app crate keeps no `service.rs` / `controller.rs`:
+those live in `crates/features/`, which is where step ② moves them.)
 
-```rust title="apps/blog/src/service.rs"
+```rust title="src/service.rs"
 use nest_rs_core::injectable;
 
 #[injectable]
@@ -61,7 +63,7 @@ impl BlogService {
 A service is an injectable struct. Anything decorated with `#[injectable]`
 is registered with the container and shared as `Arc<T>`.
 
-```rust title="apps/blog/src/controller.rs"
+```rust title="src/controller.rs"
 use std::sync::Arc;
 use nest_rs_http::{controller, routes};
 use crate::service::BlogService;
@@ -75,6 +77,7 @@ pub struct BlogController {
 #[routes]
 impl BlogController {
     #[get("/")]
+    #[public]
     async fn root(&self) -> &'static str {
         self.svc.tagline()
     }
@@ -83,9 +86,12 @@ impl BlogController {
 
 A controller is also a provider. `#[inject]` fields are resolved by type
 from the container; `#[routes]` mounts the verb methods on the
-controller's path.
+controller's path. `#[public]` is the route's **posture** — every route declares
+one, and an unguarded route with no posture is flagged at boot
+(`unguarded routes detected`). This tagline is open on purpose, so it says so;
+[Guards](/fundamentals/guards/) covers the other half.
 
-```rust title="apps/blog/src/module.rs"
+```rust title="src/module.rs"
 use nest_rs_core::module;
 use nest_rs_http::{HttpConfig, HttpModule};
 use crate::controller::BlogController;
@@ -98,7 +104,7 @@ use crate::service::BlogService;
 pub struct BlogModule;
 ```
 
-```rust title="apps/blog/src/main.rs"
+```rust title="src/main.rs"
 use nest_rs_core::App;
 
 #[tokio::main]

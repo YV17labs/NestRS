@@ -6,17 +6,21 @@ sidebar:
 ---
 
 Schema changes live in the **`migrations`** crate — a product crate under
-`crates/`, not an app. Migrations are
+`crates/`, scaffolded by `nestrs new` alongside `seed`. Migrations are
 [SeaORM](https://www.sea-ql.org/SeaORM/)'s, so a migration is a struct
 implementing `MigrationTrait` with an `up` and a `down`. Neither the API nor
 the worker run migrations on startup; you run them explicitly with `nestrs run db`.
 
 ## Write a migration
 
+```bash
+nestrs g migration create_org
+```
+
 One file per migration, named `m<utc-date>_<seq>_<what>.rs`.
 `DeriveMigrationName` takes the version from the file name; a `DeriveIden`
 enum names the table and its columns so there are no stringly-typed
-identifiers.
+identifiers. Fill in the columns the generator stubbed:
 
 ```rust title="crates/migrations/src/m20260526_000000_create_org.rs"
 use sea_orm_migration::prelude::*;
@@ -76,11 +80,24 @@ A later migration references an earlier table by adding a foreign key — the
 
 ## Register it
 
-Add the module to the `Migrator` so it joins the ordered list. Migrations run
-top to bottom, so a table must appear after anything it references:
+Two registrations, both written by `g migration`: the `mod` line in `lib.rs`,
+and the ordered vec in `migrator.rs`. Migrations run top to bottom, so a table
+must appear after anything it references.
+
+```rust title="crates/migrations/src/lib.rs"
+mod m20260526_000000_create_org;
+mod m20260526_000001_create_user;
+mod migrator;
+
+pub use migrator::{Migrator, migrate};
+```
+
+`migrator.rs` is **regenerated** from that `mod` list on every
+`g migration`, so the vec can never fall behind the files:
 
 ```rust title="crates/migrations/src/migrator.rs"
 use sea_orm_migration::prelude::*;
+
 use super::{m20260526_000000_create_org, m20260526_000001_create_user};
 
 pub struct Migrator;
@@ -96,6 +113,9 @@ impl MigratorTrait for Migrator {
 }
 ```
 
+Writing a migration by hand means writing both — the one you forget is the one
+that silently never runs.
+
 ## Run them
 
 ```bash
@@ -105,8 +125,13 @@ nestrs run db status   # show applied vs. pending
 nestrs run db fresh    # drop every table, then re-apply from scratch
 ```
 
-Each verb shells out to the crate's `migrate` binary, which reads
-`NESTRS_DATABASE__URL` — the same variable the apps connect with.
+Each verb shells out to the crate's `migrate` binary at
+`crates/migrations/src/bin/migrate.rs`. It connects through
+**`nest_rs_seaorm::connect_from_env()`** — the single connector for tools
+outside the DI container, which resolves `NESTRS_DATABASE__*` through the same
+`.env` cascade the apps use. Reaching for `std::env::var("NESTRS_DATABASE__URL")`
+in a tool of your own works only when the variable is really in the process
+environment; `connect_from_env` works either way.
 
 ## Going further
 

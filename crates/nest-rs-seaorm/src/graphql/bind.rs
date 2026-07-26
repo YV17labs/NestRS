@@ -14,11 +14,17 @@ fn forbidden() -> Error {
     Error::new("forbidden").extend_with(|_, e| e.set("code", "FORBIDDEN"))
 }
 
-/// A failed by-id load is logged in full (shared with the HTTP `Bind`) and
-/// answered with a generic error, so SQL/driver detail never reaches the
-/// client.
+/// A failed by-id load is logged in full and answered with a generic error, so
+/// SQL/driver detail never reaches the client. GraphQL logs it here because its
+/// error path has no `ResponseError` choke point; on HTTP every opaque
+/// `ServiceError` logs once as it renders.
 fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
-    crate::error::log_by_id_load_failure(service, err);
+    tracing::error!(
+        target: "nest_rs::orm",
+        service,
+        error = %err,
+        "by-id access load failed",
+    );
     Error::new("internal error").extend_with(|_, e| e.set("code", "INTERNAL_SERVER_ERROR"))
 }
 

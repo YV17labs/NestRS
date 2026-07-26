@@ -1,5 +1,6 @@
 //! Authentication failures, rendered as HTTP 401 challenges.
 
+use poem::error::ResponseError;
 use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 
@@ -90,24 +91,63 @@ impl AuthError {
     }
 }
 
-impl IntoResponse for AuthError {
-    fn into_response(self) -> Response {
+impl AuthError {
+    /// The wire rendering, logged once. Shared by [`IntoResponse`] (a handler
+    /// returning the error directly) and [`ResponseError`] (a handler `?`-ing
+    /// it), so both spellings put the same bytes and the same log line out.
+    fn render(&self) -> Response {
         let body = self.client_message();
         // An infrastructure failure is a 500, logged at `error` — not a 401
         // challenge; the caller cannot fix it by re-authenticating.
-        if let Self::Unavailable(ref detail) = self {
+        if let Self::Unavailable(detail) = self {
             tracing::error!(target: "nest_rs::authn", detail = %detail, "authentication unavailable");
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(body);
         }
-        if let Self::Failed(ref detail) = self {
+        if let Self::Failed(detail) = self {
             tracing::warn!(target: "nest_rs::authn", detail = %detail, "authentication failed");
         }
         Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(header::WWW_AUTHENTICATE, "Bearer")
             .body(body)
+    }
+}
+
+impl IntoResponse for AuthError {
+    fn into_response(self) -> Response {
+        self.render()
+    }
+}
+
+/// `?`-propagation from a handler: a service returns the framework type and it
+/// flows to the transport boundary without a `map_err` at every call site.
+impl ResponseError for AuthError {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::Unavailable(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            _ => StatusCode::UNAUTHORIZED,
+        }
+    }
+
+    fn as_response(&self) -> Response {
+        self.render()
+    }
+}
+
+/// Same `?`-propagation for the login path, which returns the opaque
+/// credential rejection rather than a token failure. A password mismatch is not
+/// a `Bearer` challenge, so no `WWW-Authenticate` header goes out.
+impl ResponseError for CredentialError {
+    fn status(&self) -> StatusCode {
+        StatusCode::UNAUTHORIZED
+    }
+
+    fn as_response(&self) -> Response {
+        Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(self.to_string())
     }
 }
 

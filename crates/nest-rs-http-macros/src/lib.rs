@@ -195,16 +195,15 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///         // `_authz` is what `#[authorize(Read, Entity)]` desugars to on a
 ///         // hand-written route; `#[crud]` emits it directly.
 ///         let p = CrudService::page(&*self.svc, page.limit(), page.after_uuid())
-///             .await.map_err(__nestrs_crud_internal_UsersController)?;
+///             .await.map_err(::nest_rs_seaorm::crud_error)?;
 ///         // Json(Vec<Dto>) + `x-next-cursor` header when p.next_cursor is Some
 ///     }
 ///     // get → CrudService::access(Read, id); create/update/delete per `ops`,
 ///     // each guarded by Authorize<Action, Entity> and mapping Access::{Denied=>403,Missing=>404}
 ///     // … plus any hand-written methods (which override the generated ones)
 /// }
-///
-/// #[doc(hidden)]
-/// fn __nestrs_crud_internal_UsersController<E: ToString>(e: E) -> ::nest_rs_http::poem::Error { /* 500 */ }
+/// // `crud_error` maps the write failure to 409/403/404, logging an
+/// // unexpected `DbErr` and shipping an empty-bodied 500.
 /// ```
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {

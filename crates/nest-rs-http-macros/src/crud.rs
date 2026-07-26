@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
 use nest_rs_codegen::{Paginate, UUID_V7_REQUIRED, impl_self_ident, parse_crud_args};
@@ -26,7 +26,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     let cfg = parse_crud_args(args)?;
     let ops = cfg.generated_ops()?;
     let self_ty = item.self_ty.clone();
-    let base = impl_self_ident(&self_ty, "#[crud]")?;
+    // Kept for the diagnostic it raises on a non-path `impl` target; the name
+    // itself is no longer needed now that the error mapper is one shared fn.
+    let _ = impl_self_ident(&self_ty, "#[crud]")?;
 
     let existing: HashSet<String> = item
         .items
@@ -45,9 +47,6 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         .last()
         .map(|s| s.ident.to_string())
         .unwrap_or_else(|| "Resource".to_owned());
-
-    // Per-controller name avoids collisions between two controllers in one module.
-    let internal = format_ident!("__nestrs_crud_internal_{}", base);
 
     // Reject non-UUID-v7 ids before loading — validation half of route-model
     // binding. The wording is shared with the GraphQL `#[crud]` so one edge rule
@@ -77,7 +76,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<::std::vec::Vec<#output>>> {
                     let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
                         .await
-                        .map_err(#internal)?;
+                        .map_err(::nest_rs_seaorm::crud_error)?;
                     ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(
                         __rows.iter().map(#output::from).collect(),
                     ))
@@ -99,7 +98,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         __page.0.after_uuid(),
                     )
                     .await
-                    .map_err(#internal)?;
+                    .map_err(::nest_rs_seaorm::crud_error)?;
                     let __items: ::std::vec::Vec<#output> =
                         __p.items.iter().map(#output::from).collect();
                     let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(::nest_rs_http::poem::web::Json(__items));
@@ -141,7 +140,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(#internal)?
+                .map_err(::nest_rs_seaorm::crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__m)))
@@ -175,7 +174,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __body.into_inner(),
                 )
                 .await
-                .map_err(#internal)?;
+                .map_err(::nest_rs_seaorm::crud_error)?;
                 ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__row)))
             }
         });
@@ -202,7 +201,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(#internal)?
+                .map_err(::nest_rs_seaorm::crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         let __row = ::nest_rs_seaorm::Updatable::update(
@@ -211,7 +210,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                             __body.into_inner(),
                         )
                         .await
-                        .map_err(#internal)?;
+                        .map_err(::nest_rs_seaorm::crud_error)?;
                         ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__row)))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
@@ -247,12 +246,12 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(#internal)?
+                .map_err(::nest_rs_seaorm::crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
                             .await
-                            .map_err(#internal)?;
+                            .map_err(::nest_rs_seaorm::crud_error)?;
                         ::core::result::Result::Ok(())
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
@@ -272,33 +271,6 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     Ok(quote! {
         #[::nest_rs_http::routes]
         #item
-
-        // Map a write failure to the HTTP status it deserves instead of a
-        // blanket 500: a unique-constraint violation is a 409, a create the
-        // ability re-check rolled back (`RecordNotInserted`) is a 403, a row
-        // that vanished between the access check and the write is a 404. Only a
-        // genuinely unexpected `DbErr` is a 500 — and it ships an empty body, so
-        // the raw driver message never reaches the client.
-        #[doc(hidden)]
-        #[allow(non_snake_case)]
-        fn #internal(__e: ::sea_orm::DbErr) -> ::nest_rs_http::poem::Error {
-            let __status = match ::sea_orm::DbErr::sql_err(&__e) {
-                ::core::option::Option::Some(
-                    ::sea_orm::SqlErr::UniqueConstraintViolation(_),
-                ) => ::nest_rs_http::poem::http::StatusCode::CONFLICT,
-                _ => match __e {
-                    ::sea_orm::DbErr::RecordNotInserted => {
-                        ::nest_rs_http::poem::http::StatusCode::FORBIDDEN
-                    }
-                    ::sea_orm::DbErr::RecordNotUpdated
-                    | ::sea_orm::DbErr::RecordNotFound(_) => {
-                        ::nest_rs_http::poem::http::StatusCode::NOT_FOUND
-                    }
-                    _ => ::nest_rs_http::poem::http::StatusCode::INTERNAL_SERVER_ERROR,
-                },
-            };
-            ::nest_rs_http::poem::Error::from_status(__status)
-        }
     })
 }
 

@@ -17,7 +17,6 @@ use poem::{Error, FromRequest, Request, RequestBody, Result};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
-use crate::error::log_by_id_load_failure;
 use crate::{Access, CrudService, ServiceError};
 
 /// The loaded, authorized entity bound from a path id, through service `S`.
@@ -78,15 +77,13 @@ where
             )
         })?;
 
-        // A failed load logs in full and ships the crate's one opaque DbErr
-        // envelope (`ServiceError::Db` — problem+json 500, constant detail),
-        // so SQL/driver text never reaches the client.
+        // A failed load ships the crate's one opaque DbErr envelope
+        // (`ServiceError::Db` — problem+json 500, constant detail), so
+        // SQL/driver text never reaches the client; the cause is logged once by
+        // that envelope's `ResponseError::as_response`.
         let access = with_ability(ability.clone(), service.access(A::ACTION, id))
             .await
-            .map_err(|err| {
-                log_by_id_load_failure(std::any::type_name::<S>(), &err);
-                Error::from(ServiceError::Db(err))
-            })?;
+            .map_err(|err| Error::from(ServiceError::Db(err)))?;
         match access {
             Access::Found(model) => Ok(Bind(model, PhantomData)),
             Access::Denied => Err(Error::from_status(StatusCode::FORBIDDEN)),

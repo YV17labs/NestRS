@@ -12,9 +12,11 @@
 //! **never mutates the process environment**, so no `set_var` can race a
 //! concurrent `getenv` on a worker thread (`std::env::set_var` is `unsafe` and
 //! unsound under that race). The one path that still writes to the process env
-//! is `load_cascade` — an explicit, opt-in bootstrapper for callers that must
-//! expose dotenv values via raw `std::env::var` before any `ConfigService`
-//! exists (the e2e harness); the framework's live-runtime path never uses it.
+//! is `load_cascade` — the explicit bootstrapper for consumers that read dotenv
+//! values through raw `std::env::var`, which no `ConfigService` serves. It has
+//! exactly two sanctioned callers, both single-threaded at startup:
+//! `Environment::init` (the top of `main`) and the e2e harness. Resolving
+//! config never reaches it.
 
 use std::collections::HashMap;
 use std::fs;
@@ -108,27 +110,42 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
 
 /// Merge the `.env` cascade rooted at `dir` into the **process environment**
 /// (set-if-absent — real env wins). This is the only path that mutates the
-/// process env; it exists for bootstrappers that read dotenv values via raw
-/// `std::env::var` before an `App` (hence a `ConfigService`) exists — the e2e
-/// harness. In-process, the config layer never calls this: it reads
-/// `dotenv_values` through `env_var`, so a running app mutates nothing.
+/// process env; it exists for the consumers that read dotenv values through raw
+/// `std::env::var`, which no `ConfigService` serves: the framework's own
+/// `NESTRS_LOG*` setup, `OpenTelemetry::init`, a `migrate`/`seed` binary.
+///
+/// Two sanctioned callers, both single-threaded before any task is spawned:
+/// [`Environment::init`](crate::Environment::init) at the top of `main`, and
+/// the e2e harness in its setup. Config *resolution* never calls it — it reads
+/// `dotenv_values` through `env_var`, so no request path mutates anything.
 pub fn load_cascade(dir: &Path, env: Environment) {
-    for (key, value) in cascade_map(dir, env) {
-        if std::env::var_os(&key).is_some() {
+    publish(&cascade_map(dir, env));
+}
+
+/// `Environment::init`'s spelling: publish the cascade **already parsed** into
+/// the in-crate map, so the top of `main` reads the `.env` files once rather
+/// than once per consumer.
+pub(crate) fn publish_dotenv_values() {
+    publish(dotenv_values());
+}
+
+/// Set-if-absent, the single process-env write. Carries the `unsafe` block both
+/// callers' contracts are written against.
+fn publish(values: &HashMap<String, String>) {
+    for (key, value) in values {
+        if std::env::var_os(key).is_some() {
             continue;
         }
         // SAFETY: `set_var` is unsound only when it races a concurrent `getenv`
-        // on another thread. This is NOT the live-runtime path — the
-        // framework's config reads go through `dotenv_values`/`env_var` and
-        // never reach here. The only in-repo caller is an explicit bootstrapper
-        // (the e2e harness) that invokes it during single-threaded setup,
-        // before spawning any task that reads the environment; the write
-        // therefore happens-before every later `getenv`. Any caller of this
-        // public function carries that same obligation.
-        // Sanctioned bootstrapper: the framework's one production env write.
+        // on another thread. Config *resolution* never reaches here — those
+        // reads go through `dotenv_values`/`env_var`. The two sanctioned
+        // callers (`Environment::init` at the top of `main`, the e2e harness in
+        // its setup) both run single-threaded, before spawning any task that
+        // reads the environment, so the write happens-before every later
+        // `getenv`. Any caller of `load_cascade` carries that obligation.
         #[allow(unsafe_code)]
         unsafe {
-            std::env::set_var(&key, value)
+            std::env::set_var(key, value)
         };
     }
 }

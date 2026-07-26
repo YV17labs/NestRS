@@ -12,9 +12,11 @@ any `Config::from_env` runs. The cascade follows dotenv-flow conventions:
 most specific wins, real process env wins over every file, and tests stay
 hermetic.
 
-A single call merges them into `std::env` exactly once per process,
-guarded by a `Once`. After that, every [`ConfigService`](/configuration/#configservice-api)
-reader sees the same merged environment.
+The cascade is parsed once per process into an in-crate map, and every
+[`ConfigService`](/configuration/#configservice-api) reader consults it under
+the real process environment. Nothing in the running app mutates `std::env` —
+`set_var` is unsound against a concurrent read on another thread, so config
+resolution stays side-effect-free by design.
 
 ## The order
 
@@ -83,22 +85,43 @@ loads — that's where shared test defaults belong.
 If a test sets `NESTRS_ENV` to something else explicitly (CI asserting
 prod behavior, for instance), the cascade follows that.
 
-## When the merge happens
+## When the load happens
 
 Exactly once per process, on the first call that needs it:
 
-- **`ConfigModule::for_root()`** triggers it during the collect phase,
+- **`ConfigModule::for_root()`** parses it during the collect phase,
   before any factory runs. This is the expected path.
-- **`Environment::init()`** triggers it. Call this at the top of `main`
-  if something reads the env outside the DI graph (e.g. an OpenTelemetry
-  initializer that runs before `App::builder()`).
-- **The default `EnvSource`** triggers it on its first `get`. A
-  [custom `ConfigSource`](/configuration/sources/) never triggers it —
-  the process env stays untouched.
+- **The default `EnvSource`** parses it on its first `get`. A
+  [custom `ConfigSource`](/configuration/sources/) never does — it
+  supplies its own values.
+- **`Environment::init()`** parses it **and merges it into `std::env`**
+  (set-if-absent, so the real environment still wins). Everything the
+  scaffolded `main` does afterwards therefore sees the cascade, including the
+  many consumers that only know `std::env::var`.
 
-The guard is process-wide, so multiple calls are safe. Every layer is
-optional: a file that does not exist contributes nothing, which is what
-lets the same cascade run unchanged in a container with no `.env` at all.
+That last one is why the scaffold calls it on line one of `main`:
+
+```rust title="apps/blog/src/main.rs"
+let _environment = Environment::init();
+```
+
+Without it, `NESTRS_LOG` / `NESTRS_LOG_FORMAT` / `NESTRS_LOG_SOURCE_LOCATION`
+in `.env.development` would be inert — the logging setup reads the process
+environment directly, long before a `ConfigService` exists. The same goes for
+any binary of yours that reads `std::env::var` at startup.
+
+<Aside type="caution">
+`Environment::init()` writes to the process environment, and `std::env::set_var`
+is unsound if it races a read on another thread. Call it at the top of `main`,
+before the runtime spawns anything — never from a task. A tool that only needs a
+database connection can skip it entirely and use
+[`nest_rs_seaorm::connect_from_env()`](/database/migrations/#run-them), which
+routes through `ConfigService` and writes nothing.
+</Aside>
+
+Every layer is optional: a file that does not exist contributes nothing, which
+is what lets the same cascade run unchanged in a container with no `.env` at
+all.
 
 ## Variable naming
 

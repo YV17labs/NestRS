@@ -81,22 +81,39 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
 - hello/
   - Cargo.toml
   - Justfile
+  - test.just
+  - db.just
+  - compose.yml
+  - .env
+  - .env.development
+  - .env.example
+  - .gitignore
+  - rust-toolchain.toml
   - README.md
   - crates/
     - features/
+      - Cargo.toml
       - src/
         - hello/
           - http/…
           - service.rs
         - lib.rs
+    - migrations/ SeaORM migrations + the `migrate` binary
+    - seed/ the `seed` binary
   - apps/
     - hello/
       - src/
         - lib.rs
         - main.rs
         - module.rs
-      - tests/e2e/main.rs
+      - tests/
+        - integration/main.rs
+        - e2e/main.rs
 </FileTree>
+
+The `e2e` suite is scaffolded **empty**. It has to exist: `nestrs run test unit`
+filters on `not binary(e2e)` and `nestrs run test e2e` on `binary(e2e)`, and
+nextest rejects a filterset naming a binary the workspace does not have.
 
 **Grow the workspace** (from the workspace root or any sub-folder):
 
@@ -121,34 +138,52 @@ in `src/` (no `features` crate).
 - hello/
   - Cargo.toml
   - Dockerfile
+  - .dockerignore
   - Justfile
+  - test.just
+  - .env
+  - .env.development
+  - .env.example
   - src/
     - controller.rs
     - service.rs
     - module.rs
     - main.rs
-  - tests/e2e/main.rs
+  - tests/
+    - integration/main.rs
+    - e2e/main.rs
 </FileTree>
+
+No `db.just` here: the database verbs drive the workspace's `migrations` and
+`seed` crates, which a single crate has nowhere to put. `g resource` and
+`g migration` are workspace-only for the same reason.
 
 </TabItem>
 </Tabs>
 
-Optional **`Dockerfile`** ships in **standalone** mode only.
+**`Dockerfile`** and **`.dockerignore`** ship in **standalone** mode only.
 **`rust-toolchain.toml`** pins Rust 1.96 in both modes.
 
-Templates — `--template` applies to **new monorepos** and **standalone** crates only.
-Every **workspace app** uses the same thin shell; the CLI scans existing
-`apps/*/src/module.rs` files and pins the next HTTP port in code (same pattern
-as `auth` → 3001, `api` → 3002, …).
+### One starter, no template flag
 
-| What | Default | Override |
-|------|---------|----------|
-| New monorepo | `hello` — feature + `apps/hello/` on port 3000 | `--template empty` |
-| New workspace app | thin shell + auto port in `HttpConfig` | _(no template flag)_ |
-| Standalone crate | `hello` | `--template empty` |
+There is nothing to choose. Every path out of `nestrs new` writes the same
+**`hello` module** — a service with a greeting and one `#[public] GET /` that
+returns it:
 
-Workspace `.env` files do **not** set `NESTRS_HTTP__PORT` — ports live in each
-app's `module.rs`:
+| What you run | What you get | `GET /` |
+|---|---|---|
+| `nestrs new acme` | monorepo + `hello` feature + `apps/hello/` on 3000 | `200 Hello World` |
+| `nestrs new blog` (inside one) | `blog` feature + `apps/blog/` on the next free port | `200 Hello World` |
+| `nestrs new solo --standalone` | one crate, `service.rs` + `controller.rs` | `200 Hello World` |
+
+A freshly created project has to prove it started, and a `404` proves nothing to
+someone looking at a browser — so there is no routeless variant to pick. Delete
+the feature once you have a real one; `nestrs new blog` refuses if a `blog`
+feature already exists, rather than overwriting it.
+
+Ports: the CLI scans existing `apps/*/src/module.rs` and pins the next free one
+in code (same pattern as `auth` → 3001, `api` → 3002, …). Workspace `.env` files
+do **not** set `NESTRS_HTTP__PORT` — ports live in each app's `module.rs`:
 
 ```rust
 HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
@@ -165,8 +200,11 @@ nestrs new blog
 nestrs run dev blog
 ```
 
-Creates a **thin** app under `apps/blog/` (composition root only — no
-`service.rs` / `controller.rs` in the app crate).
+Creates a **thin** app under `apps/blog/` — composition root only, no
+`service.rs` / `controller.rs` in the app crate — plus the `blog` feature it
+serves under `crates/features/src/blog/`. That split is why the greeting is a
+feature rather than a controller in the app: the layout keeps no business logic
+in an app crate, so the same rule that governs your code governs the starter.
 
 ## Running tasks
 
@@ -239,8 +277,14 @@ HTTP adapter in one shot.
 # Port only (service + module, no transport)
 nestrs g feature posts
 
-# DB-backed CRUD: #[expose] entity + CrudService + HTTP adapter, deps auto-added
+# DB-backed CRUD: #[expose] entity + CrudService + guarded #[crud] controller
 nestrs g resource posts
+
+# The app's authn/authz adapter — Claims, AuthnGuard, AppAbility, AuthzGuard
+nestrs g auth
+
+# A SeaORM migration, registered in lib.rs and migrator.rs
+nestrs g migration create_posts
 
 # Bolt a transport onto an existing port
 nestrs g http posts        # controller
@@ -274,13 +318,21 @@ use features::posts::PostsHttpModule;
 pub struct ApiModule;
 ```
 
-`g resource` emits a self-contained, unauthenticated slice so it compiles in any
-workspace. For auth-protected CRUD, copy the `#[crud]` + guard wiring from
-[`orgs/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/orgs)
-or [`users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
-and import the matching `Authz<Transport>Module`. Before inventing a second
-layout, open
-[`crates/features/src/users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
+### Why `g resource` is guarded
+
+`g resource` emits the `#[crud]` + `#[use_guards(AuthnGuard, AuthzGuard)]` form,
+and scaffolds the `g auth` adapter when the workspace has none. That is not
+hardening you can defer: `Repo` filters every read by the caller's ambient
+[`Ability`](/security/authorization/), which only the ability guard installs, so
+an unguarded DB-backed controller mounts its routes and then serves nothing.
+
+A generated resource therefore answers **401** without a token and **403** until
+[`AppAbility`](/security/authorization/) grants a rule for its entity — the two
+lines the generator prints. A resource meant to be readable without a login is
+the same slice with one route marked `#[public]` and a rule in
+`define_visitor`; see [Public reads](/security/authorization/public-reads/).
+Before inventing a second layout, open
+[`crates/features/src/orgs/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/orgs)
 side by side with what the generator emitted.
 
 ## Doctor
@@ -326,8 +378,6 @@ nestrs update --from-path
 |---------|-------------|
 | `nestrs new <name>` | Monorepo at `./<name>/`, or app at `apps/<name>/` when already inside one |
 | `nestrs new <name> --standalone` | Single crate in `./<name>/` |
-| `nestrs new <name> --template hello` | Force Hello World scaffold |
-| `nestrs new <name> --template empty` | Force HTTP-only shell (no routes) |
 | `nestrs new <name> --check` | Run `cargo check` after scaffolding |
 | `nestrs doctor` | Toolchain and env sanity check |
 | `nestrs version` | Print the CLI version |
@@ -336,7 +386,9 @@ nestrs update --from-path
 | `nestrs update --force` | Reinstall from crates.io even when already on the latest version |
 | `nestrs update --from-path` | Reinstall from monorepo `crates/nest-rs-cli` |
 | `nestrs g feature <name>` | Transport-agnostic port in `crates/features/src/` |
-| `nestrs g resource <name>` | DB-backed CRUD port + HTTP adapter (deps auto-added) |
+| `nestrs g resource <name>` | DB-backed CRUD port + guarded HTTP adapter (deps auto-added) |
+| `nestrs g auth` | The app's authn/authz adapter — one per workspace |
+| `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs` |
 | `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp <name>` | Add one transport adapter to a port |
 
 Every generator accepts **`--dry-run`** and **`-p <path>`**.

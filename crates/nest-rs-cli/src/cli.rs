@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::commands::{self, NewTemplate};
+use crate::commands;
 use crate::error::CliResult;
 use crate::naming::{Names, Transport};
 
@@ -48,8 +48,9 @@ pub struct Cli {
 pub enum Command {
     /// Create a new NestRS project or workspace app.
     ///
-    /// Layout is inferred from the directory tree:
-    ///   new monorepo       nestrs new hello       → ./hello/ (template: hello)
+    /// Every layout ships the same `hello` module — a `#[public] GET /` that
+    /// proves the project started. Layout is inferred from the directory tree:
+    ///   new monorepo       nestrs new hello       → ./hello/ + apps/hello/
     ///   new workspace app  nestrs new blog        → apps/blog/ (next free port)
     ///   single crate       nestrs new hello --standalone
     New {
@@ -63,10 +64,6 @@ pub enum Command {
         /// Parent directory (default: current directory).
         #[arg(long, short = 'o', default_value = ".")]
         output: PathBuf,
-
-        /// Override the starter template (`hello` or `empty`).
-        #[arg(long, value_enum)]
-        template: Option<NewTemplate>,
 
         /// Run `cargo check` after scaffolding.
         #[arg(long)]
@@ -142,25 +139,26 @@ pub struct GenTarget {
     pub dry_run: bool,
 }
 
-/// `g resource` target: the shared flags plus the guarded-form opt-in.
+/// `g auth` takes no name — a workspace has exactly one auth adapter.
 #[derive(Args, Debug)]
-pub struct ResourceTarget {
-    #[command(flatten)]
-    pub target: GenTarget,
+pub struct AuthTarget {
+    /// Workspace root or working directory (default: auto-discover from cwd).
+    #[arg(long, short = 'p')]
+    pub path: Option<PathBuf>,
 
-    /// Scaffold the hardened `#[crud]` + guards form instead of the
-    /// unguarded stub. Requires the workspace to provide `AuthnGuard`,
-    /// `AuthzGuard`, and `AuthzHttpModule` (as the `demo` does).
+    /// Print what would be written without touching the filesystem.
     #[arg(long)]
-    pub guarded: bool,
+    pub dry_run: bool,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum GenerateCommand {
     /// A transport-agnostic port (mod + module + service).
     Feature(GenTarget),
-    /// A DB-backed CRUD slice (entity + CrudService + HTTP adapter).
-    Resource(ResourceTarget),
+    /// A DB-backed CRUD slice (entity + CrudService + guarded HTTP adapter).
+    Resource(GenTarget),
+    /// The app's authn/authz adapter (Claims, AuthnGuard, AppAbility, AuthzGuard).
+    Auth(AuthTarget),
     /// A SeaORM migration, registered in both lib.rs and migrator.rs.
     Migration(GenTarget),
     /// Add an HTTP controller adapter to an existing feature.
@@ -183,7 +181,6 @@ pub fn run(cli: Cli) -> CliResult<()> {
             name,
             standalone,
             output,
-            template,
             check,
             dry_run,
         } => {
@@ -191,7 +188,6 @@ pub fn run(cli: Cli) -> CliResult<()> {
             let opts = commands::NewOptions {
                 name,
                 output: output.clone(),
-                template,
                 standalone,
                 dry_run,
             };
@@ -238,10 +234,13 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
             dry_run: t.dry_run,
         }),
         Resource(t) => commands::run_resource(commands::ResourceOptions {
-            name: t.target.name,
-            path: t.target.path,
-            dry_run: t.target.dry_run,
-            guarded: t.guarded,
+            name: t.name,
+            path: t.path,
+            dry_run: t.dry_run,
+        }),
+        Auth(t) => commands::run_auth(commands::AuthOptions {
+            path: t.path,
+            dry_run: t.dry_run,
         }),
         Migration(t) => commands::run_migration(commands::MigrationOptions {
             name: t.name,

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::context::Context;
 use crate::error::CliResult;
-use crate::scaffold::{Scaffold, ensure_module_import, rustfmt};
+use crate::scaffold::{Scaffold, ensure_module_imports, rustfmt};
 
 /// Resolve a generator's working directory (explicit `-p` or the cwd).
 pub(super) fn resolve_start(path: Option<PathBuf>) -> PathBuf {
@@ -24,15 +24,19 @@ pub(super) fn finish(s: Scaffold, dry_run: bool, base: &Path, summary: &str) -> 
     Ok(())
 }
 
-/// Queue an import of `ident` into the app the cursor sits in, returning the
-/// edited path. When `require_token` is set, wire only if the app's `module.rs`
-/// already contains it — a DB-backed module needs `DatabaseModule`, since
-/// mounting it into an app without one compiles yet panics at boot.
+/// Queue every `(use_path, ident)` import into the app the cursor sits in,
+/// returning the edited path. When `require_token` is set, wire only if the
+/// app's `module.rs` already contains it — a DB-backed module needs
+/// `DatabaseModule`, since mounting it into an app without one compiles yet
+/// panics at boot.
+///
+/// Takes the whole set at once so a command wiring several modules spends one
+/// `edit` on `module.rs`: a second edit of the same path re-reads it from disk
+/// and its write drops the first one's.
 pub(super) fn wire_into_app(
     ctx: &Context,
     s: &mut Scaffold,
-    use_path: &str,
-    ident: &str,
+    imports: &[(&str, &str)],
     require_token: Option<&str>,
 ) -> Option<PathBuf> {
     let module_rs = ctx.current_app_module()?;
@@ -45,6 +49,6 @@ pub(super) fn wire_into_app(
             return None;
         }
     }
-    s.edit(&module_rs, ensure_module_import(use_path, ident));
+    s.edit(&module_rs, ensure_module_imports(imports));
     Some(module_rs)
 }

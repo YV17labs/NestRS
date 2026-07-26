@@ -73,9 +73,22 @@ const MCP: Dep = Dep {
     workspace_value: "",
     features: &[],
 };
+const AUTHN: Dep = Dep {
+    name: "nest-rs-authn",
+    workspace_value: "",
+    features: &[],
+};
+const AUTHZ: Dep = Dep {
+    name: "nest-rs-authz",
+    workspace_value: "",
+    features: &["http"],
+};
+// Mirrors the feature set `nest-rs-seaorm` itself resolves — a divergent list
+// (or a release-candidate floor) would be a manifest the user inherits and has
+// to un-learn later.
 const SEA_ORM: Dep = Dep {
     name: "sea-orm",
-    workspace_value: "{ version = \"2.0.0-rc.38\", default-features = false, features = [\"sqlx-postgres\", \"runtime-tokio-rustls\", \"macros\", \"with-uuid\"] }",
+    workspace_value: "{ version = \"2.0\", default-features = false, features = [\"sqlx-postgres\", \"runtime-tokio-rustls\", \"macros\", \"with-uuid\", \"with-chrono\"] }",
     features: &[],
 };
 const SERDE: Dep = Dep {
@@ -108,10 +121,66 @@ const ANYHOW: Dep = Dep {
     workspace_value: "\"1\"",
     features: &[],
 };
+const SCHEMARS: Dep = Dep {
+    name: "schemars",
+    workspace_value: "{ version = \"1\", features = [\"uuid1\"] }",
+    features: &[],
+};
+const CHRONO: Dep = Dep {
+    name: "chrono",
+    workspace_value: "{ version = \"0.4\", features = [\"serde\"] }",
+    features: &[],
+};
+const SEA_ORM_MIGRATION: Dep = Dep {
+    name: "sea-orm-migration",
+    workspace_value: "{ version = \"2.0\", features = [\"sqlx-postgres\", \"runtime-tokio-rustls\"] }",
+    features: &[],
+};
+const TRACING_SUBSCRIBER: Dep = Dep {
+    name: "tracing-subscriber",
+    workspace_value: "{ version = \"0.3\", features = [\"env-filter\"] }",
+    features: &[],
+};
+const TOKIO: Dep = Dep {
+    name: "tokio",
+    workspace_value: "{ version = \"1\", features = [\"macros\", \"rt-multi-thread\"] }",
+    features: &[],
+};
 
 /// The crates a resource port (DB-backed CRUD + HTTP) needs.
+///
+/// `schemars` and `nest-rs-authz` are call-site deps of the decorators, not of
+/// the developer's own code: `#[expose]` derives `::schemars::JsonSchema` and
+/// `#[crud]` emits `::nest_rs_authz::http::Authorize<…>` parameters. Omitting
+/// either turns the very first `cargo check` after `g resource` into a wall of
+/// macro-expansion errors.
 pub fn resource_deps() -> Vec<&'static Dep> {
-    vec![&SEAORM, &RESOURCE, &SEA_ORM, &SERDE, &UUID, &VALIDATOR]
+    vec![
+        &SEAORM, &RESOURCE, &AUTHZ, &SEA_ORM, &SERDE, &UUID, &VALIDATOR, &SCHEMARS, &CHRONO,
+    ]
+}
+
+/// The crates the authn/authz adapter (`g auth`) needs.
+pub fn auth_deps() -> Vec<&'static Dep> {
+    vec![&AUTHN, &AUTHZ, &SERDE, &UUID]
+}
+
+/// The crates the `migrations` + `seed` bootstrap crates need — the union of
+/// what `templates::migration`'s two manifests declare `workspace = true`. A
+/// name missing here is a generated crate whose own `Cargo.toml` names a
+/// workspace dependency the root does not define, so keep the two in step.
+/// (`async-trait` is deliberately absent: the migration template writes
+/// `#[async_trait::async_trait]`, which `sea_orm_migration::prelude` re-exports
+/// — the demo's migrations crate does not depend on it either.)
+pub fn migrations_deps() -> Vec<&'static Dep> {
+    vec![
+        &SEAORM,
+        &SEA_ORM,
+        &SEA_ORM_MIGRATION,
+        &ANYHOW,
+        &TOKIO,
+        &TRACING_SUBSCRIBER,
+    ]
 }
 
 /// The crates an adapter for `transport` needs on top of the port.

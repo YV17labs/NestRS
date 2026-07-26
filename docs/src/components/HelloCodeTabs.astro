@@ -28,6 +28,7 @@ pub struct HelloController {
 #[routes]
 impl HelloController {
     #[get("/")]
+    #[public]
     async fn hello(&self) -> String {
         self.svc.greeting()
     }

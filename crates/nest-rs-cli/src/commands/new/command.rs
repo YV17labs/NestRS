@@ -1,10 +1,14 @@
 //! The `nestrs new` command: infer the layout from the tree and scaffold it
 //! through one of the [`standalone`] / [`workspace`] strategies.
 
+//! **One starter, no template flag.** Every layout writes the shared
+//! [`hello`](crate::templates::hello) module — a service with a greeting and a
+//! `#[public] GET /`. A freshly created project has to prove it started, and a
+//! `404` proves nothing to the developer looking at a browser, so there is no
+//! routeless variant to pick.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-use clap::ValueEnum;
 
 use super::{standalone, workspace};
 use crate::context::NestrsWorkspace;
@@ -13,36 +17,12 @@ use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold};
 use crate::templates::shared;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
-pub enum NewTemplate {
-    /// Hello World baseline — `GET /`, no auth, no DB (greenfield / standalone).
-    #[default]
-    Hello,
-    /// HTTP transport only — no routes yet.
-    Empty,
-}
-
-impl NewTemplate {
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Hello => "hello — Hello World on GET /",
-            Self::Empty => "empty — HTTP transport only, no routes",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct NewOptions {
     pub name: String,
     pub output: PathBuf,
-    /// When `None`, defaults to `hello` for new projects and standalone crates.
-    pub template: Option<NewTemplate>,
     pub standalone: bool,
     pub dry_run: bool,
-}
-
-pub fn effective_template(opts: &NewOptions) -> NewTemplate {
-    opts.template.unwrap_or(NewTemplate::Hello)
 }
 
 pub fn run(opts: NewOptions) -> CliResult<()> {
@@ -51,17 +31,16 @@ pub fn run(opts: NewOptions) -> CliResult<()> {
     // compile (CLI-I6).
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
-    let template = effective_template(&opts);
 
     if opts.standalone {
-        return standalone::scaffold(&opts.output, &names, template, opts.dry_run);
+        return standalone::scaffold(&opts.output, &names, opts.dry_run);
     }
 
     if let Some(ws) = NestrsWorkspace::discover(&opts.output)? {
         return workspace::scaffold_app(&ws, &names, opts.dry_run);
     }
 
-    workspace::scaffold_root(&opts.output, &names, template, opts.dry_run)
+    workspace::scaffold_root(&opts.output, &names, opts.dry_run)
 }
 
 pub fn project_dir_for_check(opts: &NewOptions, names: &Names) -> CliResult<PathBuf> {
@@ -108,28 +87,24 @@ pub fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::templates::{hello, standalone, workspace};
 
-    fn opts(template: Option<NewTemplate>) -> NewOptions {
-        NewOptions {
-            name: "acme".into(),
-            output: PathBuf::from("."),
-            template,
-            standalone: false,
-            dry_run: false,
-        }
+    /// The starter's whole promise: whichever layout renders it, the controller
+    /// mounts `/` and declares its posture. A template that stopped emitting
+    /// either would ship a project answering 404 on its first page.
+    #[test]
+    fn the_shared_hello_controller_mounts_root_as_public() {
+        assert!(hello::CONTROLLER.contains(r#"#[controller(path = "/")]"#));
+        assert!(hello::CONTROLLER.contains(r#"#[get("/")]"#));
+        assert!(hello::CONTROLLER.contains("#[public]"));
     }
 
+    /// Both layouts must actually reach it — the standalone crate through its
+    /// `providers` list, a workspace app through the feature's HTTP module.
     #[test]
-    fn effective_template_defaults_to_hello() {
-        assert_eq!(effective_template(&opts(None)), NewTemplate::Hello);
-    }
-
-    #[test]
-    fn effective_template_honors_explicit_override() {
-        assert_eq!(
-            effective_template(&opts(Some(NewTemplate::Empty))),
-            NewTemplate::Empty
-        );
+    fn both_layouts_wire_the_hello_controller_in() {
+        assert!(standalone::MODULE.contains("providers = [{{service}}, {{controller}}]"));
+        assert!(workspace::APP_MODULE.contains("{{http_module}},"));
+        assert!(hello::FEATURE_HTTP_MODULE.contains("providers = [{{controller}}]"));
     }
 }

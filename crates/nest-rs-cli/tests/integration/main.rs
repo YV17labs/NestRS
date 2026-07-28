@@ -97,7 +97,7 @@ fn new_standalone_hello_template() {
     assert!(app.join(".env.development").is_file());
     let dev_env = fs::read_to_string(app.join(".env.development")).unwrap();
     assert!(dev_env.contains("NESTRS_LOG=debug"));
-    assert!(app.join(".env.example").is_file());
+    assert_env_example_points_test_overrides_somewhere_loaded(&app);
 
     let main_rs = fs::read_to_string(app.join("src/main.rs")).unwrap();
     // Baseline logging is nest-rs-core's job now — a scaffold must not pull
@@ -194,9 +194,25 @@ fn new_workspace_greenfield() {
 
     let env = fs::read_to_string(root.join(".env")).unwrap();
     assert!(!env.contains("NESTRS_HTTP__PORT"));
+    assert_env_example_points_test_overrides_somewhere_loaded(&root);
 
     let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(cargo.contains("members = [\"crates/*\", \"apps/*\"]"));
+}
+
+/// The scaffolded `.env.example` sends a test override to a file the cascade
+/// actually loads under `NESTRS_ENV=test` (see `templates::shared::ENV_EXAMPLE`
+/// for why the wrong answer fails silently).
+fn assert_env_example_points_test_overrides_somewhere_loaded(root: &Path) {
+    let example = fs::read_to_string(root.join(".env.example")).unwrap();
+    assert!(
+        example.contains(".env.test.local"),
+        "`.env.example` must name the file a test override actually loads from: {example}"
+    );
+    assert!(
+        example.contains("skips `.env.local`"),
+        "…and say why `.env.local` is not it: {example}"
+    );
 }
 
 #[test]

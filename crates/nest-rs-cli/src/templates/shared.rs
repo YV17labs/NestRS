@@ -141,9 +141,18 @@ NESTRS_LOG_FORMAT=text
 NESTRS_LOG_SOURCE_LOCATION=true
 "#;
 
+/// The file that *instructs* a developer to write `.env.local`, so it is where
+/// the exception belongs: the cascade skips `.env.local` under `NESTRS_ENV=test`
+/// (hermetic by design). Without that line, a developer whose Postgres is not on
+/// the default port edits `.env.local`, watches `nestrs run test e2e` fail to
+/// connect, and has nothing pointing at the file being ignored.
 pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or secret-shaped settings:
 #
 #   cp .env.example .env.local
+#
+# Tests are hermetic: under NESTRS_ENV=test the cascade skips `.env.local`, so a
+# machine-specific test override (a different Postgres port, say) goes in
+# `.env.test.local` — also git-ignored. See https://nestrs.dev/configuration/env-cascade/
 #
 # Uncomment when you add a database (https://nestrs.dev/configuration/).
 

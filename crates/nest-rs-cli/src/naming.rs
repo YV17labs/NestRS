@@ -220,6 +220,57 @@ impl Names {
     }
 }
 
+/// Verbs a migration name leads with. Exactly one is stripped — a table
+/// genuinely called `add_ons` survives `create_add_ons`.
+const MIGRATION_VERBS: &[&str] = &[
+    "create", "add", "alter", "change", "drop", "delete", "remove", "rename", "update", "modify",
+    "init", "backfill", "make",
+];
+
+/// Words that introduce the table a migration acts *on* — everything after the
+/// last one names it (`add_status_to_posts`, `create_index_on_users`).
+const MIGRATION_TARGET_WORDS: &[&str] = &["to", "from", "on", "in", "into", "for"];
+
+/// The table a migration name is about, as [`Names`]: `create_widgets` →
+/// `widgets` (`Widget` / `widget`), `add_status_to_posts` → `posts`,
+/// `drop_orgs_table` → `orgs`. The identifier enum in a generated migration is
+/// the **table**, not the migration — `DeriveIden` snake-cases the enum name
+/// straight into the SQL, so naming it after the file creates a `create_widgets`
+/// table the entity's `table_name = "widget"` can never read.
+///
+/// A name with nothing left to strip (`init`, a bare `widgets`) stands as its
+/// own subject: a placeholder the developer renames beats an empty enum that
+/// doesn't compile.
+pub fn migration_subject(raw: &str) -> Names {
+    let whole = Names::parse(raw);
+    let all: Vec<&str> = whole.snake.split('_').filter(|t| !t.is_empty()).collect();
+    let mut tokens: &[&str] = &all;
+
+    if let Some(idx) = tokens
+        .iter()
+        .rposition(|t| MIGRATION_TARGET_WORDS.contains(t))
+        && idx + 1 < tokens.len()
+    {
+        tokens = &tokens[idx + 1..];
+    } else if let [verb, rest @ ..] = tokens
+        && !rest.is_empty()
+        && MIGRATION_VERBS.contains(verb)
+    {
+        tokens = rest;
+    }
+    if let [rest @ .., "table"] = tokens
+        && !rest.is_empty()
+    {
+        tokens = rest;
+    }
+
+    if tokens.is_empty() {
+        whole
+    } else {
+        Names::parse(&tokens.join("_"))
+    }
+}
+
 /// Placement for a boundary object that lives at the feature **port**, mirroring
 /// the entity rule: a lone instance lives in `<role>.rs`; two or more split into
 /// a pluralized `<role>s/` directory with one `<stem>_<role>.rs` per type,
@@ -387,6 +438,44 @@ mod tests {
         assert_eq!(names.module_for(Transport::Graphql), "PostsGraphqlModule");
         assert_eq!(names.handler_for(Transport::Ws), "PostsGateway");
         assert_eq!(names.http_module(), "PostsHttpModule");
+    }
+
+    #[test]
+    fn migration_names_resolve_to_the_table_they_touch() {
+        // The defect this guards: `create_widgets` naming its identifier enum
+        // `CreateWidgets`, which `DeriveIden` turns into a `create_widgets`
+        // table the `widget` entity cannot read.
+        let subject = migration_subject("create_widgets");
+        assert_eq!(subject.singular, "Widget");
+        assert_eq!(subject.table(), "widget");
+
+        // Every leading verb, the documented singular case, and the `_table` suffix.
+        for (name, entity) in [
+            ("create_org", "Org"),
+            ("add_posts", "Post"),
+            ("drop_widgets", "Widget"),
+            ("alter_blog_posts", "BlogPost"),
+            ("rename_categories", "Category"),
+            ("create_users_table", "User"),
+            ("backfill_statuses", "Status"),
+        ] {
+            assert_eq!(migration_subject(name).singular, entity, "{name}");
+        }
+
+        // A preposition names the target: the columns before it are not the table.
+        assert_eq!(migration_subject("add_status_to_posts").singular, "Post");
+        assert_eq!(migration_subject("create_index_on_users").singular, "User");
+        assert_eq!(
+            migration_subject("drop_legacy_column_from_orgs").singular,
+            "Org"
+        );
+
+        // One verb only — a table genuinely named `add_ons` survives.
+        assert_eq!(migration_subject("create_add_ons").singular, "AddOn");
+        // Nothing left to strip: the whole name stands in, for the developer to rename.
+        assert_eq!(migration_subject("init").singular, "Init");
+        // A bare table name is already the subject.
+        assert_eq!(migration_subject("widgets").singular, "Widget");
     }
 
     #[test]

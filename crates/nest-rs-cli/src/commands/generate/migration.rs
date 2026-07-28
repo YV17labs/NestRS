@@ -78,7 +78,7 @@ pub fn run(opts: MigrationOptions) -> CliResult<()> {
     mods.sort();
     mods.dedup();
 
-    let r = Renderer::new(&names);
+    let subject = crate::naming::migration_subject(&opts.name);
     let mut s = Scaffold::new();
     if bootstrapping {
         // `create` writes are staged in memory, so an `edit` on a file this
@@ -92,7 +92,7 @@ pub fn run(opts: MigrationOptions) -> CliResult<()> {
     }
     s.create(
         ws.migrations_root().join(format!("{stem}.rs")),
-        r.render(migration::MIGRATION),
+        Renderer::new(&subject).render(migration::MIGRATION),
     );
     if !bootstrapping {
         // Both registrations: the `mod` line in lib.rs, and a migrator.rs
@@ -112,7 +112,7 @@ pub fn run(opts: MigrationOptions) -> CliResult<()> {
         &ws.root,
         &format!("Created migration `{stem}`"),
     )?;
-    print_next_steps(&stem);
+    print_next_steps(&stem, &subject.table());
     Ok(())
 }
 
@@ -202,10 +202,13 @@ fn render_migrator(mods: &[String]) -> String {
     )
 }
 
-fn print_next_steps(stem: &str) {
+fn print_next_steps(stem: &str, table: &str) {
     println!();
     println!("Next steps:");
-    println!("  1. Fill in `crates/migrations/src/{stem}.rs` (table + columns).");
+    println!("  1. Fill in `crates/migrations/src/{stem}.rs` (columns).");
+    println!(
+        "     It writes the `{table}` table — rename the identifier enum if your entity disagrees."
+    );
     println!("  2. Apply it:  nestrs run db up   (or `db reset` to re-seed).");
 }
 
@@ -231,6 +234,29 @@ mod tests {
         ];
         assert_eq!(next_seq(&mods, "20260718"), 2);
         assert_eq!(next_seq(&mods, "20260719"), 0);
+    }
+
+    #[test]
+    fn the_skeleton_names_the_table_not_the_migration() {
+        let rendered = Renderer::new(&crate::naming::migration_subject("create_widgets"))
+            .render(migration::MIGRATION);
+
+        assert!(
+            rendered.contains("enum Widget {") && rendered.contains(".table(Widget::Table)"),
+            "the enum and the table must be the entity's, not the migration's: {rendered}"
+        );
+        assert!(
+            !rendered.contains("CreateWidgets"),
+            "a migration name must never reach the DDL as an identifier: {rendered}"
+        );
+        assert!(
+            rendered.contains("`widget` table"),
+            "the comment names the table the enum writes, so a rename is obvious: {rendered}"
+        );
+        assert!(
+            !rendered.contains("{{"),
+            "every placeholder is substituted: {rendered}"
+        );
     }
 
     #[test]

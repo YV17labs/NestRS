@@ -101,6 +101,11 @@ async fn main() -> Result<()> {
 }
 "#;
 
+/// The create-table skeleton. Render it through the **table**'s [`Names`]
+/// ([`crate::naming::migration_subject`]), never the migration's — the enum
+/// reaches the DDL verbatim.
+///
+/// [`Names`]: crate::naming::Names
 pub const MIGRATION: &str = r#"use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -113,24 +118,24 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table({{pascal}}::Table)
+                    .table({{singular}}::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new({{pascal}}::Id).uuid().not_null().primary_key())
-                    // TODO: add your columns here.
+                    .col(ColumnDef::new({{singular}}::Id).uuid().not_null().primary_key())
+                    // TODO: add your columns here, and as a variant of the enum below.
                     .col(
-                        ColumnDef::new({{pascal}}::CreatedAt)
+                        ColumnDef::new({{singular}}::CreatedAt)
                             .timestamp_with_time_zone()
                             .not_null()
                             .default(Expr::current_timestamp()),
                     )
                     .col(
-                        ColumnDef::new({{pascal}}::UpdatedAt)
+                        ColumnDef::new({{singular}}::UpdatedAt)
                             .timestamp_with_time_zone()
                             .not_null()
                             .default(Expr::current_timestamp()),
                     )
                     .col(
-                        ColumnDef::new({{pascal}}::DeletedAt)
+                        ColumnDef::new({{singular}}::DeletedAt)
                             .timestamp_with_time_zone()
                             .null(),
                     )
@@ -141,13 +146,16 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table({{pascal}}::Table).to_owned())
+            .drop_table(Table::drop().table({{singular}}::Table).to_owned())
             .await
     }
 }
 
+// `DeriveIden` snake-cases these into SQL: this enum writes the
+// `{{table}}` table and its columns. Rename it if your entity's
+// `#[sea_orm(table_name = "…")]` says otherwise — the two must agree.
 #[derive(DeriveIden)]
-enum {{pascal}} {
+enum {{singular}} {
     Table,
     Id,
     CreatedAt,

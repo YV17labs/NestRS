@@ -131,8 +131,8 @@ own load, a worker job touching one row) returns `Access<M>` directly
 and maps it to a wire shape:
 
 ```rust
-match self.svc.access(Action::Read, id).await? {
-    Access::Found(user) => Ok(Json(User::from(user))),
+match self.svc.access(Action::Read, id).await.map_err(ServiceError::from)? {
+    Access::Found(user) => Ok(Json(User::from(&user))),
     Access::Denied => Err(Forbidden),
     Access::Missing => Err(NotFound),
 }
@@ -182,8 +182,8 @@ handler:
 ```rust
 #[get("/:id")]
 async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>, Error> {
-    match self.svc.access(Action::Read, id.0).await? {
-        Access::Found(post) => Ok(Json(Post::from(post))),
+    match self.svc.access(Action::Read, id.0).await.map_err(ServiceError::from)? {
+        Access::Found(post) => Ok(Json(Post::from(&post))),
         Access::Denied | Access::Missing => Err(Error::from_status(NOT_FOUND)),
     }
 }

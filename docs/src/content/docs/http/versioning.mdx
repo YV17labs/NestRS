@@ -26,7 +26,7 @@ impl PostsV1Controller {
     #[get("/")]
     #[authorize(Read, posts::Entity)]
     async fn list(&self) -> Result<Json<Vec<Post>>> {
-        Ok(Json(self.svc.list().await?.iter().map(Post::from).collect()))
+        Ok(Json(self.svc.feed().await?))
     }
 }
 ```

@@ -29,9 +29,13 @@ async fn list(
     &self,
     _authz: Authorize<Read, user::Entity>,
 ) -> Result<Json<Vec<User>>> {
-    Ok(Json(self.svc.list().await?.into_iter().map(User::from).collect()))
+    Ok(Json(self.svc.directory().await?))
 }
 ```
+
+`directory` is a service method returning `Result<Vec<User>, ServiceError>` —
+the `Model` → `User` conversion lives there, so the handler declares a posture
+and delegates.
 
 `Authorize<Read, user::Entity>` does two things:
 

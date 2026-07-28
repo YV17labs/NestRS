@@ -124,6 +124,29 @@ scaffold.
 | OpenAPI, Health, Rate limiting, OTel, Testing | the `api` app over `users`/`posts` |
 | Storage | post cover-image upload (`media` slice) |
 
+## F. Code truth — three checks the prose rules can't see
+
+Style is half the job; a page that reads well and does not run is still a defect. Each of these
+was filed against a shipped release by a reader following a page verbatim, so the linter now
+greps for all three:
+
+- **`version-pin`** — a literal `nest-rs* = "X.Y"` (either manifest form) must match
+  `[workspace.package] version` in the repo root `Cargo.toml`, which is also what
+  `nestrs g resource` writes. Bump the release, bump the pages — or use `workspace = true`,
+  which carries no version at all.
+- **`unauthed-curl`** — a `curl` naming a concrete host and a guarded REST root (`/posts`,
+  `/users`, `/orgs`, …) carries an `Authorization` header. The guards run before the pipe and
+  before the handler, so a token-free call documents a `401` the page never mentions. A block
+  demonstrating the denial (`401`/`403` in its own output) is exempt — that is the point of it.
+  `/graphql` is out of scope: one endpoint, per-operation posture.
+- **`crud-error`** — a **handler** snippet must not `?` a `CrudService` read (`list()`, `page(`,
+  `access(`). Those return `Result<_, DbErr>`, and `DbErr` is not a `ResponseError`: the line
+  does not compile. The fix is a layering one, not a `map_err` at the route — the exemplar's
+  services return the **wire type** (`demo/…/posts/service.rs`: `create_in_org` → `Post`), so a
+  hand-written handler is a one-line delegation and the `Model` → wire conversion plus the
+  `ServiceError` mapping live in the service. Only handler blocks are checked; a service body
+  converting `DbErr` through `?` is the correct shape.
+
 ## Running the linter
 
 ```

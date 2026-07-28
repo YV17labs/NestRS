@@ -39,7 +39,18 @@ The route declares two things, and it needs both.
 #[get("/")]
 #[public]
 async fn list(&self, _authz: Authorize<Read, post::Entity>) -> Result<Json<Vec<Post>>> {
-    Ok(Json(self.svc.list().await?))
+    Ok(Json(self.svc.feed().await?))
+}
+```
+
+`feed` is the service method, and it is where the boundary work belongs:
+`CrudService::list` yields the entity's `Model` and a `DbErr`, neither of which
+crosses the wire, so the service returns `Result<Vec<Post>, ServiceError>` and
+the handler stays a delegation.
+
+```rust title="crates/features/src/posts/service.rs"
+pub async fn feed(&self) -> Result<Vec<Post>, ServiceError> {
+    Ok(self.list().await?.iter().map(Post::from).collect())
 }
 ```
 
@@ -73,7 +84,7 @@ added under every caller.
 That is what makes one route serve both audiences without a branch in
 the handler: a visitor sees published posts because `define_visitor`
 grants them, and a signed-in author sees their drafts too because
-`define` grants those. The handler calls `self.svc.list()` either way.
+`define` grants those. The handler calls `self.svc.feed()` either way.
 
 ## Reviewing a `#[public]` route
 

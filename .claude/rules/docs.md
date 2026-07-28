@@ -35,6 +35,9 @@ On conflict about prose, `STYLE.md` wins; about code or naming,
   users/orgs, chat/notify, audio, weather, media). The ban list
   (`items`, `products`, `artworks`, `file_assets`, `Ledger`, …) must
   stay at zero — never invent a feature.
+- **Three code-truth checks** — `version-pin`, `unauthed-curl`,
+  `crud-error` (STYLE.md § F). Each was a shipped defect on a released
+  page; the linter greps for all three.
 
 ## Gotchas no page shows
 

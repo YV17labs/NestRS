@@ -37,7 +37,7 @@ Every response now carries a `Server-Timing` header. The minimum,
 unstructured form is one entry:
 
 ```bash frame="terminal"
-$ curl -i http://localhost:3002/posts | grep -i server-timing
+$ curl -i http://localhost:3002/posts -H "Authorization: Bearer $TOKEN" | grep -i server-timing
 server-timing: total;dur=12.34
 ```
 
@@ -61,7 +61,9 @@ use poem::Request;
 #[controller(path = "/posts")]
 pub struct PostsController {
     #[inject]
-    svc: Arc<PostsService>,
+    posts_svc: Arc<PostsService>,
+    #[inject]
+    media_svc: Arc<MediaService>,
 }
 
 #[routes]
@@ -71,21 +73,26 @@ impl PostsController {
         let timings = req.extensions().get::<Timings>().cloned().unwrap_or_default();
 
         let started = Instant::now();
-        let rows = self.svc.list().await?;
+        let posts = self.posts_svc.feed().await?;
         timings.record("db", started.elapsed());
 
         let started = Instant::now();
-        let view: Vec<Post> = rows.iter().map(Post::from).collect();
-        timings.record_with_desc("render", "wire transform", started.elapsed());
+        let posts = self.media_svc.with_cover_urls(posts).await?;
+        timings.record_with_desc("covers", "object-store lookup", started.elapsed());
 
-        Ok(Json(view))
+        Ok(Json(posts))
     }
 }
 ```
 
+Each timed span wraps a **service call** — the handler measures, it never
+computes. Attributing a slow request across two backends is the case this
+header exists for; a controller that also transformed rows would be timing its
+own layering mistake.
+
 ```bash frame="terminal"
-$ curl -i http://localhost:3002/posts | grep -i server-timing
-server-timing: db;dur=7.82, render;dur=0.41;desc="wire transform", total;dur=8.96
+$ curl -i http://localhost:3002/posts -H "Authorization: Bearer $TOKEN" | grep -i server-timing
+server-timing: db;dur=7.82, covers;dur=0.41;desc="object-store lookup", total;dur=8.96
 ```
 
 - **`record(name, dur)`** — short entry; `name` must be a valid header

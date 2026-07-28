@@ -1,6 +1,6 @@
 ---
 title: Build a posts feature end to end
-description: From hello to a running apps/blog binary — HTTP CRUD, validation, Postgres, e2e — pure business logic, no auth and no GraphQL.
+description: From hello to a running apps/blog binary — HTTP CRUD behind the guards, validation, Postgres, and an e2e test, one runnable page at a time.
 sidebar:
   order: 1
 ---
@@ -8,15 +8,16 @@ sidebar:
 import { Aside, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 You ship one feature — **`posts`** — into the [**Publish**](/publish/) story's
-**`blog`** app: entity, service, `PostsController`, validation, Postgres, and
-an e2e test. No JWT, no GraphQL — that complexity lives in
-[`api`](/publish/) and [`auth`](/publish/). Each page leaves
-you with code that compiles and a command you can run.
+**`blog`** app: entity, service, a `PostsController` behind the guards,
+validation, Postgres, and an e2e test. No GraphQL — that mirror lives in
+[`api`](/publish/). Each page leaves you with code that compiles and a command
+you can run.
 
 ## What you end up with
 
-`hello` for the quick-start binary, `apps/blog/` for the tutorial app, and a
-`posts/` feature with HTTP only.
+`hello` for the quick-start binary, `apps/blog/` for the tutorial app, a
+`posts/` feature with HTTP only, and the three auth roots `nestrs g auth`
+writes on page 4 — a DB-backed route is guarded from its first request.
 
 <FileTree>
 - apps/blog/
@@ -30,6 +31,9 @@ you with code that compiles and a command you can run.
 - crates/
   - features/
     - src/
+      - identity/
+      - authn/
+      - authz/
       - posts/
         - entity.rs
         - service.rs
@@ -41,15 +45,18 @@ you with code that compiles and a command you can run.
           - mod.rs
 </FileTree>
 
-Two `curl`s against the running binary — no token:
+Two `curl`s against the running binary, carrying the development token you
+sign on [Persist through Postgres](/tutorial/database/). The bearer is not
+optional: `Repo` filters every read by the caller's ability, so the guards go
+on with the database, not later.
 
 ```bash frame="terminal"
-$ curl -s -X POST http://localhost:3005/posts \
+$ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"Hello","body":"World"}'
 {"id":"018f…","title":"Hello","body":"World"}
 
-$ curl -s http://localhost:3005/posts/018f…
+$ curl -s http://localhost:3005/posts/018f… -H "Authorization: Bearer $TOKEN"
 {"id":"018f…","title":"Hello","body":"World"}
 ```
 
@@ -84,11 +91,11 @@ If you cloned **this** repository to explore Publish, scaffold `hello` and
   <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="nestrs new blog, nestrs run dev blog, Hello World on / — then read what the CLI wrote." />
   <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The Post entity with SeaORM and #[expose]." />
   <LinkCard title="3. See the security payoff" href="/tutorial/checkpoint/" description="Optional detour — 10 min, needs Docker + a clone. Run the reference api: an admin, a masked member, a cross-tenant 403 — no handler check." />
-  <LinkCard title="4. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts." />
+  <LinkCard title="4. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts — behind AuthnGuard and AuthzGuard, which nestrs g auth writes here." />
   <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="DatabaseModule, migrations, transactional writes." />
   <LinkCard title="6. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />
   <LinkCard title="7. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e/main.rs against an EphemeralDatabase." />
-  <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Guards, AppAbility, Bind — build the access control you lived on step 3." />
+  <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Login, AppAbility, Bind — narrow step 4's blanket Manage rule into the per-caller access you lived on step 3." />
   <LinkCard title="9. Mirror on GraphQL" href="/tutorial/graphql/" description="A UsersResolver over the same service, ability, and dataloader." />
 </CardGrid>
 

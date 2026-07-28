@@ -9,6 +9,9 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/docs-pages.yml'
+      # The linter checks documented `nest-rs*` pins against the workspace
+      # version, so a release bump has to re-run it even with no docs edit.
+      - 'Cargo.toml'
   workflow_dispatch:
 
 permissions:

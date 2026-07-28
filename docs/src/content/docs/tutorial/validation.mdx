@@ -65,10 +65,15 @@ DTO; the entity is the single source.
 
 A malformed body comes back as an RFC 9457 `application/problem+json`
 `400` with the structured field errors `validator` produces riding as an
-`errors` extension member:
+`errors` extension member.
+
+`AuthnGuard` runs **before** the validation pipe, so both calls below carry the
+`$TOKEN` you signed on [Persist through Postgres](/tutorial/database/) — drop
+the header and the answer is a `401` that never reaches the pipe this page is
+about.
 
 ```bash frame="terminal"
-$ curl -i -X POST http://localhost:3005/posts \
+$ curl -i -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"","body":"World"}'
 HTTP/1.1 400 Bad Request
@@ -105,7 +110,7 @@ successful validation — and, with the database wired on the previous
 page, the handler persists the post and returns it.
 
 ```bash frame="terminal"
-$ curl -s -X POST http://localhost:3005/posts \
+$ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"Hello","body":"World"}'
 {"id":"018f…","title":"Hello","body":"World"}

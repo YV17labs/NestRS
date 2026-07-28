@@ -11,6 +11,8 @@
 // Checks (see STYLE.md): controlled H2 vocabulary, banned prose words + exclamation marks,
 // frontmatter description present / ≤160 / no unquoted '#', closing "## Going further",
 // ≤3 Asides per page, example-canon ban list.
+// Plus three code-truth checks the prose rules can't see — `version-pin`, `unauthed-curl`,
+// `crud-error` — each documented on its constant below and filed as a 1.1.0 defect first.
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +57,69 @@ const CANON_SHAPES = [
   [/(?:path|title)\s*=\s*"[^"]*\/(?:items|products|orders)\b/, 'off-canon feature path'],
   [/#\[(?:get|post|patch|put|delete)\("\/(?:items|products|orders)\b/, 'off-canon feature route'],
 ];
+
+/// `major.minor` of the framework the repo currently builds — what every
+/// documented `nest-rs*` pin has to say, and what `nestrs g resource` writes
+/// into a generated manifest.
+function workspaceVersionReq() {
+  const manifest = join(DOCS_ROOT, '..', 'Cargo.toml');
+  const m = readFileSync(manifest, 'utf8')
+    .match(/^\[workspace\.package\]$[\s\S]*?^version\s*=\s*"(\d+\.\d+)\./m);
+  if (!m) throw new Error(`no [workspace.package] version in ${manifest}`);
+  return m[1];
+}
+
+const VERSION_REQ = workspaceVersionReq();
+
+/// A `nest-rs*` dependency line pinning a literal version, in either manifest
+/// form: `nest-rs-authz = { version = "1.1", … }` and `nest-rs-resource = "1.1"`.
+/// `workspace = true` lines carry no version and never match.
+const NEST_RS_PIN =
+  /\bnest-rs[a-z0-9-]*\s*=\s*(?:\{[^}\n]*?version\s*=\s*)?"([^"]+)"/g;
+
+/// REST route roots the Publish canon serves behind `AuthnGuard` + `AuthzGuard`.
+/// A `curl` a reader can paste has to carry a bearer against one of these — the
+/// guards run before validation, before the pipe, before the handler, so a
+/// documented `400`/`200` reached without a token is a response the reader
+/// never sees.
+///
+/// `/graphql` is deliberately absent: one endpoint, per-operation posture, so
+/// the path cannot tell you whether a bearer is required (the reference pages
+/// query `#[public]` toys through it).
+const GUARDED_ROUTE_ROOTS = new Set([
+  'posts', 'users', 'orgs', 'notifications', 'media', 'audio',
+]);
+
+/// `CrudService`'s read half returns `Result<_, DbErr>`, and `DbErr` has no
+/// `ResponseError` impl — so `?` on one of these inside a handler does not
+/// compile. Named individually: `create`/`update`/`delete` are routinely
+/// overridden by a service method that *does* return `ServiceError`, and those
+/// snippets are correct.
+const UNMAPPED_CRUD_READ = /\.(?:list\(\)|page\(|access\()[^;]*?\.await\s*\?/;
+
+/// Marks a snippet as a handler — the only layer where the check above applies.
+/// A **service** method returning `ServiceError` converts `DbErr` through `?`
+/// legitimately, and that is where the conversion belongs: the exemplar's
+/// services return the wire type, so a handler is a one-line delegation.
+const HANDLER_SNIPPET = /#\[(?:get|post|put|patch|delete)\(|#\[(?:query|mutation)\]/;
+
+function fencedBlocks(src) {
+  const out = [];
+  const re = /```([^\n]*)\n([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(src)) !== null) out.push({ info: m[1].trim(), body: m[2] });
+  return out;
+}
+
+/// The guarded route root a `curl` targets, or null — the command names no
+/// concrete host (`…/posts/$ID` is elided shorthand, not something a reader
+/// pastes) or hits a root outside the canon. A `v\d+` prefix is skipped:
+/// `/v1/posts` is the `posts` controller under a version prefix.
+function guardedCurlRoot(command) {
+  const m = command.match(
+    /(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\]):\d+\/(?:v\d+\/)?([^/?#\s'"|)]+)/);
+  return m && GUARDED_ROUTE_ROOTS.has(m[1]) ? m[1] : null;
+}
 
 function walk(dir) {
   const out = [];
@@ -135,6 +200,39 @@ function lintFile(absPath) {
   for (const [re, label] of CANON_SHAPES) {
     const hit = src.match(re);
     if (hit) add('canon', `${label}: ${hit[0]}`);
+  }
+
+  // 7. `nest-rs*` pins track the version the repo builds.
+  for (const m of src.matchAll(NEST_RS_PIN)) {
+    const pinned = m[1].replace(/^[\^~=]/, '');
+    const [major, minor] = pinned.split('.');
+    if (`${major}.${minor}` !== VERSION_REQ) {
+      add('version-pin', `${m[0].split('=')[0].trim()} pins ${pinned}, workspace is ${VERSION_REQ}`);
+    }
+  }
+
+  for (const block of fencedBlocks(src)) {
+    const shell = /^(bash|sh|shell|console|zsh)\b/.test(block.info);
+
+    // 8. A pasteable `curl` against a guarded route carries a bearer — unless
+    // the block is documenting the denial itself.
+    if (shell && !/\b(401|403|Unauthorized|Forbidden)\b/.test(block.body)) {
+      // Fold shell line continuations so a header on the next line counts.
+      for (const line of block.body.replace(/\\\n\s*/g, ' ').split('\n')) {
+        if (!/\bcurl\b/.test(line) || /authorization:/i.test(line)) continue;
+        const root = guardedCurlRoot(line);
+        if (root) add('unauthed-curl', `/${root} without a bearer`);
+      }
+    }
+
+    // 9. A handler snippet that `?`s a `CrudService` read does not compile.
+    if (/^rust\b/.test(block.info) && HANDLER_SNIPPET.test(block.body)) {
+      for (const line of block.body.split('\n')) {
+        if (UNMAPPED_CRUD_READ.test(line) && !line.includes('map_err')) {
+          add('crud-error', `unmapped DbErr: ${line.trim()}`);
+        }
+      }
+    }
   }
 
   return v;

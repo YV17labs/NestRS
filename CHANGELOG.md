@@ -5,6 +5,56 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-07-27
+
+Six findings from the 1.1.0 read-through, each closed with the check that keeps
+it closed — the generator defect is now a unit test, the scaffold wording an
+integration assertion, and the three documentation classes are greps in
+`docs/scripts/lint-docs.mjs`, which gates the whole corpus (the baseline is
+empty).
+
+### Fixed
+
+- **`nestrs g migration` names the table, not the migration.** The skeleton's
+  `DeriveIden` enum was rendered from the migration name, and `DeriveIden`
+  snake-cases the enum straight into the DDL — so `g migration create_widgets`
+  created a `create_widgets` table while the entity `g resource widgets` had
+  just written read `widget`. `db up` reported success and the first query
+  failed. The enum is now derived from the *subject* of the name
+  (`create_widgets` → `Widget`, `add_status_to_posts` → `Post`,
+  `drop_orgs_table` → `Org`), the emitted comment names the table it writes, and
+  the CLI's next-steps print it.
+
+- **The scaffolded `.env.example` says where a test override goes.** It sent
+  developers to `.env.local`, which the cascade skips under `NESTRS_ENV=test` by
+  design — so a machine-specific database override was silently ignored by
+  `nestrs run test e2e`, and the failure named a connection rather than the
+  ignored file. It now points at `.env.test.local` and says why.
+
+- **The tutorial no longer promises unauthenticated CRUD.** The index and
+  `/tutorial/validation/` still curled a guarded controller with no bearer and
+  documented the pre-guard responses; a reader following them verbatim got a
+  `401` where the page showed a `201` or the `400` it was teaching. Both now
+  carry the token, and the index says guards arrive with the database on page 4
+  instead of listing them as a step-8 addition. `/server-timing/` and
+  `/rate-limiting/`, which the same check caught, carry it too.
+
+- **Six documentation snippets that could not compile, and taught the wrong
+  layer while failing to.** `/security/authorization/public-reads/`,
+  `/http/versioning/`, `/security/authorization/response-masking/`,
+  `/security/authorization/by-id-binding/` and `/server-timing/` all `?`-ed a
+  `CrudService` read directly from a handler: those yield `Result<_, DbErr>`, and
+  `DbErr` is no `ResponseError`. The fix is the exemplar's shape rather than a
+  `map_err` at the route — a service method returns the **wire type** (as
+  `PostsService::create_in_org` already does), so a hand-written handler is a
+  one-line delegation and the `Model` conversion stays in the service. The
+  by-id pages keep their `Access` → status match: mapping `Found`/`Denied`/
+  `Missing` onto 200/403/404 is transport work, and it is what those pages are
+  about.
+
+- **Stale `nest-rs* = "1.0"` pins** on `/tutorial/entity/`, `/database/` and
+  `/packages/`, one release behind what `nestrs g resource` writes.
+
 ## [1.1.0] - 2026-07-26
 
 Fixes from a crash-test of the 1.0.0 release: building an app by following the
@@ -840,6 +890,7 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
+[1.1.1]: https://github.com/YV17labs/NestRS/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/YV17labs/NestRS/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/YV17labs/NestRS/compare/v0.5.0...v1.0.0
 [0.5.0]: https://github.com/YV17labs/NestRS/compare/v0.4.0...v0.5.0

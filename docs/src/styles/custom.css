@@ -351,6 +351,16 @@
   text-align: center;
   color: var(--sl-color-gray-3);
 }
+/* The hero tagline renders outside .sl-markdown-content, so anchors here fall
+   back to the UA blue — then purple once visited. Same trap as the landing
+   .not-content blocks below. */
+.hero .hero-proof a {
+  color: var(--sl-color-text-accent);
+  text-underline-offset: 0.2em;
+}
+.hero .hero-proof a:hover {
+  color: var(--sl-color-white);
+}
 .hero .hero-stack {
   display: flex;
   flex-direction: row;

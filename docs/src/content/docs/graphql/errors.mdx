@@ -172,7 +172,7 @@ refused). On the wire:
 - `Result<T>` returning `Err` → `"errors": [...]`, the field's
   value is `null`.
 
-The bind helper follows this rule: `bind::<UsersService, Read>(ctx,
+The bind helper follows this rule: `bind::<Read, UsersService>(ctx,
 &id).await?` returns `Result<Option<User>>` — `None` means absent
 (404 equivalent), `Err` means denied or broken.
 
@@ -180,7 +180,7 @@ The bind helper follows this rule: `bind::<UsersService, Read>(ctx,
 #[query]
 #[authorize(Read, UserEntity)]
 async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-    Ok(bind::<UsersService, Read>(ctx, &id)
+    Ok(bind::<Read, UsersService>(ctx, &id)
         .await?
         .as_ref()
         .map(User::from))

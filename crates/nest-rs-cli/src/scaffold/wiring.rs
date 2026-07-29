@@ -103,6 +103,36 @@ fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) ->
     changed
 }
 
+/// Turn on `#[expose(graphql)]` for an entity that does not carry it — what a
+/// port needs before a resolver can name its output type (the flag is what
+/// emits the async-graphql `SimpleObject`, the loaders and the relation
+/// resolvers; without it the generated resolver fails on an unsatisfied
+/// `OutputType` bound).
+///
+/// Anchored on the **struct-level** attribute: the entity's own `#[expose(`
+/// starts a line at column 0, while every field-level one is indented.
+pub fn ensure_expose_graphql() -> Transform {
+    Box::new(move |content: &str| {
+        let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+        let at = lines.iter().position(|l| l.starts_with("#[expose("))?;
+        // The attribute's own argument list, whether written on one line or
+        // spread over several — a field's `#[expose(...)]` is indented, so the
+        // scan stops before reaching one.
+        let end = lines[at..]
+            .iter()
+            .position(|l| l.trim_end().ends_with(")]"))
+            .map(|offset| at + offset)?;
+        if lines[at..=end].iter().any(|l| {
+            l.split(|c: char| !c.is_alphanumeric())
+                .any(|w| w == "graphql")
+        }) {
+            return None;
+        }
+        lines[at] = lines[at].replacen("#[expose(", "#[expose(graphql, ", 1);
+        Some(rejoin(&lines, content))
+    })
+}
+
 /// Two grouping buckets: module declarations (`mod`/`pub mod`) sit together,
 /// imports (`use`/`pub use`) sit together — so a new `pub mod` lands with the
 /// `mod`s (before the `use`s), not appended at the end of the file.
@@ -216,6 +246,27 @@ mod tests {
         let out = t(src).expect("inserts");
         assert!(out.contains("PostsHttpModule"));
         assert!(out.contains("use crate::posts::PostsHttpModule;"));
+    }
+
+    #[test]
+    fn ensure_expose_graphql_flags_the_entity_not_its_fields() {
+        let src = "use nest_rs_resource::expose;\n\n#[expose(name = \"Post\", service = super::service::PostsService)]\n#[sea_orm::model]\npub struct Model {\n    #[expose(input(create, update))]\n    pub name: String,\n}\n";
+        let out = ensure_expose_graphql()(src).expect("flags the entity");
+        assert!(
+            out.contains("#[expose(graphql, name = \"Post\""),
+            "the struct-level attribute carries the flag: {out}"
+        );
+        assert!(
+            out.contains("    #[expose(input(create, update))]"),
+            "a field attribute is left alone: {out}"
+        );
+        assert!(ensure_expose_graphql()(&out).is_none(), "idempotent");
+    }
+
+    #[test]
+    fn ensure_expose_graphql_leaves_a_multiline_attribute_that_has_it() {
+        let src = "#[expose(\n    name = \"User\",\n    service = super::service::UsersService,\n    graphql,\n)]\npub struct Model;\n";
+        assert!(ensure_expose_graphql()(src).is_none());
     }
 
     // The reason this takes a slice: a caller wiring two modules gets one

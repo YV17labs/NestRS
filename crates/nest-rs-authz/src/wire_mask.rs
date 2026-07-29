@@ -8,12 +8,17 @@
 //! delegate here — one masking semantics for every transport, so the two
 //! can't drift apart.
 
+#[cfg(feature = "graphql")]
+use std::collections::BTreeSet;
+
 use nest_rs_resource::WireModelDefaults;
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::{Deserialize, DeserializeOwned};
 use serde_json::Value;
 
+#[cfg(feature = "graphql")]
+use crate::FieldSet;
 use crate::{Ability, Action};
 
 // `warn_mask_failure` lives in `crate::ability` (always compiled) so the
@@ -152,6 +157,111 @@ where
         _ => return Ok(MaskedWire::Passthrough),
     };
     masked.map(MaskedWire::Masked)
+}
+
+/// What [`mask_wire_detail`] found: the rows that survived, still carrying
+/// their original keys, and which keys the mask took off at least one of them.
+///
+/// The GraphQL wrapper needs all three because it hands the result back as a
+/// *typed* value, not as JSON bytes: a key the mask removes cannot be
+/// represented in a non-null schema field, so it has to decide between refusing
+/// the operation (the client selected that field) and returning the surviving
+/// rows untouched (it did not, so the field is never serialized).
+#[cfg(feature = "graphql")]
+pub(crate) struct MaskedDetail {
+    /// Surviving rows with their original keys — same row set as
+    /// [`mask_wire_json`] produces, without the field-level stripping.
+    pub(crate) kept: Value,
+    /// Every key stripped from at least one surviving row, wire-spelled:
+    /// refused by a field grant, or absent from the entity's exposed columns.
+    pub(crate) removed: BTreeSet<String>,
+    /// Whether any row was dropped — when none was, `kept` is the input
+    /// verbatim and the caller can hand back the value it already holds
+    /// instead of deserializing this one.
+    pub(crate) dropped_rows: bool,
+}
+
+/// The row/field verdicts behind [`mask_wire_json`], reported instead of
+/// applied.
+///
+/// **Not a rare path.** Any principal holding a partial field grant on a wire
+/// type with non-null fields reaches it on *every* read, so it evaluates each
+/// row's rules exactly once ([`Ability::evaluate`], the same scan `mask_many`
+/// makes) and takes ownership of the wire value rather than cloning rows out of
+/// it.
+#[cfg(feature = "graphql")]
+pub(crate) fn mask_wire_detail<S>(
+    ability: &Ability,
+    action: Action,
+    wire: Value,
+) -> Result<MaskedDetail, serde_json::Error>
+where
+    S: EntityTrait + WireModelDefaults,
+    S::Model: DeserializeOwned + Serialize,
+{
+    let mut removed = BTreeSet::new();
+    let exposed = S::wire_keys();
+    let mut dropped_rows = false;
+    let kept = match wire {
+        Value::Array(items) => {
+            let mut kept = Vec::with_capacity(items.len());
+            for item in items {
+                let model = wire_to_model::<S>(&item)?;
+                let verdict = ability.evaluate::<S>(action, &model);
+                // Same verdict `mask_many` applies — a refused row is dropped,
+                // never handed back for the caller to render.
+                if !verdict.allowed {
+                    dropped_rows = true;
+                    continue;
+                }
+                collect_removed(&verdict.fields, exposed, &item, &mut removed);
+                kept.push(item);
+            }
+            Value::Array(kept)
+        }
+        // A lone object is never dropped by `mask` (the class gate and `bind`
+        // decide instance visibility for a singleton) — only its fields go.
+        // A scalar never reaches here: `mask_wire_json` reports those as
+        // `Passthrough`, which the caller answers before asking for detail.
+        other => {
+            let model = wire_to_model::<S>(&other)?;
+            let verdict = ability.evaluate::<S>(action, &model);
+            collect_removed(&verdict.fields, exposed, &other, &mut removed);
+            other
+        }
+    };
+    Ok(MaskedDetail {
+        kept,
+        removed,
+        dropped_rows,
+    })
+}
+
+/// The keys [`mask_wire_json`] strips from this row, read off the same two
+/// rules instead of performing them: the row's field grant (what
+/// [`Ability::mask`] retains) and the entity's statically exposed columns (what
+/// [`retain_static_keys`] retains). Change either rule and this reads the
+/// change — it holds no copy of its own.
+#[cfg(feature = "graphql")]
+fn collect_removed(
+    granted: &FieldSet,
+    exposed: Option<&'static [&'static str]>,
+    row: &Value,
+    out: &mut BTreeSet<String>,
+) {
+    let Some(obj) = row.as_object() else { return };
+    for key in obj.keys() {
+        let ungranted = match granted {
+            FieldSet::All => false,
+            FieldSet::Only(cols) => !cols.contains(key.as_str()),
+        };
+        let unexposed = exposed.is_some_and(|keys| !keys.contains(&key.as_str()));
+        // `contains` first: every row of a list strips the same keys, so the
+        // insert would otherwise allocate a `String` per row to keep one.
+        if (ungranted || unexposed) && !out.contains(key.as_str()) {
+            out.insert(key.clone());
+        }
+    }
 }
 
 /// Deserialize a handler JSON object into `S::Model`, filling columns the wire

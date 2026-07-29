@@ -140,7 +140,7 @@ impl UsersController {
     }
 
     #[get("/:id")]
-    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
 }
@@ -153,7 +153,7 @@ Four things changed:
 | `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
 | `auth: Ctx<Claims>` | Read the principal that `AuthnGuard` attached to the request |
 | `_authz: Authorize<Create, UserEntity>` | Check the ability allows `Create` on `UserEntity` before the body runs |
-| `user: Bind<UsersService, Read>` | Parse the `:id`, load the row through the service, return `403` if the ability refuses it |
+| `user: Bind<Read, UsersService>` | Parse the `:id`, load the row through the service, return `403` if the ability refuses it |
 
 The org id comes from the caller's claims, never from the body — there
 is no placeholder to fill in and no way to spoof the tenant.
@@ -213,7 +213,7 @@ Three behaviours land without writing them in the handler.
 SQL — the `Repo::scoped(Action::Read)` `CrudService::list` uses joins
 the ambient ability's `condition_for(Read)`.
 
-**By-id load checks access.** `Bind<UsersService, Read>` parses the
+**By-id load checks access.** `Bind<Read, UsersService>` parses the
 `:id` path segment, loads the row through the service, runs the
 ability check. Three failure shapes:
 
@@ -266,7 +266,7 @@ never had to know.
   route requires a valid JWT and a matching ability.
 - An `AppAbility` policy that scopes reads to the caller's org and
   masks the email column for plain users.
-- `Bind<UsersService, Read>` on the by-id route — `403` on a denied
+- `Bind<Read, UsersService>` on the by-id route — `403` on a denied
   row, `404` on a missing one, both without manual checks.
 
 ## Going further

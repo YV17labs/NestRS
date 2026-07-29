@@ -299,3 +299,68 @@ async fn has_many_relation_load_is_capped_at_relation_load_cap() {
         "an exposed has_many load is bounded at RELATION_LOAD_CAP, not the {seeded} seeded",
     );
 }
+
+/// A member holds `Read` on users restricted to `.fields([Id, Name])`, and the
+/// exposed `User` types every column non-null. Masking cannot null a non-null
+/// field, so the selection set decides: the granted columns are served, and
+/// asking for `email` is refused by name. Before that, a partial field grant
+/// took the whole entity offline over GraphQL while its HTTP twin still served
+/// the masked rows.
+#[tokio::test]
+async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
+    let (_db, app) = boot().await;
+    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org = create_org(&app, &admin, "GqlFields").await;
+    let admin_org = format!("Bearer {}", token_for(&org, "admin").await);
+    let member = format!("Bearer {}", token_for(&org, "user").await);
+    create_user(&app, &admin_org, "Gql Grace", "gqlgrace@fields.test").await;
+
+    let granted = graphql(&app, &member, "{ users { id name } }").await;
+    assert!(
+        granted.get("errors").is_none(),
+        "a query asking only for granted columns must be served: {granted}",
+    );
+    let names: Vec<&str> = granted["data"]["users"]
+        .as_array()
+        .unwrap_or_else(|| panic!("users is a list: {granted}"))
+        .iter()
+        .map(|u| u["name"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(names, vec!["Gql Grace"], "{granted}");
+
+    let refused = graphql(&app, &member, "{ users { id name email } }").await;
+    assert_eq!(
+        refused["data"],
+        serde_json::Value::Null,
+        "no row may ship with a column outside the field grant: {refused}",
+    );
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{refused}",
+    );
+    assert_eq!(
+        refused["errors"][0]["extensions"]["fields"], "email",
+        "the denial names the column it refused: {refused}",
+    );
+
+    // Same query, unrestricted grant: the admin still reads every column.
+    let admin_view = graphql(&app, &admin_org, "{ users { id name email } }").await;
+    assert!(admin_view.get("errors").is_none(), "{admin_view}");
+    assert_eq!(
+        admin_view["data"]["users"][0]["email"], "gqlgrace@fields.test",
+        "{admin_view}",
+    );
+}
+
+/// POST one query, returning the response body as plain JSON.
+async fn graphql(app: &nest_rs_testing::TestApp, bearer: &str, query: &str) -> serde_json::Value {
+    let resp = app
+        .http()
+        .post("/graphql")
+        .header(header::AUTHORIZATION, bearer)
+        .body_json(&json!({ "query": query }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    serde_json::to_value(resp.json().await).expect("a GraphQL response is JSON")
+}

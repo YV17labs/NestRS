@@ -34,7 +34,7 @@ pub fn run(opts: AuthOptions) -> CliResult<()> {
     }
 
     let mut s = Scaffold::new();
-    queue(&mut s, &ws);
+    queue(&mut s, &ws, Vec::new());
     s.edit(
         ws.root.join("Cargo.toml"),
         ensure_workspace_deps(auth_deps()),
@@ -67,7 +67,12 @@ pub(super) fn lib_decls() -> Vec<String> {
 /// edits ([`lib_decls`], [`auth_deps`]), which a caller adding its own must
 /// fold into a single `edit` per path. Split out so `g resource` can bootstrap
 /// the adapter in the same transaction as the resource that needs it.
-pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace) {
+///
+/// `authz_decls` are extra index lines for `authz/mod.rs` — a caller
+/// scaffolding a transport bridge in the same transaction passes
+/// [`graphql_decls`], since the file is created here and an `edit` targets what
+/// is already on disk.
+pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<String>) {
     let src = ws.features_root();
 
     s.create(src.join("identity/mod.rs"), auth::IDENTITY_MOD.to_string());
@@ -83,7 +88,9 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace) {
         auth::AUTHN_STRATEGY.to_string(),
     );
 
-    s.create(src.join("authz/mod.rs"), auth::AUTHZ_MOD.to_string());
+    let authz_mod =
+        ensure_lines(authz_decls)(auth::AUTHZ_MOD).unwrap_or_else(|| auth::AUTHZ_MOD.to_string());
+    s.create(src.join("authz/mod.rs"), authz_mod);
     s.create(
         src.join("authz/ability.rs"),
         auth::AUTHZ_ABILITY.to_string(),
@@ -127,6 +134,41 @@ fn wire(ctx: &Context, s: &mut Scaffold) -> Option<PathBuf> {
 
 pub(super) fn exists(ws: &NestrsWorkspace) -> bool {
     ws.features_root().join("authz").is_dir()
+}
+
+// ── authz/graphql/ — the per-operation bridge `nestrs g graphql` needs ───────
+//
+// Lives here, beside the HTTP one: `authz/` is one tree with one layout, and a
+// second transport bridge (WS, MCP) belongs next to these rather than in the
+// generator that happens to want it first.
+
+pub(super) fn graphql_exists(ws: &NestrsWorkspace) -> bool {
+    ws.features_root().join("authz/graphql").is_dir()
+}
+
+/// The `authz/mod.rs` index lines the GraphQL bridge adds — a `Vec` like
+/// [`lib_decls`], so a caller folds them into whichever single edit (or file
+/// body) they belong to.
+pub(super) fn graphql_decls() -> Vec<String> {
+    ["pub mod graphql;", "pub use graphql::AuthzGraphqlModule;"]
+        .map(str::to_owned)
+        .to_vec()
+}
+
+/// Queue the bridge's four files. Mirrors
+/// `demo/crates/features/src/authz/graphql/`.
+pub(super) fn queue_graphql(s: &mut Scaffold, ws: &NestrsWorkspace) {
+    let dir = ws.features_root().join("authz/graphql");
+    s.create(dir.join("mod.rs"), auth::AUTHZ_GRAPHQL_MOD.to_string());
+    s.create(
+        dir.join("bridge.rs"),
+        auth::AUTHZ_GRAPHQL_BRIDGE.to_string(),
+    );
+    s.create(dir.join("guard.rs"), auth::AUTHZ_GRAPHQL_GUARD.to_string());
+    s.create(
+        dir.join("module.rs"),
+        auth::AUTHZ_GRAPHQL_MODULE.to_string(),
+    );
 }
 
 /// Append the HS256 dev secret unless the file already sets one — an app with

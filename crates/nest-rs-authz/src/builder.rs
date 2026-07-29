@@ -60,6 +60,21 @@ impl AbilityBuilder {
             None => Ok(self.ability),
         }
     }
+
+    /// [`build`](Self::build) for the **anonymous** caller: the rule set is
+    /// identical, but the result answers `true` to
+    /// [`Ability::is_visitor`](crate::Ability::is_visitor). The ability guard
+    /// calls this on its
+    /// [`define_visitor`](crate::AbilityFactory::define_visitor) branch, which
+    /// is what lets a transport that admits anonymous callers at the edge
+    /// (GraphQL) still refuse an operation whose declared posture is
+    /// `#[authorize(...)]` rather than `#[public]`.
+    pub fn build_visitor(self) -> Result<Ability, MalformedRuleError> {
+        self.build().map(|mut ability| {
+            ability.mark_visitor();
+            ability
+        })
+    }
 }
 
 /// One in-progress rule. Commits on drop — binding to a variable defers the

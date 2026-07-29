@@ -35,3 +35,19 @@ pub fn ability(ctx: &Context<'_>) -> Result<Arc<Ability>> {
 pub(crate) fn forbidden() -> Error {
     Error::new("forbidden").extend_with(|_, e| e.set("code", "FORBIDDEN"))
 }
+
+/// [`forbidden`] naming the response fields the caller's field grant refuses —
+/// the answer to an operation that selected a column it may not read. The names
+/// ride as an extension rather than in the message so the message stays the one
+/// constant string every denial carries.
+pub(crate) fn forbidden_fields(fields: &str) -> Error {
+    forbidden().extend_with(|_, e| e.set("fields", fields))
+}
+
+/// A GraphQL `unauthenticated` error — the anonymous caller's answer to a
+/// gated operation. Code `UNAUTHENTICATED`, the same one
+/// `nest_rs_guards::denial_to_graphql_error` gives a `401` denial, so a client
+/// reads one code for "log in" whichever layer refused.
+pub(crate) fn unauthenticated() -> Error {
+    Error::new("unauthenticated").extend_with(|_, e| e.set("code", "UNAUTHENTICATED"))
+}

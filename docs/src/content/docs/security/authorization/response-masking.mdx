@@ -56,7 +56,13 @@ unaliased.
 </Aside>
 
 The GraphQL analog is `#[authorize(Action, Entity)]` on a
-`#[query]`/`#[mutation]` — same declaration, same automatic mask.
+`#[query]`/`#[mutation]` — same declaration, same automatic mask, with
+one difference the schema forces: the masked value has to come back as
+the operation's own type. A stripped column masks to `null` where the
+field is nullable; where it is `String!` — what `#[expose]` emits for a
+non-nullable column — it cannot, so an operation that **selects** such a
+field is refused (`FORBIDDEN`, names in the `fields` extension) and one
+that does not select it is served. Row dropping applies either way.
 
 ## What you get
 

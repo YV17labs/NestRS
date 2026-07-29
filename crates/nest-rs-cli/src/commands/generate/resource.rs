@@ -45,7 +45,7 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     // The guards the controller binds have to exist before it names them.
     let scaffolded_auth = !auth::exists(&ws);
     if scaffolded_auth {
-        auth::queue(&mut s, &ws);
+        auth::queue(&mut s, &ws, Vec::new());
     }
 
     // DB-backed port.

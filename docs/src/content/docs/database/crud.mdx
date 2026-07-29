@@ -138,7 +138,7 @@ impl UsersController {
     }
 
     #[get("/:id")]
-    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
 }
@@ -181,7 +181,7 @@ impl UsersResolver {
     #[query]
     #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<UsersService, Read>(ctx, &id).await?.as_ref().map(User::from))
+        Ok(bind::<Read, UsersService>(ctx, &id).await?.as_ref().map(User::from))
     }
 }
 ```
@@ -200,7 +200,7 @@ A **bound mutation** acts on one existing row the caller already named by
 id — `publish`, `archive`, `confirm`. It declares its posture like any
 other operation — a **visible `#[authorize(Action, Entity)]`** — then loads
 the row in the body with `bind_required`, which returns the
-`Authorized<E, A>` proof to hand straight to the service:
+`Authorized<A, E>` proof to hand straight to the service:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 #[crud(service = svc, entity = PostEntity, output = Post, /* … */)]
@@ -208,7 +208,7 @@ impl PostsResolver {
     #[mutation]
     #[authorize(Update, PostEntity)]
     async fn publish_post(&self, ctx: &Context<'_>, id: String) -> Result<Post> {
-        let post = bind_required::<PostsService, Update>(ctx, &id).await?;
+        let post = bind_required::<Update, PostsService>(ctx, &id).await?;
         Ok(Post::from(&self.svc.publish(post).await?))
     }
 }
@@ -219,29 +219,29 @@ Two pieces, each with one job:
 - `#[authorize(Update, PostEntity)]` is the **posture** — the class gate
   before the body and the response mask after it. This is the only thing
   that decides authorization, and it is greppable.
-- `bind_required::<PostsService, Update>(ctx, &id)` is the **binding** —
+- `bind_required::<Update, PostsService>(ctx, &id)` is the **binding** —
   it parses the id, runs the row-level access check for `Update` (404 on a
   missing row, `FORBIDDEN` on a denied one), and returns the loaded
-  `Authorized<PostEntity, Update>`.
+  `Authorized<Update, PostEntity>`.
 
 The action lives **in the type**, so the proof is action-true: a service
-method that takes `Authorized<E, Update>` cannot be handed an
-`Authorized<E, Read>` — a compile error, not a runtime surprise. The
-`Authorized<E, A>` value is also *proof of authorization*: its constructor
+method that takes `Authorized<Update, E>` cannot be handed an
+`Authorized<Read, E>` — a compile error, not a runtime surprise. The
+`Authorized<A, E>` value is also *proof of authorization*: its constructor
 is sealed, mintable only by the binding seams, so the mutation body can
 neither reach a row the caller could not load nor act under an action it
 was not granted.
 
 <Aside type="caution">
 Posture is **always** the visible `#[authorize]`/`#[public]` — a bare
-`Authorized<E, A>` parameter is never accepted as a standalone posture.
+`Authorized<A, E>` parameter is never accepted as a standalone posture.
 Only a guard, via the attribute, decides authn/authz; `bind_required` and
 the `Authorized` proof are enforcement plumbing the decision flows into.
 </Aside>
 
 <Aside type="note">
 The `#[authorize(Update, bind = PostsService)]` form is a shorthand:
-it keeps the posture explicit **and** binds the `Authorized<E, A>` subject
+it keeps the posture explicit **and** binds the `Authorized<A, E>` subject
 for you (container-resolved service), so the body receives the proof
 without calling `bind_required` itself.
 </Aside>

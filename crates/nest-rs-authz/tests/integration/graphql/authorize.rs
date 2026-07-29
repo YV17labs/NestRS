@@ -19,6 +19,8 @@ use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
 use nest_rs_testing::TestApp;
 
+use super::query;
+
 /// A throwaway SeaORM entity to act as the authorization `Subject`.
 mod widget {
     use sea_orm::entity::prelude::*;
@@ -52,6 +54,10 @@ impl Guard for PassGuard {}
 /// Stands in for the `AbilityGuard` slot: reads the caller's role from a
 /// header and builds the matching `Ability` onto the request. An admin gets a
 /// Read grant on widgets; anyone else gets nothing.
+///
+/// A request with **no** `x-role` header is the anonymous caller, and takes the
+/// factory's visitor branch (`build_visitor`) — which here grants the same Read
+/// a `define_visitor` written for a `#[public]` query would.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -61,19 +67,26 @@ impl Layer for AbilityInjector {}
 #[async_trait]
 impl Guard for AbilityInjector {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let admin = req
+        let role = req
             .headers()
             .get("x-role")
             .and_then(|v| v.to_str().ok())
-            .map(|role| role == "admin")
-            .unwrap_or(false);
+            .map(str::to_owned);
         let mut b = AbilityBuilder::new();
-        if admin {
-            b.can(Action::Read, widget::Entity)
-                .when(|p| p.eq(widget::Column::Id, 1));
-        }
+        let ability = match role.as_deref() {
+            None => {
+                b.can(Action::Read, widget::Entity);
+                b.build_visitor()
+            }
+            Some("admin") => {
+                b.can(Action::Read, widget::Entity)
+                    .when(|p| p.eq(widget::Column::Id, 1));
+                b.build()
+            }
+            Some(_) => b.build(),
+        };
         req.extensions_mut()
-            .insert(Arc::new(b.build().expect("valid test ability")));
+            .insert(Arc::new(ability.expect("valid test ability")));
         Ok(())
     }
 }
@@ -89,6 +102,14 @@ impl WidgetResolver {
     #[authorize(Read, widget::Entity)]
     async fn widget_name(&self) -> GqlResult<String> {
         Ok("ada".into())
+    }
+
+    /// The `#[public]` twin of `widget_name`: the surface a visitor grant is
+    /// written for, and the one it must reach.
+    #[query]
+    #[public]
+    async fn widget_motd(&self) -> GqlResult<String> {
+        Ok("hello".into())
     }
 }
 
@@ -118,44 +139,48 @@ async fn boot() -> TestApp {
 #[tokio::test]
 async fn admin_passes_the_resolver_gate() {
     let app = boot().await;
-    let resp = app
-        .http()
-        .post("/graphql")
-        .header("x-role", "admin")
-        .body_json(&serde_json::json!({ "query": "{ widgetName }" }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
+    let json = query(&app, "admin", "{ widgetName }").await;
+    assert_eq!(json["data"]["widgetName"], "ada", "{json}");
+}
 
-    let json = resp.json().await;
-    let name = json
-        .value()
-        .object()
-        .get("data")
-        .object()
-        .get("widgetName")
-        .string();
-    assert_eq!(name, "ada");
+/// The `#[authorize]`/`#[public]` split is the whole review contract of
+/// `define_visitor`: a grant written there opens the `#[public]` operations and
+/// **nothing else**. `/graphql` admits the anonymous caller at the edge (one
+/// endpoint, posture declared per operation), so the gate is what has to hold
+/// the line — otherwise a visitor grant added for a public feed silently opens
+/// every guarded operation on the same entity.
+#[tokio::test]
+async fn a_visitor_grant_does_not_satisfy_a_guarded_operation() {
+    let app = boot().await;
+    let json = query(&app, "", "{ widgetName }").await;
+    assert_eq!(
+        json["data"],
+        serde_json::Value::Null,
+        "an anonymous caller must read no data from an `#[authorize]` operation: {json}",
+    );
+    assert_eq!(
+        json["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
+        "the anonymous caller is refused for want of a principal, not of a grant: {json}",
+    );
+}
+
+/// The other half of the same contract: the visitor grant does reach the
+/// operation it was written for.
+#[tokio::test]
+async fn a_visitor_grant_still_reaches_a_public_operation() {
+    let app = boot().await;
+    let json = query(&app, "", "{ widgetMotd }").await;
+    assert_eq!(json["data"]["widgetMotd"], "hello", "{json}");
 }
 
 #[tokio::test]
 async fn non_admin_is_forbidden_by_the_resolver_gate() {
     let app = boot().await;
-    let resp = app
-        .http()
-        .post("/graphql")
-        .header("x-role", "user")
-        .body_json(&serde_json::json!({ "query": "{ widgetName }" }))
-        .send()
-        .await;
     // GraphQL reports authorization failures as a 200 response carrying an
     // `errors` array, not an HTTP status.
-    resp.assert_status_is_ok();
-
-    let json = resp.json().await;
-    let errors = json.value().object().get("errors").array();
-    assert!(
-        !errors.is_empty(),
-        "a forbidden query must carry a GraphQL error"
+    let json = query(&app, "user", "{ widgetName }").await;
+    assert_eq!(
+        json["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{json}"
     );
 }

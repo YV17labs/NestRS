@@ -21,7 +21,7 @@ pub struct UsersController {
 #[routes]
 impl UsersController {
     #[get("/:id")]
-    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
 }
@@ -138,7 +138,7 @@ pub struct UsersController {
 #[routes]
 impl UsersController {
     #[get("/:id")]
-    async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
 }

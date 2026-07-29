@@ -97,6 +97,17 @@ const GUARDED_ROUTE_ROOTS = new Set([
 /// snippets are correct.
 const UNMAPPED_CRUD_READ = /\.(?:list\(\)|page\(|access\()[^;]*?\.await\s*\?/;
 
+/// `Bind` and `bind` take the **action marker first**, the service second
+/// (`nest-rs-seaorm/src/http/bind.rs`, `…/src/graphql/bind.rs`). Written the
+/// other way round the snippet does not compile — `Read: CrudService` and
+/// `UsersService: ActionMarker` both fail — and the prose form `Bind<S, A>`
+/// teaches the wrong rule to every page that repeats it. Filed as a 1.1.1
+/// defect (G5) across ~10 pages, so the shape is gated rather than trusted.
+/// Same defect on the proof the binder returns: `Authorized<A, E>`
+/// (`nest-rs-seaorm/src/service.rs`), action first, entity second.
+const BIND_ORDER =
+  /\b(?:[Bb]ind(?:_required)?(?:::)?<\s*(?:S|[A-Z]\w*Service)|Authorized<\s*(?:E|[A-Z]\w*Entity))\b/g;
+
 /// Marks a snippet as a handler — the only layer where the check above applies.
 /// A **service** method returning `ServiceError` converts `DbErr` through `?`
 /// legitimately, and that is where the conversion belongs: the exemplar's
@@ -211,10 +222,15 @@ function lintFile(absPath) {
     }
   }
 
+  // 8. The by-id binder's type parameters, in the order the code declares.
+  for (const m of src.matchAll(BIND_ORDER)) {
+    add('bind-order', `${m[0]}… — the action marker comes first`);
+  }
+
   for (const block of fencedBlocks(src)) {
     const shell = /^(bash|sh|shell|console|zsh)\b/.test(block.info);
 
-    // 8. A pasteable `curl` against a guarded route carries a bearer — unless
+    // 9. A pasteable `curl` against a guarded route carries a bearer — unless
     // the block is documenting the denial itself.
     if (shell && !/\b(401|403|Unauthorized|Forbidden)\b/.test(block.body)) {
       // Fold shell line continuations so a header on the next line counts.
@@ -225,7 +241,7 @@ function lintFile(absPath) {
       }
     }
 
-    // 9. A handler snippet that `?`s a `CrudService` read does not compile.
+    // 10. A handler snippet that `?`s a `CrudService` read does not compile.
     if (/^rust\b/.test(block.info) && HANDLER_SNIPPET.test(block.body)) {
       for (const line of block.body.split('\n')) {
         if (UNMAPPED_CRUD_READ.test(line) && !line.includes('map_err')) {

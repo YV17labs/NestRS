@@ -192,7 +192,7 @@ async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
 ## Pipes vs `Bind`
 
 A pipe converts a *primitive* input — an ID string into a `Uuid`, a JSON
-blob into a validated DTO. A [`Bind<S, A>`](/database/) extractor goes
+blob into a validated DTO. A [`Bind<A, S>`](/database/) extractor goes
 further: it parses the id, **loads the row through a service**, and
 **authorizes** it — returning `404` if the row doesn't exist within the
 caller's scope, `403` if denied.
@@ -206,7 +206,7 @@ async fn validate(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> String 
 
 // Bind — convert + load + authorize
 #[get("/:id")]
-async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
     Json(User::from(&*user))
 }
 ```

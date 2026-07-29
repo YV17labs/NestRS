@@ -6,6 +6,17 @@ import LinkButton from '../../node_modules/@astrojs/starlight/user-components/Li
 const { data } = Astro.locals.starlightRoute.entry;
 const { title = data.title, tagline, image, actions = [] } = data.hero || {};
 
+/** The nest stays on the ground — the pad every craft in the field left from. */
+const padRing = `M0,-180
+  L28,-160 L65,-168 L92,-140 L130,-136
+  L146,-100 L180,-82 L176,-42 L198,0
+  L176,42 L180,82 L146,100 L130,136
+  L92,140 L65,168 L28,160 L0,180
+  L-28,160 L-65,168 L-92,140 L-130,136
+  L-146,100 L-180,82 L-176,42 L-198,0
+  L-176,-42 L-180,-82 L-146,-100 L-130,-136
+  L-92,-140 L-65,-168 L-28,-160 Z`;
+
 const imageAttrs = {
   loading: 'eager' as const,
   decoding: 'async' as const,
@@ -30,6 +41,14 @@ if (image) {
 ---
 
 <div class="hero">
+  <div class="hero-pad" aria-hidden="true">
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+      <g transform="translate(256,256)">
+        <path class="hero-pad-ring" d={padRing} />
+        <circle class="hero-pad-orbit" r="120" />
+      </g>
+    </svg>
+  </div>
   <div class="hero-lockup">
     {
       darkImage && (

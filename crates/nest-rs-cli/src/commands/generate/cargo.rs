@@ -83,6 +83,33 @@ const AUTHZ: Dep = Dep {
     workspace_value: "",
     features: &["http"],
 };
+// The GraphQL trio. `#[resolver]` expands to `nest_rs_guards::{GraphqlChainCell,
+// GraphqlChainSources, run_layered_graphql_chain}`, which live behind that
+// crate's `graphql` feature — and `nest-rs-guards` is already a dependency of
+// every scaffolded `features` crate, so it is the *feature*, not the entry,
+// that has to be added. The other two carry the authz bridge
+// (`GraphqlAbilityBridge`) and its loader scope (`LoaderScope`); both keep
+// `http` because the bridge is written against the HTTP guards.
+const GUARDS_GRAPHQL: Dep = Dep {
+    name: "nest-rs-guards",
+    workspace_value: "",
+    features: &["graphql"],
+};
+const AUTHZ_GRAPHQL: Dep = Dep {
+    name: "nest-rs-authz",
+    workspace_value: "",
+    features: &["http", "graphql"],
+};
+const SEAORM_GRAPHQL: Dep = Dep {
+    name: "nest-rs-seaorm",
+    workspace_value: "",
+    features: &["http", "graphql"],
+};
+const RESOURCE_GRAPHQL: Dep = Dep {
+    name: "nest-rs-resource",
+    workspace_value: "",
+    features: &["graphql"],
+};
 // Mirrors the feature set `nest-rs-seaorm` itself resolves — a divergent list
 // (or a release-candidate floor) would be a manifest the user inherits and has
 // to un-learn later.
@@ -187,12 +214,25 @@ pub fn migrations_deps() -> Vec<&'static Dep> {
 pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http => vec![],
-        Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL],
+        Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL, &GUARDS_GRAPHQL],
         Transport::Ws => vec![&WS],
         Transport::Queue => vec![&QUEUE, &SERDE, &ANYHOW],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW],
         Transport::Mcp => vec![&MCP, &RMCP],
     }
+}
+
+/// The crates the GraphQL authz adapter (`authz/graphql/`) needs — the
+/// per-operation bridge and the dataloader scope.
+pub fn graphql_authz_deps() -> Vec<&'static Dep> {
+    vec![&AUTHZ_GRAPHQL, &SEAORM_GRAPHQL, &GRAPHQL]
+}
+
+/// What exposing an entity over GraphQL needs: `#[expose(graphql)]` derives the
+/// async-graphql object through `nest_rs_resource::graphql`, which that crate
+/// only compiles under its own `graphql` feature.
+pub fn graphql_port_deps() -> Vec<&'static Dep> {
+    vec![&RESOURCE_GRAPHQL]
 }
 
 /// Edit the root manifest: add any missing `[workspace.dependencies]` entries.
@@ -214,7 +254,12 @@ pub fn ensure_workspace_deps(deps: Vec<&'static Dep>) -> Transform {
 }
 
 /// Edit the `features` manifest: add any missing `[dependencies]` entries as
-/// `{ workspace = true, features = [...] }`.
+/// `{ workspace = true, features = [...] }` — and, for an entry that is already
+/// there, enable any feature it is missing. The second half is what a generator
+/// bolting a transport onto a crate the starter manifest already depends on
+/// needs: `nest-rs-guards` ships with every workspace, so `g graphql` can only
+/// reach `nest_rs_guards::run_layered_graphql_chain` by turning its `graphql`
+/// feature on.
 pub fn ensure_features_deps(deps: Vec<&'static Dep>) -> Transform {
     Box::new(move |content: &str| {
         let mut doc = content.parse::<DocumentMut>().ok()?;
@@ -224,12 +269,53 @@ pub fn ensure_features_deps(deps: Vec<&'static Dep>) -> Transform {
         let mut changed = false;
         for dep in &deps {
             if table.get(dep.name).is_none() {
-                table.insert(dep.name, Item::Value(features_value(dep.features)));
+                table.insert(dep.name, Item::Value(workspace_value()));
                 changed = true;
             }
+            let entry = table.get_mut(dep.name)?;
+            changed |= enable_features(entry, dep.features);
         }
         changed.then(|| doc.to_string())
     })
+}
+
+/// Turn on every feature `wanted` that this dependency entry does not already
+/// enable, in place. Handles the three shapes a manifest writes: the dotted
+/// `dep.workspace = true`, the inline `dep = { workspace = true }`, and the
+/// bare `dep = "1"` (widened to a table so the list has somewhere to live).
+fn enable_features(entry: &mut Item, wanted: &[&str]) -> bool {
+    if wanted.is_empty() {
+        return false;
+    }
+    if let Some(version) = entry.as_str() {
+        let mut table = toml_edit::InlineTable::new();
+        table.insert("version", Value::from(version));
+        *entry = Item::Value(Value::InlineTable(table));
+    }
+    let Some(table) = entry.as_table_like_mut() else {
+        return false;
+    };
+    let mut features = table
+        .get("features")
+        .and_then(Item::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut changed = false;
+    for feature in wanted {
+        if !features.iter().any(|f| f.as_str() == Some(*feature)) {
+            features.push(*feature);
+            changed = true;
+        }
+    }
+    if changed {
+        table.insert("features", Item::Value(Value::Array(features)));
+        // Re-space the entry we just widened, so the manifest the developer
+        // inherits reads as if it had been written by hand.
+        if let Some(inline) = entry.as_value_mut().and_then(Value::as_inline_table_mut) {
+            inline.fmt();
+        }
+    }
+    changed
 }
 
 fn parse_value(raw: &str) -> Item {
@@ -240,16 +326,12 @@ fn parse_value(raw: &str) -> Item {
         .unwrap_or_else(|| Item::Value(Value::from(raw)))
 }
 
-fn features_value(features: &[&str]) -> Value {
+/// A bare `{ workspace = true }` entry — [`enable_features`] then adds whatever
+/// the dependency needs on top, so the feature list is built in one place
+/// whether the entry is new or already there.
+fn workspace_value() -> Value {
     let mut table = toml_edit::InlineTable::new();
     table.insert("workspace", Value::from(true));
-    if !features.is_empty() {
-        let mut arr = toml_edit::Array::new();
-        for f in features {
-            arr.push(*f);
-        }
-        table.insert("features", Value::Array(arr));
-    }
     Value::InlineTable(table)
 }
 
@@ -275,5 +357,50 @@ mod tests {
         assert!(out.contains("nest-rs-seaorm"));
         assert!(out.contains("workspace = true"));
         assert!(out.contains("\"http\""));
+    }
+
+    // The `g graphql` case: the crate is already a dependency (every scaffolded
+    // workspace carries `nest-rs-guards`), so only its feature is missing —
+    // and without it `#[resolver]` expands to names that do not exist.
+    #[test]
+    fn enables_a_missing_feature_on_a_dependency_already_declared() {
+        let src = "[dependencies]\nnest-rs-guards.workspace = true\n";
+        let out = ensure_features_deps(vec![&GUARDS_GRAPHQL])(src).expect("enables graphql");
+        assert!(out.contains("graphql"), "{out}");
+        assert!(
+            ensure_features_deps(vec![&GUARDS_GRAPHQL])(&out).is_none(),
+            "a second run is a no-op: {out}",
+        );
+        let doc = out.parse::<DocumentMut>().expect("still valid TOML");
+        assert_eq!(
+            doc["dependencies"]["nest-rs-guards"]["workspace"].as_bool(),
+            Some(true),
+            "the existing keys survive: {out}",
+        );
+    }
+
+    #[test]
+    fn enabling_a_feature_keeps_the_ones_already_listed() {
+        let src = "[dependencies]\nnest-rs-seaorm = { workspace = true, features = [\"http\"] }\n";
+        let out = ensure_features_deps(vec![&SEAORM_GRAPHQL])(src).expect("adds graphql");
+        assert!(
+            out.contains("\"http\"") && out.contains("\"graphql\""),
+            "{out}"
+        );
+    }
+
+    // A hand-rolled manifest may pin a version literally; the feature list then
+    // has nowhere to go until the entry is widened into a table.
+    #[test]
+    fn a_version_pinned_dependency_is_widened_to_carry_features() {
+        let src = "[dependencies]\nnest-rs-guards = \"1.1\"\n";
+        let out = ensure_features_deps(vec![&GUARDS_GRAPHQL])(src).expect("widens the entry");
+        let doc = out.parse::<DocumentMut>().expect("still valid TOML");
+        assert_eq!(
+            doc["dependencies"]["nest-rs-guards"]["version"].as_str(),
+            Some("1.1"),
+            "the pin survives: {out}",
+        );
+        assert!(out.contains("graphql"), "{out}");
     }
 }

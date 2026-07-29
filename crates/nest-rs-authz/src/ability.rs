@@ -93,11 +93,38 @@ pub(crate) struct Rule {
 #[derive(Default)]
 pub struct Ability {
     rules: HashMap<(Action, TypeId), Vec<Rule>>,
+    visitor: bool,
 }
 
 impl Ability {
     pub(crate) fn add_rule(&mut self, action: Action, subject: TypeId, rule: Rule) {
         self.rules.entry((action, subject)).or_default().push(rule);
+    }
+
+    pub(crate) fn mark_visitor(&mut self) {
+        self.visitor = true;
+    }
+
+    /// Whether these rules came from
+    /// [`AbilityFactory::define_visitor`](crate::AbilityFactory::define_visitor)
+    /// — i.e. the caller is **anonymous**.
+    ///
+    /// A grant is a grant on either branch, so the three enforcement layers
+    /// ignore this. It answers the *other* question, the one a transport whose
+    /// edge admits anonymous callers has to ask before running a gate: is there
+    /// a principal at all? On HTTP that is the route's own posture (a
+    /// non-`#[public]` route never reaches the visitor branch); on GraphQL,
+    /// where the single `/graphql` endpoint is `#[public]` and posture is
+    /// declared per operation, [`graphql::authorize`](crate::graphql::authorize)
+    /// reads this so a `define_visitor` grant cannot satisfy an
+    /// `#[authorize(...)]` operation.
+    ///
+    /// Read it from a **guard** or from the gate a posture attribute emits, the
+    /// same rule [`can_class`](Self::can_class) follows — a check buried in a
+    /// service or a parameter type is an authorization decision outside the
+    /// three greppable sites.
+    pub fn is_visitor(&self) -> bool {
+        self.visitor
     }
 
     /// Rules relevant to `action` on `subject`: those keyed under the action
@@ -152,7 +179,11 @@ impl Ability {
     /// [`mask_many`](Self::mask_many) — both answers come from the same
     /// predicates, so computing them together is one pass instead of two per
     /// row (the masked-list path used to evaluate every predicate twice).
-    fn evaluate<E: EntityTrait>(&self, action: Action, model: &E::Model) -> Verdict {
+    ///
+    /// `pub(crate)` for the same reason: a caller needing *both* answers about
+    /// one row asks once here rather than calling `can` and then
+    /// `permitted_fields`.
+    pub(crate) fn evaluate<E: EntityTrait>(&self, action: Action, model: &E::Model) -> Verdict {
         let mut granted = false;
         let mut denied = false;
         let mut unrestricted = false;
@@ -272,9 +303,9 @@ impl Ability {
 
 /// What one rule scan concluded about a model: whether it is visible, and which
 /// of its columns the matching grants expose.
-struct Verdict {
-    allowed: bool,
-    fields: FieldSet,
+pub(crate) struct Verdict {
+    pub(crate) allowed: bool,
+    pub(crate) fields: FieldSet,
 }
 
 /// Recover a rule's typed predicate. The downcast cannot fail in practice —

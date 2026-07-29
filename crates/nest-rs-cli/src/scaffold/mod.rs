@@ -7,4 +7,6 @@ mod wiring;
 
 pub use render::Renderer;
 pub use transaction::{Scaffold, rustfmt};
-pub use wiring::{Transform, ensure_decl, ensure_lines, ensure_module_imports};
+pub use wiring::{
+    Transform, ensure_decl, ensure_expose_graphql, ensure_lines, ensure_module_imports,
+};

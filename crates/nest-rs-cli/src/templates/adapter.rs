@@ -4,6 +4,13 @@
 //! Each skeleton delegates to the port service's `count()` (the method
 //! `g feature` emits) so a freshly-generated port + any adapter compiles
 //! immediately. The handler is the seam the developer then fills in.
+//!
+//! **A `g resource` port has no `count()`** — its service is a `CrudService`
+//! (`list`/`page`/`access`/`create`/`update`/`delete`), so a skeleton calling
+//! `count()` on one does not compile. [`GRAPHQL_RESOLVER_CRUD`] is the variant
+//! for that port, picked by reading the port's `service.rs`. The `ws`,
+//! `schedule` and `mcp` skeletons still assume the `g feature` port and have no
+//! CRUD twin yet — same gap, one transport at a time.
 
 /// `mod.rs` for an adapter folder: `mod <handler>; mod module;` + re-exports.
 /// `{{handler_mod}}`/`{{handler}}`/`{{tmodule}}` are layered per transport.
@@ -63,15 +70,50 @@ pub struct {{resolver}} {
 
 #[resolver]
 impl {{resolver}} {
-    // SECURITY: scaffolded as #[public]. Before exposing real data, declare
-    // #[authorize(Action, Entity)] instead (class gate + automatic response
-    // masking) and import AuthzGraphqlModule — see crates/features/src/users/graphql/.
+    // SECURITY: scaffolded as #[public] because this port holds no entity.
+    // Before serving real rows, declare #[authorize(Action, Entity)] instead
+    // (class gate + automatic response masking), bind
+    // #[use_guards(AuthnGuard, AuthzGuard)] on the struct, and import
+    // AuthzGraphqlModule in this adapter's module.rs — `nestrs g auth` writes
+    // all three, and `nestrs g graphql` on a `g resource` port emits them.
     #[query]
     #[public]
     async fn {{snake}}_count(&self) -> Result<usize> {
         Ok(self.svc.count())
     }
 }
+"#;
+
+/// The GraphQL adapter for a **resource** port: the `#[crud]` resolver behind
+/// the app's guards, the exact twin of `resource::HTTP_CONTROLLER` — same
+/// service, same ability, same rows, one transport over.
+pub const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
+
+use nest_rs_graphql::{crud, resolver};
+
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
+use crate::{{snake}}::{{{create_op}}, Entity as {{entity}}Entity, {{entity}}, {{service}}, {{update_op}}};
+
+#[resolver]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct {{resolver}} {
+    #[inject]
+    svc: Arc<{{service}}>,
+}
+
+// Every operation declares #[authorize(Action, Entity)], so each is
+// authenticated, ability-filtered, transactional and field-masked — generated
+// by #[crud], the same way the HTTP controller is. They answer FORBIDDEN until
+// AppAbility grants a rule for {{entity}}.
+#[crud(
+    service = svc,
+    entity = {{entity}}Entity,
+    output = {{entity}},
+    create = {{create_op}},
+    update = {{update_op}},
+)]
+impl {{resolver}} {}
 "#;
 
 pub const WS_GATEWAY: &str = r#"use std::sync::Arc;

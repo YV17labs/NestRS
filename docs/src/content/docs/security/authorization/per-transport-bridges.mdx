@@ -89,6 +89,14 @@ you write is unchanged in spirit: import `AuthzGraphqlModule`, bind the
 impl UsersResolver { /* #[authorize(Action, Entity)] or #[public] per op */ }
 ```
 
+The module those three providers live in is app code, like the rest of
+`authz/`: **`nestrs g graphql <feature>` writes it** into
+`crates/features/src/authz/graphql/` the first time a resource gets a
+GraphQL adapter, and imports it from that adapter's `module.rs`. The
+four files are the ones sketched below —
+[`demo/crates/features/src/authz/graphql/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/authz/graphql)
+is the same thing under version control.
+
 That's the whole resolver-side surface. The marker exists for the access
 graph: HTTP guards run on `&mut Request` *before* the handler — they
 *are* the auth chain. GraphQL instead runs authn/ability **in-band** per
@@ -117,8 +125,13 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
 ```
 
 `before` runs the same HTTP guard chain (`AuthnGuard`, then
-`AbilityGuard`) on the GraphQL request and fails closed: a failed authn
-leaves no ability, so every `authorize`/`bind` in the operation refuses.
+`AbilityGuard`) on the GraphQL request. `/graphql` carries the `Public`
+marker — one endpoint, posture declared per operation — so an anonymous
+caller is admitted here and takes the ability guard's *visitor* branch.
+The line is held one step later, by the operation's own posture:
+`#[authorize(...)]` refuses an ability with no principal behind it
+(`UNAUTHENTICATED`), whatever `define_visitor` granted, and only
+`#[public]` operations read those grants.
 `around` installs the resulting ability via `with_ability` for the
 duration of the operation. The marker itself is a
 `dyn GraphqlResolverGuard` that fails closed if `Arc<Ability>` is

@@ -112,7 +112,7 @@ it and builds the `Ability`. Every handler downstream sees an ambient
    action+entity into a `sea_orm::Condition`, joined into every query.
    No matching grant ⇒ `1 = 0` ⇒ the query returns nothing. See
    [Row-level filtering](/security/authorization/row-level-filtering/).
-2. **`Bind<S, A>` — the by-id loader.**
+2. **`Bind<A, S>` — the by-id loader.**
    `Service::access(id)` loads the row **unscoped**, then re-checks
    the same primary key filtered by `condition_for(action)` — the
    decision is made in SQL, by the same predicate the list path
@@ -203,7 +203,7 @@ controller with the transport's authz module, and write a
 - [Row-level filtering](/security/authorization/row-level-filtering/)
   — what `Repo::scoped` does, with before/after SQL.
 - [By-id binding](/security/authorization/by-id-binding/) —
-  `Bind<S, A>` and the 404/403 distinction.
+  `Bind<A, S>` and the 404/403 distinction.
 - [Response masking](/security/authorization/response-masking/) —
   declare `Authorize<A, S>` and masking is automatic; the
   `mask`/`retain_wire_keys`/`WireModelDefaults` pipeline is documented

@@ -36,6 +36,7 @@ impl GlobalPoolChain {
     /// guard passed" — the builder only seeds the fallback for a non-empty
     /// pool, but `resolve` drops specs it cannot resolve, so emptiness here is
     /// not the same question the builder answered.
+    #[cfg(feature = "mcp")]
     pub(crate) fn is_empty(&self) -> bool {
         self.chain.is_empty()
     }

@@ -245,7 +245,7 @@ here, against types your users already recognise.
 
 The SeaORM-typed primitives — `Repo<E>`'s ambient
 row-level filter via `Ability::condition_for`, the `#[expose]` response
-mask, `Bind<S, A>`, `CrudService` — all read SeaORM's typed `Column` /
+mask, `Bind<A, S>`, `CrudService` — all read SeaORM's typed `Column` /
 `EntityTrait` model layer, so a driver ships their equivalents in
 store-native terms
 (e.g. Postgres RLS, an ability-derived filter document, a per-collection

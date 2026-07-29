@@ -1,13 +1,13 @@
 ---
 title: Route model binding
-description: Bind<S, A> turns a path id into the loaded, authorized model — 404 when the row is absent, 403 when it exists but the caller cannot see it.
+description: Bind<A, S> turns a path id into the loaded, authorized model — 404 when the row is absent, 403 when it exists but the caller cannot see it.
 sidebar:
   order: 4
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-`Bind<S, A>` is the handler argument that turns `/users/:id` into a
+`Bind<A, S>` is the handler argument that turns `/users/:id` into a
 loaded, authorized model. It runs through the service's `access`
 method, which loads the row **unscoped** and then asks the ambient
 `Ability` whether the caller may perform `A` on it. Three outcomes,
@@ -31,7 +31,7 @@ use nest_rs_authz::Read;
 use nest_rs_seaorm::Bind;
 
 #[get("/:id")]
-async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
+async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
     Json(User::from(&*user))
 }
 ```
@@ -39,10 +39,12 @@ async fn get(&self, user: Bind<UsersService, Read>) -> Json<User> {
 `Bind` derefs to the entity's `Model`, so `&*user` is `&user::Model`.
 Take ownership with `user.into_inner()` when the handler moves it.
 
-`Bind<UsersService, Read>` reads as: "load a user by id, authorize
+`Bind<Read, UsersService>` reads as: "load a user by id, authorize
 the caller for `Read` on it, refuse with 404 or 403 otherwise". The
-type parameters are the **service** (not the entity) and the
-**action marker** — the service is what the framework calls
+type parameters are the **action marker** first and the **service**
+(not the entity) second — the same order `#[authorize(Read,
+users::Entity)]` and the GraphQL `bind::<Read, UsersService>` use, so
+the action always leads. The service is what the framework calls
 `access` on; the entity comes from `S::Entity`.
 
 ## The four outcomes
@@ -70,7 +72,7 @@ fails at request time with this 500.
 
 ## How `access` decides
 
-`Bind<S, A>` calls `S::access(action, id)` from the service. The
+`Bind<A, S>` calls `S::access(action, id)` from the service. The
 default `CrudService::access` is (simplified):
 
 ```rust
@@ -143,12 +145,12 @@ analog (`nest_rs_seaorm::graphql::bind`) does the same for resolvers.
 
 ## Updates and deletes — the by-id mutation path
 
-For mutating actions, `Bind<S, Update>` (or `Delete`) loads the row
+For mutating actions, `Bind<Update, S>` (or `Delete`) loads the row
 the caller is about to touch and refuses early if the policy says no:
 
 ```rust
 #[delete("/:id")]
-async fn delete(&self, user: Bind<UsersService, Delete>) -> StatusCode {
+async fn delete(&self, user: Bind<Delete, UsersService>) -> StatusCode {
     self.svc.delete_by_id(user.id).await?;
     StatusCode::NO_CONTENT
 }

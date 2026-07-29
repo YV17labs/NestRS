@@ -57,7 +57,12 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             None if Reflector::new(req).is_public() => {
                 let mut builder = AbilityBuilder::new();
                 self.factory.define_visitor(&mut builder);
-                Some(builder.build())
+                // `build_visitor`, not `build`: the ability carries the fact
+                // that no principal backs it, so a transport declaring posture
+                // *per operation* rather than per route (GraphQL) can refuse an
+                // `#[authorize]` operation it would otherwise let a visitor
+                // grant satisfy.
+                Some(builder.build_visitor())
             }
             None => None,
         };
@@ -254,6 +259,28 @@ mod tests {
         assert!(
             ability.can_class(Action::Read, TypeId::of::<post::Entity>()),
             "the visitor branch's grant must reach the request",
+        );
+        assert!(
+            ability.is_visitor(),
+            "the ability must carry that no principal backs it — the GraphQL gate \
+             reads this to keep a visitor grant out of an `#[authorize]` operation",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_authenticated_ability_is_not_a_visitors() {
+        let mut req = Request::default();
+        req.extensions_mut().insert(());
+        guard()
+            .check_http(&mut req)
+            .await
+            .expect("an authenticated actor builds an ability");
+
+        assert!(
+            !attached(&req)
+                .expect("the guard attaches an ability")
+                .is_visitor(),
+            "an actor-backed ability is never the visitor's",
         );
     }
 

@@ -727,6 +727,138 @@ fn generate_queue_adapter_puts_command_at_the_port() {
     assert!(mod_rs.contains("PostsQueueModule"));
 }
 
+/// `#[resolver]` expands to names behind `nest-rs-guards`' `graphql` feature,
+/// and that crate is already a dependency of every scaffolded workspace — so
+/// the generator has to turn the *feature* on, not add the entry. Without it
+/// the very first `cargo check` after `g graphql` is a wall of
+/// `cannot find … in nest_rs_guards`.
+#[test]
+fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    // The starter shape: the crate is declared, with default features.
+    let features_cargo_path = dir.path().join("crates/features/Cargo.toml");
+    fs::write(
+        &features_cargo_path,
+        "[package]\nname = \"features\"\n\n[dependencies]\nnest-rs-core.workspace = true\n\
+         nest-rs-guards.workspace = true\n",
+    )
+    .unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let features_cargo = fs::read_to_string(&features_cargo_path).unwrap();
+    assert!(
+        features_cargo.contains("nest-rs-guards") && features_cargo.contains("graphql"),
+        "the guards crate has to gain the graphql feature: {features_cargo}"
+    );
+
+    // A port with no entity stays the `#[public]` stand-in — nothing to guard.
+    let resolver = fs::read_to_string(
+        dir.path()
+            .join("crates/features/src/posts/graphql/resolver.rs"),
+    )
+    .unwrap();
+    assert!(resolver.contains("#[public]"), "{resolver}");
+    assert!(
+        !dir.path().join("crates/features/src/authz").exists(),
+        "a workspace with no policy does not get one from a public count query",
+    );
+}
+
+/// The GraphQL twin of `generate_resource_emits_the_guarded_form_…`: over a
+/// `g resource` port the resolver is the `#[crud]` form behind the app's
+/// guards, and the per-operation bridge it is enforced through
+/// (`authz/graphql/`) is scaffolded with it. The old scaffold called
+/// `svc.count()` — a method a `CrudService` does not have.
+#[test]
+fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let src = dir.path().join("crates/features/src");
+    let resolver = fs::read_to_string(src.join("posts/graphql/resolver.rs")).unwrap();
+    assert!(
+        !resolver.contains("count()"),
+        "a CrudService has no `count()`: {resolver}"
+    );
+    assert!(
+        resolver.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        "DB-backed rows are only reachable behind the ability guard: {resolver}"
+    );
+    assert!(
+        resolver.contains("#[crud(") && resolver.contains("entity = PostEntity"),
+        "the resource resolver uses the #[crud] form: {resolver}"
+    );
+
+    // The entity has to *be* a GraphQL object for the resolver to return it.
+    let entity = fs::read_to_string(src.join("posts/entity.rs")).unwrap();
+    assert!(entity.contains("#[expose(graphql"), "{entity}");
+
+    // The bridge `/graphql` gates through, and the module that serves it.
+    let module = fs::read_to_string(src.join("posts/graphql/module.rs")).unwrap();
+    assert!(module.contains("AuthzGraphqlModule"), "{module}");
+    let bridge = fs::read_to_string(src.join("authz/graphql/bridge.rs")).unwrap();
+    assert!(
+        bridge.contains("GraphqlAbilityBridge<AuthnGuard, AuthzGuard>"),
+        "{bridge}"
+    );
+    let authz_graphql = fs::read_to_string(src.join("authz/graphql/module.rs")).unwrap();
+    assert!(
+        authz_graphql.contains("dyn GraphqlOperationGuard")
+            && authz_graphql.contains("dyn GraphqlBatchContext")
+            && authz_graphql.contains("forward_principal!(Claims, GraphqlAuthnGuard)"),
+        "the three providers the bridge needs: {authz_graphql}"
+    );
+    let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
+    assert!(
+        authz_mod.contains("pub use graphql::AuthzGraphqlModule;"),
+        "{authz_mod}"
+    );
+
+    // Its crates, with the features that make those paths resolve.
+    let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    for needed in ["nest-rs-graphql", "async-graphql", "nest-rs-guards"] {
+        assert!(
+            features_cargo.contains(needed),
+            "{needed}: {features_cargo}"
+        );
+    }
+    assert!(
+        features_cargo
+            .contains("nest-rs-authz = { workspace = true, features = [\"http\", \"graphql\"] }"),
+        "{features_cargo}"
+    );
+}
+
+/// A second GraphQL adapter reuses the bridge the first one created rather
+/// than failing on a file that already exists.
+#[test]
+fn generate_graphql_reuses_an_existing_authz_bridge() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "resource", "tags", "-p", path]);
+    run_ok(dir.path(), &["g", "graphql", "tags", "-p", path]);
+
+    let authz_mod =
+        fs::read_to_string(dir.path().join("crates/features/src/authz/mod.rs")).unwrap();
+    assert_eq!(
+        authz_mod.matches("pub mod graphql;").count(),
+        1,
+        "the index line is written once: {authz_mod}"
+    );
+}
+
 #[test]
 fn generate_adapter_is_rejected_on_rerun() {
     let dir = tempfile::tempdir().unwrap();

@@ -44,7 +44,7 @@ compile:
 The posture is **always** one of these visible attributes — a parameter
 type is never a posture. A bound mutation acts on a row named by id: it
 still carries `#[authorize(Action, Entity)]`, then loads the
-`Authorized<E, A>` subject in its body. See
+`Authorized<A, E>` subject in its body. See
 [Database / CRUD](/database/crud/#bound-mutations).
 
 The toy examples on this page are `#[public]`; the service-backed ones at
@@ -284,7 +284,7 @@ impl UsersResolver {
     #[query]
     #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<UsersService, Read>(ctx, &id).await?.as_ref().map(User::from))
+        Ok(bind::<Read, UsersService>(ctx, &id).await?.as_ref().map(User::from))
     }
 
     #[mutation]

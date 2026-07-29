@@ -68,7 +68,7 @@ impl UsersResolver {
     #[query]
     #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<UsersService, Read>(ctx, &id)
+        Ok(bind::<Read, UsersService>(ctx, &id)
             .await?
             .as_ref()
             .map(User::from))
@@ -96,7 +96,7 @@ are different:
 | HTTP | GraphQL | Job |
 |------|---------|-----|
 | `Authorize<Create, users::Entity>` extractor | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
-| `Bind<UsersService, Read>` extractor | `bind::<UsersService, Read>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
+| `Bind<Read, UsersService>` extractor | `bind::<Read, UsersService>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
 | `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the authz bridge seeded |
 
 The same `#[use_guards(AuthnGuard, AuthzGuard)]` declaration on the
@@ -177,8 +177,12 @@ $ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 The ambient ability runs on the query — a plain user gets the same
-filter as the HTTP `GET /users`, and a missing email field on the
-masker drops it from the response. Same policy, two transports.
+filter as the HTTP `GET /users`. The response side differs by one
+GraphQL rule: `email` is `String!` in the schema, and a non-null field
+cannot be nulled, so a caller whose grant excludes it is refused
+(`FORBIDDEN`, naming the field) rather than served a row without it.
+Asking for `{ users { id name } }` works. Same policy, two transports,
+each answering in its own shape.
 
 ## Relations resolve themselves
 

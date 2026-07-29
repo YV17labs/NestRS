@@ -124,7 +124,7 @@ pub struct PostsController {
 #[routes]
 impl PostsController {
     #[get("/:id")]
-    async fn get(&self, post: Bind<PostsService, Read>) -> Json<Post> {
+    async fn get(&self, post: Bind<Read, PostsService>) -> Json<Post> {
         Json(Post::from(&*post))
     }
 

@@ -177,6 +177,67 @@ use crate::authz::AuthzModule;
 pub struct AuthzHttpModule;
 "#;
 
+// ── authz/graphql/ — the per-operation bridge (`nestrs g graphql`) ──────────
+//
+// `/graphql` is one endpoint with no guard at the HTTP edge: authn and the
+// ability run **in band, per operation**, through a `GraphqlOperationGuard`.
+// These three providers are what a resolver's `#[authorize]` / `#[public]`
+// posture is enforced against, so a GraphQL adapter without them boots into a
+// deny-all fallback that installs no ability at all.
+
+pub const AUTHZ_GRAPHQL_MOD: &str = r#"mod bridge;
+mod guard;
+mod module;
+
+pub use module::AuthzGraphqlModule;
+"#;
+
+/// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
+/// `AuthzGuard`) on the GraphQL request, then scopes the operation to the
+/// ability it produced — so one policy answers on both transports.
+pub const AUTHZ_GRAPHQL_BRIDGE: &str = r#"use nest_rs_authz::graphql::GraphqlAbilityBridge;
+
+use crate::authn::AuthnGuard;
+use crate::authz::http::AuthzGuard;
+
+pub type AppGraphqlGuard = GraphqlAbilityBridge<AuthnGuard, AuthzGuard>;
+"#;
+
+/// The marker that owns the seeded `Claims` context entry. It is not a guard
+/// chain member: `forward_principal!` gates the principal it forwards on this
+/// type being reachable, which turns "did the app import the GraphQL authz
+/// module?" into a boot-time access-graph answer instead of a null at run time.
+pub const AUTHZ_GRAPHQL_GUARD: &str = r#"use nest_rs_core::injectable;
+
+#[injectable]
+#[derive(Default)]
+pub struct GraphqlAuthnGuard;
+"#;
+
+pub const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs_core::module;
+use nest_rs_graphql::{GraphqlBatchContext, GraphqlOperationGuard};
+use nest_rs_seaorm::graphql::LoaderScope;
+
+use super::bridge::AppGraphqlGuard;
+use super::guard::GraphqlAuthnGuard;
+use crate::authz::http::AuthzHttpModule;
+use crate::identity::Claims;
+
+#[module(
+    imports = [AuthzHttpModule],
+    providers = [
+        AppGraphqlGuard as dyn GraphqlOperationGuard,
+        GraphqlAuthnGuard,
+        LoaderScope as dyn GraphqlBatchContext,
+    ],
+)]
+pub struct AuthzGraphqlModule;
+
+// Forwards the verified principal into every operation's GraphQL context,
+// gated on `GraphqlAuthnGuard` being reachable from the running app.
+nest_rs_graphql::forward_principal!(Claims, GraphqlAuthnGuard);
+"#;
+
 /// Appended to the committed `.env`. HS256 needs ≥ 32 bytes or the app refuses
 /// to boot; this placeholder is deliberately obvious so nobody ships it.
 pub const ENV_AUTHN: &str = r#"

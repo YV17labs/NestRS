@@ -19,6 +19,8 @@ use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 
+use super::query;
+
 /// A throwaway SeaORM entity with a server-only column (`secret`) the wire
 /// DTOs never carry — [`WireModelDefaults`] reconstructs it for policy and the
 /// exposed-key strainer drops it again.
@@ -80,8 +82,8 @@ impl Layer for PassGuard {}
 impl Guard for PassGuard {}
 
 /// Builds the caller's ability from an `x-role` header: `admin` reads widgets
-/// unrestricted; `viewer` reads widgets but only the `id` field; anyone else
-/// gets nothing.
+/// unrestricted; `viewer` reads widgets but only the `id` field; `auditor`
+/// reads only widget 1 and only its `id`; anyone else gets nothing.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -104,6 +106,11 @@ impl Guard for AbilityInjector {
             }
             "viewer" => {
                 b.can(Action::Read, widget::Entity)
+                    .fields([widget::Column::Id]);
+            }
+            "auditor" => {
+                b.can(Action::Read, widget::Entity)
+                    .when(|p| p.eq(widget::Column::Id, 1))
                     .fields([widget::Column::Id]);
             }
             _ => {}
@@ -153,6 +160,21 @@ impl MaskResolver {
     }
 
     #[query]
+    #[authorize(Read, widget::Entity)]
+    async fn strict_widgets(&self) -> GqlResult<Vec<StrictWidgetDto>> {
+        Ok(vec![
+            StrictWidgetDto {
+                id: 1,
+                name: "ada".into(),
+            },
+            StrictWidgetDto {
+                id: 2,
+                name: "grace".into(),
+            },
+        ])
+    }
+
+    #[query]
     #[public]
     async fn motd(&self) -> GqlResult<String> {
         Ok("hello".into())
@@ -178,19 +200,6 @@ async fn boot() -> TestApp {
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")
-}
-
-async fn query(app: &TestApp, role: &str, query: &str) -> serde_json::Value {
-    let mut req = app.http().post("/graphql");
-    if !role.is_empty() {
-        req = req.header("x-role", role);
-    }
-    let resp = req
-        .body_json(&serde_json::json!({ "query": query }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    serde_json::to_value(resp.json().await).expect("a GraphQL response is JSON")
 }
 
 #[tokio::test]
@@ -226,19 +235,70 @@ async fn every_row_of_a_vec_is_masked() {
     }
 }
 
+// ── A field grant against a non-null schema field ───────────────────────────
+//
+// `#[expose]` types a non-nullable column as a non-null GraphQL field, which
+// the mask cannot null. The selection set decides instead: asking for the
+// stripped field is refused, asking for the granted ones is served.
+
 #[tokio::test]
-async fn irreconcilable_masked_value_fails_closed() {
+async fn selecting_a_field_the_grant_strips_is_refused() {
     let app = boot().await;
     let json = query(&app, "viewer", "{ strictWidget { id name } }").await;
-    assert!(
-        !json["errors"].as_array().unwrap_or(&vec![]).is_empty(),
-        "masking away a required field must surface an error, not data"
-    );
     assert_eq!(
         json["data"],
         serde_json::Value::Null,
-        "no partial unmasked data may ship"
+        "no partial unmasked data may ship: {json}",
     );
+    assert_eq!(
+        json["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "a field outside the grant is a denial, not a masking failure: {json}",
+    );
+    assert_eq!(
+        json["errors"][0]["extensions"]["fields"], "name",
+        "the denial names the field it refused: {json}",
+    );
+}
+
+#[tokio::test]
+async fn selecting_only_granted_fields_still_serves_the_entity() {
+    let app = boot().await;
+    let json = query(&app, "viewer", "{ strictWidget { id } }").await;
+    assert!(
+        json.get("errors").is_none(),
+        "a query asking only for granted columns must succeed: {json}",
+    );
+    assert_eq!(json["data"]["strictWidget"]["id"], 1);
+}
+
+#[tokio::test]
+async fn an_unrestricted_caller_reads_every_field_of_a_strict_shape() {
+    let app = boot().await;
+    let json = query(&app, "admin", "{ strictWidget { id name } }").await;
+    assert_eq!(json["data"]["strictWidget"]["name"], "ada", "{json}");
+}
+
+#[tokio::test]
+async fn rows_the_ability_refuses_are_still_dropped_from_a_strict_list() {
+    let app = boot().await;
+    let json = query(&app, "auditor", "{ strictWidgets { id } }").await;
+    let rows = json["data"]["strictWidgets"]
+        .as_array()
+        .unwrap_or_else(|| panic!("strictWidgets is a list: {json}"));
+    assert_eq!(rows.len(), 1, "widget 2 is outside the grant: {json}");
+    assert_eq!(rows[0]["id"], 1);
+}
+
+#[tokio::test]
+async fn a_caller_with_no_grant_reads_no_strict_row() {
+    let app = boot().await;
+    let json = query(&app, "", "{ strictWidgets { id } }").await;
+    assert_eq!(
+        json["data"],
+        serde_json::Value::Null,
+        "the class gate rejects a caller with no Read rule: {json}",
+    );
+    assert!(!json["errors"].as_array().unwrap_or(&vec![]).is_empty());
 }
 
 #[tokio::test]

@@ -5,6 +5,73 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Five findings from the 1.1.1 read-through, which opened the GraphQL surface.
+Two were security-relevant, and each is closed with the check that keeps it
+closed: two integration suites and a demo e2e for the transport behaviour, three
+CLI tests for the generator, and a sixth grep (`bind-order`) in
+`docs/scripts/lint-docs.mjs`.
+
+### Security
+
+- **On GraphQL, `#[authorize]` did not require authentication.** `/graphql` is
+  one endpoint carrying the `Public` marker — the authn guard admits an
+  anonymous caller so `#[public]` operations stay reachable, and the ability
+  guard then hands the operation the *visitor* ability
+  (`AbilityFactory::define_visitor`). The class gate consulted only the grants,
+  so a visitor grant added to serve a public feed also satisfied every
+  `#[authorize]` operation on that entity — while the review contract of
+  `define_visitor` is that a grant there reaches `#[public]` surfaces *only*,
+  and the diff a reviewer reads shows only `#[public]` routes. The ability now
+  carries whether a principal backs it (`Ability::is_visitor`, set by the
+  guard's visitor branch through `AbilityBuilder::build_visitor`), and the
+  GraphQL gate refuses the anonymous caller with `UNAUTHENTICATED` before
+  looking at a single grant. HTTP is unchanged: a non-`#[public]` route never
+  reaches the visitor branch, so the marker is still what selects the policy
+  half there.
+
+### Fixed
+
+- **A field-level grant took an entity offline over GraphQL.** `.fields([...])`
+  strips a column, and the GraphQL wrapper had to hand the masked value back as
+  the operation's own type — which a non-null schema field cannot express, so
+  *every* query on that entity failed, including one asking only for granted
+  columns. Its HTTP twin served the same rows masked. The mask now follows
+  GraphQL's own rule: a stripped column masks to `null` where the field is
+  nullable, and where it is not, the selection set decides — an operation that
+  **selects** the column is refused (`FORBIDDEN`, names in the `fields`
+  extension), one that does not is served. Rows the ability refuses are dropped
+  either way, and nothing unmasked ever ships.
+
+- **`nestrs g graphql <feature>` generated code that did not compile**, from two
+  independent causes. `#[resolver]` expands to
+  `nest_rs_guards::{GraphqlChainCell, GraphqlChainSources,
+  run_layered_graphql_chain}`, which sit behind that crate's `graphql` feature —
+  and because `nest-rs-guards` is already a dependency of every scaffolded
+  workspace, the generator had to enable the *feature*, not add the entry
+  (`ensure_features_deps` now widens an existing entry). And over a `g resource`
+  port the scaffold called `svc.count()`, a method `CrudService` does not have:
+  a resource now takes the `#[crud]` resolver behind `AuthnGuard` +
+  `AuthzGuard`, the twin of the HTTP controller `g resource` already writes, and
+  its entity gains the `#[expose(graphql)]` flag that makes it a GraphQL object.
+
+- **`AuthzGraphqlModule` was required but never scaffolded.** The generated
+  resolver's own comment told the reader to import it, while
+  `g resource` / `g auth` wrote `authz/http/` only and no command wrote the
+  GraphQL bridge — leaving three providers (`AppGraphqlGuard`,
+  `GraphqlAuthnGuard`, `LoaderScope`) to be reconstructed from prose.
+  `g graphql` now writes `authz/graphql/` when the workspace has a policy to
+  enforce, imports it from the adapter's `module.rs`, and lists it at the app's
+  composition site.
+
+- **`Bind` / `bind` generic order was inverted throughout the docs.** The real
+  signatures put the **action first** (`Bind<Read, UsersService>`,
+  `bind::<Read, UsersService>`, `Authorized<Update, PostEntity>`); roughly a
+  dozen places wrote the reverse, and `/security/authorization/by-id-binding/`
+  stated the rule backwards in prose. Fixed across every page and gated by a new
+  `bind-order` check in the docs linter.
+
 ## [1.1.1] - 2026-07-27
 
 Six findings from the 1.1.0 read-through, each closed with the check that keeps

@@ -1,10 +1,12 @@
 ---
 import Default from '@astrojs/starlight/components/PageFrame.astro';
 import BrandBackground from './BrandBackground.astro';
+
+const isSplash = Astro.locals.starlightRoute.entry.data.template === 'splash';
 ---
 
 <div class="nestrs-page-shell">
-  <BrandBackground />
+  <BrandBackground full={isSplash} />
   <Default {...Astro.props}>
     <slot />
     <Fragment slot="header">

@@ -74,8 +74,50 @@
   padding-inline: 0;
 }
 
+/* The pad — the nest at rest, behind the lockup. Everything else in the field
+   is in flight; this one ring is the structure it all left from. */
+.hero-pad {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: -1;
+  width: min(96vmin, 56rem);
+  aspect-ratio: 1;
+  transform: translate(-50%, -26%);
+  pointer-events: none;
+}
+
+.hero-pad svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  animation: nestrs-pad-orbit 150s linear infinite;
+}
+
+.hero-pad-ring {
+  fill: none;
+  stroke: var(--nestrs-orange);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  opacity: 0.12;
+}
+
+.hero-pad-orbit {
+  fill: none;
+  stroke: var(--nestrs-coral);
+  stroke-width: 1;
+  opacity: 0.08;
+}
+
+@keyframes nestrs-pad-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Logo + wordmark — one visual unit; keep emblem → NestRS tight. */
 .hero-lockup {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -83,6 +125,38 @@
   gap: clamp(0.75rem, 1.6vw, 1.15rem);
   width: 100%;
   margin-bottom: clamp(1.1rem, 2.2vw, 1.6rem);
+}
+
+/* Residual heat under the emblem — a long breath, not a blink. */
+.hero-lockup::before {
+  content: '';
+  position: absolute;
+  top: -14%;
+  left: 50%;
+  z-index: -1;
+  width: min(36rem, 92%);
+  aspect-ratio: 1 / 0.7;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 122, 89, 0.17) 0%,
+    rgba(255, 77, 95, 0.07) 55%,
+    transparent 78%
+  );
+  filter: blur(12px);
+  pointer-events: none;
+  animation: nestrs-heat 11s ease-in-out infinite alternate;
+}
+
+@keyframes nestrs-heat {
+  from {
+    opacity: 0.7;
+    transform: translateX(-50%) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1.07);
+  }
 }
 
 .hero-lockup > img,
@@ -93,6 +167,24 @@
   max-height: min(24vh, 10.5rem);
   margin: 0;
   filter: drop-shadow(0 24px 70px rgba(255, 77, 95, 0.12));
+  animation: nestrs-ignition 1.15s cubic-bezier(0.16, 0.84, 0.28, 1) both;
+}
+
+/* Ignition — one shot on load; the emblem settles, it never loops. */
+@keyframes nestrs-ignition {
+  0% {
+    opacity: 0;
+    transform: translateY(1.4rem) scale(0.9);
+    filter: drop-shadow(0 0 0 rgba(255, 77, 95, 0));
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+    filter: drop-shadow(0 24px 70px rgba(255, 77, 95, 0.12));
+  }
 }
 
 .hero-lockup h1 {
@@ -124,129 +216,6 @@
   gap: clamp(1rem, 1.8vw, 1.35rem);
 }
 
-@media (min-width: 50rem) {
-  .hero .stack {
-    gap: clamp(1.5rem, 2.5vw, 2rem);
-  }
-
-  .hero .tagline {
-    width: 100%;
-    max-width: none;
-  }
-
-  .hero .hero-stack {
-    flex-wrap: nowrap;
-  }
-
-  .hero .actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.65rem;
-    width: 100%;
-  }
-}
-
-@media (max-width: 49.99rem) {
-  .hero {
-    padding-block: clamp(1rem, 3vw, 1.75rem) clamp(1.75rem, 5vw, 2.5rem) !important;
-  }
-
-  .hero-lockup {
-    margin-bottom: clamp(1.25rem, 4vw, 1.75rem);
-  }
-
-  .hero-lockup > img,
-  .hero-lockup > .hero-html {
-    width: min(52%, 10.5rem) !important;
-  }
-
-  .hero h1 {
-    font-size: clamp(1.85rem, calc(0.7rem + 6.4vw), 2.7rem);
-  }
-
-  .hero .tagline {
-    align-items: center;
-    gap: clamp(1rem, 3.5vw, 1.25rem);
-  }
-
-  .hero .hero-sub {
-    font-size: 0.9375rem;
-    line-height: 1.55;
-  }
-
-  .hero .hero-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.5rem;
-  }
-
-  .hero .stat {
-    padding: 0.7rem 0.5rem;
-  }
-
-  .hero .stat--wide {
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-
-  .hero .hero-stack {
-    justify-content: center;
-    gap: 0.35rem 0.32rem;
-    margin-top: 0.15rem;
-    padding-top: 0.85rem;
-  }
-
-  .hero .hero-stack > span {
-    font-size: 0.675rem;
-    padding: 0.2rem 0.48rem;
-  }
-
-  .hero .stack {
-    gap: clamp(1.35rem, 4.5vw, 1.75rem);
-  }
-
-  .hero .actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.55rem;
-    width: 100%;
-    max-width: none;
-    margin-inline: 0;
-    margin-top: 0;
-  }
-
-  .hero .actions .sl-link-button {
-    justify-content: center;
-    min-width: 0;
-    padding-block: 0.82rem;
-    padding-inline: 0.85rem;
-    font-size: 0.9rem;
-  }
-
-  .hero .actions .sl-link-button:first-child {
-    grid-column: 1 / -1;
-  }
-
-  .hero .actions .sl-link-button.minimal {
-    padding-inline: 0.65rem;
-    font-size: 0.8rem;
-  }
-
-  :root[data-has-hero] .sl-markdown-content > :first-child {
-    margin-top: 0.25rem;
-  }
-}
-
-@media (max-width: 22.49rem) {
-  .hero .actions {
-    grid-template-columns: 1fr;
-  }
-
-  .hero .actions .sl-link-button:first-child {
-    grid-column: auto;
-  }
-}
-
 /* Ambient glow — centered behind the stacked logo + copy */
 .hero::before {
   content: '';
@@ -258,12 +227,12 @@
     radial-gradient(50% 60% at 50% 32%, rgba(255, 122, 89, 0.07) 0%, transparent 72%);
   filter: blur(20px);
   pointer-events: none;
-  animation: hero-drift 3s ease-in-out infinite alternate;
+  animation: hero-drift 26s ease-in-out infinite alternate;
 }
 
 @keyframes hero-drift {
-  from { transform: translate3d(-1.5%, -1%, 0) scale(1); }
-  to   { transform: translate3d(2%, 1.5%, 0) scale(1.06); }
+  from { transform: translate3d(-1.2%, -0.8%, 0) scale(1); }
+  to   { transform: translate3d(1.6%, 1.2%, 0) scale(1.05); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -434,6 +403,132 @@
   padding-inline: 1.6rem;
   font-size: 1.02rem;
   border-radius: 999px;
+}
+
+/* Breakpoints last: these carry the same specificity as the hero base rules
+   above and win by source order alone — moved up, the overrides go dead. */
+@media (min-width: 50rem) {
+  .hero .stack {
+    gap: clamp(1.5rem, 2.5vw, 2rem);
+  }
+
+  .hero .tagline {
+    width: 100%;
+    max-width: none;
+  }
+
+  .hero .hero-stack {
+    flex-wrap: nowrap;
+  }
+
+  .hero .actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.65rem;
+    width: 100%;
+  }
+}
+
+@media (max-width: 49.99rem) {
+  .hero {
+    padding-block: clamp(1rem, 3vw, 1.75rem) clamp(1.75rem, 5vw, 2.5rem) !important;
+  }
+
+  .hero-lockup {
+    margin-bottom: clamp(1.25rem, 4vw, 1.75rem);
+  }
+
+  .hero-lockup > img,
+  .hero-lockup > .hero-html {
+    width: min(52%, 10.5rem) !important;
+  }
+
+  .hero h1 {
+    font-size: clamp(1.85rem, calc(0.7rem + 6.4vw), 2.7rem);
+  }
+
+  .hero .tagline {
+    align-items: center;
+    gap: clamp(1rem, 3.5vw, 1.25rem);
+  }
+
+  .hero .hero-sub {
+    font-size: 0.9375rem;
+    line-height: 1.55;
+  }
+
+  .hero .hero-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .hero .stat {
+    padding: 0.7rem 0.5rem;
+  }
+
+  .hero .stat--wide {
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+  }
+
+  .hero .hero-stack {
+    justify-content: center;
+    gap: 0.35rem 0.32rem;
+    margin-top: 0.15rem;
+    padding-top: 0.85rem;
+  }
+
+  .hero .hero-stack > span {
+    font-size: 0.675rem;
+    padding: 0.2rem 0.48rem;
+  }
+
+  .hero .stack {
+    gap: clamp(1.35rem, 4.5vw, 1.75rem);
+  }
+
+  .hero .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
+    margin-top: 0;
+  }
+
+  .hero .actions .sl-link-button {
+    justify-content: center;
+    min-width: 0;
+    padding-block: 0.82rem;
+    padding-inline: 0.85rem;
+    font-size: 0.9rem;
+  }
+
+  .hero .actions .sl-link-button:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .hero .actions .sl-link-button.minimal {
+    padding-inline: 0.65rem;
+    font-size: 0.8rem;
+  }
+
+  :root[data-has-hero] .sl-markdown-content > :first-child {
+    margin-top: 0.25rem;
+  }
+}
+
+@media (max-width: 22.49rem) {
+  .hero .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .hero .actions .sl-link-button:first-child {
+    grid-column: auto;
+  }
 }
 
 .sl-link-button.primary {
@@ -1526,23 +1621,22 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Brand background — faint rotating full logos (experimental; easy to remove)
+   Ascent field — one heading for the whole page. The world falls (three
+   parallax star planes), the marks climb along a single lean, each behind its
+   own exhaust. Crafts fly the splash only; doc pages keep the stars alone.
    --------------------------------------------------------------------------- */
 
 .nestrs-brand-bg {
-  --logo-fill-ring: #111111;
-  --logo-fill-disc: #0f0f0f;
-  --logo-fill-cut: #111111;
-  --logo-stroke-ring: #ff7a59;
-  --logo-stroke-opacity: 0.4;
+  --nestrs-star-rgb: 255 255 255;
+  /* One heading for every craft; --drift is tan(--lean) over the 132vh travel. */
+  --lean: 9deg;
+  --drift: 21vh;
+  --craft-gain: 1;
 }
 
 :root[data-theme='light'] .nestrs-brand-bg {
-  --logo-fill-ring: #e4e4e8;
-  --logo-fill-disc: #ececef;
-  --logo-fill-cut: #e4e4e8;
-  --logo-stroke-ring: #ff7a59;
-  --logo-stroke-opacity: 0.35;
+  --nestrs-star-rgb: 92 94 108;
+  --craft-gain: 1.4;
 }
 
 .nestrs-page-shell {
@@ -1553,340 +1647,268 @@
 .nestrs-page-shell > .nestrs-brand-bg {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  z-index: -1;
   pointer-events: none;
   overflow: hidden;
-  /* Soften the centre (reading zone) without washing out the edges entirely. */
+  /* Clear the reading column; the field lives at the edges and behind it. */
   -webkit-mask-image: radial-gradient(
-    ellipse 92% 84% at 50% 44%,
+    ellipse 82% 78% at 50% 46%,
     transparent 0%,
-    transparent 26%,
-    rgba(0, 0, 0, 0.55) 50%,
+    transparent 28%,
+    rgba(0, 0, 0, 0.5) 54%,
     #000 94%
   );
   mask-image: radial-gradient(
-    ellipse 92% 84% at 50% 44%,
+    ellipse 82% 78% at 50% 46%,
     transparent 0%,
-    transparent 26%,
-    rgba(0, 0, 0, 0.55) 50%,
+    transparent 28%,
+    rgba(0, 0, 0, 0.5) 54%,
     #000 94%
   );
 }
 
-.nestrs-page-shell > :global(.page) {
+/* Content sits above the field. `:global()` is not valid in a plain stylesheet
+   — the selector is dropped, so this must stay a bare class. */
+.nestrs-page-shell > .page {
   position: relative;
-  z-index: 1;
-}
-
-/* Wrap follows streamlines; mark stays locked to velocity (no free spin). */
-.nestrs-brand-bg .logo-wrap {
-  position: absolute;
-  transform-origin: center center;
-  will-change: transform;
-}
-
-.nestrs-brand-bg .logo {
-  display: block;
-  width: 100%;
-  height: 100%;
-  opacity: var(--logo-opacity, 0.06);
-}
-
-.nestrs-brand-bg .logo-ring {
-  fill: var(--logo-fill-ring);
-  stroke: var(--logo-stroke-ring);
-  stroke-opacity: var(--logo-stroke-opacity);
-}
-
-.nestrs-brand-bg .logo-disc {
-  fill: var(--logo-fill-disc);
-}
-
-.nestrs-brand-bg .logo-cut {
-  fill: var(--logo-fill-cut);
-}
-
-:root[data-theme='light'] .nestrs-brand-bg .logo {
-  --logo-opacity: 0.045;
+  z-index: 0;
 }
 
 /*
- * Meteor streaks — straight lines, 8 headings. Anchor = spawn lane on the rim;
- * 0% off-screen entry → 100% off-screen exit, loop respawns at the anchor.
- * Mark apex is up in SVG; rotate() locks nose to velocity.
+ * Star planes — one tile of gradients, repeated, translated by exactly one
+ * tile height so the loop is seamless whatever the viewport.
  */
-.nestrs-brand-bg .logo-wrap--1 {
-  width: min(44vw, 440px);
-  height: min(44vw, 440px);
-  top: 6%;
-  left: 18%;
-  animation: nestrs-logo-streak-down 5s linear infinite;
+.nestrs-stars {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(-1 * var(--tile));
+  height: calc(100% + 2 * var(--tile));
+  background-repeat: repeat;
+  background-size: var(--tile) var(--tile);
+  opacity: var(--layer-opacity);
+  will-change: transform;
+  animation: nestrs-starfall var(--dur) linear infinite;
 }
-.nestrs-brand-bg .logo-wrap--1 .logo { --logo-opacity: 0.065; }
 
-.nestrs-brand-bg .logo-wrap--2 {
-  width: min(32vw, 320px);
-  height: min(32vw, 320px);
-  top: 32%;
-  left: 4%;
-  animation: nestrs-logo-streak-right 6s linear -1.4s infinite;
+.nestrs-stars--far {
+  --tile: 340px;
+  --dur: 82s;
+  --layer-opacity: 0.8;
 }
-.nestrs-brand-bg .logo-wrap--2 .logo { --logo-opacity: 0.055; }
 
-.nestrs-brand-bg .logo-wrap--3 {
-  width: min(28vw, 280px);
-  height: min(28vw, 280px);
-  bottom: 8%;
-  left: 42%;
-  animation: nestrs-logo-streak-up 5s linear -2.6s infinite;
+.nestrs-stars--mid {
+  --tile: 460px;
+  --dur: 48s;
+  --layer-opacity: 0.9;
 }
-.nestrs-brand-bg .logo-wrap--3 .logo { --logo-opacity: 0.062; }
 
-.nestrs-brand-bg .logo-wrap--4 {
-  width: min(38vw, 380px);
-  height: min(38vw, 380px);
-  top: 4%;
-  right: 16%;
-  animation: nestrs-logo-streak-down-left 6s linear -0.8s infinite;
+.nestrs-stars--near {
+  --tile: 600px;
+  --dur: 27s;
+  --layer-opacity: 1;
 }
-.nestrs-brand-bg .logo-wrap--4 .logo { --logo-opacity: 0.058; }
 
-.nestrs-brand-bg .logo-wrap--5 {
-  width: min(30vw, 300px);
-  height: min(30vw, 300px);
-  top: 48%;
-  right: 6%;
-  animation: nestrs-logo-streak-left 4.5s linear -2.1s infinite;
+/* Off the splash the field is barely there — prose wins. */
+.nestrs-brand-bg:not(.is-full) .nestrs-stars {
+  --layer-opacity: 0.28;
+  --dur: 120s;
 }
-.nestrs-brand-bg .logo-wrap--5 .logo { --logo-opacity: 0.052; }
 
-.nestrs-brand-bg .logo-wrap--6 {
-  width: min(50vw, 500px);
-  height: min(50vw, 500px);
-  top: 12%;
-  left: 72%;
-  animation: nestrs-logo-streak-down-right 7s linear -3.5s infinite;
+.nestrs-brand-bg:not(.is-full) .nestrs-stars--near {
+  --layer-opacity: 0.32;
+  --dur: 64s;
 }
-.nestrs-brand-bg .logo-wrap--6 .logo { --logo-opacity: 0.048; }
 
-.nestrs-brand-bg .logo-wrap--7 {
-  width: min(34vw, 340px);
-  height: min(34vw, 340px);
-  bottom: 22%;
-  right: 38%;
-  animation: nestrs-logo-streak-up 5.5s linear -1.9s infinite;
+@keyframes nestrs-starfall {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(0, var(--tile), 0);
+  }
 }
-.nestrs-brand-bg .logo-wrap--7 .logo { --logo-opacity: 0.056; }
 
-.nestrs-brand-bg .logo-wrap--8 {
-  width: min(20vw, 220px);
-  height: min(20vw, 220px);
-  top: 62%;
-  left: 12%;
-  animation: nestrs-logo-streak-right 4s linear -0.4s infinite;
+/*
+ * Craft — the mark alone, never the nest. Nose locked to the shared lean,
+ * scale rising with the climb so depth reads without a second cue.
+ */
+.craft {
+  position: absolute;
+  top: 50%;
+  left: var(--x);
+  width: var(--w);
+  height: var(--w);
+  margin-top: calc(var(--w) / -2);
+  margin-left: calc(var(--w) / -2);
+  opacity: 0;
+  filter: blur(var(--depth-blur, 0px));
+  will-change: transform, opacity;
+  animation: nestrs-ascend var(--dur) linear var(--delay) infinite;
 }
-.nestrs-brand-bg .logo-wrap--8 .logo { --logo-opacity: 0.068; }
 
-.nestrs-brand-bg .logo-wrap--9 {
-  width: 6.5rem;
-  height: 6.5rem;
-  top: 2%;
-  left: 52%;
-  animation: nestrs-logo-streak-down 3.5s linear -1.1s infinite;
+.craft-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 0 calc(var(--w) * 0.07) rgba(255, 110, 90, 0.55));
 }
-.nestrs-brand-bg .logo-wrap--9 .logo { --logo-opacity: 0.07; }
 
-.nestrs-brand-bg .logo-wrap--10 {
-  width: 10rem;
-  height: 10rem;
-  bottom: 6%;
-  right: 22%;
-  animation: nestrs-logo-streak-up-left 5s linear -3.2s infinite;
+/* Nozzle bloom — the light the exhaust throws, spilling past the trail. */
+.craft::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 34%;
+  width: 150%;
+  height: 110%;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse 26% 34% at 50% 30%,
+    rgba(255, 150, 106, 0.45) 0%,
+    rgba(255, 77, 95, 0.14) 48%,
+    transparent 74%
+  );
+  filter: blur(calc(var(--w) * 0.05));
 }
-.nestrs-brand-bg .logo-wrap--10 .logo { --logo-opacity: 0.064; }
 
-.nestrs-brand-bg .logo-wrap--11 {
-  width: min(24vw, 260px);
-  height: min(24vw, 260px);
-  top: 18%;
-  right: 4%;
-  animation: nestrs-logo-streak-left 4.5s linear -2.7s infinite;
+/*
+ * Trail — a lens (border-radius 50%) rather than a clipped polygon, so it
+ * tapers at both ends with no hard edge; blur scales with the craft or the
+ * near planes read as cut paper.
+ */
+.craft-plume {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  width: 20%;
+  height: 250%;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 190, 148, 0.9) 0%,
+    rgba(255, 122, 89, 0.55) 18%,
+    rgba(255, 77, 95, 0.24) 44%,
+    rgba(255, 77, 95, 0) 88%
+  );
+  filter: blur(calc(var(--w) * 0.05));
 }
-.nestrs-brand-bg .logo-wrap--11 .logo { --logo-opacity: 0.05; }
 
-.nestrs-brand-bg .logo-wrap--12 {
-  width: min(26vw, 280px);
-  height: min(26vw, 280px);
-  top: 28%;
-  left: 88%;
-  animation: nestrs-logo-streak-down 6s linear -4.1s infinite;
+/* A tighter, brighter core inside the trail — without it the streak is a smudge. */
+.craft-plume::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 34%;
+  height: 52%;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 226, 196, 0.95) 0%,
+    rgba(255, 138, 96, 0.5) 40%,
+    rgba(255, 122, 89, 0) 100%
+  );
+  filter: blur(calc(var(--w) * 0.02));
 }
-.nestrs-brand-bg .logo-wrap--12 .logo { --logo-opacity: 0.048; }
 
-.nestrs-brand-bg .logo-wrap--13 {
-  width: min(30vw, 320px);
-  height: min(30vw, 320px);
-  bottom: 14%;
-  left: 8%;
-  animation: nestrs-logo-streak-up-right 5s linear -0.6s infinite;
-}
-.nestrs-brand-bg .logo-wrap--13 .logo { --logo-opacity: 0.052; }
-
-.nestrs-brand-bg .logo-wrap--14 {
-  width: min(18vw, 200px);
-  height: min(18vw, 200px);
-  top: 44%;
-  left: 28%;
-  animation: nestrs-logo-streak-down-right 4s linear -2.4s infinite;
-}
-.nestrs-brand-bg .logo-wrap--14 .logo { --logo-opacity: 0.054; }
-
-.nestrs-brand-bg .logo-wrap--15 {
-  width: min(22vw, 240px);
-  height: min(22vw, 240px);
-  bottom: 32%;
-  right: 10%;
-  animation: nestrs-logo-streak-left 5.5s linear -1.6s infinite;
-}
-.nestrs-brand-bg .logo-wrap--15 .logo { --logo-opacity: 0.05; }
-
-.nestrs-brand-bg .logo-wrap--16 {
-  width: min(16vw, 180px);
-  height: min(16vw, 180px);
-  bottom: 2%;
-  left: 58%;
-  animation: nestrs-logo-streak-up 4.5s linear -3.8s infinite;
-}
-.nestrs-brand-bg .logo-wrap--16 .logo { --logo-opacity: 0.056; }
-
-.nestrs-brand-bg .logo-wrap--17 {
-  width: 5.5rem;
-  height: 5.5rem;
-  top: 74%;
-  left: 48%;
-  animation: nestrs-logo-streak-right 3.5s linear -2.9s infinite;
-}
-.nestrs-brand-bg .logo-wrap--17 .logo { --logo-opacity: 0.058; }
-
-.nestrs-brand-bg .logo-wrap--18 {
-  width: min(42vw, 420px);
-  height: min(42vw, 420px);
-  top: 8%;
-  left: 2%;
-  animation: nestrs-logo-streak-down-left 6.5s linear -4.6s infinite;
-}
-.nestrs-brand-bg .logo-wrap--18 .logo { --logo-opacity: 0.044; }
-
-.nestrs-brand-bg .logo-wrap--19 {
-  width: min(14vw, 160px);
-  height: min(14vw, 160px);
-  bottom: 38%;
-  left: 78%;
-  animation: nestrs-logo-streak-up-left 4s linear -1.3s infinite;
-}
-.nestrs-brand-bg .logo-wrap--19 .logo { --logo-opacity: 0.055; }
-
-.nestrs-brand-bg .logo-wrap--20 {
-  width: 7.5rem;
-  height: 7.5rem;
-  top: 52%;
-  right: 28%;
-  animation: nestrs-logo-streak-down-right 5s linear -0.2s infinite;
-}
-.nestrs-brand-bg .logo-wrap--20 .logo { --logo-opacity: 0.053; }
-
-/* Straight streaks — entry off-screen, exit off-screen, constant heading. */
-@keyframes nestrs-logo-streak-right {
+@keyframes nestrs-ascend {
   0% {
-    transform: translate3d(-30vw, 0, 0) scale(0.52) rotate(90deg);
+    opacity: 0;
+    transform: translate3d(0, 66vh, 0) rotate(var(--lean)) scale(0.82);
+  }
+  11% {
+    opacity: calc(var(--craft-opacity) * var(--craft-gain));
+  }
+  85% {
+    opacity: calc(var(--craft-opacity) * var(--craft-gain));
   }
   100% {
-    transform: translate3d(30vw, 0, 0) scale(1.04) rotate(90deg);
+    opacity: 0;
+    transform: translate3d(var(--drift), -66vh, 0) rotate(var(--lean)) scale(1.12);
   }
 }
 
-@keyframes nestrs-logo-streak-left {
-  0% {
-    transform: translate3d(30vw, 0, 0) scale(0.52) rotate(-90deg);
-  }
-  100% {
-    transform: translate3d(-30vw, 0, 0) scale(1.04) rotate(-90deg);
-  }
+/* Depth ladder: nearer ⇒ larger, faster, brighter, sharper. */
+.craft--1 {
+  --x: 7%;
+  --w: min(11vw, 122px);
+  --dur: 13s;
+  --delay: -2.4s;
+  --craft-opacity: 0.62;
 }
 
-@keyframes nestrs-logo-streak-down {
-  0% {
-    transform: translate3d(0, -26vh, 0) scale(0.52) rotate(180deg);
-  }
-  100% {
-    transform: translate3d(0, 26vh, 0) scale(1.04) rotate(180deg);
-  }
+.craft--2 {
+  --x: 91%;
+  --w: min(12vw, 136px);
+  --dur: 12s;
+  --delay: -8.1s;
+  --craft-opacity: 0.65;
 }
 
-@keyframes nestrs-logo-streak-up {
-  0% {
-    transform: translate3d(0, 26vh, 0) scale(0.52) rotate(0deg);
-  }
-  100% {
-    transform: translate3d(0, -26vh, 0) scale(1.04) rotate(0deg);
-  }
+.craft--3 {
+  --x: 63%;
+  --w: min(8vw, 88px);
+  --dur: 16.5s;
+  --delay: -5.2s;
+  --craft-opacity: 0.46;
+  --depth-blur: 0.4px;
 }
 
-@keyframes nestrs-logo-streak-down-right {
-  0% {
-    transform: translate3d(-28vw, -22vh, 0) scale(0.52) rotate(45deg);
-  }
-  100% {
-    transform: translate3d(28vw, 22vh, 0) scale(1.04) rotate(45deg);
-  }
+.craft--4 {
+  --x: 24%;
+  --w: min(6vw, 66px);
+  --dur: 19s;
+  --delay: -12.6s;
+  --craft-opacity: 0.34;
+  --depth-blur: 0.7px;
 }
 
-@keyframes nestrs-logo-streak-down-left {
-  0% {
-    transform: translate3d(28vw, -22vh, 0) scale(0.52) rotate(135deg);
-  }
-  100% {
-    transform: translate3d(-28vw, 22vh, 0) scale(1.04) rotate(135deg);
-  }
+.craft--5 {
+  --x: 79%;
+  --w: min(4.6vw, 50px);
+  --dur: 23s;
+  --delay: -3.7s;
+  --craft-opacity: 0.25;
+  --depth-blur: 1px;
 }
 
-@keyframes nestrs-logo-streak-up-right {
-  0% {
-    transform: translate3d(-28vw, 22vh, 0) scale(0.52) rotate(-45deg);
-  }
-  100% {
-    transform: translate3d(28vw, -22vh, 0) scale(1.04) rotate(-45deg);
-  }
+.craft--6 {
+  --x: 43%;
+  --w: min(3.6vw, 40px);
+  --dur: 27s;
+  --delay: -17.3s;
+  --craft-opacity: 0.19;
+  --depth-blur: 1.3px;
 }
 
-@keyframes nestrs-logo-streak-up-left {
-  0% {
-    transform: translate3d(28vw, 22vh, 0) scale(0.52) rotate(-135deg);
+/* Under the Starlight lg breakpoint: keep the stars, park the fleet. */
+@media (max-width: 50rem) {
+  .nestrs-brand-bg .craft {
+    display: none;
   }
-  100% {
-    transform: translate3d(-28vw, -22vh, 0) scale(1.04) rotate(-135deg);
+
+  .nestrs-brand-bg .nestrs-stars {
+    --layer-opacity: 0.38;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nestrs-brand-bg .logo-wrap {
+  .nestrs-stars,
+  .craft,
+  .hero-pad svg,
+  .hero-lockup::before,
+  .hero-lockup > img,
+  .hero-lockup > .hero-html {
     animation: none;
     will-change: auto;
   }
 
-  .nestrs-brand-bg .logo {
-    animation: none;
-    will-change: auto;
-  }
-}
-
-/* Meteor background + hero drift — desktop only (≥50rem, Starlight lg). */
-@media (max-width: 50rem) {
-  .nestrs-page-shell > .nestrs-brand-bg {
-    display: none;
-  }
-
-  .hero::before {
-    animation: none;
+  /* The fleet is mid-flight rather than absent. */
+  .craft {
+    opacity: calc(var(--craft-opacity) * var(--craft-gain));
+    transform: rotate(var(--lean));
   }
 }

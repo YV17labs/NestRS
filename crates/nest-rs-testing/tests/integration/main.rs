@@ -3,6 +3,7 @@
 mod access_contract;
 mod config;
 mod cors;
+mod destructured_args;
 mod env_cascade;
 mod exception_filters;
 mod fail_secure_boot;

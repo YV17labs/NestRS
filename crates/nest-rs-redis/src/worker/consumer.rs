@@ -4,9 +4,27 @@
 //! Every queue is consumed as `RedisStorage<serde_json::Value>` — the
 //! backend-agnostic wire format — and dispatched through the type-erased
 //! `JobHandler` the `#[processor]` macro emits.
+//!
+//! **One job at a time per `#[process]` method.** That is the whole contract,
+//! and it is deliberately not configurable: nestrs targets the container, so
+//! throughput comes from running more replicas of the worker — the unit the
+//! platform already schedules, meters and restarts. A per-method ceiling would
+//! be a second, in-process scheduler competing with the first, and the number
+//! that makes it correct depends on the pod's CPU share rather than on anything
+//! the code can know. Serialized-per-method is the behaviour a reader can
+//! predict from the source, and it makes every replica's load identical.
+//!
+//! **Delivery is exclusive but at-least-once.** Two replicas never receive the
+//! same job from the queue (`get_jobs.lua` claims ids in one atomic EVAL), yet a
+//! replica's *startup* requeues work its peers are running: apalis-redis calls
+//! `reenqueue_orphaned` with a cutoff of `Utc::now()`, which matches every
+//! registered consumer rather than only this worker's previous incarnation. A
+//! scale-up therefore re-runs in-flight jobs. Both halves are measured in
+//! `tests/e2e/replicas.rs`; a `#[process]` handler must be idempotent.
 
 use anyhow::{Context, Result};
 use apalis::layers::ErrorHandlingLayer;
+use apalis::layers::WorkerBuilderExt;
 use apalis::layers::catch_panic::CatchPanicLayer;
 use apalis::layers::retry::{RetryLayer, RetryPolicy};
 use apalis::prelude::{Attempt, Data, Monitor, TaskId, WorkerBuilder, WorkerFactoryFn};
@@ -78,7 +96,6 @@ impl Transport for QueueWorker {
                     target: "nest_rs::queue",
                     processor = m.name,
                     queue = m.queue,
-                    concurrency = m.concurrency,
                     retries = m.retries,
                     "registered queue processor",
                 );
@@ -137,10 +154,13 @@ fn build_worker(
     container: Container,
     method: &ProcessMethod,
 ) -> Monitor {
-    // apalis 0.7: one worker processes its fetched batch concurrently
-    // (FuturesUnordered), so `concurrency` is the Redis source's fetch buffer
-    // — the ceiling on in-flight jobs — not a worker count.
-    let storage = conn.consumer_storage(method.queue, method.concurrency);
+    // Fetch one job per poll. apalis 0.7 drives a fetched batch through a
+    // `FuturesUnordered` and keeps polling while those futures are in flight, so
+    // the buffer alone bounds nothing — it is `concurrency(1)` below that
+    // serializes the work. Sizing the buffer to match matters anyway: a job
+    // sitting in a saturated worker's buffer is invisible to every other
+    // replica, which is exactly the throughput the deployment is paying for.
+    let storage = conn.consumer_storage(method.queue);
     let handler = method.handler;
     let queue_name = method.queue;
     let processor_name = method.name;
@@ -153,6 +173,12 @@ fn build_worker(
     // take down the queue's consumer. Position is load-bearing: inside the
     // retry/error-handling layers, so an abort is not re-attempted.
     let worker = WorkerBuilder::new(method.queue)
+        // The serialization point, and the outermost layer so the single permit
+        // covers a job's whole lifecycle — retries included. apalis delegates
+        // `poll_ready` to the inner service, so a held permit backs the fetch
+        // loop off rather than piling work into memory: the next job stays in
+        // Redis, where another replica can take it.
+        .concurrency(1)
         .layer(ErrorHandlingLayer::new())
         .layer(RetryLayer::new(RetryPolicy::retries(method.retries)))
         .layer(CatchPanicLayer::new())
@@ -256,10 +282,15 @@ async fn run_job(
             Ok(())
         }
         Err(je) if !je.retryable => {
+            // `errors` carries the rejection's per-field detail when it had any —
+            // same member name as the HTTP body and the WebSocket error frame, so
+            // one query shape finds a validation failure on any transport. Absent
+            // detail emits no field rather than an empty one.
             tracing::error!(
                 target: "nest_rs::queue",
                 elapsed_ms,
                 error = %je,
+                errors = je.details.as_ref().map(tracing::field::display),
                 "job dead-lettered: non-retryable failure",
             );
             Err(abort(je.source))
@@ -333,6 +364,67 @@ mod tests {
             "the panic message rides on the shared `panic` field: {event:#?}",
         );
         assert!(event.field("elapsed_ms").is_some());
+    }
+
+    /// A dead-lettered job is read from a log, days later, by someone who cannot
+    /// re-run it. `error=validation failed` alone does not say which field of
+    /// which payload was wrong — and the rejection knew. The detail rides the
+    /// event as `errors`, the member name HTTP and the WebSocket error frame use
+    /// for the same failure.
+    #[tokio::test]
+    async fn a_dead_lettered_pipe_rejection_logs_its_field_errors() {
+        fn rejected(
+            _job: serde_json::Value,
+            _c: Container,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>> {
+            Box::pin(async {
+                Err(
+                    JobError::abort("validation failed").with_details(Some(serde_json::json!({
+                        "slug": [{ "code": "length" }],
+                    }))),
+                )
+            })
+        }
+
+        let logs = LogCapture::install();
+        assert!(
+            run_job(rejected, serde_json::json!({}), container())
+                .await
+                .is_err()
+        );
+
+        let event = logs.expect_one("nest_rs::queue", "job dead-lettered: non-retryable failure");
+        let errors = event
+            .field("errors")
+            .unwrap_or_else(|| panic!("the dead-letter event carries `errors`: {event:#?}"));
+        assert!(
+            errors.contains("slug"),
+            "and it names the offending field: {errors}",
+        );
+    }
+
+    /// A failure with nothing structured to say must not invent an `errors`
+    /// field — an empty one reads as "checked, nothing found".
+    #[tokio::test]
+    async fn a_dead_letter_without_detail_logs_no_errors_field() {
+        fn bare(
+            _job: serde_json::Value,
+            _c: Container,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>> {
+            Box::pin(async { Err(JobError::abort("missing field `id`")) })
+        }
+
+        let logs = LogCapture::install();
+        assert!(
+            run_job(bare, serde_json::json!({}), container())
+                .await
+                .is_err()
+        );
+        let event = logs.expect_one("nest_rs::queue", "job dead-lettered: non-retryable failure");
+        assert!(
+            event.field("errors").is_none(),
+            "no detail ⇒ no field: {event:#?}",
+        );
     }
 
     /// The three non-panic outcomes, so the panic branch is pinned against

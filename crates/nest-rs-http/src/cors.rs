@@ -30,25 +30,32 @@ pub struct CorsConfig {
 }
 
 impl CorsConfig {
-    /// Build a [`CorsConfig`] from the `NESTRS_HTTP__CORS_*` keys. Returns
-    /// `Ok(None)` when `NESTRS_HTTP__CORS_ORIGINS` is unset (CORS off).
-    pub fn from_env(env: &ConfigService) -> Result<Option<Self>> {
-        let origins = env.list("CORS_ORIGINS");
+    /// Overlay the `NESTRS_HTTP__CORS_*` keys onto `base` (the policy pinned in
+    /// code, if any). Returns `Ok(None)` when neither the environment nor `base`
+    /// supplies an origin — no origins means no CORS layer.
+    ///
+    /// Every sub-key overlays independently, so a deployment can widen the
+    /// origins of a policy pinned in code without restating its methods and
+    /// headers.
+    pub fn from_env(env: &ConfigService, base: Option<Self>) -> Result<Option<Self>> {
+        let base = base.unwrap_or_default();
+        let origins = env.list("CORS_ORIGINS", base.origins);
         if origins.is_empty() {
             return Ok(None);
         }
         Ok(Some(Self {
             origins,
-            methods: env.list("CORS_METHODS"),
-            headers: env.list("CORS_HEADERS"),
-            exposed_headers: env.list("CORS_EXPOSED"),
+            methods: env.list("CORS_METHODS", base.methods),
+            headers: env.list("CORS_HEADERS", base.headers),
+            exposed_headers: env.list("CORS_EXPOSED", base.exposed_headers),
             credentials: env
-                .flag("CORS_CREDENTIALS", false)
+                .flag("CORS_CREDENTIALS", base.credentials)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?,
             max_age: env
                 .parse::<u64>("CORS_MAX_AGE")
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                .map(Duration::from_secs),
+                .map(Duration::from_secs)
+                .or(base.max_age),
         }))
     }
 
@@ -184,7 +191,8 @@ mod tests {
 
     #[test]
     fn from_env_returns_none_when_origins_unset() {
-        let cfg = CorsConfig::from_env(&ConfigService::with_vars("http", [])).expect("no error");
+        let cfg =
+            CorsConfig::from_env(&ConfigService::with_vars("http", []), None).expect("no error");
         assert!(cfg.is_none(), "unset origins ⇒ CORS off");
     }
 
@@ -201,7 +209,7 @@ mod tests {
                 ("NESTRS_HTTP__CORS_HEADERS", "content-type"),
             ],
         );
-        let cfg = CorsConfig::from_env(&service)
+        let cfg = CorsConfig::from_env(&service, None)
             .expect("no error")
             .expect("Some when origins set");
         assert_eq!(
@@ -224,7 +232,7 @@ mod tests {
                 ("NESTRS_HTTP__CORS_MAX_AGE", "600"),
             ],
         );
-        let cfg = CorsConfig::from_env(&service)
+        let cfg = CorsConfig::from_env(&service, None)
             .expect("no error")
             .expect("Some");
         assert!(cfg.credentials);

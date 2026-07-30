@@ -19,22 +19,71 @@ pub trait Namespaced {
 
 /// A namespaced configuration type.
 ///
-/// [`from_env`](Self::from_env) is the **explicit** field-by-field mapping
-/// from `NESTRS_<NAMESPACE>__<KEY>` variables, defaults included — the single
-/// place to look for the env contract of a feature.
-pub trait Config: Namespaced + Validate + Clone + Send + Sync + Sized + 'static {
+/// [`from_env`](Self::from_env) is the **explicit** field-by-field overlay of
+/// `NESTRS_<NAMESPACE>__<KEY>` variables over a base value — the single place to
+/// look for the env contract of a feature.
+///
+/// # The environment can always override, per field
+///
+/// A module configured in code (`HttpModule::for_root(HttpConfig { port: 3000,
+/// ..Default::default() })`) hands that struct in as the **base**, not as the
+/// answer: [`resolve`](Self::resolve) still runs `from_env` over it, so
+/// `NESTRS_HTTP__TLS_CERT` reaches an app whose author only meant to pin the
+/// port. The whole precedence chain is
+///
+/// ```text
+/// real env  >  pinned in code  >  .env cascade  >  Config::defaults()
+/// ```
+///
+/// and it is per **field**, never per struct — which is what makes the
+/// framework's dual-path rule true rather than aspirational. The one hard pin
+/// left is seeding the value on the builder (`App::builder().provide(cfg)`): a
+/// seed short-circuits the factory `resolve` runs in, which is the escape hatch
+/// a test wanting hermetic values takes.
+pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized + 'static {
+    /// Field-by-field overlay of this namespace's environment over `base`: every
+    /// field takes its `NESTRS_<NAMESPACE>__<KEY>` value when the variable is
+    /// set, and the matching field of `base` when it is not. One body serves
+    /// both the pinned and the unpinned path, so no field can be reachable one
+    /// way only.
+    ///
     /// A set-but-unparseable variable returns `Err` (naming it) and aborts
     /// boot — never a silent fallback.
-    fn from_env(env: &ConfigService) -> Result<Self>;
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self>;
 
-    /// Read from the environment for this type's namespace and validate the
-    /// result. The default composes [`from_env`](Self::from_env) with
-    /// `validator::Validate`; a set-but-unparseable variable aborts boot.
-    fn load() -> Result<Self> {
+    /// The base the environment overlays when the call site pinned nothing.
+    ///
+    /// Defaults to [`Default::default`]. Override it when a field's *safe*
+    /// baseline depends on the active profile rather than being a constant —
+    /// `StorageConfig::allow_http`, `OpenApiConfig::enabled` and
+    /// `QueueConfig::url` all default one way in dev and another in
+    /// staging/production, and that belongs here rather than inside `from_env`
+    /// where it would also silently rewrite a pinned value.
+    fn defaults() -> Self {
+        Self::default()
+    }
+
+    /// Resolve this config for the boot: the environment overlaid on `pinned`
+    /// when the call site supplied one, on [`defaults`](Self::defaults)
+    /// otherwise, then validated. The single entry point
+    /// `ConfigModule::provide_feature` calls.
+    fn resolve(pinned: Option<Self>) -> Result<Self> {
         let env = ConfigService::for_namespace(Self::NAMESPACE);
-        let config = Self::from_env(&env)?;
+        // A pinned base is deliberate, so only the deployment tier outranks it;
+        // an unpinned base is a default, so the `.env` cascade outranks it too.
+        let (env, base) = match pinned {
+            Some(pinned) => (env.over_pinned(), pinned),
+            None => (env, Self::defaults()),
+        };
+        let config = Self::from_env(&env, base)?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Read from the environment for this type's namespace with nothing pinned,
+    /// and validate the result.
+    fn load() -> Result<Self> {
+        Self::resolve(None)
     }
 }
 
@@ -53,14 +102,24 @@ mod tests {
         #[validate(range(min = 1))]
         max_connections: u32,
     }
+    impl Default for DbCfg {
+        fn default() -> Self {
+            Self {
+                url: String::new(),
+                max_connections: 10,
+            }
+        }
+    }
     impl Namespaced for DbCfg {
         const NAMESPACE: &'static str = "testdb";
     }
     impl Config for DbCfg {
-        fn from_env(env: &ConfigService) -> Result<Self> {
+        fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
             Ok(Self {
-                url: env.get("URL").unwrap_or_default(),
-                max_connections: env.parse("MAX_CONNECTIONS")?.unwrap_or(10),
+                url: env.get("URL").unwrap_or(base.url),
+                max_connections: env
+                    .parse("MAX_CONNECTIONS")?
+                    .unwrap_or(base.max_connections),
             })
         }
     }

@@ -70,14 +70,13 @@ failure](/queue/retries-and-failure/) for the policy behind `attempt`.
 ## What boot looks like
 
 Each active processor logs one `attached` line (from the transport) and
-one `registered queue processor` line carrying its `concurrency` and
-`retries` budget. A `#[process]` method that compiled in but whose
+one `registered queue processor` line carrying its `retries` budget. A `#[process]` method that compiled in but whose
 provider isn't reachable from this app's module tree is skipped with a
 `warn`:
 
 ```text frame="terminal"
  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
- INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
+ INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
  WARN nest_rs::queue: skipped #[process] method: provider unreachable from app's module tree processor=ReportJobs::weekly queue=reports
 ```
 

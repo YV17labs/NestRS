@@ -10,7 +10,7 @@ use std::sync::Arc;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
 use crate::Guard;
-use crate::dispatch::denial_to_http_response;
+use crate::dispatch::deny_http;
 
 /// Wraps any poem endpoint with a [`Guard`]'s `check_http` step.
 pub struct GuardEndpoint<E, G: ?Sized> {
@@ -36,7 +36,10 @@ where
     async fn call(&self, mut req: Request) -> Result<Self::Output> {
         match self.guard.check_http(&mut req).await {
             Ok(()) => self.inner.call(req).await.map(IntoResponse::into_response),
-            Err(denial) => Ok(denial_to_http_response(denial)),
+            // Through `deny_http`, not the bare converter: this site is the WS
+            // upgrade's gate, so skipping it left a connection-level denial
+            // invisible while its per-message twin logged at warn.
+            Err(denial) => Ok(deny_http(self.guard.name(), denial)),
         }
     }
 }

@@ -38,19 +38,29 @@ impl Validate for IssuerConfig {
     }
 }
 
+impl Default for IssuerConfig {
+    fn default() -> Self {
+        Self { clients: Vec::new(), default_org_id: DEFAULT_ORG }
+    }
+}
+
 impl Config for IssuerConfig {
-    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         let clients = match env.get("CLIENTS") {
             Some(raw) => serde_json::from_str(&raw)
                 .map_err(|e| ConfigError::parse(env.var_name("CLIENTS"), e.to_string()))?,
-            None => Vec::new(),
+            None => base.clients,
         };
-        let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(DEFAULT_ORG);
+        let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(base.default_org_id);
         Ok(Self { clients, default_org_id })
     }
 }
 ```
 
+- **`base` supplies the fallback, even for the structured field.** An unset
+  `NESTRS_ISSUER__CLIENTS` keeps `base.clients` rather than resetting to an
+  empty list, so a deployment can override the org id without also wiping the
+  clients a `for_root` pinned in code.
 - **`clients` is a JSON array in a single variable.** `env.get("CLIENTS")`
   returns the raw string and `serde_json::from_str` does the structured
   parse — mapping the failure through
@@ -135,6 +145,30 @@ Error: configuration validation failed for 'issuer'
   - clients: at_least_one_client
 ```
 
+
+## A profile-dependent baseline
+
+`from_env` overlays the environment onto a **base**, and that base is
+`Config::defaults()` when nothing was pinned at the import site. Override it
+when a field's *safe* value differs by profile — the framework does this for
+three of its own:
+
+```rust
+impl Config for StorageConfig {
+    fn defaults() -> Self {
+        let d = Self::default();
+        if dev_profile() { return d; }
+        // Outside dev/test: no sentinel credentials, no plain HTTP.
+        Self { access_key: String::new(), secret_key: String::new(), allow_http: false, ..d }
+    }
+
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> { /* … */ }
+}
+```
+
+It belongs here rather than inside `from_env`: `from_env` also runs over a
+value pinned in code, and a profile rule there would silently rewrite a
+deliberate choice. `Default` stays the plain, pin-friendly struct value.
 
 ## Going further
 

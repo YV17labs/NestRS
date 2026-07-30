@@ -64,53 +64,67 @@ impl Default for StorageConfig {
 }
 
 impl Config for StorageConfig {
-    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
-        let environment = Environment::from_env();
-        let dev = !matches!(environment, Environment::Production | Environment::Staging);
+    /// The unpinned baseline is profile-dependent, and both differences are
+    /// security ones. Outside dev/test the dev sentinel credentials
+    /// (`nestrs`/`nestrs`) are dropped so an unset `NESTRS_STORAGE__ACCESS_KEY`
+    /// fails boot naming the variable rather than authenticating with a public
+    /// default (STORAGE-ST1), and plain-HTTP is off so credentials never travel
+    /// unencrypted by omission (STORAGE-ST2). It lives here rather than in
+    /// `from_env` so it applies only where it is a default — overlaying it onto a
+    /// pinned struct would rewrite a deliberate choice.
+    fn defaults() -> Self {
         let d = Self::default();
+        if dev_profile() {
+            return d;
+        }
+        Self {
+            access_key: String::new(),
+            secret_key: String::new(),
+            allow_http: false,
+            ..d
+        }
+    }
+
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+        let d = base;
         Ok(Self {
             endpoint: env.get("ENDPOINT").unwrap_or(d.endpoint),
             region: env.get("REGION").unwrap_or(d.region),
-            // Credentials must never silently fall back to the dev sentinel
-            // `nestrs`/`nestrs` in staging/production (STORAGE-ST1).
             access_key: resolve_credential(
-                env.get("ACCESS_KEY"),
-                "NESTRS_STORAGE__ACCESS_KEY",
-                dev,
-                d.access_key,
+                env.get("ACCESS_KEY").unwrap_or(d.access_key),
+                &env.var_name("ACCESS_KEY"),
             )?,
             secret_key: resolve_credential(
-                env.get("SECRET_KEY"),
-                "NESTRS_STORAGE__SECRET_KEY",
-                dev,
-                d.secret_key,
+                env.get("SECRET_KEY").unwrap_or(d.secret_key),
+                &env.var_name("SECRET_KEY"),
             )?,
             bucket: env.get("BUCKET").unwrap_or(d.bucket),
             force_path_style: env.flag("FORCE_PATH_STYLE", d.force_path_style)?,
-            // Plain-HTTP is a dev convenience; default it off outside dev/test so
-            // production credentials never travel unencrypted by omission.
-            allow_http: env.flag("ALLOW_HTTP", dev)?,
+            allow_http: env.flag("ALLOW_HTTP", d.allow_http)?,
         })
     }
 }
 
-/// A storage credential from the environment, defaulting to the dev sentinel
-/// **only** in dev/test; unset (or blank) in staging/production aborts boot.
-/// Pure, so the profile-dependent branch is testable without env mutation.
-fn resolve_credential(
-    raw: Option<String>,
-    var: &str,
-    dev: bool,
-    dev_default: String,
-) -> nest_rs_config::Result<String> {
-    match raw {
-        Some(value) if !value.trim().is_empty() => Ok(value),
-        _ if dev => Ok(dev_default),
-        _ => Err(ConfigError::parse(
+/// `true` in every profile but staging/production.
+fn dev_profile() -> bool {
+    !matches!(
+        Environment::from_env(),
+        Environment::Production | Environment::Staging
+    )
+}
+
+/// The resolved credential, refusing a blank one by naming its variable. Blank
+/// is only reachable outside dev/test, where [`Config::defaults`] drops the dev
+/// sentinel — so this is where STORAGE-ST1 lands as a boot error. Pure, so the
+/// branch is testable without env mutation.
+fn resolve_credential(resolved: String, var: &str) -> nest_rs_config::Result<String> {
+    if resolved.trim().is_empty() {
+        return Err(ConfigError::parse(
             var,
             "must be set in staging/production (no dev-credential fallback outside dev/test)",
-        )),
+        ));
     }
+    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -126,42 +140,63 @@ mod tests {
     }
 
     #[test]
-    fn credential_defaults_to_the_dev_sentinel_only_in_dev() {
-        assert_eq!(
-            resolve_credential(None, "NESTRS_STORAGE__ACCESS_KEY", true, "nestrs".into())
-                .expect("dev falls back"),
-            "nestrs",
-        );
-        assert_eq!(
-            resolve_credential(Some("  ".into()), "K", true, "nestrs".into())
-                .expect("blank ⇒ default in dev"),
-            "nestrs",
-        );
+    fn the_struct_default_keeps_the_dev_sentinel_credentials() {
+        // `Default` is the pin-friendly value a call site writes
+        // `..Default::default()` against; the profile floor lives in `defaults`.
+        let d = StorageConfig::default();
+        assert_eq!(d.access_key, "nestrs");
+        assert_eq!(d.secret_key, "nestrs");
     }
 
     #[test]
-    fn credential_unset_aborts_outside_dev() {
-        // STORAGE-ST1: no silent `nestrs`/`nestrs` in staging/production.
-        let err = resolve_credential(None, "NESTRS_STORAGE__SECRET_KEY", false, "nestrs".into())
+    fn credential_blank_aborts_naming_its_variable() {
+        // STORAGE-ST1: outside dev/test `Config::defaults` drops the sentinel, so
+        // an unset variable arrives here blank and must abort by name.
+        let err = resolve_credential(String::new(), "NESTRS_STORAGE__SECRET_KEY")
             .expect_err("must abort");
         assert!(
             err.to_string().contains("NESTRS_STORAGE__SECRET_KEY"),
             "the error names the variable: {err}",
         );
         assert!(
-            resolve_credential(Some(String::new()), "K", false, "nestrs".into()).is_err(),
-            "blank also aborts outside dev",
+            resolve_credential("   ".into(), "K").is_err(),
+            "whitespace-only is blank too",
         );
     }
 
     #[test]
-    fn credential_set_is_taken_verbatim_in_every_profile() {
-        for dev in [true, false] {
-            assert_eq!(
-                resolve_credential(Some("AKIAREAL".into()), "K", dev, "nestrs".into())
-                    .expect("set ⇒ ok"),
-                "AKIAREAL",
-            );
-        }
+    fn credential_set_is_taken_verbatim() {
+        assert_eq!(
+            resolve_credential("AKIAREAL".into(), "K").expect("set ⇒ ok"),
+            "AKIAREAL",
+        );
+    }
+
+    // The whole point of the overlay: a pinned bucket must not freeze the
+    // credentials or the endpoint alongside it.
+    #[test]
+    fn env_overrides_each_field_of_a_pinned_config_independently() {
+        let pinned = StorageConfig {
+            bucket: "pinned-bucket".into(),
+            ..Default::default()
+        };
+        let cfg = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [
+                    ("NESTRS_STORAGE__ENDPOINT", "https://s3.example"),
+                    ("NESTRS_STORAGE__ACCESS_KEY", "AKIAREAL"),
+                ],
+            ),
+            pinned,
+        )
+        .expect("overlay resolves");
+        assert_eq!(cfg.endpoint, "https://s3.example");
+        assert_eq!(cfg.access_key, "AKIAREAL");
+        assert_eq!(
+            cfg.bucket, "pinned-bucket",
+            "the pin survives where the env is silent"
+        );
+        assert_eq!(cfg.secret_key, "nestrs", "and so does the rest of the pin");
     }
 }

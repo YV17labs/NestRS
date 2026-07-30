@@ -1,0 +1,5 @@
+error: `concurrency` is gone from #[process]: a process method runs one job at a time, and throughput scales by running more worker replicas — the unit the container platform already schedules. Drop the argument
+  --> tests/integration/diagnostics/process_concurrency_is_gone.rs:24:33
+   |
+24 |     #[process(queue = FanQueue, concurrency = 2, retries = 1)]
+   |                                 ^^^^^^^^^^^

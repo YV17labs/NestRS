@@ -271,7 +271,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                         // while reading; this second check covers the boundary
                         // exactly at the limit and keeps the reply symmetric.
                         if text.len() > limits.max_message_bytes {
-                            let frame = error_frame("error", "message too large");
+                            let frame = error_frame("error", &crate::WsError::new("message too large"));
                             if outbox.try_send(frame.into()).is_err() {
                                 break;
                             }
@@ -330,7 +330,12 @@ async fn handle_text<G: Gateway>(
 ) -> Option<String> {
     let envelope: WsEnvelope = match serde_json::from_str(text) {
         Ok(envelope) => envelope,
-        Err(_) => return Some(error_frame("error", "invalid envelope")),
+        Err(_) => {
+            return Some(error_frame(
+                "error",
+                &crate::WsError::new("invalid envelope"),
+            ));
+        }
     };
     let WsEnvelope { event, mut data } = envelope;
     let data_pipe = wiring.data_pipe.as_ref();
@@ -354,14 +359,14 @@ async fn handle_text<G: Gateway>(
                 reason = %reason,
                 "websocket message denied by a guard",
             );
-            return WsReply::Error(reason);
+            return WsReply::Error(crate::WsError::new(reason));
         }
         // Global data pipes run after guards (which see the raw value), before
         // dispatch — the per-message analog of HTTP running pipes after guards.
         if let Some(pipe) = data_pipe
             && let Err(err) = pipe(&event_ref, &mut data)
         {
-            return WsReply::error(format!("invalid data for `{event_ref}`: {}", err.message()));
+            return WsReply::pipe_error(&event_ref, "data", err);
         }
         gateway.dispatch(client, &event_ref, data).await
     });
@@ -395,17 +400,20 @@ async fn handle_text<G: Gateway>(
                         error = %err,
                         "failed to serialize reply",
                     );
-                    Some(error_frame(&envelope.event, "internal error"))
+                    Some(error_frame(
+                        &envelope.event,
+                        &crate::WsError::new("internal error"),
+                    ))
                 }
             }
         }
         WsReply::None => None,
-        WsReply::Error(message) => Some(error_frame(&event, &message)),
+        WsReply::Error(error) => Some(error_frame(&event, &error)),
     }
 }
 
-fn error_frame(event: &str, message: &str) -> String {
-    WsEnvelope::encode(event, &serde_json::json!({ "error": message }))
+fn error_frame(event: &str, error: &crate::WsError) -> String {
+    WsEnvelope::encode(event, error)
         .unwrap_or_else(|_| String::from(r#"{"event":"error","data":{"error":"internal"}}"#))
 }
 

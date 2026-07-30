@@ -71,8 +71,8 @@ impl Default for GraphqlConfig {
 }
 
 impl Config for GraphqlConfig {
-    fn from_env(env: &ConfigService) -> Result<Self> {
-        let d = Self::default();
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        let d = base;
         Ok(Self {
             path: env.get("PATH").unwrap_or(d.path),
             playground: env.flag("PLAYGROUND", d.playground)?,
@@ -107,6 +107,25 @@ mod tests {
     }
 
     #[test]
+    fn env_overrides_each_field_of_a_pinned_config() {
+        let pinned = GraphqlConfig {
+            path: "/pinned-graphql".into(),
+            max_depth: Some(3),
+            ..Default::default()
+        };
+        let cfg = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", [("NESTRS_GRAPHQL__MAX_DEPTH", "9")]),
+            pinned,
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.max_depth, Some(9), "the env outranks the pin");
+        assert_eq!(
+            cfg.path, "/pinned-graphql",
+            "and the field the env is silent about keeps the pin",
+        );
+    }
+
+    #[test]
     fn default_path_constant_pins_the_mount_point() {
         // App code reads this path string indirectly through the module — a
         // rename here breaks every reverse proxy.
@@ -115,7 +134,9 @@ mod tests {
 
     #[test]
     fn from_env_falls_back_to_defaults_when_unset() {
-        let cfg = GraphqlConfig::from_env(&ConfigService::with_vars("graphql", [])).expect("ok");
+        let cfg =
+            GraphqlConfig::from_env(&ConfigService::with_vars("graphql", []), Default::default())
+                .expect("ok");
         let d = GraphqlConfig::default();
         assert_eq!(cfg.path, d.path);
         assert_eq!(cfg.playground, d.playground);
@@ -168,7 +189,7 @@ mod tests {
                 ("NESTRS_GRAPHQL__MAX_COMPLEXITY", "2000"),
             ],
         );
-        let cfg = GraphqlConfig::from_env(&service).expect("ok");
+        let cfg = GraphqlConfig::from_env(&service, Default::default()).expect("ok");
         assert_eq!(cfg.path, "/api/graphql");
         assert!(cfg.playground);
         assert_eq!(cfg.schema_path, PathBuf::from("./schema-out.graphql"));

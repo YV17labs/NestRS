@@ -27,7 +27,7 @@ pub use inject::{
     forwarded_arg_idents, forwarded_idents, from_container_method, from_scope_method,
     injected_keyed_method, injected_keys_with_layers, injected_method,
     injected_methods_with_layers, injected_names_method, injected_names_with_layers, layer_deps,
-    optional_dependencies_method,
+    normalize_forwarded_args, optional_dependencies_method,
 };
 pub use specs::{force_guard_typeids, scoped_specs};
 pub use ty::{

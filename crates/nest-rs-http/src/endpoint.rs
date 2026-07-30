@@ -37,7 +37,9 @@ pub enum EdgePosture {
 pub struct HttpEndpointMeta {
     path: Cow<'static, str>,
     label: Cow<'static, str>,
+    owner: Option<Cow<'static, str>>,
     posture: EdgePosture,
+    self_guarded: bool,
     mount: Arc<MountFn>,
 }
 
@@ -57,7 +59,9 @@ impl HttpEndpointMeta {
         Self {
             path: path.into(),
             label: label.into(),
+            owner: None,
             posture: EdgePosture::Guarded,
+            self_guarded: false,
             mount: Arc::new(mount),
         }
     }
@@ -69,6 +73,31 @@ impl HttpEndpointMeta {
         self
     }
 
+    /// Name the type that owns this mount (`ChatGateway`, `PostsTools`). Two
+    /// surfaces colliding on one path are reported by owner, the way two
+    /// controllers on one prefix already are — `label` alone degenerates to
+    /// "a ws endpoint and a ws endpoint".
+    pub fn owned_by(mut self, owner: impl Into<Cow<'static, str>>) -> Self {
+        self.owner = Some(owner.into());
+        self
+    }
+
+    /// Declare that this surface binds its own guards at its edge (a gateway's
+    /// `#[use_guards]`). Those live inside the opaque mount closure, so without
+    /// this the transport cannot tell a guarded edge from a bare one and warns
+    /// on both.
+    pub fn self_guarded(self) -> Self {
+        self.self_guarded_if(true)
+    }
+
+    /// [`self_guarded`](Self::self_guarded) driven by a flag — what a macro
+    /// calls, since whether the surface declared guards is only known at
+    /// expansion.
+    pub fn self_guarded_if(mut self, yes: bool) -> Self {
+        self.self_guarded = yes;
+        self
+    }
+
     /// The path this surface self-mounts at (e.g. `/graphql`, `/ws`).
     pub fn path(&self) -> &str {
         &self.path
@@ -77,6 +106,12 @@ impl HttpEndpointMeta {
     /// Human-readable label for the boot mount log.
     pub fn label(&self) -> &str {
         &self.label
+    }
+
+    /// The owning type's name when one was declared, else the kind — what a
+    /// collision error names.
+    pub fn owner(&self) -> &str {
+        self.owner.as_deref().unwrap_or(&self.label)
     }
 
     /// This self-mount's edge posture — whether the transport runs the global
@@ -92,12 +127,13 @@ impl HttpEndpointMeta {
     /// self-mount analog of the controller route's `access_is_implicit`.
     ///
     /// An [`Exempt`](EdgePosture::Exempt) self-mount gates in-band or is
-    /// deliberately public (the `#[public]` analog), so it is never implicit. A
-    /// gateway's own `#[use_guards]` live inside its opaque mount closure and
-    /// are invisible here, so a `true` prompts the developer to confirm the
-    /// edge is guarded on purpose — it is not proof the edge is wide open.
+    /// deliberately public (the `#[public]` analog), so it is never implicit,
+    /// and neither is one that declared its own edge guards through
+    /// [`self_guarded`](Self::self_guarded) — a warning that fires on a gateway
+    /// already carrying `#[use_guards]` is a security signal people learn to
+    /// scroll past.
     pub fn edge_access_is_implicit(&self, global_guards: bool) -> bool {
-        !global_guards && self.posture == EdgePosture::Guarded
+        !global_guards && !self.self_guarded && self.posture == EdgePosture::Guarded
     }
 
     /// Mount this surface onto `route`, resolving its dependencies from

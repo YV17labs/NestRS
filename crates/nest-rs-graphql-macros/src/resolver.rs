@@ -13,8 +13,8 @@ use syn::{
 use nest_rs_codegen::{
     InjectableBody, PipeWrapper, build_injectable_body, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, impl_self_ident, injected_keys_with_layers,
-    injected_methods_with_layers, injected_names_with_layers, layer_deps, pipe_wrapper,
-    reject_http_only_layers, scoped_specs, take_flag_attr, take_path_list,
+    injected_methods_with_layers, injected_names_with_layers, layer_deps, normalize_forwarded_args,
+    pipe_wrapper, reject_http_only_layers, scoped_specs, take_flag_attr, take_path_list,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -556,7 +556,14 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         // The delegating method keeps the signature and any remaining attrs
         // (`#[graphql(...)]` belongs there); the inherent method holds the body.
         let deleg_attrs = method.attrs.clone();
-        let sig = method.sig.clone();
+        let mut sig = method.sig.clone();
+        // Give each argument a plain binding name before anything keys off it:
+        // `Valid(Json(input)): Valid<Json<Dto>>` becomes `input: Valid<Json<Dto>>`
+        // here, so the pipe detection, the wrapper signature (whose parameter
+        // names are the SDL argument names) and the forwarded call all see one
+        // ident. The developer's method keeps its pattern — this is a clone.
+        normalize_forwarded_args(sig.inputs.iter_mut())?;
+        let sig = sig;
         let method_name = method.sig.ident.clone();
 
         if is_field {
@@ -886,6 +893,17 @@ fn field_method(
     force_guards: &[Path],
     field_label: &str,
 ) -> syn::Result<(Type, TokenStream2, Vec<Type>)> {
+    // Same normalization as an operation's: a destructured argument gets the
+    // plain name the `#[ComplexObject]` method declares it under (and exposes in
+    // the SDL) and forwards it by, while the developer's method keeps its
+    // pattern. Working on a clone is what keeps that true.
+    let owned_sig = {
+        let mut s = sig.clone();
+        normalize_forwarded_args(s.inputs.iter_mut())?;
+        s
+    };
+    let sig = &owned_sig;
+
     let mut inputs = sig.inputs.iter();
     match inputs.next() {
         Some(FnArg::Receiver(_)) => {}

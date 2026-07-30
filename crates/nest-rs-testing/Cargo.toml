@@ -78,3 +78,15 @@ async-trait.workspace = true
 # The WS gateway-guard dedup test (`tests/ws_gateway_guards.rs`) drives a
 # `#[gateway]` + `#[messages]` impl, so it needs the macros + `WsModule`.
 nest-rs-ws = { path = "../nest-rs-ws" }
+# `figment::Jail` isolates the real process env for the pinned-config override
+# test (the deployment tier of the precedence rule), matching how
+# `nest-rs-config` and `nest-rs-http` test env reads — no `unsafe set_var`.
+figment = { workspace = true, features = ["test"] }
+# The destructured-argument test covers all four transports against one app;
+# `#[process]` is the fourth, so the queue contract + `#[queue]` macro come in
+# dev-only (path-only, so publishing drags no test cycle).
+nest-rs-queue = { path = "../nest-rs-queue" }
+# The payload the four transports share derives `Serialize`/`Deserialize`, and
+# an HTTP `Json` body needs `JsonSchema` for the OpenAPI document.
+serde.workspace = true
+schemars.workspace = true

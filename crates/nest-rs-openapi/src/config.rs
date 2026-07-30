@@ -57,15 +57,25 @@ impl Default for OpenApiConfig {
 }
 
 impl Config for OpenApiConfig {
-    fn from_env(env: &ConfigService) -> Result<Self> {
-        let d = Self::default();
+    /// Secure-by-default (HTTP-S5): the docs endpoints are public and
+    /// unauthenticated, so the *unpinned* baseline turns them OFF outside a
+    /// dev/test profile. This lives here rather than in `from_env` so it applies
+    /// only where it is a default — overlaying it onto a pinned `enabled: true`
+    /// would silently rewrite a deliberate choice.
+    fn defaults() -> Self {
+        Self {
+            enabled: docs_default_enabled(Environment::from_env()),
+            ..Self::default()
+        }
+    }
+
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        let d = base;
         let environment = Environment::from_env();
-        // Secure-by-default (HTTP-S5): the docs endpoints are public and
-        // unauthenticated, so outside a dev/test profile they default OFF. `flag`
-        // still returns `Err` (naming the var) on a set-but-unparseable value, so
-        // a typo'd `NESTRS_OPENAPI__ENABLED` stays boot-fatal — it never silently
-        // falls back to on.
-        let enabled = env.flag("ENABLED", docs_default_enabled(environment))?;
+        // `flag` returns `Err` (naming the var) on a set-but-unparseable value,
+        // so a typo'd `NESTRS_OPENAPI__ENABLED` stays boot-fatal — it never
+        // silently falls back to on.
+        let enabled = env.flag("ENABLED", d.enabled)?;
         if enabled && !docs_default_enabled(environment) {
             tracing::warn!(
                 target: "nest_rs::openapi",
@@ -77,7 +87,7 @@ impl Config for OpenApiConfig {
             enabled,
             title: env.get("TITLE").unwrap_or(d.title),
             version: env.get("VERSION").unwrap_or(d.version),
-            description: env.get("DESCRIPTION"),
+            description: env.get("DESCRIPTION").or(d.description),
             emit_document: env.flag("EMIT_DOCUMENT", d.emit_document)?,
             document_path: env
                 .get("DOCUMENT_PATH")
@@ -108,7 +118,9 @@ mod tests {
 
     #[test]
     fn from_env_falls_back_to_defaults_when_unset() {
-        let cfg = OpenApiConfig::from_env(&ConfigService::with_vars("openapi", [])).expect("ok");
+        let cfg =
+            OpenApiConfig::from_env(&ConfigService::with_vars("openapi", []), Default::default())
+                .expect("ok");
         let d = OpenApiConfig::default();
         assert_eq!(cfg.enabled, d.enabled);
         assert_eq!(cfg.title, d.title);
@@ -127,7 +139,7 @@ mod tests {
                 ("NESTRS_OPENAPI__DESCRIPTION", "Generated docs"),
             ],
         );
-        let cfg = OpenApiConfig::from_env(&service).expect("ok");
+        let cfg = OpenApiConfig::from_env(&service, Default::default()).expect("ok");
         assert!(!cfg.enabled);
         assert_eq!(cfg.title, "Custom API");
         assert_eq!(cfg.version, "9.9.9");
@@ -137,11 +149,11 @@ mod tests {
     #[test]
     fn enabled_reads_boolean_spellings() {
         let off = ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "off")]);
-        let cfg = OpenApiConfig::from_env(&off).expect("ok");
+        let cfg = OpenApiConfig::from_env(&off, Default::default()).expect("ok");
         assert!(!cfg.enabled, "`off` disables the documentation endpoints");
 
         let on = ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "true")]);
-        let cfg = OpenApiConfig::from_env(&on).expect("ok");
+        let cfg = OpenApiConfig::from_env(&on, Default::default()).expect("ok");
         assert!(cfg.enabled);
     }
 
@@ -161,7 +173,7 @@ mod tests {
     #[test]
     fn enabled_rejects_unparseable_value_naming_the_var() {
         let service = ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "maybe")]);
-        let err = OpenApiConfig::from_env(&service)
+        let err = OpenApiConfig::from_env(&service, Default::default())
             .expect_err("a non-boolean must fail, never silently default");
         assert!(
             matches!(err, nest_rs_config::ConfigError::Parse { ref var, .. } if var == "NESTRS_OPENAPI__ENABLED"),

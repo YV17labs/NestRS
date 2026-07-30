@@ -45,13 +45,32 @@ impl Default for QueueConfig {
 }
 
 impl Config for QueueConfig {
-    fn from_env(env: &ConfigService) -> Result<Self> {
+    /// The loopback URL is a dev convenience, so the *unpinned* baseline drops it
+    /// outside dev/test: an unset `NESTRS_QUEUE__URL` then fails boot naming the
+    /// variable instead of silently pointing the queue at a non-existent local
+    /// Redis (REDIS-Q1). It lives here rather than in `from_env` so it applies
+    /// only where it is a default, never over a pinned value.
+    fn defaults() -> Self {
+        let d = Self::default();
+        if matches!(
+            Environment::from_env(),
+            Environment::Production | Environment::Staging
+        ) {
+            return Self {
+                url: String::new(),
+                ..d
+            };
+        }
+        d
+    }
+
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let shutdown_timeout = env
             .parse::<u64>("SHUTDOWN_TIMEOUT_SECS")?
             .map(Duration::from_secs)
-            .unwrap_or(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS));
+            .unwrap_or(base.shutdown_timeout);
         Ok(Self {
-            url: resolve_url(env.get("URL"), Environment::from_env())?,
+            url: resolve_url(env.get("URL").or(Some(base.url)), Environment::from_env())?,
             shutdown_timeout,
         })
     }
@@ -91,6 +110,28 @@ mod tests {
     }
 
     #[test]
+    fn env_overrides_each_field_of_a_pinned_config() {
+        let pinned = QueueConfig {
+            url: "redis://pinned:6379/".into(),
+            shutdown_timeout: Duration::from_secs(7),
+        };
+        let cfg = QueueConfig::from_env(
+            &ConfigService::with_vars("queue", [("NESTRS_QUEUE__URL", "redis://from-env:6379/")]),
+            pinned,
+        )
+        .expect("the overlay resolves");
+        assert_eq!(
+            cfg.url, "redis://from-env:6379/",
+            "the env outranks the pin"
+        );
+        assert_eq!(
+            cfg.shutdown_timeout,
+            Duration::from_secs(7),
+            "and the untouched pin survives",
+        );
+    }
+
+    #[test]
     fn resolve_url_uses_loopback_default_in_dev_and_test() {
         for env in [Environment::Development, Environment::Test] {
             assert_eq!(
@@ -127,13 +168,16 @@ mod tests {
         let d = QueueConfig::default();
         assert_eq!(d.shutdown_timeout, Duration::from_secs(30));
 
-        let cfg = QueueConfig::from_env(&ConfigService::with_vars(
-            "queue",
-            [
-                ("NESTRS_QUEUE__URL", "redis://redis:6379"),
-                ("NESTRS_QUEUE__SHUTDOWN_TIMEOUT_SECS", "5"),
-            ],
-        ))
+        let cfg = QueueConfig::from_env(
+            &ConfigService::with_vars(
+                "queue",
+                [
+                    ("NESTRS_QUEUE__URL", "redis://redis:6379"),
+                    ("NESTRS_QUEUE__SHUTDOWN_TIMEOUT_SECS", "5"),
+                ],
+            ),
+            Default::default(),
+        )
         .expect("ok");
         assert_eq!(cfg.shutdown_timeout, Duration::from_secs(5));
     }
@@ -153,10 +197,13 @@ mod tests {
 
     #[test]
     fn from_env_picks_up_a_custom_url() {
-        let cfg = QueueConfig::from_env(&ConfigService::with_vars(
-            "queue",
-            [("NESTRS_QUEUE__URL", "redis://redis.staging:6379/2")],
-        ))
+        let cfg = QueueConfig::from_env(
+            &ConfigService::with_vars(
+                "queue",
+                [("NESTRS_QUEUE__URL", "redis://redis.staging:6379/2")],
+            ),
+            Default::default(),
+        )
         .expect("ok");
         assert_eq!(cfg.url, "redis://redis.staging:6379/2");
     }

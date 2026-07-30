@@ -84,6 +84,13 @@ async fn greet(&self, Path(name): Path<String>) -> String {
 before the handler runs — there is no `name.parse::<i32>()` to handle
 manually.
 
+**Destructuring in the parameter list is supported** — `Path(name)`,
+`Query(q)`, `Json(body)`, `Valid(input)` — as long as the pattern binds one
+name. `#[routes]` forwards the argument to the handler it generates under that
+name, so the pattern stays where you wrote it. A pattern binding two
+(`Path((a, b))`) has no single name to forward and is a compile error naming
+the way out: bind the whole extractor and destructure in the body.
+
 ```bash frame="terminal"
 $ curl http://localhost:3000/Ada
 Hello, Ada!
@@ -95,7 +102,7 @@ Hello, Ada!
 use poem::web::Query;
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 struct Greet {
     lang: Option<String>,
 }
@@ -129,13 +136,13 @@ struct GreetInput {
     name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 struct GreetReply {
     greeting: String,
 }
 
 #[post("/")]
-async fn shout(&self, Valid(Json(input)): Valid<Json<GreetInput>>) -> Result<Json<GreetReply>> {
+async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<GreetReply>> {
     Ok(Json(GreetReply {
         greeting: format!("HELLO, {}!", input.name.to_uppercase()),
     }))
@@ -143,8 +150,8 @@ async fn shout(&self, Valid(Json(input)): Valid<Json<GreetInput>>) -> Result<Jso
 ```
 
 - **`#[input]`** is the shorthand for input DTOs. It appends
-  `#[derive(::serde::Deserialize, ::validator::Validate)]` and
-  `#[serde(deny_unknown_fields)]` — an unknown field on the wire
+  `#[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
+  and `#[serde(deny_unknown_fields)]` — an unknown field on the wire
   (`{"name":"Ada","is_admin":true}`) is rejected with `400` at parse time
   instead of silently dropped. Don't use `#[input]` together with a manual
   `#[derive(Deserialize, Validate)]` — pick one (the macro errors on a

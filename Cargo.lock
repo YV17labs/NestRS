@@ -2832,6 +2832,7 @@ dependencies = [
  "nest-rs-interceptors",
  "nest-rs-mcp",
  "nest-rs-pipes",
+ "nest-rs-testing",
  "nest-rs-ws",
  "poem",
  "serde_json",
@@ -3018,6 +3019,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]
@@ -3201,6 +3203,7 @@ dependencies = [
  "anyhow",
  "async-graphql",
  "async-trait",
+ "figment",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-exception-filters",
@@ -3212,11 +3215,14 @@ dependencies = [
  "nest-rs-mcp",
  "nest-rs-opentelemetry",
  "nest-rs-pipes",
+ "nest-rs-queue",
  "nest-rs-ws",
  "poem",
  "rmcp",
+ "schemars",
  "sea-orm",
  "sea-orm-migration",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -5918,8 +5924,10 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]

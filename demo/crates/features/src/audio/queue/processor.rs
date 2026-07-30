@@ -14,7 +14,7 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = AudioQueue, concurrency = 5, retries = 3)]
+    #[process(queue = AudioQueue, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.svc.transcode(&job.file).await?;
         Ok(())
@@ -41,7 +41,6 @@ mod tests {
             .find(|e| e.name == "AudioProcessor::transcode")
             .expect("AudioProcessor::transcode is discovered");
         assert_eq!(transcode.queue, AUDIO_QUEUE);
-        assert_eq!(transcode.concurrency, 5);
         assert_eq!(transcode.retries, 3);
     }
 

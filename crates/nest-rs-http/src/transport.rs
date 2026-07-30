@@ -345,11 +345,29 @@ impl Transport for HttpTransport {
         // naming both endpoints, not an opaque poem internal.
         let mut endpoint_owner: HashMap<String, String> = HashMap::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
+            // Cross-family too: a self-mount nests its whole subtree, so a
+            // controller already holding that path is the same poem panic by
+            // another route. The two maps above only ever compared a family
+            // against itself, which let `#[controller(path = "/chat")]` beside
+            // `#[gateway(path = "/chat")]` through to route assembly.
+            if let Some(first) = prefix_owner
+                .get(d.meta.path())
+                .or_else(|| route_owner.get(d.meta.path()))
+            {
+                anyhow::bail!(
+                    "duplicate mount path {:?}: controller {first} and {} endpoint {} both mount \
+                     there — a mount path is its owner's exclusive namespace; give each one a \
+                     distinct path",
+                    d.meta.path(),
+                    d.meta.label(),
+                    d.meta.owner(),
+                );
+            }
             claim_exclusive_path(
                 &mut endpoint_owner,
                 "self-mounted endpoint path",
                 d.meta.path().to_owned(),
-                format!("a {} endpoint", d.meta.label()),
+                format!("{} endpoint {}", d.meta.label(), d.meta.owner()),
             )?;
             tracing::info!(
                 target: "nest_rs::routes",

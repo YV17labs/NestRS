@@ -44,6 +44,11 @@ pub struct ProviderDescriptor {
     /// `TypeId::of::<Concrete>()` for an `#[injectable]`, or
     /// `TypeId::of::<Arc<dyn Trait>>()` for a `Foo as dyn Trait` binding.
     pub provides: fn() -> TypeId,
+    /// Extra container keys this provider registers on its module's behalf,
+    /// each with the label a boot error names it by. See
+    /// [`Discoverable::also_provides`](crate::Discoverable::also_provides) —
+    /// almost always empty.
+    pub also_provides: fn() -> Vec<(TypeId, &'static str)>,
     /// `TypeId` of each bare `#[inject]` field plus each attribute-referenced
     /// layer (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`).
     pub injects: fn() -> Vec<TypeId>,
@@ -282,6 +287,13 @@ pub fn validate_access_graph(
             provided_by
                 .entry((p.provides)())
                 .or_insert((p.name, d.name));
+            // A key the provider installs for its module — named by the key's own
+            // label, not the provider's, so the error reads
+            // "`WsServer<NotifyNs>` is provided by `WsModule`" rather than naming
+            // the plumbing that installed it.
+            for (key, label) in (p.also_provides)() {
+                provided_by.entry(key).or_insert((label, d.name));
+            }
         }
     }
 
@@ -298,6 +310,7 @@ pub fn validate_access_graph(
             if let Some(imported) = by_id.get(&import_id) {
                 for p in imported.providers {
                     closure_keys.insert((p.provides)());
+                    closure_keys.extend((p.also_provides)().into_iter().map(|(key, _)| key));
                 }
             }
         }
@@ -585,6 +598,11 @@ mod tests {
         Vec::new()
     }
 
+    /// The default for every provider that registers only itself.
+    fn provides_only_itself() -> Vec<(TypeId, &'static str)> {
+        Vec::new()
+    }
+
     fn users_deps() -> Vec<TypeId> {
         vec![TypeId::of::<Db>()]
     }
@@ -604,6 +622,7 @@ mod tests {
                 injects: users_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
             }],
         }
     }
@@ -644,6 +663,7 @@ mod tests {
                     injects: no_deps,
                     inject_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
                     name: "AppGuard",
@@ -651,6 +671,7 @@ mod tests {
                     injects: billing_deps,
                     inject_names: no_names,
                     injects_keyed: no_keyed_deps,
+                    also_provides: provides_only_itself,
                 },
             ],
         };
@@ -676,6 +697,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
             }],
         };
         let app = ModuleDescriptor {
@@ -706,6 +728,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
             }],
         };
         let app = ModuleDescriptor {
@@ -750,6 +773,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: billing_names,
                 injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
             }],
         };
         let err = validate_access_graph(
@@ -784,6 +808,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
             }],
         };
         let app = ModuleDescriptor {
@@ -831,6 +856,7 @@ mod tests {
                 injects: no_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
             }],
         };
         let keys = reachable_provider_ids(&[&app], &[TypeId::of::<AppMod>()], &HashSet::new());
@@ -865,6 +891,7 @@ mod tests {
                 injects: no_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
             }],
         };
         let app = ModuleDescriptor {
@@ -919,6 +946,7 @@ mod tests {
                 injects: no_deps,
                 inject_names: no_names,
                 injects_keyed: github_dep,
+                also_provides: provides_only_itself,
             }],
         }
     }

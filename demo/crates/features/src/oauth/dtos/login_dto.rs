@@ -1,8 +1,7 @@
 use nest_rs_http::input;
-use schemars::JsonSchema;
 
 #[input]
-#[derive(Debug, JsonSchema)]
+#[derive(Debug)]
 pub struct LoginDto {
     #[validate(email)]
     pub email: String,

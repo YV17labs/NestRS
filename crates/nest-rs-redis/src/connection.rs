@@ -72,18 +72,13 @@ impl QueueConnection {
         RedisStorage::new_with_config(self.conn.clone(), Config::default().set_namespace(queue))
     }
 
-    /// Consumer-side storage. Fetch buffer = processor concurrency — the
-    /// in-flight-job ceiling.
-    pub(crate) fn consumer_storage(
-        &self,
-        queue: &str,
-        concurrency: usize,
-    ) -> RedisStorage<serde_json::Value> {
+    /// Consumer-side storage, one job per fetch. A `#[process]` method runs a
+    /// single job at a time (see [`QueueWorker`](crate::QueueWorker)), so
+    /// prefetching would only hold jobs a peer replica could be running.
+    pub(crate) fn consumer_storage(&self, queue: &str) -> RedisStorage<serde_json::Value> {
         RedisStorage::new_with_config(
             self.conn.clone(),
-            Config::default()
-                .set_namespace(queue)
-                .set_buffer_size(concurrency.max(1)),
+            Config::default().set_namespace(queue).set_buffer_size(1),
         )
     }
 }

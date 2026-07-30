@@ -63,9 +63,14 @@ struct CreateUser {
     #[validate(email)]
     email: String,
 }
+```
 
+`#[input]` carries `JsonSchema` too, so a DTO behind it needs no second derive
+for the OpenAPI document; a hand-derived DTO (like `CreatePost` above) does.
+
+```rust
 #[post("/users")]
-async fn create(&self, Valid(Json(body)): Valid<Json<CreateUser>>) -> Json<User> {
+async fn create(&self, Valid(body): Valid<Json<CreateUser>>) -> Json<User> {
     Json(self.svc.create(body))
 }
 ```

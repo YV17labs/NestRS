@@ -14,10 +14,30 @@ use crate::source::{ConfigSource, EnvSource, MapSource};
 
 const PREFIX: &str = "NESTRS_";
 
+/// Which tiers of the environment outrank the value a field falls back to.
+///
+/// A `Config` is always resolved as *environment over a base*. What the base
+/// **is** decides how much of the environment may overrule it, which is the
+/// whole of the framework's precedence rule:
+/// `real env > pinned in code > .env cascade > in-code defaults`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Precedence {
+    /// The base is the config's own defaults, so every tier the source serves
+    /// outranks it — the real process env first, then the `.env` cascade.
+    #[default]
+    OverDefaults,
+    /// The base is a value pinned at the call site (`Module::for_root(cfg)`), so
+    /// only [`ConfigSource::get_from_deployment`] outranks it. A `.env` file
+    /// committed beside the code does not silently undo a deliberate pin; a
+    /// deployment variable always does.
+    OverPinned,
+}
+
 /// Typed reader bound to one namespace; resolves `NESTRS_<NAMESPACE>__<KEY>`.
 pub struct ConfigService {
     namespace: String,
     source: Arc<dyn ConfigSource>,
+    precedence: Precedence,
 }
 
 impl ConfigService {
@@ -34,7 +54,22 @@ impl ConfigService {
         Self {
             namespace: namespace.to_ascii_uppercase(),
             source,
+            precedence: Precedence::OverDefaults,
         }
+    }
+
+    /// Narrow this reader to the tiers that outrank a **code-pinned** value.
+    /// Called by [`Config::resolve`](crate::Config::resolve) when the call site
+    /// passed a config to `Module::for_root`, so a field the deployment sets
+    /// still wins while the `.env` cascade defers to the pin.
+    pub fn over_pinned(mut self) -> Self {
+        self.precedence = Precedence::OverPinned;
+        self
+    }
+
+    /// Which tiers this reader lets through.
+    pub fn precedence(&self) -> Precedence {
+        self.precedence
     }
 
     /// Convenience over [`with_source`](Self::with_source) + [`MapSource`]: a
@@ -62,9 +97,14 @@ impl ConfigService {
         format!("{PREFIX}{}__{}", self.namespace, key.to_ascii_uppercase())
     }
 
-    /// The raw string value for `key` in this namespace, or `None` if unset.
+    /// The raw string value for `key` in this namespace, or `None` if unset in
+    /// every tier this reader's [`Precedence`] lets through.
     pub fn get(&self, key: &str) -> Option<String> {
-        self.source.get(&self.var_name(key))
+        let var = self.var_name(key);
+        match self.precedence {
+            Precedence::OverDefaults => self.source.get(&var),
+            Precedence::OverPinned => self.source.get_from_deployment(&var),
+        }
     }
 
     /// `Err` (naming the variable) when set-but-unparseable — boot-fatal, no
@@ -98,8 +138,11 @@ impl ConfigService {
         }
     }
 
-    /// Comma-separated, trimmed, empties dropped.
-    pub fn list(&self, key: &str) -> Vec<String> {
+    /// Comma-separated, trimmed, empties dropped. `default` is the value the
+    /// field keeps when the variable is unset — the same shape as
+    /// [`flag`](Self::flag), so a `from_env` body passes `base.<field>` and the
+    /// overlay reads the same way for every field type.
+    pub fn list(&self, key: &str, default: Vec<String>) -> Vec<String> {
         self.get(key)
             .map(|raw| {
                 raw.split(',')
@@ -108,7 +151,7 @@ impl ConfigService {
                     .map(ToOwned::to_owned)
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or(default)
     }
 }
 
@@ -172,7 +215,62 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env("NESTRS_TESTL__SCOPES", "read:user, write , ,admin");
             let env = ConfigService::for_namespace("testl");
-            assert_eq!(env.list("SCOPES"), vec!["read:user", "write", "admin"]);
+            assert_eq!(
+                env.list("SCOPES", Vec::new()),
+                vec!["read:user", "write", "admin"],
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn list_keeps_the_default_when_unset() {
+        let env = ConfigService::with_vars("testl", []);
+        assert_eq!(
+            env.list("SCOPES", vec!["pinned".to_owned()]),
+            vec!["pinned".to_owned()],
+            "an unset list keeps the base, the same way `flag` keeps its default",
+        );
+    }
+
+    // The precedence split D-2 rests on: a pinned value loses to a deployment
+    // variable and wins over the `.env` cascade. `MapSource` stands in for a
+    // custom source, whose default is "deployment-supplied" — the fail-safe
+    // direction, so a Vault value is never shadowed by a pinned struct.
+    #[test]
+    fn over_pinned_narrows_to_the_deployment_tier() {
+        let env = ConfigService::with_vars("prec", [("NESTRS_PREC__PORT", "9000")]);
+        assert_eq!(env.get("PORT").as_deref(), Some("9000"));
+        assert_eq!(
+            env.over_pinned().get("PORT").as_deref(),
+            Some("9000"),
+            "a custom source is deployment-supplied unless it says otherwise",
+        );
+    }
+
+    #[test]
+    fn env_source_over_pinned_ignores_the_dotenv_cascade_but_not_the_real_env() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "NESTRS_PRECPIN__FROM_FILE=from_dotenv")?;
+            jail.set_env("NESTRS_PRECPIN__FROM_REAL", "from_real");
+            let pinned = ConfigService::for_namespace("precpin").over_pinned();
+            assert_eq!(
+                pinned.get("FROM_REAL").as_deref(),
+                Some("from_real"),
+                "a deployment variable outranks a value pinned in code",
+            );
+            assert_eq!(
+                pinned.get("FROM_FILE"),
+                None,
+                "a committed .env file does not silently undo a deliberate pin",
+            );
+            // Unpinned, the cascade is back in play.
+            assert_eq!(
+                ConfigService::for_namespace("precpin")
+                    .get("FROM_FILE")
+                    .as_deref(),
+                Some("from_dotenv"),
+            );
             Ok(())
         });
     }

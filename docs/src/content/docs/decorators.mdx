@@ -40,7 +40,7 @@ position without leaving the page.
 | `#[meta]` | method | Attaches typed metadata read back via `Reflector` (repeatable) | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[interceptor]` | struct | Marks a struct as a global HTTP interceptor | [Interceptors](/fundamentals/interceptors/) |
-| `#[input]` | struct | Shorthand for input DTOs (`Deserialize` + `Validate` + `deny_unknown_fields`) | [Extractors](/http/extractors/) |
+| `#[input]` | struct | Shorthand for input DTOs (`Deserialize` + `Validate` + `JsonSchema` + `deny_unknown_fields`) | [Extractors](/http/extractors/) |
 
 ## GraphQL
 
@@ -69,7 +69,7 @@ position without leaving the page.
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[processor]` | impl block | Orchestrates queue consumers on a provider | [Queue](/queue/) |
-| `#[process]` | method | Binds the method to a queue with optional `concurrency` and `retries` | [Queue](/queue/) |
+| `#[process]` | method | Binds the method to a queue with an optional `retries` budget | [Queue](/queue/) |
 
 ## Schedule
 

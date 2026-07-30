@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use assistant::AssistantModule;
 use nest_rs_authn::JwtConfig;
-use nest_rs_config::{Config, ConfigService};
+use nest_rs_config::Config;
 use nest_rs_storage::{Storage, StorageConfig};
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 
@@ -38,8 +38,7 @@ pub(crate) fn bearer() -> String {
 }
 
 pub(crate) fn storage_client() -> Storage {
-    let config = StorageConfig::from_env(&ConfigService::for_namespace("storage"))
-        .expect("storage config parses from env");
+    let config = StorageConfig::load().expect("storage config parses from env");
     Storage::new(Arc::new(config))
 }
 

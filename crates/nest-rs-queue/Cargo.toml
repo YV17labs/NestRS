@@ -38,6 +38,14 @@ nest-rs-worker.workspace = true
 [dev-dependencies]
 tokio.workspace = true
 serde.workspace = true
+# Snapshot-tests the `#[process]` compile diagnostics
+# (tests/integration/diagnostics/).
+trybuild.workspace = true
+# The diagnostics fixtures put a `#[process]` on an `#[injectable]`
+# provider, the shape a real processor has.
+nest-rs-core = { path = "../nest-rs-core" }
+# `anyhow::Result<()>` is the `#[process]` method's return type.
+anyhow.workspace = true
 
 [lints]
 workspace = true

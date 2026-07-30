@@ -89,7 +89,10 @@ where
         // an empty one fails rather than taking the inert path.
         Some(pinned) => (*pinned).clone(),
         None => {
-            let config = C::from_env(&ConfigService::for_namespace(C::NAMESPACE))?;
+            // Not `C::load()`: this leg must distinguish "unconfigured" (inert,
+            // the line below) from "invalid", so it validates *after* that
+            // check rather than inside the load.
+            let config = C::from_env(&ConfigService::for_namespace(C::NAMESPACE), C::defaults())?;
             if config.is_unconfigured() {
                 return Ok(None);
             }
@@ -309,10 +312,10 @@ mod tests {
     }
 
     impl Config for StubConfig {
-        fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
+        fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
             Ok(Self {
-                client_id: env.get("CLIENT_ID").unwrap_or_default(),
-                client_secret: env.get("CLIENT_SECRET").unwrap_or_default(),
+                client_id: env.get("CLIENT_ID").unwrap_or(base.client_id),
+                client_secret: env.get("CLIENT_SECRET").unwrap_or(base.client_secret),
             })
         }
     }

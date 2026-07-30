@@ -107,7 +107,22 @@ The error frame is shaped like any other envelope:
 ```
 
 The string comes from `e.to_string()` — i.e. the `Display` impl of your
-error type. A `warn!` lands in the `nest_rs::ws` target alongside the
+error type. A rejection that carries **structured** detail adds an `errors`
+member beside it — a `Valid<T>` payload names the offending fields, the same way
+the HTTP body does:
+
+```json
+{
+  "event": "validated",
+  "data": {
+    "error": "invalid payload for `validated`: validation failed",
+    "errors": { "text": [{ "code": "length", "message": "text must not be empty" }] }
+  }
+}
+```
+
+`errors` is **absent**, not `null`, when the failure had nothing structured to
+say, so a client can branch on its presence. A `warn!` lands in the `nest_rs::ws` target alongside the
 frame, so a denied dispatch shows up in logs without extra
 instrumentation.
 
@@ -185,8 +200,8 @@ async fn send(&self, msg: SendMessageDto) -> Result<ChatMessageDto, SendError> {
 < {"event":"send","data":{"error":"text must not be empty"}}
 ```
 
-The wire shape stays the same envelope — clients branch on the
-presence of `data.error`.
+The wire shape stays the same envelope — clients branch on the presence of
+`data.error`, and read `data.errors` when they need to point at a field.
 
 ## The envelope itself
 

@@ -33,8 +33,9 @@ data:
 pub struct NotifyNs;
 ```
 
-Attach it to a gateway with `#[gateway(namespace = NotifyNs)]`, and
-the macro self-provides `WsServer<NotifyNs>` for that gateway:
+Attach it to a gateway with `#[gateway(namespace = NotifyNs)]`. The registry
+comes from `WsModule` — the same module that provides the default one, so
+namespacing changes which registry is wired, not how it is wired:
 
 ```rust title="apps/live/src/notify/gateway.rs"
 use nest_rs_ws::{gateway, messages, WsClient};
@@ -64,7 +65,7 @@ same HTTP transport stays untouched.
 A service that wants to push to one namespace injects the typed
 registry directly:
 
-```rust
+```rust title="crates/features/src/notify/service.rs"
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
@@ -85,10 +86,36 @@ impl AdminNotifier {
 }
 ```
 
-`Arc<WsServer<Global>>` (the default `WsModule` provides) and
-`Arc<WsServer<NotifyNs>>` are distinct injected types — the access
-graph verifies each one is reachable on its own. A service can inject
-both at once if it needs to fan out to both audiences.
+Its module imports `WsModule`, exactly as it would to inject the default
+registry:
+
+```rust title="crates/features/src/notify/module.rs"
+#[module(imports = [WsModule], providers = [AdminNotifier])]
+pub struct NotifyModule;
+```
+
+`Arc<WsServer<Global>>` and `Arc<WsServer<NotifyNs>>` are distinct injected
+types, and the access graph verifies each one is reachable on its own: forget
+the import and the boot fails naming both the key and its owner —
+
+```text frame="terminal"
+Error: module access violation: `AdminNotifier` (in module `NotifyModule`) depends on
+`WsServer<NotifyNs>`, but `NotifyModule` imports no module that provides it.
+`WsServer<NotifyNs>` is provided by `WsModule` — add `WsModule` to
+`#[module(imports = [...])]` of `NotifyModule`, …
+```
+
+A service can inject both registries at once if it needs to fan out to both
+audiences, and one `WsModule` import covers both.
+
+<Aside type="note">
+`WsModule` owns the namespaced registries too, which is why the import is the
+whole wiring step and why it does not matter where the gateway sits relative to
+the service. It used to be the gateway that installed its own `WsServer<N>` from
+its `register` — that left the key belonging to no module (so the access graph
+could not check it) and made a push service's construction depend on import
+order. One owner, one import, one diagnostic.
+</Aside>
 
 ## Why namespaces exist
 
@@ -132,11 +159,10 @@ registry the macro wires:
   GET /notify -> NotifyGateway (1 message,  0 lifecycle hooks)
 ```
 
-Listing both gateways' modules in `AppModule` is enough — the macro
-emits `WsServer<NotifyNs>` as a self-provided singleton, so a
-namespaced gateway works even without `WsModule` in the dynamic chain
-(the marker carries its own registry; `WsModule` only provides
-`WsServer<Global>`).
+Listing both gateways' modules in `AppModule` is enough, provided each of those
+modules imports `WsModule` — the gateway's registry is a declared dependency
+like any `#[inject]` field, so a missing import is a boot error naming it rather
+than a surprise at the first `broadcast`.
 
 ## Going further
 

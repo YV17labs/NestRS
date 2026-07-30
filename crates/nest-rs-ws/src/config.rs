@@ -69,17 +69,17 @@ impl WsConfig {
 }
 
 impl Config for WsConfig {
-    fn from_env(env: &ConfigService) -> Result<Self> {
-        // `0` is the "unlimited" sentinel; unset falls back to the default
-        // ceiling; a set-but-unparseable value surfaces as a boot error.
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        // `0` is the "unlimited" sentinel; unset keeps the base's ceiling; a
+        // set-but-unparseable value surfaces as a boot error.
         let max_connection = match env.parse::<u64>("MAX_CONNECTION_SECS")? {
-            None => Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
+            None => base.max_connection,
             Some(0) => None,
             Some(secs) => Some(Duration::from_secs(secs)),
         };
         let max_message_bytes = env
             .parse::<usize>("MAX_MESSAGE_BYTES")?
-            .unwrap_or(DEFAULT_MAX_MESSAGE_BYTES);
+            .unwrap_or(base.max_message_bytes);
         Ok(Self {
             max_connection,
             max_message_bytes,
@@ -90,6 +90,27 @@ impl Config for WsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The dual-path rule is framework-wide, not an HTTP special case: a pinned
+    // `WsConfig` still takes its overrides per field from `NESTRS_WS__*`.
+    #[test]
+    fn env_overrides_each_field_of_a_pinned_config() {
+        let pinned = WsConfig {
+            max_connection: Some(Duration::from_secs(60)),
+            max_message_bytes: 999,
+        };
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_MESSAGE_BYTES", "2048")]),
+            pinned,
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.max_message_bytes, 2048, "the env outranks the pin");
+        assert_eq!(
+            cfg.max_connection,
+            Some(Duration::from_secs(60)),
+            "and the field the env is silent about keeps the pin",
+        );
+    }
 
     #[test]
     fn default_bounds_the_socket_to_four_hours() {
@@ -109,26 +130,27 @@ mod tests {
 
     #[test]
     fn from_env_falls_back_to_the_default_when_unset() {
-        let cfg = WsConfig::from_env(&ConfigService::with_vars("ws", [])).expect("ok");
+        let cfg = WsConfig::from_env(&ConfigService::with_vars("ws", []), Default::default())
+            .expect("ok");
         assert_eq!(cfg.max_connection, Some(Duration::from_secs(4 * 60 * 60)));
     }
 
     #[test]
     fn from_env_reads_a_custom_ceiling_in_seconds() {
-        let cfg = WsConfig::from_env(&ConfigService::with_vars(
-            "ws",
-            [("NESTRS_WS__MAX_CONNECTION_SECS", "900")],
-        ))
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_CONNECTION_SECS", "900")]),
+            Default::default(),
+        )
         .expect("ok");
         assert_eq!(cfg.max_connection, Some(Duration::from_secs(900)));
     }
 
     #[test]
     fn from_env_treats_zero_as_unlimited() {
-        let cfg = WsConfig::from_env(&ConfigService::with_vars(
-            "ws",
-            [("NESTRS_WS__MAX_CONNECTION_SECS", "0")],
-        ))
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_CONNECTION_SECS", "0")]),
+            Default::default(),
+        )
         .expect("ok");
         assert_eq!(cfg.max_connection, None, "0 is the unlimited sentinel");
     }
@@ -140,10 +162,10 @@ mod tests {
 
     #[test]
     fn from_env_reads_a_custom_message_cap() {
-        let cfg = WsConfig::from_env(&ConfigService::with_vars(
-            "ws",
-            [("NESTRS_WS__MAX_MESSAGE_BYTES", "1048576")],
-        ))
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_MESSAGE_BYTES", "1048576")]),
+            Default::default(),
+        )
         .expect("ok");
         assert_eq!(cfg.max_message_bytes, 1_048_576);
     }
@@ -151,10 +173,10 @@ mod tests {
     #[test]
     fn from_env_rejects_an_unparseable_ceiling() {
         assert!(
-            WsConfig::from_env(&ConfigService::with_vars(
-                "ws",
-                [("NESTRS_WS__MAX_CONNECTION_SECS", "forever")]
-            ))
+            WsConfig::from_env(
+                &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_CONNECTION_SECS", "forever")]),
+                Default::default()
+            )
             .is_err(),
             "non-numeric must surface as a boot error — no silent default",
         );

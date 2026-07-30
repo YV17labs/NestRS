@@ -54,7 +54,14 @@ pub struct {{controller}} {
 
 #[routes]
 impl {{controller}} {
+    // SECURITY: scaffolded as #[public] because this port holds no entity.
+    // Before serving real rows, declare #[authorize(Action, Entity)] instead
+    // (class gate + automatic response masking), bind
+    // #[use_guards(AuthnGuard, AuthzGuard)] on the struct, and import
+    // AuthzHttpModule in this adapter's module.rs — `nestrs g auth` writes all
+    // three, and `nestrs g http` on a `g resource` port emits them.
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         format!("{} items", self.svc.count())
     }
@@ -122,11 +129,10 @@ pub struct {{resolver}} {
 impl {{resolver}} {}
 "#;
 
-/// The WS adapter's `module.rs`. `WsModule` is **not optional** for a
-/// default-namespace gateway — it provides the connection registry every
-/// `WsClient` reads — so the generator writes it rather than leaving the app to
-/// discover it at boot. A gateway that declares its own `namespace` self-provides
-/// one instead, and the import is then inert.
+/// The WS adapter's `module.rs`. `WsModule` is **not optional** — it owns the
+/// connection registry every `WsClient` reads, for the default namespace and for
+/// every `#[gateway(namespace = …)]` marker alike — so the generator writes it
+/// rather than leaving the app to discover it at boot.
 pub const WS_MODULE: &str = r#"use nest_rs_core::module;
 use nest_rs_ws::WsModule;
 
@@ -146,7 +152,11 @@ use nest_rs_ws::{WsClient, gateway, messages};
 
 use crate::{{snake}}::{{service}};
 
-#[gateway(path = "/ws")]
+// The path carries the feature name: a self-mount path is its exclusive
+// namespace, so a bare `/ws` made the *second* generated gateway fail boot on a
+// duplicate path. `/ws/<feature>` also stays clear of the HTTP controller
+// adapter, which claims `/<feature>`.
+#[gateway(path = "/ws/{{kebab}}")]
 pub struct {{gateway}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -178,7 +188,7 @@ pub struct {{processor}};
 
 #[processor]
 impl {{processor}} {
-    #[process(queue = {{queue_name}}, concurrency = 1, retries = 3)]
+    #[process(queue = {{queue_name}}, retries = 3)]
     async fn handle(&self, job: {{command}}) -> Result<()> {
         tracing::info!(target: "features::{{snake}}", id = %job.id, "processing job");
         Ok(())

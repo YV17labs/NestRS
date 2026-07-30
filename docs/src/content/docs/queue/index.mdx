@@ -9,7 +9,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 Background work shares the rest of the framework's shape. A queue
 handler is a method on any `#[injectable]` provider, tagged
-`#[process(queue = <Name>Queue, concurrency, retries)]` inside a
+`#[process(queue = <Name>Queue, retries)]` inside a
 `#[processor]` impl block. Importing `QueueWorkerModule` in the worker app
 activates the runtime at boot, drains the discovered methods, and spawns
 one worker per method. A producer-only app skips that import and only
@@ -45,8 +45,8 @@ crates the handler body itself names:
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
-nest-rs-queue = "1.1"
-nest-rs-redis = "1.1"     # the app that owns the connection
+nest-rs-queue = "1.2"
+nest-rs-redis = "1.2"     # the app that owns the connection
 serde = { version = "1", features = ["derive"] }   # the job payload derives it
 anyhow = "1"              # a #[process] method returns anyhow::Result<()>
 tracing = "0.1"           # if the handler logs, which it should
@@ -103,7 +103,7 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = AudioQueue, concurrency = 5, retries = 3)]
+    #[process(queue = AudioQueue, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.svc.transcode(&job.file).await
     }
@@ -120,23 +120,62 @@ Adapters carry transport mechanics; the service carries intent.
 - **`#[processor]`** on the impl block orchestrates the per-method
   `#[process]` attributes and submits one queue consumer per decorated
   method.
-- **`#[process(queue, concurrency, retries)]`** binds the method to a
-  `QueueName` **type**, bounds the in-flight jobs, and gives an apalis
-  retry budget. The job type is read from the method's first parameter
-  after `&self`, and the macro asserts it is `AudioQueue::Job` — a
-  handler consuming the wrong payload is a compile error naming both
-  types.
+- **`#[process(queue, retries)]`** binds the method to a `QueueName`
+  **type** and gives it a retry budget. The job type is read from the
+  method's first parameter after `&self`, and the macro asserts it is
+  `AudioQueue::Job` — a handler consuming the wrong payload is a compile
+  error naming both types.
 
 The job argument also binds a [pipe](/fundamentals/pipes/):
 `Piped<P, T>` / `Valid<T>` expose the wire payload `T`, run the pipe
 after deserialization, and hand the handler the transformed value — a
 rejection is a job error, so the queue's retry/failure policy applies.
 
+## One job at a time
+
+A `#[process]` method processes **one job at a time**, and there is no
+knob to change that. Throughput comes from running more replicas of the
+worker app:
+
+```bash frame="terminal"
+$ kubectl scale deploy/worker --replicas=6   # six jobs in flight, not one
+```
+
+That is a deliberate division of labour. nestrs targets the container, and
+the container platform already schedules, meters and restarts the unit that
+decides how much work runs at once. A per-method ceiling would be a second
+scheduler competing with the first, and the number that makes it correct
+depends on the pod's CPU share — something the source cannot know.
+Serialized-per-method is instead a property you can read off the code:
+every replica carries an identical load, and a handler that guards a
+connection pool or a rate-limited third-party API needs no ceiling of its
+own to stay within its budget.
+
+Two consequences worth knowing:
+
+- **A slow handler is head-of-line blocking for its own queue** — but only
+  its own. Methods on other queues, and other replicas on the same queue,
+  keep draining. Split a long tail onto its own queue rather than reaching
+  for parallelism inside one.
+- **The consumer prefetches nothing.** Each poll fetches a single job, so a
+  job waiting behind a busy worker stays in Redis where a peer replica can
+  take it — scaling out actually redistributes work instead of shuffling it
+  between in-memory buffers.
+
+<Aside type="caution">
+**Write `#[process]` handlers to be idempotent.** Two replicas never receive
+the same job from the queue — the Redis fetch claims ids atomically — but
+*starting* a replica while another holds a job puts that job back on the queue,
+and it runs again. Scaling the worker up mid-flight therefore re-runs in-flight
+work, not only failed work. The measurement and the cause are in
+[Retries and failure](/queue/retries-and-failure/#limits).
+</Aside>
+
 ## Several methods on the same provider
 
 The pattern the framework is built for: one `#[injectable]` declares
 the deps once, multiple decorated methods share them. Different queues,
-different concurrencies, same service:
+same service:
 
 Three queues, so three `#[queue]` declarations at the port — each pairing
 a wire name with the payload it carries:
@@ -161,12 +200,12 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = AudioQueue, concurrency = 5, retries = 3)]
+    #[process(queue = AudioQueue, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.audio_svc.transcode(&job.file).await
     }
 
-    #[process(queue = AudioPreviewQueue, concurrency = 10, retries = 1)]
+    #[process(queue = AudioPreviewQueue, retries = 1)]
     async fn preview(&self, job: PreviewCommand) -> Result<()> {
         self.media_svc.preview(&job.file).await
     }
@@ -178,8 +217,8 @@ impl AudioProcessor {
 }
 ```
 
-`#[process(queue = AudioCleanupQueue)]` omits the optional `concurrency`
-(default `1`) and `retries` (default `0`).
+`#[process(queue = AudioCleanupQueue)]` omits the optional `retries`
+(default `0`).
 
 Three inventory entries — `AudioProcessor::transcode`, `AudioProcessor::preview`,
 `AudioProcessor::cleanup` — all pointing at the same `AudioProcessor` instance.
@@ -250,7 +289,7 @@ $ nestrs run dev worker
 
 ```text frame="terminal"
  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
- INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
+ INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
  INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: features::audio: transcoded file=track-1717405126521.mp3
  INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: nest_rs::queue: job ok elapsed_ms=342
 ```

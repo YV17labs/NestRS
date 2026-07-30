@@ -10,13 +10,18 @@ mod processor;
 mod queue;
 
 /// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
-/// tagged with `#[process(queue = <Queue>, concurrency, retries)]` becomes a
-/// queue consumer the `QueueWorker` spawns at boot.
+/// tagged with `#[process(queue = <Queue>, retries)]` becomes a queue consumer
+/// the `QueueWorker` spawns at boot.
 ///
-/// A single provider may carry several `#[process]` methods (different
-/// queues, different concurrencies) sharing the same `#[inject]`
-/// dependencies — pooling related queue handlers on one service keeps
-/// shared state (clients, repositories) in one place.
+/// A single provider may carry several `#[process]` methods (different queues)
+/// sharing the same `#[inject]` dependencies — pooling related queue handlers
+/// on one service keeps shared state (clients, repositories) in one place.
+///
+/// **A process method runs one job at a time.** There is no per-method
+/// concurrency knob: throughput scales by running more replicas of the worker,
+/// which is the unit the container platform already schedules. See
+/// `QueueWorker` for the guarantee and why it is the framework's job to be
+/// predictable here rather than tunable.
 ///
 /// The `queue` is named by its `QueueName` **type**, declared with
 /// [`queue`](macro@crate::queue) at the feature port. The macro reads
@@ -29,12 +34,9 @@ mod queue;
 ///
 /// Per-method attributes (exactly one `#[process]` per method):
 ///
-/// - `#[process(queue = AudioQueue)]` — minimal, defaults `concurrency = 1`,
-///   `retries = 0`.
-/// - `#[process(queue = AudioQueue, concurrency = 5)]` — bound the in-flight
-///   jobs per worker.
-/// - `#[process(queue = AudioQueue, concurrency = 5, retries = 3)]` — apalis
-///   retries before the job lands on the queue's failed list.
+/// - `#[process(queue = AudioQueue)]` — minimal, defaults `retries = 0`.
+/// - `#[process(queue = AudioQueue, retries = 3)]` — retries before the job
+///   lands on the queue's failed list.
 ///
 /// The method signature is `async fn(&self, job: T) -> anyhow::Result<()>`,
 /// where `T: Job`. The macro extracts the job type from the second
@@ -54,8 +56,7 @@ mod queue;
 /// fn __nestrs_process_handler_audio_processor_transcode(payload, container) -> Pin<Box<dyn Future<…>>> { /* … */ }
 /// ::nest_rs_core::inventory::submit! {
 ///     ::nest_rs_queue::ProcessMethod {
-///         name: "AudioProcessor::transcode", queue: "audio",
-///         concurrency: 5, retries: 3,
+///         name: "AudioProcessor::transcode", queue: "audio", retries: 3,
 ///         provider_type_id: || TypeId::of::<AudioProcessor>(),
 ///         handler: __nestrs_process_handler_audio_processor_transcode,
 ///     }

@@ -110,17 +110,22 @@ pub const ENV: &str = r#"# {{env_label}} — committed base config (`.env` casca
 # see `.env.example`.
 #
 # Precedence (highest first):
-#   real env  >  .env.<NESTRS_ENV>.local  >  .env.local  >  .env.<NESTRS_ENV>  >  .env
+#   real env  >  pinned in `module.rs`  >  .env.<NESTRS_ENV>.local  >  .env.local
+#   >  .env.<NESTRS_ENV>  >  .env
 
 # HTTP server listen port (default: 3000).
 NESTRS_HTTP__PORT=3000
 "#;
 
-/// Workspace root `.env` — no HTTP port; each app pins its port in `module.rs`.
+/// Workspace root `.env` — the HTTP port's *default* lives in each app's
+/// `module.rs`, but every `NESTRS_HTTP__*` key stays live over it.
 pub const ENV_WORKSPACE: &str = r#"# {{env_label}} — committed base config (`.env` cascade).
 #
-# HTTP listen ports live in each app's root `module.rs`
-# (`HttpConfig { port: …, ..Default::default() }`), not here.
+# Each app's root `module.rs` sets its own HTTP defaults
+# (`HttpConfig { port: …, ..Default::default() }`). Those are defaults, not a
+# lock: any `NESTRS_HTTP__*` key set in the real environment still wins, field
+# by field — so a deployment moves the port or turns on TLS without touching
+# the code.
 #
 # Postgres + Redis as `compose.yml` exposes them on localhost. Start them with
 # `docker compose up -d`, then `nestrs run db up`. An app only connects if it
@@ -129,7 +134,8 @@ NESTRS_DATABASE__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
 NESTRS_QUEUE__URL=redis://localhost:6379
 #
 # Precedence (highest first):
-#   real env  >  .env.<NESTRS_ENV>.local  >  .env.local  >  .env.<NESTRS_ENV>  >  .env
+#   real env  >  pinned in `module.rs`  >  .env.<NESTRS_ENV>.local  >  .env.local
+#   >  .env.<NESTRS_ENV>  >  .env
 "#;
 
 pub const ENV_DEVELOPMENT: &str = r#"# {{env_label}} — development-only overrides (NESTRS_ENV=development, the default).

@@ -59,8 +59,8 @@
 //!
 //! [`WsServer`] is generic over a zero-sized namespace marker (default
 //! [`Global`]). `#[gateway(namespace = MyNs)]` mounts against its own
-//! `WsServer<MyNs>` — a separate registry the macro self-provides — so two
-//! gateways isolate without sharing a registry.
+//! `WsServer<MyNs>` — a separate registry, also owned by [`WsModule`] (see
+//! `crate::namespace`) — so two gateways isolate without sharing a registry.
 //!
 //! # Ambient request data context
 //!
@@ -78,17 +78,19 @@ mod envelope;
 mod gateway;
 mod guard;
 mod module;
+mod namespace;
 mod scope;
 mod server;
 
 pub use config::WsConfig;
 pub use context::{BoxFuture, Captured, SocketContext};
-pub use envelope::{ReplyValue, ReplyValueFallback, WsEnvelope, WsReply};
+pub use envelope::{ReplyValue, ReplyValueFallback, WsEnvelope, WsError, WsReply};
 pub use gateway::{
     Gateway, GatewayEndpoint, WsDataFold, WsDataPipe, gateway_endpoint, resolve_ws_data_pipe,
 };
 pub use guard::{EventLayerTable, WsMessageCheck};
 pub use module::{WsModule, WsSetup};
+pub use namespace::{WsNamespaceEntry, WsNamespaces};
 /// Per-message accessor for `#[injectable(scope = request)]` providers inside a
 /// WS message handler — the WS mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::{Scoped, WsScopeError};

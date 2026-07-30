@@ -16,6 +16,9 @@
 //! The URL comes from `NESTRS_QUEUE__URL` (the dev container wires
 //! `redis://redis:6379`); unset, it falls back to that default.
 
+mod concurrency;
+mod replicas;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_redis::{QueueConnection, RedisThrottler};

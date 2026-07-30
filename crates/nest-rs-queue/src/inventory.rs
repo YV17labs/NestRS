@@ -37,6 +37,15 @@ pub struct JobError {
     pub retryable: bool,
     /// The underlying error, for logging and the backend's dead-letter record.
     pub source: Box<dyn std::error::Error + Send + Sync>,
+    /// Structured detail the failure carried, when it had any — the per-field
+    /// errors of a `Valid<T>` job-argument rejection.
+    ///
+    /// A dead-lettered job is read from a log, days later, by someone who cannot
+    /// re-run it: `error=validation failed` alone does not say which field of
+    /// which payload was wrong, and the information existed at the moment of
+    /// failure. A backend surfaces this beside the error on the dead-letter
+    /// event, under the same `errors` name HTTP and WebSockets use.
+    pub details: Option<serde_json::Value>,
 }
 
 impl JobError {
@@ -45,6 +54,7 @@ impl JobError {
         Self {
             retryable: true,
             source: source.into(),
+            details: None,
         }
     }
 
@@ -54,7 +64,15 @@ impl JobError {
         Self {
             retryable: false,
             source: source.into(),
+            details: None,
         }
+    }
+
+    /// Attach structured detail to a failure — what a rejected pipe knows about
+    /// *which* field failed.
+    pub fn with_details(mut self, details: Option<serde_json::Value>) -> Self {
+        self.details = details;
+        self
     }
 }
 
@@ -69,6 +87,7 @@ impl std::fmt::Debug for JobError {
         f.debug_struct("JobError")
             .field("retryable", &self.retryable)
             .field("source", &self.source)
+            .field("details", &self.details)
             .finish()
     }
 }
@@ -100,8 +119,6 @@ pub struct ProcessMethod {
     pub name: &'static str,
     /// The queue name this method drains.
     pub queue: &'static str,
-    /// How many jobs to process concurrently.
-    pub concurrency: usize,
     /// Retry budget per job before it is considered failed.
     pub retries: usize,
     /// `TypeId` of the host provider, matched against the reachable set to

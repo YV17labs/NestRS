@@ -41,14 +41,19 @@ pub struct DatabaseConfig {
 }
 
 impl Config for DatabaseConfig {
-    fn from_env(env: &ConfigService) -> Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            url: env.get("URL").unwrap_or_default(), //                NESTRS_DATABASE__URL
-            max_connections: env.parse("MAX_CONNECTIONS")?, //         NESTRS_DATABASE__MAX_CONNECTIONS
-            min_connections: env.parse("MIN_CONNECTIONS")?, //         NESTRS_DATABASE__MIN_CONNECTIONS
-            connect_timeout_secs: env.parse("CONNECT_TIMEOUT_SECS")?, //NESTRS_DATABASE__CONNECT_TIMEOUT_SECS
-            sqlx_logging: env.flag("SQLX_LOGGING", false)?, //         NESTRS_DATABASE__SQLX_LOGGING (else false)
-            observe_serialization_conflicts: env.flag("OBSERVE_SERIALIZATION_CONFLICTS", false)?, //     NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS
+            url: env.get("URL").unwrap_or(base.url), //                NESTRS_DATABASE__URL
+            max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections), // NESTRS_DATABASE__MAX_CONNECTIONS
+            min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections), // NESTRS_DATABASE__MIN_CONNECTIONS
+            connect_timeout_secs: env
+                .parse("CONNECT_TIMEOUT_SECS")?
+                .or(base.connect_timeout_secs), //                     NESTRS_DATABASE__CONNECT_TIMEOUT_SECS
+            sqlx_logging: env.flag("SQLX_LOGGING", base.sqlx_logging)?, // NESTRS_DATABASE__SQLX_LOGGING
+            observe_serialization_conflicts: env.flag(
+                "OBSERVE_SERIALIZATION_CONFLICTS",
+                base.observe_serialization_conflicts,
+            )?, //                       NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS
         })
     }
 }
@@ -95,6 +100,21 @@ mod tests {
             url: url.into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn env_overrides_each_field_of_a_pinned_config() {
+        use nest_rs_config::ConfigService;
+        let cfg = DatabaseConfig::from_env(
+            &ConfigService::with_vars("database", [("NESTRS_DATABASE__MAX_CONNECTIONS", "25")]),
+            pinned("postgres://pinned/app"),
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.max_connections, Some(25), "the env outranks the pin");
+        assert_eq!(
+            cfg.url, "postgres://pinned/app",
+            "and the untouched pin survives",
+        );
     }
 
     #[test]
@@ -159,7 +179,7 @@ mod tests {
                 ("NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS", "true"),
             ],
         );
-        let cfg = DatabaseConfig::from_env(&service).expect("ok");
+        let cfg = DatabaseConfig::from_env(&service, Default::default()).expect("ok");
         assert_eq!(cfg.url, "postgres://u@h/d");
         assert_eq!(cfg.max_connections, Some(25));
         assert_eq!(cfg.min_connections, Some(2));
@@ -170,7 +190,11 @@ mod tests {
 
     #[test]
     fn from_env_defaults_to_empty_url_and_no_bounds() {
-        let cfg = DatabaseConfig::from_env(&ConfigService::with_vars("database", [])).expect("ok");
+        let cfg = DatabaseConfig::from_env(
+            &ConfigService::with_vars("database", []),
+            Default::default(),
+        )
+        .expect("ok");
         // Empty URL ⇒ module-level `for_root` aborts with a clear message.
         assert!(cfg.url.is_empty());
         assert!(cfg.max_connections.is_none());

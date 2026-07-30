@@ -141,7 +141,12 @@ where
 /// Validation pipe: extract `E`, validate with `validator::Validate`, reject
 /// invalid input with a field-level JSON `400`. `Valid<Json<T>>` is the
 /// ergonomic form of `Piped<ValidationPipe<T>, Json<T>>`.
-pub struct Valid<E: IntoInner>(E::Inner);
+///
+/// The field is public so a handler can **destructure** it in the parameter
+/// list — `Valid(input): Valid<Json<CreateUser>>`, binding the `CreateUser`
+/// itself (the carrier holds the extractor's *inner* value, never the
+/// extractor). See `nest_rs_pipes::Valid` for why that is safe to expose.
+pub struct Valid<E: IntoInner>(pub E::Inner);
 
 impl<E: IntoInner> Valid<E> {
     /// Take ownership of the validated inner value.

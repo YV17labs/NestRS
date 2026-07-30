@@ -16,7 +16,7 @@ than that is bolted on top.
 ## The basic shape
 
 ```rust
-#[process(queue = AudioQueue, concurrency = 5, retries = 3)]
+#[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
     self.svc.transcode(&job.file).await
 }
@@ -177,6 +177,17 @@ always wrap.
   span, not the message, to tell the last try from the others.
 - **The dead list is not routed anywhere.** Nothing alerts, replays or
   archives on your behalf; wire the wrapper above if you need that.
+- **Scaling the worker up re-runs in-flight jobs.** Delivery is exclusive —
+  two replicas never get the same job from the queue — but a replica's
+  *startup* sweep requeues work its peers are currently running, so the same
+  `job_id` executes twice (both reported as `attempt=1`). It comes from
+  apalis-redis's startup call to `reenqueue_orphaned` using a cutoff of *now*,
+  which matches every registered consumer instead of only the worker's own
+  previous incarnation. Until it is fixed upstream, treat a `#[process]`
+  handler as **at-least-once** and make it idempotent — the practical rule for
+  any durable queue, and load-bearing here because replicas are how throughput
+  scales. Measured in
+  `crates/nest-rs-redis/tests/e2e/replicas.rs`, which pins both halves.
 
 ## Going further
 

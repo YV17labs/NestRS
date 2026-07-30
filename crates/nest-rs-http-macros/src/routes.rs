@@ -12,9 +12,8 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    expr_str, force_guard_typeids, forwarded_arg_idents, impl_self_ident,
-    injected_methods_with_layers, layer_deps, nth_generic_type, scoped_specs, take_flag_attr,
-    take_path_list,
+    expr_str, force_guard_typeids, impl_self_ident, injected_methods_with_layers, layer_deps,
+    normalize_forwarded_args, nth_generic_type, scoped_specs, take_flag_attr, take_path_list,
 };
 
 use crate::attr::opt_str;
@@ -107,6 +106,15 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         let wrapper_name = format_ident!("__nestrs_route_{}_{}", ctrl_name, method_name);
 
         let mut inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
+        // The wrapper declares the developer's arguments under plain names it can
+        // forward by, so a destructured `Path(name): Path<String>` — poem's own
+        // idiom — becomes `name: Path<String>` here and the developer's method
+        // keeps its pattern. Done before the `#[authorize]` insert below, which
+        // adds a wrapper-only parameter that is never forwarded.
+        let arg_idents = match normalize_forwarded_args(&mut inputs) {
+            Ok(idents) => idents,
+            Err(err) => return err.to_compile_error().into(),
+        };
         // `#[authorize(Action, Entity)]` — the route's posture, uniform with
         // `#[resolver]`. Desugars to the shaper extractor the macro writes
         // itself, so the arming can no longer be broken by how the developer
@@ -121,11 +129,6 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 Err(err) => return err.to_compile_error().into(),
             }
         }
-        let arg_idents = match forwarded_arg_idents(&method.sig) {
-            Ok(idents) => idents,
-            Err(err) => return err.to_compile_error().into(),
-        };
-
         let return_type = match &method.sig.output {
             ReturnType::Default => quote! { () },
             ReturnType::Type(_, ty) => quote! { #ty },

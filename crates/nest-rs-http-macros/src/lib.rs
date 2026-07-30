@@ -213,10 +213,11 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// `#[input]` — shorthand for input DTOs. Appends
-/// `#[derive(::serde::Deserialize, ::validator::Validate)]` and
-/// `#[serde(deny_unknown_fields)]` so an unknown field on the wire
+/// `#[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
+/// and `#[serde(deny_unknown_fields)]` so an unknown field on the wire
 /// (e.g. `is_admin: true`) is rejected at parse time instead of silently
-/// dropped.
+/// dropped, and the DTO documents itself in the OpenAPI document without a
+/// second derive to remember.
 ///
 /// # Expands to
 ///
@@ -224,7 +225,7 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// existing `#[derive(...)]`):
 ///
 /// ```ignore
-/// #[derive(::serde::Deserialize, ::validator::Validate)]
+/// #[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]
 /// #[serde(deny_unknown_fields)]
 /// struct CreateUser { /* … */ }
 /// ```

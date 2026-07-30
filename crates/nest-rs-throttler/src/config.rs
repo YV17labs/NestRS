@@ -18,11 +18,11 @@ pub struct ThrottlerConfig {
 }
 
 impl Config for ThrottlerConfig {
-    fn from_env(env: &ConfigService) -> Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            limit: env.parse("LIMIT")?,
-            window_secs: env.parse("WINDOW_SECS")?,
-            trusted_proxies: env.list("TRUSTED_PROXIES"),
+            limit: env.parse("LIMIT")?.or(base.limit),
+            window_secs: env.parse("WINDOW_SECS")?.or(base.window_secs),
+            trusted_proxies: env.list("TRUSTED_PROXIES", base.trusted_proxies),
         })
     }
 }
@@ -33,23 +33,50 @@ mod tests {
 
     #[test]
     fn defaults_when_no_env_set() {
-        let cfg = ThrottlerConfig::from_env(&ConfigService::with_vars("throttler", []))
-            .expect("no error");
+        let cfg = ThrottlerConfig::from_env(
+            &ConfigService::with_vars("throttler", []),
+            Default::default(),
+        )
+        .expect("no error");
         assert!(cfg.limit.is_none(), "unset ⇒ module default applies later");
         assert!(cfg.window_secs.is_none());
         assert!(cfg.trusted_proxies.is_empty());
     }
 
     #[test]
+    fn env_overrides_each_field_of_a_pinned_config() {
+        let pinned = ThrottlerConfig {
+            limit: Some(10),
+            window_secs: Some(5),
+            trusted_proxies: vec!["10.0.0.9".into()],
+        };
+        let cfg = ThrottlerConfig::from_env(
+            &ConfigService::with_vars("throttler", [("NESTRS_THROTTLER__LIMIT", "120")]),
+            pinned,
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.limit, Some(120), "the env outranks the pin");
+        assert_eq!(cfg.window_secs, Some(5), "the untouched pin survives");
+        assert_eq!(
+            cfg.trusted_proxies,
+            vec!["10.0.0.9".to_string()],
+            "including a list field",
+        );
+    }
+
+    #[test]
     fn from_env_reads_all_fields_when_set() {
-        let cfg = ThrottlerConfig::from_env(&ConfigService::with_vars(
-            "throttler",
-            [
-                ("NESTRS_THROTTLER__LIMIT", "120"),
-                ("NESTRS_THROTTLER__WINDOW_SECS", "90"),
-                ("NESTRS_THROTTLER__TRUSTED_PROXIES", "10.0.0.1,192.168.0.1"),
-            ],
-        ))
+        let cfg = ThrottlerConfig::from_env(
+            &ConfigService::with_vars(
+                "throttler",
+                [
+                    ("NESTRS_THROTTLER__LIMIT", "120"),
+                    ("NESTRS_THROTTLER__WINDOW_SECS", "90"),
+                    ("NESTRS_THROTTLER__TRUSTED_PROXIES", "10.0.0.1,192.168.0.1"),
+                ],
+            ),
+            Default::default(),
+        )
         .expect("no error");
         assert_eq!(cfg.limit, Some(120));
         assert_eq!(cfg.window_secs, Some(90));

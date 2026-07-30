@@ -87,7 +87,7 @@ impl UsersService {
 }
 
 #[post("/")]
-async fn create(&self, Valid(Json(input)): Valid<Json<CreateUser>>)
+async fn create(&self, Valid(input): Valid<Json<CreateUser>>)
     -> Result<Json<User>, ServiceError>
 {
     Ok(Json(self.svc.create(input).await?))
@@ -274,7 +274,7 @@ globally. The error itself stays pure.
 
 ## Going further
 
-- [HTTP / controllers — custom errors with `?`](/http/controllers/#custom-errors-with-) —
+- [HTTP / errors — map a feature error with `ResponseError`](/http/errors/#map-a-feature-error-with-responseerror) —
   the `ResponseError` walkthrough.
 - [Interceptors](/fundamentals/interceptors/) — the success-path sibling.
 - [Guards](/fundamentals/guards/) — return `Err(Response)` directly,

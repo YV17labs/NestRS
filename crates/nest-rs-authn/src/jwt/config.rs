@@ -38,15 +38,15 @@ pub struct JwtConfig {
 }
 
 impl Config for JwtConfig {
-    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            secret: env.get("SECRET"),
-            private_key: env.get("PRIVATE_KEY"),
-            public_key: env.get("PUBLIC_KEY"),
-            leeway_secs: env.parse("LEEWAY_SECS")?,
-            audience: env.get("AUDIENCE"),
-            issuer: env.get("ISSUER"),
-            expires_in_secs: env.parse("EXPIRES_IN_SECS")?,
+            secret: env.get("SECRET").or(base.secret),
+            private_key: env.get("PRIVATE_KEY").or(base.private_key),
+            public_key: env.get("PUBLIC_KEY").or(base.public_key),
+            leeway_secs: env.parse("LEEWAY_SECS")?.or(base.leeway_secs),
+            audience: env.get("AUDIENCE").or(base.audience),
+            issuer: env.get("ISSUER").or(base.issuer),
+            expires_in_secs: env.parse("EXPIRES_IN_SECS")?.or(base.expires_in_secs),
         })
     }
 }

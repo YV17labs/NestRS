@@ -59,7 +59,7 @@ deep on each.
 - **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
   macro emits when that type appears in a handler signature; runs
   response masking after a 2xx. Innermost per-route layer, just outside
-  the handler. [Layer order](/fundamentals/guards/#ordering-inside-a-route).
+  the handler. [Layer order](/fundamentals/guards/#where-guards-run-in-the-chain).
 - **RouteShaper** — the per-route orchestrator inside `nest-rs-guards`;
   runs guards and body pipes on the way in, exception filters when the
   handler returns `Err`. Documented on [Guards](/fundamentals/guards/).

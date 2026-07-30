@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use nest_rs_core::Layer;
 use nest_rs_guards::{Denial, Guard, GuardExt};
 use nest_rs_http::async_trait;
+use nest_rs_testing::LogCapture;
 use poem::{Endpoint, IntoResponse, Request, endpoint::make_sync};
 
 /// A guard whose decision is fixed at construction: `None` allows, `Some(d)`
@@ -115,6 +116,46 @@ async fn a_denial_short_circuits_before_the_handler_runs() {
         handler_ran.load(Ordering::SeqCst),
         0,
         "the handler must not run once a guard denies",
+    );
+}
+
+#[tokio::test]
+async fn a_denial_at_this_site_is_visible_at_warn() {
+    // Regression: this endpoint is the WS upgrade's gate. It used to render the
+    // 401 through the bare converter, so a connection-level denial logged
+    // *nothing* at any level while its per-message twin logged at warn — the
+    // "every denial visible at warn+" invariant, breached exactly where the
+    // authentication boundary is.
+    let logs = LogCapture::install();
+    let resp = call_guarded(DecisionGuard::deny(
+        Denial::unauthorized("no ticket"),
+        Arc::new(AtomicU32::new(0)),
+    ))
+    .await;
+    assert_eq!(resp.status(), poem::http::StatusCode::UNAUTHORIZED);
+
+    let event = logs.expect_one("nest_rs::layers", "guard denied the request");
+    assert_eq!(event.level, "warn", "a denial is a warn+ event");
+    assert_eq!(
+        event.field("status").as_deref(),
+        Some("401"),
+        "the denial's status rides as a structured field",
+    );
+    assert!(
+        event.field("guard").is_some(),
+        "the denying guard must be named — a bare denial log is the defect",
+    );
+}
+
+#[tokio::test]
+async fn an_allowed_request_logs_no_denial() {
+    // The floor must not fire on the happy path, or the signal is worthless.
+    let logs = LogCapture::install();
+    let resp = call_guarded(DecisionGuard::allow(Arc::new(AtomicU32::new(0)))).await;
+    assert_eq!(resp.status(), poem::http::StatusCode::OK);
+    assert!(
+        logs.find("nest_rs::layers", "guard denied the request")
+            .is_empty(),
     );
 }
 

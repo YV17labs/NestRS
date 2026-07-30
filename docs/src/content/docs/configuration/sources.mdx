@@ -63,6 +63,14 @@ impl ConfigSource for VaultSource {
 }
 ```
 
+`get` is the only required method. The trait also carries
+`get_from_deployment`, which defaults to `get` — that is the tier allowed to
+outrank a value [pinned in code](/configuration/#the-dual-path-rule), and a
+custom source counts as deployment-supplied unless it says otherwise. That
+default is the safe direction: a Vault secret is never shadowed by a struct
+literal. Override it only if your source also serves values that should *lose*
+to a pin.
+
 Wire it in by building the `ConfigService` directly and calling
 `Config::from_env` yourself — bypassing `ConfigModule::for_feature`:
 
@@ -73,7 +81,7 @@ let vault = Arc::new(
     VaultSource::fetch(&vault_client, "secret/api").await?,
 );
 let env = ConfigService::with_source("database", vault);
-let db_config = DatabaseConfig::from_env(&env)?;
+let db_config = DatabaseConfig::from_env(&env, DatabaseConfig::defaults())?;
 
 App::builder()
     .module::<AppModule>()
@@ -103,34 +111,41 @@ Reach for a custom `ConfigSource` only when:
 - A K8s ConfigMap mounts as a file tree rather than env vars.
 - A test needs a programmatic source decoupled from `std::env`.
 
-## What fails if you get it wrong — `for_namespace` and the `.env` cascade
+## What fails if you get it wrong — hermeticity and the cascade
 
 `ConfigService::for_namespace(ns)` is shorthand for `with_source(ns,
-Arc::new(EnvSource))`. The `EnvSource` triggers the `.env` cascade merge
-on its first `get`, which writes into `std::env` process-globally and is
-guarded by a `Once` — so it happens at most once per process, but it
-**does** happen the moment any default-source reader runs.
+Arc::new(EnvSource))`. **Reading through it mutates nothing.** `EnvSource`
+resolves the real process environment first, then falls back to the `.env`
+cascade parsed into a map *inside the crate* — `std::env::set_var` is unsound
+against a concurrent `getenv` on another thread, so no read path may write.
+
+One function publishes the cascade into the process environment:
+`Environment::init()`, which every scaffolded `main` calls on its first line.
+It exists for the consumers that only know `std::env::var` and never see a
+`ConfigService` — the framework's own `NESTRS_LOG*` setup,
+`OpenTelemetry::init`, your `migrate`/`seed` binaries. It writes set-if-absent
+(the real env still wins) and belongs at the top of `main` precisely because
+being single-threaded there is what makes the write sound.
 
 What this means in practice:
 
-- A custom-source reader built via `with_source(ns, my_source)` **does
-  not** trigger the merge. The process env stays untouched if nothing
-  else has triggered it.
-- A genuinely hermetic test should wire its source through `with_source`
-  and avoid any `for_namespace` / `ConfigModule::for_root()` call —
-  otherwise the cascade has already populated `std::env` and any
-  `std::env::var` lookup elsewhere will see it.
-- Mixing both is fine in production: the framework expects `for_root`
-  to run, the cascade to merge, and custom sources to override specific
-  namespaces on top.
+- **Resolving config is side-effect-free**, whichever source you use. Neither
+  `for_namespace` nor `ConfigModule::for_root()` publishes anything;
+  `for_root`'s collect registers the active `Environment` and stops there.
+- **A test is hermetic when it does not call `Environment::init`** (or
+  `load_cascade`, its explicit form). `with_source` additionally decides where
+  the values come from — useful, but a different question from whether the
+  process env is touched.
+- **In an app, assume the cascade *is* in `std::env`**, because `main` put it
+  there. That is the point: a `.env` value reaches code the DI graph never sees.
 
 <Aside type="caution">
-The cascade is process-global. Once any code path triggers it, every
-later `std::env::var` lookup in the same process sees the merged values
-— including code outside the `ConfigService` reader (a `dotenv`-aware
-library, your own `env::var` call, an observability initializer). A
-custom `ConfigSource` overrides where `ConfigService` reads from; it
-doesn't isolate the process environment.
+The real hermeticity trap is the **cache**, not a write. The cascade is parsed
+once per process, and that first parse freezes both the working directory it
+read from and the `NESTRS_ENV` that selected the files. A test that changes
+either afterwards — `figment::Jail` moves the CWD — resolves against the
+*earlier* test's cascade. Prefer `ConfigService::with_vars` for config
+assertions: it answers from a map, so nothing is cached and nothing is shared.
 </Aside>
 
 ## What the source sees

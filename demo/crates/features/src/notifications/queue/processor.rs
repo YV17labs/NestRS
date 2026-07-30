@@ -14,7 +14,7 @@ pub struct NotificationsProcessor {
 
 #[processor]
 impl NotificationsProcessor {
-    #[process(queue = NotifyQueue, concurrency = 5, retries = 3)]
+    #[process(queue = NotifyQueue, retries = 3)]
     async fn notify(&self, job: NotifyCommand) -> Result<()> {
         self.svc.persist(job).await?;
         Ok(())

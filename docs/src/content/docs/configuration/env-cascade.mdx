@@ -38,6 +38,10 @@ second pass.
 | `.env.<env>` | committed | Non-secret defaults for one environment |
 | `.env` | committed | Non-secret defaults shared across environments |
 
+A value **pinned in code** (`Module::for_root(cfg)`) slots in between: below the
+real process env, above every file. The reasoning and the full chain live with
+[the dual-path rule](/configuration/#the-dual-path-rule).
+
 The convention: anything ending in `.local` is gitignored, everything
 else is committed.
 
@@ -89,11 +93,14 @@ prod behavior, for instance), the cascade follows that.
 
 Exactly once per process, on the first call that needs it:
 
-- **`ConfigModule::for_root()`** parses it during the collect phase,
-  before any factory runs. This is the expected path.
-- **The default `EnvSource`** parses it on its first `get`. A
-  [custom `ConfigSource`](/configuration/sources/) never does — it
-  supplies its own values.
+- **The default `EnvSource`** parses it on its first `get` — so the first
+  config read of the boot, in the factory phase. A
+  [custom `ConfigSource`](/configuration/sources/) never does; it supplies its
+  own values.
+- **`ConfigModule::for_root()`** does *not* parse it. Its collect reads
+  `NESTRS_ENV` from the real environment and registers the resulting
+  `Arc<Environment>`, which is what decides *which* files a later parse
+  reads.
 - **`Environment::init()`** parses it **and merges it into `std::env`**
   (set-if-absent, so the real environment still wins). Everything the
   scaffolded `main` does afterwards therefore sees the cascade, including the

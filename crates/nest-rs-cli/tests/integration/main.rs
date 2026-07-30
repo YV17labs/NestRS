@@ -679,6 +679,34 @@ fn generate_http_adapter_wires_feature_mod() {
     assert!(mod_rs.contains("PostsHttpModule"));
 }
 
+/// Every route declares a posture — the `hello` starter and the GraphQL adapter
+/// both write `#[public]`, and the HTTP adapter used to write neither, so any
+/// app that took a `g http` booted with `unguarded routes detected` on a route
+/// nobody had decided about.
+#[test]
+fn generate_http_adapter_declares_a_route_posture() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
+
+    let controller = fs::read_to_string(
+        dir.path()
+            .join("crates/features/src/posts/http/controller.rs"),
+    )
+    .unwrap();
+    assert!(
+        controller.contains("#[public]"),
+        "the scaffolded route must declare its posture: {controller}"
+    );
+    assert!(
+        controller.contains("SECURITY:"),
+        "and say why it is open, the way the graphql adapter does: {controller}"
+    );
+}
+
 #[test]
 fn generate_ws_adapter_ensures_dep_and_wires() {
     let dir = tempfile::tempdir().unwrap();
@@ -695,6 +723,54 @@ fn generate_ws_adapter_ensures_dep_and_wires() {
     );
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(features_cargo.contains("nest-rs-ws"));
+}
+
+/// A self-mount path is its exclusive namespace, so two gateways cannot share
+/// one. The template hard-coded `/ws`, which meant a second `g ws` produced an
+/// app that failed boot on `duplicate self-mounted endpoint path "/ws"` — and
+/// the generator's own next-step line told you to wire it in.
+#[test]
+fn generate_ws_adapter_gives_each_gateway_a_distinct_path() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "feature", "notify", "-p", path]);
+    run_ok(dir.path(), &["g", "ws", "notify", "-p", path]);
+
+    let read = |feature: &str| {
+        fs::read_to_string(
+            dir.path()
+                .join(format!("crates/features/src/{feature}/ws/gateway.rs")),
+        )
+        .unwrap()
+    };
+    let posts = read("posts");
+    let notify = read("notify");
+    assert!(
+        posts.contains(r#"path = "/ws/posts""#),
+        "the gateway path carries the feature name: {posts}"
+    );
+    assert!(
+        notify.contains(r#"path = "/ws/notify""#),
+        "so a second adapter does not collide: {notify}"
+    );
+
+    // The HTTP adapter claims `/<feature>`; the gateway must not land there
+    // either — a controller prefix and a self-mount on one path is the same
+    // exclusivity failure across families.
+    run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
+    let controller = fs::read_to_string(
+        dir.path()
+            .join("crates/features/src/posts/http/controller.rs"),
+    )
+    .unwrap();
+    assert!(
+        controller.contains(r#"path = "/posts""#) && !posts.contains(r#"path = "/posts""#),
+        "the two adapters of one feature must claim different paths",
+    );
 }
 
 /// `WsModule` provides the connection registry every default-namespace gateway
@@ -747,6 +823,39 @@ fn generate_ws_adapter_enables_the_guards_ws_feature_and_tracing() {
         "nest-rs-guards needs its `ws` feature: {features_cargo}"
     );
     assert!(features_cargo.contains("tracing"), "{features_cargo}");
+}
+
+/// The finding: `/websockets/` listed three dependencies and said `nestrs g ws`
+/// writes all three — it did, and the *first typed payload* still failed to
+/// compile. `nest_rs_ws` re-exports `serde_json`, never `serde`, so the
+/// `#[derive(serde::Deserialize)]` DTO the next page presents as the normal case
+/// had no `serde` in the manifest.
+#[test]
+fn generate_ws_adapter_brings_serde_for_a_typed_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    let features_cargo_path = dir.path().join("crates/features/Cargo.toml");
+    fs::write(
+        &features_cargo_path,
+        "[package]\nname = \"features\"\n\n[dependencies]\n\
+         nest-rs-core.workspace = true\nnest-rs-guards.workspace = true\n",
+    )
+    .unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
+
+    let features_cargo = fs::read_to_string(&features_cargo_path).unwrap();
+    assert!(
+        features_cargo.lines().any(|l| l.starts_with("serde")),
+        "the features crate needs `serde` for a typed WS payload: {features_cargo}"
+    );
+    let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(
+        root_cargo.contains("serde = { version = \"1\", features = [\"derive\"] }"),
+        "and the workspace pin carries the `derive` feature the DTO needs: {root_cargo}"
+    );
 }
 
 /// The schedule skeleton logs too — same class as the ws and queue ones.

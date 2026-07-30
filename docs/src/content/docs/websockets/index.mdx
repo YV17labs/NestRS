@@ -38,15 +38,21 @@ cargo add nest-rs-ws
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
-nest-rs-ws = "1.1"
-nest-rs-guards = { version = "1.1", features = ["ws"] }
-tracing = "0.1"     # if the gateway logs, which it should
+nest-rs-ws = "1.2"
+nest-rs-guards = { version = "1.2", features = ["ws"] }
+serde = { version = "1", features = ["derive"] }   # any typed payload
+tracing = "0.1"                                    # if the gateway logs, which it should
 ```
 
-`nestrs g ws <feature>` writes all three. The `ws` feature is worth naming
-because leaving it off can pass `cargo check --workspace` — some other member's
-dev-dependency unifies it in — while `cargo check -p features` fails. Build the
-crate on its own when you want the truth about its manifest.
+`nestrs g ws <feature>` writes all four. Two are worth naming:
+
+- The `ws` **feature** on `nest-rs-guards`, because leaving it off can pass
+  `cargo check --workspace` — some other member's dev-dependency unifies it in —
+  while `cargo check -p features` fails. Build the crate on its own when you want
+  the truth about its manifest.
+- **`serde`**, because `nest_rs_ws` re-exports `serde_json` and not `serde`. The
+  moment a handler takes a typed payload — the normal case, one page along — its
+  DTO derives `serde::Deserialize`, and that derive needs the crate itself.
 
 ## A one-event gateway
 
@@ -109,9 +115,9 @@ provided by `WsModule` — add `WsModule` to `#[module(imports = [...])]` …
 ```
 
 Import it in whichever module lists the gateway — `nestrs g ws` writes it into
-the generated adapter module. A gateway with its own
-[`namespace`](/websockets/namespaces/) self-provides a `WsServer<Ns>` and needs
-no import.
+the generated adapter module. `WsModule` owns the
+[`namespace`](/websockets/namespaces/)d registries too, so the import is the
+same one step whichever registry a gateway uses.
 
 ## Run it
 

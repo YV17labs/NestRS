@@ -11,7 +11,11 @@ const DEFAULT_PORT: u16 = 3000;
 
 /// HTTP transport options resolved at boot. Every field is settable both via
 /// `NESTRS_HTTP__*` env vars (read by [`Config::from_env`]) and via the pinned
-/// struct (passed to [`HttpModule::for_root`](crate::HttpModule::for_root)).
+/// struct (passed to [`HttpModule::for_root`](crate::HttpModule::for_root)) —
+/// and the two compose **per field**: a pinned struct is the base the
+/// environment overlays, so pinning `port` leaves `NESTRS_HTTP__TLS_CERT_FILE`
+/// and every other `NESTRS_HTTP__*` key live. See [`Config`] for the full
+/// precedence chain.
 #[config(namespace = "http")]
 #[derive(Clone, Debug, Validate)]
 pub struct HttpConfig {
@@ -100,35 +104,42 @@ impl HttpConfig {
 }
 
 impl Config for HttpConfig {
-    fn from_env(env: &ConfigService) -> Result<Self> {
-        let global_prefix = env.get("GLOBAL_PREFIX").and_then(|raw| {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_owned())
-            }
-        });
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        let global_prefix = env
+            .get("GLOBAL_PREFIX")
+            .map(|raw| {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_owned())
+                }
+            })
+            .unwrap_or(base.global_prefix);
         Ok(Self {
-            host: env.get("HOST").unwrap_or_else(|| DEFAULT_HOST.to_string()),
-            port: env.parse("PORT")?.unwrap_or(DEFAULT_PORT),
-            tls: TlsConfig::from_env().map_err(|e| nest_rs_config::ConfigError::Parse {
-                var: "NESTRS_HTTP__TLS_*".into(),
-                message: e.to_string(),
+            host: env.get("HOST").unwrap_or(base.host),
+            port: env.parse("PORT")?.unwrap_or(base.port),
+            tls: TlsConfig::from_env(env, base.tls).map_err(|e| {
+                nest_rs_config::ConfigError::Parse {
+                    var: "NESTRS_HTTP__TLS_*".into(),
+                    message: e.to_string(),
+                }
             })?,
-            cors: CorsConfig::from_env(env).map_err(|e| nest_rs_config::ConfigError::Parse {
-                var: "NESTRS_HTTP__CORS_*".into(),
-                message: e.to_string(),
+            cors: CorsConfig::from_env(env, base.cors).map_err(|e| {
+                nest_rs_config::ConfigError::Parse {
+                    var: "NESTRS_HTTP__CORS_*".into(),
+                    message: e.to_string(),
+                }
             })?,
-            server_header: env.flag("SERVER_HEADER", false)?,
+            server_header: env.flag("SERVER_HEADER", base.server_header)?,
             global_prefix,
-            max_body_bytes: env
-                .parse("MAX_BODY_BYTES")?
-                .or(Some(RawBody::DEFAULT_LIMIT)),
-            request_timeout_secs: env.parse("REQUEST_TIMEOUT_SECS")?.or(Some(30)),
-            fail_secure_strict: env.flag("FAIL_SECURE_STRICT", true)?,
-            security_headers: SecurityHeadersConfig::from_env(env)?,
-            compression: env.flag("COMPRESSION", false)?,
+            max_body_bytes: env.parse("MAX_BODY_BYTES")?.or(base.max_body_bytes),
+            request_timeout_secs: env
+                .parse("REQUEST_TIMEOUT_SECS")?
+                .or(base.request_timeout_secs),
+            fail_secure_strict: env.flag("FAIL_SECURE_STRICT", base.fail_secure_strict)?,
+            security_headers: SecurityHeadersConfig::from_env(env, base.security_headers)?,
+            compression: env.flag("COMPRESSION", base.compression)?,
         })
     }
 }
@@ -163,10 +174,55 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env("NESTRS_HTTP__COMPRESSION", "true");
             let env = ConfigService::for_namespace("http");
-            let cfg = HttpConfig::from_env(&env).expect("env parses");
+            let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert!(cfg.compression);
             Ok(())
         });
+    }
+
+    // The finding: the scaffold writes `HttpConfig { port: 3000,
+    // ..Default::default() }`, which used to freeze every field — a
+    // deployment setting `NESTRS_HTTP__PORT` or `NESTRS_HTTP__TLS_CERT_FILE` got
+    // silence. The overlay makes the pin a *base*: the env wins per field, and
+    // the pin survives wherever the env is silent.
+    #[test]
+    fn a_pinned_port_does_not_freeze_the_rest_of_the_namespace() {
+        let pinned = HttpConfig {
+            port: 3000,
+            ..Default::default()
+        };
+        let cfg = HttpConfig::from_env(
+            &ConfigService::with_vars(
+                "http",
+                [
+                    ("NESTRS_HTTP__PORT", "3555"),
+                    ("NESTRS_HTTP__GLOBAL_PREFIX", "/api"),
+                    ("NESTRS_HTTP__MAX_BODY_BYTES", "4096"),
+                    ("NESTRS_HTTP__COMPRESSION", "true"),
+                    ("NESTRS_HTTP__FAIL_SECURE_STRICT", "false"),
+                ],
+            ),
+            pinned,
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.port, 3555, "the env outranks the pinned port");
+        assert_eq!(cfg.global_prefix.as_deref(), Some("/api"));
+        assert_eq!(cfg.max_body_bytes, Some(4096));
+        assert!(cfg.compression);
+        assert!(!cfg.fail_secure_strict);
+        assert_eq!(cfg.host, "0.0.0.0", "and an untouched field keeps the base");
+    }
+
+    #[test]
+    fn a_pinned_field_survives_a_silent_environment() {
+        let pinned = HttpConfig::default().with_global_prefix("/pinned");
+        let cfg = HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned)
+            .expect("the overlay resolves");
+        assert_eq!(
+            cfg.global_prefix.as_deref(),
+            Some("/pinned"),
+            "nothing in the env ⇒ the pin is the answer",
+        );
     }
 
     #[test]
@@ -194,7 +250,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env("NESTRS_HTTP__GLOBAL_PREFIX", "/api");
             let env = ConfigService::for_namespace("http");
-            let cfg = HttpConfig::from_env(&env).expect("env parses");
+            let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert_eq!(cfg.global_prefix.as_deref(), Some("/api"));
             Ok(())
         });
@@ -207,7 +263,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env("NESTRS_HTTP__GLOBAL_PREFIX", "   ");
             let env = ConfigService::for_namespace("http");
-            let cfg = HttpConfig::from_env(&env).expect("env parses");
+            let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert!(cfg.global_prefix.is_none());
             Ok(())
         });
@@ -218,7 +274,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env("NESTRS_HTTP__MAX_BODY_BYTES", "1024");
             let env = ConfigService::for_namespace("http");
-            let cfg = HttpConfig::from_env(&env).expect("env parses");
+            let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert_eq!(cfg.max_body_bytes, Some(1024));
             Ok(())
         });
@@ -230,7 +286,7 @@ mod tests {
             jail.set_env("NESTRS_HTTP__MAX_BODY_BYTES", "huge");
             let env = ConfigService::for_namespace("http");
             assert!(
-                HttpConfig::from_env(&env).is_err(),
+                HttpConfig::from_env(&env, Default::default()).is_err(),
                 "non-numeric must surface as ConfigError — no silent default",
             );
             Ok(())

@@ -1,12 +1,11 @@
 use nest_rs_http::input;
-use schemars::JsonSchema;
 use serde::Serialize;
 use validator::ValidationError;
 
 const ALLOWED_AUDIO_EXTENSIONS: [&str; 6] = ["mp3", "wav", "flac", "aac", "ogg", "m4a"];
 
 #[input]
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TranscodeDto {
     #[validate(
         length(min = 1, max = 255),

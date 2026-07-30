@@ -23,6 +23,15 @@ dead-lettered job with no event, a warning filed under the wrong target. Those
 lines are what an operator queries during an incident, and they now have the same
 coverage as a status code.
 
+A third campaign then ran the unpublished 1.2.0 end to end — a fresh
+`nestrs new` project, real HTTP requests, raw RFC6455 frames against a live
+server, live Redis — and found sixteen more findings, four security-relevant.
+Fifteen are closed below, several by product decision rather than patch. The one
+left open is upstream: apalis-redis's orphan sweep makes a starting replica
+re-run a peer's in-flight jobs, so queue delivery is documented as
+**at-least-once**, measured, and pinned by an e2e test written to fail loudly
+the day the upstream fix lands.
+
 ### Security
 
 - **On GraphQL, `#[authorize]` did not require authentication.** `/graphql` is
@@ -40,6 +49,75 @@ coverage as a status code.
   looking at a single grant. HTTP is unchanged: a non-`#[public]` route never
   reaches the visitor branch, so the marker is still what selects the policy
   half there.
+
+- **A guard denial at the WebSocket upgrade logged nothing, at any level.** The
+  client saw the right refusal — 401/403 as `problem+json`, no socket opened,
+  no `on_connect` — but `GuardEndpoint::call` converted the denial without
+  passing through `deny_http`, the one site carrying the "every denial visible
+  at `warn`+" floor, so a token-less socket sweep was invisible in supervision.
+  The per-route HTTP and GraphQL paths already went through the floor; the
+  upgrade path now does too, and a suite asserts both the `warn` and its
+  absence on an allowed request.
+
+### Changed
+
+- **`WsModule` owns every connection registry, namespaced or not.** A
+  `#[gateway(namespace = N)]` used to provide `WsServer<N>` from its own
+  `Discoverable::register`, so the key belonged to no module: the access graph
+  admitted any consumer through the imperative-registration escape hatch, and
+  registration order decided whether the provider existed at all — a service
+  living in a module the gateway imports was constructed before the registry
+  existed and panicked at mount, naming the wrong provider. A namespaced
+  gateway now submits a link-time `WsNamespaceEntry`; `WsNamespaces`, a
+  `WsModule` provider, drains it and installs each `WsServer<N>`; and the new
+  `Discoverable::also_provides` hook declares those keys to the graph, which
+  attributes them to `WsModule`. One rule for `Global` and namespaced alike:
+  the registry comes from `WsModule`, and the import is what the graph
+  verifies. **Breaking:** a namespaced gateway's module must import `WsModule`
+  — the boot error names it verbatim.
+
+- **A `Valid<T>` rejection says which field, on every transport.** The
+  field-level detail travelled in `PipeError`'s `details` and both async
+  transports threw it away: a WS error frame said only
+  `validation failed`, and a dead-lettered job carried nothing at all — read
+  in a log days later by someone who cannot replay it. The error frame now
+  carries `{error, errors}` under `data` (`errors` absent, not `null`, when
+  the rejection has no structured detail — the same shape HTTP uses), through
+  `WsReply::pipe_error` as the single site for both the payload pipe and the
+  global data pipe; and `job dead-lettered` logs the detail under an `errors`
+  field. **Wire-contract change** for WS clients: keep branching on
+  `data.error`, read `data.errors` to point at a field.
+
+- **A pinned config field no longer freezes its neighbours.** `nestrs new`
+  writes `HttpConfig { port: 3000, ..Default::default() }`, and
+  `provide_feature` served that literal as the whole config — pinning every
+  field and making `NESTRS_HTTP__*` inert, silently, against the dual-path
+  rule the configuration docs promise. Resolution is per-field now, strongest
+  first: real environment > pinned code > `.env` cascade >
+  `Config::defaults()`. One body (`Config::from_env(env, base)`) serves the
+  pinned and unpinned paths, so no field can be reachable from only one side;
+  `ConfigSource::get_from_deployment` isolates the tier that outranks a pin —
+  `EnvSource` restricts it to the real process environment, so a committed
+  `.env` reads as another default and yields to the pin while a deployment
+  variable always wins, and a third-party source (Vault, a ConfigMap) is
+  deployment-tier by default, the safe direction for a secret. The one
+  remaining hard pin is the builder seed (`App::builder().provide(cfg)`),
+  documented as such.
+
+### Removed
+
+- **`concurrency` on `#[process]` — it never capped anything.** The value only
+  sized the Redis read buffer, so a handler declared `concurrency = 2` ran ten
+  jobs at once (measured: `peak=10` while the boot line announced
+  `concurrency=2`). Rather than fix the knob, the decision removes it: nestrs
+  targets the container, so a `#[process]` method runs **one job at a time**
+  (`WorkerBuilderExt::concurrency(1)`, read buffer of 1 so a waiting job stays
+  in Redis where another replica can claim it) and scale comes from replicas —
+  the unit the platform already schedules, measures and restarts. A
+  `#[process(concurrency = N)]` is refused by name with the replacement
+  spelled out, not as an unknown key; a live-Redis e2e pins `peak == 1` while
+  still requiring progress; and `tower` drops back to a dev-dependency of
+  `nest-rs-redis`.
 
 ### Fixed
 
@@ -146,7 +224,8 @@ coverage as a status code.
   died with a backtrace note — where every other boot-time misconfiguration
   exits cleanly. A gateway now declares the registry as a dependency, so the
   access graph refuses the boot naming both the missing type and the module that
-  provides it. A namespaced gateway self-provides its own and needs no import.
+  provides it. (A namespaced gateway self-provided its own registry at that
+  point; the live campaign moved ownership to `WsModule` — see *Changed*.)
 
 - **`ThrottlerGuard` could not be wired the way the page describes.** The two
   documented steps — import `ThrottlerModule::for_root(None)`, bind
@@ -229,6 +308,46 @@ coverage as a status code.
   `chrono` on its optional `async-graphql`, since it is the crate whose macro
   creates the requirement.
 
+- **A controller and a self-mounted endpoint on one path panicked poem instead
+  of failing the boot.** The exclusivity rule ran inside each family only —
+  `prefix_owner` for controllers, `endpoint_owner` for self-mounts, two maps
+  never crossed — so `#[controller(path = "/chat")]` plus
+  `#[gateway(path = "/chat")]` passed both checks, logged both mounts as
+  successful, and then hit poem's `duplicate path` panic the code's own comment
+  promised to catch. One combined check refuses at boot; and the collision
+  message names the owners (`ChatGateway`), not just the kinds — "a ws endpoint
+  and a ws endpoint both mount there" is unusable with five gateways in play.
+
+- **A gateway binding its own guards was reported as an unguarded self-mount
+  edge.** The predicate consulted only the presence of a global guard pool, so
+  `#[use_guards(TicketGuard)]` on the gateway — verified working, 401/403 at
+  the upgrade — still drew the boot warning, with a hint recommending exactly
+  what was already done: a security signal an operator learns to ignore.
+  `HttpEndpointMeta` now carries the self-mount's own posture; a gateway with
+  no guard at all is still reported.
+
+- **Destructured handler arguments failed to compile on HTTP and GraphQL.**
+  `#[routes]` and `#[resolver]` forwarded each argument to the generated
+  wrapper by name, and a pattern has none — so the idiomatic poem forms the
+  docs print (`Path(name): Path<String>`, `Query(q)`, `Json(body)`) were
+  rejected with "must be simple identifiers", while `#[messages]` and
+  `#[process]`, which forward by position, accepted them. The wrapper now
+  forwards under the one identifier the pattern binds — the method keeps its
+  pattern, only the wrapper's parameter list is normalized, and the name comes
+  from the pattern because on GraphQL it *is* the SDL argument name. `Valid<T>`
+  becomes destructurable (`pub` newtype field — exposing it grants nothing;
+  `Authorized<A, E>` stays sealed, that proof guards data access). A pattern
+  binding zero or several names keeps a named error, pinned by a trybuild
+  snapshot; one suite drives all four transports against a single app.
+
+- **`#[input]` did not derive `JsonSchema`.** `#[routes]` documents every
+  `Json<T>` / `Query<T>` argument in the OpenAPI document, so an extractor DTO
+  must implement `schemars::JsonSchema` — and the decorator whose whole role
+  is absorbing input-DTO boilerplate left that one derive out. The failure was
+  an unsatisfied-bound error pointing at `schema_of`, naming neither the
+  missing derive nor the DTO. `#[input]` derives it now, and a test pins the
+  full derive set so a future edit cannot drop one.
+
 ### CLI
 
 - **`nestrs g queue` generated code that did not compile, and the `tracing` half
@@ -266,6 +385,22 @@ coverage as a status code.
 
 - **`nestrs g ws`'s module omitted `WsModule`**, so following the generator's own
   "Next steps" produced an app that mounted the gateway and then failed to boot.
+
+- **`nestrs g ws <feature>` wrote `path = "/ws"` for every feature**, so the
+  second WS adapter collided with the first at boot — right after the
+  generator's own "Next steps" said to import it. The path derives from the
+  feature name now, as the HTTP twin always did.
+
+- **`nestrs g http <feature>` emitted a route with no posture** — the only one
+  of the three route generators (`new`, `g graphql`, `g http`) whose output
+  booted straight into the unguarded-routes warning. It writes `#[public]`
+  with the same `// SECURITY:` comment as the GraphQL template.
+
+- **A typed WS payload needed a `serde` the generator did not write.**
+  `nest_rs_ws` re-exports `serde_json` only, so the first
+  `#[derive(serde::Deserialize)]` payload — the messages page's normal case —
+  failed to compile until `serde` was added by hand. `g ws` writes it, and the
+  install stanza on the WebSockets page explains why it is on the list.
 
 ### Documentation
 
@@ -311,6 +446,47 @@ coverage as a status code.
   trailing-slash form is a 404 that still carries a global interceptor's headers
   — convincing enough to read as a broken feature. The boot line is
   authoritative.
+
+- **The sources page described a cascade mechanism the code does not have.** It
+  said `EnvSource` triggers the `.env` cascade merge on its first `get`,
+  writing into `std::env` under a `Once` — the code parses the cascade into a
+  crate-internal map and never mutates the process environment on a read;
+  `Environment::init` is the only publisher, called on the first line of every
+  scaffolded `main` for consumers that only know `std::env::var`. The page's
+  conclusion was right for the wrong reason, and its advice sent readers to
+  distrust calls with no side effect. Rewritten around the real mechanism,
+  three derived claims on other pages corrected, and the *actual* hermeticity
+  trap documented: the first parse freezes the working directory and
+  `NESTRS_ENV` that chose the files, so a test that moves either afterwards
+  resolves against the previous test's cascade. Two new tests pin the one
+  claim nothing covered.
+
+- **Twelve snippets used destructured arguments that did not compile** (the
+  macro fix above makes the poem-idiom six compile as printed), **and three of
+  them were structurally wrong regardless**: `Valid(Json(input))` never holds
+  a `Json`, and `Piped(id)` cannot be a pattern (`Piped` carries a
+  `PhantomData`, and a public type projection just so a pattern works is not
+  worth it) — those read `Valid(input)` and `id: Piped<…>` + `*id` now. Three
+  more `#[input]` snippets relied on the `JsonSchema` derive the decorator was
+  missing.
+
+- **Two env keys were absent from the reference** — `NESTRS_HTTP__COMPRESSION`
+  and `NESTRS_STORAGE__ALLOW_HTTP`, the second security-relevant — plus the
+  seven OAuth2 keys of the `authn` namespace. Established by extracting every
+  key each `from_env` reads and diffing against the page, across all nine
+  namespaces; key counts in prose ("all fifteen keys") are gone, since a count
+  rusts at the first added option.
+
+- **Four dead internal anchors repointed**, detected by diffing every
+  `](/page/#anchor)` against the built HTML's `id=` set; one had the right
+  label on the wrong page. Every internal anchor in the docs now resolves.
+
+- **`/queue/` gains a "One job at a time" section** documenting the
+  concurrency decision and its two consequences (head-of-line blocking is per
+  queue, no prefetch), and an idempotent-handlers aside stating the
+  at-least-once contract with its cause — a starting replica re-runs a peer's
+  in-flight jobs, upstream in apalis-redis — and a pointer to the e2e test
+  that pins both halves of the replica behaviour.
 
 ## [1.1.1] - 2026-07-27
 

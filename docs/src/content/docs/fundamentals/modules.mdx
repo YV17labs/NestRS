@@ -165,8 +165,10 @@ both reach `DatabaseModule`, its providers are built once. Dynamic
 modules do **not** dedupe — each call carries its own config.
 
 <Aside type="tip">
-Pass `None` to a dynamic import and env vars fill the config at boot
-(`NESTRS_<NAMESPACE>__<KEY>`). For the imports above:
+Env vars (`NESTRS_<NAMESPACE>__<KEY>`) fill a dynamic import's config at boot.
+Pass `None` for env-only; pass a config to set defaults in code that the
+environment can still override **per field** — never a lock, see
+[the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
 
 ```rust
 DatabaseModule::for_root(None)

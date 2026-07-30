@@ -13,6 +13,8 @@
 //! `crates/features` sees, since nothing tells a developer writing a processor
 //! that the worker crate is a hard requirement.
 
+mod diagnostics;
+
 use std::any::TypeId;
 use std::sync::{Arc, Mutex};
 
@@ -116,7 +118,7 @@ impl TranscodeProcessor {
     // The type-path form: the macro reads `TranscodeQueue::NAME` into the
     // inventory entry and asserts this method's argument is
     // `<TranscodeQueue as QueueName>::Job` (compiling this test proves it).
-    #[process(queue = TranscodeQueue, concurrency = 2, retries = 1)]
+    #[process(queue = TranscodeQueue, retries = 1)]
     async fn transcode(&self, job: TranscodeCommand) -> anyhow::Result<()> {
         self.sink.seen.lock().expect("lock").push(job.file);
         Ok(())
@@ -137,7 +139,6 @@ fn typed_process_populates_the_inventory_entry_from_the_queue_type() {
     let method = transcode_method();
     // Queue name resolved from `TranscodeQueue::NAME`, not a string literal.
     assert_eq!(method.queue, <TranscodeQueue as QueueName>::NAME);
-    assert_eq!(method.concurrency, 2);
     assert_eq!(method.retries, 1);
 }
 

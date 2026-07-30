@@ -10,7 +10,9 @@ Every framework module reads its config from a namespaced env prefix
 ([Configuration](/configuration/#the-dual-path-rule)). The variable name is
 `NESTRS_<NAMESPACE>__<KEY>` (double underscore between namespace and key). This
 page lists the variables; each maps one-to-one to a field on the module's
-config struct, so anything here is also settable in code.
+config struct, so anything here is also settable in code — and, because the
+override is per field, setting one here works even when the app pins its
+neighbours in `module.rs`.
 
 ## Logging — `NESTRS_LOG*`
 
@@ -48,6 +50,7 @@ config survives adopting or dropping the observability stack.
 | `CORS_EXPOSED` | comma-separated response headers exposed to the browser |
 | `CORS_CREDENTIALS` | allow credentialed requests — default `false` |
 | `CORS_MAX_AGE` | preflight cache lifetime in seconds |
+| `COMPRESSION` | negotiate response compression from `Accept-Encoding` — default `false` (leave it to the proxy unless the app terminates responses) |
 | `ACCESS_LOG` | emit one access-log event per request — default `true` (read by `nest-rs-opentelemetry`) |
 
 ## `database` — `NESTRS_DATABASE__*`
@@ -76,6 +79,7 @@ config survives adopting or dropping the observability stack.
 | `ACCESS_KEY` / `SECRET_KEY` | static credentials |
 | `BUCKET` | target bucket |
 | `FORCE_PATH_STYLE` | path-style vs virtual-hosted addressing |
+| `ALLOW_HTTP` | reach the endpoint over plain `http://` — default `true` in dev/test, `false` in staging/production so credentials never travel unencrypted by omission |
 
 ## `opentelemetry` — `NESTRS_OPENTELEMETRY__*`
 
@@ -106,6 +110,18 @@ signing side.
 | `LEEWAY_SECS` | clock-skew leeway in seconds (default `30`) |
 | `EXPIRES_IN_SECS` | minted-token lifetime in seconds (default `3600`) |
 
+`OAuth2Config` shares this namespace for the login flow's provider endpoints —
+every field is required, so an unconfigured app fails boot naming the field:
+
+| Key | Meaning |
+|---|---|
+| `CLIENT_ID` / `CLIENT_SECRET` | the registered OAuth2 client credentials |
+| `AUTH_URL` | provider authorization endpoint (where the user consents) |
+| `TOKEN_URL` | provider token endpoint (code → tokens) |
+| `REDIRECT_URL` | this app's callback the provider returns to |
+| `USERINFO_URL` | provider endpoint the profile is fetched from |
+| `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
+
 ## Other namespaces
 
 `graphql`, `openapi`, `ws`, `throttler`, and the `auth` app's `issuer` each read
@@ -114,8 +130,11 @@ fields. The rule is uniform: the struct's field name uppercased is the key.
 
 ## The `.env` cascade
 
-Values resolve highest-first: real env > `.env.<NESTRS_ENV>.local` > `.env.local`
-> `.env.<NESTRS_ENV>` > `.env`. See [the env cascade](/configuration/env-cascade/).
+Values resolve highest-first: real env > pinned in `module.rs` >
+`.env.<NESTRS_ENV>.local` > `.env.local` > `.env.<NESTRS_ENV>` > `.env`. See
+[the env cascade](/configuration/env-cascade/) for the files and
+[the dual-path rule](/configuration/#the-dual-path-rule) for where a pinned
+value sits.
 
 ## Going further
 

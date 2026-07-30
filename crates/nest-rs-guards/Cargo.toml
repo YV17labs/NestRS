@@ -41,6 +41,10 @@ nest-rs-filters.workspace = true
 # Async unit tests drain a poem `Response` body (`into_bytes().await`) to assert
 # the RFC-9457 `problem+json` denial rendering.
 tokio.workspace = true
+# `LogCapture`, to assert the denial `warn` a status assertion cannot see — a
+# gateway-scope denial once rendered 401 while logging nothing. Dev-dep cycle,
+# the same one `nest-rs-graphql` and `nest-rs-ws` already carry.
+nest-rs-testing = { path = "../nest-rs-testing" }
 
 [lints]
 workspace = true

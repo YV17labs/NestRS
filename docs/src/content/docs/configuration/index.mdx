@@ -41,11 +41,17 @@ pub struct PostsConfig {
     pub cache_enabled: bool,
 }
 
+impl Default for PostsConfig {
+    fn default() -> Self {
+        Self { page_size: 50, cache_enabled: false }
+    }
+}
+
 impl Config for PostsConfig {
-    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            page_size: env.parse("PAGE_SIZE")?.unwrap_or(50),
-            cache_enabled: env.flag("CACHE_ENABLED", false)?,
+            page_size: env.parse("PAGE_SIZE")?.unwrap_or(base.page_size),
+            cache_enabled: env.flag("CACHE_ENABLED", base.cache_enabled)?,
         })
     }
 }
@@ -56,10 +62,15 @@ Three pieces do the heavy lifting:
 - **`#[config(namespace = "posts")]`** binds the struct to the
   `NESTRS_POSTS__*` scheme. The macro wires the `Namespaced` trait — no
   manual constant to write.
-- **`impl Config { fn from_env(env: &ConfigService) }`** is the
+- **`impl Config { fn from_env(env: &ConfigService, base: Self) }`** is the
   hand-written contract: one line per variable. A reviewer reading this
   file knows exactly which env vars exist, with which defaults, and what
-  happens when one is malformed.
+  happens when one is malformed. Each line reads *env, else `base`* — `base`
+  is where the fallback comes from, which is what makes [the dual-path
+  rule](#the-dual-path-rule) work per field.
+- **`impl Default`** is that fallback when nothing is pinned at the call
+  site. Defaults live here and nowhere else, so `from_env` has no second
+  copy to drift from.
 - **`#[derive(Validate)]`** plus `#[validate(...)]` attributes run after
   the load. A failure aborts boot naming the field. A rule the derive
   cannot express is the one case for a hand-written `impl Validate` —
@@ -80,9 +91,38 @@ Every field a module's config exposes must be reachable two ways:
 2. The `NESTRS_<NS>__<KEY>` environment variable, mapped explicitly in
    `from_env`.
 
-That is the framework-wide rule for every `nest-rs-*` module. An
-env-only field can't be set from a config file; a code-only field can't
-be overridden in deployment. Both, always.
+That is the framework-wide rule for every `nest-rs-*` module. An env-only
+field can't be set from a config file; a code-only field can't be
+overridden in deployment. Both, always.
+
+**And the two compose per field, not per struct.** A pinned struct is the
+**base** the environment overlays — never the final answer. So this, the
+shape `nestrs new` scaffolds:
+
+```rust title="src/module.rs"
+HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
+```
+
+pins the port as a *default* and leaves every `NESTRS_HTTP__*` key live.
+`NESTRS_HTTP__PORT=3555` moves the port; `NESTRS_HTTP__TLS_CERT_FILE` still
+turns on TLS. The `..Default::default()` does not freeze the other fields
+alongside the one you meant to set.
+
+The full precedence chain, highest first:
+
+| Tier | Wins over | Why |
+|---|---|---|
+| Real process environment | everything | The deployment is the last word — it is the only tier the code cannot see. |
+| Pinned in code (`for_root`) | `.env`, defaults | A deliberate choice by the app's author. |
+| The `.env` cascade | defaults | Committed beside the code, so it reads as another default and defers to a pin. |
+| `Config::defaults()` | — | The in-code baseline, profile-aware where safety demands it. |
+
+<Aside type="note">
+Need a value nothing can override — a test that must not read the ambient
+environment? Seed it on the builder: `App::builder().provide(cfg)`. A seed
+short-circuits the factory that resolves the config, so it is the one hard
+pin. See [Overriding in tests](/configuration/testing/).
+</Aside>
 
 ## `ConfigService` API
 
@@ -94,7 +134,7 @@ prefix. Five methods, all sync.
 | `env.get("KEY")` → `Option<String>`         | `NESTRS_<NS>__KEY` as a raw string          |
 | `env.parse::<T>("KEY")?` → `Option<T>`      | Same, parsed via `FromStr`                  |
 | `env.flag("KEY", default)?` → `bool`        | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
-| `env.list("KEY")` → `Vec<String>`           | Comma-separated, trimmed, empties dropped   |
+| `env.list("KEY", default)` → `Vec<String>`  | Comma-separated, trimmed, empties dropped   |
 | `env.var_name("KEY")` → `String`            | The full env-var **name** (for error messages) |
 
 Empty strings count as unset, so `FOO=` in a `.env` file does not blank
@@ -129,13 +169,18 @@ use nest_rs_config::ConfigModule;
 pub struct AppModule;
 ```
 
-- **`ConfigModule::for_root()`** goes first in the root module. It merges
-  the `.env` cascade once (real env vars always win) and registers
-  `Arc<Environment>` so every later `Config::load` sees the merged
-  environment.
+- **`ConfigModule::for_root()`** goes first in the root module. It registers
+  `Arc<Environment>` — the active profile, read from `NESTRS_ENV` — which is
+  what selects the `.env` files every later `Config::load` resolves against.
+  It writes nothing to the process environment; see
+  [alternative sources](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade)
+  for which call does.
 - **`ConfigModule::for_feature::<C>()`** queues a factory in the boot's
-  factory phase. The factory calls `C::load()` (= `from_env` + `validate`);
-  on failure the boot aborts with the variable named.
+  factory phase. The factory calls `C::load()` (= `from_env` over
+  `C::defaults()`, then `validate`); on failure the boot aborts with the
+  variable named. A module's `for_root(cfg)` queues the same factory with
+  `cfg` as the base — one code path, so a field cannot be reachable one way
+  only.
 
 ## Inject it
 
@@ -176,8 +221,8 @@ becomes implicit (which vars exist? what are their types?). With
 `from_env` written explicitly:
 
 - The full env contract of a feature is one impl block, in one file.
-- A missing variable falls back to a code default, not silently to
-  `Default::default()`.
+- A missing variable falls back to the base — the pinned value, or the
+  config's own `Default` — one visible expression per field.
 - Unparseable values fail loudly, naming the variable.
 - A reviewer reads the contract by reading ten lines, not by chasing
   serde attributes.

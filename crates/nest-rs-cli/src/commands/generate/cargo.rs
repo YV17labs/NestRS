@@ -239,7 +239,12 @@ pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http => vec![],
         Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL, &GUARDS_GRAPHQL],
-        Transport::Ws => vec![&WS, &GUARDS_WS, &TRACING],
+        // `serde` is not optional the moment a handler takes a typed payload —
+        // the shape `/websockets/messages/` presents as the normal case, with
+        // `#[derive(serde::Deserialize)]` on a DTO. `nest_rs_ws` re-exports only
+        // `serde_json`, so without this the first typed handler fails to compile
+        // and the page's install list was wrong by omission.
+        Transport::Ws => vec![&WS, &GUARDS_WS, &SERDE, &TRACING],
         Transport::Queue => vec![&QUEUE, &SERDE, &ANYHOW, &TRACING],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW, &TRACING],
         Transport::Mcp => vec![&MCP, &RMCP],

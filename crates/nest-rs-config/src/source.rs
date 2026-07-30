@@ -74,6 +74,21 @@ pub trait ConfigSource: Send + Sync + 'static {
     /// Return the raw value for the fully-qualified variable name (e.g.
     /// `"NESTRS_DATABASE__URL"`). Empty strings should be treated as unset.
     fn get(&self, var: &str) -> Option<String>;
+
+    /// The subset of [`get`](Self::get) that comes from the **deployment** —
+    /// the tier that outranks a value pinned in code by
+    /// `Module::for_root(cfg)`. Everything else (a `.env` file committed beside
+    /// the code) loses to the pin instead, which is what makes
+    /// `real env > pinned > .env cascade > defaults` a per-field rule rather
+    /// than a whole-struct one.
+    ///
+    /// Defaults to [`get`](Self::get): a custom source is deployment-supplied
+    /// unless it says otherwise, so a Vault or ConfigMap value is never
+    /// shadowed by a pinned struct. Only [`EnvSource`] narrows it, and only
+    /// because it is the one source serving two tiers at once.
+    fn get_from_deployment(&self, var: &str) -> Option<String> {
+        self.get(var)
+    }
 }
 
 /// Default [`ConfigSource`] — resolves from the real process environment with a
@@ -88,6 +103,14 @@ pub struct EnvSource;
 impl ConfigSource for EnvSource {
     fn get(&self, var: &str) -> Option<String> {
         env_var(var)
+    }
+
+    /// The real process environment only. A `.env` file is checked into the
+    /// repository next to the code that pins the value, so it reads as another
+    /// in-code default and loses to the pin; an actual deployment variable
+    /// wins.
+    fn get_from_deployment(&self, var: &str) -> Option<String> {
+        real_env_var(var)
     }
 }
 

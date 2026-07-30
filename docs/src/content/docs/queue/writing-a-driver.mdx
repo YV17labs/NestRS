@@ -97,8 +97,13 @@ places you write storage-specific code.
 
 The framework owns the registry and the dispatch contract. Your code
 owns the **receive loop** — how envelopes arrive (block-pop, subscribe,
-long-poll, `ReceiveMessage`), how concurrency is bounded, how retries
-and visibility timeouts wire up. Those are storage decisions.
+long-poll, `ReceiveMessage`), how retries and visibility timeouts wire
+up. Those are storage decisions.
+
+One contract is *not* a storage decision: a `#[process]` method runs
+[one job at a time](/queue/#one-job-at-a-time). Serialize per method in
+your receive loop, the way `nest-rs-redis` does, so a handler behaves the
+same whichever driver is underneath it.
 
 ```rust
 use async_trait::async_trait;

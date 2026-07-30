@@ -58,39 +58,71 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     // Connection-level guard layers; first listed ends up outermost. With
     // nothing declared this just boxes the endpoint.
     let guard_layers = guard_layers(&guards);
+    let has_edge_guards = !guards.is_empty();
 
     let ns_ty = match &namespace {
         Some(path) => quote! { #path },
         None => quote! { ::nest_rs_ws::Global },
     };
-    let provide_registry = match &namespace {
-        // A namespaced gateway self-provides its `WsServer<Ns>`; `Global`
-        // comes from `WsModule`.
-        Some(_) => quote! {
-            ::nest_rs_core::ContainerBuilder::provide(
-                __builder,
-                <::nest_rs_ws::WsServer<#ns_ty>>::default(),
-            )
-        },
-        None => quote! { __builder },
-    };
-
     // The connection registry is a hard dependency of every gateway — the
     // `WsClient` each handler receives reads it — so it belongs under the
     // access contract like any `#[inject]` field. Declared here, a missing
     // `WsModule` is a clean boot error naming the module that provides it
     // (`AccessGraphError`), instead of a mount-time panic with a backtrace
     // note: the app used to compile, log `mounted endpoint kind="ws"`, and
-    // *then* die. A namespaced gateway self-provides its `WsServer<Ns>` in
-    // `register`, so the same declaration is satisfied without an import.
+    // *then* die. Namespaced or not, the registry comes from `WsModule`, so the
+    // same declaration and the same diagnostic cover both.
     let registry_key = quote! { ::core::any::TypeId::of::<::nest_rs_ws::WsServer<#ns_ty>>() };
-    let registry_label = "WsServer";
+    // Names the *key*, marker included, because this label is what a missing
+    // import prints. `WsServer` for the default namespace keeps the diagnostic
+    // the docs quote verbatim; `WsServer<NotifyNs>` distinguishes the rest, which
+    // is the whole point of having several.
+    let registry_label: &str = &match &namespace {
+        Some(path) => format!(
+            "WsServer<{}>",
+            path.segments
+                .last()
+                .map(|s| s.ident.to_string())
+                .unwrap_or_default(),
+        ),
+        None => "WsServer".to_owned(),
+    };
+
+    // A namespaced gateway submits its marker to the link-time registry
+    // `WsNamespaces` (a provider of `WsModule`) drains, so `WsModule` owns every
+    // registry — namespaced or `Global` — and the access graph can name it. The
+    // gateway used to install its own from `Discoverable::register`, which left
+    // the key belonging to no module (so the graph waved consumers through) and
+    // made construction order depend on where the gateway sat in the tree.
+    let namespace_submission = match &namespace {
+        Some(_) => quote! {
+            ::nest_rs_core::inventory::submit! {
+                ::nest_rs_ws::WsNamespaceEntry {
+                    key: || ::core::any::TypeId::of::<::nest_rs_ws::WsServer<#ns_ty>>(),
+                    label: #registry_label,
+                    provide: |__builder| ::nest_rs_core::ContainerBuilder::provide(
+                        __builder,
+                        <::nest_rs_ws::WsServer<#ns_ty>>::default(),
+                    ),
+                }
+            }
+        },
+        None => quote! {},
+    };
 
     quote! {
         #item
 
+        #namespace_submission
+
         impl #impl_generics #name #ty_generics #where_clause {
             pub const PATH: &'static str = #path_lit;
+
+            /// Whether this gateway binds its own guards at the upgrade. The
+            /// transport cannot see inside the mount closure, so it reads this
+            /// to tell a guarded edge from a bare one instead of warning on both.
+            #[doc(hidden)]
+            pub const HAS_EDGE_GUARDS: bool = #has_edge_guards;
 
             #from_container
 
@@ -118,16 +150,8 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
                 // hand-assembled container that skips that check.
                 ::nest_rs_core::Container::get::<::nest_rs_ws::WsServer<#ns_ty>>(__container).expect(
                     "WebSocket gateway requires its connection registry — add `WsModule` to a \
-                     module's `imports` for the default namespace, or the gateway self-provides \
-                     a `namespace`d one",
+                     module's `imports`; it owns every registry, namespaced or not",
                 )
-            }
-
-            #[doc(hidden)]
-            pub fn __nestrs_provide_registry(
-                __builder: ::nest_rs_core::ContainerBuilder,
-            ) -> ::nest_rs_core::ContainerBuilder {
-                #provide_registry
             }
 
             #[doc(hidden)]

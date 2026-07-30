@@ -176,9 +176,14 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                             let __payload = match #apply {
                                 ::core::result::Result::Ok(__p) => __p,
                                 ::core::result::Result::Err(__e) => {
-                                    return ::nest_rs_ws::WsReply::error(::std::format!(
-                                        "invalid payload for `{}`: {}", #event, __e.message(),
-                                    ));
+                                    // Through `pipe_error`, so the frame carries
+                                    // the rejection's per-field detail as
+                                    // `data.errors` — the same member HTTP
+                                    // renders. Formatting only `message()` here
+                                    // is what used to drop it.
+                                    return ::nest_rs_ws::WsReply::pipe_error(
+                                        #event, "payload", __e,
+                                    );
                                 }
                             };
                         }
@@ -280,9 +285,6 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
-                // A namespaced gateway self-provides its own `WsServer<Ns>`;
-                // `Global` comes from `WsModule` (no-op here).
-                let builder = <#self_ty>::__nestrs_provide_registry(builder);
                 // Self-mount on HTTP: a WS upgrade is an HTTP `GET`, so a
                 // gateway is just another `HttpEndpointMeta` at boot.
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
@@ -332,7 +334,9 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
                             __route.at(<#self_ty>::PATH, __ep)
                         },
-                    ),
+                    )
+                    .owned_by(#gateway_name)
+                    .self_guarded_if(<#self_ty>::HAS_EDGE_GUARDS),
                 )
             }
         }

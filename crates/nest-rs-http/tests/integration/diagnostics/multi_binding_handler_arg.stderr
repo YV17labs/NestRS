@@ -1,0 +1,13 @@
+error: this handler argument binds 2 names, so the generated wrapper cannot tell which one to forward — bind the whole extractor under one name (`arg: Path<(String, u32)>`) and destructure in the body, or destructure to a single binding (`Path(name): Path<String>`)
+  --> tests/integration/diagnostics/multi_binding_handler_arg.rs:22:26
+   |
+22 |     async fn pair(&self, Path((a, b)): Path<(String, String)>) -> String {
+   |                          ^^^^^^^^^^^^
+
+warning: unused import: `poem::web::Path`
+  --> tests/integration/diagnostics/multi_binding_handler_arg.rs:13:5
+   |
+13 | use poem::web::Path;
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

@@ -54,12 +54,19 @@ async fn issues_a_token_for_a_registered_client() {
 The test never sets a `NESTRS_ISSUER__*` variable, doesn't depend on a
 committed `.env.test`, and produces the same result on any machine.
 
-## Seeding through `for_root`
+## Pinning through `for_root`
 
-Every configurable module's `for_root` accepts a `pinned: Option<C>`:
-`None` loads from the environment, `Some(cfg)` registers the value
-directly. This is the same pattern as `.provide()`, expressed at the
-module-import layer.
+Every configurable module's `for_root` accepts a `pinned: Option<C>`: `None`
+loads from the environment over the config's defaults, `Some(cfg)` makes `cfg`
+the **base** the environment overlays.
+
+<Aside type="caution">
+`for_root` is not a hermetic pin. A `NESTRS_<NS>__<KEY>` set in the ambient
+environment still wins, per field — that is [the dual-path
+rule](/configuration/#the-dual-path-rule), and it applies to test runs too. When
+a test must not read the environment at all, seed the value with `.provide()`
+(above): a seed short-circuits the resolving factory outright.
+</Aside>
 
 ```rust title="apps/api/tests/e2e/main.rs"
 use nest_rs_http::{HttpConfig, HttpModule};
@@ -84,10 +91,11 @@ pub struct ApiModule;
 ```
 
 `HttpModule::for_root(opts)` routes its `Option<HttpConfig>` through
-`ConfigModule::provide_feature`: the `Some` arm seeds the value, the
-`None` arm queues the factory. Use this when the test module **owns**
-the binding (it composes the app); use `.provide()` when the test wants
-to override a config a feature already pulled in.
+`ConfigModule::provide_feature`, which queues one resolving factory either way
+— the `Option` only decides what the environment overlays. Use this when the
+test module **owns** the binding (it composes the app) and an ambient
+`NESTRS_HTTP__*` overriding it is *welcome*; use `.provide()` when the value
+must hold regardless of the environment.
 
 ## A test-specific source
 
@@ -114,7 +122,7 @@ let source = Arc::new(Map(HashMap::from([
     ("NESTRS_DATABASE__MAX_CONNECTIONS", "5"),
 ])));
 let env = ConfigService::with_source("database", source);
-let cfg = DatabaseConfig::from_env(&env).unwrap();
+let cfg = DatabaseConfig::from_env(&env, DatabaseConfig::defaults()).unwrap();
 
 let app = TestApp::<AppModule>::builder()
     .provide(cfg)
@@ -122,9 +130,11 @@ let app = TestApp::<AppModule>::builder()
     .await?;
 ```
 
-The custom-source path **does not** trigger the `.env` cascade merge, so
-`std::env` stays untouched and the test cannot pick up a stray
-`NESTRS_*` from a neighboring run.
+A custom source also decides *where* the values come from, so the test cannot
+pick up a stray `NESTRS_*` from the ambient environment. It is not what keeps
+`std::env` untouched, though — no config read ever writes there. The call that
+does is `Environment::init()`, which a test never makes; see
+[hermeticity and the cascade](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade).
 
 ## Unit-testing a `Config` impl
 

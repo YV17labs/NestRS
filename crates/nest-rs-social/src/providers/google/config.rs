@@ -53,12 +53,12 @@ impl GoogleSocialConfig {
 }
 
 impl Config for GoogleSocialConfig {
-    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            client_id: env.get("CLIENT_ID").unwrap_or_default(),
-            client_secret: env.get("CLIENT_SECRET").unwrap_or_default(),
-            redirect_url: env.get("REDIRECT_URL").unwrap_or_default(),
-            scopes: env.list("SCOPES"),
+            client_id: env.get("CLIENT_ID").unwrap_or(base.client_id),
+            client_secret: env.get("CLIENT_SECRET").unwrap_or(base.client_secret),
+            redirect_url: env.get("REDIRECT_URL").unwrap_or(base.redirect_url),
+            scopes: env.list("SCOPES", base.scopes),
         })
     }
 }

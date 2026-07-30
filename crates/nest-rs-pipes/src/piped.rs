@@ -56,7 +56,14 @@ impl<P: Pipe, T> Deref for Piped<P, T> {
 /// the value-form of the HTTP `Valid<E>`. `Valid<T>` is the ergonomic form of
 /// `Piped<ValidationPipe<T>, T>`; the transport macro exposes `T` on the wire
 /// and calls [`Valid::apply`].
-pub struct Valid<T>(T);
+///
+/// The field is public so the handler can **destructure** the carrier in its
+/// parameter list — `Valid(note): Valid<Note>` — the way poem's own extractors
+/// are written. That grants nothing: a developer who wants an unvalidated value
+/// can already declare the bare `T`, so a hand-built `Valid(x)` is not a bypass
+/// of anything the framework enforces on their behalf. (`Authorized<A, E>` is
+/// the opposite case and stays sealed — that proof *does* gate a data read.)
+pub struct Valid<T>(pub T);
 
 impl<T: Validate> Valid<T> {
     /// Validate `input`, wrapping it on success or returning the field errors.

@@ -63,6 +63,24 @@ pub trait Discoverable {
         Vec::new()
     }
 
+    /// Container keys this provider registers **besides itself**, each with the
+    /// label a boot error should use for it.
+    ///
+    /// A provider normally registers exactly one key — its own type — and
+    /// `#[module]` records that automatically. This hook is for the provider that
+    /// also installs a *typed singleton on its module's behalf*, so the access
+    /// graph can attribute that key to the module and produce the same named
+    /// error it gives for any other unimported dependency. `nest-rs-ws` uses it
+    /// for the per-namespace `WsServer<N>` registries `WsModule` owns: without
+    /// it, the key belongs to no module, and the graph's escape hatch for
+    /// imperatively-registered types waves the dependency through — then the
+    /// consumer panics at first resolution, naming the wrong provider.
+    ///
+    /// Empty for every ordinary provider.
+    fn also_provides() -> Vec<(TypeId, &'static str)> {
+        Vec::new()
+    }
+
     /// Install this provider's construction into the builder — the register
     /// phase's per-provider step. Emitted by the decorator (`#[injectable]`,
     /// `#[routes]`, …); resolves the provider's dependencies from the builder

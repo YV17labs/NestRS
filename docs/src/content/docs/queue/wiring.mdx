@@ -21,9 +21,10 @@ graph from each app's root.
 | `QueueWorkerModule` | Contributes the `QueueWorker` transport — drains `#[process]` methods at boot and spawns one worker each. | Worker apps only. |
 
 `QueueModule::for_root(None)` reads `NESTRS_QUEUE__URL` from the
-environment; `QueueModule::for_root(Some(QueueConfig { url, .. }))`
-pins it in code. Every field of `QueueConfig` is settable both ways —
-the framework-wide dual-path config rule. See
+environment; `QueueModule::for_root(Some(QueueConfig { url, .. }))` supplies
+that URL as the **base** the environment overlays — so a deployment setting
+`NESTRS_QUEUE__URL` still wins, field by field
+([the dual-path rule](/configuration/#the-dual-path-rule)). See
 [fundamentals/modules](/fundamentals/modules/) for the four boot
 phases that resolve the connection before any transport attaches.
 
@@ -134,7 +135,7 @@ injects something its module doesn't own or import transitively.
 ```text frame="terminal"
 $ nestrs run dev worker
  INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
- INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio concurrency=5 retries=3
+ INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
 ```
 
 One `attached` line per transport, one `registered` line per

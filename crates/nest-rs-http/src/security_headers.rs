@@ -44,10 +44,11 @@ impl Default for SecurityHeadersConfig {
 
 impl SecurityHeadersConfig {
     /// Read `NESTRS_HTTP__SECURITY_HEADERS` (master), `__FRAME_OPTIONS`, `__HSTS`,
-    /// `__CONTENT_TYPE_OPTIONS`. Absent vars keep the safe defaults; an explicit
-    /// empty string drops that one header.
-    pub fn from_env(env: &ConfigService) -> Result<Self> {
-        let d = Self::default();
+    /// `__CONTENT_TYPE_OPTIONS`, overlaid onto `base`. Absent vars keep `base`'s
+    /// value (the safe defaults unless the call site pinned something else); an
+    /// explicit empty string drops that one header.
+    pub fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        let d = base;
         let frame_options = override_header(env.get("FRAME_OPTIONS"), d.frame_options);
         let hsts = override_header(env.get("HSTS"), d.hsts);
         // Reject a set-but-invalid header value at boot, naming the env var
@@ -152,7 +153,7 @@ mod tests {
     #[test]
     fn an_invalid_header_value_fails_boot_naming_the_var() {
         let cfg = ConfigService::with_vars("http", [("NESTRS_HTTP__FRAME_OPTIONS", "bad\nvalue")]);
-        let err = SecurityHeadersConfig::from_env(&cfg).unwrap_err();
+        let err = SecurityHeadersConfig::from_env(&cfg, Default::default()).unwrap_err();
         assert!(
             matches!(err, ConfigError::Parse { ref var, .. } if var == "NESTRS_HTTP__FRAME_OPTIONS"),
             "expected a Parse error naming FRAME_OPTIONS, got {err:?}",
@@ -162,7 +163,8 @@ mod tests {
     #[test]
     fn a_valid_override_still_loads() {
         let cfg = ConfigService::with_vars("http", [("NESTRS_HTTP__FRAME_OPTIONS", "SAMEORIGIN")]);
-        let loaded = SecurityHeadersConfig::from_env(&cfg).expect("valid value loads");
+        let loaded =
+            SecurityHeadersConfig::from_env(&cfg, Default::default()).expect("valid value loads");
         assert_eq!(loaded.frame_options.as_deref(), Some("SAMEORIGIN"));
     }
 

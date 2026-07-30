@@ -30,7 +30,6 @@ nest_rs_core::inventory::submit! {
     ProcessMethod {
         name: "probe::process",
         queue: "test-queue",
-        concurrency: 1,
         retries: 0,
         provider_type_id: || std::any::TypeId::of::<ProbeMarker>(),
         handler: probe_handler,
@@ -149,7 +148,7 @@ struct EnvelopeProc;
 
 #[processor]
 impl EnvelopeProc {
-    #[process(queue = EnvelopeTestQueue, concurrency = 1, retries = 0)]
+    #[process(queue = EnvelopeTestQueue, retries = 0)]
     async fn handle(&self, job: EnvelopeCommand) -> anyhow::Result<()> {
         ENVELOPE_LAST_N.store(job.n, Ordering::SeqCst);
         Ok(())
@@ -191,6 +190,7 @@ async fn unversioned_legacy_payload_is_still_processed() {
     // deploy must drain successfully (with a warn log) so a rolling deploy
     // doesn't drop jobs.
     let legacy = json!({ "n": 7 });
+    let logs = nest_rs_testing::LogCapture::install();
     envelope_handler()(legacy, envelope_container())
         .await
         .expect("legacy unversioned payload is decoded directly");
@@ -198,6 +198,22 @@ async fn unversioned_legacy_payload_is_still_processed() {
         ENVELOPE_LAST_N.load(Ordering::SeqCst),
         7,
         "the user method saw the raw legacy payload",
+    );
+
+    // The warn is the whole point of accepting the payload: it runs *and* tells
+    // the operator there is a pre-envelope queue left to drain. Running quietly
+    // is the same defect as dropping the job, one incident later — and the
+    // observability page documents the message and both fields verbatim.
+    let event = logs.expect_one("nest_rs::queue", "processed an unversioned job payload");
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("queue").as_deref(),
+        Some(ENVELOPE_QUEUE),
+        "the warn names the queue to drain",
+    );
+    assert!(
+        event.field("hint").is_some(),
+        "a bare warn is the defect — the hint says what to do about it",
     );
 }
 
@@ -333,7 +349,7 @@ struct PipeProc;
 impl PipeProc {
     // `Piped<Trim, String>`: the wire payload is a `String`; the handler body
     // receives it already trimmed — the queue analog of the HTTP / GraphQL form.
-    #[process(queue = PipeArgTestQueue, concurrency = 1, retries = 0)]
+    #[process(queue = PipeArgTestQueue, retries = 0)]
     async fn handle(
         &self,
         name: nest_rs_pipes::Piped<nest_rs_pipes::Trim, String>,
@@ -398,7 +414,7 @@ struct StrictProc;
 
 #[processor]
 impl StrictProc {
-    #[process(queue = StrictEnvelopeTestQueue, concurrency = 1, retries = 0)]
+    #[process(queue = StrictEnvelopeTestQueue, retries = 0)]
     async fn handle(&self, job: StrictCommand) -> anyhow::Result<()> {
         STRICT_LAST_V.store(job.v, Ordering::SeqCst);
         STRICT_LAST_PAYLOAD.store(job.payload, Ordering::SeqCst);

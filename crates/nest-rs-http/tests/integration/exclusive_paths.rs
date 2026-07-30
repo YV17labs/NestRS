@@ -45,6 +45,7 @@ impl nest_rs_core::Discoverable for FirstEndpoint {
             HttpEndpointMeta::new("/tools", "mcp", |_c, r: Route| {
                 r.at("/tools", poem::endpoint::make_sync(|_| "first"))
             })
+            .owned_by("FirstTools")
             .exempt(),
         )
     }
@@ -56,6 +57,7 @@ impl nest_rs_core::Discoverable for SecondEndpoint {
             HttpEndpointMeta::new("/tools", "mcp", |_c, r: Route| {
                 r.at("/tools", poem::endpoint::make_sync(|_| "second"))
             })
+            .owned_by("SecondTools")
             .exempt(),
         )
     }
@@ -63,6 +65,24 @@ impl nest_rs_core::Discoverable for SecondEndpoint {
 
 #[module(providers = [FirstEndpoint, SecondEndpoint])]
 struct DuplicateEndpointModule;
+
+/// A self-mount claiming a path a **controller** already owns — the shape
+/// `#[controller(path = "/chat")]` beside `#[gateway(path = "/chat")]` makes.
+struct ChatSocket;
+
+impl nest_rs_core::Discoverable for ChatSocket {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<ChatSocket, HttpEndpointMeta>(
+            HttpEndpointMeta::new("/users", "ws", |_c, r: Route| {
+                r.at("/users", poem::endpoint::make_sync(|_| "socket"))
+            })
+            .owned_by("ChatGateway"),
+        )
+    }
+}
+
+#[module(providers = [UsersController, ChatSocket])]
+struct ControllerVersusEndpointModule;
 
 async fn configure_error(container: &Container) -> String {
     let mut transport = HttpTransport::new();
@@ -106,5 +126,48 @@ async fn two_self_mounts_on_one_path_fail_boot_instead_of_panicking() {
     assert!(
         msg.contains("duplicate self-mounted endpoint path") && msg.contains("\"/tools\""),
         "names the contested path: {msg}",
+    );
+}
+
+#[tokio::test]
+async fn a_controller_and_a_self_mount_on_one_path_fail_boot_instead_of_panicking() {
+    // The regression this pins: the exclusivity rule was enforced per family —
+    // controllers against controllers, self-mounts against self-mounts — in two
+    // maps that never met. A `#[controller(path = "/x")]` beside a
+    // `#[gateway(path = "/x")]` passed both checks, logged both mounts as
+    // successful, and then hit the very poem panic the check exists to prevent:
+    // `panicked at poem/src/route/mod.rs: duplicate path: /x`.
+    let app = App::builder()
+        .module::<ControllerVersusEndpointModule>()
+        .build()
+        .await
+        .expect("the module itself builds — the clash is a transport concern");
+
+    let msg = configure_error(app.container()).await;
+    assert!(
+        msg.contains("duplicate mount path") && msg.contains("\"/users\""),
+        "names the contested path: {msg}",
+    );
+    assert!(
+        msg.contains("UsersController") && msg.contains("ChatGateway"),
+        "names the controller AND the endpoint's owner so the fix is obvious: {msg}",
+    );
+}
+
+#[tokio::test]
+async fn a_self_mount_collision_names_the_owners_not_just_the_kind() {
+    // `format!("a {} endpoint", label())` made the message a tautology —
+    // "a ws endpoint and a ws endpoint both mount there" — useless with several
+    // gateways in one app, while the controller twin named both owners.
+    let app = App::builder()
+        .module::<DuplicateEndpointModule>()
+        .build()
+        .await
+        .expect("the module itself builds");
+
+    let msg = configure_error(app.container()).await;
+    assert!(
+        msg.contains("FirstTools") && msg.contains("SecondTools"),
+        "both owners must be named, not repeated as a kind: {msg}",
     );
 }

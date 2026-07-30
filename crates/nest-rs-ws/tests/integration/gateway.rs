@@ -138,7 +138,7 @@ async fn result_err_becomes_error_frame() {
         .await;
     match reply {
         WsReply::Error(msg) => {
-            assert!(msg.contains("boom"), "want 'boom' in {msg}");
+            assert!(msg.error.contains("boom"), "want 'boom' in {msg}");
         }
         _ => panic!("expected Error for Result::Err"),
     }
@@ -162,7 +162,7 @@ async fn result_err_unit_becomes_error_frame() {
         .await;
     match reply {
         WsReply::Error(msg) => {
-            assert!(msg.contains("boom-unit"), "want 'boom-unit' in {msg}");
+            assert!(msg.error.contains("boom-unit"), "want 'boom-unit' in {msg}");
         }
         _ => panic!("expected Error for Result<(), E>::Err"),
     }
@@ -198,7 +198,7 @@ async fn unknown_event_returns_unknown_error() {
     match reply {
         WsReply::Error(msg) => {
             assert!(
-                msg.contains("missing") && msg.contains("unknown"),
+                msg.error.contains("missing") && msg.error.contains("unknown"),
                 "want 'unknown' + the event name in {msg}",
             );
         }
@@ -231,7 +231,9 @@ async fn a_rejecting_pipe_replies_with_an_error_frame() {
         )
         .await;
     match reply {
-        WsReply::Error(msg) => assert!(msg.contains("bad input"), "want 'bad input' in {msg}"),
+        WsReply::Error(msg) => {
+            assert!(msg.error.contains("bad input"), "want 'bad input' in {msg}")
+        }
         _ => panic!("expected an error frame from the rejecting pipe"),
     }
 }
@@ -260,12 +262,56 @@ async fn a_valid_payload_is_validated_before_the_handler() {
     match bad {
         WsReply::Error(msg) => {
             assert!(
-                msg.contains("validation failed"),
+                msg.error.contains("validation failed"),
                 "want validation error in {msg}"
-            )
+            );
+            // The finding: the macro formatted only `PipeError::message()`, so a
+            // client learned that validation failed and never which field. The
+            // per-field detail rides the frame as `errors`, the member name HTTP
+            // uses for the same rejection.
+            let errors = msg
+                .errors
+                .as_ref()
+                .unwrap_or_else(|| panic!("the frame must carry the field errors: {msg:?}"));
+            assert!(
+                errors.get("name").is_some(),
+                "the offending field is named: {errors}",
+            );
         }
         _ => panic!("expected a validation error frame"),
     }
+}
+
+/// The wire shape, not just the reply value: a client parses
+/// `{ event, data: { error, errors } }`, and `errors` is absent — not `null` —
+/// when the failure had no structured detail. Same asymmetry HTTP has.
+#[tokio::test]
+async fn the_error_frame_carries_error_and_errors_under_data() {
+    let bad = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "named",
+            serde_json::json!({ "name": "" }),
+        )
+        .await;
+    let WsReply::Error(err) = bad else {
+        panic!("expected a validation error frame");
+    };
+    let frame: serde_json::Value =
+        serde_json::from_str(&nest_rs_ws::WsEnvelope::encode("named", &err).expect("encode"))
+            .expect("parse");
+    assert_eq!(frame["event"], "named");
+    assert!(frame["data"]["error"].is_string(), "{frame}");
+    assert!(frame["data"]["errors"]["name"].is_array(), "{frame}");
+
+    let plain = nest_rs_ws::WsError::new("unknown event `nope`");
+    let frame: serde_json::Value =
+        serde_json::from_str(&nest_rs_ws::WsEnvelope::encode("nope", &plain).expect("encode"))
+            .expect("parse");
+    assert!(
+        frame["data"].get("errors").is_none(),
+        "no detail ⇒ no `errors` member at all: {frame}",
+    );
 }
 
 /// A `Result` reached through a type alias must behave exactly like the literal
@@ -283,7 +329,7 @@ async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
         .await;
 
     match reply {
-        WsReply::Error(msg) => assert_eq!(msg, "database unavailable"),
+        WsReply::Error(msg) => assert_eq!(msg.error, "database unavailable"),
         WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
         WsReply::None => panic!("expected an error frame"),
     }
@@ -304,7 +350,7 @@ async fn the_literal_and_aliased_forms_reply_identically() {
             .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
             .await
         {
-            WsReply::Error(msg) => frames.push(msg),
+            WsReply::Error(msg) => frames.push(msg.error),
             other => panic!(
                 "`{event}` must produce an error frame, got {}",
                 match other {

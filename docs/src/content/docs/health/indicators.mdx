@@ -81,7 +81,7 @@ The dividing rule matches every other adapter: a file lives in
 A loose `health.rs` at the root of `apps/<x>/src/` is never the answer:
 `apps/<x>/` is composition only (`main.rs` + `module.rs`), so the file
 would belong to no `#[module]`. See [Monorepo
-layout](/fundamentals/modules/#port--adapters-one-module-per-role) for
+layout](/fundamentals/modules/#extract-a-feature) for
 the full rule.
 
 ## Framework-shipped: `DatabaseHealthModule`

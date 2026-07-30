@@ -5,5 +5,6 @@ mod compression;
 mod diagnostics;
 mod exclusive_paths;
 mod global_prefix;
+mod input;
 mod route_decorators;
 mod versioning;

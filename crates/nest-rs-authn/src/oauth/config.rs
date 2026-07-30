@@ -34,15 +34,15 @@ pub struct OAuth2Config {
 }
 
 impl Config for OAuth2Config {
-    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            client_id: env.get("CLIENT_ID").unwrap_or_default(),
-            client_secret: env.get("CLIENT_SECRET").unwrap_or_default(),
-            auth_url: env.get("AUTH_URL").unwrap_or_default(),
-            token_url: env.get("TOKEN_URL").unwrap_or_default(),
-            redirect_url: env.get("REDIRECT_URL").unwrap_or_default(),
-            userinfo_url: env.get("USERINFO_URL").unwrap_or_default(),
-            scopes: env.list("SCOPES"),
+            client_id: env.get("CLIENT_ID").unwrap_or(base.client_id),
+            client_secret: env.get("CLIENT_SECRET").unwrap_or(base.client_secret),
+            auth_url: env.get("AUTH_URL").unwrap_or(base.auth_url),
+            token_url: env.get("TOKEN_URL").unwrap_or(base.token_url),
+            redirect_url: env.get("REDIRECT_URL").unwrap_or(base.redirect_url),
+            userinfo_url: env.get("USERINFO_URL").unwrap_or(base.userinfo_url),
+            scopes: env.list("SCOPES", base.scopes),
         })
     }
 }

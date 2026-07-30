@@ -36,7 +36,7 @@ struct ProbeConsumer;
 
 #[processor]
 impl ProbeConsumer {
-    #[process(queue = ProbeQueue, concurrency = 1, retries = 0)]
+    #[process(queue = ProbeQueue, retries = 0)]
     async fn handle(&self, job: ProbeCommand) -> anyhow::Result<()> {
         if let Some(tx) = PROBE_TX.get() {
             let _ = tx.send(job.tag);

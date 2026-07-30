@@ -129,7 +129,7 @@ async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'stati
         .build()
         .await
         .expect("module boots");
-    let cfg = HttpConfig::from_env(&ConfigService::for_namespace("http"))
+    let cfg = HttpConfig::from_env(&ConfigService::for_namespace("http"), Default::default())
         .expect("HttpConfig::from_env succeeds");
     let mut transport = HttpTransport::new();
     if let Some(prefix) = cfg.global_prefix {

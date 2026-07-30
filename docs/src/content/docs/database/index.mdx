@@ -81,9 +81,9 @@ auto-resolve through dataloaders when the relation field carries `#[expose]`
 REST/OpenAPI adopters can compile without pulling in GraphQL:
 
 ```toml title="Cargo.toml"
-nest-rs-resource = { version = "1.1", default-features = false }
-nest-rs-seaorm = { version = "1.1", features = ["http"] }
-nest-rs-authz = { version = "1.1", features = ["http"] }
+nest-rs-resource = { version = "1.2", default-features = false }
+nest-rs-seaorm = { version = "1.2", features = ["http"] }
+nest-rs-authz = { version = "1.2", features = ["http"] }
 ```
 
 ```rust title="src/posts/entity.rs"
@@ -99,7 +99,7 @@ pub struct Model {
 GraphQL surface when you need it:
 
 ```toml
-nest-rs-resource = { version = "1.1", features = ["graphql"] }
+nest-rs-resource = { version = "1.2", features = ["graphql"] }
 ```
 
 ```rust
@@ -194,8 +194,9 @@ pub struct AppModule;
 ```
 
 `DatabaseModule::for_root(None)` reads `NESTRS_DATABASE__URL` (and the other
-`NESTRS_DATABASE__*` keys) from the environment; pass a `DatabaseConfig` to
-pin values in code — the framework-wide dual path applies.
+`NESTRS_DATABASE__*` keys) from the environment; pass a `DatabaseConfig` to set
+those values in code. They stay overridable per field by the environment — see
+[the dual-path rule](/configuration/#the-dual-path-rule).
 
 ## What the data layer hands you for free
 

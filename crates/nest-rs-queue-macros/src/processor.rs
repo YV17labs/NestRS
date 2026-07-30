@@ -1,5 +1,5 @@
 //! `#[processor]` — orchestrator on a provider's `impl` block. Walks the
-//! methods; for each one tagged with `#[process(queue = …, concurrency, retries)]`
+//! methods; for each one tagged with `#[process(queue = …, retries)]`
 //! emits a type-erased handler `fn` and a `ProcessMethod` inventory submission
 //! the active queue backend (e.g. Redis via `nest-rs-redis`) drains at boot.
 //!
@@ -48,11 +48,7 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(a) => a,
             Err(err) => return err.to_compile_error().into(),
         };
-        let ProcessArgs {
-            queue,
-            concurrency,
-            retries,
-        } = args;
+        let ProcessArgs { queue, retries } = args;
 
         let job_ty = match payload_arg_type(method, "#[process]", "job") {
             Ok(ty) => ty,
@@ -105,7 +101,6 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
             method_snake
         );
 
-        let concurrency_lit = LitInt::new(&concurrency.to_string(), proc_macro2::Span::call_site());
         let retries_lit = LitInt::new(&retries.to_string(), proc_macro2::Span::call_site());
 
         emissions.push(quote! {
@@ -256,7 +251,6 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                 ::nest_rs_queue::ProcessMethod {
                     name: #qualified_name,
                     queue: #queue_str,
-                    concurrency: #concurrency_lit,
                     retries: #retries_lit,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     handler: #handler_ident,
@@ -281,7 +275,14 @@ fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
     // A pipe rejection is deterministic (the same payload fails the pipe again),
     // so it aborts rather than retries (QUEUE-I4).
     let box_err = quote! {
-        |__e: ::nest_rs_pipes::PipeError| ::nest_rs_queue::JobError::abort(__e.message().to_string())
+        |__e: ::nest_rs_pipes::PipeError| {
+            // The message *and* the per-field detail: a dead-lettered job is
+            // read from a log by someone who cannot re-run it, so
+            // `error=validation failed` on its own throws away what the
+            // rejection knew.
+            let __msg = __e.message().to_string();
+            ::nest_rs_queue::JobError::abort(__msg).with_details(__e.into_details())
+        }
     };
     match pipe_wrapper(job_ty) {
         Some(PipeWrapper::Piped { pipe, value }) => (
@@ -337,14 +338,12 @@ impl Parse for QueueId {
 
 struct ProcessArgs {
     queue: QueueId,
-    concurrency: usize,
     retries: usize,
 }
 
 impl Parse for ProcessArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut queue: Option<QueueId> = None;
-        let mut concurrency: usize = 1;
         let mut retries: usize = 0;
 
         while !input.is_empty() {
@@ -352,14 +351,25 @@ impl Parse for ProcessArgs {
             input.parse::<Token![=]>()?;
             match key.to_string().as_str() {
                 "queue" => queue = Some(input.parse()?),
-                "concurrency" => concurrency = input.parse::<LitInt>()?.base10_parse()?,
                 "retries" => retries = input.parse::<LitInt>()?.base10_parse()?,
+                // `concurrency` was a real key. It is gone rather than
+                // deprecated, so say what replaced it instead of listing the
+                // survivors: the removal is a behaviour change, and a bare
+                // "unknown key" would read as a typo.
+                "concurrency" => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "`concurrency` is gone from #[process]: a process method runs one job \
+                         at a time, and throughput scales by running more worker replicas — \
+                         the unit the container platform already schedules. Drop the argument",
+                    ));
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
                             "unknown #[process] key `{other}` \
-                             (expected `queue`, `concurrency`, or `retries`)"
+                             (expected `queue` or `retries`)"
                         ),
                     ));
                 }
@@ -376,10 +386,6 @@ impl Parse for ProcessArgs {
             )
         })?;
 
-        Ok(Self {
-            queue,
-            concurrency,
-            retries,
-        })
+        Ok(Self { queue, retries })
     }
 }

@@ -78,11 +78,15 @@ the handler body never runs:
 |-----------|--------------------|
 | HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7" }`) |
 | GraphQL | An error in the response's `errors` array |
-| WebSockets | An error frame on the socket |
+| WebSockets | An error frame on the socket (`{ event, data: { error, errors } }`) |
 | Queue | A job error — the queue's retry/failure policy applies |
 
-`ValidationPipe<T>` attaches the structured field-level errors as an
-`errors` extension member.
+`ValidationPipe<T>` attaches the structured field-level errors to the rejection,
+and **every** transport carries them through under the name `errors`: an RFC 9457
+extension member on HTTP, `extensions.details` on GraphQL, `data.errors` on a
+WebSocket frame, and an `errors` field on the queue's
+`job dead-lettered` event. A client (or an operator reading a dead-letter log)
+can always tell which field was wrong, not merely that something was.
 
 ## Validation at the HTTP edge
 
@@ -95,7 +99,7 @@ use poem::web::Json;
 use serde::Deserialize;
 use validator::Validate;
 
-#[derive(Deserialize, Validate)]
+#[derive(Deserialize, Validate, schemars::JsonSchema)]
 pub struct CreateUser {
     #[validate(email)]
     email: String,
@@ -104,7 +108,7 @@ pub struct CreateUser {
 }
 
 #[post("/")]
-async fn create(&self, Valid(Json(input)): Valid<Json<CreateUser>>)
+async fn create(&self, Valid(input): Valid<Json<CreateUser>>)
     -> Result<Json<User>>
 {
     Ok(Json(self.svc.create(input).await?))
@@ -140,10 +144,16 @@ use nest_rs_pipes::ParseUuidV7;
 use poem::web::Path;
 
 #[get("/:id")]
-async fn get(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> Json<User> {
-    Json(self.svc.find(id).await?)
+async fn get(&self, id: Piped<ParseUuidV7, Path<String>>) -> Json<User> {
+    Json(self.svc.find(*id).await?)
 }
 ```
+
+`Valid<E>` destructures in the parameter list (`Valid(input)`) and binds the
+extractor's **inner** value — `Valid<Json<CreateUser>>` carries the
+`CreateUser`, never the `Json`. `Piped<P, E>` names its pipe with a phantom
+marker, so it is not a tuple struct: bind it and reach the value through
+`Deref`/`into_inner()`, as above.
 
 `Path<String>` extracts the raw segment; `ParseUuidV7::transform` validates
 it as a v7 UUID. A non-UUID string is `400` with `"must be a UUID v7"` —
@@ -183,7 +193,7 @@ async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
 
 ```rust
 // Queue — the job payload is a `String`, piped after deserialization.
-#[process(queue = SignupsQueue, concurrency = 1, retries = 0)]
+#[process(queue = SignupsQueue, retries = 0)]
 async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
     /* ... */
 }
@@ -200,8 +210,8 @@ caller's scope, `403` if denied.
 ```rust
 // Pipe — pure conversion, no DB
 #[get("/_validate/:id")]
-async fn validate(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> String {
-    format!("{id} is valid")
+async fn validate(&self, id: Piped<ParseUuidV7, Path<String>>) -> String {
+    format!("{} is valid", *id)
 }
 
 // Bind — convert + load + authorize
@@ -251,7 +261,7 @@ Then bind it at the call site:
 
 ```rust
 #[post("/")]
-async fn create(&self, Piped(name): Piped<NonEmpty, Json<String>>) -> &'static str {
+async fn create(&self, name: Piped<NonEmpty, Json<String>>) -> &'static str {
     "ok"
 }
 ```

@@ -266,15 +266,28 @@ pub fn from_scope_method(ctor: &TokenStream2) -> TokenStream2 {
 }
 
 /// Binding identifiers of a method's value arguments (receiver skipped) for
-/// forwarding a call by name. Errors on a non-identifier pattern (e.g.
-/// `Path(id)` destructure) — a spanned error beats the arity mismatch the
-/// generated call would otherwise raise.
+/// forwarding a call by name. A destructuring pattern forwards under the
+/// identifier it binds — see [`forwarded_idents`].
 pub fn forwarded_arg_idents(sig: &Signature) -> syn::Result<Vec<Ident>> {
     forwarded_idents(&sig.inputs)
 }
 
 /// [`forwarded_arg_idents`] over an arbitrary argument sequence — used when
 /// `#[resolver]`'s `#[field_resolver]` path drops the parent before forwarding.
+///
+/// A **destructuring pattern** resolves to the identifier it binds:
+/// `Path(name): Path<String>` forwards as `name`, `Valid(Json(input))` as
+/// `input`. That is poem's own idiom and the first shape a reader writes, so the
+/// decorators accept it rather than making the developer un-destructure for the
+/// macro's benefit. The developer's method keeps the pattern (it is valid Rust
+/// there, and the macro re-emits the method unchanged); only the generated
+/// wrapper's parameter list is rewritten, by
+/// [`normalize_forwarded_args`] — a wrapper that destructured too would hand the
+/// inner value (`String`) to a method expecting the extractor (`Path<String>`).
+///
+/// A pattern binding **no** name or **several** is still an error: there is no
+/// single name to forward under, and on GraphQL the wrapper's parameter name is
+/// the SDL argument name, so a synthesized one would leak into the schema.
 pub fn forwarded_idents<'a>(
     inputs: impl IntoIterator<Item = &'a FnArg>,
 ) -> syn::Result<Vec<Ident>> {
@@ -283,18 +296,93 @@ pub fn forwarded_idents<'a>(
         let FnArg::Typed(pat_type) = arg else {
             continue;
         };
-        match &*pat_type.pat {
-            Pat::Ident(pat_ident) => idents.push(pat_ident.ident.clone()),
-            other => {
-                return Err(syn::Error::new_spanned(
-                    other,
-                    "resolver/controller method arguments must be simple identifiers \
-                     (no destructuring patterns)",
-                ));
-            }
-        }
+        idents.push(binder_of(&pat_type.pat)?);
     }
     Ok(idents)
+}
+
+/// Rewrite each value argument's pattern to the plain identifier it forwards
+/// under, so the sequence can serve as a generated wrapper's parameter list.
+/// Returns those identifiers in order, index-aligned with the value arguments.
+///
+/// Types are untouched: `Path(name): Path<String>` becomes `name:
+/// Path<String>`, which is what lets the wrapper pass the whole extractor on to
+/// a method that destructures it itself. See [`forwarded_idents`] for the why.
+pub fn normalize_forwarded_args<'a>(
+    inputs: impl IntoIterator<Item = &'a mut FnArg>,
+) -> syn::Result<Vec<Ident>> {
+    let mut idents = Vec::new();
+    for arg in inputs {
+        let FnArg::Typed(pat_type) = arg else {
+            continue;
+        };
+        let ident = binder_of(&pat_type.pat)?;
+        // Keep the span of the pattern it replaces, so a later error about this
+        // parameter still points at the developer's own code.
+        *pat_type.pat = Pat::Ident(syn::PatIdent {
+            attrs: Vec::new(),
+            by_ref: None,
+            mutability: None,
+            ident: ident.clone(),
+            subpat: None,
+        });
+        idents.push(ident);
+    }
+    Ok(idents)
+}
+
+/// The single identifier a parameter pattern binds — the name a generated
+/// wrapper declares it under and forwards it by.
+fn binder_of(pat: &Pat) -> syn::Result<Ident> {
+    // The common case, and the only one that needs no rewrite.
+    if let Pat::Ident(pat_ident) = pat
+        && pat_ident.subpat.is_none()
+    {
+        return Ok(pat_ident.ident.clone());
+    }
+    let mut found = Vec::new();
+    collect_binders(pat, &mut found);
+    match found.len() {
+        1 => Ok(found.remove(0)),
+        0 => Err(syn::Error::new_spanned(
+            pat,
+            "this handler argument binds no name, so the generated wrapper has \
+             nothing to forward — give it one (`arg: Path<String>`, or \
+             `Path(name): Path<String>`)",
+        )),
+        n => Err(syn::Error::new_spanned(
+            pat,
+            format!(
+                "this handler argument binds {n} names, so the generated wrapper \
+                 cannot tell which one to forward — bind the whole extractor \
+                 under one name (`arg: Path<(String, u32)>`) and destructure in \
+                 the body, or destructure to a single binding \
+                 (`Path(name): Path<String>`)"
+            ),
+        )),
+    }
+}
+
+/// Every identifier a pattern binds, in source order.
+fn collect_binders(pat: &Pat, out: &mut Vec<Ident>) {
+    match pat {
+        Pat::Ident(pi) => {
+            out.push(pi.ident.clone());
+            if let Some((_, sub)) = &pi.subpat {
+                collect_binders(sub, out);
+            }
+        }
+        Pat::TupleStruct(ts) => ts.elems.iter().for_each(|p| collect_binders(p, out)),
+        Pat::Tuple(t) => t.elems.iter().for_each(|p| collect_binders(p, out)),
+        Pat::Paren(p) => collect_binders(&p.pat, out),
+        Pat::Struct(s) => s.fields.iter().for_each(|f| collect_binders(&f.pat, out)),
+        Pat::Reference(r) => collect_binders(&r.pat, out),
+        Pat::Slice(s) => s.elems.iter().for_each(|p| collect_binders(p, out)),
+        Pat::Or(o) => o.cases.iter().for_each(|p| collect_binders(p, out)),
+        Pat::Type(t) => collect_binders(&t.pat, out),
+        // `_`, a literal, a path constant: binds nothing.
+        _ => {}
+    }
 }
 
 /// The `TypeId` **and** the diagnostic label of each type a provider resolves

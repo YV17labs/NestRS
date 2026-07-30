@@ -16,9 +16,9 @@ impl Default for AudioConfig {
 }
 
 impl Config for AudioConfig {
-    fn from_env(env: &ConfigService) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            synthetic_seed: env.parse("SYNTHETIC_SEED")?.unwrap_or(true),
+            synthetic_seed: env.parse("SYNTHETIC_SEED")?.unwrap_or(base.synthetic_seed),
         })
     }
 }

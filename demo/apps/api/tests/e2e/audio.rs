@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use features::audio::AudioQueueModule;
-use nest_rs_config::{Config, ConfigService};
+use nest_rs_config::Config;
 use nest_rs_core::module;
 use nest_rs_redis::{QueueModule, QueueWorker, QueueWorkerModule};
 use nest_rs_storage::{Storage, StorageConfig};
@@ -74,8 +74,7 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
 struct AudioWorkerHarness;
 
 pub(crate) fn storage_client() -> Storage {
-    let config = StorageConfig::from_env(&ConfigService::for_namespace("storage"))
-        .expect("storage config parses from env");
+    let config = StorageConfig::load().expect("storage config parses from env");
     Storage::new(Arc::new(config))
 }
 

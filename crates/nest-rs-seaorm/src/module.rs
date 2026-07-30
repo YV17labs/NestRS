@@ -53,8 +53,8 @@ impl DynamicModule for DatabaseSetup {
 /// for tools outside the DI container (`migrate`, `seed`) — a new config knob
 /// reaches them without editing each binary.
 pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
-    use nest_rs_config::{Config, ConfigService};
-    let config = DatabaseConfig::from_env(&ConfigService::for_namespace("database"))?;
+    use nest_rs_config::Config;
+    let config = DatabaseConfig::load()?;
     connect(&config).await
 }
 

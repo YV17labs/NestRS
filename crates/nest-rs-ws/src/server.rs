@@ -6,9 +6,10 @@
 //! [`WsServer`] is generic over a zero-sized namespace marker `N`
 //! (default [`Global`]). The flat container keys by type, so `WsServer<Global>`
 //! and `WsServer<MyNs>` are wholly separate registries — `#[gateway(namespace
-//! = MyNs)]` mounts against its own, self-provided registry. [`WsClient`]
-//! holds the registry as a type-erased [`Registry`] so the handler surface
-//! stays free of the namespace parameter.
+//! = MyNs)]` mounts against its own. Both come from [`WsModule`]
+//! (`crate::namespace` covers how, and what it replaced). [`WsClient`] holds the
+//! registry as a type-erased [`Registry`] so the handler surface stays free of
+//! the namespace parameter.
 //!
 //! [`WsModule`]: crate::WsModule
 

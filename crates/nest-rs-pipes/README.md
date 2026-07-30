@@ -2,11 +2,10 @@
 
 Transport-agnostic validation & transformation pipes for NestRS, applied at the request boundary by the transport that owns it.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at `1.0.0` in lockstep, under a semver contract: breaking changes wait for `2.0`.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
 
-```toml
-[dependencies]
-nest-rs-pipes = "1.0"
+```sh
+cargo add nest-rs-pipes
 ```
 
 [Documentation](https://nestrs.dev/fundamentals/pipes/) · [GitHub](https://github.com/YV17labs/NestRS)

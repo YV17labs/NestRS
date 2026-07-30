@@ -2,11 +2,10 @@
 
 Configuration loading for NestRS apps — namespaced env mapping bound to typed pinned configs.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at `1.0.0` in lockstep, under a semver contract: breaking changes wait for `2.0`.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
 
-```toml
-[dependencies]
-nest-rs-config = "1.0"
+```sh
+cargo add nest-rs-config
 ```
 
 [Documentation](https://nestrs.dev/configuration/) · [GitHub](https://github.com/YV17labs/NestRS)

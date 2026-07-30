@@ -9,11 +9,17 @@ import { Aside } from '@astrojs/starlight/components';
 
 Background work shares the rest of the framework's shape. A queue
 handler is a method on any `#[injectable]` provider, tagged
-`#[process(queue = "...", concurrency, retries)]` inside a `#[processor]`
-impl block. Importing `QueueWorkerModule` in the worker app activates
-the runtime at boot, drains the discovered methods, and spawns one
-worker per method. A producer-only app skips that import and only gets
-the connection — same crate, same types, one less module.
+`#[process(queue = <Name>Queue, concurrency, retries)]` inside a
+`#[processor]` impl block. Importing `QueueWorkerModule` in the worker app
+activates the runtime at boot, drains the discovered methods, and spawns
+one worker per method. A producer-only app skips that import and only
+gets the connection — same crate, same types, one less module.
+
+A queue is named by a **type**, not a string. `#[queue(name = "...", job =
+<Payload>)]` on a unit struct at the feature port declares the wire name
+and the payload in one artifact both sides import, so a typo or a
+mismatched payload is a compile error rather than a job that silently
+never drains.
 
 Read this section, then start from the working reference: the
 [`worker`](/publish/) app in Publish — audio transcoding jobs, with the
@@ -33,6 +39,47 @@ and abstractions, `nest-rs-redis` for the Redis-bound types.
 cargo add nest-rs-queue nest-rs-redis
 ```
 
+Everything a handler needs, in full — `nest-rs-queue` for the macros and
+the abstractions, `nest-rs-redis` for the Redis-bound types, and the
+crates the handler body itself names:
+
+```toml title="crates/features/Cargo.toml"
+[dependencies]
+nest-rs-queue = "1.1"
+nest-rs-redis = "1.1"     # the app that owns the connection
+serde = { version = "1", features = ["derive"] }   # the job payload derives it
+anyhow = "1"              # a #[process] method returns anyhow::Result<()>
+tracing = "0.1"           # if the handler logs, which it should
+```
+
+Nothing else: the `#[processor]` expansion reaches the worker-context seam
+through `nest_rs_queue`, so a `#[process]` method never obliges the call
+site to name `nest-rs-worker`. `nestrs g queue <feature>` writes this
+stanza for you.
+
+## The queue's identity
+
+One declaration, at the feature **port** — beside the payload, not inside
+the `queue/` adapter. The producer is usually the port's own service, so
+this is the artifact both sides reach for:
+
+```rust title="crates/features/src/audio/command.rs"
+use nest_rs_queue::queue;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscodeCommand {
+    pub file: String,
+}
+
+#[queue(name = "audio", job = TranscodeCommand)]
+pub struct AudioQueue;
+```
+
+Re-export both from the feature's `mod.rs`. A marker that is not reachable
+from the port leaves the untyped `push(name, job)` escape hatch as the only
+way to enqueue — which loses the check `QueueName` exists to provide.
+
 ## A first queue handler
 
 A regular `#[injectable]` service with one decorated method. The
@@ -46,7 +93,7 @@ use anyhow::Result;
 use nest_rs_core::injectable;
 use nest_rs_queue::processor;
 
-use crate::audio::{AudioService, TranscodeCommand};
+use crate::audio::{AudioQueue, AudioService, TranscodeCommand};
 
 #[injectable]
 pub struct AudioProcessor {
@@ -56,7 +103,7 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = "audio", concurrency = 5, retries = 3)]
+    #[process(queue = AudioQueue, concurrency = 5, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.svc.transcode(&job.file).await
     }
@@ -74,9 +121,11 @@ Adapters carry transport mechanics; the service carries intent.
   `#[process]` attributes and submits one queue consumer per decorated
   method.
 - **`#[process(queue, concurrency, retries)]`** binds the method to a
-  Redis queue name (stringly-typed, the known cost), bounds the
-  in-flight jobs, and gives an apalis retry budget. The job type is
-  read from the method's first parameter after `&self`.
+  `QueueName` **type**, bounds the in-flight jobs, and gives an apalis
+  retry budget. The job type is read from the method's first parameter
+  after `&self`, and the macro asserts it is `AudioQueue::Job` — a
+  handler consuming the wrong payload is a compile error naming both
+  types.
 
 The job argument also binds a [pipe](/fundamentals/pipes/):
 `Piped<P, T>` / `Valid<T>` expose the wire payload `T`, run the pipe
@@ -89,6 +138,20 @@ The pattern the framework is built for: one `#[injectable]` declares
 the deps once, multiple decorated methods share them. Different queues,
 different concurrencies, same service:
 
+Three queues, so three `#[queue]` declarations at the port — each pairing
+a wire name with the payload it carries:
+
+```rust title="crates/features/src/audio/command.rs"
+#[queue(name = "audio", job = TranscodeCommand)]
+pub struct AudioQueue;
+
+#[queue(name = "audio.preview", job = PreviewCommand)]
+pub struct AudioPreviewQueue;
+
+#[queue(name = "audio.cleanup", job = CleanupCommand)]
+pub struct AudioCleanupQueue;
+```
+
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[injectable]
 pub struct AudioProcessor {
@@ -98,24 +161,24 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = "audio", concurrency = 5, retries = 3)]
+    #[process(queue = AudioQueue, concurrency = 5, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.audio_svc.transcode(&job.file).await
     }
 
-    #[process(queue = "audio.preview", concurrency = 10, retries = 1)]
+    #[process(queue = AudioPreviewQueue, concurrency = 10, retries = 1)]
     async fn preview(&self, job: PreviewCommand) -> Result<()> {
         self.media_svc.preview(&job.file).await
     }
 
-    #[process(queue = "audio.cleanup")]
+    #[process(queue = AudioCleanupQueue)]
     async fn cleanup(&self, job: CleanupCommand) -> Result<()> {
         self.media_svc.cleanup(job.older_than).await
     }
 }
 ```
 
-`#[process(queue = "audio.cleanup")]` omits the optional `concurrency`
+`#[process(queue = AudioCleanupQueue)]` omits the optional `concurrency`
 (default `1`) and `retries` (default `0`).
 
 Three inventory entries — `AudioProcessor::transcode`, `AudioProcessor::preview`,

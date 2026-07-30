@@ -17,6 +17,20 @@ pub enum Transport {
 }
 
 impl Transport {
+    /// Every transport, so a check over the whole adapter surface (the
+    /// template↔dependency agreement, say) covers a new one the day it lands
+    /// rather than the day someone remembers to extend the list. Test-only:
+    /// the generators are each reached through one `Transport`, never the set.
+    #[cfg(test)]
+    pub const ALL: [Transport; 6] = [
+        Self::Http,
+        Self::Graphql,
+        Self::Ws,
+        Self::Queue,
+        Self::Schedule,
+        Self::Mcp,
+    ];
+
     /// Adapter sub-folder under the feature root (`users/http/`).
     pub fn folder(self) -> &'static str {
         match self {

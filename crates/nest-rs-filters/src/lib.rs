@@ -68,3 +68,10 @@ pub use builder::AppBuilderFiltersExt;
 pub use ext::FilterExt;
 pub use filter::{Filter, FilterChain, FilterEndpoint, RequestSnapshot};
 pub use registry::{FilterSpec, FilterSpecs, filter};
+// Re-exported so a crate writing an `Filter` impl needs no direct
+// `async-trait` dependency of its own. `nest-rs-http`, `nest-rs-queue` and
+// `nest-rs-ws` already do this; the layer crates did not, so the one import a
+// reader needed most was the one no page could name — and the miss cascades
+// (without the attribute, every trait method reports a lifetime mismatch, so
+// the real cause is buried under four unrelated errors).
+pub use async_trait::async_trait;

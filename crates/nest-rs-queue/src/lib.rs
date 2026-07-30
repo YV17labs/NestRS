@@ -50,4 +50,12 @@ pub use serde_json;
 #[doc(hidden)]
 pub use tracing;
 
+// Re-exported for `#[processor]`-generated code, which runs every handler
+// inside the ambient `JobContext` a worker transport installs. Same reason as
+// the two above: `nest_rs_queue` stays the single import a `#[process]` method
+// needs, so writing a processor never requires naming `nest-rs-worker` in the
+// call site's manifest.
+#[doc(hidden)]
+pub use nest_rs_worker;
+
 pub use nest_rs_queue_macros::{processor, queue};

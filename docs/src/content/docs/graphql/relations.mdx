@@ -127,6 +127,30 @@ transport — see [Repo and executor](/database/repo-and-executor/).
 This is the killer property: turning a per-row leak into a wire-level
 omission needs no controller code and no manual `if` in the resolver.
 
+## What fails if you get it wrong
+
+A batch runs on its **own task** — that is what a DataLoader is — and a fresh
+task starts with empty task-locals, so the ambient executor and ability the
+request installed are gone. `LoaderScope` is what carries them across, bound as
+`LoaderScope as dyn GraphqlBatchContext` in a reachable module (`nestrs g
+graphql` writes it into `authz/graphql/`).
+
+Without it, `Repo` finds no ambient executor and **every relation field fails
+before a single statement reaches the database** — the operation answers
+`database error` on each relation path, scalars resolve normally, and the query
+log stays empty. Schema build names the gap up front so the symptom is not the
+only clue:
+
+```text frame="terminal"
+ WARN nest_rs::graphql: dataloaders seeded with no batch context loaders=4
+      hint="list `LoaderScope as dyn GraphqlBatchContext` in a reachable module …"
+```
+
+The failure itself is logged too — `error` on `nest_rs::orm`, naming the entity
+and every binding that installs an executor — because the wire form of
+`ServiceError::Db` is the constant `database error` and carries nothing an
+operator can act on.
+
 ## Fanout-aware complexity
 
 The auto-emitted `HasMany` resolver loads every child of the parent —

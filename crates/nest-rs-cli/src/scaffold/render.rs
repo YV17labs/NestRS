@@ -41,7 +41,6 @@ impl Renderer {
         put("http_module", names.module_for(Transport::Http));
         put("graphql_module", names.module_for(Transport::Graphql));
         put("ws_module", names.module_for(Transport::Ws));
-        put("queue_module", names.module_for(Transport::Queue));
         put("schedule_module", names.module_for(Transport::Schedule));
         put("mcp_module", names.module_for(Transport::Mcp));
         // The `nest-rs-*` version every generated manifest pins — derived from

@@ -183,7 +183,7 @@ async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
 
 ```rust
 // Queue — the job payload is a `String`, piped after deserialization.
-#[process(queue = "signups", concurrency = 1, retries = 0)]
+#[process(queue = SignupsQueue, concurrency = 1, retries = 0)]
 async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
     /* ... */
 }

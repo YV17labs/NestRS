@@ -17,7 +17,7 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    PipeWrapper, impl_self_ident, injected_method_with_layers, layer_inject_keys, pipe_wrapper,
+    PipeWrapper, impl_self_ident, injected_methods_with_layers, layer_deps, pipe_wrapper,
     reject_http_only_layers, take_flag_attr, take_path_list,
 };
 
@@ -208,36 +208,39 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                 { #call };
                 ::nest_rs_ws::WsReply::None
             },
+            // Routed through `ReplyValue` rather than `WsReply::reply` so the
+            // decision is made on the **type**: a `Result` spelled through an
+            // alias (`ServiceResult<T>`) reads as an ordinary value here, and
+            // used to serialize its `Err` variant — the whole error struct —
+            // into a frame shaped like a success. Method resolution picks the
+            // inherent `Result` impl whatever the alias is called.
+            //
+            // The syntactic `Result` arm below is therefore not redundant: on a
+            // literal `Result` it calls `from_handler_error` directly, which
+            // **requires `E: Display`** at compile time. This arm cannot — an
+            // `E` that is `Serialize` but not `Display` falls back to the
+            // blanket impl, the original leak shape. Keeping both means the
+            // common spelling is checked and the alias is at least contained.
             ReturnKind::Value => quote! {
                 let __ret = { #call };
-                ::nest_rs_ws::WsReply::reply(&__ret)
+                {
+                    #[allow(unused_imports)]
+                    use ::nest_rs_ws::ReplyValueFallback as _;
+                    ::nest_rs_ws::ReplyValue(&__ret).into_reply(#event)
+                }
             },
             ReturnKind::ResultUnit => quote! {
                 match { #call } {
                     ::core::result::Result::Ok(()) => ::nest_rs_ws::WsReply::None,
-                    ::core::result::Result::Err(__err) => {
-                        ::nest_rs_ws::tracing::warn!(
-                            target: "nest_rs::ws",
-                            event = #event,
-                            error = ?__err,
-                            "subscribe_message handler returned Err",
-                        );
-                        ::nest_rs_ws::WsReply::error(::std::format!("{}", __err))
-                    }
+                    ::core::result::Result::Err(__err) =>
+                        ::nest_rs_ws::WsReply::from_handler_error(#event, &__err),
                 }
             },
             ReturnKind::Result => quote! {
                 match { #call } {
                     ::core::result::Result::Ok(__ret) => ::nest_rs_ws::WsReply::reply(&__ret),
-                    ::core::result::Result::Err(__err) => {
-                        ::nest_rs_ws::tracing::warn!(
-                            target: "nest_rs::ws",
-                            event = #event,
-                            error = ?__err,
-                            "subscribe_message handler returned Err",
-                        );
-                        ::nest_rs_ws::WsReply::error(::std::format!("{}", __err))
-                    }
+                    ::core::result::Result::Err(__err) =>
+                        ::nest_rs_ws::WsReply::from_handler_error(#event, &__err),
                 }
             },
         };
@@ -245,8 +248,8 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         arms.push(quote! { #event => { #arm_body } });
     }
 
-    let message_guard_keys = layer_inject_keys(all_message_layers.iter());
-    let injected_method = injected_method_with_layers(&self_ty, &message_guard_keys);
+    let message_layers = layer_deps(all_message_layers.iter());
+    let injected_methods = injected_methods_with_layers(&self_ty, &message_layers);
 
     quote! {
         #item
@@ -272,7 +275,7 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl ::nest_rs_core::Discoverable for #self_ty {
-            #injected_method
+            #injected_methods
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

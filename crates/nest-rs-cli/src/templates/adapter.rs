@@ -22,6 +22,12 @@ pub use module::{{tmodule}};
 "#;
 
 /// Adapter `module.rs` — imports the port, provides the handler.
+///
+/// **Every adapter imports the port**, including the queue's: the moment the
+/// generated stub grows the shape the docs prescribe — a thin processor handing
+/// the job to the port service — the access graph fails the boot unless the port
+/// module is already there. Scaffolding the import costs nothing (registration
+/// is idempotent) and removes a boot error from the developer's first edit.
 pub const MODULE: &str = r#"use nest_rs_core::module;
 
 use super::{{handler_mod}}::{{handler}};
@@ -116,6 +122,24 @@ pub struct {{resolver}} {
 impl {{resolver}} {}
 "#;
 
+/// The WS adapter's `module.rs`. `WsModule` is **not optional** for a
+/// default-namespace gateway — it provides the connection registry every
+/// `WsClient` reads — so the generator writes it rather than leaving the app to
+/// discover it at boot. A gateway that declares its own `namespace` self-provides
+/// one instead, and the import is then inert.
+pub const WS_MODULE: &str = r#"use nest_rs_core::module;
+use nest_rs_ws::WsModule;
+
+use super::{{handler_mod}}::{{handler}};
+use crate::{{snake}}::{{module}};
+
+#[module(
+    imports = [{{module}}, WsModule],
+    providers = [{{handler}}],
+)]
+pub struct {{tmodule}};
+"#;
+
 pub const WS_GATEWAY: &str = r#"use std::sync::Arc;
 
 use nest_rs_ws::{WsClient, gateway, messages};
@@ -144,15 +168,9 @@ impl {{gateway}} {
 
 pub const QUEUE_PROCESSOR: &str = r#"use anyhow::Result;
 use nest_rs_core::injectable;
-use nest_rs_queue::{processor, queue};
+use nest_rs_queue::processor;
 
-use crate::{{snake}}::{{command}};
-
-// The queue's identity — wire name + payload type in one artifact both the
-// producer and this consumer name, so a typo or a payload mismatch is a
-// compile error rather than a job that never drains.
-#[queue(name = "{{kebab}}", job = {{command}})]
-pub struct {{queue_name}};
+use crate::{{snake}}::{{{command}}, {{queue_name}}};
 
 #[injectable]
 #[derive(Default)]
@@ -168,12 +186,18 @@ impl {{processor}} {
 }
 "#;
 
-/// The queue payload — an imperative **`Command`** living at the feature *port*,
-/// not in the `queue/` adapter: it is a producer↔worker contract the consumer's
-/// `processor.rs` imports. The default is a Command (the common case); rename it
-/// verb-led to the real action, or switch to an `…Event` (past tense) when a
-/// fact is published to several consumers.
-pub const QUEUE_COMMAND: &str = r#"use serde::{Deserialize, Serialize};
+/// The queue payload **and its `QueueName`** — both at the feature *port*, not
+/// in the `queue/` adapter: they are the producer↔worker contract, and the
+/// producer is usually the port's own service, one directory up. Keeping the
+/// marker beside the payload is what makes `push_to::<Q>` reachable; declaring
+/// it inside the private `queue::processor` module would leave the untyped
+/// `push(name, job)` escape hatch as the only way to enqueue.
+///
+/// The default payload is a Command (the common case); rename it verb-led to
+/// the real action, or switch to an `…Event` (past tense) when a fact is
+/// published to several consumers.
+pub const QUEUE_COMMAND: &str = r#"use nest_rs_queue::queue;
+use serde::{Deserialize, Serialize};
 
 /// Imperative payload for the `{{kebab}}` queue — "do this work", handled by one
 /// processor. Rename it to the action it commands (e.g. `GenerateMediaVariantCommand`).
@@ -181,16 +205,13 @@ pub const QUEUE_COMMAND: &str = r#"use serde::{Deserialize, Serialize};
 pub struct {{command}} {
     pub id: String,
 }
-"#;
 
-/// The queue processor has no port *provider* dependency, so its module imports
-/// nothing — the `Command` it handles is a plain type, not an injected provider.
-pub const QUEUE_MODULE: &str = r#"use nest_rs_core::module;
-
-use super::processor::{{processor}};
-
-#[module(providers = [{{processor}}])]
-pub struct {{queue_module}};
+/// The queue's identity — wire name + payload type in one artifact the producer
+/// and the processor both import, so a typo or a mismatched payload is a compile
+/// error rather than a job that silently never drains. Enqueue with
+/// `queue.push_to::<{{queue_name}}>(…)`.
+#[queue(name = "{{kebab}}", job = {{command}})]
+pub struct {{queue_name}};
 "#;
 
 pub const SCHEDULE_TASKS: &str = r#"use std::sync::Arc;

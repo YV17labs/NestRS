@@ -63,6 +63,63 @@ impl WsReply {
     pub fn unknown(event: &str) -> WsReply {
         WsReply::Error(format!("unknown event `{event}`"))
     }
+
+    /// The error frame a handler's `Err` produces, with the `warn` that makes
+    /// it greppable. One implementation for both routes into it — the
+    /// `#[subscribe_message]` expansion's syntactic `Result` arm and the
+    /// type-directed [`ReplyValue`] fallback — so the two can never disagree
+    /// on what a failed handler puts on the wire.
+    pub fn from_handler_error(event: &str, error: &impl std::fmt::Display) -> WsReply {
+        tracing::warn!(
+            target: "nest_rs::ws",
+            event,
+            error = %error,
+            "subscribe_message handler returned Err",
+        );
+        WsReply::Error(error.to_string())
+    }
+}
+
+/// Turns a handler's return value into a [`WsReply`] **by type**, closing the
+/// gap the macro's syntactic detection leaves.
+///
+/// `#[subscribe_message]` reads the return type's last path segment to decide
+/// whether a handler can fail. That works for `Result<T, E>` and for
+/// `anyhow::Result<T>`, and silently does not for an alias —
+/// `pub type ServiceResult<T> = Result<T, MyError>` reads as an ordinary value,
+/// so the `Err` variant was serialized straight into the reply `data`: the
+/// whole error struct, every field, under a frame shaped like a success (no
+/// `error` key), with no `warn` server-side because nothing knew a failure had
+/// happened. It compiled without a warning, and only in codebases with typed
+/// `Serialize` errors — the ones whose errors carry the most detail.
+///
+/// Resolution here is on the type, so an alias is transparent: the inherent
+/// method below applies to any `Result<T, E>` however it is spelled, and wins
+/// over the blanket trait method (inherent methods are probed first).
+pub struct ReplyValue<'a, T>(pub &'a T);
+
+impl<T: Serialize, E: std::fmt::Display> ReplyValue<'_, Result<T, E>> {
+    /// A `Result` however it was spelled: `Ok` replies, `Err` becomes the same
+    /// error frame the literal form produces.
+    pub fn into_reply(self, event: &str) -> WsReply {
+        match self.0 {
+            Ok(value) => WsReply::reply(value),
+            Err(err) => WsReply::from_handler_error(event, err),
+        }
+    }
+}
+
+/// The ordinary case: any serializable value replies as-is. Kept a trait so the
+/// `Result` impl above can be inherent, and therefore more specific.
+pub trait ReplyValueFallback {
+    /// Serialize the value into a reply on the request's event name.
+    fn into_reply(self, event: &str) -> WsReply;
+}
+
+impl<T: Serialize> ReplyValueFallback for ReplyValue<'_, T> {
+    fn into_reply(self, _event: &str) -> WsReply {
+        WsReply::reply(self.0)
+    }
 }
 
 #[cfg(test)]

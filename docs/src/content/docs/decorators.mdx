@@ -61,8 +61,8 @@ position without leaving the page.
 | `#[gateway]` | struct | Mounts a WebSocket gateway at a path on the HTTP transport | [WebSockets](/websockets/) |
 | `#[messages]` | impl block | Binds gateway message handlers and lifecycle hooks | [Messages](/websockets/messages/) |
 | `#[subscribe_message]` | method | Handles one event in the `{ event, data }` envelope | [Messages](/websockets/messages/) |
-| `#[on_connect]` | method | Runs after the socket upgrades | [Messages](/websockets/messages/) |
-| `#[on_disconnect]` | method | Runs after the socket closes | [Messages](/websockets/messages/) |
+| `#[on_connect]` | method | Runs after the socket upgrades | [Rooms](/websockets/rooms/) |
+| `#[on_disconnect]` | method | Runs after the socket closes | [Rooms](/websockets/rooms/) |
 
 ## Queue
 

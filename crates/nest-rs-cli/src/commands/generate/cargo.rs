@@ -110,6 +110,16 @@ const RESOURCE_GRAPHQL: Dep = Dep {
     workspace_value: "",
     features: &["graphql"],
 };
+// `#[messages]` expands to `nest_rs_guards::GuardAsWsMessageCheck`, which that
+// crate gates behind `ws`. Same shape as `GUARDS_GRAPHQL`: every scaffolded
+// workspace already depends on `nest-rs-guards`, so it is the feature that has
+// to be turned on. Leaving it off compiles only by feature unification with a
+// dev-dependency — `cargo check -p features` fails while `--workspace` passes.
+const GUARDS_WS: Dep = Dep {
+    name: "nest-rs-guards",
+    workspace_value: "",
+    features: &["ws"],
+};
 // Mirrors the feature set `nest-rs-seaorm` itself resolves — a divergent list
 // (or a release-candidate floor) would be a manifest the user inherits and has
 // to un-learn later.
@@ -138,9 +148,23 @@ const ASYNC_GRAPHQL: Dep = Dep {
     workspace_value: "{ version = \"7\", features = [\"dataloader\"] }",
     features: &[],
 };
+// `nest-rs-mcp`'s macros expand to bare `rmcp::` paths, so the user's manifest
+// genuinely needs the crate — which makes this line a *contract* with what
+// `nest-rs-mcp` itself compiled against. A different major puts two
+// `ServerHandler` traits in one graph and every `#[tool_handler]` method
+// mismatches. `rmcp_pin_matches_the_frameworks_own` pins the two together.
 const RMCP: Dep = Dep {
     name: "rmcp",
-    workspace_value: "{ version = \"1.7\", features = [\"server\", \"macros\", \"transport-streamable-http-server\"] }",
+    workspace_value: "{ version = \"2.2\", features = [\"server\", \"macros\", \"transport-streamable-http-server\"] }",
+    features: &[],
+};
+// Every adapter skeleton that logs (`queue`, `schedule`, `ws`) writes a
+// `tracing::` call in the handler body, and a workspace scaffolded by
+// `nestrs new` carries no `tracing` in its features crate — the first generated
+// adapter is usually the first code to reach for it.
+const TRACING: Dep = Dep {
+    name: "tracing",
+    workspace_value: "\"0.1\"",
     features: &[],
 };
 const ANYHOW: Dep = Dep {
@@ -215,9 +239,9 @@ pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http => vec![],
         Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL, &GUARDS_GRAPHQL],
-        Transport::Ws => vec![&WS],
-        Transport::Queue => vec![&QUEUE, &SERDE, &ANYHOW],
-        Transport::Schedule => vec![&SCHEDULE, &ANYHOW],
+        Transport::Ws => vec![&WS, &GUARDS_WS, &TRACING],
+        Transport::Queue => vec![&QUEUE, &SERDE, &ANYHOW, &TRACING],
+        Transport::Schedule => vec![&SCHEDULE, &ANYHOW, &TRACING],
         Transport::Mcp => vec![&MCP, &RMCP],
     }
 }
@@ -387,6 +411,89 @@ mod tests {
             out.contains("\"http\"") && out.contains("\"graphql\""),
             "{out}"
         );
+    }
+
+    /// Every crate a generated skeleton *names* has to be in that transport's
+    /// dependency list. Derived from the template text rather than from a
+    /// hand-kept list, so a skeleton that starts logging (or starts returning
+    /// `anyhow::Result`) drags its dependency along on the same commit.
+    ///
+    /// The class this closes: three generators wrote `tracing::info!` into the
+    /// handler body while adding only their own `nest-rs-*` crate, so the first
+    /// `cargo check` after `nestrs g queue` was `cannot find module or crate
+    /// `tracing``.
+    #[test]
+    fn a_skeleton_that_names_a_crate_declares_it() {
+        // (token appearing in a skeleton, crate that must then be a dependency)
+        const NAMED: &[(&str, &str)] = &[
+            ("tracing::", "tracing"),
+            ("anyhow::", "anyhow"),
+            ("use anyhow", "anyhow"),
+            ("serde::", "serde"),
+            ("use serde", "serde"),
+            ("async_graphql::", "async-graphql"),
+            ("use async_graphql", "async-graphql"),
+            ("rmcp::", "rmcp"),
+        ];
+        for transport in Transport::ALL {
+            let declared: Vec<&str> = adapter_deps(transport).iter().map(|d| d.name).collect();
+            for crud_port in [false, true] {
+                let (handler, module) =
+                    crate::commands::generate::adapter::templates_for(transport, crud_port);
+                // The queue payload rides at the port, but `g queue` is what
+                // writes it — so it counts against the same dependency list.
+                let extra = if transport == Transport::Queue {
+                    crate::templates::adapter::QUEUE_COMMAND
+                } else {
+                    ""
+                };
+                let src = format!("{handler}{module}{extra}");
+                for (token, krate) in NAMED {
+                    if src.contains(token) {
+                        assert!(
+                            declared.contains(krate),
+                            "the {} skeleton writes `{token}` but `nestrs g {}` does not add \
+                             `{krate}` — the first `cargo check` after generating fails",
+                            transport.folder(),
+                            transport.folder(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// `rmcp` is the one third-party crate a generated manifest must pin to the
+    /// *same* major the framework compiled against: `#[tool_handler]` expands
+    /// against `nest-rs-mcp`'s `ServerHandler` while the user's `impl` resolves
+    /// against theirs, so two majors in one graph mismatch every method.
+    ///
+    /// Read from the workspace manifest rather than restated, so bumping the
+    /// framework's `rmcp` fails here until the generator follows.
+    #[test]
+    fn the_rmcp_pin_matches_the_frameworks_own() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Cargo.toml")
+            .canonicalize()
+            .expect("the framework workspace manifest");
+        let doc = std::fs::read_to_string(&root)
+            .expect("readable workspace manifest")
+            .parse::<DocumentMut>()
+            .expect("valid TOML");
+        let ours = doc["workspace"]["dependencies"]["rmcp"].to_string();
+        let ours = ours.trim();
+        let generated = RMCP.workspace_value;
+        assert_eq!(
+            normalize(generated),
+            normalize(ours),
+            "`nestrs g mcp` writes {generated} while the framework builds against {ours} — \
+             two rmcp majors in one graph make every `#[tool_handler]` method mismatch",
+        );
+    }
+
+    /// Whitespace-insensitive compare of two inline-table literals.
+    fn normalize(raw: &str) -> String {
+        raw.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
     // A hand-rolled manifest may pin a version literally; the feature list then

@@ -224,6 +224,42 @@ pub struct ResolverSchemaActive;
 /// `providers = [...]` plus the global infrastructure keys.
 pub struct ReachableProviders(pub std::collections::HashSet<TypeId>);
 
+/// The reachable providers again, this time **in declaration order** — modules
+/// depth-first from the root along `imports = [...]`, each module's
+/// `providers = [...]` left to right.
+///
+/// Seeded beside [`ReachableProviders`] for the one discovery seam that
+/// promises an order the developer wrote: the event bus dispatches listeners in
+/// "the order their providers appear in `providers = [...]`, then the order
+/// their methods appear in the `#[listeners]` block". Link order cannot deliver
+/// that — it is stable per binary but reshuffles when the code changes, which
+/// is the worst of both worlds: two listeners ordered deliberately and verified
+/// locally get silently rearranged the next time somebody adds a third.
+pub struct ProviderOrder(HashMap<TypeId, usize>);
+
+impl ProviderOrder {
+    /// Index each provider by its position in `order`. Stored as a map rather
+    /// than the `Vec` it comes from because the only consumer asks for a
+    /// **rank** inside a sort key — a linear scan there is one pass per
+    /// comparison, and the walk that produced the order already visited every
+    /// provider once.
+    pub fn new(order: impl IntoIterator<Item = TypeId>) -> Self {
+        Self(
+            order
+                .into_iter()
+                .enumerate()
+                .map(|(i, id)| (id, i))
+                .collect(),
+        )
+    }
+
+    /// Rank of `provider` in declaration order; unreachable providers sort last
+    /// (they are skipped before dispatch anyway).
+    pub fn rank(&self, provider: TypeId) -> usize {
+        self.0.get(&provider).copied().unwrap_or(usize::MAX)
+    }
+}
+
 /// Validate the access graph: every provider's dependency must be reachable
 /// from its module's import closure or be global infrastructure.
 ///
@@ -349,19 +385,36 @@ pub fn validate_keyed_access_graph(
 /// BFS over `imports` from `roots`, returning every module `TypeId` reached
 /// (roots included). A `TypeId` without a descriptor terminates its branch.
 fn reachable(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> HashSet<TypeId> {
+    // The ordered walk, collected — order is irrelevant to a set, and one
+    // traversal is one thing to keep correct.
+    reachable_in_order(roots, by_id).into_iter().collect()
+}
+
+/// The same walk, **in source order**: roots first, then each module's
+/// `imports = [...]` left to right, depth-first, first occurrence winning.
+///
+/// A `HashSet` cannot answer "which provider was declared first", and link
+/// order cannot either — `inventory` hands entries back in whatever order the
+/// linker emitted them, which is stable per binary and changes when the code
+/// does. Any discovery seam that promises a *declaration* order (the event bus
+/// does) needs an ordering derived from the module graph instead.
+fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> Vec<TypeId> {
     let mut seen = HashSet::new();
-    let mut stack = roots.to_vec();
+    let mut order = Vec::new();
+    let mut stack: Vec<TypeId> = roots.iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
         if !seen.insert(id) {
             continue;
         }
+        order.push(id);
         if let Some(desc) = by_id.get(&id) {
-            for import in desc.imports {
+            // Reversed onto the stack so the first import is visited first.
+            for import in desc.imports.iter().rev() {
                 stack.push((import)());
             }
         }
     }
-    seen
+    order
 }
 
 /// Provider keys reachable from `roots` via the module import graph plus
@@ -372,16 +425,10 @@ pub fn reachable_provider_ids(
     roots: &[TypeId],
     global: &HashSet<TypeId>,
 ) -> HashSet<TypeId> {
-    let by_id: HashMap<TypeId, &ModuleDescriptor> =
-        descriptors.iter().map(|d| ((d.module)(), *d)).collect();
+    // The same providers [`provider_order`] enumerates, plus global infra — one
+    // walk, one collection loop, two shapes of the answer.
     let mut keys = global.clone();
-    for module_id in reachable(roots, &by_id) {
-        if let Some(desc) = by_id.get(&module_id) {
-            for p in desc.providers {
-                keys.insert((p.provides)());
-            }
-        }
-    }
+    keys.extend(provider_order(descriptors, roots));
     keys
 }
 
@@ -393,6 +440,35 @@ pub(crate) fn reachable_provider_ids_from_inventory(
 ) -> HashSet<TypeId> {
     let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
     reachable_provider_ids(&descriptors, roots, global)
+}
+
+/// Every reachable provider in **declaration order**: modules depth-first from
+/// the roots along their `imports = [...]`, and within each module its
+/// `providers = [...]` left to right. First occurrence wins, so a diamond
+/// import ranks a provider where it is first reached. Pure over its inputs.
+pub fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
+    let by_id: HashMap<TypeId, &ModuleDescriptor> =
+        descriptors.iter().map(|d| ((d.module)(), *d)).collect();
+    let mut seen = HashSet::new();
+    let mut order = Vec::new();
+    for module_id in reachable_in_order(roots, &by_id) {
+        let Some(desc) = by_id.get(&module_id) else {
+            continue;
+        };
+        for p in desc.providers {
+            let key = (p.provides)();
+            if seen.insert(key) {
+                order.push(key);
+            }
+        }
+    }
+    order
+}
+
+/// Boot-time equivalent of [`provider_order`] against the link-time registry.
+pub(crate) fn provider_order_from_inventory(roots: &[TypeId]) -> Vec<TypeId> {
+    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+    provider_order(&descriptors, roots)
 }
 
 /// Linked resolvers that live in no module reachable from `roots`. Returned

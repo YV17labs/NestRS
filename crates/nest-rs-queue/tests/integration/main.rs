@@ -5,6 +5,13 @@
 //! `#[process]`-emitted handler is drained straight from the link-time inventory
 //! and invoked with an envelope payload. Live-Redis coverage is the worker
 //! app's e2e suite.
+//!
+//! **This suite is also the call-site hygiene proof for `#[processor]`.** The
+//! manifest declares no `nest-rs-worker`, so a `#[process]` expansion that
+//! names it directly (it used to emit `::nest_rs_worker::run_in_job_context`)
+//! fails to compile *here* — which is exactly what a freshly generated
+//! `crates/features` sees, since nothing tells a developer writing a processor
+//! that the worker crate is a hard requirement.
 
 use std::any::TypeId;
 use std::sync::{Arc, Mutex};

@@ -79,7 +79,9 @@ Mix triggers freely:
 ```rust title="crates/features/src/audio/schedule/tasks.rs (abridged)"
 use nest_rs_schedule::{scheduled, CronExpression};
 
-use crate::audio::AUDIO_QUEUE;
+use nest_rs_queue::QueueName;
+
+use crate::audio::AudioQueue;
 
 #[injectable]
 pub struct AudioTasks {
@@ -109,7 +111,7 @@ impl AudioTasks {
     async fn heartbeat(&self) -> Result<()> {
         tracing::info!(
             target: "features::audio",
-            queue = AUDIO_QUEUE,
+            queue = AudioQueue::NAME,
             "audio producer heartbeat",
         );
         Ok(())

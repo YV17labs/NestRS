@@ -10,7 +10,8 @@ use syn::{ItemStruct, LitStr, Meta, Path, Token, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, expr_str, from_container_method,
-    injected_keys_with_layers, reject_http_only_layers, take_path_list,
+    injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
+    take_path_list,
 };
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -31,7 +32,12 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let InjectableBody { ctor, dep_keys, .. } = match build_injectable_body(&mut item) {
+    let InjectableBody {
+        ctor,
+        dep_keys,
+        dep_names,
+        ..
+    } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -42,7 +48,12 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     // Access-graph deps: `#[inject]` keys + connection-level guards. Exposed
     // through an inherent fn `#[messages]` reads back (and extends with its
     // per-message guards) when emitting `Discoverable::injected`.
-    let injected_keys = injected_keys_with_layers(&dep_keys, guards.iter());
+    // Keys plus index-aligned labels from one walk, so a connection guard no
+    // module provides is named in the boot error rather than reported as
+    // `<unnamed dependency>`.
+    let layers = layer_deps(guards.iter());
+    let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
+    let injected_names = injected_names_with_layers(&dep_names, &layers);
 
     // Connection-level guard layers; first listed ends up outermost. With
     // nothing declared this just boxes the endpoint.
@@ -64,6 +75,17 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         None => quote! { __builder },
     };
 
+    // The connection registry is a hard dependency of every gateway — the
+    // `WsClient` each handler receives reads it — so it belongs under the
+    // access contract like any `#[inject]` field. Declared here, a missing
+    // `WsModule` is a clean boot error naming the module that provides it
+    // (`AccessGraphError`), instead of a mount-time panic with a backtrace
+    // note: the app used to compile, log `mounted endpoint kind="ws"`, and
+    // *then* die. A namespaced gateway self-provides its `WsServer<Ns>` in
+    // `register`, so the same declaration is satisfied without an import.
+    let registry_key = quote! { ::core::any::TypeId::of::<::nest_rs_ws::WsServer<#ns_ty>>() };
+    let registry_label = "WsServer";
+
     quote! {
         #item
 
@@ -74,13 +96,26 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
-                #injected_keys
+                let mut __keys = #injected_keys;
+                __keys.push(#registry_key);
+                __keys
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_injected_names() -> ::std::vec::Vec<&'static str> {
+                let mut __names = #injected_names;
+                __names.push(#registry_label);
+                __names
             }
 
             #[doc(hidden)]
             pub fn __nestrs_registry(
                 __container: &::nest_rs_core::Container,
             ) -> ::std::sync::Arc<::nest_rs_ws::WsServer<#ns_ty>> {
+                // Unreachable in a booted app: the registry is declared in
+                // `__nestrs_injected`, so the access graph refuses the boot
+                // before any mount runs. Kept as a defensive resolve for a
+                // hand-assembled container that skips that check.
                 ::nest_rs_core::Container::get::<::nest_rs_ws::WsServer<#ns_ty>>(__container).expect(
                     "WebSocket gateway requires its connection registry — add `WsModule` to a \
                      module's `imports` for the default namespace, or the gateway self-provides \

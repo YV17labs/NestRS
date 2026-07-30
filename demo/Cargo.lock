@@ -462,6 +462,7 @@ dependencies = [
  "asynk-strim",
  "base64",
  "bytes",
+ "chrono",
  "fast_chemail",
  "fnv",
  "futures-channel",
@@ -481,6 +482,7 @@ dependencies = [
  "static_assertions_next",
  "tempfile",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -2813,6 +2815,7 @@ name = "nest-rs-events"
 version = "1.1.1"
 dependencies = [
  "anyhow",
+ "futures-util",
  "nest-rs-core",
  "nest-rs-events-macros",
  "parking_lot",
@@ -3050,6 +3053,7 @@ dependencies = [
  "async-trait",
  "nest-rs-core",
  "nest-rs-queue-macros",
+ "nest-rs-worker",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3074,6 +3078,7 @@ dependencies = [
  "apalis",
  "apalis-redis",
  "async-trait",
+ "futures-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-queue",
@@ -3229,6 +3234,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

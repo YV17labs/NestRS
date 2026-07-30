@@ -40,6 +40,13 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
     let provider_snake = snake_case(&provider_name);
 
     let mut emissions: Vec<TokenStream2> = Vec::new();
+    // Position of each `#[on_event]` method **in this block**, submitted with
+    // the entry. `inventory` hands entries back in link order, which is stable
+    // per binary and reshuffles whenever the code changes — so two listeners
+    // ordered deliberately and verified locally were silently rearranged the
+    // next time somebody added a third. The index is what lets `EventsModule`
+    // restore the order the developer actually wrote.
+    let mut declaration_index: usize = 0;
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
@@ -91,6 +98,9 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         let wire_ident =
             format_ident!("__nestrs_listener_wire_{}_{}", provider_snake, method_snake);
 
+        let declaration = proc_macro2::Literal::usize_unsuffixed(declaration_index);
+        declaration_index += 1;
+
         emissions.push(quote! {
             #[doc(hidden)]
             #[allow(non_snake_case)]
@@ -117,6 +127,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
                 ::nest_rs_events::ListenerMethod {
                     name: #qualified_name,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
+                    declaration_index: #declaration,
                     wire: #wire_ident,
                 }
             }

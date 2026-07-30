@@ -171,7 +171,10 @@ impl PoolTool {}
 #[tool_handler]
 impl ServerHandler for PoolTool {}
 
-#[module(imports = [ThrottlerModule::for_root(one_per_minute())], providers = [PoolTool, ThrottlerGuard])]
+// `ThrottlerGuard` is *not* listed here: `ThrottlerModule` registers it
+// alongside the store it reads, so importing the module is the whole wiring.
+// Listing it as well is now a duplicate registration and fails the boot.
+#[module(imports = [ThrottlerModule::for_root(one_per_minute())], providers = [PoolTool])]
 struct PoolModule;
 
 fn one_per_minute() -> ThrottlerConfig {

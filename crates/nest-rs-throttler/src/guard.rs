@@ -28,6 +28,15 @@ pub struct ThrottlerGuard {
     throttler: Arc<dyn ThrottlerStore>,
 }
 
+impl ThrottlerGuard {
+    /// Build the guard over a store. `ThrottlerModule` uses it to register the
+    /// guard as global infrastructure, so `#[use_guards(ThrottlerGuard)]` needs
+    /// nothing in the controller module's `providers`.
+    pub fn new(throttler: Arc<dyn ThrottlerStore>) -> Self {
+        Self { throttler }
+    }
+}
+
 impl Layer for ThrottlerGuard {}
 
 #[async_trait]

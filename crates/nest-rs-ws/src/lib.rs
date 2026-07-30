@@ -83,7 +83,7 @@ mod server;
 
 pub use config::WsConfig;
 pub use context::{BoxFuture, Captured, SocketContext};
-pub use envelope::{WsEnvelope, WsReply};
+pub use envelope::{ReplyValue, ReplyValueFallback, WsEnvelope, WsReply};
 pub use gateway::{
     Gateway, GatewayEndpoint, WsDataFold, WsDataPipe, gateway_endpoint, resolve_ws_data_pipe,
 };

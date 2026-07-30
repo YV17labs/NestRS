@@ -49,9 +49,15 @@ pub struct IndicatorReport {
     pub name: &'static str,
     /// Whether this indicator's check passed.
     pub status: IndicatorStatus,
-    /// `Some` only when the check failed — the stringified `anyhow` error so
-    /// the JSON body carries enough for an operator to triage without a log
-    /// dive.
+    /// `Some` only when the check failed — a **fixed, opaque** reason
+    /// (`"check failed"` / `"timed out"`), never the indicator's own error.
+    ///
+    /// Deliberate: `/health/*` is routinely unauthenticated, and an
+    /// `anyhow` chain from a connection check carries a DSN, an internal
+    /// hostname or a driver message. The full `{err:#}` is emitted instead as
+    /// a `warn` on `nest_rs::health` carrying `indicator` and `kind`, so
+    /// triage is one filtered log query — not a value anyone can read off an
+    /// open port.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

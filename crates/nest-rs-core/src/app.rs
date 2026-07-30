@@ -12,9 +12,10 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    AccessError, DuplicateProviderError, ReachableProviders, ResolverSchemaActive,
-    UnreachableResolversError, reachable_provider_ids_from_inventory,
-    unreachable_resolvers_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
+    AccessError, DuplicateProviderError, ProviderOrder, ReachableProviders, ResolverSchemaActive,
+    UnreachableResolversError, provider_order_from_inventory,
+    reachable_provider_ids_from_inventory, unreachable_resolvers_from_inventory,
+    validate_from_inventory, validate_keyed_from_inventory,
     warn_unreachable_resolvers_from_inventory,
 };
 use crate::container::ProviderKey;
@@ -63,7 +64,10 @@ impl App {
         // `ReachableProviders` is seeded after register but is global
         // infrastructure for the access graph, so it must be in `global` up
         // front regardless of seed ordering.
-        let global: HashSet<TypeId> = HashSet::from([TypeId::of::<ReachableProviders>()]);
+        let global: HashSet<TypeId> = HashSet::from([
+            TypeId::of::<ReachableProviders>(),
+            TypeId::of::<ProviderOrder>(),
+        ]);
         // The actual registered set (singletons + scoped/transient factories +
         // imperatively-provided values) — consulted so a dependency provided
         // outside the declarative graph is not misreported as unmet.
@@ -74,7 +78,9 @@ impl App {
         // up front, so any keyed dependency here is genuinely unmet.
         validate_keyed_from_inventory(&roots, &HashSet::new())?;
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
-        let builder = builder.provide(ReachableProviders(reachable));
+        let builder = builder
+            .provide(ReachableProviders(reachable))
+            .provide(ProviderOrder::new(provider_order_from_inventory(&roots)));
         let container = builder.build();
         if container.get::<ResolverSchemaActive>().is_some() {
             warn_unreachable_resolvers_from_inventory(&roots);
@@ -388,6 +394,7 @@ impl AppBuilder {
         // front regardless of seed ordering.
         let mut global = builder.provider_ids();
         global.insert(TypeId::of::<ReachableProviders>());
+        global.insert(TypeId::of::<ProviderOrder>());
         // The keyed global set: keyed seeds + keyed factory outputs, snapshotted
         // before modules register (same timing as the bare global set).
         let global_keyed: HashSet<ProviderKey> = builder.keyed_provider_keys();
@@ -408,7 +415,9 @@ impl AppBuilder {
         validate_from_inventory(&roots, &global, &registered).map_err(AccessError::into_anyhow)?;
         validate_keyed_from_inventory(&roots, &global_keyed)?;
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
-        let builder = builder.provide(ReachableProviders(reachable));
+        let builder = builder
+            .provide(ReachableProviders(reachable))
+            .provide(ProviderOrder::new(provider_order_from_inventory(&roots)));
         if builder.contains(TypeId::of::<ResolverSchemaActive>()) {
             if strict_resolver_membership {
                 let unreachable = unreachable_resolvers_from_inventory(&roots);

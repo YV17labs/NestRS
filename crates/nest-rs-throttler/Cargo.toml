@@ -33,5 +33,11 @@ parking_lot.workspace = true
 # whose error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
 
+[dev-dependencies]
+# The wiring suite boots a real app: `#[routes]` wraps each verb in poem's own
+# `#[handler]`, and a rate-limited controller is the shape the docs describe.
+tokio = { workspace = true, features = ["macros", "rt"] }
+nest-rs-interceptors.workspace = true
+
 [lints]
 workspace = true

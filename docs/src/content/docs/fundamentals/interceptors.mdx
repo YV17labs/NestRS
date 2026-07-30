@@ -50,8 +50,8 @@ masking lives, where tracing spans wrap a request.
 
 ```rust
 use nest_rs_core::{Layer, injectable};
-use nest_rs_interceptors::{Interceptor, Next};
-use poem::{async_trait, Request, Response, Result};
+use nest_rs_interceptors::{Interceptor, Next, async_trait};
+use poem::{Request, Response, Result};
 
 #[injectable]
 #[derive(Default)]
@@ -78,7 +78,7 @@ or per handler.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main` | A transport-level `HttpInterceptorMeta` wrap + the per-route shaper |
+| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs_interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level `HttpInterceptorMeta` wrap + the per-route shaper |
 | **Controller / Resolver / Gateway** | `#[use_interceptors(Tracer)]` on the struct | The container, at mount |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 

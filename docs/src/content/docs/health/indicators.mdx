@@ -10,9 +10,16 @@ import { Aside } from '@astrojs/starlight/components';
 An indicator is one check a probe runs: a method on an `#[injectable]`
 provider, tagged with `#[liveness]`, `#[readiness]`, or `#[startup]`
 inside an `#[indicators]` impl block. It returns
-`anyhow::Result<()>` — `Ok(())` reports `up`, `Err(_)` reports
-`down` and the stringified error lands in the probe's JSON body. The
+`anyhow::Result<()>` — `Ok(())` reports `up`, `Err(_)` reports `down`. The
 method's name becomes the indicator's key.
+
+**The probe body carries a fixed reason, never your error.** A failed check
+reports `"check failed"` (or `"timed out"`), and the `anyhow` chain goes to
+the log instead: `warn` on `nest_rs::health`, with `indicator`, `kind` and
+`error` as fields. That is deliberate — `/health/*` is routinely
+unauthenticated, and an error from a connection check carries a DSN, an
+internal hostname or a driver message. Triage is one filtered log query;
+it is not a value anyone can read off an open port.
 
 ## A first indicator
 

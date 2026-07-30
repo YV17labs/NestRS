@@ -11,8 +11,9 @@
 // Checks (see STYLE.md): controlled H2 vocabulary, banned prose words + exclamation marks,
 // frontmatter description present / ≤160 / no unquoted '#', closing "## Going further",
 // ≤3 Asides per page, example-canon ban list.
-// Plus three code-truth checks the prose rules can't see — `version-pin`, `unauthed-curl`,
-// `crud-error` — each documented on its constant below and filed as a 1.1.0 defect first.
+// Plus the code-truth checks the prose rules can't see — `version-pin`, `unauthed-curl`,
+// `crud-error`, `bind-order`, `queue-name` — each documented on its constant below and filed
+// as a shipped defect first.
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -107,6 +108,16 @@ const UNMAPPED_CRUD_READ = /\.(?:list\(\)|page\(|access\()[^;]*?\.await\s*\?/;
 /// (`nest-rs-seaorm/src/service.rs`), action first, entity second.
 const BIND_ORDER =
   /\b(?:[Bb]ind(?:_required)?(?:::)?<\s*(?:S|[A-Z]\w*Service)|Authorized<\s*(?:E|[A-Z]\w*Entity))\b/g;
+
+/// A queue is named by its `QueueName` **type**, never a string: the macro
+/// rejects `#[process(queue = "audio")]` outright, and the producer's
+/// string-taking `push(name, job)` is the runtime-name escape hatch, not the
+/// default. Both spellings shipped across ~10 places on pages that predated
+/// `QueueName` (filed as 1.1.1 Q2), so a reader following the queue section
+/// wrote a consumer that would not compile and a producer that silently opted
+/// out of the very check the type exists to provide. Gated rather than trusted.
+const QUEUE_STRING_FORM = /#\[process\(\s*queue\s*=\s*"/g;
+const QUEUE_UNTYPED_PUSH = /\.(?:of::<[^>]*>\(|push\(\s*[A-Z_]{3,}\b)/g;
 
 /// Marks a snippet as a handler — the only layer where the check above applies.
 /// A **service** method returning `ServiceError` converts `DbErr` through `?`
@@ -227,10 +238,18 @@ function lintFile(absPath) {
     add('bind-order', `${m[0]}… — the action marker comes first`);
   }
 
+  // 9. A queue is named by its `QueueName` type on both sides.
+  for (const m of src.matchAll(QUEUE_STRING_FORM)) {
+    add('queue-name', `${m[0]}…" — name the queue by its QueueName type`);
+  }
+  for (const m of src.matchAll(QUEUE_UNTYPED_PUSH)) {
+    add('queue-name', `${m[0]}… — enqueue with push_to::<Q>, not an untyped name`);
+  }
+
   for (const block of fencedBlocks(src)) {
     const shell = /^(bash|sh|shell|console|zsh)\b/.test(block.info);
 
-    // 9. A pasteable `curl` against a guarded route carries a bearer — unless
+    // 10. A pasteable `curl` against a guarded route carries a bearer — unless
     // the block is documenting the denial itself.
     if (shell && !/\b(401|403|Unauthorized|Forbidden)\b/.test(block.body)) {
       // Fold shell line continuations so a header on the next line counts.
@@ -241,7 +260,7 @@ function lintFile(absPath) {
       }
     }
 
-    // 10. A handler snippet that `?`s a `CrudService` read does not compile.
+    // 11. A handler snippet that `?`s a `CrudService` read does not compile.
     if (/^rust\b/.test(block.info) && HANDLER_SNIPPET.test(block.body)) {
       for (const line of block.body.split('\n')) {
         if (UNMAPPED_CRUD_READ.test(line) && !line.includes('map_err')) {

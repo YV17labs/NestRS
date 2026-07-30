@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Five findings from the 1.1.1 read-through, which opened the GraphQL surface.
-Two were security-relevant, and each is closed with the check that keeps it
-closed: two integration suites and a demo e2e for the transport behaviour, three
-CLI tests for the generator, and a sixth grep (`bind-order`) in
-`docs/scripts/lint-docs.mjs`.
+Twenty-nine findings from two read-throughs. The first opened the GraphQL surface
+(five findings, two security-relevant); the second worked down the untested list
+into queue, schedule, events, WebSockets, MCP, rate limiting, health,
+OpenTelemetry and GraphQL relations (twenty-four, three security-relevant). Each
+is closed with the check that keeps it closed: new suites in nine crates, eight
+CLI tests, live-Postgres e2e coverage, and two new greps (`bind-order`,
+`queue-name`) in `docs/scripts/lint-docs.mjs`. One reported finding did not
+reproduce and is now pinned so it cannot start (the ability-less read over
+WebSockets already warns — an in-process test and an e2e both assert it).
+
+`nest-rs-testing` gains **`LogCapture`**, because a third of the second round was
+about what the framework *said*: a denial that fails closed but logs nothing, a
+dead-lettered job with no event, a warning filed under the wrong target. Those
+lines are what an operator queries during an incident, and they now have the same
+coverage as a status code.
 
 ### Security
 
@@ -71,6 +81,236 @@ CLI tests for the generator, and a sixth grep (`bind-order`) in
   dozen places wrote the reverse, and `/security/authorization/by-id-binding/`
   stated the rule backwards in prose. Fixed across every page and gated by a new
   `bind-order` check in the docs linter.
+
+- **A panicking event listener destroyed the emitter's request.** The events page
+  promises "failure is local"; a panic was contained to the *process*, not the
+  listener — it abandoned the dispatch chain mid-way, unwound through `emit` into
+  the emitter, and on HTTP took the response with it. The client saw a dropped
+  connection rather than a 500, with the emitter's side effects already
+  committed, so a retry re-ran them. Any `unwrap()` in a fire-and-forget reaction
+  (`email_the_author`, `index_for_search`) was therefore a way to break an
+  unrelated write path. Each listener now runs under `catch_unwind`: the panic is
+  logged at `error` on `nest_rs::events` with the event type and the panic
+  message, and the chain continues.
+
+- **A `Result` reached through a type alias shipped the error struct as a success
+  frame over WebSockets.** `#[subscribe_message]` read the return type's last
+  path segment to decide whether a handler could fail, so
+  `pub type ServiceResult<T> = Result<T, MyError>` read as an ordinary value and
+  the `Err` variant was serialized straight into the reply `data` — every field
+  of the error, including ones `Display` deliberately withholds, in a frame with
+  no `error` key and no server-side `warn`, because nothing knew a failure had
+  happened. It compiled without a warning, and only in codebases with typed
+  `Serialize` errors: the ones whose errors carry the most detail. The decision
+  is now made on the **type** (`ReplyValue`, inherent-impl specialization), so
+  however the return is spelled an `Err` becomes the same error frame and the
+  same `warn` on `nest_rs::ws`.
+
+- **A per-message WebSocket guard denial was logged under the wrong target.** It
+  landed on `nest_rs::layers`, which carries events about the layer *system*; an
+  operator tailing `nest_rs::ws=warn` for denials — the filtering every other
+  page teaches — saw nothing. Now on `nest_rs::ws`, beside the rest of the
+  transport's events.
+
+- **A panicking queue job was dead-lettered in silence.** `CatchPanicLayer`
+  contained it correctly — the job failed, the worker survived, the next job ran
+  — but it unwound past the per-job span, so the whole field set (`queue`,
+  `processor`, `job_id`, `attempt`) and every event were skipped. The only trace
+  was the default Rust panic hook on stderr: no target, no fields, no span, and
+  nothing at all at the docs' own production filter (`nest_rs::queue=warn`),
+  while a deserialization failure on the same worker reported properly. The panic
+  is now caught inside the span and reported as
+  `job dead-lettered: handler panicked` at `error`. The outcome is unchanged.
+
+- **Listener dispatch order was link order, not declaration order.** The events
+  page guarantees "the order their providers appear in `providers = [...]`, then
+  the order their methods appear in the `#[listeners]` block". `inventory` hands
+  entries back in link order — stable per binary and reshuffled by any change to
+  the code, which is the worst shape a guarantee can have: three methods declared
+  `first, second, third` dispatched `2, 3, 1`, a second provider's listener
+  landed *between* two of the first's, and two listeners ordered deliberately got
+  silently rearranged the next time somebody added a third. `#[on_event]` now
+  submits its position in its block, `nest-rs-core` seeds a `ProviderOrder` from
+  the module walk, and `EventsModule` sorts on the pair.
+
+- **Two controllers in one file could not share a handler name.** `#[routes]`
+  emits one module-level type per handler and derived its name from the method
+  alone, so `V1Controller::ping` and `V2Controller::ping` collided in a namespace
+  neither knew it shared — breaking the layout the versioning page prescribes,
+  and `list` / `get` / `create` besides. The symbol is now qualified by the
+  controller.
+
+- **A missing `WsModule` panicked the app after it had already mounted the
+  gateway.** The connection registry was resolved with an `.expect(...)` at
+  mount, so the app compiled, logged `mounted endpoint kind="ws"`, and *then*
+  died with a backtrace note — where every other boot-time misconfiguration
+  exits cleanly. A gateway now declares the registry as a dependency, so the
+  access graph refuses the boot naming both the missing type and the module that
+  provides it. A namespaced gateway self-provides its own and needs no import.
+
+- **`ThrottlerGuard` could not be wired the way the page describes.** The two
+  documented steps — import `ThrottlerModule::for_root(None)`, bind
+  `#[use_guards(ThrottlerGuard)]` — failed the boot: `#[use_guards]` puts the
+  guard under the access contract, so the *controller's* module owed a provider
+  for it, and a dynamic (`for_root`) import contributes only global
+  infrastructure and could never satisfy it. `ThrottlerModule` (and its Redis
+  twin, through one shared `provide_guard`) now registers the guard alongside the
+  store it reads. **Breaking for an app that worked around this** by listing
+  `ThrottlerGuard` in `providers`: that is now a duplicate registration and fails
+  the boot naming it — remove the line.
+
+- **An attribute-bound layer no module provides was reported as
+  `<unnamed dependency>`.** A guard, filter or interceptor is reached by
+  `Container::get::<P>` rather than an `#[inject]` field, and the access graph's
+  names list covered only the fields — so every layer fell off the end of it and
+  printed as a placeholder, *including in the suggested fix*. The framework's
+  best wiring diagnostic was unusable for exactly the things wired as `dyn`.
+  `#[controller]`, `#[resolver]`, `#[gateway]`, `#[routes]`, `#[messages]` and
+  the resolver impl now emit index-aligned labels.
+
+- **GraphQL relations answered `database error` with no `DbErr` and no SQL.** The
+  flagship "relations resolve themselves" feature failed wholesale on a wiring
+  gap nothing announced: `batch_spawner` fell back to a bare `tokio::spawn` when
+  no `dyn GraphqlBatchContext` was registered, and a batch on a fresh task has no
+  ambient executor, so `Repo` failed before a single statement reached the
+  database. Schema build now warns when loaders are seeded with no batch context,
+  naming the binding (`LoaderScope as dyn GraphqlBatchContext`), and
+  `Repo::conn`'s missing-executor error is logged at `error` on `nest_rs::orm`
+  with every context that installs one — because the wire form of
+  `ServiceError::Db` is the constant `database error` and carries nothing an
+  operator can act on.
+
+- **A failing health indicator's error was reachable from nowhere.** The probe
+  body reports a fixed `"check failed"` — deliberate, since `/health/*` is
+  routinely unauthenticated and an `anyhow` chain from a connection check carries
+  a DSN or an internal hostname — but the field's own rustdoc and the indicators
+  page both promised the stringified error. The three now agree: the detail goes
+  to a `warn` on `nest_rs::health`, and a test pins both directions.
+
+- **The skipped-indicator notice fired on every probe.** A linked-but-unreachable
+  indicator is a startup fact about the module tree; repeating it per request
+  turned a wiring notice into production log volume, and no other discovery seam
+  does that. Named once at boot now, at `warn`, matching `nest_rs::queue` and
+  `nest_rs::events`; the docs said `debug` and are corrected.
+
+- **The metric export interval was reachable from nowhere.** All three OTel
+  signals arrive, but metrics wait ~60 s while traces and logs land immediately —
+  so the standard first check (wire a meter, hit the route, look at the
+  collector) shows zero metrics for a full minute and reads as a broken pipeline.
+  The SDK's default was in neither the env table nor `OpenTelemetryConfig`, so it
+  could not be shortened for a local run either. Now
+  `metric_interval` / `NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS`, dual-path
+  like every other field, with the 60 s default named as
+  `DEFAULT_METRIC_INTERVAL`.
+
+- **`#[process]` obliged its call site to depend on `nest-rs-worker`.** The
+  expansion emitted bare `::nest_rs_worker::` paths, which resolve against the
+  *consumer's* extern prelude — so writing a processor needed a crate named
+  nowhere in the docs (`nest-rs-worker` appears once in the whole set, as an
+  "ambient job context seam"), and the first `cargo check` after
+  `nestrs g queue` was `could not find nest_rs_worker`. `nest-rs-queue`
+  re-exports it and the macro routes through that, as its own module docs already
+  claimed. `nest-rs-queue`'s integration suite declares no `nest-rs-worker`,
+  which is what keeps it closed.
+
+- **`async_trait` was re-exported by three surface crates and not by the four
+  layer crates.** `nest-rs-http` / `-queue` / `-ws` did; `-interceptors`,
+  `-filters`, `-exception-filters` and `-guards` did not, so the one import a
+  reader needed most was the one no page could name — and the miss cascades
+  (without the attribute every trait method reports a lifetime mismatch, so the
+  real cause hides under four unrelated errors). All seven now do.
+
+- **`#[expose(…, graphql)]` required async-graphql features the consumer had to
+  discover one error at a time.** The macro re-emits a column's own type into the
+  generated `InputObject`, and an entity's columns are `Uuid` and `DateTime*` by
+  construction — so a foreign key exposed as an input failed with
+  `the trait bound uuid::Uuid: InputType is not satisfied`, pointing at a field
+  whose type the developer never chose. `nest-rs-resource` declares `uuid` and
+  `chrono` on its optional `async-graphql`, since it is the crate whose macro
+  creates the requirement.
+
+### CLI
+
+- **`nestrs g queue` generated code that did not compile, and the `tracing` half
+  hit three generators.** `g queue`, `g schedule` and `g ws` all write a
+  `tracing::` call into the handler body while adding only their own `nest-rs-*`
+  crate, and a workspace scaffolded by `nestrs new` carries no `tracing` in its
+  features crate. `a_skeleton_that_names_a_crate_declares_it` derives the
+  requirement from the template text, so a skeleton that starts logging drags its
+  dependency along on the same commit.
+
+- **`nestrs g mcp` pinned `rmcp 1.7` while `nest-rs-mcp` builds against 2.2.**
+  Two majors in one graph put two `ServerHandler` traits in scope and every
+  `#[tool_handler]` method mismatched; pinning harder made it worse. The
+  generator's line is now read against the workspace manifest by
+  `the_rmcp_pin_matches_the_frameworks_own`, so bumping the framework's `rmcp`
+  fails there until the generator follows.
+
+- **`nestrs g ws` omitted `nest-rs-guards`' `ws` feature.** `#[messages]` expands
+  to `GuardAsWsMessageCheck`, which that feature gates — and the miss was worse
+  than an ordinary one: `cargo check -p features` failed while
+  `cargo check --workspace` passed, because a dev-dependency elsewhere in the
+  graph unified the feature in.
+
+- **`nestrs g queue` hid its own `#[queue]` marker.** The generator declared it
+  in the adapter's private `processor` module and did not re-export it, so
+  `push_to::<Q>` — the enqueue path the crate designates as the default — was
+  unreachable even from the feature's own service, leaving the untyped
+  `push(name, job)` escape hatch as the only way to enqueue. The marker now sits
+  at the port beside the payload, where `QueueName`'s own docs say it belongs.
+
+- **`nestrs g queue`'s module imported nothing.** That held only while the
+  processor stayed the inert stub; give it the shape the Queue page prescribes and
+  the worker died at boot on an access violation. Every adapter module imports
+  its port now, as `g http` / `g ws` / `g schedule` already did.
+
+- **`nestrs g ws`'s module omitted `WsModule`**, so following the generator's own
+  "Next steps" produced an app that mounted the gateway and then failed to boot.
+
+### Documentation
+
+- **The whole `/queue/` section described a pre-`QueueName` API.** Every
+  `#[process]` example named its queue with a string — a form the shipped macro
+  rejects — while `#[queue(name = …, job = …)]` and `QueueName` appeared in no
+  prose page at all, so the only place a reader met the real API was the
+  generator output. The producer half was worse because it *compiled*:
+  `/queue/producing-jobs/` taught `queue.of::<T>(AUDIO_QUEUE)`, the
+  runtime-name escape hatch, and called the string "the only stringly-typed
+  coupling" — the exact coupling the type removed. Rewritten across the section
+  and gated by a new `queue-name` check in the docs linter.
+
+- **Failed jobs land in `<queue>:dead`, not `<queue>:failed`.** The page tells
+  readers to inspect and replay that set themselves, so the key name is the one
+  detail an operator actually types. Two neighbours corrected with it: a
+  deserialization failure is non-retryable and dead-letters on the first attempt
+  rather than burning the budget, and every failed attempt *including the
+  terminal one* logs `will retry within the budget` — read the `attempt` field,
+  not the message.
+
+- **Three snippets imported `async_trait` from `poem`, which does not export
+  it**, and the global-interceptor snippet omitted
+  `AppBuilderInterceptorsExt`.
+
+- **Standalone mode loses every generator, not the two the CLI page named**, and
+  the landing page's "grow into a workspace when you add apps" was promised in
+  one sentence and explained nowhere. Both corrected, with the growth path
+  written out as a recipe.
+
+- **Per-section dependency stanzas** on `/queue/`, `/mcp/`, `/graphql/` and
+  `/websockets/`. Every section opened with `cargo add <one-crate>`, and in
+  several cases that did not compile the page's own first example — the real set
+  was discovered one compiler error at a time. The stanzas also give the
+  generators a spec to match, rather than leaving the generator and the docs as
+  two independent guesses at the same list.
+
+- **The decorators index pointed `#[on_connect]` / `#[on_disconnect]` at
+  Messages**; both are documented on Rooms.
+
+- **The trailing-slash trap**, on the controllers page: `#[get("/")]` under
+  `#[controller(path = "/greetings")]` serves `/greetings`, and the
+  trailing-slash form is a 404 that still carries a global interceptor's headers
+  — convincing enough to read as a broken feature. The boot line is
+  authoritative.
 
 ## [1.1.1] - 2026-07-27
 

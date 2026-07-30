@@ -11,7 +11,8 @@ use syn::{ItemStruct, LitStr, Meta, Token, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, expr_str, from_container_method,
-    injected_keys_with_layers, scoped_specs, take_path_list,
+    injected_keys_with_layers, injected_names_with_layers, layer_deps, scoped_specs,
+    take_path_list,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -48,7 +49,12 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let InjectableBody { ctor, dep_keys, .. } = match build_injectable_body(&mut item) {
+    let InjectableBody {
+        ctor,
+        dep_keys,
+        dep_names,
+        ..
+    } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -61,12 +67,18 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     // the same boot contract as a field — otherwise a layer registered in a
     // non-imported module resolves silently (flat-container leak). `#[routes]`
     // owns `Discoverable`, so the keys are exposed via an inherent fn it reads.
-    let injected_keys = injected_keys_with_layers(
-        &dep_keys,
+    // Keys and their diagnostic labels from one walk: without the labels a layer
+    // no module provides is reported as `<unnamed dependency>` — including in
+    // the suggested fix — which is precisely the case a `dyn`-injecting guard
+    // hits. `layer_deps` keeps the two index-aligned, so this selector is
+    // written once.
+    let layers = layer_deps(
         [&interceptors, &guards, &filters, &pipes, &exception_filters]
             .into_iter()
             .flatten(),
     );
+    let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
+    let injected_names = injected_names_with_layers(&dep_names, &layers);
 
     // `mount` is emitted by `#[routes]` (separate impl), so the layer lists are
     // exposed via an inherent fn `#[routes]` calls. Each layer is boxed to a
@@ -109,6 +121,11 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
                 #injected_keys
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_injected_names() -> ::std::vec::Vec<&'static str> {
+                #injected_names
             }
 
             /// Controller-level `#[use_interceptors(...)]`, exposed for the

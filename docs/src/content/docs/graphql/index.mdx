@@ -26,6 +26,30 @@ providers like any other struct.
 cargo add nest-rs-graphql
 ```
 
+A resolver's expansion reaches names several crates gate behind a **feature**,
+so the full stanza for a crate exposing entities over GraphQL is:
+
+```toml title="crates/features/Cargo.toml"
+[dependencies]
+nest-rs-graphql = "1.1"
+nest-rs-guards = { version = "1.1", features = ["graphql"] }     # #[resolver]'s guard chain
+nest-rs-resource = { version = "1.1", features = ["graphql"] }   # #[expose(…, graphql)]
+nest-rs-seaorm = { version = "1.1", features = ["http", "graphql"] }   # bind, LoaderScope
+nest-rs-authz = { version = "1.1", features = ["http", "graphql"] }    # the operation bridge
+async-graphql = { version = "7", features = ["dataloader"] }
+```
+
+`nestrs g graphql <feature>` writes all of it. Leaving a feature off is a
+resolution error inside a macro expansion rather than a missing-feature
+message, which is why the generator owns the list.
+
+<Aside>
+Only the crates you use: a resolver over a hand-written service needs
+`nest-rs-graphql` and `nest-rs-guards`; the `nest-rs-resource` /
+`nest-rs-seaorm` / `nest-rs-authz` rows are for an **entity** exposed over
+GraphQL behind an ability.
+</Aside>
+
 ## The minimal resolver
 
 ```rust title="src/greeting/resolver.rs"

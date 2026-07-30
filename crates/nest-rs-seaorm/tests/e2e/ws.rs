@@ -11,10 +11,12 @@ use std::sync::Arc;
 use nest_rs_authz::{Ability, AbilityBuilder, Action, current_ability};
 use nest_rs_core::Container;
 use nest_rs_seaorm::ws::WsDataContext;
-use nest_rs_seaorm::{Executor, current_executor};
+use nest_rs_seaorm::{
+    Executor, ExecutorScope, current_executor, current_executor_scope, scope_for,
+};
 use nest_rs_ws::{Captured, SocketContext, WsReply};
 use poem::Request;
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryTrait};
 
 mod widget {
     use sea_orm::entity::prelude::*;
@@ -93,6 +95,66 @@ async fn around_without_an_upgrade_ability_still_installs_the_executor() {
         }),
     )
     .await;
+}
+
+/// A gateway whose module bound no authz module reads through `Repo` with no
+/// ambient ability. It must fail closed **and say so**: a WS handler has no
+/// status code and no response envelope, so the empty array is the entire
+/// signal and is indistinguishable from an empty table. The claim under test is
+/// that this transport is not quieter than HTTP — the executor it installs is
+/// request-scoped, which is what puts the deny branch (and its `warn`) in play,
+/// rather than the unscoped worker branch that would have returned every row.
+#[tokio::test]
+async fn an_ability_less_read_over_websockets_denies_loudly() {
+    let container = Container::builder()
+        .provide_arc(crate::harness::connect_arc().await)
+        .build();
+    let ctx = WsDataContext::from_container(&container);
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let captured = ctx.capture(&Request::default());
+    ctx.around(
+        &captured,
+        Box::pin(async {
+            assert_eq!(
+                current_executor_scope(),
+                Some(ExecutorScope::Request),
+                "a message is request-scoped work, never system work",
+            );
+            let sql = probe::Entity::find()
+                .filter(scope_for::<probe::Entity>(Action::Read))
+                .build(sea_orm::DatabaseBackend::Postgres)
+                .to_string();
+            assert!(sql.contains("1 = 0"), "fails closed: {sql}");
+            WsReply::None
+        }),
+    )
+    .await;
+
+    let event = logs.expect_one(
+        "nest_rs::orm",
+        "no ambient Ability outside a worker job — denying all rows",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("action").as_deref(), Some("Read"));
+}
+
+/// Stand-in entity for the scope probe above — the filter is rendered, never
+/// executed, so no table has to exist.
+mod probe {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "ws_scope_probe")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
 }
 
 async fn probe_table(conn: &DatabaseConnection, name: &str) {

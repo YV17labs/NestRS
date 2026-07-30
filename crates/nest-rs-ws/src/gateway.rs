@@ -342,9 +342,13 @@ async fn handle_text<G: Gateway>(
         if let Err(reason) = guards.check(client, &event_ref, &data).await {
             // A per-message guard denial is a security event — it must be
             // greppable at `warn`+ like every other transport's denial, not
-            // silently folded into the error reply (WS-I2).
+            // silently folded into the error reply (WS-I2). On `nest_rs::ws`,
+            // not `nest_rs::layers`: the concern is a websocket message, and an
+            // operator tailing this transport for denials filters by transport.
+            // (`nest_rs::layers` stays the target for events *about* the layer
+            // system itself, like a guard declared at two scopes.)
             tracing::warn!(
-                target: "nest_rs::layers",
+                target: "nest_rs::ws",
                 conn_id,
                 event = %event_ref,
                 reason = %reason,
@@ -403,4 +407,117 @@ async fn handle_text<G: Gateway>(
 fn error_frame(event: &str, message: &str) -> String {
     WsEnvelope::encode(event, &serde_json::json!({ "error": message }))
         .unwrap_or_else(|_| String::from(r#"{"event":"error","data":{"error":"internal"}}"#))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use super::*;
+    use crate::guard::WsMessageCheck;
+
+    struct DenyAll;
+
+    #[async_trait]
+    impl WsMessageCheck for DenyAll {
+        async fn check(
+            &self,
+            _client: &WsClient,
+            _event: &str,
+            _data: &serde_json::Value,
+        ) -> Result<(), String> {
+            Err("author `banned` is not allowed to post".into())
+        }
+
+        fn type_key(&self) -> TypeId {
+            TypeId::of::<Self>()
+        }
+    }
+
+    struct Echo;
+
+    #[async_trait]
+    impl Gateway for Echo {
+        async fn dispatch(
+            &self,
+            _client: &WsClient,
+            _event: &str,
+            data: serde_json::Value,
+        ) -> WsReply {
+            WsReply::Reply(data)
+        }
+    }
+
+    fn wiring() -> DispatchWiring {
+        DispatchWiring {
+            ambient: None,
+            data_pipe: None,
+            root_container: None,
+        }
+    }
+
+    /// A per-message guard denial is a security event, so it has to be
+    /// greppable — and on the transport an operator would filter for. It was
+    /// emitted on `nest_rs::layers`, which carries the *layer system's* own
+    /// events (a guard declared at two scopes) and nothing else about this
+    /// socket: someone tailing `nest_rs::ws=warn` for denials, the way every
+    /// other page teaches, saw nothing at all.
+    #[tokio::test]
+    async fn a_denied_message_warns_on_the_websocket_target() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut guards = EventLayerTable::new();
+        guards.insert("moderated", vec![Arc::new(DenyAll)]);
+
+        let frame = handle_text(
+            &Echo,
+            &guards,
+            &wiring(),
+            &WsClient::for_test(),
+            r#"{"event":"moderated","data":"hi"}"#,
+        )
+        .await
+        .expect("a denial replies with an error frame");
+
+        assert!(
+            frame.contains("is not allowed to post"),
+            "the client is told why: {frame}"
+        );
+
+        let event = logs.expect_one("nest_rs::ws", "websocket message denied by a guard");
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("event").as_deref(), Some("moderated"));
+        assert!(
+            event.field("reason").is_some_and(|r| r.contains("banned")),
+            "the denial reason rides as a field: {event:#?}",
+        );
+        assert!(
+            logs.find("nest_rs::layers", "websocket message denied by a guard")
+                .is_empty(),
+            "…and only there: {:#?}",
+            logs.events(),
+        );
+    }
+
+    /// The allowed path stays silent on `warn` — a denial log that fires on
+    /// every message is as useless as none.
+    #[tokio::test]
+    async fn an_allowed_message_logs_no_denial() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let frame = handle_text(
+            &Echo,
+            &EventLayerTable::new(),
+            &wiring(),
+            &WsClient::for_test(),
+            r#"{"event":"open","data":"hi"}"#,
+        )
+        .await
+        .expect("an echo reply");
+        assert!(frame.contains("hi"), "{frame}");
+        assert!(
+            logs.find("nest_rs::ws", "websocket message denied by a guard")
+                .is_empty(),
+            "{:#?}",
+            logs.events(),
+        );
+    }
 }

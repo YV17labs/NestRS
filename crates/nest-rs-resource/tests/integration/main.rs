@@ -1,6 +1,9 @@
 //! Compile-time guard: wire-only `#[expose]` must not pull in `async_graphql`.
 //! Run with `cargo test -p nest-rs-resource --no-default-features`.
 
+#[cfg(feature = "graphql")]
+mod graphql;
+
 use nest_rs_resource::expose;
 use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
 use sea_orm::entity::prelude::*;

@@ -9,7 +9,9 @@ use chrono::Utc;
 use chrono_tz::Tz;
 use croner::Cron;
 use futures_util::FutureExt;
-use nest_rs_core::{Container, DiscoveryService, ReachableProviders, Transport, inventory};
+use nest_rs_core::{
+    Container, DiscoveryService, ReachableProviders, Transport, inventory, panic_message,
+};
 use nest_rs_worker::{JobContext, run_in_job_context};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval, sleep};
@@ -312,14 +314,4 @@ async fn fire(id: JobId, run: RunFn, container: &Container, ctx: &Option<Arc<dyn
             "scheduled job panicked; the schedule continues",
         ),
     }
-}
-
-/// Best-effort extraction of a panic payload's message — the common
-/// `&str`/`String` shapes a `panic!`/`unwrap`/`expect` produces.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
-    payload
-        .downcast_ref::<&'static str>()
-        .copied()
-        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("<non-string panic payload>")
 }

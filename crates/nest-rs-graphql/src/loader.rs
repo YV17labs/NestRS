@@ -45,8 +45,12 @@ pub type GraphqlBatchSpawner = Box<dyn Fn(GraphqlBatchFuture) + Send + Sync>;
 /// spawner.
 ///
 /// Bind with `providers = [MyBridge as dyn GraphqlBatchContext]`. With none
-/// registered, batches spawn bare on `tokio::spawn` (correct for an app
-/// without row-level security).
+/// registered, batches spawn bare on `tokio::spawn` — correct only for a
+/// loader that reaches no request-scoped state. A loader going through `Repo`
+/// (which every auto-emitted relation loader does) finds no ambient executor on
+/// that bare task and fails the whole relation before a single statement
+/// reaches the database, so the schema build warns when loaders exist and no
+/// context is bound.
 pub trait GraphqlBatchContext: Send + Sync + 'static {
     /// Build a spawner that carries the current request's ambient executor +
     /// ability into each batch it runs.
@@ -80,6 +84,7 @@ impl LoaderExtensionFactory {
     pub(crate) fn new(container: Container) -> Self {
         warn_unreachable_loaders(&container);
         let seeds = reachable_seeds(&container);
+        warn_missing_batch_context(&container, seeds.len());
         Self { container, seeds }
     }
 }
@@ -133,6 +138,32 @@ fn warn_unreachable_loaders(container: &Container) {
             "dataloaders linked but unreachable",
         );
     }
+}
+
+/// Warn once at schema build when loaders are seeded but nothing re-installs
+/// the request's ambient state around their batches.
+///
+/// This is the boot signal a whole class of failure had none of. Every
+/// auto-emitted relation loader reads through `Repo`, and `Repo` runs against
+/// the *ambient* executor — which a bare `tokio::spawn` batch does not have.
+/// The result was a relation that returned `database error` with no `DbErr`
+/// behind it and, tellingly, **no SQL reaching the database at all**: the query
+/// failed before execution, on a wiring gap nothing announced. The flagship
+/// "relations resolve themselves" feature looked broken with nothing to grep.
+fn warn_missing_batch_context(container: &Container, seeded: usize) {
+    const HINT: &str = "list `LoaderScope as dyn GraphqlBatchContext` in a reachable module \
+         (`nestrs g graphql` writes it into authz/graphql/) — without it every batch runs on a \
+         task with no ambient executor, and each relation field answers with an error before \
+         any SQL is issued";
+    if seeded == 0 || container.get_dyn::<dyn GraphqlBatchContext>().is_some() {
+        return;
+    }
+    tracing::warn!(
+        target: "nest_rs::graphql",
+        loaders = seeded,
+        hint = HINT,
+        "dataloaders seeded with no batch context",
+    );
 }
 
 impl ExtensionFactory for LoaderExtensionFactory {
@@ -225,5 +256,67 @@ mod tests {
             1,
             "the bridge's spawner must wrap the future, not be bypassed",
         );
+    }
+}
+
+#[cfg(test)]
+mod batch_context_warning {
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+
+    struct Bridge;
+
+    impl GraphqlBatchContext for Bridge {
+        fn spawner(&self) -> GraphqlBatchSpawner {
+            Box::new(|fut| {
+                tokio::spawn(fut);
+            })
+        }
+    }
+
+    const EVENT: &str = "dataloaders seeded with no batch context";
+
+    /// The wiring gap behind "relations resolve themselves, except they return
+    /// `database error`". Every auto-emitted relation loader reads through
+    /// `Repo`, `Repo` runs against the *ambient* executor, and a batch spawned
+    /// bare has none — so the relation failed before a single statement reached
+    /// the database, with nothing at `RUST_LOG=trace` to point at the cause.
+    /// Schema build now names it, and names the binding that fixes it.
+    #[test]
+    fn seeded_loaders_without_a_batch_context_warn_at_schema_build() {
+        let logs = LogCapture::install();
+        warn_missing_batch_context(&Container::builder().build(), 3);
+
+        let event = logs.expect_one("nest_rs::graphql", EVENT);
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("loaders").as_deref(), Some("3"));
+        assert!(
+            event
+                .field("hint")
+                .is_some_and(|h| h.contains("LoaderScope as dyn GraphqlBatchContext")),
+            "the hint names the binding: {event:#?}",
+        );
+    }
+
+    /// Bound, and the warning goes away — otherwise it would be noise every
+    /// correctly-wired app has to learn to ignore.
+    #[test]
+    fn a_bound_batch_context_is_silent() {
+        let container = Container::builder()
+            .provide_dyn::<dyn GraphqlBatchContext>(Arc::new(Bridge))
+            .build();
+        let logs = LogCapture::install();
+        warn_missing_batch_context(&container, 3);
+        assert!(logs.find("nest_rs::graphql", EVENT).is_empty());
+    }
+
+    /// An app with no loaders at all needs no context — a schema of plain
+    /// resolvers must boot silent.
+    #[test]
+    fn no_loaders_means_no_warning() {
+        let logs = LogCapture::install();
+        warn_missing_batch_context(&Container::builder().build(), 0);
+        assert!(logs.find("nest_rs::graphql", EVENT).is_empty());
     }
 }

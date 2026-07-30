@@ -62,11 +62,27 @@ impl<E: EntityTrait> Repo<E> {
     /// pre-filter, committing an out-of-scope row (DATA-S4).
     pub fn conn() -> Result<Executor, DbErr> {
         current_executor().ok_or_else(|| {
-            DbErr::Custom(
-                "no ambient database executor — a Repo query must run inside the request \
-                 scope installed by nest-rs-seaorm's DbContext interceptor"
-                    .to_owned(),
-            )
+            // Logged, not only returned. This error travels as
+            // `ServiceError::Db`, whose wire form is the constant
+            // `"database error"` — right for the client, useless for whoever
+            // has to fix it. On a GraphQL relation it was the *only* symptom:
+            // an error with no `DbErr`, nothing at `RUST_LOG=trace`, and no
+            // statement reaching the database, because the query failed before
+            // execution. The message names every context that installs an
+            // executor, so the missing one is the answer.
+            const HINT: &str = "a Repo query runs against the executor its transport installs: \
+                 HTTP through DatabaseModule's DbContext interceptor, a WS message through \
+                 `WsDataContext as dyn SocketContext`, an MCP tool through \
+                 `McpDataContext as dyn McpToolContext`, a dataloader batch through \
+                 `LoaderScope as dyn GraphqlBatchContext`, and worker/cron jobs through \
+                 DatabaseModule's JobContext — none of those is bound on this path";
+            tracing::error!(
+                target: "nest_rs::orm",
+                entity = std::any::type_name::<E>(),
+                hint = HINT,
+                "no ambient database executor",
+            );
+            DbErr::Custom(format!("no ambient database executor — {HINT}"))
         })
     }
 
@@ -288,6 +304,39 @@ mod tests {
     // (no `SocketContext` registered) runs with no ambient executor at all.
     // The WS-auth fail-secure carry-over rests on this erroring, never
     // falling back to some default connection.
+    /// The wire form of this failure is the constant `"database error"` — no
+    /// `DbErr`, and (on a dataloader batch) not a single statement reaching the
+    /// database, because the query fails before execution. Whoever has to fix
+    /// it gets nothing from the response, so the detail has to be in the log,
+    /// and it has to name the binding that is missing.
+    #[tokio::test]
+    async fn a_missing_executor_is_logged_with_the_binding_that_would_supply_it() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let Err(err) = Repo::<widget::Entity>::conn() else {
+            panic!("no executor is installed on this task");
+        };
+
+        let detail = err.to_string();
+        assert!(detail.contains("no ambient database executor"), "{detail}");
+        assert!(
+            detail.contains("LoaderScope as dyn GraphqlBatchContext"),
+            "the dataloader binding is one of the ones named: {detail}",
+        );
+
+        let event = logs.expect_one("nest_rs::orm", "no ambient database executor");
+        assert_eq!(event.level, "error");
+        assert!(
+            event.field("entity").is_some_and(|e| e.contains("widget")),
+            "…against the entity that could not be read: {event:#?}",
+        );
+        assert!(
+            event
+                .field("hint")
+                .is_some_and(|h| h.contains("LoaderScope as dyn GraphqlBatchContext")),
+            "…and the bindings that would supply one: {event:#?}",
+        );
+    }
+
     #[tokio::test]
     async fn conn_without_ambient_executor_is_an_error() {
         match Repo::<widget::Entity>::conn() {
@@ -337,6 +386,55 @@ mod tests {
             assert!(s.contains("1 = 0"), "request paths fail closed: {s}");
         })
         .await;
+    }
+
+    /// Failing closed is only half the promise. The row-level-filtering page
+    /// leans on the *other* half to justify the design: a missing authz module
+    /// "shows up as an empty (and noisy) endpoint in the first manual test,
+    /// never as a cross-tenant leak". On a transport with no status code and no
+    /// response envelope — a WebSocket message, a queue job — the empty array
+    /// *is* the whole signal, indistinguishable from an empty table, so the
+    /// `warn` is what makes the miswiring findable at all.
+    #[tokio::test]
+    async fn denying_all_rows_is_loud() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_request_executor(pool, async {
+            let _ = scope_for::<widget::Entity>(Action::Read);
+        })
+        .await;
+
+        let event = logs.expect_one(
+            "nest_rs::orm",
+            "no ambient Ability outside a worker job — denying all rows",
+        );
+        assert_eq!(event.level, "warn");
+        assert!(
+            event.field("entity").is_some_and(|e| e.contains("widget")),
+            "the entity is named: {event:#?}",
+        );
+        assert_eq!(event.field("action").as_deref(), Some("Read"));
+    }
+
+    /// …and the unscoped path stays quiet: a warning on every system query
+    /// would train an operator to ignore the one that matters.
+    #[tokio::test]
+    async fn the_unscoped_job_path_is_silent() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        with_job_executor(pool, async {
+            let _ = scope_for::<widget::Entity>(Action::Read);
+        })
+        .await;
+        assert!(
+            logs.find(
+                "nest_rs::orm",
+                "no ambient Ability outside a worker job — denying all rows",
+            )
+            .is_empty(),
+            "{:#?}",
+            logs.events(),
+        );
     }
 
     // System work (workers, schedule, shutdown hooks) runs unscoped — that's

@@ -73,14 +73,15 @@ pub mod lifecycle;
 pub(crate) mod logging;
 pub mod metadata;
 pub mod module;
+pub mod panic;
 pub mod request_scope;
 pub mod transport;
 
 pub use access::{
     AccessError, AccessGraphError, DuplicateProviderError, KeyedDependencyError,
-    MissingDependencyError, ModuleDescriptor, ProviderDescriptor, ReachableProviders,
-    ResolverDescriptor, ResolverSchemaActive, UnreachableResolversError,
-    validate_keyed_access_graph,
+    MissingDependencyError, ModuleDescriptor, ProviderDescriptor, ProviderOrder,
+    ReachableProviders, ResolverDescriptor, ResolverSchemaActive, UnreachableResolversError,
+    provider_order, validate_keyed_access_graph,
 };
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
@@ -91,6 +92,7 @@ pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
 pub use metadata::{HandlerMetadata, MappedError, Public};
 pub use module::{DynamicModule, Module};
+pub use panic::panic_message;
 pub use request_scope::{
     RequestScope, current_body_limit, current_request_scope, with_request_scope,
 };

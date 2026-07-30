@@ -62,6 +62,13 @@ $ curl http://localhost:3000
 Hello World
 ```
 
+**The boot line is authoritative about the served path.** `#[get("/")]` on
+`#[controller(path = "/greetings")]` serves `/greetings`, not `/greetings/` —
+requesting the trailing-slash form is a `404`, and one that still carries any
+global interceptor's headers, which reads convincingly like a broken feature.
+When a route seems missing, compare your URL against the `GET … →` line rather
+than against the attribute.
+
 ## Adding a path parameter
 
 ```rust

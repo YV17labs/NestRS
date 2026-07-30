@@ -16,7 +16,7 @@ than that is bolted on top.
 ## The basic shape
 
 ```rust
-#[process(queue = "audio", concurrency = 5, retries = 3)]
+#[process(queue = AudioQueue, concurrency = 5, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
     self.svc.transcode(&job.file).await
 }
@@ -27,15 +27,19 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 - `Err(e)` ⇒ the job goes back for another attempt. apalis tracks the
   attempt count, and after `retries` failures it's moved to the
   queue's failed-jobs list (see [Where failed jobs go](#where-failed-jobs-go)).
-- A **panic** inside the method is caught by a `CatchPanicLayer` and
-  converted to `Error::Abort`. The job ends up in the failed list, the
+- A **panic** inside the method is caught, logged as
+  `job dead-lettered: handler panicked` at `error` (inside the job's own
+  span, so it carries `queue`, `processor`, `job_id` and `attempt`), and
+  converted to `Error::Abort`. The job dead-letters immediately, the
   worker keeps running — one bad job doesn't kill the queue's consumer.
 
 Hot-path layer order: `CatchPanicLayer` sits *inside* `RetryLayer`,
 which sits inside `ErrorHandlingLayer`. `RetryLayer` reacts to `Err`,
 not to panics, so without the panic layer a single `unwrap()` in user
 code would tear down the worker. The order is fixed in
-`nest-rs-redis`'s `build_worker`.
+`nest-rs-redis`'s `build_worker`, which also catches the panic itself,
+one level in — that is what keeps the event inside the per-job span
+instead of unwinding past it to the default panic hook on stderr.
 
 ## The retry shape
 
@@ -85,13 +89,25 @@ failing under load, a panic in deserialization).
 
 ## Where failed jobs go
 
-apalis moves a job whose budget is exhausted (or that aborted via
-`CatchPanicLayer`) to a Redis sorted set named after the queue, with
-`:failed` appended (an apalis-internal naming convention you generally
-read through apalis's CLI or admin tools). The framework does **not**
-ship a dead-letter routing layer of its own — the failed list is the
-storage's failed list, and inspecting / replaying it is an operational
-task you run with apalis tooling or your own admin handler.
+apalis moves a job whose budget is exhausted (or that aborted) to a Redis
+sorted set named after the queue with **`:dead`** appended, and records
+the terminal error under `<queue>:data::result`. Both are apalis-internal
+keys you normally read through its CLI or admin tools:
+
+```bash frame="terminal"
+$ redis-cli KEYS 'audio*'
+audio:data          audio:data::result          audio:consumers          audio:dead
+
+$ redis-cli ZRANGE audio:dead 0 -1
+01KYQ7RH444ZAHA2JP8JBJVRA1
+
+$ redis-cli HGET audio:data::result 01KYQ7RH444ZAHA2JP8JBJVRA1
+RetryPolicyError: Out of retries after 4 attempts: FailedError: transcode failed
+```
+
+The framework does **not** ship a dead-letter routing layer of its own —
+the dead list is the storage's, and inspecting / replaying it is an
+operational task you run with apalis tooling or your own admin handler.
 
 If you need richer dead-lettering — alerting, replay, archival to a
 separate queue — write a wrapper service that catches the `Err` from
@@ -101,7 +117,7 @@ on `audio.dead` then runs your DLQ logic. That's the same pattern any
 non-Redis backend would expose.
 
 ```rust
-#[process(queue = "audio", retries = 3)]
+#[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
     match self.svc.transcode(&job.file).await {
         Ok(()) => Ok(()),
@@ -118,14 +134,17 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 Three failure modes the framework converts into the same `Err` path,
 so you don't have to think about them separately:
 
-- **Panics in the method body** — caught by `CatchPanicLayer`, surfaced
-  as `Error::Abort`. The job goes to the failed list immediately
+- **Panics in the method body** — caught and surfaced as
+  `Error::Abort`, with a `job dead-lettered: handler panicked` event
+  carrying the panic message. The job dead-letters immediately
   (regardless of remaining retries), the worker stays up.
 - **Deserialization errors** — the macro-emitted `JobHandler` does the
   `serde_json::from_value`. A payload that doesn't match the method's
   job type returns `Err` before your method even runs. Retrying won't
-  help: the payload shape is wrong. `retries` will burn through, then
-  the job ends in the failed list.
+  help: the payload shape is wrong, so it is classified **non-retryable**
+  and dead-letters on the **first** attempt, logging
+  `job dead-lettered: non-retryable failure` at `error`. The `retries`
+  budget is not consumed.
 - **Container resolution failures** — `Container::get` of the
   `#[processor]` host can fail if a dep wasn't seeded. The handler
   returns `Err` with the resolution error. This usually means a
@@ -146,6 +165,18 @@ up; afterward the new worker drains them.
 decoded directly with a `tracing::warn` — so jobs left in Redis from a
 release before envelopes existed don't get stuck. New producers
 always wrap.
+
+## Limits
+
+- **No backoff.** `retries = N` is a fixed count, retried
+  back-to-back — see the caution above.
+- **`will retry` is logged on the terminal attempt too.** Every failed
+  attempt including the last logs `job failed; will retry within the
+  budget`; after attempt `N + 1` there is no budget left and the job
+  dead-letters with no further line. Read the `attempt` field on the
+  span, not the message, to tell the last try from the others.
+- **The dead list is not routed anywhere.** Nothing alerts, replays or
+  archives on your behalf; wire the wrapper above if you need that.
 
 ## Going further
 

@@ -70,6 +70,25 @@ same OTLP endpoint as the traces (set
 construction still works but the readings stay local — useful for tests that
 want to assert on counter increments without spinning a collector.
 
+**The interval is 60 seconds by default, and that will look broken.** Traces and
+logs reach a collector immediately; metrics wait for the reader's next flush. The
+natural first check — wire a meter, hit the route, look at the collector — shows
+spans and log records with **zero** metrics, for a full minute. Nothing is wrong;
+shorten the interval for a local run:
+
+```bash frame="terminal"
+NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS=5 nestrs run dev api
+```
+
+or pin it in code, as with any other field:
+
+```rust
+OpenTelemetryConfig::from_env("api").with_metric_interval(Duration::from_secs(5))
+```
+
+A value of `0` (or an unparseable one) keeps the 60 s default rather than
+spinning the reader in a tight export loop.
+
 ## Resource attributes
 
 Every exported metric carries the service-level resource attributes built from

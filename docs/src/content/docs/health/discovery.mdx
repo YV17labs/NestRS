@@ -46,17 +46,20 @@ where its provider belongs.
 
 ## Checking what runs
 
-When an indicator silently sits out, the framework emits one line
-per skipped check on the `nest_rs::health` target:
+When an indicator silently sits out, the framework names it **once at
+boot** on the `nest_rs::health` target — the same contract every other
+discovery seam honours (`nest_rs::queue`, `nest_rs::events`):
 
 ```
-DEBUG nest_rs::health: skipped indicator: provider unreachable from
-      app's module tree indicator=upstream kind=Readiness
+ WARN nest_rs::health: skipped indicator: provider unreachable from
+      app's module tree indicator="upstream" kind=Readiness
 ```
 
-Run with `RUST_LOG=nest_rs::health=debug` to surface them. The usual
-cause is a missing `<Feature>HealthModule` import in `AppModule` —
-the feature's data module imports the service, not the health adapter.
+`warn`, so it shows at any production filter, and once — a wiring notice
+repeated on every probe is log volume, not a signal. Probing then skips in
+silence. The usual cause is a missing `<Feature>HealthModule` import in
+`AppModule` — the feature's data module imports the service, not the
+health adapter.
 
 A second check: the response body. With the indicator's module
 imported, the indicator's name appears under `details` on its probe:

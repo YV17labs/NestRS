@@ -155,8 +155,15 @@ in `src/` (no `features` crate).
 </FileTree>
 
 No `db.just` here: the database verbs drive the workspace's `migrations` and
-`seed` crates, which a single crate has nowhere to put. `g resource` and
-`g migration` are workspace-only for the same reason.
+`seed` crates, which a single crate has nowhere to put.
+
+**Every `generate` subcommand is workspace-only** — not just the database ones.
+`g feature`, `g resource`, `g auth`, `g migration` and the six adapters all
+resolve paths against `crates/features/` and wire the serving app's `module.rs`,
+neither of which exists here; outside a workspace they refuse with
+`not inside a nestrs workspace`. `nestrs generate --help` says the same in its
+header. In standalone mode you copy the shapes by hand — the layout is two
+files per concern, and the [Publish workspace](/publish/) is the reference.
 
 </TabItem>
 </Tabs>
@@ -405,6 +412,43 @@ nestrs update --from-path
 
 Every generator accepts **`--dry-run`** and **`-p <path>`**.
 Aliases: **`nestrs g`** = **`nestrs generate`**.
+**All of them require a workspace** — see the standalone note above.
+
+## Grow a standalone crate into a workspace
+
+There is no `nestrs migrate`: the move is a handful of file relocations, and
+doing it by hand keeps you in control of the app boundary you are introducing.
+The order matters only in that the workspace has to exist before anything moves
+into it.
+
+```bash frame="terminal"
+# 1. Scaffold the workspace beside the standalone crate.
+nestrs new acme && cd acme
+
+# 2. Move the standalone crate's src/ in as a feature. The file names already
+#    match — service.rs, controller.rs, module.rs are the same roles.
+mkdir -p crates/features/src/hello
+mv ../hello/src/{service.rs,controller.rs,module.rs} crates/features/src/hello/
+
+# 3. `main.rs` stays behind as the app: apps/hello/src/main.rs already exists
+#    from step 1 and is the same six lines.
+```
+
+Then three edits the copy cannot do:
+
+1. **`crates/features/src/lib.rs`** — add `pub mod hello;` and
+   `pub use hello::HelloModule;`.
+2. **`crates/features/src/hello/mod.rs`** — the folder index
+   (`mod service; mod controller; mod module;` plus the `pub use` lines).
+   Standalone had no `mod.rs` because `main.rs` declared the modules.
+3. **Imports** — `crate::service::HelloService` becomes
+   `crate::hello::HelloService`; the app's `module.rs` imports
+   `features::hello::HelloHttpModule`.
+
+`crates/migrations/` and `crates/seed/` come from `nestrs new`, so the database
+verbs and `g migration` work from the first `nestrs run db migrate`. From here
+every generator is available: `nestrs g http <feature>` and its siblings wire
+themselves into the app whose directory you are standing in.
 
 ## Going further
 

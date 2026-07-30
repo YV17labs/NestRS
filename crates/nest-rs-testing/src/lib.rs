@@ -7,12 +7,17 @@
 //!
 //! Override providers with [`override_dyn`](TestAppBuilder::override_dyn) /
 //! [`override_value`](TestAppBuilder::override_value).
+//!
+//! [`LogCapture`] covers the other half of a transport's contract: the events
+//! it emits. A denial that fails closed but logs nothing passes every response
+//! assertion — and is exactly what nobody can debug at 3am.
 #![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]
 
 mod app;
 mod env;
 mod headless;
+mod logs;
 pub mod mcp;
 
 #[cfg(feature = "orm")]
@@ -23,5 +28,6 @@ pub use database::EphemeralDatabase;
 pub use app::{TestApp, TestAppBuilder};
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
+pub use logs::{CapturedEvent, LogCapture};
 
 pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};

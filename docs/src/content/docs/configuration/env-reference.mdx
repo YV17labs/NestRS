@@ -84,6 +84,7 @@ config survives adopting or dropping the observability stack.
 | `SERVICE_NAME` | service name; overrides the name passed to `OpenTelemetry::init` |
 | `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export) |
 | `SAMPLE_RATIO` | trace sampling ratio, `0.0`–`1.0` (default `1.0`) |
+| `METRIC_INTERVAL_SECS` | metric export period (default `60`; `0` keeps the default). Traces and logs export immediately — metrics wait for this flush |
 | `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
 
 The console layer reads the [`NESTRS_LOG*` family](#logging--nestrs_log)

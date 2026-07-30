@@ -1,5 +1,7 @@
 //! Public-API exercise for `Throttle` + `InMemoryThrottler` keyed by client.
 
+mod wiring;
+
 use std::net::IpAddr;
 use std::time::Duration;
 

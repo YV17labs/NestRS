@@ -18,9 +18,15 @@ anyhow.workspace = true
 tracing.workspace = true
 # Listener-registry lock — poison-free locking on the emit path.
 parking_lot.workspace = true
+# `catch_unwind` on each listener future: a panicking listener is contained to
+# itself rather than unwinding through `emit` into the emitter's request.
+futures-util.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+# A contained panic that logs nothing would be a silent failure — `LogCapture`
+# covers the event half of the containment contract.
+nest-rs-testing = { path = "../nest-rs-testing" }
 
 [lints]
 workspace = true

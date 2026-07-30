@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, quote};
-use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Path, Signature};
+use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Signature};
 
 use crate::ty::{arc_inner, nth_generic_type, type_label};
 
@@ -297,19 +297,51 @@ pub fn forwarded_idents<'a>(
     Ok(idents)
 }
 
-/// `TypeId::of::<P>()` for each referenced type a provider resolves from the
-/// container outside its `#[inject]` fields — guards, filters, interceptors,
-/// resolver `#[field_resolver]` `&Service` deps — deduplicated by token text. Feeding
-/// these into `Discoverable::injected` puts them under the access contract.
-pub fn layer_inject_keys<'a, T: ToTokens + 'a>(
-    items: impl IntoIterator<Item = &'a T>,
-) -> Vec<TokenStream2> {
+/// The `TypeId` **and** the diagnostic label of each type a provider resolves
+/// from the container outside its `#[inject]` fields — guards, filters,
+/// interceptors, resolver `#[field_resolver]` `&Service` deps.
+///
+/// Both halves come out of **one** walk, deduplicated by token text once, so
+/// they are index-aligned by construction. That alignment is load-bearing: the
+/// access graph pairs `injected()[i]` with `injected_names()[i]` to name a
+/// dependency no module provides. Two independent walks over the same list
+/// would have to dedupe on the byte-identical rule forever, and a divergence
+/// would not fail — it would silently make the boot error name the *wrong*
+/// type, which is worse than the `<unnamed dependency>` placeholder it
+/// replaces.
+pub struct LayerDeps {
+    /// `TypeId::of::<P>()` per layer, for `Discoverable::injected`.
+    pub keys: Vec<TokenStream2>,
+    /// The matching label per layer, for `Discoverable::injected_names`.
+    pub labels: Vec<TokenStream2>,
+}
+
+/// Walk `items` once, yielding [`LayerDeps`]. Feeding its `keys` into
+/// `Discoverable::injected` is what puts a layer under the access contract.
+pub fn layer_deps<'a, T: ToTokens + 'a>(items: impl IntoIterator<Item = &'a T>) -> LayerDeps {
     let mut seen = HashSet::new();
-    items
-        .into_iter()
-        .filter(|p| seen.insert(quote!(#p).to_string()))
-        .map(|p| quote! { ::core::any::TypeId::of::<#p>() })
-        .collect()
+    let mut keys = Vec::new();
+    let mut labels = Vec::new();
+    for item in items {
+        if !seen.insert(quote!(#item).to_string()) {
+            continue;
+        }
+        keys.push(quote! { ::core::any::TypeId::of::<#item>() });
+        let label = layer_label(item);
+        labels.push(quote! { #label });
+    }
+    LayerDeps { keys, labels }
+}
+
+/// Short diagnostic name for a layer, through the crate's one labeller. Routed
+/// via `Type` rather than `Path` so a `&Service` or `Arc<dyn Trait>` field
+/// dependency — which `#[resolver]` passes here — reads as `dyn Trait` instead
+/// of raw token text.
+fn layer_label(item: &impl ToTokens) -> String {
+    match syn::parse2::<syn::Type>(item.to_token_stream()) {
+        Ok(ty) => type_label(&ty),
+        Err(_) => quote!(#item).to_string(),
+    }
 }
 
 /// `::std::vec![...]` of `#[inject]` dependency `TypeId`s — body for
@@ -321,31 +353,52 @@ pub(crate) fn injected_keys_expr(dep_keys: &[TokenStream2]) -> TokenStream2 {
 
 /// `injected_keys_expr` extended with the dedup'd struct-level guard/filter/
 /// interceptor `TypeId`s; the companion impl-block macro appends per-route/
-/// per-message layers on top via [`injected_method_with_layers`].
-pub fn injected_keys_with_layers<'a>(
-    dep_keys: &[TokenStream2],
-    layer_paths: impl IntoIterator<Item = &'a Path>,
-) -> TokenStream2 {
+/// per-message layers on top via [`injected_methods_with_layers`].
+pub fn injected_keys_with_layers(dep_keys: &[TokenStream2], layers: &LayerDeps) -> TokenStream2 {
     let mut keys = dep_keys.to_vec();
-    keys.extend(layer_inject_keys(layer_paths));
+    keys.extend(layers.keys.iter().cloned());
     injected_keys_expr(&keys)
 }
 
-/// `Discoverable::injected` for an impl-block macro: take the struct's
-/// `__nestrs_injected()` and extend it with per-route/per-message layer
-/// `TypeId`s. The fixed-size, explicitly-typed array keeps `extend` unambiguous
-/// when no per-method layers are present.
-pub fn injected_method_with_layers(
+/// The name half of [`injected_keys_with_layers`], index-aligned with it —
+/// body for the inherent `__nestrs_injected_names()` a struct decorator emits.
+/// Both take the same [`LayerDeps`], so the alignment is not a convention the
+/// call site has to honour.
+pub fn injected_names_with_layers(dep_names: &[TokenStream2], layers: &LayerDeps) -> TokenStream2 {
+    let mut names = dep_names.to_vec();
+    names.extend(layers.labels.iter().cloned());
+    injected_keys_expr(&names)
+}
+
+/// `Discoverable::injected` **and** `injected_names` for an impl-block macro:
+/// take the struct's `__nestrs_injected()` / `__nestrs_injected_names()` and
+/// extend each with the per-route / per-message layers.
+///
+/// One function emitting both, over one [`LayerDeps`] — so an impl-block
+/// decorator cannot append a key without its label, and adding a seventh layer
+/// family to a call site's selector cannot misalign the two. The fixed-size,
+/// explicitly-typed arrays keep `extend` unambiguous when no per-method layers
+/// are present.
+pub fn injected_methods_with_layers(
     self_ty: &impl quote::ToTokens,
-    layer_keys: &[TokenStream2],
+    layers: &LayerDeps,
 ) -> TokenStream2 {
-    let count = proc_macro2::Literal::usize_unsuffixed(layer_keys.len());
+    let count = proc_macro2::Literal::usize_unsuffixed(layers.keys.len());
+    let keys = &layers.keys;
+    let labels = &layers.labels;
     quote! {
         fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
             let mut __keys = <#self_ty>::__nestrs_injected();
-            let __layers: [::core::any::TypeId; #count] = [ #(#layer_keys),* ];
+            let __layers: [::core::any::TypeId; #count] = [ #(#keys),* ];
             __keys.extend(__layers);
             __keys
+        }
+
+        fn injected_names() -> ::std::vec::Vec<&'static str> {
+            let mut __names = <#self_ty>::__nestrs_injected_names();
+            let __layers: [&'static str; #count] = [ #(#labels),* ];
+            __names.extend(__layers);
+            __names
         }
     }
 }

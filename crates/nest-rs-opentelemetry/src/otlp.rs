@@ -68,7 +68,12 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
             .with_protocol(Protocol::HttpBinary)
             .build()
             .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
-        let reader = PeriodicReader::builder(metric_exporter).build();
+        // Explicit, because the SDK's default is 60 s and nothing else says so:
+        // traces and logs land immediately while metrics do not, which reads as
+        // a broken metrics pipeline for a full minute during setup.
+        let reader = PeriodicReader::builder(metric_exporter)
+            .with_interval(config.metric_interval)
+            .build();
         let meter_provider = SdkMeterProvider::builder()
             .with_resource(resource.clone())
             .with_reader(reader)

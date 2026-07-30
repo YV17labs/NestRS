@@ -56,6 +56,9 @@ validator.workspace = true
 nest-rs-guards = { path = "../nest-rs-guards", features = ["ws"] }
 # Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
 trybuild.workspace = true
+# A denial that fails closed but logs nothing passes every reply assertion —
+# `LogCapture` covers the other half of the dispatch contract.
+nest-rs-testing = { path = "../nest-rs-testing" }
 
 [lints]
 workspace = true

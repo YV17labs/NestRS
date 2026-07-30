@@ -697,6 +697,81 @@ fn generate_ws_adapter_ensures_dep_and_wires() {
     assert!(features_cargo.contains("nest-rs-ws"));
 }
 
+/// `WsModule` provides the connection registry every default-namespace gateway
+/// reads. Left out, the app compiles, mounts the gateway, and *then* dies — so
+/// the generator writes the import rather than leaving it to the boot.
+#[test]
+fn generate_ws_adapter_imports_the_connection_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
+
+    let module_rs =
+        fs::read_to_string(dir.path().join("crates/features/src/posts/ws/module.rs")).unwrap();
+    assert!(
+        module_rs.contains("use nest_rs_ws::WsModule;")
+            && module_rs.contains("imports = [PostsModule, WsModule]"),
+        "the generated ws module must import WsModule: {module_rs}"
+    );
+}
+
+/// `#[messages]` expands to `nest_rs_guards::GuardAsWsMessageCheck`, gated
+/// behind that crate's `ws` feature — and the gateway body logs. Without both,
+/// `cargo check -p features` fails while `cargo check --workspace` passes
+/// (feature unification through a dev-dependency), which is the worst possible
+/// place for the failure to surface.
+#[test]
+fn generate_ws_adapter_enables_the_guards_ws_feature_and_tracing() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    let features_cargo_path = dir.path().join("crates/features/Cargo.toml");
+    fs::write(
+        &features_cargo_path,
+        "[package]\nname = \"features\"\n\n[dependencies]\n\
+         nest-rs-core.workspace = true\nnest-rs-guards.workspace = true\n",
+    )
+    .unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
+
+    let features_cargo = fs::read_to_string(&features_cargo_path).unwrap();
+    assert!(
+        features_cargo
+            .lines()
+            .any(|l| l.starts_with("nest-rs-guards") && l.contains("\"ws\"")),
+        "nest-rs-guards needs its `ws` feature: {features_cargo}"
+    );
+    assert!(features_cargo.contains("tracing"), "{features_cargo}");
+}
+
+/// The schedule skeleton logs too — same class as the ws and queue ones.
+#[test]
+fn generate_schedule_adapter_brings_tracing() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "schedule", "posts", "-p", path]);
+
+    let tasks_rs = fs::read_to_string(
+        dir.path()
+            .join("crates/features/src/posts/schedule/tasks.rs"),
+    )
+    .unwrap();
+    assert!(tasks_rs.contains("tracing::"), "the skeleton logs");
+    let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    assert!(
+        features_cargo.contains("tracing"),
+        "…so `tracing` has to be a dependency: {features_cargo}"
+    );
+}
+
 #[test]
 fn generate_queue_adapter_puts_command_at_the_port() {
     let dir = tempfile::tempdir().unwrap();
@@ -714,7 +789,15 @@ fn generate_queue_adapter_puts_command_at_the_port() {
     assert!(command_rs.contains("pub struct ProcessPostCommand"));
 
     let processor_rs = fs::read_to_string(feature.join("queue/processor.rs")).unwrap();
-    assert!(processor_rs.contains("use crate::posts::ProcessPostCommand;"));
+    // rustfmt may reorder the braced list, so assert on the names, not the line.
+    let port_import = processor_rs
+        .lines()
+        .find(|l| l.starts_with("use crate::posts::"))
+        .expect("the processor imports its port");
+    assert!(
+        port_import.contains("ProcessPostCommand") && port_import.contains("PostsQueue"),
+        "{port_import}"
+    );
     assert!(processor_rs.contains("job: ProcessPostCommand"));
     // The payload is imported, never redefined in the adapter.
     assert!(!processor_rs.contains("pub struct ProcessPostCommand"));
@@ -722,9 +805,75 @@ fn generate_queue_adapter_puts_command_at_the_port() {
     // The port `mod.rs` exposes both the command and the adapter module.
     let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
     assert!(mod_rs.contains("mod command;"));
-    assert!(mod_rs.contains("pub use command::ProcessPostCommand;"));
+    let command_export = mod_rs
+        .lines()
+        .find(|l| l.starts_with("pub use command::"))
+        .expect("the port re-exports its command");
+    assert!(
+        command_export.contains("ProcessPostCommand") && command_export.contains("PostsQueue"),
+        "{command_export}"
+    );
     assert!(mod_rs.contains("pub mod queue;"));
     assert!(mod_rs.contains("PostsQueueModule"));
+}
+
+/// The `#[queue]` marker is the artifact `push_to::<Q>` is generic over, so it
+/// has to be *reachable*. Declared in the adapter's private `processor` module
+/// it was invisible to the feature's own service one directory up, leaving the
+/// untyped `push(name, job)` escape hatch as the only way to enqueue — the exact
+/// check `QueueName` exists to provide, lost.
+#[test]
+fn generate_queue_adapter_declares_the_queue_marker_at_the_port() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "queue", "posts", "-p", path]);
+
+    let feature = dir.path().join("crates/features/src/posts");
+    let command_rs = fs::read_to_string(feature.join("command.rs")).unwrap();
+    assert!(
+        command_rs.contains("#[queue(name = \"posts\", job = ProcessPostCommand)]")
+            && command_rs.contains("pub struct PostsQueue;"),
+        "the marker belongs beside the payload it names: {command_rs}"
+    );
+
+    let processor_rs = fs::read_to_string(feature.join("queue/processor.rs")).unwrap();
+    assert!(
+        !processor_rs.contains("pub struct PostsQueue"),
+        "and nowhere else: {processor_rs}"
+    );
+    assert!(processor_rs.contains("#[process(queue = PostsQueue"));
+
+    // Reachable from the port, which is what a producer imports.
+    let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
+    assert!(mod_rs.contains("PostsQueue"), "{mod_rs}");
+}
+
+/// The generated processor module imports the port like every sibling adapter
+/// does. It reads as redundant only while the stub stays inert: give it the
+/// documented shape — a thin processor delegating to the port service — and
+/// without the import the worker dies at boot with an access violation.
+#[test]
+fn generate_queue_adapter_module_imports_the_port() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "queue", "posts", "-p", path]);
+
+    let module_rs =
+        fs::read_to_string(dir.path().join("crates/features/src/posts/queue/module.rs")).unwrap();
+    assert!(
+        module_rs.contains("imports = [PostsModule]"),
+        "the queue adapter module must import its port: {module_rs}"
+    );
+
+    // The skeleton logs, so `tracing` has to come with it.
+    let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    assert!(features_cargo.contains("tracing"), "{features_cargo}");
 }
 
 /// `#[resolver]` expands to names behind `nest-rs-guards`' `graphql` feature,

@@ -13,8 +13,8 @@ use syn::{
 use nest_rs_codegen::{
     InjectableBody, PipeWrapper, build_injectable_body, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, impl_self_ident, injected_keys_with_layers,
-    injected_method_with_layers, layer_inject_keys, pipe_wrapper, reject_http_only_layers,
-    scoped_specs, take_flag_attr, take_path_list,
+    injected_methods_with_layers, injected_names_with_layers, layer_deps, pipe_wrapper,
+    reject_http_only_layers, scoped_specs, take_flag_attr, take_path_list,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -57,7 +57,12 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let InjectableBody { ctor, dep_keys, .. } = match build_injectable_body(&mut item) {
+    let InjectableBody {
+        ctor,
+        dep_keys,
+        dep_names,
+        ..
+    } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -70,7 +75,12 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     // for the impl-block macro to fold into `Discoverable::injected`
     // together with method guards and `#[field_resolver]` `&Service`
     // deps. Same struct/impl split as `#[controller]`/`#[routes]`.
-    let injected_keys = injected_keys_with_layers(&dep_keys, guards.iter());
+    // Keys plus index-aligned labels from one walk, so a resolver-scope guard no
+    // module provides is named in the boot error rather than reported as
+    // `<unnamed dependency>`.
+    let layers = layer_deps(guards.iter());
+    let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
+    let injected_names = injected_names_with_layers(&dep_names, &layers);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
 
     // Resolver-membership marker so the boot can require this resolver be
@@ -99,6 +109,11 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
                 #injected_keys
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_injected_names() -> ::std::vec::Vec<&'static str> {
+                #injected_names
             }
 
             /// Resolver-scope `#[use_guards(...)]`, exposed for the
@@ -828,9 +843,15 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // `Discoverable::injected` = struct `#[inject]` keys + operation guards +
     // `#[field_resolver]` deps. `register` is a no-op: the schema builds the resolver
     // from the assembled container at boot.
-    let mut layer_keys = layer_inject_keys(all_guard_paths.iter());
-    layer_keys.extend(layer_inject_keys(field_dep_types.iter()));
-    let injected_method = injected_method_with_layers(&self_ty, &layer_keys);
+    // Operation guards then `#[field_resolver]` deps, each with the label that
+    // names it in a boot error. Two walks because the two lists have different
+    // token types, concatenated in the order the keys were: `LayerDeps` keeps
+    // each half internally aligned, and appending one to the other preserves it.
+    let mut layers = layer_deps(all_guard_paths.iter());
+    let field_layers = layer_deps(field_dep_types.iter());
+    layers.keys.extend(field_layers.keys);
+    layers.labels.extend(field_layers.labels);
+    let injected_methods = injected_methods_with_layers(&self_ty, &layers);
 
     Ok(quote! {
         #item
@@ -840,7 +861,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #(#field_blocks)*
 
         impl ::nest_rs_core::Discoverable for #self_ty {
-            #injected_method
+            #injected_methods
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

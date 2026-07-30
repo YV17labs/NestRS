@@ -11,6 +11,7 @@ use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
 
 use crate::config::ThrottlerConfig;
+use crate::guard::ThrottlerGuard;
 use crate::rate::Throttle;
 use crate::store::{InMemoryThrottler, ThrottlerStore};
 
@@ -46,15 +47,44 @@ impl DynamicModule for ThrottlerSetup {
         // infrastructure (the guard's `#[inject] Arc<dyn ThrottlerStore>`
         // resolves). An alternative backend (`RedisThrottlerModule`) supplies
         // the same binding from its own factory; import exactly one.
-        builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|container| async move {
-            let config = container
-                .get::<ThrottlerConfig>()
-                .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
-            let (default, trusted_proxies) = resolve(&config)?;
-            Ok(Arc::new(InMemoryThrottler::new(default, trusted_proxies))
-                as Arc<dyn ThrottlerStore>)
-        })
+        let builder =
+            builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|container| async move {
+                let config = container
+                    .get::<ThrottlerConfig>()
+                    .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
+                let (default, trusted_proxies) = resolve(&config)?;
+                Ok(Arc::new(InMemoryThrottler::new(default, trusted_proxies))
+                    as Arc<dyn ThrottlerStore>)
+            });
+        provide_guard(builder)
     }
+}
+
+/// Register [`ThrottlerGuard`] as global infrastructure, next to whichever
+/// `dyn ThrottlerStore` binding the caller just registered.
+///
+/// Binding the guard is `#[use_guards(ThrottlerGuard)]` on a controller — which
+/// leaves the *controller's* module owing the access graph a provider for it.
+/// No documented step supplies one, and a **dynamic** import (`for_root`)
+/// contributes only global infrastructure, never an injectable a provider can
+/// depend on: importing `ThrottlerModule` anywhere therefore could not satisfy
+/// it, and the boot failed on a dependency the graph could not even name.
+/// Registered as a factory output, the guard *is* global infrastructure, so one
+/// import at the app is genuinely the whole wiring.
+///
+/// Every store backend calls this, so the two never drift: an app that swaps
+/// `ThrottlerModule` for `RedisThrottlerModule` changes the store and nothing
+/// else, exactly as the guard's own doc promises.
+pub fn provide_guard(builder: ContainerBuilder) -> ContainerBuilder {
+    builder.provide_factory::<ThrottlerGuard, _, _>(|container| async move {
+        let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
+            anyhow::anyhow!(
+                "ThrottlerGuard needs a `dyn ThrottlerStore` binding — register one \
+                 (ThrottlerModule::for_root / RedisThrottlerModule::for_root) before the guard"
+            )
+        })?;
+        Ok(ThrottlerGuard::new(store))
+    })
 }
 
 /// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] and the parsed

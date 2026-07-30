@@ -34,6 +34,12 @@ use nest_rs_throttler::ThrottlerModule;
 pub struct ApiModule;
 ```
 
+That import is the whole wiring. It registers the shared store **and** the
+`ThrottlerGuard` that reads it, both as global infrastructure — so the guard
+resolves from any module that binds it, and nothing goes in a controller
+module's `providers`. Listing `ThrottlerGuard` there as well is a duplicate
+registration and fails the boot naming it.
+
 Passing `None` loads `ThrottlerConfig` from `NESTRS_THROTTLER__*`; the
 defaults (`60` requests per `60s` window) apply when nothing is set.
 Pass `Some(ThrottlerConfig { ... })` to pin the limit in code — the

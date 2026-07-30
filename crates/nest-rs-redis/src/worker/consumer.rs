@@ -11,7 +11,7 @@ use apalis::layers::catch_panic::CatchPanicLayer;
 use apalis::layers::retry::{RetryLayer, RetryPolicy};
 use apalis::prelude::{Attempt, Data, Monitor, TaskId, WorkerBuilder, WorkerFactoryFn};
 use async_trait::async_trait;
-use nest_rs_core::{Container, ReachableProviders, Transport, inventory};
+use nest_rs_core::{Container, ReachableProviders, Transport, inventory, panic_message};
 use nest_rs_queue::ProcessMethod;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -144,13 +144,14 @@ fn build_worker(
     let handler = method.handler;
     let queue_name = method.queue;
     let processor_name = method.name;
-    // CatchPanicLayer sits *inside* the retry/error-handling layers so a
-    // panic inside the user `#[process]` method (a `Container::get` cycle,
-    // an `unwrap` in user code, a panicking `Deserialize` impl, …) is
-    // converted into an apalis `Error::Abort` instead of propagating up
-    // and aborting the worker for the whole queue. RetryLayer catches
-    // `Err`, not panics, so without this layer one bad job kills the
-    // queue's consumer.
+    // `run_job` catches a handler panic itself (so the event lands inside the
+    // per-job span rather than on the default panic hook), which means this
+    // layer no longer sees one. It stays as the **backstop** for a panic
+    // outside that call — in apalis's own fetch/deserialize path, or in the
+    // closure prologue — where `RetryLayer` would not help either: it reacts to
+    // `Err`, not to unwinding, so without a panic layer one bad job would still
+    // take down the queue's consumer. Position is load-bearing: inside the
+    // retry/error-handling layers, so an abort is not re-attempted.
     let worker = WorkerBuilder::new(method.queue)
         .layer(ErrorHandlingLayer::new())
         .layer(RetryLayer::new(RetryPolicy::retries(method.retries)))
@@ -180,49 +181,210 @@ fn build_worker(
                         attempt = attempt.current(),
                         "job started",
                     );
-                    let started = ::std::time::Instant::now();
-                    let result = handler(job, container).await;
-                    let elapsed_ms = started.elapsed().as_millis() as u64;
-                    // Map the classified `JobError` onto apalis's retry model
-                    // (QUEUE-I4). A NON-retryable failure (deterministic: bad
-                    // wire version, undeserializable payload, missing provider,
-                    // pipe rejection) is boxed as `Error::Abort` so `RetryLayer`
-                    // skips it and the job dead-letters at once — logged at
-                    // `error` (the previously-silent dead-letter). A retryable
-                    // failure (the user method's `Err`) stays a plain boxed error
-                    // → `Error::Failed`, which the retry budget re-attempts.
-                    type BoxDynError = ::std::boxed::Box<
-                        dyn ::std::error::Error + ::std::marker::Send + ::std::marker::Sync,
-                    >;
-                    match result {
-                        Ok(()) => {
-                            tracing::info!(target: "nest_rs::queue", elapsed_ms, "job ok");
-                            ::std::result::Result::<(), BoxDynError>::Ok(())
-                        }
-                        Err(je) if !je.retryable => {
-                            tracing::error!(
-                                target: "nest_rs::queue",
-                                elapsed_ms,
-                                error = %je,
-                                "job dead-lettered: non-retryable failure",
-                            );
-                            ::std::result::Result::Err(::std::boxed::Box::new(
-                                ::apalis::prelude::Error::Abort(::std::sync::Arc::new(je.source)),
-                            ) as BoxDynError)
-                        }
-                        Err(je) => {
-                            tracing::warn!(
-                                target: "nest_rs::queue",
-                                elapsed_ms,
-                                error = %je,
-                                "job failed; will retry within the budget",
-                            );
-                            ::std::result::Result::Err(je.source)
-                        }
-                    }
+                    run_job(handler, job, container).await
                 }
                 .instrument(span)
             },
         );
     monitor.register(worker)
+}
+
+/// The error type apalis's `build_fn` closure returns.
+type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Run one job handler and turn its outcome into the event it logs plus the
+/// error apalis sees. Lifted out of the closure so every terminal state is
+/// reachable from a test — the panic branch in particular, which is the one
+/// that used to reach no event at all.
+///
+/// Three terminal states, one event each:
+///
+/// | outcome | event | apalis |
+/// | --- | --- | --- |
+/// | `Ok(())` | `job ok` (`info`) | success |
+/// | non-retryable `Err` | `job dead-lettered: non-retryable failure` (`error`) | `Abort` |
+/// | retryable `Err` | `job failed; will retry within the budget` (`warn`) | `Failed` |
+/// | **panic** | `job dead-lettered: handler panicked` (`error`) | `Abort` |
+///
+/// The panic is caught **here** rather than left to the outer
+/// `CatchPanicLayer`. That layer contains it correctly — the job fails, the
+/// worker survives, the next job on the queue runs — but it unwinds past this
+/// function, so the per-job span (`queue`, `processor`, `job_id`, `attempt`)
+/// and every event below were skipped. The only trace of a panicking job was
+/// the default Rust panic hook on stderr: no target, no fields, no span. At the
+/// docs' own production filter (`nest_rs::queue=warn`) it vanished entirely,
+/// while a deserialization failure on the same worker reported properly. The
+/// outcome is unchanged; only the silence is gone.
+async fn run_job(
+    handler: nest_rs_queue::JobHandler,
+    job: serde_json::Value,
+    container: Container,
+) -> Result<(), BoxDynError> {
+    let started = std::time::Instant::now();
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(handler(
+        job, container,
+    )))
+    .await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+
+    let result = match outcome {
+        Ok(result) => result,
+        Err(payload) => {
+            let detail = panic_message(payload.as_ref());
+            tracing::error!(
+                target: "nest_rs::queue",
+                elapsed_ms,
+                panic = detail,
+                "job dead-lettered: handler panicked",
+            );
+            // A panic is deterministic as far as the queue can tell — the same
+            // payload panics again — so it aborts rather than burning the retry
+            // budget. That is already what `CatchPanicLayer` did.
+            return Err(abort(BoxDynError::from(detail.to_owned())));
+        }
+    };
+
+    // Map the classified `JobError` onto apalis's retry model (QUEUE-I4). A
+    // NON-retryable failure (deterministic: bad wire version, undeserializable
+    // payload, missing provider, pipe rejection) aborts so `RetryLayer` skips
+    // it and the job dead-letters at once. A retryable failure (the user
+    // method's `Err`) stays a plain boxed error → `Error::Failed`, which the
+    // retry budget re-attempts.
+    match result {
+        Ok(()) => {
+            tracing::info!(target: "nest_rs::queue", elapsed_ms, "job ok");
+            Ok(())
+        }
+        Err(je) if !je.retryable => {
+            tracing::error!(
+                target: "nest_rs::queue",
+                elapsed_ms,
+                error = %je,
+                "job dead-lettered: non-retryable failure",
+            );
+            Err(abort(je.source))
+        }
+        Err(je) => {
+            tracing::warn!(
+                target: "nest_rs::queue",
+                elapsed_ms,
+                error = %je,
+                "job failed; will retry within the budget",
+            );
+            Err(je.source)
+        }
+    }
+}
+
+/// Wrap an error as apalis's `Abort` — the shape that skips the retry budget
+/// and dead-letters immediately.
+fn abort(source: BoxDynError) -> BoxDynError {
+    Box::new(apalis::prelude::Error::Abort(std::sync::Arc::new(source)))
+}
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_queue::JobError;
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+
+    fn container() -> Container {
+        Container::builder().build()
+    }
+
+    /// The finding: `CatchPanicLayer` dead-letters a panicking job correctly,
+    /// and `nest_rs::queue` said **nothing** about it. The comparison case
+    /// proves it was a gap rather than a choice — a deserialization failure on
+    /// the same worker reports through `job dead-lettered: non-retryable
+    /// failure`. The panic branch now emits the same shape.
+    #[tokio::test]
+    async fn a_panicking_handler_is_dead_lettered_with_an_event() {
+        fn boom(
+            _job: serde_json::Value,
+            _c: Container,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>> {
+            Box::pin(async { panic!("deliberate panic for panic-2") })
+        }
+
+        let logs = LogCapture::install();
+        // The default hook would print the panic to stderr and drown the test
+        // output; the event under test is the structured one.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = run_job(boom, serde_json::json!({}), container()).await;
+        std::panic::set_hook(previous);
+
+        let err = result.expect_err("a panicking job fails");
+        assert!(
+            err.downcast_ref::<apalis::prelude::Error>()
+                .is_some_and(|e| matches!(e, apalis::prelude::Error::Abort(_))),
+            "a panic is deterministic — it dead-letters instead of burning the retry budget",
+        );
+
+        let event = logs.expect_one("nest_rs::queue", "job dead-lettered: handler panicked");
+        assert_eq!(
+            event.level, "error",
+            "at the docs' own production filter (`nest_rs::queue=warn`) it has to show",
+        );
+        assert_eq!(
+            event.field("panic").as_deref(),
+            Some("deliberate panic for panic-2"),
+            "the panic message rides on the shared `panic` field: {event:#?}",
+        );
+        assert!(event.field("elapsed_ms").is_some());
+    }
+
+    /// The three non-panic outcomes, so the panic branch is pinned against
+    /// siblings that already worked rather than in isolation.
+    #[tokio::test]
+    async fn every_other_outcome_keeps_its_own_event() {
+        fn ok(
+            _job: serde_json::Value,
+            _c: Container,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn fatal(
+            _job: serde_json::Value,
+            _c: Container,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>> {
+            Box::pin(async { Err(JobError::abort("missing field `id`")) })
+        }
+        fn transient(
+            _job: serde_json::Value,
+            _c: Container,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>> {
+            Box::pin(async { Err(JobError::retry("upstream timed out")) })
+        }
+
+        let logs = LogCapture::install();
+        assert!(
+            run_job(ok, serde_json::json!({}), container())
+                .await
+                .is_ok()
+        );
+        assert!(
+            run_job(fatal, serde_json::json!({}), container())
+                .await
+                .is_err()
+        );
+        assert!(
+            run_job(transient, serde_json::json!({}), container())
+                .await
+                .is_err()
+        );
+
+        assert_eq!(logs.expect_one("nest_rs::queue", "job ok").level, "info");
+        assert_eq!(
+            logs.expect_one("nest_rs::queue", "job dead-lettered: non-retryable failure")
+                .level,
+            "error",
+        );
+        assert_eq!(
+            logs.expect_one("nest_rs::queue", "job failed; will retry within the budget")
+                .level,
+            "warn",
+        );
+    }
 }

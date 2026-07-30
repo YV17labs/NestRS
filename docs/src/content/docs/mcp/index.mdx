@@ -25,6 +25,21 @@ schemas the client reads.
 cargo add nest-rs-mcp
 ```
 
+`nest-rs-mcp` re-exports what a tool host names, with **one exception**: the
+`#[tool_router]` / `#[tool_handler]` macros come from `rmcp` and expand to bare
+`rmcp::` paths, so your manifest needs the crate directly — at the same major
+`nest-rs-mcp` was built against. Two majors in one graph put two
+`ServerHandler` traits in scope and every generated method mismatches:
+
+```toml title="crates/features/Cargo.toml"
+[dependencies]
+nest-rs-mcp = "1.1"
+rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
+```
+
+`nestrs g mcp <feature>` writes both lines, and a CLI test pins the `rmcp`
+requirement against the framework's own so the two cannot drift.
+
 ## The smallest possible tool
 
 The fastest way to see the shape: one tool, one string in, one string out.

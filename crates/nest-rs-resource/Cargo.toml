@@ -20,7 +20,14 @@ graphql = [
 
 [dependencies]
 nest-rs-resource-macros.workspace = true
-async-graphql = { workspace = true, optional = true }
+# `uuid` / `chrono`: `#[expose(…, graphql)]` re-emits the column's own type into
+# the generated `InputObject`, and renders `DateTime*` columns on the output
+# object — and an entity's columns are `Uuid` and `DateTime*` by construction.
+# Those scalars' `InputType`/`OutputType` impls are therefore a requirement
+# *this crate's macro* creates, declared here rather than left to the consumer,
+# whose only signal was `the trait bound uuid::Uuid: InputType is not satisfied`
+# pointing at a foreign-key field they never chose a type for.
+async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono"] }
 nest-rs-graphql = { workspace = true, optional = true }
 sea-orm.workspace = true
 serde_json.workspace = true
@@ -39,6 +46,14 @@ schemars.workspace = true
 # crate, so a versioned dev-edge would form a member cycle no publish order can
 # satisfy. Cargo strips a versionless dev-dep from the published manifest.
 nest-rs-seaorm = { path = "../nest-rs-seaorm" }
+# Same path-only rule, and it does double duty: `#[expose(…, graphql)]` emits
+# `::nest_rs_authz::` and `::nest_rs_core::` paths that resolve in the consuming
+# crate, and this edge is what turns *this* crate's `graphql` feature on for its
+# own test target — so the GraphQL fixture is compiled by a plain
+# `cargo nextest run --workspace`, not only when some other member happens to
+# unify the feature in.
+nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
+nest-rs-core.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
 validator.workspace = true

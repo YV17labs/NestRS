@@ -3,8 +3,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nest_rs_core::{
-    Container, ContainerBuilder, LifecycleHook, LifecyclePhase, Module, ReachableProviders,
-    inventory,
+    Container, ContainerBuilder, LifecycleHook, LifecyclePhase, Module, ProviderOrder,
+    ReachableProviders, inventory,
 };
 
 use crate::{EventBus, ListenerMethod};
@@ -43,7 +43,31 @@ fn wire_listeners(
             return Ok(());
         };
         let reachable = container.get::<ReachableProviders>();
-        for entry in inventory::iter::<ListenerMethod>() {
+        let order = container.get::<ProviderOrder>();
+
+        // Sort before wiring. `inventory::iter` yields **link order** — stable
+        // for a given binary, and reshuffled by any change to the code, so a
+        // pair of listeners ordered deliberately and verified locally was
+        // silently rearranged the next time somebody added a third to the same
+        // block. The bus faithfully preserves whatever it is handed, so the
+        // order has to be right here: providers as they appear in
+        // `providers = [...]` (their rank in the module walk), then methods as
+        // they appear in the `#[listeners]` block. `name` breaks the remaining
+        // tie so an app booted without the access graph (a hand-built
+        // container in a test) is deterministic rather than link-ordered.
+        let mut entries: Vec<&'static ListenerMethod> =
+            inventory::iter::<ListenerMethod>().collect();
+        entries.sort_by_cached_key(|entry| {
+            (
+                order
+                    .as_ref()
+                    .map_or(0, |o| o.rank((entry.provider_type_id)())),
+                entry.declaration_index,
+                entry.name,
+            )
+        });
+
+        for entry in entries {
             let provider_id = (entry.provider_type_id)();
             if let Some(r) = reachable.as_ref()
                 && !r.0.contains(&provider_id)

@@ -40,6 +40,11 @@ nest-rs-config.workspace = true
 # The MCP helpers (`mcp::call_tool`) build JSON-RPC messages; no `nest-rs-mcp`
 # dependency needed, the protocol is JSON over the `TestClient`.
 serde_json.workspace = true
+# `LogCapture` records what a transport *said* — the half of the contract a
+# response assertion cannot reach (a silent denial, a missing dead-letter
+# event, a warning filed under the wrong target).
+tracing.workspace = true
+tracing-subscriber.workspace = true
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }

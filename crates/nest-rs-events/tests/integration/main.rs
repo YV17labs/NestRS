@@ -2,6 +2,8 @@
 //! method runs. A second `#[on_event]` on the same provider proves the
 //! multi-method orchestrator pattern (shared `#[inject]` deps, one struct).
 
+mod order;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

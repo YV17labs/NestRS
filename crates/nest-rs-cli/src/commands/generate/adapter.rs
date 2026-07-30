@@ -109,10 +109,15 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         );
     }
 
-    // The queue payload is a producer↔worker contract, so it lives at the
-    // *port* (`command.rs`), not in the consumer-side `queue/` adapter — the
-    // generated `processor.rs` imports it. Lines wiring it into the feature
-    // `mod.rs` are folded into the single edit below (one edit per file).
+    // The queue payload and its `QueueName` marker are a producer↔worker
+    // contract, so they live at the *port* (`command.rs`), not in the
+    // consumer-side `queue/` adapter — the generated `processor.rs` imports
+    // both. Re-exporting the marker is what keeps the typed `push_to::<Q>`
+    // reachable: left inside the private `queue::processor` module it is
+    // invisible even to the feature's own service, and the untyped
+    // `push(name, job)` escape hatch becomes the only way to enqueue. Lines
+    // wiring it into the feature `mod.rs` are folded into the single edit
+    // below (one edit per file).
     let mut port_lines = Vec::new();
     if transport == Transport::Queue {
         // Single payload today, so `command_file` yields `command.rs`; routing
@@ -123,7 +128,11 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
             r.render(adapter::QUEUE_COMMAND),
         );
         port_lines.push("mod command;".to_string());
-        port_lines.push(format!("pub use command::{};", names.command()));
+        port_lines.push(format!(
+            "pub use command::{{{}, {}}};",
+            names.command(),
+            names.queue_name()
+        ));
     }
 
     // Ensure the transport's crates — plus the bridge's, and the auth
@@ -211,15 +220,15 @@ fn is_crud_port(ws: &NestrsWorkspace, snake: &str) -> bool {
 /// The handler skeleton, and the `module.rs` that serves it. A CRUD port over
 /// GraphQL is the one pair that differs: `#[crud]` behind the app's guards,
 /// whose module imports the bridge enforcing them.
-fn templates_for(transport: Transport, crud_port: bool) -> (&'static str, &'static str) {
+pub(crate) fn templates_for(transport: Transport, crud_port: bool) -> (&'static str, &'static str) {
     if transport == Transport::Graphql && crud_port {
         return (adapter::GRAPHQL_RESOLVER_CRUD, adapter::MODULE);
     }
     match transport {
         Transport::Http => (adapter::HTTP_CONTROLLER, adapter::MODULE),
         Transport::Graphql => (adapter::GRAPHQL_RESOLVER, adapter::MODULE),
-        Transport::Ws => (adapter::WS_GATEWAY, adapter::MODULE),
-        Transport::Queue => (adapter::QUEUE_PROCESSOR, adapter::QUEUE_MODULE),
+        Transport::Ws => (adapter::WS_GATEWAY, adapter::WS_MODULE),
+        Transport::Queue => (adapter::QUEUE_PROCESSOR, adapter::MODULE),
         Transport::Schedule => (adapter::SCHEDULE_TASKS, adapter::MODULE),
         Transport::Mcp => (adapter::MCP_TOOL, adapter::MODULE),
     }

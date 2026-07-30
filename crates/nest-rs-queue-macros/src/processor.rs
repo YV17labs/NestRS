@@ -239,9 +239,9 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
                         }
                     };
                     let __job_context = ::nest_rs_core::Container::get_dyn::<
-                        dyn ::nest_rs_worker::JobContext,
+                        dyn ::nest_rs_queue::nest_rs_worker::JobContext,
                     >(&__container);
-                    ::nest_rs_worker::run_in_job_context(
+                    ::nest_rs_queue::nest_rs_worker::run_in_job_context(
                         __job_context.as_ref(),
                         async move { <#self_ty>::#method_ident(&__provider, __job).await },
                     )

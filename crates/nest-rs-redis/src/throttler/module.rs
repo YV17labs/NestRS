@@ -45,20 +45,28 @@ impl DynamicModule for RedisThrottlerSetup {
         // Same `Arc<dyn ThrottlerStore>` factory-output binding the in-memory
         // module registers — a factory output so the guard's
         // `#[inject] Arc<dyn ThrottlerStore>` resolves as global infrastructure.
-        builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|container| async move {
-            let config = container
-                .get::<ThrottlerConfig>()
-                .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
-            let (default, trusted_proxies) = nest_rs_throttler::resolve(&config)?;
-            let conn = container.get::<QueueConnection>().expect(
-                "QueueConnection is resolved by QueueModule — import QueueModule::for_root \
-                 before RedisThrottlerModule::for_root",
-            );
-            Ok(Arc::new(RedisThrottler::new(
-                (*conn).clone(),
-                default,
-                trusted_proxies,
-            )) as Arc<dyn ThrottlerStore>)
-        })
+        let builder =
+            builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|container| async move {
+                let config = container
+                    .get::<ThrottlerConfig>()
+                    .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
+                let (default, trusted_proxies) = nest_rs_throttler::resolve(&config)?;
+                // Import order is a wiring mistake, so it is a boot error — the
+                // same channel `resolve` above already uses — not a panic.
+                let conn = container.get::<QueueConnection>().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "QueueConnection is not registered — import QueueModule::for_root \
+                         before RedisThrottlerModule::for_root, whose store reuses that connection"
+                    )
+                })?;
+                Ok(Arc::new(RedisThrottler::new(
+                    (*conn).clone(),
+                    default,
+                    trusted_proxies,
+                )) as Arc<dyn ThrottlerStore>)
+            });
+        // The guard rides with the store on every backend — swapping the store
+        // must not also change what a controller has to list in `providers`.
+        nest_rs_throttler::provide_guard(builder)
     }
 }

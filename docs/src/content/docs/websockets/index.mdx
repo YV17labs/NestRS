@@ -33,6 +33,21 @@ run in [`live`](/publish/) on port **3004**.
 cargo add nest-rs-ws
 ```
 
+`#[messages]` expands to the per-message guard chain, which lives behind
+`nest-rs-guards`' `ws` feature — so a crate defining a gateway declares it:
+
+```toml title="crates/features/Cargo.toml"
+[dependencies]
+nest-rs-ws = "1.1"
+nest-rs-guards = { version = "1.1", features = ["ws"] }
+tracing = "0.1"     # if the gateway logs, which it should
+```
+
+`nestrs g ws <feature>` writes all three. The `ws` feature is worth naming
+because leaving it off can pass `cargo check --workspace` — some other member's
+dev-dependency unifies it in — while `cargo check -p features` fails. Build the
+crate on its own when you want the truth about its manifest.
+
 ## A one-event gateway
 
 The smallest possible gateway: one event, one reply.
@@ -81,6 +96,22 @@ pub struct LiveModule;
 `HttpModule` for the transport, `WsModule` for the connection registry
 (`WsServer`). The gateway itself is listed in `providers` — no
 `.transport(...)` call, no second port.
+
+`WsModule` is **not optional** for a default-namespace gateway: every
+`WsClient` a handler touches reads that registry. A gateway declares the
+dependency, so leaving it out fails the boot through the access graph, naming
+both the missing type and the module that provides it:
+
+```text frame="terminal"
+Error: module access violation: `PingGateway` (in module `LiveModule`) depends on
+`WsServer`, but `LiveModule` imports no module that provides it. `WsServer` is
+provided by `WsModule` — add `WsModule` to `#[module(imports = [...])]` …
+```
+
+Import it in whichever module lists the gateway — `nestrs g ws` writes it into
+the generated adapter module. A gateway with its own
+[`namespace`](/websockets/namespaces/) self-provides a `WsServer<Ns>` and needs
+no import.
 
 ## Run it
 

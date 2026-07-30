@@ -28,12 +28,14 @@ serde_json.workspace = true
 # Re-exported for the `#[processor]` macro emission so the call site doesn't
 # need a direct `tracing` dependency for the unversioned-payload warning.
 tracing.workspace = true
+# Re-exported for the same reason: `#[process]` runs each handler inside the
+# ambient `JobContext`, so the expansion names the worker seam. Routing it
+# through this crate keeps `nest_rs_queue` the single import a `#[processor]`
+# call site needs — a bare `::nest_rs_worker::` path would resolve against the
+# consumer's extern prelude and break any app that hasn't added the crate.
+nest-rs-worker.workspace = true
 
 [dev-dependencies]
-# The `#[processor]` macro emits absolute `::nest_rs_worker::*` paths, so the
-# integration test that exercises a typed `#[process]` handler needs the worker
-# crate in scope.
-nest-rs-worker = { path = "../nest-rs-worker" }
 tokio.workspace = true
 serde.workspace = true
 

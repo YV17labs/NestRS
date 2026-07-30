@@ -217,8 +217,13 @@ with its own clone of the event. Three consequences worth naming:
   `providers = [...]`, then in the order their methods appear in the
   `#[listeners]` impl block.
 - **Failure is local** — a listener returns `()`; there is no `Result` to
-  propagate, no retry, no dead-letter queue, no global rollback. Side
-  effects that can fail belong on the [Queue](/queue/).
+  propagate, no retry, no dead-letter queue, no global rollback. A
+  **panicking** listener is contained to itself: the panic is caught, logged
+  at `error` on `nest_rs::events` with the event type and the panic message,
+  and the chain continues with the next listener. `emit` returns normally, so
+  the emitter's own post-emit work still runs and an HTTP response is still
+  built. Side effects that can fail belong on the [Queue](/queue/), which
+  buys retries as well as isolation.
 - **No bridge to a transaction** — `emit` does not enroll itself in the
   ambient executor's transaction. If a listener must write to the same
   transaction as the emitter, call it directly from the service instead

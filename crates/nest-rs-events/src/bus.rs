@@ -1,9 +1,12 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_util::FutureExt;
+use nest_rs_core::panic_message;
 use parking_lot::RwLock;
 
 type BoxedEvent = Box<dyn Any + Send>;
@@ -45,18 +48,38 @@ impl EventBus {
     /// Runs each listener in registration order, awaited in turn. No-op when
     /// nothing is registered for `E`.
     ///
-    /// **Contract — in-process, sequential, no isolation.** The emitter awaits
-    /// every listener: a slow listener delays the ones after it and the
-    /// emitter itself, and a panicking listener propagates into the emitter's
-    /// task. This is deliberate — the bus is for lightweight same-process
-    /// reactions. Work that must not block or fail its emitter belongs on the
-    /// queue (a `Command`/`Event` job), which buys isolation and retries.
+    /// **Contract — in-process, sequential, failure is local.** The emitter
+    /// awaits every listener, so a *slow* listener delays the ones after it and
+    /// the emitter itself: the bus is for lightweight same-process reactions,
+    /// and work that must not block its emitter belongs on the queue (which
+    /// buys isolation and retries).
+    ///
+    /// A **panicking** listener is contained to that listener. It is caught,
+    /// logged at `error` on `nest_rs::events`, and the chain continues — the
+    /// containment the events page promises. Without it a single `unwrap()` in
+    /// a fire-and-forget reaction (`email_the_author`, `index_for_search`)
+    /// unwound through `emit` into the emitter: every listener after it was
+    /// skipped, the emitter's own post-emit work never ran, and on HTTP the
+    /// response was destroyed outright — the client saw a dropped connection
+    /// rather than a 500, with the emitter's side effects already committed, so
+    /// a retry re-ran them. The process survived, which made it containment at
+    /// the wrong granularity: the *process*, not the listener.
     pub async fn emit<E: Clone + Send + 'static>(&self, event: E) {
         // Clone out the list so the lock is released before awaiting.
         let listeners = self.listeners.read().get(&TypeId::of::<E>()).cloned();
         let Some(listeners) = listeners else { return };
         for listener in listeners {
-            listener(Box::new(event.clone())).await;
+            let outcome = AssertUnwindSafe(listener(Box::new(event.clone())))
+                .catch_unwind()
+                .await;
+            if let Err(payload) = outcome {
+                tracing::error!(
+                    target: "nest_rs::events",
+                    event = std::any::type_name::<E>(),
+                    panic = panic_message(payload.as_ref()),
+                    "event listener panicked — dispatch continues with the next listener",
+                );
+            }
         }
     }
 }
@@ -187,5 +210,105 @@ mod tests {
         bus.emit(OrderPlaced { id: 4 }).await;
         // 3 listeners × event id 4 = 12.
         assert_eq!(counter.load(Ordering::SeqCst), 12);
+    }
+}
+
+#[cfg(test)]
+mod panic_containment {
+    use std::sync::Arc;
+
+    use nest_rs_testing::LogCapture;
+    use parking_lot::Mutex;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct NotifyRequested {
+        id: &'static str,
+    }
+
+    /// The events page makes a containment promise — "**Failure is local** — a
+    /// listener returns `()`; there is no `Result` to propagate, no retry, no
+    /// dead-letter queue, no global rollback." A panic was not local: it
+    /// abandoned the chain mid-way, unwound through `emit` into the emitter, and
+    /// on HTTP destroyed the response — the client got a dropped connection, not
+    /// a 500, with the emitter's side effects already committed.
+    #[tokio::test]
+    async fn a_panicking_listener_does_not_stop_the_ones_after_it() {
+        let bus = EventBus::new();
+        let ran = Arc::new(Mutex::new(Vec::<u32>::new()));
+
+        let r1 = ran.clone();
+        bus.subscribe(move |_: NotifyRequested| {
+            let r = r1.clone();
+            async move { r.lock().push(1) }
+        });
+        bus.subscribe(move |e: NotifyRequested| async move {
+            if e.id == "boom" {
+                panic!("listener panic for boom");
+            }
+        });
+        let r3 = ran.clone();
+        bus.subscribe(move |_: NotifyRequested| {
+            let r = r3.clone();
+            async move { r.lock().push(3) }
+        });
+
+        let logs = LogCapture::install();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        bus.emit(NotifyRequested { id: "boom" }).await;
+        std::panic::set_hook(previous);
+
+        assert_eq!(
+            *ran.lock(),
+            vec![1, 3],
+            "the listener after the panicking one still runs",
+        );
+
+        // Contained, never swallowed: the panic is an `error` event naming the
+        // event type and the panic message. On the field `panic`, which is the
+        // name every transport that contains a panic uses — one query reaches a
+        // contained panic whichever seam caught it.
+        let event = logs.expect_one(
+            "nest_rs::events",
+            "event listener panicked — dispatch continues with the next listener",
+        );
+        assert_eq!(event.level, "error");
+        assert_eq!(
+            event.field("panic").as_deref(),
+            Some("listener panic for boom"),
+        );
+    }
+
+    /// …and `emit` returns normally, so the emitter's own post-emit work runs.
+    /// This is what a request handler depends on: the response is built after
+    /// `emit`, and the panic used to take it with it.
+    #[tokio::test]
+    async fn emit_returns_to_its_caller_after_a_listener_panics() {
+        let bus = EventBus::new();
+        bus.subscribe(move |_: NotifyRequested| async move {
+            panic!("listener panic");
+        });
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        bus.emit(NotifyRequested { id: "boom" }).await;
+        std::panic::set_hook(previous);
+
+        // Reaching this line *is* the assertion — before the fix the unwind
+        // carried straight past it into the caller.
+        let emit_returned = true;
+        assert!(emit_returned);
+    }
+
+    /// The happy path stays quiet — an `error` on every emit would be noise.
+    #[tokio::test]
+    async fn a_healthy_dispatch_logs_no_containment_event() {
+        let bus = EventBus::new();
+        bus.subscribe(move |_: NotifyRequested| async move {});
+        let logs = LogCapture::install();
+        bus.emit(NotifyRequested { id: "ok" }).await;
+        assert!(logs.events().is_empty(), "{:#?}", logs.events());
     }
 }

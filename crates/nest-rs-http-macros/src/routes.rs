@@ -13,7 +13,7 @@ use syn::{
 
 use nest_rs_codegen::{
     expr_str, force_guard_typeids, forwarded_arg_idents, impl_self_ident,
-    injected_method_with_layers, layer_inject_keys, nth_generic_type, scoped_specs, take_flag_attr,
+    injected_methods_with_layers, layer_deps, nth_generic_type, scoped_specs, take_flag_attr,
     take_path_list,
 };
 
@@ -98,7 +98,13 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         let method_name = method.sig.ident.clone();
         let method_name_lit = method_name.to_string();
-        let wrapper_name = format_ident!("__nestrs_route_{}", method_name);
+        // Qualified by the **controller**, not the method alone. Each verb
+        // becomes a module-level type (poem's `#[handler]` shape), so two
+        // controllers in one file — the documented layout for URI versioning,
+        // where `V1Controller::list` and `V2Controller::list` sit side by
+        // side — collided in a namespace neither knew it shared. `list` /
+        // `get` / `create` are exactly the names that repeat.
+        let wrapper_name = format_ident!("__nestrs_route_{}_{}", ctrl_name, method_name);
 
         let mut inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
         // `#[authorize(Action, Entity)]` — the route's posture, uniform with
@@ -406,8 +412,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     // Per-route layers fold into the access-graph dependencies so an unimported
-    // module fails boot with an `AccessGraphError`, not a silent resolution.
-    let route_layer_keys = layer_inject_keys(
+    // module fails boot with an `AccessGraphError`, not a silent resolution —
+    // and carry a label each, so the error names the layer instead of reporting
+    // `<unnamed dependency>`. One walk, so the selector below is written once
+    // and a seventh layer family cannot misalign keys against labels.
+    let route_layers = layer_deps(
         routes_by_path
             .iter()
             .flat_map(|(_, handlers)| handlers.iter())
@@ -422,7 +431,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                     .chain(&handler.exception_filters)
             }),
     );
-    let injected_method = injected_method_with_layers(&self_ty, &route_layer_keys);
+    let injected_methods = injected_methods_with_layers(&self_ty, &route_layers);
 
     let route_entries: Vec<TokenStream2> = routes_by_path
         .iter()
@@ -472,7 +481,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             // `dependencies` stays empty (controller is built at mount); `injected`
             // reports `#[inject]` keys + every container-resolved layer for the
             // access-graph check.
-            #injected_method
+            #injected_methods
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

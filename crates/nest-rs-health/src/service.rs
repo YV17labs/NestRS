@@ -32,7 +32,11 @@ pub struct HealthService {
 
 impl HealthService {
     pub(crate) fn install_container(&self, container: Container) {
-        let _ = self.container.set(container);
+        // `Container` is a cheap `Arc` handle, so the clone is for the report's
+        // borrow, not a second container.
+        if self.container.set(container.clone()).is_ok() {
+            report_unreachable_indicators(&container);
+        }
     }
 
     /// Run every reachable indicator for `kind` and aggregate their results
@@ -56,12 +60,9 @@ impl HealthService {
             if let Some(r) = reachable.as_ref()
                 && !r.0.contains(&provider_id)
             {
-                tracing::warn!(
-                    target: "nest_rs::health",
-                    indicator = entry.name,
-                    ?kind,
-                    "skipped indicator: provider unreachable from app's module tree",
-                );
+                // Silent here on purpose: `report_unreachable_indicators` named
+                // it at boot, so repeating per probe would be the same event
+                // said twice — once per request, in production.
                 continue;
             }
 
@@ -78,6 +79,30 @@ impl HealthService {
             ProbeReport::empty_up()
         } else {
             ProbeReport::from_indicators(reports)
+        }
+    }
+}
+
+/// Name the linked-but-unreachable indicators **once, at boot** — the same
+/// contract every other discovery seam honours (`nest_rs::queue`,
+/// `nest_rs::events`): leftover code never vanishes silently, and the notice is
+/// a startup fact rather than a line per probe. Called from
+/// `install_container` because that is where the reachability set first exists;
+/// probing then skips in silence.
+fn report_unreachable_indicators(container: &Container) {
+    // No reachability set means the access graph never ran (a hand-built
+    // container in a test) — every indicator is then in scope, not skipped.
+    let Some(reachable) = container.get::<ReachableProviders>() else {
+        return;
+    };
+    for entry in inventory::iter::<HealthIndicator>() {
+        if !reachable.0.contains(&(entry.provider_type_id)()) {
+            tracing::warn!(
+                target: "nest_rs::health",
+                indicator = entry.name,
+                kind = ?entry.kind,
+                "skipped indicator: provider unreachable from app's module tree",
+            );
         }
     }
 }
@@ -221,6 +246,86 @@ mod tests {
             "public probe responses must not leak indicator internals",
         );
         assert_eq!(report.details.len(), 2);
+    }
+
+    /// The two halves of a failed check, and where each is allowed to appear.
+    /// They disagreed once — the body promised the operator a stringified
+    /// error, the code shipped `"check failed"` — and the resolution is that
+    /// `/health/*` is routinely unauthenticated, so the detail belongs in the
+    /// log and nowhere else. Both directions are pinned: a future change that
+    /// widens the body, *or* one that drops the log line, fails here.
+    #[tokio::test]
+    async fn the_indicators_own_error_reaches_the_log_and_never_the_body() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let (status, error) = run_with_timeout(
+            "migrations",
+            ProbeKind::Startup,
+            async { anyhow::bail!("pending migrations") },
+            Duration::from_secs(5),
+        )
+        .await;
+
+        assert_eq!(status, IndicatorStatus::Down);
+        assert_eq!(
+            error.as_deref(),
+            Some("check failed"),
+            "an unauthenticated probe body carries a fixed reason, never a DSN \
+             or a hostname the anyhow chain picked up",
+        );
+
+        let event = logs.expect_one("nest_rs::health", "health indicator failed");
+        assert_eq!(event.level, "warn");
+        assert_eq!(
+            event.field("error").as_deref(),
+            Some("pending migrations"),
+            "…and the detail is one filtered log query away: {event:#?}",
+        );
+        assert_eq!(event.field("indicator").as_deref(), Some("migrations"));
+    }
+
+    /// A linked-but-unreachable indicator is named **once, at boot** — not on
+    /// every probe. The line is a startup fact about the module tree; repeating
+    /// it per request turns a wiring notice into production log volume, and no
+    /// other discovery seam does that.
+    #[tokio::test]
+    async fn an_unreachable_indicator_is_named_once_at_boot_not_per_probe() {
+        let container = Container::builder()
+            .provide(UpHost)
+            .provide(DownHost)
+            // `DownHost` is deliberately absent from the reachable set: linked
+            // into the binary, in no module the running app imports.
+            .provide(ReachableProviders(
+                [std::any::TypeId::of::<UpHost>()].into_iter().collect(),
+            ))
+            .build();
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let svc = HealthService::default();
+        svc.install_container(container);
+
+        let skipped = logs.find(
+            "nest_rs::health",
+            "skipped indicator: provider unreachable from app's module tree",
+        );
+        assert_eq!(skipped.len(), 1, "one line at boot: {:#?}", logs.events());
+        assert_eq!(skipped[0].level, "warn");
+        assert_eq!(skipped[0].field("indicator").as_deref(), Some("down_host"));
+
+        // Two probes later, still one line — and the unreachable indicator
+        // never ran, so the probe is `up`.
+        let report = svc.probe(ProbeKind::Readiness).await;
+        let _ = svc.probe(ProbeKind::Readiness).await;
+        assert_eq!(report.status, IndicatorStatus::Up);
+        assert_eq!(
+            logs.find(
+                "nest_rs::health",
+                "skipped indicator: provider unreachable from app's module tree",
+            )
+            .len(),
+            1,
+            "probing must not repeat the boot notice: {:#?}",
+            logs.events(),
+        );
     }
 
     #[tokio::test]

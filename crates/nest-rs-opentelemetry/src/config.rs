@@ -1,4 +1,10 @@
+use std::time::Duration;
+
 use nest_rs_config::env_var;
+
+/// The OTel SDK's own metric export period, restated so it is a named,
+/// documented default rather than a number buried in a dependency.
+pub const DEFAULT_METRIC_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///
@@ -7,7 +13,7 @@ use nest_rs_config::env_var;
 /// variables nest-rs-core's fallback logger honours); everything OTel-specific
 /// lives under the `NESTRS_OPENTELEMETRY__` prefix
 /// (`NESTRS_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,SERVICE_ENVIRONMENT,
-/// SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO}`).
+/// SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO,METRIC_INTERVAL_SECS}`).
 /// OTel exporter is wired only when `otlp_endpoint` is set; otherwise the
 /// subscriber stays console-only.
 #[derive(Clone, Debug)]
@@ -41,6 +47,17 @@ pub struct OpenTelemetryConfig {
     /// `[0.0, 1.0]`; wrapped in `ParentBased` so children inherit the
     /// parent's sampling decision.
     pub trace_sample_ratio: f64,
+    /// How often the `PeriodicReader` flushes metrics to the collector.
+    ///
+    /// Defaults to the OTel SDK's own 60 s. That default is the single most
+    /// misleading thing about a first OTel setup: traces and logs arrive
+    /// immediately, metrics take a *minute*, so the natural conclusion after
+    /// wiring a meter, hitting a route and checking the collector is that the
+    /// metrics half is broken. It was reachable neither from the env table nor
+    /// from this struct, so there was no way to shorten it for a local run
+    /// either — hence this field, and `NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS`
+    /// beside it.
+    pub metric_interval: Duration,
 }
 
 /// Shape of the console log layer's output.
@@ -102,6 +119,7 @@ impl OpenTelemetryConfig {
             log_source_location: false,
             otlp_endpoint: None,
             trace_sample_ratio: 1.0,
+            metric_interval: DEFAULT_METRIC_INTERVAL,
         }
     }
 
@@ -137,8 +155,26 @@ impl OpenTelemetryConfig {
         {
             cfg.trace_sample_ratio = r.clamp(0.0, 1.0);
         }
+        // A zero or unparseable value keeps the default rather than wedging the
+        // reader in a tight export loop.
+        if let Some(secs) = env_var("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS")
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .filter(|secs| *secs > 0)
+        {
+            cfg.metric_interval = Duration::from_secs(secs);
+        }
 
         cfg
+    }
+
+    /// Pin the metric export interval, overriding the SDK's 60 s default.
+    /// Dropping it to a few seconds is what makes a local collector setup
+    /// verifiable in the time it takes to read the output.
+    pub fn with_metric_interval(mut self, interval: Duration) -> Self {
+        if !interval.is_zero() {
+            self.metric_interval = interval;
+        }
+        self
     }
 
     /// Override the `EnvFilter` directive string (e.g. `"debug,hyper=warn"`).
@@ -353,6 +389,59 @@ mod tests {
             );
             Ok(())
         });
+    }
+
+    /// The interval is dual-path like every other `nest-rs-*` config field: a
+    /// documented default, an env var, and a builder. It used to be none of the
+    /// three — the SDK's 60 s was reachable from nowhere, so the standard
+    /// "wire a meter, hit the route, check the collector" loop showed traces
+    /// and logs but no metrics for a full minute, and read as broken.
+    #[test]
+    fn the_metric_interval_is_a_documented_default_an_env_var_and_a_builder() {
+        assert_eq!(
+            OpenTelemetryConfig::new("svc").metric_interval,
+            DEFAULT_METRIC_INTERVAL,
+            "the SDK's own period, named rather than implicit",
+        );
+        assert_eq!(DEFAULT_METRIC_INTERVAL, Duration::from_secs(60));
+        assert_eq!(
+            OpenTelemetryConfig::new("svc")
+                .with_metric_interval(Duration::from_secs(5))
+                .metric_interval,
+            Duration::from_secs(5),
+        );
+
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS", "5");
+            assert_eq!(
+                OpenTelemetryConfig::from_env("svc").metric_interval,
+                Duration::from_secs(5),
+            );
+            Ok(())
+        });
+    }
+
+    /// A zero or unparseable interval keeps the default — a `PeriodicReader`
+    /// on a zero period is a tight export loop, which is worse than a slow one.
+    #[test]
+    fn a_zero_or_unparseable_metric_interval_keeps_the_default() {
+        for raw in ["0", "", "soon"] {
+            figment::Jail::expect_with(|jail| {
+                jail.set_env("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS", raw);
+                assert_eq!(
+                    OpenTelemetryConfig::from_env("svc").metric_interval,
+                    DEFAULT_METRIC_INTERVAL,
+                    "`{raw}` must not shorten the interval",
+                );
+                Ok(())
+            });
+        }
+        assert_eq!(
+            OpenTelemetryConfig::new("svc")
+                .with_metric_interval(Duration::ZERO)
+                .metric_interval,
+            DEFAULT_METRIC_INTERVAL,
+        );
     }
 
     #[test]

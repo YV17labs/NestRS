@@ -128,7 +128,9 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// impl UsersController { /* methods, verb attrs removed */ }
 ///
 /// #[::nest_rs_http::poem::handler]
-/// async fn __nestrs_route_list(Data(ctrl): Data<&Arc<UsersController>> /* extractors */)
+/// // One module-level type per verb, qualified by the controller so two
+/// // controllers in one file (a v1/v2 pair) never share a symbol.
+/// async fn __nestrs_route_UsersController_list(Data(ctrl): Data<&Arc<UsersController>> /* extractors */)
 ///     -> /* return type or ::nest_rs_http::poem::Result<Response> when response shapers apply */
 /// { ctrl.list(/* forwarded args */).await }
 ///

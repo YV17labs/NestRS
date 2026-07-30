@@ -17,6 +17,13 @@ pub struct ListenerMethod {
     /// `TypeId` of the host provider, matched against the reachable set to
     /// module-gate this listener.
     pub provider_type_id: fn() -> TypeId,
+    /// Position of this method **within its own `#[listeners]` block**. The
+    /// registry is link-ordered, which is stable per binary but reshuffles when
+    /// the code changes; combined with the provider's rank in
+    /// [`ProviderOrder`](::nest_rs_core::ProviderOrder) this restores the order
+    /// the developer wrote — providers as they appear in `providers = [...]`,
+    /// then methods as they appear in the block.
+    pub declaration_index: usize,
     /// Resolves the provider from the assembled container and subscribes a
     /// closure to the bus for the method's event type.
     pub wire: fn(&Container, &EventBus),

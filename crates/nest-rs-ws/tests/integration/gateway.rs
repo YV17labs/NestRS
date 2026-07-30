@@ -4,8 +4,27 @@
 
 use nest_rs_pipes::{Pipe, PipeError, Piped, Trim, Valid};
 use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use validator::Validate;
+
+/// A typed error that is **`Serialize`** and whose `Display` deliberately
+/// withholds a field — the shape that made the alias leak matter.
+#[derive(Debug, Serialize)]
+struct DbFailure {
+    dsn: String,
+    message: String,
+}
+
+impl std::fmt::Display for DbFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DbFailure {}
+
+/// The alias the return-type detection cannot see through.
+type ServiceResult<T> = Result<T, DbFailure>;
 
 /// A pipe that always rejects — exercises the WS pipe error path.
 struct Reject;
@@ -74,6 +93,30 @@ impl TestGateway {
     #[subscribe_message("named")]
     async fn named_handler(&self, input: Valid<NameInput>) -> String {
         input.into_inner().name
+    }
+
+    // The two spellings of one type. `literal` is what the macro can see; the
+    // three `renamed_*` handlers are the same `Result` behind an alias.
+    #[subscribe_message("literal")]
+    async fn literal_handler(&self) -> Result<String, DbFailure> {
+        Err(failure())
+    }
+
+    #[subscribe_message("renamed")]
+    async fn renamed_handler(&self) -> ServiceResult<String> {
+        Err(failure())
+    }
+
+    #[subscribe_message("renamed_ok")]
+    async fn renamed_ok_handler(&self) -> ServiceResult<String> {
+        Ok("fine".to_string())
+    }
+}
+
+fn failure() -> DbFailure {
+    DbFailure {
+        dsn: "postgres://blog:hunter2@db:5432/blog".to_string(),
+        message: "database unavailable".to_string(),
     }
 }
 
@@ -222,5 +265,69 @@ async fn a_valid_payload_is_validated_before_the_handler() {
             )
         }
         _ => panic!("expected a validation error frame"),
+    }
+}
+
+/// A `Result` reached through a type alias must behave exactly like the literal
+/// form. It did not: return-type detection is syntactic on the last path
+/// segment, so `ServiceResult<T>` read as an ordinary value and the `Err`
+/// variant was serialized into the reply `data` — the whole error struct,
+/// including the field `Display` withholds, in a frame with no `error` key. It
+/// compiled without a warning and logged nothing, because nothing knew a
+/// failure had happened.
+#[tokio::test]
+async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(&WsClient::for_test(), "renamed", serde_json::Value::Null)
+        .await;
+
+    match reply {
+        WsReply::Error(msg) => assert_eq!(msg, "database unavailable"),
+        WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
+        WsReply::None => panic!("expected an error frame"),
+    }
+
+    // …and the denial is greppable, on the transport's own target.
+    let event = logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("event").as_deref(), Some("renamed"));
+}
+
+/// Both spellings produce the same frame — the point of the fix is that the
+/// contract no longer depends on how the type was written.
+#[tokio::test]
+async fn the_literal_and_aliased_forms_reply_identically() {
+    let mut frames = Vec::new();
+    for event in ["literal", "renamed"] {
+        match TestGateway
+            .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
+            .await
+        {
+            WsReply::Error(msg) => frames.push(msg),
+            other => panic!(
+                "`{event}` must produce an error frame, got {}",
+                match other {
+                    WsReply::Reply(v) => format!("a reply: {v}"),
+                    _ => "silence".to_string(),
+                }
+            ),
+        }
+    }
+    assert_eq!(frames[0], frames[1]);
+    // The withheld field never reaches the wire on either path.
+    assert!(!frames[0].contains("hunter2"), "{}", frames[0]);
+}
+
+/// The `Ok` half still replies with the value, so the fix costs the happy path
+/// nothing — an aliased `Result` is now simply a `Result`.
+#[tokio::test]
+async fn an_aliased_result_still_replies_on_ok() {
+    let reply = TestGateway
+        .dispatch(&WsClient::for_test(), "renamed_ok", serde_json::Value::Null)
+        .await;
+    match reply {
+        WsReply::Reply(v) => assert_eq!(v.as_str(), Some("fine")),
+        _ => panic!("expected the Ok value"),
     }
 }

@@ -2,11 +2,10 @@
 
 Core building blocks (DI container, module trait, lifecycle, access graph) for the NestRS framework.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at `1.0.0` in lockstep, under a semver contract: breaking changes wait for `2.0`.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
 
-```toml
-[dependencies]
-nest-rs-core = "1.0"
+```sh
+cargo add nest-rs-core
 ```
 
 [Documentation](https://nestrs.dev/fundamentals/) · [GitHub](https://github.com/YV17labs/NestRS)

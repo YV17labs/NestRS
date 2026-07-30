@@ -2,11 +2,10 @@
 
 Discovered cron-style scheduled jobs for NestRS: the #[scheduled] decorator plus a ScheduleModule that auto-attaches the Scheduler.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at `1.0.0` in lockstep, under a semver contract: breaking changes wait for `2.0`.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
 
-```toml
-[dependencies]
-nest-rs-schedule = "1.0"
+```sh
+cargo add nest-rs-schedule
 ```
 
 [Documentation](https://nestrs.dev/schedule/) · [GitHub](https://github.com/YV17labs/NestRS)

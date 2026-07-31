@@ -39,18 +39,60 @@ resolver — carries across intact.
 | NestJS | NestRS |
 |---|---|
 | `@Module({ imports, providers })` | `#[module(imports = [...], providers = [...])]` |
+| `@Module({ controllers: [...] })` | the same `providers` list — there is no `controllers` key |
 | `@Injectable()` | `#[injectable]` |
 | `@Controller('users')` | `#[controller(path = "/users")]` |
 | `@Get()` / `@Post()` methods | `#[get("/")]` / `#[post("/")]` in a `#[routes] impl` |
 | `CanActivate` guard | `Guard` trait (`check_http`) + `#[use_guards(...)]` |
 | DTO + `class-validator` | entity `#[expose]` + `validate(...)` (the `validator` crate) |
+| `@Param('id')` / `@Query()` / `@Body()` | the parameter type: `Path<Uuid>`, `Query<F>`, `Json<T>` |
+| `@ApiProperty()` / `@Field()` per property | one `#[expose]` on the column, schemas derived |
 | `@Inject('TOKEN')` provider token | inject `Arc<dyn Trait>`, provider listed `as dyn Trait` |
 | `@UseGuards(...)` | `#[use_guards(...)]` |
+| `@UseInterceptors(...)` / `@UseFilters(...)` | `#[use_interceptors(...)]` / `#[use_filters(...)]` |
 | `@Resolver()` operation | `#[resolver]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
+| `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
+| `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `NESTRS_<NS>__<KEY>` |
+| `Test.createTestingModule(...)` | `TestApp` booting the real `AppModule` |
+| `nest g resource users` | `nestrs g resource users` |
 | Runtime DI resolution | access graph checked at boot, with a named error |
 
-The rows are close, but two of them carry a design change worth reading in
-full: provider visibility and when wiring is verified.
+The rows are close, but four of them carry a design change worth reading in
+full: what a module lists, provider visibility, when wiring is verified, and
+where configuration comes from.
+
+## A controller is a provider
+
+`@Module({ controllers: [...], providers: [...] })` keeps two lists because a
+NestJS controller is a different kind of citizen — not injectable, never
+exported. NestRS keeps one. `#[module]` accepts exactly two keys, `imports` and
+`providers`, and an unknown key is a compile error naming the two.
+
+```rust title="crates/features/src/users/http/module.rs"
+use nest_rs_core::module;
+
+use super::controller::UsersController;
+use crate::authz::AuthzHttpModule;
+use crate::users::UsersModule;
+
+#[module(
+    imports = [UsersModule, AuthzHttpModule],
+    providers = [UsersController],
+)]
+pub struct UsersHttpModule;
+```
+
+A controller, a resolver, a gateway, a queue processor and an MCP tool are all
+providers: built by the same container, holding the same `#[inject]` fields,
+resolved by the same access-graph check. What makes one an HTTP route table is
+`#[controller]` + `#[routes]` — the decorator carries the transport, so the
+module list has nothing left to say about it.
+
+The payoff is per-binary composition. A transport mounts only when its module is
+reachable from the running app's root, so one feature crate serves an API that
+imports `UsersHttpModule` and `UsersGraphqlModule` and a worker that imports
+neither. Dropping the import unmounts the routes, and there is no second list to
+keep in sync with the first.
 
 ## No exports array
 
@@ -83,6 +125,36 @@ boots in milliseconds, so you find out immediately.
   [Providers](/fundamentals/providers/).
 </Aside>
 
+## Every config field has an environment variable
+
+In NestJS the two configuration paths rarely line up: some knobs live in a
+`forRoot` literal in code, others behind an untyped
+`configService.get('SOME_KEY')`, and which is which is a per-module habit.
+NestRS makes it a framework rule instead. Every field of every `nest-rs-*`
+module config is reachable both ways:
+
+1. **Pinned in code** — `Module::for_root(MyConfig { .. })`, type-checked by
+   the compiler.
+2. **`NESTRS_<NAMESPACE>__<KEY>`** — one explicit line per variable in
+   `from_env`, so the file lists exactly which variables exist.
+
+The two compose **per field, not per struct**: the pinned struct is the *base*
+the environment overlays. Pinning `port` in `HttpConfig` leaves
+`NESTRS_HTTP__COMPRESSION` free to move, and neither path erases the other.
+
+That is what pays off in a container. The image ships one binary with sane pins;
+the deployment moves any knob through the `env` block of a Compose file or a
+Kubernetes Deployment, or through a Secret — no rebuild, no config file baked
+into a layer, no override mounted at a path the process has to go find. A
+malformed value is boot-fatal and names the variable, so a bad ConfigMap fails
+the readiness probe instead of surfacing as a mystery three requests later.
+
+<Aside type="note">
+  The rule and the `from_env` contract live on
+  [Configuration](/configuration/#the-dual-path-rule); every variable the
+  framework reads is in the [env reference](/configuration/env-reference/).
+</Aside>
+
 ## Security is structural, not per-decorator discipline
 
 In NestJS, authorization is a habit: you remember to add `@UseGuards` and a
@@ -97,18 +169,102 @@ every posture stays greppable as one `#[authorize]` or `#[public]` site — but
 forgetting the filter on a query is a category error the framework prevents,
 not a review catch.
 
-## No runtime reflection
+## Globals are declared twice on purpose
 
-NestJS reads decorator metadata through `reflect-metadata` at runtime, and some
-behavior is shaped by configuration the process reads on boot. NestRS
-decorators are attribute macros: they expand to plain Rust during compilation.
-There is no metadata registry to query at runtime and no `.env`-driven
-reflection deciding what a decorator means. What the macro emitted is what runs.
+`APP_GUARD` binds a NestJS guard once, in a module, for the whole app — and a
+controller has no way to say it depends on that binding. NestRS binds globals in
+`main` with `App::builder().use_guards_global([...])`, but the convention is to
+**also** declare the guard on the controller, resolver or gateway that needs it.
+That is not double work: the Layer System dedups every layer by `TypeId` across
+scopes, so a guard listed twice resolves once and runs once per request.
 
-## Side by side
+The redundancy buys portability. A feature crate travels between binaries, and
+the app that forgets a global would otherwise leave a controller silently
+unprotected. Declared on the provider, the requirement travels with the code —
+and a binary with no global pool at all fails boot rather than serving open
+routes.
+
+## There is no `forwardRef`
+
+`forwardRef(() => OtherService)` exists because JavaScript modules let two files
+import each other and resolve the tie at runtime — NestJS then needs a way to
+defer one side of a cycle it cannot see until it runs. Rust does not offer the
+tie in the first place. Cargo refuses a dependency cycle **between crates**
+outright, so the layering you drew is the layering you get.
+
+Inside a module, two providers waiting on each other fail the register phase by
+name, and the panic carries the remedy:
+
+```text
+module `PostsModule`: dependency cycle among provider(s) ["PostsService", "UsersService"] — each waits on another provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete type
+```
+
+That remedy is the point. A cycle is a design signal — two things that should
+meet at an interface are reaching for each other's concrete type. Injecting
+`Arc<dyn Trait>` puts the seam back, and the cycle disappears instead of being
+deferred. There is nothing to wrap in a thunk, and no runtime resolution order
+to reason about.
+
+## Other things you will reach for and not find
+
+Each is deliberate: the concept exists in NestJS to work around something Rust
+does not do.
+
+| NestJS | Why NestRS has none |
+|---|---|
+| `configure(consumer)` middleware | The word covers two shapes. Gating is a [Guard](/fundamentals/guards/), wrapping is an [Interceptor](/fundamentals/interceptors/), body normalization is a [Pipe](/fundamentals/pipes/), CORS and security headers are `HttpConfig`. [Middleware](/fundamentals/middleware/) maps every role to its home |
+| `@Global()` | The import list is the declaration, and it is what the boot-time access-graph check reads. A module reachable everywhere without saying so is exactly the wire that check exists to catch |
+| `app.enableShutdownHooks()` | Never opt-in. `#[on_module_destroy]` and `#[on_application_shutdown]` always run, best-effort, so one failing cleanup doesn't skip the rest |
+| `@Injectable()` on everything | `#[injectable]` marks a provider the container builds; a controller, resolver or gateway is already one through its own decorator |
+
+## The parameter type is the decorator
+
+`@Param('id')`, `@Query()`, `@Body()`, `@Req()` have no counterpart, because the
+job they do is already done by the parameter's **type**. A handler declares
+`Path<Uuid>`, `Query<Filters>`, `Json<CreatePost>` or `Valid<Json<CreatePost>>`,
+and the extraction, the parse and the `400` on malformed input come from that
+type. The same applies to the request-scoped `Scoped<T>`, the guard-attached
+`Ctx<T>`, and `Bind<Action, Service>` — [Extractors](/http/extractors/) is the
+full list.
+
+Interceptors follow the same move. There is no RxJS: `intercept` is an
+`async fn` receiving `Next<'_>`, and "after the handler" is the code you write
+after `next.run(req).await` — no `.pipe(map(...))`, no stream to remember to
+subscribe.
+
+## One declaration feeds every schema
+
+A NestJS field is declared several times: on the entity, on the DTO, again with
+`@ApiProperty()` for Swagger, again with `@Field()` for GraphQL. Each copy is a
+chance to drift. NestRS declares it once — `#[expose]` on the SeaORM column —
+and derives the wire type, the create/update inputs, the JSON Schema behind
+`GET /api-json`, and the GraphQL object from that one site.
+
+A column with no `#[expose]` reaches no transport at all, so the default is
+closed: adding a column to a table never widens the API by accident.
+
+## No runtime reflection, because nothing was erased
+
+NestJS reads decorator metadata through `reflect-metadata` at runtime — the
+crutch exists because TypeScript types vanish at compile time, so the framework
+has to recover them from a side channel, and an interface can't be injected
+without a hand-written token. NestRS decorators are attribute macros: they
+expand to plain Rust during compilation, and the types they read are the ones
+the compiler checks. There is no metadata registry to query at runtime, and no
+`.env`-driven reflection deciding what a decorator *means* — the environment
+moves values, every one of them, and never shape. What the macro emitted is what
+runs.
+
+What ships is one executable. `cargo build --release` produces a binary you
+copy into a distroless image — no `node_modules` to install, no runtime to
+pin alongside it, no `npm ci` in the Dockerfile. The monorepo habits do carry
+over: a Cargo workspace is the layout you already run, `apps/*` next to shared
+crates, one lockfile at the root, local packages wired by path.
+
+## What the port changes
 
 The same slice — a users controller with an injected service and one guarded
-route — written both ways. The NestJS sketch first:
+route. The NestJS sketch:
 
 ```ts
 @Controller('users')
@@ -123,26 +279,10 @@ export class UsersController {
 }
 ```
 
-And the NestRS equivalent. The guard binding, the injected service, and the
-route decorator all have a direct counterpart; the `Bind` parameter loads the
-authorized row for the caller's org through the service:
-
-```rust
-#[controller(path = "/users")]
-#[use_guards(AuthnGuard, AuthzGuard)]
-pub struct UsersController {
-    #[inject]
-    svc: Arc<UsersService>,
-}
-
-#[routes]
-impl UsersController {
-    #[get("/:id")]
-    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
-        Json(User::from(&*user))
-    }
-}
-```
+The NestRS equivalent is the snippet that opened this page. The guard binding,
+the injected service and the route decorator each have a direct counterpart —
+the one line with no counterpart is the parameter. `@Param('id') id: string`
+hands you a string to look up; `Bind<Read, UsersService>` hands you the row.
 
 The org scoping is not an argument you thread through by hand. The guard
 established the principal, and `Bind` resolves the id to a row the caller is

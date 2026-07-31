@@ -105,6 +105,14 @@ feature. A docs example is either (a) a quote/abridgement of a real demo file (f
 path, "(abridged)" when trimmed), or (b) a minimal fictional snippet **inside the canon domain**
 with a generic `src/…` title.
 
+**The one escape — a concept with no canon home.** Some pages teach a shape the Publish universe
+has no feature for: the app's own claims module, an external service you depend on. Those name a
+**neutral placeholder** rather than a second product (`identity`, which is also what `nestrs g
+auth` scaffolds; `upstream` for a third-party dependency). The test is whether the canon *could*
+have carried it: a pure calculation, a CRUD slice or a migration walkthrough always can, so it
+takes `posts` / `users` / `orgs` and inventing a name there is the violation this rule names. The
+linter greps a ban list and cannot see this — it is a review call.
+
 **Ban list** (the linter greps; must return zero): `items`/`ItemsService`, `products`/
 `ProductEntity`, `artworks`, `file_assets`, `points`/`Ledger`, ad-hoc greetings outside the hello
 scaffold.

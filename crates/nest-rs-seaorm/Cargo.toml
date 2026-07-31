@@ -51,6 +51,10 @@ nest-rs-database.workspace = true
 # `DatabaseModule` owns its `#[config]` `DatabaseConfig` (namespace `database`),
 # loaded from `NESTRS_DATABASE__*`; `validator` backs its `#[validate]` rules.
 nest-rs-config.workspace = true
+# `validation_details` — the one redaction policy for `ValidationErrors` on a
+# wire. `ServiceError::Validation` must inherit it, not restate it: a raw
+# `to_value` echoes `params.value`, i.e. the rejected input.
+nest-rs-pipes.workspace = true
 validator.workspace = true
 # `Repo` auto-applies the caller's row-level filter, read from the ambient
 # `Ability` (`condition_for`); the ambient `Ability` itself lives in nest-rs-authz.
@@ -101,6 +105,11 @@ nest-rs-seaorm = { path = ".", features = ["full"] }
 # directly (same reason `nest-rs-authz`'s bridge tests do).
 nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-testing = { path = "../nest-rs-testing" }
+# The by-id binding's swapped-parameter diagnostic is an upgrade contract: the
+# `on_unimplemented` notes are the only thing that names the 1.1.x order, since
+# rustc reports the two bound failures against the `#[crud]` attribute rather
+# than the parameter. Snapshotted so a wording regression fails here.
+trybuild.workspace = true
 
 # The e2e suite imports feature-gated transport bridges: `DbContext` (`http`)
 # and `WsDataContext` (`ws`). Without this gate, a default-feature

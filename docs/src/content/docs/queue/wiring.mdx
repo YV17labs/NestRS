@@ -33,7 +33,11 @@ The connection is built in the **collect** phase as an async factory.
 By the time `QueueWorker::configure` runs, `Arc<QueueConnection>` is in
 the container regardless of how modules were ordered in `imports = [...]`.
 A worker app with no `QueueConnection` seeded fails fast at boot with
-a clear error.
+a clear error — and so does one whose `NESTRS_QUEUE__URL` is unreachable:
+every connect attempt warns on `nest_rs::queue`, and the boot gives up after
+`NESTRS_QUEUE__CONNECT_TIMEOUT_SECS` (10 s by default) naming the redacted
+endpoint. A container that cannot reach its queue crashes rather than parking
+forever between "not healthy" and "not dead".
 </Aside>
 
 ## The worker app
@@ -134,7 +138,7 @@ injects something its module doesn't own or import transitively.
 
 ```text frame="terminal"
 $ nestrs run dev worker
- INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
+ INFO nest_rs::app: attached module-contributed transport transport=QueueWorker
  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
 ```
 

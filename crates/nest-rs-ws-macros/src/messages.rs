@@ -192,10 +192,12 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                 quote! {
                     let __deser: #deser_ty = match ::nest_rs_ws::serde_json::from_value(__data) {
                         ::core::result::Result::Ok(__p) => __p,
+                        // Through `payload_error`, which carries the `warn` on
+                        // `nest_rs::ws` a denied dispatch owes an operator —
+                        // a client sending garbage used to be the one refusal
+                        // that logged nothing at any level.
                         ::core::result::Result::Err(__e) => {
-                            return ::nest_rs_ws::WsReply::error(::std::format!(
-                                "invalid payload for `{}`: {}", #event, __e,
-                            ));
+                            return ::nest_rs_ws::WsReply::payload_error(#event, &__e);
                         }
                     };
                     #wrap

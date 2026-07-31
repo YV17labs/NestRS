@@ -339,8 +339,9 @@ async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
         "{refused}",
     );
     assert_eq!(
-        refused["errors"][0]["extensions"]["fields"], "email",
-        "the denial names the column it refused: {refused}",
+        refused["errors"][0]["extensions"]["fields"],
+        serde_json::json!(["email"]),
+        "the denial names the columns it refused, as a list: {refused}",
     );
 
     // Same query, unrestricted grant: the admin still reads every column.
@@ -363,4 +364,42 @@ async fn graphql(app: &nest_rs_testing::TestApp, bearer: &str, query: &str) -> s
         .await;
     resp.assert_status_is_ok();
     serde_json::to_value(resp.json().await).expect("a GraphQL response is JSON")
+}
+
+/// D2: a rejected input must name the offending fields, exactly as the HTTP twin
+/// does. `/fundamentals/pipes/` promises every transport carries the structured
+/// field errors "under the name `errors`" — GraphQL carried no `extensions` at
+/// all, so the message was the constant `"validation failed"` and a client could
+/// only learn that *something* was wrong.
+#[tokio::test]
+async fn graphql_validation_errors_name_the_offending_fields() {
+    let (_db, app) = boot().await;
+    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+
+    let rejected = graphql(
+        &app,
+        &admin,
+        r#"mutation { createOrg(input: {name: ""}) { id } }"#,
+    )
+    .await;
+
+    assert_eq!(rejected["data"], serde_json::Value::Null, "{rejected}");
+    let errors = &rejected["errors"][0]["extensions"]["errors"];
+    assert!(
+        errors.is_object(),
+        "the rejection must carry the field errors under `extensions.errors`: {rejected}",
+    );
+    assert!(
+        errors.get("name").is_some(),
+        "`name` was rejected but is not named: {rejected}",
+    );
+    // The message is the constant every transport uses; the detail is structural.
+    assert_eq!(
+        rejected["errors"][0]["message"], "validation failed",
+        "{rejected}"
+    );
+    assert!(
+        !rejected.to_string().contains("Validation error:"),
+        "`validator`'s raw debug payload must not reach the wire: {rejected}",
+    );
 }

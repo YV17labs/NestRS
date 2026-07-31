@@ -19,7 +19,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
 
-use nest_rs_codegen::{Paginate, UUID_V7_REQUIRED, parse_crud_args, singular_of};
+use nest_rs_codegen::{Paginate, parse_crud_args, singular_of};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemImpl);
@@ -54,17 +54,20 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     // Validation half of route-model binding (bad format/version => GraphQL
     // error before any load); the load + authz half is the service's `access`.
+    // Through `parse_v7`, the same refusal a hand-written `bind` gives: both
+    // malformed branches answer `INVALID_ARGUMENT`, where mapping the parse
+    // failure to its `Display` leaked the `uuid` crate's internal string.
     let parse_id: TokenStream2 = quote! {
-        let __id = ::uuid::Uuid::parse_str(&id)
-            .map_err(|__e| ::nest_rs_graphql::async_graphql::Error::new(
-                ::std::string::ToString::to_string(&__e),
-            ))?;
-        if __id.get_version_num() != 7 {
-            return ::core::result::Result::Err(
-                ::nest_rs_graphql::async_graphql::Error::new(#UUID_V7_REQUIRED),
-            );
-        }
+        let __id = ::nest_rs_seaorm::graphql::parse_v7(&id)?;
     };
+    // Through `service_error`, so a `ServiceError::Validation` carries its
+    // field errors under `extensions.errors` — the same member the HTTP twin
+    // puts on the RFC 9457 envelope. Stringifying it named nothing a client
+    // could branch on, and rebuilt the message from `validator`'s `Debug`
+    // payload.
+    // Every call below yields a `DbErr`, whose `Display` is already the opaque
+    // wire string. Structured field errors come from `validate_input` (a
+    // `PipeError`), which runs before any of them.
     let gql_err: TokenStream2 = quote! {
         |__e| ::nest_rs_graphql::async_graphql::Error::new(::std::string::ToString::to_string(&__e))
     };
@@ -76,12 +79,16 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // no-ops when the input type carries no rules (compile-time dispatch), so
     // this is free for inputs without `#[validate]`. Runs before the DB load so
     // a malformed input never reaches the service.
+    // The rejection goes through `pipe_error`, not the generic `gql_err`: a
+    // stringified `PipeError` is the constant `"validation failed"`, which
+    // leaves a GraphQL client unable to tell *which* field was wrong while the
+    // HTTP twin names them all.
     let validate_input: TokenStream2 = quote! {
         {
             use ::nest_rs_graphql::MaybeValidateFallback as _;
             ::nest_rs_graphql::ValidateProbe(&input)
                 .maybe_validate()
-                .map_err(#gql_err)?;
+                .map_err(|__e| ::nest_rs_graphql::pipe_error(&__e))?;
         }
     };
 

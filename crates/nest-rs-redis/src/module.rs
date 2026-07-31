@@ -4,8 +4,11 @@
 //! is wired, so `QueueWorker` and every producer inject it regardless of
 //! import order.
 
+use std::sync::Arc;
+
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
+use nest_rs_queue::JobProducer;
 
 use crate::QueueConnection;
 use crate::config::QueueConfig;
@@ -33,13 +36,21 @@ pub struct QueueSetup {
 impl DynamicModule for QueueSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        builder.provide_factory::<QueueConnection, _, _>(|container| async move {
-            let config = container
-                .get::<QueueConfig>()
-                .expect("QueueConfig is resolved by ConfigModule::provide_feature");
-            // `?` lifts the typed `RedisError` into the factory's `anyhow`
-            // boundary (the composition-root error channel).
-            Ok(QueueConnection::connect(&config.url).await?)
-        })
+        // Bound as both names: `Arc<QueueConnection>` for the concrete backend
+        // and `Arc<dyn JobProducer>` for the portable form the queue docs
+        // prescribe — the very contract `/queue/writing-a-driver/` asks a driver
+        // to honour. `QueueConnection`'s `Clone` is a handle clone over the one
+        // multiplexed connection, so both names share a single socket.
+        builder.provide_factory_dyn::<QueueConnection, dyn JobProducer, _, _>(
+            |container| async move {
+                let config = container
+                    .get::<QueueConfig>()
+                    .expect("QueueConfig is resolved by ConfigModule::provide_feature");
+                // `?` lifts the typed `RedisError` into the factory's `anyhow`
+                // boundary (the composition-root error channel).
+                Ok(QueueConnection::connect_within(&config.url, config.connect_timeout).await?)
+            },
+            |conn| Arc::new(conn) as Arc<dyn JobProducer>,
+        )
     }
 }

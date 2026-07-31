@@ -186,17 +186,40 @@ impl<E: EntityTrait> Repo<E> {
     /// key: a row outside the caller's scope is never touched and surfaces as
     /// [`DbErr::RecordNotUpdated`], so a caller cannot mutate by id past its
     /// scope.
+    ///
+    /// Runs [`ActiveModelBehavior`] — see [`scoped_save`](Self::scoped_save).
     pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
     where
-        A: ActiveModelTrait<Entity = E> + Send,
+        A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
+        E::Model: IntoActiveModel<A>,
+    {
+        Self::scoped_save(active, Action::Update).await
+    }
+
+    /// The one query-builder write: hooks, validate, scope filter, execute.
+    ///
+    /// The scope filter forces sea-orm's **query-builder** path (`Update::one`),
+    /// which — unlike `ActiveModelTrait::insert` on the create side — does not
+    /// run [`ActiveModelBehavior`]. Driving the hooks here rather than per
+    /// method is what makes the invariant "`Repo` runs the behaviour on every
+    /// write path" instead of "`Repo::update` does": without it the
+    /// `timestamps` flag stamped `created_at` on insert and **never moved
+    /// `updated_at`**, silently freezing the column every downstream cache
+    /// invalidation, incremental sync and ETag trusts — and a soft delete,
+    /// which is also an `Update::one`, froze it in exactly the same way.
+    async fn scoped_save<A>(active: A, action: Action) -> Result<E::Model, DbErr>
+    where
+        A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
         E::Model: IntoActiveModel<A>,
     {
         let conn = Self::conn()?;
-        Update::one(active)
+        let active = A::before_save(active, &conn, false).await?;
+        let model = Update::one(active)
             .validate()?
-            .filter(scope_for::<E>(Action::Update))
+            .filter(scope_for::<E>(action))
             .exec(&conn)
-            .await
+            .await?;
+        A::after_save(model, &conn, false).await
     }
 
     /// Delete a row, gated by `condition_for(Delete)` ANDed with the primary
@@ -219,21 +242,20 @@ impl<E: EntityTrait> Repo<E> {
     /// Soft-delete a loaded row: stamp `col = now()` in the request transaction,
     /// gated by `condition_for(Delete)` ANDed with the primary key. Idempotent
     /// when the row is already tombstoned. Hard purge stays on [`Self::delete`].
+    ///
+    /// Goes through [`scoped_save`](Self::scoped_save), so a tombstone also
+    /// moves `updated_at` — a scaffolded resource declares `soft_delete` and
+    /// `timestamps` together, and a delete that left the audit column behind
+    /// would be the same silent freeze one method over.
     pub async fn soft_delete<A, M>(model: M, col: E::Column) -> Result<(), DbErr>
     where
-        A: ActiveModelTrait<Entity = E> + Send,
+        A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
         M: IntoActiveModel<A> + Send,
         E::Model: IntoActiveModel<A>,
     {
-        let conn = Self::conn()?;
         let mut active = model.into_active_model();
-        let now = crate::now();
-        active.set(col, Value::from(now));
-        Update::one(active)
-            .validate()?
-            .filter(scope_for::<E>(Action::Delete))
-            .exec(&conn)
-            .await?;
+        active.set(col, Value::from(crate::now()));
+        Self::scoped_save(active, Action::Delete).await?;
         Ok(())
     }
 }

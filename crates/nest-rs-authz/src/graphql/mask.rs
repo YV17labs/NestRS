@@ -110,17 +110,19 @@ where
         .map(String::as_str)
         .collect();
     if !refused.is_empty() {
-        let fields = refused.join(",");
         tracing::warn!(
             target: "nest_rs::authz",
             transport = "graphql",
             entity = std::any::type_name::<E>(),
             action = ?action,
-            fields = %fields,
+            // A tracing field must be a scalar, so the log keeps the joined
+            // form; the wire keeps the list.
+            fields = %refused.join(","),
             reason = "field_not_granted",
             "authorization denied",
         );
-        return Err(forbidden_fields(&fields));
+        let refused: Vec<String> = refused.into_iter().map(str::to_owned).collect();
+        return Err(forbidden_fields(&refused));
     }
 
     // Nothing refused and no row dropped ⇒ the surviving value *is* the one the

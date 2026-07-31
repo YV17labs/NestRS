@@ -1,0 +1,32 @@
+error[E0277]: `nest_rs_authz::Read` is not a resource service
+  --> tests/integration/diagnostics/swapped_bind_parameters.rs:28:20
+   |
+28 | fn swapped(_bound: Bind<WidgetsService, Read>) {}
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected a service implementing `CrudService`
+   |
+   = help: the trait `CrudService` is not implemented for `nest_rs_authz::Read`
+   = note: `Bind<A, S>` and `bind::<A, S>` name the action FIRST and the service SECOND. If this type is an action marker, the two type parameters are swapped.
+help: the trait `CrudService` is implemented for `WidgetsService`
+  --> tests/integration/diagnostics/swapped_bind_parameters.rs:24:1
+   |
+24 | impl CrudService for WidgetsService {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `Bind`
+  --> src/http/bind.rs
+   |
+   | pub struct Bind<A, S: CrudService>(<S::Entity as EntityTrait>::Model, PhantomData<fn() -> A>);
+   |                       ^^^^^^^^^^^ required by this bound in `Bind`
+
+error[E0277]: `nest_rs_authz::Read` is not a resource service
+  --> tests/integration/diagnostics/swapped_bind_parameters.rs:28:12
+   |
+28 | fn swapped(_bound: Bind<WidgetsService, Read>) {}
+   |            ^^^^^^ expected a service implementing `CrudService`
+   |
+   = help: the trait `CrudService` is not implemented for `nest_rs_authz::Read`
+   = note: `Bind<A, S>` and `bind::<A, S>` name the action FIRST and the service SECOND. If this type is an action marker, the two type parameters are swapped.
+help: the trait `CrudService` is implemented for `WidgetsService`
+  --> tests/integration/diagnostics/swapped_bind_parameters.rs:24:1
+   |
+24 | impl CrudService for WidgetsService {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

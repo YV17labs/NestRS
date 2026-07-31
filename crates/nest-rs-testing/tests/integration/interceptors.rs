@@ -385,3 +385,56 @@ async fn infra_interceptor_mounts_at_the_transport_edge_and_is_not_a_provider() 
         "an infra interceptor is not a provider",
     );
 }
+
+// --- E7: the global pool must actually reach the transport edge ---
+
+#[controller(path = "/edgeband")]
+struct EdgeBandController;
+
+#[routes]
+impl EdgeBandController {
+    #[get("/ok")]
+    async fn ok(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [Tracer, EdgeBandController])]
+struct EdgeBandModule;
+
+/// The interceptors page, the request-lifecycle table and the controllers
+/// troubleshooting note all promise that a `use_interceptors_global`
+/// interceptor "folds at the transport edge — it sees 404s and denials".
+///
+/// It saw denials (those happen on a *matched* route) but not 404s or 405s:
+/// poem's router answers an unmatched path with `Err(NotFoundError)`, so the
+/// documented interceptor body — `let mut resp = next.run(req).await?;` —
+/// short-circuited before it could observe or stamp anything. An audit or
+/// request-id interceptor bound globally therefore skipped exactly the
+/// traffic an audit trail wants.
+#[tokio::test]
+async fn a_global_interceptor_sees_matched_routes_denials_404s_and_405s() {
+    let app = TestApp::builder()
+        .module::<EdgeBandModule>()
+        .use_interceptors_global([interceptor::<Tracer>()])
+        .build()
+        .await
+        .expect("boots");
+
+    let matched = app.http().get("/edgeband/ok").send().await;
+    matched.assert_status_is_ok();
+    matched.assert_header("x-trace", "hit");
+
+    // The docs' own trailing-slash scenario.
+    let trailing = app.http().get("/edgeband/ok/").send().await;
+    trailing.assert_status(StatusCode::NOT_FOUND);
+    trailing.assert_header("x-trace", "hit");
+
+    let bogus = app.http().get("/totally-bogus").send().await;
+    bogus.assert_status(StatusCode::NOT_FOUND);
+    bogus.assert_header("x-trace", "hit");
+
+    let wrong_method = app.http().post("/edgeband/ok").send().await;
+    wrong_method.assert_status(StatusCode::METHOD_NOT_ALLOWED);
+    wrong_method.assert_header("x-trace", "hit");
+}

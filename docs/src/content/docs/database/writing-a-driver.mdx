@@ -74,7 +74,7 @@ five places you write store-specific code.
 ```rust
 use std::sync::Arc;
 use async_trait::async_trait;
-use nest_rs_core::injectable;
+use nest_rs_core::{Layer, injectable};
 use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
@@ -86,6 +86,10 @@ pub struct YourDbContext {
 }
 
 #[async_trait]
+// `Interceptor` has `Layer` as a supertrait — an empty impl is enough
+// unless the layer needs a `priority`.
+impl Layer for YourDbContext {}
+
 impl Interceptor for YourDbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
         let mutating = !matches!(

@@ -10,6 +10,11 @@ const DEFAULT_URL: &str = "redis://127.0.0.1/";
 /// cleanly before SIGKILL rather than being force-killed mid-job.
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 
+/// Default boot budget for reaching Redis: 10s — long enough to ride out a
+/// cold DNS lookup or a sidecar still starting, short enough that a
+/// misconfigured URL fails the container's startup probe instead of parking it.
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
+
 /// Redis connection settings for the queue, settable via `NESTRS_QUEUE__*` or
 /// pinned through [`QueueModule::for_root`](crate::QueueModule::for_root). The
 /// URL is redacted in `Debug` output — it may embed credentials.
@@ -24,6 +29,12 @@ pub struct QueueConfig {
     /// other in-flight job's drain — QUEUE-I5). Read from
     /// `NESTRS_QUEUE__SHUTDOWN_TIMEOUT_SECS`; defaults to 30s.
     pub shutdown_timeout: Duration,
+    /// How long boot may spend reaching Redis before failing with a named
+    /// error. The client retries an unreachable endpoint indefinitely on its
+    /// own, so without a budget a wrong URL parks the process forever with an
+    /// empty log — never healthy, never crashed. Read from
+    /// `NESTRS_QUEUE__CONNECT_TIMEOUT_SECS`; defaults to 10s.
+    pub connect_timeout: Duration,
 }
 
 impl std::fmt::Debug for QueueConfig {
@@ -31,6 +42,7 @@ impl std::fmt::Debug for QueueConfig {
         f.debug_struct("QueueConfig")
             .field("url", &"<redacted>")
             .field("shutdown_timeout", &self.shutdown_timeout)
+            .field("connect_timeout", &self.connect_timeout)
             .finish()
     }
 }
@@ -40,6 +52,7 @@ impl Default for QueueConfig {
         Self {
             url: DEFAULT_URL.to_string(),
             shutdown_timeout: Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS),
+            connect_timeout: Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
         }
     }
 }
@@ -69,9 +82,22 @@ impl Config for QueueConfig {
             .parse::<u64>("SHUTDOWN_TIMEOUT_SECS")?
             .map(Duration::from_secs)
             .unwrap_or(base.shutdown_timeout);
+        // A zero budget would restore the unbounded hang this knob exists to
+        // prevent, so it is rejected rather than silently normalized.
+        let connect_timeout = match env.parse::<u64>("CONNECT_TIMEOUT_SECS")? {
+            Some(0) => {
+                return Err(ConfigError::parse(
+                    "NESTRS_QUEUE__CONNECT_TIMEOUT_SECS",
+                    "must be at least 1 second — a zero budget cannot bound the connect",
+                ));
+            }
+            Some(secs) => Duration::from_secs(secs),
+            None => base.connect_timeout,
+        };
         Ok(Self {
             url: resolve_url(env.get("URL").or(Some(base.url)), Environment::from_env())?,
             shutdown_timeout,
+            connect_timeout,
         })
     }
 }
@@ -114,6 +140,7 @@ mod tests {
         let pinned = QueueConfig {
             url: "redis://pinned:6379/".into(),
             shutdown_timeout: Duration::from_secs(7),
+            ..Default::default()
         };
         let cfg = QueueConfig::from_env(
             &ConfigService::with_vars("queue", [("NESTRS_QUEUE__URL", "redis://from-env:6379/")]),
@@ -180,6 +207,50 @@ mod tests {
         )
         .expect("ok");
         assert_eq!(cfg.shutdown_timeout, Duration::from_secs(5));
+    }
+
+    // C6: the connect budget is the knob that turns an unreachable backend from
+    // a silent forever-hang into a named boot failure — so it must be
+    // configurable, and a zero must not quietly restore the hang.
+    #[test]
+    fn connect_timeout_defaults_to_10s_and_reads_the_env() {
+        assert_eq!(
+            QueueConfig::default().connect_timeout,
+            Duration::from_secs(10)
+        );
+
+        let cfg = QueueConfig::from_env(
+            &ConfigService::with_vars(
+                "queue",
+                [
+                    ("NESTRS_QUEUE__URL", "redis://redis:6379"),
+                    ("NESTRS_QUEUE__CONNECT_TIMEOUT_SECS", "3"),
+                ],
+            ),
+            Default::default(),
+        )
+        .expect("ok");
+        assert_eq!(cfg.connect_timeout, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn connect_timeout_of_zero_is_rejected_by_name() {
+        let err = QueueConfig::from_env(
+            &ConfigService::with_vars(
+                "queue",
+                [
+                    ("NESTRS_QUEUE__URL", "redis://redis:6379"),
+                    ("NESTRS_QUEUE__CONNECT_TIMEOUT_SECS", "0"),
+                ],
+            ),
+            Default::default(),
+        )
+        .expect_err("zero must abort boot");
+        assert!(
+            err.to_string()
+                .contains("NESTRS_QUEUE__CONNECT_TIMEOUT_SECS"),
+            "the error names the variable: {err}",
+        );
     }
 
     #[test]

@@ -14,12 +14,17 @@ pub(super) fn resolve_start(path: Option<PathBuf>) -> PathBuf {
 
 /// Commit a generator's scaffold, format the touched files, and print the
 /// one-line summary plus the change report.
-pub(super) fn finish(s: Scaffold, dry_run: bool, base: &Path, summary: &str) -> CliResult<()> {
+///
+/// `what` is the noun phrase alone (`"feature `orders`"`); the tense is this
+/// function's to choose, because only it knows whether anything was written. A
+/// line claiming something was created directly above "no files written" reads
+/// as a bug in the tool.
+pub(super) fn finish(s: Scaffold, dry_run: bool, base: &Path, what: &str) -> CliResult<()> {
     let report = s.apply(dry_run)?;
     if !dry_run {
         rustfmt(&report.rust_files());
     }
-    println!("{summary}");
+    println!("{} {what}", if dry_run { "Would write" } else { "Wrote" });
     report.print(base);
     Ok(())
 }

@@ -22,7 +22,22 @@ trait lets you ship one when you need Vault, K8s, or AWS Parameter Store.
 
 ```bash frame="terminal"
 cargo add nest-rs-config
+cargo add validator --features derive
 ```
+
+A `#[config]` struct derives `validator::Validate` and carries `#[validate]`
+rules, and the crate re-exports neither the trait nor its derive — so the
+version has to match the one `nest-rs-config` compiles against, or the derive
+implements a *different* copy of the trait and the error reads as though you
+wrote the impl wrong:
+
+```toml title="Cargo.toml"
+[dependencies]
+nest-rs-config = "1.2"
+validator = { version = "0.20", features = ["derive"] }
+```
+
+`nestrs new` writes that pin into `[workspace.dependencies]` for you.
 
 ## A typed config — by example
 
@@ -140,6 +155,12 @@ prefix. Five methods, all sync.
 Empty strings count as unset, so `FOO=` in a `.env` file does not blank
 an in-code default.
 
+It is an **unset override**, not a no-op: a present-but-empty entry suppresses
+the fallback, so `FOO=` in `.env.local` also masks `FOO=33` in `.env.development`
+and `FOO=11` in `.env`, and the in-code default is what lands. Same for an empty
+value in the real environment. Delete the line to defer to the next layer;
+leave it empty to mean "nothing, whatever the files below say".
+
 ## Wire it in
 
 The wiring is two module imports. The feature owns its config; the root
@@ -243,6 +264,11 @@ Hand-writing `from_env` (for custom validation, or a field carrying a structured
     title="Alternative sources"
     href="/configuration/sources/"
     description="Plug Vault, a K8s ConfigMap, or AWS Parameter Store behind ConfigSource."
+  />
+  <LinkCard
+    title="Env-var reference"
+    href="/configuration/env-reference/"
+    description="Every NESTRS_* variable the framework reads, by namespace."
   />
   <LinkCard
     title="Overriding in tests"

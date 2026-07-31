@@ -32,9 +32,15 @@ pub fn scaffold(output: &Path, names: &Names, dry_run: bool) -> CliResult<()> {
     queue_sources(&mut s, &root.join("src"), names);
 
     // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
+    // Standalone has no separate feature crate: the crate's root module *is*
+    // the module that serves the greeting, so the narrowest boot is that one.
+    let smoke = r
+        .clone()
+        .with("smoke_use", format!("{}::{}", names.snake, names.module()))
+        .with("smoke_module", names.module());
     s.create(
         root.join("tests/integration/main.rs"),
-        r.render(shared::SMOKE),
+        smoke.render(shared::SMOKE),
     );
     // Empty, but present: the test recipes filter on `binary(e2e)`, which
     // nextest refuses to parse when no such binary exists.

@@ -5,6 +5,141 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+A clean-room QA campaign against the **published** 1.2.0 — crates.io releases and
+the live docs site, never the repository — filed 71 findings: 3 blockers, 27
+major (4 security-relevant), 41 documentation defects. Every finding is closed
+below, each with the test that keeps it closed.
+
+### Security
+
+- **`NESTRS_STORAGE__ALLOW_HTTP=false` did not cover presigned URLs.** Signing is
+  a local computation, so `object_store`'s own plain-HTTP gate never saw it: a
+  production app minted working `http://` URLs carrying the SigV4 signature, on
+  the flow `/storage/` calls canonical. An `http://` endpoint with plain HTTP
+  disallowed is now refused **at config load**, naming the variable, so no
+  transfer can be attempted and no plaintext URL can be signed; the signing path
+  keeps a second check for a hand-built `Storage::new`. It was also a
+  request-time `500` with nothing logged at any level — a mis-deployed app
+  started healthy and passed its liveness probe.
+- **`#[public]` on an OAuth2 callback turned a forged-callback `401` into a
+  `500`.** The authn guard absorbs a rejected credential on a public route by
+  design, which left the handler with no principal and `Ctx<Claims>` answering a
+  server error — indistinguishable from a bug, and invisible to any alert, WAF
+  rule or rate limit keyed on `401`. The rejection is now recorded on the
+  request, and a handler that goes on to need the principal answers the deferred
+  `401`. A public route that never needs one still serves.
+- **A `401` produced by a guard carried no `WWW-Authenticate` challenge**, which
+  RFC 9110 §11.6.1 and RFC 6750 §3 require. Only a handler-returned `AuthError`
+  set it; the guard path — the one the JWT page documents — did not. Every `401`
+  the framework renders now carries it, and only a `401`.
+- **`/http/file-uploads/` inverted its own caveat**: it said `MAX_BODY_BYTES`
+  does *not* gate `Multipart` and told readers to compensate. It does. The page
+  taught operators to build a control they already had, and developers to expect
+  a large direct upload to work when it `413`s at 2 MiB by default.
+
+### Fixed
+
+- **The `.env` cascade outranked a value pinned in `for_root`** in every
+  scaffolded app — the exact inverse of the documented tier, stated in three
+  places and in the generated `.env`. `Environment::init` publishes the cascade
+  into `std::env` so raw `std::env::var` consumers see it, which erased the one
+  distinction the deployment tier rests on. The published names are now recorded
+  and subtracted from `ConfigSource::get_from_deployment`, so `real env > pinned
+  in code > .env cascade` holds in a scaffolded app exactly as in a library-only
+  one.
+- **An unreachable `NESTRS_QUEUE__URL` blocked boot forever with zero output** —
+  never healthy, never crashed, and silent at `RUST_LOG=trace`, the worst shape
+  for a container platform. The connect is now bounded by
+  `NESTRS_QUEUE__CONNECT_TIMEOUT_SECS` (10 s default, `0` rejected), warns per
+  attempt on `nest_rs::queue`, and fails with the redacted endpoint and the knob
+  that widens it.
+- **`timestamps` never bumped `updated_at`.** Create ran `ActiveModelBehavior`
+  through `ActiveModelTrait::insert`; update went through the query builder that
+  the scope filter forces, which does not. Every resource with the flag on
+  silently froze the column downstream caches, incremental sync and ETags trust.
+  `Repo::update` now drives the hooks explicitly, keeping the scope filter.
+- **`QueueModule::for_root` never bound `Arc<dyn JobProducer>`**, so the portable
+  injection form both the queue and the driver-authoring pages prescribe compiled
+  and then died at boot. Both names now resolve from the one connection.
+- **A global interceptor did not run on 404s or 405s**, contradicting three doc
+  statements and skipping exactly the traffic a request-id or audit interceptor
+  exists to record. The router answers an unmatched path with `Err`, which
+  short-circuited the documented `next.run(req).await?` body; the transport now
+  renders it once the global filter pool has had its turn, so the interceptor
+  bands genuinely see a response.
+- **GraphQL validation errors carried no `extensions` at all**, so a client could
+  not tell which field was wrong while the HTTP twin named them. Every rejection
+  site now renders through one helper: `extensions.errors`, the same member name
+  HTTP, WS and the queue's dead-letter event use.
+- **The `fields` extension on a masking denial is a list**, not a comma-joined
+  string — the natural reading of "names in the `fields` extension", and the only
+  shape that survives more than one refused field.
+- **A malformed id on the GraphQL bind path leaked the `uuid` crate's parse
+  string** with no code. Both malformed branches now answer
+  `"id must be a UUID v7"` with `INVALID_ARGUMENT`.
+- **A WebSocket pipe rejection, a malformed payload and an unknown event logged
+  nothing** — exactly backwards, since a client sending garbage is the case worth
+  seeing. All three now `warn` on `nest_rs::ws` beside the frame.
+- **A set-but-unparseable `NESTRS_OPENTELEMETRY__*` value was swallowed.** `0`
+  stays the documented sentinel; a typo is reported on stderr naming the
+  variable.
+- **A config validation failure dropped the namespace and leaked `validator`'s
+  raw debug payload** — including the rejected value — into an operator-facing
+  line. It now reads `configuration validation failed for '<namespace>'` with one
+  `- field: rule (bound = n)` line each, bounds kept and the submitted value
+  stripped.
+- **`Storage` gained `delete`** (absent keys succeed, so retention sweeps and
+  failed-upload cleanup are idempotent), `put_bytes` takes anything
+  `Into<Bytes>` so the read/write round-trip composes without a copy, and
+  `StorageError` converts into `std::io::Error` so `get_stream` feeds
+  `Body::from_bytes_stream` as the streaming page shows.
+- **Swapping `Bind`'s type parameters** (the 1.1.x order) reported two unrelated
+  bound failures against the `#[crud]` attribute. Both traits now carry an
+  `on_unimplemented` note naming the order and the swap, snapshotted by trybuild.
+
+### CLI
+
+- `nestrs g ws|schedule|mcp` over a `g resource` port emitted `self.svc.count()`,
+  which a `CrudService` does not have — so the page's "any adapter compiles
+  immediately" guarantee broke, with rustc blaming `Iterator::count`. Every
+  transport now has a CRUD twin.
+- `nestrs g queue` omitted `nest-rs-redis`, `nestrs g mcp` omitted `schemars`
+  and `nest-rs-guards`' `mcp` feature (without which the documented global-pool
+  fallback for `/mcp` is never seeded), and `nestrs g graphql` left the app
+  crate — whose `module.rs` it edits — without `nest-rs-graphql`.
+- `g resource` and `g migration` disagreed about the same table: the migration
+  scaffolded `created_at`/`updated_at`/`deleted_at` and the entity declared none,
+  so the resource hard-deleted against a tombstone column it never wrote. The
+  entity now carries `soft_delete, timestamps` and the columns, matching the
+  `users/` exemplar.
+- The scaffolded smoke test booted the **app root**, so wiring a resource the way
+  `g resource` instructs made the no-infrastructure suite need Postgres and fail
+  on a 30 s pool timeout. It boots the feature's own module now.
+- `nestrs doctor` read only `std::env`, reporting `not set` for a variable the
+  workspace's own generated `.env` defines — the exact mistake
+  `/database/migrations/` warns tool authors against.
+- `--dry-run` printed `Created feature …` directly above `no files written`;
+  `--version` / `-V` were rejected with `unexpected argument`; and the scaffold
+  now pins `validator` to the major the framework compiles against.
+
+### Documentation
+
+Forty-one defects across the site, from stale samples (`TestApp::<M>::builder()`,
+a pre-RFC-9457 validation body, a `debug`-vs-`warn` contradiction on one page) to
+whole sections that could not be followed: the "grow a standalone crate into a
+workspace" walkthrough clobbered the scaffold's own files and ended in a
+duplicate-controller boot failure, and Social login documented two routes that
+exist in no framework crate.
+
+The install stanzas got the sweep 1.2.0 gave GraphQL, WS, MCP and Queue: `/http/`
+needs `nest-rs-guards`, `/configuration/` needs `validator`, `/database/` needs
+`schemars` and `validator`, `/mcp/` needs `schemars`. The `nest-rs` umbrella is
+documented for what it is — version alignment and a prelude, not a substitute for
+the crates a decorator's expansion names, which Rust's lack of a transitive
+extern prelude makes impossible.
+
 ## [1.2.0] - 2026-07-30
 
 Twenty-nine findings from two read-throughs. The first opened the GraphQL surface

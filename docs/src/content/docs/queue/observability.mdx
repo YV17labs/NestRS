@@ -18,7 +18,7 @@ service-level logs your `#[process]` method emits keep their own target
 | Target | What | Level |
 |---|---|---|
 | `nest_rs::queue` | Boot registration, per-job span + events, skipped/unversioned warnings. | `debug` on job start, `info` on success, `warn` on failure. |
-| `nest_rs::transport` | Boot: `attached module-contributed transport transport=QueueWorker`. | `info`. |
+| `nest_rs::app` | Boot: `attached module-contributed transport transport=QueueWorker`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
 | `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
 
 Hot paths respect `RUST_LOG=info`: `job started` sits at `debug`, so a
@@ -75,7 +75,7 @@ provider isn't reachable from this app's module tree is skipped with a
 `warn`:
 
 ```text frame="terminal"
- INFO nest_rs::transport: attached module-contributed transport transport=QueueWorker
+ INFO nest_rs::app: attached module-contributed transport transport=QueueWorker
  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
  WARN nest_rs::queue: skipped #[process] method: provider unreachable from app's module tree processor=ReportJobs::weekly queue=reports
 ```

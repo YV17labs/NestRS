@@ -22,8 +22,24 @@ queries each have their own category.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-http
+cargo add nest-rs-core nest-rs-http nest-rs-guards
 ```
+
+Everything a controller needs, in full:
+
+```toml title="Cargo.toml"
+[dependencies]
+nest-rs-core = "1.2"
+nest-rs-http = "1.2"
+nest-rs-guards = "1.2"   # `#[controller]`/`#[routes]` expand to the guard chain
+```
+
+`nest-rs-guards` is the one that looks optional and is not: `#[controller]` and
+`#[routes]` expand to the per-route guard chain, which lives there — the same
+reason the WebSockets page calls out its `ws` feature. Leaving it off is a
+resolution error inside a macro expansion (`cannot find nest_rs_guards in the
+crate root`) rather than a missing-feature message. `nestrs new` writes all
+three, so this only bites a crate assembled by hand.
 
 ## In this section
 

@@ -36,6 +36,8 @@ pub fn print_about() {
     about = PROJECT_TAGLINE,
     long_about = "Scalable Rust backend apps with native performance.\n\n\
                   Scaffolds NestRS projects, features, transport adapters, and toolchain checks.",
+    // `--version` / `-V` are intercepted in `main` so they print exactly what
+    // `nestrs version` prints, rather than clap's `<bin> <ver>` rendering.
     disable_version_flag = true,
     after_help = AFTER_HELP,
 )]

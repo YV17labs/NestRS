@@ -132,10 +132,14 @@ What this means in practice:
 - **Resolving config is side-effect-free**, whichever source you use. Neither
   `for_namespace` nor `ConfigModule::for_root()` publishes anything;
   `for_root`'s collect registers the active `Environment` and stops there.
-- **A test is hermetic when it does not call `Environment::init`** (or
-  `load_cascade`, its explicit form). `with_source` additionally decides where
-  the values come from — useful, but a different question from whether the
-  process env is touched.
+- **`TestApp::builder()` *does* publish the cascade.** The e2e harness reads
+  backend URLs through `std::env` before any `ConfigService` exists, so it calls
+  `load_cascade` (the explicit form of what `Environment::init` does) once per
+  process. The merge is bounded — set-if-absent, real env still wins, and
+  `.env.local` is skipped under `NESTRS_ENV=test` — and a `for_root` pin still
+  outranks every cascade value. Reach for `with_source` (or `.provide(cfg)`)
+  when a test must not see a committed `.env` at all: it decides where the
+  values come from, which is the stronger guarantee.
 - **In an app, assume the cascade *is* in `std::env`**, because `main` put it
   there. That is the point: a `.env` value reaches code the DI graph never sees.
 

@@ -418,32 +418,59 @@ Aliases: **`nestrs g`** = **`nestrs generate`**.
 
 There is no `nestrs migrate`: the move is a handful of file relocations, and
 doing it by hand keeps you in control of the app boundary you are introducing.
-The order matters only in that the workspace has to exist before anything moves
-into it.
+
+The one thing to know before you start: **`nestrs new <workspace>` already
+writes a `hello` feature and a `hello` app** — the starter that proves the
+workspace runs. Move the incoming crate in under its **own** name. `mv` does
+not warn about overwriting, and `nestrs new` initialises no git repository, so
+a collision has nothing to recover from.
 
 ```bash frame="terminal"
 # 1. Scaffold the workspace beside the standalone crate.
 nestrs new acme && cd acme
 
-# 2. Move the standalone crate's src/ in as a feature. The file names already
-#    match — service.rs, controller.rs, module.rs are the same roles.
-mkdir -p crates/features/src/hello
-mv ../hello/src/{service.rs,controller.rs,module.rs} crates/features/src/hello/
+# 2. Give the incoming crate its own feature folder, with the adapter
+#    sub-folder the workspace layout uses.
+mkdir -p crates/features/src/posts/http
 
-# 3. `main.rs` stays behind as the app: apps/hello/src/main.rs already exists
-#    from step 1 and is the same six lines.
+# 3. Move the port and the adapter into their conventional homes. `main.rs`
+#    stays behind: apps/hello/src/main.rs already exists and is the same six
+#    lines.
+mv ../posts/src/service.rs    crates/features/src/posts/
+mv ../posts/src/module.rs     crates/features/src/posts/
+mv ../posts/src/controller.rs crates/features/src/posts/http/
 ```
 
-Then three edits the copy cannot do:
+Then the edits a move cannot do:
 
-1. **`crates/features/src/lib.rs`** — add `pub mod hello;` and
-   `pub use hello::HelloModule;`.
-2. **`crates/features/src/hello/mod.rs`** — the folder index
-   (`mod service; mod controller; mod module;` plus the `pub use` lines).
+1. **`crates/features/src/lib.rs`** — add `pub mod posts;`.
+2. **`crates/features/src/posts/mod.rs`** (new) — the folder index:
+   `mod service; mod module; pub mod http;` plus the `pub use` lines.
    Standalone had no `mod.rs` because `main.rs` declared the modules.
-3. **Imports** — `crate::service::HelloService` becomes
-   `crate::hello::HelloService`; the app's `module.rs` imports
-   `features::hello::HelloHttpModule`.
+3. **`crates/features/src/posts/http/mod.rs`** (new) — `mod controller; mod
+   module;` plus its `pub use` lines, and a `http/module.rs` holding
+   `#[module(imports = [PostsModule], providers = [PostsController])]`.
+4. **`crates/features/src/posts/module.rs`** — drop `HttpModule::for_root(…)`
+   and the controller from `providers`. In a workspace the transport is the
+   **app's** decision, and the port module provides only the service:
+   `#[module(providers = [PostsService])]`.
+5. **Imports** — `crate::service::PostsService` becomes
+   `crate::posts::PostsService`; the app's `module.rs` adds
+   `features::posts::PostsHttpModule` to its imports.
+
+Both halves of step 4 fail loudly if skipped. Leaving `HttpModule::for_root(…)`
+in the moved module attaches a **second** HTTP transport — a duplicated
+`attached module-contributed transport` line at boot. And a moved controller
+still declaring `#[controller(path = "/")]` collides with the starter one:
+
+```text frame="terminal"
+Error: duplicate controller prefix "/": HelloController and PostsController
+both mount there — a controller prefix is its exclusive namespace; give each
+one a distinct path
+```
+
+Give the moved controller its own prefix, or delete the starter `hello` feature
+and app once yours is serving.
 
 `crates/migrations/` and `crates/seed/` come from `nestrs new`, so the database
 verbs and `g migration` work from the first `nestrs run db migrate`. From here

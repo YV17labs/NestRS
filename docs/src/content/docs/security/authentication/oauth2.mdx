@@ -49,13 +49,32 @@ pub struct OAuthController {
 
 #[routes]
 impl OAuthController {
+    // The redirect leg is a plain handler: a `Strategy` maps a request to a
+    // principal and never issues a transport response, so the 302 and the
+    // cookie are built here. `#[public]` because there is no credential yet.
     #[get("/authorize")]
     #[public]
-    #[use_guards(OAuthGuard)]
-    async fn authorize(&self) {}
+    async fn authorize(&self) -> Result<Response> {
+        let auth = self.client.authorize(&self.jwt, "github")?;
+        Ok(Response::builder()
+            .status(StatusCode::FOUND)
+            .header(header::LOCATION, auth.url)
+            .header(
+                header::SET_COOKIE,
+                format!(
+                    "nestrs_oauth_tx={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
+                    auth.transaction,
+                    OAuth2Client::TRANSACTION_TTL_SECS,
+                ),
+            )
+            .finish())
+    }
 
+    // NOT `#[public]`: `OAuthGuard` authenticates *from* `code`/`state`, so it
+    // must be allowed to reject. A forged callback is then the documented
+    // `401`; marked public, the guard would absorb the denial and the handler
+    // would fail on the missing principal instead.
     #[get("/callback")]
-    #[public]
     #[use_guards(OAuthGuard)]
     async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
         Ok(Json(self.issuer.issue(
@@ -67,9 +86,13 @@ impl OAuthController {
 }
 ```
 
-Both routes are `#[public]` — the provider redirect lands without a
-bearer token, so `AuthnGuard` would refuse. The `OAuthGuard` is your
-app's `Strategy<Principal = Caller>` running the flow.
+Only `/authorize` is `#[public]`: it runs before any credential exists, and it
+binds no guard because there is nothing yet to authenticate. `/callback` is the
+opposite — `code` and `state` *are* the credential, and `OAuthGuard` (your app's
+`Strategy<Principal = Caller>`) is what verifies them. Marking it `#[public]`
+tells `AuthnGuard` to admit a rejected credential as anonymous, which turns a
+forged-callback `401` into a failure on the missing principal — invisible to any
+alert, WAF rule or rate limit keyed on `401`.
 
 ## Configuration
 
@@ -98,10 +121,16 @@ crate's own guidance.
 transaction cookie that ties the round-trip together:
 
 ```rust
-let auth = self.client.authorize(&self.jwt)?;
+let auth = self.client.authorize(&self.jwt, "github")?;
 // auth.url        — the provider redirect URL
 // auth.transaction — short-lived JWT cookie: CSRF state + PKCE verifier
 ```
+
+The `provider` argument is the registry key of the provider this flow is for.
+It is **load-bearing**: it is minted into the transaction, and `exchange`
+refuses a transaction issued for a different provider (`AuthError::Failed("OAuth
+provider mismatch")`) *before* the CSRF compare — which is what stops a
+transaction being replayed across providers.
 
 The transaction is a JSON Web Token signed by your app's
 `JwtService`, carrying the random CSRF `state`, the PKCE verifier,
@@ -122,6 +151,7 @@ the code for a `TokenSet`:
 ```rust
 let tokens = self.client.exchange(
     &self.jwt,
+    "github",              // the same provider the transaction was minted for
     &transaction_cookie,
     state_from_query,
     code_from_query,

@@ -60,6 +60,20 @@ pub struct OpenTelemetryConfig {
     pub metric_interval: Duration,
 }
 
+/// Report a set-but-unparseable OTel variable on stderr.
+///
+/// `from_env` cannot return `Err` (it builds the config that installs the
+/// subscriber, so it runs before one exists and before `main` can propagate),
+/// but silence is what broke the framework-wide contract: the value was
+/// dropped and the default kept with nothing to read anywhere. Same channel and
+/// shape as `Environment::from_env`'s unrecognised-`NESTRS_ENV` report.
+fn warn_unparseable(name: &str, raw: &str) {
+    eprintln!(
+        "nestrs: WARNING — unparseable {name}={raw:?}; keeping the default. \
+         Fix the value, or unset it to make the default explicit."
+    );
+}
+
 /// Shape of the console log layer's output.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LogFormat {
@@ -150,18 +164,24 @@ impl OpenTelemetryConfig {
         }
 
         cfg.otlp_endpoint = env_var("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT");
-        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__SAMPLE_RATIO")
-            && let Ok(r) = raw.parse::<f64>()
-        {
-            cfg.trace_sample_ratio = r.clamp(0.0, 1.0);
+        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__SAMPLE_RATIO") {
+            match raw.trim().parse::<f64>() {
+                Ok(r) => cfg.trace_sample_ratio = r.clamp(0.0, 1.0),
+                Err(_) => warn_unparseable("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", &raw),
+            }
         }
-        // A zero or unparseable value keeps the default rather than wedging the
-        // reader in a tight export loop.
-        if let Some(secs) = env_var("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS")
-            .and_then(|raw| raw.trim().parse::<u64>().ok())
-            .filter(|secs| *secs > 0)
-        {
-            cfg.metric_interval = Duration::from_secs(secs);
+        // `0` is the documented sentinel for "keep the default"; anything
+        // non-numeric is a typo, and swallowing it silently broke the
+        // framework-wide "set-but-unparseable is never a silent fallback"
+        // contract. This runs before any subscriber exists (it is what
+        // configures one), so the report goes to stderr — the same channel
+        // `Environment::from_env` uses for an unrecognised `NESTRS_ENV`.
+        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS") {
+            match raw.trim().parse::<u64>() {
+                Ok(0) => {}
+                Ok(secs) => cfg.metric_interval = Duration::from_secs(secs),
+                Err(_) => warn_unparseable("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS", &raw),
+            }
         }
 
         cfg

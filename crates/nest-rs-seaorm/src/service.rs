@@ -97,6 +97,16 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// — and exposes — only the operations it genuinely has. A read-only resource
 /// (e.g. a relation or a projection) implements just this trait and never has
 /// to declare an unused `Create`/`Update` placeholder.
+///
+/// The `on_unimplemented` note pairs with `ActionMarker`'s: a swapped
+/// `Bind<Service, Action>` (the 1.1.x order) trips both bounds at once, and
+/// the pair is what names the swap rather than leaving two unrelated errors
+/// pointing at the `#[crud]` attribute above.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a resource service",
+    label = "expected a service implementing `CrudService`",
+    note = "`Bind<A, S>` and `bind::<A, S>` name the action FIRST and the service SECOND. If this type is an action marker, the two type parameters are swapped."
+)]
 #[async_trait]
 pub trait CrudService: Send + Sync
 where

@@ -7,5 +7,5 @@
 mod bind;
 mod loader;
 
-pub use bind::{bind, bind_required};
+pub use bind::{bind, bind_required, parse_v7};
 pub use loader::LoaderScope;

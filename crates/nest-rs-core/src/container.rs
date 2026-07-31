@@ -540,16 +540,54 @@ impl ContainerBuilder {
     /// (injectable as `Arc<T>`). Drained by
     /// [`AppBuilder::build`](crate::AppBuilder::build) before providers are
     /// built.
-    pub fn provide_factory<T, F, Fut>(mut self, factory: F) -> Self
+    pub fn provide_factory<T, F, Fut>(self, factory: F) -> Self
     where
         T: Any + Send + Sync,
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
+        self.queue_factory(factory, |builder, value| builder.provide(value))
+    }
+
+    /// Queue an async factory whose awaited output is bound **twice**: as the
+    /// concrete `T` and as the `Arc<D>` trait object `bind` derives from it.
+    ///
+    /// The portable-injection pattern a driver owes its callers — inject
+    /// `Arc<Connection>` for the concrete backend, or `Arc<dyn Trait>` to stay
+    /// swappable — needs both names resolvable from the one factory. Without
+    /// this, a driver that only registers the concrete type compiles fine and
+    /// then fails at boot with "unmet dependency" the first time an app takes
+    /// the documented portable form.
+    ///
+    /// `bind` receives a clone, so `T`'s `Clone` must share the underlying
+    /// resource (a pooled or multiplexed handle), not duplicate it.
+    pub fn provide_factory_dyn<T, D, F, Fut>(self, factory: F, bind: fn(T) -> Arc<D>) -> Self
+    where
+        T: Any + Clone + Send + Sync,
+        D: ?Sized + Send + Sync + 'static,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.queue_factory(factory, move |builder, value| {
+            let dynamic = bind(value.clone());
+            builder.provide(value).provide_dyn(dynamic)
+        })
+    }
+
+    /// The factory-queue protocol both public forms share: box the future,
+    /// await it in the factory phase, and hand the awaited value to `install`,
+    /// which decides under which name(s) it registers.
+    fn queue_factory<T, F, Fut, I>(mut self, factory: F, install: I) -> Self
+    where
+        T: Any + Send + Sync,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+        I: FnOnce(ContainerBuilder, T) -> ContainerBuilder + Send + 'static,
+    {
         let boxed: BoxedFactory = Box::new(move |container| {
             Box::pin(async move {
                 let value = factory(container).await?;
-                let registrar: Registrar = Box::new(move |builder| builder.provide(value));
+                let registrar: Registrar = Box::new(move |builder| install(builder, value));
                 Ok(registrar)
             })
         });

@@ -377,3 +377,74 @@ async fn an_aliased_result_still_replies_on_ok() {
         _ => panic!("expected the Ok value"),
     }
 }
+
+// --- E4: a refused dispatch must be greppable, whoever refused it ---
+
+/// `/websockets/messages/` promises "a `warn!` lands in the `nest_rs::ws`
+/// target alongside the frame, so a denied dispatch shows up in logs without
+/// extra instrumentation" — in the paragraph about a `Valid<T>` rejection.
+///
+/// Only a handler-returned `Err` warned. A pipe rejection and a malformed
+/// payload — a *client* sending garbage, which is the case worth alerting on —
+/// produced the right frame and no record at any level.
+#[tokio::test]
+async fn a_pipe_rejection_warns_on_the_ws_target() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "checked",
+            serde_json::json!("anything"),
+        )
+        .await;
+    assert!(matches!(reply, WsReply::Error(_)), "the frame is unchanged");
+
+    let event = logs.expect_one("nest_rs::ws", "subscribe_message rejected by a pipe");
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("event").as_deref(), Some("checked"));
+}
+
+#[tokio::test]
+async fn a_structured_validation_rejection_warns_too() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "named",
+            serde_json::json!({ "name": "" }),
+        )
+        .await;
+    assert!(matches!(reply, WsReply::Error(_)));
+
+    let event = logs.expect_one("nest_rs::ws", "subscribe_message rejected by a pipe");
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("event").as_deref(), Some("named"));
+}
+
+#[tokio::test]
+async fn a_malformed_payload_warns_on_the_ws_target() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "named",
+            serde_json::json!({ "nope": 1 }),
+        )
+        .await;
+    match reply {
+        WsReply::Error(msg) => assert!(
+            msg.error.contains("invalid payload for `named`"),
+            "the frame is unchanged: {}",
+            msg.error,
+        ),
+        WsReply::Reply(value) => panic!("expected an error frame, got a reply: {value}"),
+        WsReply::None => panic!("expected an error frame, got silence"),
+    }
+
+    let event = logs.expect_one(
+        "nest_rs::ws",
+        "subscribe_message payload failed to deserialize",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("event").as_deref(), Some("named"));
+}

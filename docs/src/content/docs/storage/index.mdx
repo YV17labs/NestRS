@@ -114,7 +114,7 @@ Workers that transform objects (e.g. generating a WebP variant) read
 and write bytes directly:
 
 ```rust
-let original = self.storage.get_bytes(key).await?;
+let original = self.storage.get_bytes(key).await?;   // -> bytes::Bytes
 let webp = transcode(&original)?;
 self.storage
     .put_bytes(&variant_key, webp, "image/webp")
@@ -128,12 +128,33 @@ originals: a short-lived signed `GET` URL the client fetches directly.
 
 | Method | Purpose |
 |---|---|
-| `bucket_name()` | the configured bucket |
-| `presign_put(key, expires)` | signed `PUT` URL for direct client upload |
-| `presign_get(key, expires)` | signed `GET` URL for serving private originals |
+| `bucket_name() -> &str` | the configured bucket |
+| `presign_put(key, expires) -> String` | signed `PUT` URL for direct client upload |
+| `presign_get(key, expires) -> String` | signed `GET` URL for serving private originals |
 | `head(key) -> Option<HeadMetadata>` | object size; `None` if absent |
-| `get_bytes(key)` | download full bytes (server-side) |
-| `put_bytes(key, bytes, content_type)` | upload bytes (server-side) |
+| `get_bytes(key) -> Bytes` | download full bytes (server-side) |
+| `get_stream(key) -> impl Stream<Item = Result<Bytes>>` | download chunk by chunk, never buffering the whole object |
+| `put_bytes(key, bytes, content_type)` | upload bytes — takes anything `Into<Bytes>`, so the `Bytes` from `get_bytes` composes without a copy |
+| `delete(key)` | remove an object; an absent key succeeds, so retention sweeps and failed-upload cleanup are idempotent |
+
+That is the whole surface. A `StorageError` converts into `std::io::Error`, so
+a `get_stream` feeds `poem::Body::from_bytes_stream` directly:
+
+```rust
+let Some(stream) = self.storage.get_stream(key).await.ok() else {
+    return Ok(ProblemDetails::not_found().into_response());
+};
+Ok(Response::builder().body(Body::from_bytes_stream(stream)))
+```
+
+<Aside type="caution">
+`ALLOW_HTTP=false` — the staging/production default — refuses a plain-`http://`
+endpoint **at boot**, naming `NESTRS_STORAGE__ENDPOINT`. It covers presigned
+URLs too: signing is a local computation, so a plaintext endpoint would
+otherwise hand clients a working URL carrying the SigV4 signature. Point it at
+an `https://` endpoint, or set `NESTRS_STORAGE__ALLOW_HTTP=true` to opt in
+deliberately.
+</Aside>
 
 ## Another backend
 

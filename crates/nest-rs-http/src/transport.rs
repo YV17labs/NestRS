@@ -514,8 +514,31 @@ impl Transport for HttpTransport {
             )
             .boxed()
         } else {
-            let mut endpoint: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
-            for meta in metas {
+            // Render whatever is still an `Err` into its response once the
+            // global filter pool has had its turn, so the interceptor bands
+            // above genuinely see 404s and 405s (the router answers an
+            // unmatched path with `Err`, which short-circuits the documented
+            // `next.run(req).await?` body).
+            //
+            // `metas` is sorted ascending, so the insertion point is a
+            // partition — and `to_response` subsumes `map_to_response`, so when
+            // nothing sits below the band (the common case: an app with only
+            // the interceptor pool and infra wraps) the resolution is *free*,
+            // folded into the base layer instead of stacked on top of it.
+            // Kept out of the meta list so it stays un-registerable.
+            let split = metas
+                .partition_point(|m| m.priority() < crate::endpoint_wrap_priority::ERROR_RESOLVE);
+            let (below, above) = metas.split_at(split);
+            let mut endpoint: BoxEndpoint<'static, Response> = if below.is_empty() {
+                route.to_response().boxed()
+            } else {
+                let mut inner: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
+                for meta in below {
+                    inner = meta.wrap(container, inner);
+                }
+                inner.to_response().boxed()
+            };
+            for meta in above {
                 endpoint = meta.wrap(container, endpoint);
             }
             let mut endpoint: BoxEndpoint<'static, Response> = crate::edge::EdgeEndpoint::new(

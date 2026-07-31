@@ -813,8 +813,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     None => quote!(::nest_rs_pipes::Valid::<#ty>::apply(#ident)),
                 };
                 quote! {
-                    let #ident = #apply.map_err(|__e|
-                        ::nest_rs_graphql::async_graphql::Error::new(__e.message().to_string()))?;
+                    let #ident = #apply.map_err(|__e| ::nest_rs_graphql::pipe_error(&__e))?;
                 }
             });
             let delegating = quote! {

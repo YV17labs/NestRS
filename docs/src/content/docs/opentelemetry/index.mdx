@@ -143,7 +143,7 @@ nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 ```text frame="terminal"
 thread 'main' panicked at 'OpenTelemetryModule was imported without calling
 `OpenTelemetry::init` first — the global tracer and meter are no-ops, so
-traces and metrics would be silently dropped. Add `let _opentelemetry =
+traces and metrics would be silently dropped. Add `let _otel =
 nest_rs_opentelemetry::OpenTelemetry::init("<service>")?;` at the top of
 `main`, before building the app.'
 ```

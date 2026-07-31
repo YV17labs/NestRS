@@ -14,17 +14,24 @@ Three pieces, two of which you already have:
 
 | Piece | Where it lives | You write |
 |---|---|---|
-| `POST /login` — verify credentials, sign a JWT | `crates/features/src/oauth/` (`grant_password`) | a thin handler |
+| `POST /login` — verify credentials, sign a JWT | **app code** — no generator emits it | the DTOs, the service method, and a thin handler |
 | `AuthnGuard` — bearer JWT → principal | alias over the shipped `JwtStrategy` | one `type` line |
 | `AuthzGuard` — principal → `Ability` | alias over the shipped `AbilityGuard` | one `type` line + your policy |
 
 ## 1. Issue a token on `POST /login`
 
-The handler is thin: validate the body, delegate to the service, return
-the token. Credential verification (`UsersService::authenticate`, argon2)
-and signing (`JwtService`) are already in the box:
+**This slice is yours to write.** `nestrs g auth` writes the two guards, the
+`Claims` they name and the ability policy — but *not* a login route: what
+counts as a credential, where users live and what the token carries are domain
+decisions. The parts underneath are in the box, so the handler stays thin:
+`hash_password` / `verify_password` / `burn_verify` (argon2, constant-time),
+`CredentialError` (one opaque `invalid credentials` for every failure mode),
+and `JwtService::sign`. `LoginDto`, `AccessTokenDto` and the `grant_password`
+service method below are the three things you add.
 
-```rust title="crates/features/src/oauth/http/controller.rs (excerpt)"
+The handler validates the body, delegates to the service, returns the token:
+
+```rust title="crates/features/src/oauth/http/controller.rs (you write this)"
 #[post("/login")]
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]

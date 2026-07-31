@@ -166,25 +166,37 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 # NESTRS_QUEUE__URL=redis://localhost:6379
 "#;
 
-/// The scaffolded smoke test, identical in both layouts: `{{snake}}` is the
-/// crate that owns the root module — the app crate in workspace mode, the
-/// single crate standalone. In-process through `TestApp`, no live infra, so it
-/// belongs to the `integration` suite.
-pub const SMOKE: &str = r#"//! In-process smoke test — boots the real DI graph through `TestApp`, no live
-//! infra, so it belongs to the `integration` suite and runs on every
+/// The scaffolded smoke test. `{{smoke_use}}` / `{{smoke_module}}` name the
+/// **narrowest** module that serves the greeting — the feature's HTTP module in
+/// workspace mode, the crate's root module standalone (where they are the same
+/// thing). In-process through `TestApp`, no live infra, so it belongs to the
+/// `integration` suite.
+///
+/// Booting the app *root* here was the trap: the moment a resource is wired the
+/// way `g resource` instructs, the root imports `DatabaseModule`, the
+/// connection opens during `build()`, and the suite that `test.just`, this
+/// file's own header and `/testing/integration-tests/` all define as the
+/// infrastructure-free one fails with a 30 s pool timeout. Booting the feature
+/// module keeps the promise no matter what the app grows into.
+pub const SMOKE: &str = r#"//! In-process smoke test — boots the feature's own module through `TestApp`,
+//! no live infra, so it belongs to the `integration` suite and runs on every
 //! `nestrs run test unit`. Tests needing a database, queue or object store go
 //! next door in `tests/e2e/main.rs`.
+//!
+//! It deliberately boots the *feature* module rather than the app root: the app
+//! root grows every transport and connection the app serves, and this suite
+//! must stay infrastructure-free. Assert on the composed app in `tests/e2e/`.
 
-use {{snake}}::{{module}};
+use {{smoke_use}};
 use nest_rs_testing::TestApp;
 
 #[tokio::test]
 async fn hello_endpoint_greets() {
     let app = TestApp::builder()
-        .module::<{{module}}>()
+        .module::<{{smoke_module}}>()
         .build()
         .await
-        .expect("{{module}} boots and mounts its routes");
+        .expect("{{smoke_module}} boots and mounts its routes");
 
     let resp = app.http().get("/").send().await;
     resp.assert_status_is_ok();

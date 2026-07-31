@@ -254,9 +254,13 @@ async fn selecting_a_field_the_grant_strips_is_refused() {
         json["errors"][0]["extensions"]["code"], "FORBIDDEN",
         "a field outside the grant is a denial, not a masking failure: {json}",
     );
+    // D3: a **list**, not a comma-joined string — the natural reading of
+    // "names in the `fields` extension", and the only shape that survives more
+    // than one refused field without every client re-splitting it.
     assert_eq!(
-        json["errors"][0]["extensions"]["fields"], "name",
-        "the denial names the field it refused: {json}",
+        json["errors"][0]["extensions"]["fields"],
+        serde_json::json!(["name"]),
+        "the denial names the field it refused, as a list: {json}",
     );
 }
 

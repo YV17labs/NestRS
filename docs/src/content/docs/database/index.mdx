@@ -23,7 +23,31 @@ pages, linked at the bottom.
 
 ```bash frame="terminal"
 cargo add nest-rs-seaorm nest-rs-resource
+cargo add sea-orm serde uuid schemars validator
 ```
+
+Everything the entity below needs, in full:
+
+```toml title="Cargo.toml"
+[dependencies]
+nest-rs-seaorm = { version = "1.2", features = ["http"] }
+nest-rs-resource = "1.2"
+sea-orm = { version = "2.0", default-features = false, features = [
+  "sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono",
+] }
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+# `#[expose]` derives these on the generated wire model. A derive's expansion
+# targets the *call site's* prelude, so re-exporting them would not help —
+# both have to be linked here.
+schemars = { version = "1", features = ["uuid1"] }
+validator = { version = "0.20", features = ["derive"] }
+```
+
+`schemars` and `validator` are the two that look like they belong to the
+framework and do not: leaving either off is a resolution error *inside* the
+`#[expose]` expansion (`cannot find schemars in the crate root`), with no
+mention of which crate is missing. `nestrs g resource` writes the whole stanza.
 
 ## The entity
 

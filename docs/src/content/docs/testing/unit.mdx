@@ -14,18 +14,18 @@ private items the integration tree cannot see.
 `#[cfg(test)] mod tests` inside the `src/` file under test —
 [Rust's standard layout](https://doc.rust-lang.org/book/ch11-03-test-organization.html#the-tests-module-and-cfgtest):
 
-```rust title="crates/features/src/pricing/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 use nest_rs_core::injectable;
 
 #[injectable]
-pub struct PricingService {}
+pub struct PostsService {}
 
-impl PricingService {
-    pub fn apply_discount(amount_cents: u64, percent: u8) -> u64 {
-        if percent >= 100 {
-            return 0;
+impl PostsService {
+    pub fn excerpt(body: &str, max_chars: usize) -> String {
+        if body.chars().count() <= max_chars {
+            return body.to_owned();
         }
-        amount_cents * (100 - percent as u64) / 100
+        body.chars().take(max_chars).collect::<String>() + "…"
     }
 }
 
@@ -34,18 +34,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_discount_leaves_amount_unchanged() {
-        assert_eq!(PricingService::apply_discount(10_000, 0), 10_000);
+    fn a_short_body_is_returned_whole() {
+        assert_eq!(PostsService::excerpt("hello", 32), "hello");
     }
 
     #[test]
-    fn fifty_percent_halves_amount() {
-        assert_eq!(PricingService::apply_discount(10_000, 50), 5_000);
+    fn a_long_body_is_cut_and_marked() {
+        assert_eq!(PostsService::excerpt("hello world", 5), "hello…");
     }
 
     #[test]
-    fn full_discount_zeroes_amount() {
-        assert_eq!(PricingService::apply_discount(10_000, 100), 0);
+    fn the_cut_counts_characters_not_bytes() {
+        assert_eq!(PostsService::excerpt("héllo wörld", 5), "héllo…");
     }
 }
 ```
@@ -55,10 +55,10 @@ nothing at runtime. `use super::*;` brings the parent module's items
 into scope — that visibility is the reason to keep the test next to
 the code instead of moving it to `tests/`.
 
-`apply_discount` does not reach the injected fields, so the test calls
-it as an associated function — no DI boot, no `&self`. The methods on
-the same service that do load or persist get tested through the app
-e2e instead.
+`excerpt` does not reach the injected fields, so the test calls it as
+an associated function — no DI boot, no `&self`. The methods on the
+same service that do load or persist get tested through the app e2e
+instead.
 
 ## What belongs here
 

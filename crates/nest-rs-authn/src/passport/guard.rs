@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use nest_rs_core::{HandlerMetadata, Layer, injectable};
 use nest_rs_guards::{Denial, Guard, GuardPhase, PrincipalClaim};
-use nest_rs_http::{Reflector, async_trait};
+use nest_rs_http::{Reflector, RejectedCredential, async_trait};
 use poem::Request;
 
 use crate::error::AuthError;
@@ -94,6 +94,14 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                     error = %error,
                     "rejected credential on a public route — continuing as anonymous",
                 );
+                // Anonymous is only an answer while nothing downstream needs a
+                // principal. Record the rejection so a handler that *does* read
+                // one (`Ctx<Claims>`) answers the 401 this credential earned,
+                // instead of a 500 that hides a forged-credential attempt.
+                req.extensions_mut().insert(RejectedCredential {
+                    principal: std::any::TypeId::of::<S::Principal>(),
+                    client_message: error.client_message().to_string(),
+                });
                 Ok(())
             }
             Err(error) => {

@@ -19,7 +19,7 @@ or `#[processor]` applies here.
 | Provider state                                                          | Indicator behavior |
 |-------------------------------------------------------------------------|---------------------|
 | Provider lives in a module **imported** by `AppModule` (directly or transitively) | Runs on every matching probe |
-| Provider linked into the binary but in **no reachable module**          | Silently skipped; the skip is logged at `debug` on `nest_rs::health` |
+| Provider linked into the binary but in **no reachable module**          | Skipped; named **once at boot** with a `warn` on `nest_rs::health`, so it shows at any production filter |
 
 Linking a crate without importing its module keeps every provider in
 that crate inert — present in the binary, not mounted on any

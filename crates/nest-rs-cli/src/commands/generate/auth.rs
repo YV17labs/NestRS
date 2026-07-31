@@ -43,7 +43,7 @@ pub fn run(opts: AuthOptions) -> CliResult<()> {
     s.edit(ws.features_lib(), ensure_lines(lib_decls()));
     let wired_app = wire(&ctx, &mut s);
 
-    finish(s, opts.dry_run, &ws.root, "Created auth adapter")?;
+    finish(s, opts.dry_run, &ws.root, "the auth adapter")?;
     print_next_steps(wired_app.is_some());
     Ok(())
 }

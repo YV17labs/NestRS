@@ -49,6 +49,16 @@ impl HelloController {
 - **`async fn hello(&self) -> String`** — any type that implements
   `IntoResponse` is a valid return. `String`, `&'static str`, `i32`,
   `Json<T>`, `(StatusCode, Body)` … all work.
+- **A controller with no `#[inject]` field needs `#[derive(Default)]`.**
+  Injected fields give the container everything it needs to build the struct;
+  with none, it falls back to `Default`. rustc names the fix, but the case only
+  shows up on a controller that reaches for nothing:
+
+  ```rust
+  #[controller(path = "/greetings")]
+  #[derive(Default)]
+  pub struct GreetingsController;
+  ```
 
 Run it:
 
@@ -172,7 +182,9 @@ $ curl -sX POST http://localhost:3000/ \
 $ curl -sX POST http://localhost:3000/ \
     -H 'Content-Type: application/json' \
     -d '{"name":""}'
-{"error":"validation","fields":{"name":["length"]}}
+{"type":"https://www.rfc-editor.org/rfc/rfc9110#status.400","title":"Bad Request",
+ "status":400,"detail":"validation failed",
+ "errors":{"name":[{"code":"length","message":null,"params":{"min":1}}]}}
 ```
 
 ## Returning typed JSON

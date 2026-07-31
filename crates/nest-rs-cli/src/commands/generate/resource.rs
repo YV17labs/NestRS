@@ -95,7 +95,7 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
         s,
         opts.dry_run,
         &ws.root,
-        &format!("Created resource `{}`", names.snake),
+        &format!("resource `{}`", names.snake),
     )?;
     print_next_steps(&ctx, &names, wired_app, scaffolded_auth);
     Ok(())

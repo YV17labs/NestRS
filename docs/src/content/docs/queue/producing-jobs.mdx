@@ -112,8 +112,9 @@ implements. Neither is the default path.
 <Aside>
 Inject `Arc<QueueConnection>` for the concrete type, or
 `Arc<dyn nest_rs_queue::JobProducer>` to keep the feature portable across
-backends. Same publisher surface either way — `push_to` is on the
-extension trait, not the concrete type.
+backends. `QueueModule::for_root` binds **both** names to the one connection,
+so either resolves from the container. Same publisher surface either way —
+`push_to` is on the extension trait, not the concrete type.
 </Aside>
 
 ## The HTTP adapter
@@ -121,6 +122,20 @@ extension trait, not the concrete type.
 The controller is a thin transport. It accepts a `TranscodeDto` — the
 REST body, a distinct type from the queue's `TranscodeCommand` — calls
 the service, returns the wire response. No queue knowledge of its own.
+
+Declare the DTO with `#[input]`: a `Json<T>` handler argument requires
+`schemars::JsonSchema` (see [extractors](/http/extractors/)), and `#[input]`
+derives it along with `Deserialize` and `Validate`. A hand-derived DTO needs
+`#[derive(schemars::JsonSchema)]` and the `schemars` dependency to go with it.
+
+```rust title="crates/features/src/audio/dto.rs"
+use nest_rs_http::input;
+
+#[input]
+pub struct TranscodeDto {
+    pub file: String,
+}
+```
 
 ```rust title="crates/features/src/audio/http/controller.rs"
 use std::sync::Arc;

@@ -45,7 +45,7 @@ pub fn run(opts: FeatureOptions) -> CliResult<()> {
         s,
         opts.dry_run,
         &ws.root,
-        &format!("Created feature `{}`", names.snake),
+        &format!("feature `{}`", names.snake),
     )?;
     print_next_steps(&names);
     Ok(())

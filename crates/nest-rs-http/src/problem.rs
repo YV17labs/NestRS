@@ -308,10 +308,19 @@ impl ResponseError for ProblemDetails {
         // Serialize the body once; on the off-chance serialization fails we
         // fall back to an empty object so the status code still surfaces.
         let body = serde_json::to_vec(self).unwrap_or_else(|_| b"{}".to_vec());
-        Response::builder()
+        let mut builder = Response::builder()
             .status(self.status)
-            .header(header::CONTENT_TYPE, "application/problem+json")
-            .body(body)
+            .header(header::CONTENT_TYPE, "application/problem+json");
+        // RFC 9110 §11.6.1 / RFC 6750 §3: a 401 MUST carry a challenge, and a
+        // client that never sees one cannot know how to authenticate. Setting
+        // it on the single envelope every 401 travels covers the guard denial
+        // path too — `AuthError::render` used to be the only place that did,
+        // so the header appeared only when a handler returned the error
+        // directly, never on the guard path the docs describe.
+        if self.status == StatusCode::UNAUTHORIZED {
+            builder = builder.header(header::WWW_AUTHENTICATE, "Bearer");
+        }
+        builder.body(body)
     }
 }
 
@@ -387,6 +396,29 @@ mod tests {
             .with_title("Order invalid");
         assert_eq!(p.type_uri, "urn:problem:order-invalid");
         assert_eq!(p.title, "Order invalid");
+    }
+
+    // G8: RFC 9110 §11.6.1 / RFC 6750 §3 require the challenge on every 401.
+    // It used to be set only by `AuthError::render`, so the guard path — the
+    // one the JWT page documents — shipped a bare 401.
+    #[test]
+    fn every_401_carries_the_www_authenticate_challenge() {
+        let resp = ProblemDetails::unauthorized().as_response();
+        assert_eq!(
+            resp.headers()
+                .get(header::WWW_AUTHENTICATE)
+                .map(|v| v.as_bytes()),
+            Some(b"Bearer".as_slice()),
+        );
+        // …and only a 401 — a 403 means authenticated-but-not-permitted, where
+        // a challenge would invite a pointless retry.
+        assert!(
+            ProblemDetails::forbidden()
+                .as_response()
+                .headers()
+                .get(header::WWW_AUTHENTICATE)
+                .is_none(),
+        );
     }
 
     #[test]

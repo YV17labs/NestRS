@@ -30,6 +30,7 @@ nest-rs-testing = "{{nestrs_version}}"
 poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
 sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
 sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+validator = { version = "0.20", features = ["derive"] }
 
 # Release: the smallest, fastest single binary — production defaults.
 [profile.release]

@@ -26,7 +26,18 @@ pub const ENTITY: &str = r#"use nest_rs_resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[expose(name = "{{entity}}", service = super::service::{{service}})]
+// `soft_delete` + `timestamps` match the three columns `nestrs g migration`
+// scaffolds for this table, and the `users/` exemplar. Without them the
+// generated resource hard-deleted against a table carrying an unused
+// `deleted_at` tombstone, and never wrote the audit columns — the exact silent
+// mismatch /database/crud/ warns about. `timestamps` emits the
+// `ActiveModelBehavior`, so the resource must not also write an empty one.
+#[expose(
+    name = "{{entity}}",
+    service = super::service::{{service}},
+    soft_delete,
+    timestamps
+)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(
@@ -39,9 +50,12 @@ pub struct Model {
     pub id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
+    #[expose]
+    pub created_at: DateTimeWithTimeZone,
+    #[expose]
+    pub updated_at: DateTimeWithTimeZone,
+    pub deleted_at: Option<DateTimeWithTimeZone>,
 }
-
-impl ActiveModelBehavior for ActiveModel {}
 "#;
 
 pub const SERVICE: &str = r#"use nest_rs_core::injectable;
@@ -56,6 +70,14 @@ pub struct {{service}};
 // Read API + the audited ORM choke point.
 impl CrudService for {{service}} {
     type Entity = {{pascal}};
+
+    // The entity's `soft_delete` flag makes the column addressable; this
+    // override is what makes DELETE tombstone instead of hard-delete, and what
+    // ANDs `deleted_at IS NULL` into every read. Both halves are required —
+    // drop them together for a resource that should really erase rows.
+    fn soft_delete_column() -> Option<super::entity::Column> {
+        Some(super::entity::Column::DeletedAt)
+    }
 }
 
 // Opt-in write capabilities — drop any your resource does not offer (and the

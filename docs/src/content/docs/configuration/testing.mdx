@@ -29,7 +29,8 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn issues_a_token_for_a_registered_client() {
-    let app = TestApp::<AuthModule>::builder()
+    let app = TestApp::builder()
+        .module::<AuthModule>()
         .provide(IssuerConfig {
             clients: vec![RegisteredClient {
                 client_id: "test-client".into(),
@@ -71,7 +72,8 @@ a test must not read the environment at all, seed the value with `.provide()`
 ```rust title="apps/api/tests/e2e/main.rs"
 use nest_rs_http::{HttpConfig, HttpModule};
 
-let app = TestApp::<ApiModule>::builder()
+let app = TestApp::builder()
+    .module::<ApiModule>()
     // ...
     .build()
     .await?;
@@ -124,16 +126,25 @@ let source = Arc::new(Map(HashMap::from([
 let env = ConfigService::with_source("database", source);
 let cfg = DatabaseConfig::from_env(&env, DatabaseConfig::defaults()).unwrap();
 
-let app = TestApp::<AppModule>::builder()
+let app = TestApp::builder()
+    .module::<AppModule>()
     .provide(cfg)
     .build()
     .await?;
 ```
 
 A custom source also decides *where* the values come from, so the test cannot
-pick up a stray `NESTRS_*` from the ambient environment. It is not what keeps
-`std::env` untouched, though — no config read ever writes there. The call that
-does is `Environment::init()`, which a test never makes; see
+pick up a stray `NESTRS_*` from the ambient environment — that is the whole
+point of reaching for one.
+
+It is **not** the case that a test leaves `std::env` untouched. No config *read*
+writes there, but `TestApp::builder()` calls `load_project_env`, which publishes
+the nearest project `.env` cascade set-if-absent — the harness needs backend
+URLs before any `ConfigService` exists. The merge is bounded (once per process,
+real env still wins, and `.env.local` is skipped under `NESTRS_ENV=test`), and a
+`for_root` pin still outranks every cascade value, but a test asserting on a
+variable a committed `.env` happens to define will read the file. Use
+`with_source` — or `.provide(cfg)` — when the test must not. See
 [hermeticity and the cascade](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade).
 
 ## Unit-testing a `Config` impl

@@ -35,9 +35,17 @@ cargo add nest-rs-mcp
 [dependencies]
 nest-rs-mcp = "1.2"
 rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
+# rmcp's `#[tool]` derive emits bare `schemars::` paths for a tool that takes
+# input — i.e. every non-trivial one, including the example below. The
+# `nest_rs_mcp::schemars` re-export does not rescue it: a derive expands
+# against the *call site's* prelude, so the crate has to be linked here.
+schemars = { version = "1", features = ["uuid1"] }
+# The fallback operation guard — what lets a registered global guard pool gate
+# `/mcp` instead of the endpoint staying deny-all — lives behind this feature.
+nest-rs-guards = { version = "1.2", features = ["mcp"] }
 ```
 
-`nestrs g mcp <feature>` writes both lines, and a CLI test pins the `rmcp`
+`nestrs g mcp <feature>` writes all four, and a CLI test pins the `rmcp`
 requirement against the framework's own so the two cannot drift.
 
 ## The smallest possible tool
@@ -83,8 +91,15 @@ default**. The endpoint gates through the app's `dyn McpOperationGuard`; with
 none registered it falls back to the global guard pool
 (`App::builder().use_guards_global(...)`), and with no pool either it is
 **deny-all** — every request answers `401`, so a schema-added tool can never
-leak unauthenticated. A *deliberately* public tool has to say so, by binding
-`AllowAllMcpGuard`:
+leak unauthenticated.
+
+The fallback needs `nest-rs-guards`' `mcp` feature (the install stanza above).
+Without it the pool is never consulted and the boot line stays `no operation
+guard registered — mcp endpoint is deny-all mode="deny_all"` even with a pool
+registered — safe, but not what you asked for. With it, the line reads
+`mode="global_guard_pool"`.
+
+A *deliberately* public tool has to say so, by binding `AllowAllMcpGuard`:
 
 ```rust title="src/hello/module.rs"
 use nest_rs_core::module;

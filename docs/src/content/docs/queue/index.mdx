@@ -45,8 +45,8 @@ crates the handler body itself names:
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
-nest-rs-queue = "1.2"
-nest-rs-redis = "1.2"     # the app that owns the connection
+nest-rs-queue = "1.3"
+nest-rs-redis = "1.3"     # the app that owns the connection
 serde = { version = "1", features = ["derive"] }   # the job payload derives it
 anyhow = "1"              # a #[process] method returns anyhow::Result<()>
 tracing = "0.1"           # if the handler logs, which it should

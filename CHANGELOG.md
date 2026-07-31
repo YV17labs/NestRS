@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-07-31
 
 A clean-room QA campaign against the **published** 1.2.0 — crates.io releases and
 the live docs site, never the repository — filed 71 findings: 3 blockers, 27
@@ -1508,6 +1508,7 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
+[1.3.0]: https://github.com/YV17labs/NestRS/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/YV17labs/NestRS/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/YV17labs/NestRS/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/YV17labs/NestRS/compare/v1.0.0...v1.1.0

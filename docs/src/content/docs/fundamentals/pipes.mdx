@@ -83,7 +83,7 @@ the handler body never runs:
 
 `ValidationPipe<T>` attaches the structured field-level errors to the rejection,
 and **every** transport carries them through under the name `errors`: an RFC 9457
-extension member on HTTP, `extensions.details` on GraphQL, `data.errors` on a
+extension member on HTTP, `extensions.errors` on GraphQL, `data.errors` on a
 WebSocket frame, and an `errors` field on the queue's
 `job dead-lettered` event. A client (or an operator reading a dead-letter log)
 can always tell which field was wrong, not merely that something was.

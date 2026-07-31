@@ -3137,6 +3137,7 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-mcp",
+ "nest-rs-pipes",
  "nest-rs-resource",
  "nest-rs-seaorm",
  "nest-rs-testing",
@@ -3150,6 +3151,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "trybuild",
  "uuid",
  "validator",
 ]

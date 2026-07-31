@@ -39,4 +39,4 @@ pub use pipes::{
     Lowercase, Parse, ParseArray, ParseBool, ParseFloat, ParseInt, ParseUuid, ParseUuidV3,
     ParseUuidV4, ParseUuidV5, ParseUuidV7, ParseUuidVersion, Trim, Uppercase, ValidationPipe,
 };
-pub use validate::{MaybeValidateFallback, ValidateProbe};
+pub use validate::{MaybeValidateFallback, ValidateProbe, validation_details};

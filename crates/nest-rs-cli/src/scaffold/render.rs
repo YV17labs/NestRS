@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use crate::naming::{Names, Transport};
 
+#[derive(Clone)]
 pub struct Renderer {
     vars: HashMap<String, String>,
 }

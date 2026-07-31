@@ -116,14 +116,24 @@ the HTTP body does:
   "event": "validated",
   "data": {
     "error": "invalid payload for `validated`: validation failed",
-    "errors": { "text": [{ "code": "length", "message": "text must not be empty" }] }
+    "errors": {
+      "text": [{ "code": "length", "message": "text must not be empty", "params": { "min": 1 } }]
+    }
   }
 }
 ```
 
+Each entry is `{ code, message, params }`. `params` carries the rule's own
+bounds — `min`, `max`, the regex name — so a client renders "at least 1
+character" without parsing prose; the rejected **value** is stripped, so a
+too-short password never rides back out. `message` is `null` unless the
+`#[validate]` rule set one.
+
 `errors` is **absent**, not `null`, when the failure had nothing structured to
-say, so a client can branch on its presence. A `warn!` lands in the `nest_rs::ws` target alongside the
-frame, so a denied dispatch shows up in logs without extra
+say, so a client can branch on its presence. Every refused dispatch lands a
+`warn!` on the `nest_rs::ws` target alongside the frame — a pipe rejection, a
+payload that does not deserialize, an unknown event, and a handler-returned
+`Err` alike — so a denied dispatch shows up in logs without extra
 instrumentation.
 
 A type **alias** over `Result` behaves the same. `pub type ServiceResult<T> =

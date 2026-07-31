@@ -40,8 +40,15 @@ pub(crate) fn forbidden() -> Error {
 /// the answer to an operation that selected a column it may not read. The names
 /// ride as an extension rather than in the message so the message stays the one
 /// constant string every denial carries.
-pub(crate) fn forbidden_fields(fields: &str) -> Error {
-    forbidden().extend_with(|_, e| e.set("fields", fields))
+///
+/// The extension is a **list**, which is the natural reading of "names in the
+/// `fields` extension" and the only shape that survives more than one refused
+/// field: a comma-joined string forced every client to re-split it, and a
+/// client that read it as an array broke. Takes the names structurally so a
+/// field containing a comma cannot split into two entries.
+pub(crate) fn forbidden_fields(fields: &[String]) -> Error {
+    let names = fields.to_vec();
+    forbidden().extend_with(move |_, e| e.set("fields", names))
 }
 
 /// A GraphQL `unauthenticated` error — the anonymous caller's answer to a

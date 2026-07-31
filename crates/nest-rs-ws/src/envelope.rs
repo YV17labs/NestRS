@@ -111,17 +111,51 @@ impl WsReply {
     /// the wire, carrying its per-field detail. The single site both the payload
     /// pipe and the global data pipe route through, so a client sees the same
     /// shape whichever one rejected.
+    ///
+    /// Warns on `nest_rs::ws`, like every other refused dispatch. It used to be
+    /// silent, which was exactly backwards: a *client* sending an invalid
+    /// payload is the case an operator wants in the log, and the server's own
+    /// deliberate `Err` was the only one that appeared.
     pub fn pipe_error(event: &str, what: &str, error: nest_rs_pipes::PipeError) -> WsReply {
         let message = format!("invalid {what} for `{event}`: {}", error.message());
+        tracing::warn!(
+            target: "nest_rs::ws",
+            event,
+            kind = what,
+            error = error.message(),
+            "subscribe_message rejected by a pipe",
+        );
         match error.into_details() {
             Some(details) => WsReply::Error(WsError::with_details(message, details)),
             None => WsReply::Error(WsError::new(message)),
         }
     }
 
+    /// The error frame a payload that does not deserialize puts on the wire.
+    ///
+    /// Its own constructor rather than a bare [`error`](Self::error) so the
+    /// `warn` cannot be forgotten at the one call site that produces it —
+    /// malformed input from a client is a denied dispatch like any other.
+    pub fn payload_error(event: &str, error: &impl std::fmt::Display) -> WsReply {
+        tracing::warn!(
+            target: "nest_rs::ws",
+            event,
+            error = %error,
+            "subscribe_message payload failed to deserialize",
+        );
+        WsReply::Error(WsError::new(format!(
+            "invalid payload for `{event}`: {error}"
+        )))
+    }
+
     /// The reply for an event with no registered handler — names the offending
     /// event so a client can tell a typo from an auth failure.
     pub fn unknown(event: &str) -> WsReply {
+        tracing::warn!(
+            target: "nest_rs::ws",
+            event,
+            "subscribe_message dispatched to an unknown event",
+        );
         WsReply::Error(WsError::new(format!("unknown event `{event}`")))
     }
 

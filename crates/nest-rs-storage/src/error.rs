@@ -31,6 +31,33 @@ pub enum StorageError {
     /// Uploading an object's bytes failed.
     #[error("failed to upload object")]
     Put(#[source] object_store::Error),
+    /// Deleting an object failed.
+    #[error("failed to delete object")]
+    Delete(#[source] object_store::Error),
+    /// A plaintext endpoint was reached with plain HTTP disallowed.
+    ///
+    /// Normally unreachable — `StorageConfig` refuses the pairing at boot. It
+    /// remains as the last line of defence for a hand-built
+    /// [`Storage::new`](crate::Storage::new), because the presigned path signs
+    /// locally and would otherwise hand a client a working plaintext URL
+    /// carrying the SigV4 signature.
+    #[error(
+        "refusing to address {endpoint} over plain HTTP: \
+         NESTRS_STORAGE__ALLOW_HTTP is false, so credentials must not travel unencrypted"
+    )]
+    PlaintextEndpoint {
+        /// The offending endpoint.
+        endpoint: String,
+    },
+}
+
+/// Lets a `get_stream` chunk feed `poem::Body::from_bytes_stream` directly,
+/// which requires `E: Into<std::io::Error>`. Without it the documented
+/// one-liner needs a `map_err` the streaming page never shows.
+impl From<StorageError> for std::io::Error {
+    fn from(error: StorageError) -> Self {
+        std::io::Error::other(error)
+    }
 }
 
 /// Result alias for storage operations.

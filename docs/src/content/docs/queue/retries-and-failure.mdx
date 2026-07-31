@@ -38,8 +38,15 @@ which sits inside `ErrorHandlingLayer`. `RetryLayer` reacts to `Err`,
 not to panics, so without the panic layer a single `unwrap()` in user
 code would tear down the worker. The order is fixed in
 `nest-rs-redis`'s `build_worker`, which also catches the panic itself,
-one level in — that is what keeps the event inside the per-job span
-instead of unwinding past it to the default panic hook on stderr.
+one level in — that is what keeps the structured event inside the per-job span
+(with `queue`, `processor`, `job_id` and `attempt`) instead of losing it to an
+unwind.
+
+Rust's **default panic hook still prints its own `thread … panicked at …` line
+to stderr** first: catching an unwind does not replace the hook. That line
+carries no target, so `RUST_LOG` cannot filter it — the framework's own record
+is the `job dead-lettered: handler panicked` event beneath it. Install
+`std::panic::set_hook` in `main` if you need the raw line gone.
 
 ## The retry shape
 

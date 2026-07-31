@@ -151,9 +151,19 @@ fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
     );
 
     // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
+    // The *feature's* HTTP module, not the app root: the root accumulates every
+    // transport and connection the app serves, and this suite must stay
+    // infrastructure-free however the app grows.
+    let smoke = r
+        .clone()
+        .with(
+            "smoke_use",
+            format!("features::{}::{}", names.snake, names.http_module()),
+        )
+        .with("smoke_module", names.http_module());
     s.create(
         app_root.join("tests/integration/main.rs"),
-        r.render(shared::SMOKE),
+        smoke.render(shared::SMOKE),
     );
     // Empty, but present: the test recipes filter on `binary(e2e)`, which
     // nextest refuses to parse when no such binary exists.

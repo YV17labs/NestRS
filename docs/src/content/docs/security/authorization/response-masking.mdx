@@ -49,10 +49,22 @@ and delegates.
 
 <Aside type="caution">
 The parameter is load-bearing even bound as `_authz` — deleting the
-"unused" parameter disarms masking for that route. And `#[routes]` reads
-it **by type name**: importing it under an alias (`use ... as Foo`) keeps
-the gate working but silently disables the shaper. Keep `Authorize`
-unaliased.
+"unused" parameter disarms masking for that route.
+
+`#[routes]` also reads it **by type name**, so importing it under an alias
+(`use ... as Foo`) escapes that detection. The route then **fails closed** — a
+`500` for every caller, never a body — with an `error` on `nest_rs::http`
+naming the route and the fix:
+
+```text
+ERROR nest_rs::http: a masking extractor ran but response masking is not armed
+  on this route — spell `Authorize<..>`/`Bind<..>` with their own names (a
+  renamed import escapes `#[routes]` detection); failing closed
+  route="get /aliased"
+```
+
+Nothing ships unmasked, so an alias is a wiring error to fix, not an exposure
+to audit. Keep `Authorize` unaliased.
 </Aside>
 
 The GraphQL analog is `#[authorize(Action, Entity)]` on a
@@ -61,8 +73,16 @@ one difference the schema forces: the masked value has to come back as
 the operation's own type. A stripped column masks to `null` where the
 field is nullable; where it is `String!` — what `#[expose]` emits for a
 non-nullable column — it cannot, so an operation that **selects** such a
-field is refused (`FORBIDDEN`, names in the `fields` extension) and one
-that does not select it is served. Row dropping applies either way.
+field is refused and one that does not select it is served. Row dropping
+applies either way.
+
+The refusal carries `extensions.code = "FORBIDDEN"` and `extensions.fields` —
+a **list** of the column names it refused:
+
+```json
+{"data":null,"errors":[{"message":"forbidden","path":["users"],
+  "extensions":{"code":"FORBIDDEN","fields":["email","name"]}}]}
+```
 
 ## What you get
 

@@ -263,6 +263,13 @@ no pool either, `/mcp` stays deny-all: the fallback only ever widens what the
 app declared, and unlike `/graphql` the MCP endpoint carries no `Public` marker,
 so a pooled `AuthnGuard` still refuses an anonymous tool call.
 
+That fallback is compiled in by `nest-rs-guards`' **`mcp` feature**, which
+`nestrs g mcp` turns on. Without it there is nothing to fall back *to*: the boot
+line stays `no operation guard registered — mcp endpoint is deny-all
+mode="deny_all"` and a pooled guard is never consulted. Fail-closed either way —
+check the boot line for `mode="global_guard_pool"` when the pool is what you
+meant to gate with.
+
 ## Public handlers — opt out per transport
 
 A handler is "public" by **not** binding the transport's authz

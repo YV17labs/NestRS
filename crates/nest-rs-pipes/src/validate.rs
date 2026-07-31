@@ -30,9 +30,21 @@ use crate::PipeError;
 /// [`ValidationPipe`](crate::ValidationPipe) in `pipes/`) so no transport can
 /// echo the credential.
 pub(crate) fn validation_error(errors: ValidationErrors) -> PipeError {
+    PipeError::with_details("validation failed", validation_details(&errors))
+}
+
+/// The wire-safe JSON for a `validator` failure — the field errors with every
+/// echoed input stripped, as [`validation_error`] ships them.
+///
+/// Public because the redaction is the *policy*, not an implementation detail
+/// of pipes: any layer that puts `ValidationErrors` on a wire (a service-level
+/// `ServiceError::Validation`, a transport's own renderer) has to inherit it,
+/// or the framework leaks the submitted value on the one path that skipped the
+/// pipe.
+pub fn validation_details(errors: &ValidationErrors) -> serde_json::Value {
     let mut details = serde_json::to_value(errors).unwrap_or(serde_json::Value::Null);
     redact_submitted_values(&mut details);
-    PipeError::with_details("validation failed", details)
+    details
 }
 
 /// Recursively drop every `params.value` from serialized `validator` errors —

@@ -69,6 +69,8 @@ config survives adopting or dropping the observability stack.
 | Key | Meaning |
 |---|---|
 | `URL` | Redis connection string |
+| `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error; defaults to `10`, and `0` is rejected. Each attempt warns on `nest_rs::queue`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes |
+| `SHUTDOWN_TIMEOUT_SECS` | how long the worker waits for in-flight jobs after a shutdown signal; defaults to `30` |
 
 ## `storage` — `NESTRS_STORAGE__*`
 
@@ -79,7 +81,7 @@ config survives adopting or dropping the observability stack.
 | `ACCESS_KEY` / `SECRET_KEY` | static credentials |
 | `BUCKET` | target bucket |
 | `FORCE_PATH_STYLE` | path-style vs virtual-hosted addressing |
-| `ALLOW_HTTP` | reach the endpoint over plain `http://` — default `true` in dev/test, `false` in staging/production so credentials never travel unencrypted by omission |
+| `ALLOW_HTTP` | reach the endpoint over plain `http://` — default `true` in dev/test, `false` in staging/production so credentials never travel unencrypted by omission. `false` + an `http://` `ENDPOINT` **fails boot**, naming the variable; the refusal covers presigned URLs, which are signed locally and would otherwise ship a working plaintext URL |
 
 ## `opentelemetry` — `NESTRS_OPENTELEMETRY__*`
 

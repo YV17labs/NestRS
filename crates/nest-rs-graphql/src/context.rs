@@ -284,11 +284,12 @@ async fn without_transaction(fut: BoxFuture<'_, Response>) -> Response {
 
 /// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
 /// with an `errors` array, the GraphQL wire convention (matching how a resolver
-/// error surfaces), with any field-level `details` under `extensions`.
+/// error surfaces), with any field-level errors under
+/// `extensions.errors` — the same member name every other transport uses.
 fn variable_pipe_error_response(err: &nest_rs_pipes::PipeError) -> Box<Response> {
     let mut error = serde_json::json!({ "message": err.message() });
     if let Some(details) = err.details() {
-        error["extensions"] = serde_json::json!({ "details": details });
+        error["extensions"] = serde_json::json!({ crate::FIELD_ERRORS_EXTENSION: details });
     }
     let body = serde_json::json!({ "data": serde_json::Value::Null, "errors": [error] });
     Box::new(

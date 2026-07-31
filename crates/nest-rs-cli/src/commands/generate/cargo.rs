@@ -68,10 +68,31 @@ const SCHEDULE: Dep = Dep {
     workspace_value: "",
     features: &[],
 };
+// The connection behind `QueueConnection` / `QueueModule` / `QueueWorkerModule`.
+// `nest-rs-queue` carries only the abstractions, so a generated producer that
+// follows `/queue/producing-jobs/` (`use nest_rs_redis::QueueConnection;`)
+// cannot compile without it — the one line the queue install stanza names that
+// the generator used to skip.
+const REDIS: Dep = Dep {
+    name: "nest-rs-redis",
+    workspace_value: "",
+    features: &[],
+};
 const MCP: Dep = Dep {
     name: "nest-rs-mcp",
     workspace_value: "",
     features: &[],
+};
+// `/mcp`'s fallback operation guard — the seam that lets a registered global
+// guard pool gate tool calls instead of the endpoint staying deny-all — lives
+// behind `nest-rs-guards`' `mcp` feature. Same shape as `GUARDS_GRAPHQL` /
+// `GUARDS_WS`: the crate is already in every scaffolded workspace, so only the
+// feature is missing, and leaving it off silently reduced the two documented
+// ways to authenticate `/mcp` to one.
+const GUARDS_MCP: Dep = Dep {
+    name: "nest-rs-guards",
+    workspace_value: "",
+    features: &["mcp"],
 };
 const AUTHN: Dep = Dep {
     name: "nest-rs-authn",
@@ -245,9 +266,32 @@ pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
         // `serde_json`, so without this the first typed handler fails to compile
         // and the page's install list was wrong by omission.
         Transport::Ws => vec![&WS, &GUARDS_WS, &SERDE, &TRACING],
-        Transport::Queue => vec![&QUEUE, &SERDE, &ANYHOW, &TRACING],
+        // `nest-rs-redis` carries `QueueConnection`/`QueueModule`/
+        // `QueueWorkerModule`; `nest-rs-queue` is abstractions only. Without it
+        // the very first `push_to` — the page the generator points at — fails
+        // on `unresolved import nest_rs_redis`.
+        Transport::Queue => vec![&QUEUE, &REDIS, &SERDE, &ANYHOW, &TRACING],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW, &TRACING],
-        Transport::Mcp => vec![&MCP, &RMCP],
+        // `schemars` is a call-site dep of rmcp's `#[tool]` derive, which emits
+        // bare `schemars::` paths — the crate has to be *linked*, so the
+        // `nest_rs_mcp::schemars` re-export does not rescue a tool that takes
+        // input (i.e. every non-trivial one). `GUARDS_MCP` turns on the
+        // fallback operation guard so a global pool can gate `/mcp`.
+        Transport::Mcp => vec![&MCP, &RMCP, &SCHEMARS, &GUARDS_MCP],
+    }
+}
+
+/// What an **app crate** needs to depend on to name the transport's root
+/// module — the one the generator's own printed next step tells the reader to
+/// import. Empty where the scaffold already carries it: every app crate
+/// `nestrs new` writes depends on `nest-rs-http`, so HTTP, WS and MCP add
+/// nothing.
+pub fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
+    match transport {
+        Transport::Http | Transport::Ws | Transport::Mcp => vec![],
+        Transport::Graphql => vec![&GRAPHQL],
+        Transport::Queue => vec![&REDIS],
+        Transport::Schedule => vec![&SCHEDULE],
     }
 }
 
@@ -465,6 +509,57 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Render an adapter's handler the way the generator does — template plus
+    /// the `crud_vars` that supply the differing handler.
+    fn rendered_handler(transport: Transport, crud_port: bool) -> String {
+        let names = crate::naming::Names::parse("posts");
+        let (handler, _) = crate::commands::generate::adapter::templates_for(transport, crud_port);
+        let mut r = crate::scaffold::Renderer::new(&names)
+            .with("handler", names.handler_for(transport))
+            .with("handler_mod", transport.handler_mod())
+            .with("tmodule", names.module_for(transport));
+        for (key, value) in crate::templates::crud_vars(crud_port, transport) {
+            r = r.with(key, value);
+        }
+        r.render(handler)
+    }
+
+    /// A2: `count()` exists only on the `g feature` service. A `g resource`
+    /// port's service is a `CrudService`, so a skeleton calling it produced a
+    /// workspace that did not compile — and rustc blamed `Iterator::count`,
+    /// sending the reader after an iterator bug. The CLI page's guarantee is
+    /// unconditional ("a freshly-generated port plus **any** adapter compiles
+    /// immediately"), so no CRUD skeleton may name it.
+    #[test]
+    fn no_crud_port_skeleton_calls_the_plain_features_count() {
+        for transport in Transport::ALL {
+            let rendered = rendered_handler(transport, true);
+            assert!(
+                !rendered.contains("svc.count()"),
+                "the {} adapter renders `svc.count()` over a resource port, which a \
+                 CrudService does not have:
+{rendered}",
+                transport.folder(),
+            );
+        }
+    }
+
+    /// …and the plain-feature skeletons must keep delegating, so the two
+    /// variants cannot silently collapse into one inert stub.
+    #[test]
+    fn the_plain_feature_skeletons_still_delegate_to_the_port() {
+        for transport in [Transport::Http, Transport::Graphql, Transport::Ws] {
+            let rendered = rendered_handler(transport, false);
+            assert!(
+                rendered.contains("svc.count()"),
+                "the {} adapter over a `g feature` port should still show the delegation:
+\
+                 {rendered}",
+                transport.folder(),
+            );
         }
     }
 

@@ -86,7 +86,11 @@ async fn post(&self, id: String) -> Result<String> {
 
 Codes are free-form strings — pick a vocabulary and stick to it. A
 typical set: `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`,
-`INVALID_ARGUMENT`, `INTERNAL`. The Apollo spec calls out these names
+`INVALID_ARGUMENT`, `INTERNAL`. The framework's own by-id binding uses the same
+vocabulary: a `bind` argument that is not a UUID v7 — malformed, or well-formed
+but a different version — answers `"id must be a UUID v7"` with
+`extensions.code = "INVALID_ARGUMENT"`, the GraphQL twin of the HTTP path's
+`400`. The Apollo spec calls out these names
 and clients converge on them.
 
 ## Mapping `ServiceError`

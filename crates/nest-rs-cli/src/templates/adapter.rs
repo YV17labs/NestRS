@@ -7,10 +7,13 @@
 //!
 //! **A `g resource` port has no `count()`** — its service is a `CrudService`
 //! (`list`/`page`/`access`/`create`/`update`/`delete`), so a skeleton calling
-//! `count()` on one does not compile. [`GRAPHQL_RESOLVER_CRUD`] is the variant
-//! for that port, picked by reading the port's `service.rs`. The `ws`,
-//! `schedule` and `mcp` skeletons still assume the `g feature` port and have no
-//! CRUD twin yet — same gap, one transport at a time.
+//! `count()` on one does not compile. Each transport therefore renders one
+//! template with the differing handler supplied as `{{op}}` / `{{op_body}}` /
+//! `{{op_value}}` (see [`crud_vars`](super::crud_vars)), rather than a second
+//! near-identical blob: the scaffolding, imports and path conventions have one
+//! home each. GraphQL is the exception that earns a second template
+//! ([`GRAPHQL_RESOLVER_CRUD`]) — over a resource it is not a stub but the full
+//! `#[crud]` block behind the app's guards.
 
 /// `mod.rs` for an adapter folder: `mod <handler>; mod module;` + re-exports.
 /// `{{handler_mod}}`/`{{handler}}`/`{{tmodule}}` are layered per transport.
@@ -164,12 +167,13 @@ pub struct {{gateway}} {
 
 #[messages]
 impl {{gateway}} {
-    #[subscribe_message("{{kebab}}.count")]
-    async fn count(&self, client: &WsClient) {
+    #[subscribe_message("{{kebab}}.{{op}}")]
+    async fn {{op}}(&self, client: &WsClient) {
+{{op_body}}
         // Best-effort fan-out: a peer disconnecting mid-broadcast is normal, so
         // a delivery failure is logged rather than propagated (this handler
         // returns `()` — there is no client left to surface an error to).
-        if let Err(e) = client.broadcast("{{kebab}}.count", &self.svc.count()) {
+        if let Err(e) = client.broadcast("{{kebab}}.{{op}}", {{op_value}}) {
             tracing::warn!(target: "features::{{snake}}", error = %e, "broadcast failed");
         }
     }
@@ -242,7 +246,10 @@ pub struct {{tasks}} {
 impl {{tasks}} {
     #[every("60s")]
     async fn tick(&self) -> Result<()> {
-        tracing::info!(target: "features::{{snake}}", count = self.svc.count(), "scheduled tick");
+{{op_body}}
+        // Every event carries at least one structured field: the cadence is what
+        // tells a reader which tick fired when several share this target.
+        tracing::info!(target: "features::{{snake}}", every = "60s", "scheduled tick");
         Ok(())
     }
 }
@@ -272,10 +279,11 @@ pub struct {{tool}} {
 
 #[tool_router]
 impl {{tool}} {
-    #[tool(description = "Count {{kebab}} items.")]
-    async fn count(&self) -> Result<CallToolResult, McpError> {
+    #[tool(description = "{{op_description}}")]
+    async fn {{op}}(&self) -> Result<CallToolResult, McpError> {
+{{op_body}}
         Ok(CallToolResult::success(vec![ContentBlock::text(
-            self.svc.count().to_string(),
+            {{op_value}},
         )]))
     }
 }

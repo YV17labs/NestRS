@@ -14,27 +14,24 @@ handler). One call, both sides of the boundary.
 
 `Interceptor` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait shipped by
 [`nest-rs-interceptors`](https://crates.io/crates/nest-rs-interceptors).
-The HTTP continuation builds on [`poem`](https://crates.io/crates/poem)'s
-endpoint chain; the GraphQL one on
-[`async-graphql`](https://crates.io/crates/async-graphql)'s resolver
-context. One impl, three transports — override the method(s) the
-interceptor targets, the rest inherit a pass-through default.
+The continuation builds on [`poem`](https://crates.io/crates/poem)'s endpoint
+chain. One method, one transport:
 
 ```rust
 #[async_trait]
 pub trait Interceptor: Layer {
-    /// HTTP entry — required. Per-route, runs once per request.
+    /// HTTP entry. Per-route, runs once per request.
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
-
-    /// GraphQL per-resolver-call entry. Default just awaits `next`.
-    async fn wrap_graphql<'a>(&self, ctx: &GraphqlContext<'a>, next: GraphqlNext<'a>)
-        -> ServerResult<GraphqlValue> { next.await }
-
-    /// WS per-message entry. Default just awaits `next`.
-    async fn wrap_ws<'a>(&self, client: &WsClient, event: &str, data: &Value, next: WsNext<'a>)
-        -> Result<Option<Value>, String> { next.await }
 }
 ```
+
+<Aside type="caution">
+**HTTP only.** Per-resolver (GraphQL) and per-message (WS) wrapping are not
+offered — a reserved seam for them was removed rather than shipped unwired.
+For GraphQL, the equivalent hook is the operation guard's `around`; for WS, the
+socket context's per-dispatch wrap. A `wrap_graphql` / `wrap_ws` method on an
+`Interceptor` impl is an `E0407` (`method is not a member of trait`).
+</Aside>
 
 Same vocabulary as a guard, different shape:
 
@@ -47,6 +44,16 @@ It is the seam where the database transaction lives, where response
 masking lives, where tracing spans wrap a request.
 
 ## A minimal interceptor
+
+`async_trait` comes from `nest-rs-interceptors` (and `nest-rs-filters` /
+`nest-rs-exception-filters` for their traits). That re-export is **load-bearing,
+not ergonomic**: `poem::async_trait` does not exist in poem 3, so there is no
+alternative spelling to fall back on — and the unresolved import cascades into
+a confusing `E0195: lifetime parameters or bounds on method 'intercept' do not
+match the trait declaration`, because the un-expanded `async fn` no longer
+matches the `#[async_trait]`-declared trait. A crate mid-upgrade can also depend
+on `async-trait = "0.1"` directly and `use async_trait::async_trait;` — both
+spellings must resolve to the same 0.1 macro.
 
 ```rust
 use nest_rs_core::{Layer, injectable};

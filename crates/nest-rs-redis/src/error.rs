@@ -21,4 +21,28 @@ pub enum RedisError {
     /// The Redis connection could not be established.
     #[error("failed to connect to Redis")]
     Connect(#[from] redis::RedisError),
+
+    /// The connect budget elapsed with the backend still unreachable. Carries
+    /// the redacted endpoint and the knob to widen, because this is the boot
+    /// error an operator reads at 3am — an unreachable queue used to be
+    /// indistinguishable from a hung process.
+    #[error(
+        "could not reach Redis at {endpoint} within {}s ({attempts} attempt(s)): \
+         check NESTRS_QUEUE__URL, or widen the budget with \
+         NESTRS_QUEUE__CONNECT_TIMEOUT_SECS",
+        budget.as_secs()
+    )]
+    Unreachable {
+        /// The configured endpoint with any userinfo stripped — the URL may
+        /// embed a password and this string reaches logs and stderr.
+        endpoint: String,
+        /// The budget that elapsed.
+        budget: std::time::Duration,
+        /// How many connect attempts were made inside it.
+        attempts: u32,
+        /// The last transport failure, when the budget ran out after an
+        /// outright error rather than mid-attempt.
+        #[source]
+        source: Option<redis::RedisError>,
+    },
 }

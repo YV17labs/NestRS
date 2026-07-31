@@ -87,8 +87,14 @@ impl Config for StorageConfig {
 
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         let d = base;
+        let allow_http = env.flag("ALLOW_HTTP", d.allow_http)?;
         Ok(Self {
-            endpoint: env.get("ENDPOINT").unwrap_or(d.endpoint),
+            endpoint: resolve_endpoint(
+                env.get("ENDPOINT").unwrap_or(d.endpoint),
+                allow_http,
+                &env.var_name("ENDPOINT"),
+                &env.var_name("ALLOW_HTTP"),
+            )?,
             region: env.get("REGION").unwrap_or(d.region),
             access_key: resolve_credential(
                 env.get("ACCESS_KEY").unwrap_or(d.access_key),
@@ -100,9 +106,53 @@ impl Config for StorageConfig {
             )?,
             bucket: env.get("BUCKET").unwrap_or(d.bucket),
             force_path_style: env.flag("FORCE_PATH_STYLE", d.force_path_style)?,
-            allow_http: env.flag("ALLOW_HTTP", d.allow_http)?,
+            allow_http,
         })
     }
+}
+
+/// Refuse a plain-`http://` endpoint when plain HTTP is disallowed.
+///
+/// `object_store`'s `with_allow_http` only gates the client's own byte
+/// transfers, and it does so as an opaque request-time failure. Presigning is a
+/// *local* computation, so it was never gated at all: a production app minted
+/// working `http://` URLs carrying the SigV4 signature — the exact leak the
+/// default exists to prevent, on the flow `/storage/` calls canonical.
+///
+/// Rejecting the pairing where the config is resolved fixes both halves at
+/// once: no unencrypted transfer can be attempted, no plaintext URL can be
+/// signed, and a mis-deployed app fails boot naming the variable instead of
+/// starting healthy and 500-ing on first use. Pure, so the branch is testable
+/// without env mutation.
+fn resolve_endpoint(
+    endpoint: String,
+    allow_http: bool,
+    endpoint_var: &str,
+    allow_http_var: &str,
+) -> nest_rs_config::Result<String> {
+    if is_plaintext(&endpoint) && !allow_http {
+        return Err(ConfigError::parse(
+            endpoint_var,
+            format!(
+                "plain-http endpoint `{endpoint}` is refused because {allow_http_var} is false \
+                 (the staging/production default) — credentials and presigned URLs would travel \
+                 unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in"
+            ),
+        ));
+    }
+    Ok(endpoint)
+}
+
+/// Whether `endpoint` addresses the store over unencrypted HTTP.
+///
+/// The single spelling of the rule: both the boot-time refusal here and the
+/// client's last-line-of-defence check call it, so a future tweak (an IDN host,
+/// a scheme-relative endpoint) cannot leave the two enforcing different rules.
+pub(crate) fn is_plaintext(endpoint: &str) -> bool {
+    endpoint
+        .trim_start()
+        .get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
 }
 
 /// `true` in every profile but staging/production.
@@ -170,6 +220,69 @@ mod tests {
             resolve_credential("AKIAREAL".into(), "K").expect("set ⇒ ok"),
             "AKIAREAL",
         );
+    }
+
+    // G1/G2: `with_allow_http` only gates the client's own byte transfers, and
+    // only as an opaque request-time 500 — presigning is local, so it minted
+    // working plaintext URLs in production. The pairing has to die at load.
+    #[test]
+    fn a_plain_http_endpoint_is_refused_when_allow_http_is_false() {
+        let err = resolve_endpoint(
+            "http://minio.internal:9000".into(),
+            false,
+            "NESTRS_STORAGE__ENDPOINT",
+            "NESTRS_STORAGE__ALLOW_HTTP",
+        )
+        .expect_err("plaintext + allow_http=false must abort boot");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("NESTRS_STORAGE__ENDPOINT"),
+            "the error names the offending variable: {rendered}",
+        );
+        assert!(
+            rendered.contains("NESTRS_STORAGE__ALLOW_HTTP"),
+            "and the opt-in that would allow it: {rendered}",
+        );
+        // Case-insensitive and whitespace-tolerant — a scheme is not a shibboleth.
+        assert!(
+            resolve_endpoint("  HTTP://x:9000".into(), false, "E", "A").is_err(),
+            "the scheme check must not be defeated by case or leading space",
+        );
+    }
+
+    #[test]
+    fn https_and_the_empty_aws_endpoint_are_always_accepted() {
+        for endpoint in ["https://s3.example", "", "https://minio:9000"] {
+            assert_eq!(
+                resolve_endpoint(endpoint.into(), false, "E", "A").expect("encrypted ⇒ ok"),
+                endpoint,
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_http_endpoint_is_accepted_when_allow_http_is_opted_in() {
+        // The dev/test default, and the documented production opt-in.
+        assert_eq!(
+            resolve_endpoint("http://rustfs:9000".into(), true, "E", "A").expect("opted in ⇒ ok"),
+            "http://rustfs:9000",
+        );
+    }
+
+    #[test]
+    fn from_env_refuses_the_production_pairing_end_to_end() {
+        let err = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [
+                    ("NESTRS_STORAGE__ENDPOINT", "http://minio:9000"),
+                    ("NESTRS_STORAGE__ALLOW_HTTP", "false"),
+                ],
+            ),
+            StorageConfig::default(),
+        )
+        .expect_err("the resolved config must not carry a plaintext endpoint");
+        assert!(err.to_string().contains("NESTRS_STORAGE__ENDPOINT"));
     }
 
     // The whole point of the overlay: a pinned bucket must not freeze the

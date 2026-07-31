@@ -67,8 +67,12 @@ Metrics batch on a
 [`PeriodicReader`](https://docs.rs/opentelemetry_sdk) and export through the
 same OTLP endpoint as the traces (set
 `NESTRS_OPENTELEMETRY__OTLP_ENDPOINT`). Without an endpoint, instrument
-construction still works but the readings stay local — useful for tests that
-want to assert on counter increments without spinning a collector.
+construction still works — `counter()` and friends return real handles, so
+wiring compiles and runs — but the meter comes from a `NoopMeterProvider` and
+every reading is **dropped**. The SDK says so once, at `Meter was obtained from
+a NoopMeterProvider. No metrics will be recorded.` A test that needs to assert
+on an increment has to hold its own counter; there is nothing to read back
+here.
 
 **The interval is 60 seconds by default, and that will look broken.** Traces and
 logs reach a collector immediately; metrics wait for the reader's next flush. The
@@ -86,8 +90,13 @@ or pin it in code, as with any other field:
 OpenTelemetryConfig::from_env("api").with_metric_interval(Duration::from_secs(5))
 ```
 
-A value of `0` (or an unparseable one) keeps the 60 s default rather than
-spinning the reader in a tight export loop.
+A value of `0` is the sentinel for "keep the 60 s default" — a `PeriodicReader`
+on a zero period is a tight export loop, which is worse than a slow one. A
+**non-numeric** value is a typo, not a sentinel: the default is kept and the
+variable is named on stderr (`nestrs: WARNING — unparseable
+NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS=…`). It is reported rather than
+boot-fatal because this config is what installs the subscriber, so it is built
+before there is anywhere to log or anything to propagate an error to.
 
 ## Resource attributes
 

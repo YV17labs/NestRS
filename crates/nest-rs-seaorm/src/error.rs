@@ -34,7 +34,16 @@ use validator::ValidationErrors;
 #[non_exhaustive]
 pub enum ServiceError {
     /// Edge validation (`validator`) rejected the input — maps to a 400.
-    #[error(transparent)]
+    ///
+    /// The message is the constant every transport already uses for a pipe
+    /// rejection; the offending fields ride structurally, under `errors`
+    /// ([`field_errors`](Self::field_errors)). `transparent` used to render
+    /// `validator`'s own `Debug` payload — `name: Validation error: length
+    /// [{"min": Number(1), "value": String("")}]` — which is unreadable, not
+    /// programmable, and echoes the **rejected value** back out: a too-short
+    /// password or a malformed token into every log and transcript that
+    /// captures the line.
+    #[error("validation failed")]
     Validation(#[from] ValidationErrors),
     /// A `Repo`/ORM query failed. The `DbErr` detail stays for `tracing`; the
     /// wire sees a generic message.
@@ -95,6 +104,21 @@ impl ServiceError {
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(msg.into())
     }
+
+    /// The field-level errors a [`Validation`](Self::Validation) failure carries,
+    /// as the JSON every transport ships under `errors`.
+    ///
+    /// One accessor so no transport can disagree about the shape, and it routes
+    /// through `nest_rs_pipes::validation_details` so none can disagree about
+    /// the **policy** either: a raw `serde_json::to_value` keeps `params.value`,
+    /// the rejected input, and would put a too-short password or a malformed
+    /// token in every log and transcript that captures the response.
+    pub fn field_errors(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::Validation(errors) => Some(nest_rs_pipes::validation_details(errors)),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(feature = "http")]
@@ -139,9 +163,7 @@ mod http {
             let status = self.status();
             log_opaque(self);
             let mut problem = ProblemDetails::from_status(status).with_detail(self.to_string());
-            if let ServiceError::Validation(errs) = self
-                && let Ok(fields) = serde_json::to_value(errs)
-            {
+            if let Some(fields) = self.field_errors() {
                 problem = problem.with_extension("errors", fields);
             }
             problem.into_response()
@@ -338,5 +360,29 @@ mod tests {
             ServiceError::Validation(v) => assert!(v.field_errors().contains_key("email")),
             other => panic!("expected Validation, got {other:?}"),
         }
+    }
+
+    // `serde_json::to_value(ValidationErrors)` keeps `params.value` — the
+    // rejected input. Every transport reads the field errors through
+    // `field_errors`, so the redaction has to hold there, not at each renderer.
+    #[test]
+    fn field_errors_never_echo_the_submitted_value() {
+        let mut error = validator::ValidationError::new("length");
+        error.add_param("min".into(), &1);
+        error.add_param("value".into(), &"hunter2");
+        let mut errors = validator::ValidationErrors::new();
+        errors.add("password", error);
+
+        let fields = ServiceError::Validation(errors)
+            .field_errors()
+            .expect("a validation failure carries its fields");
+        let rendered = fields.to_string();
+
+        assert!(rendered.contains("length"), "the rule survives: {rendered}");
+        assert!(rendered.contains("min"), "and its bound: {rendered}");
+        assert!(
+            !rendered.contains("hunter2"),
+            "the submitted value must never ride back out: {rendered}",
+        );
     }
 }

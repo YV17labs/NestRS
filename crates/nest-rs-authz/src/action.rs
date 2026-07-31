@@ -20,6 +20,19 @@ pub enum Action {
 
 /// Lets a route name an [`Action`] as a type argument on stable Rust (enum
 /// const generics still need nightly `adt_const_params`).
+///
+/// The `on_unimplemented` note names the closed set, because the bound fires
+/// wherever an action is a type argument — `Authorized<A, E>`, `#[authorize]`,
+/// any generic over one — and rustc's default ("the trait is not implemented")
+/// leaves the reader guessing what belongs there. It stays generic on purpose:
+/// the one caller whose parameter *order* is the usual cause lives in
+/// `nest-rs-seaorm`, a crate this one may not depend on, so that story is told
+/// by `CrudService`'s own note instead.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an action marker",
+    label = "expected an action marker here",
+    note = "actions are `Create`, `Read`, `Update`, `Delete` and `Manage`."
+)]
 pub trait ActionMarker: Send + Sync + 'static {
     /// The runtime [`Action`] this type marker stands for.
     const ACTION: Action;

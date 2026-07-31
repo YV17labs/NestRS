@@ -18,10 +18,10 @@
 //! `Environment::init` (the top of `main`) and the e2e harness. Resolving
 //! config never reaches it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock, RwLock};
 
 use crate::environment::Environment;
 
@@ -129,12 +129,38 @@ pub(crate) fn publish_dotenv_values() {
     publish(dotenv_values());
 }
 
+/// Names this process wrote into `std::env` **from a cascade file** — the real
+/// environment left them unset and a committed `.env` supplied the value.
+///
+/// Publishing is what makes `NESTRS_LOG` and a `migrate` binary see the
+/// cascade, but it also erases the one distinction the documented precedence
+/// tier rests on: afterwards a bare `std::env::var` cannot tell a deployment
+/// variable from a file checked in beside the code. Recording the names
+/// restores it for [`ConfigSource::get_from_deployment`], so
+/// `real env > pinned in code > .env cascade` holds in a scaffolded app exactly
+/// as it does in a library-only one.
+///
+/// [`ConfigSource::get_from_deployment`]: crate::ConfigSource::get_from_deployment
+static PUBLISHED: LazyLock<RwLock<HashSet<String>>> = LazyLock::new(|| RwLock::new(HashSet::new()));
+
+/// Whether `name`'s current `std::env` value came from a cascade file rather
+/// than from the deployment. Read at boot by the config layer only.
+pub(crate) fn published_from_cascade(name: &str) -> bool {
+    PUBLISHED
+        .read()
+        .is_ok_and(|published| published.contains(name))
+}
+
 /// Set-if-absent, the single process-env write. Carries the `unsafe` block both
 /// callers' contracts are written against.
 fn publish(values: &HashMap<String, String>) {
+    let mut published = PUBLISHED.write().ok();
     for (key, value) in values {
         if std::env::var_os(key).is_some() {
             continue;
+        }
+        if let Some(published) = published.as_mut() {
+            published.insert(key.clone());
         }
         // SAFETY: `set_var` is unsound only when it races a concurrent `getenv`
         // on another thread. Config *resolution* never reaches here — those
@@ -371,6 +397,31 @@ mod tests {
                 std::env::var("PEM_KEY").unwrap(),
                 "-----BEGIN-----\nMIIB\n-----END-----",
             );
+            Ok(())
+        });
+    }
+
+    // Publishing is what erased the deployment-vs-file distinction that the
+    // documented `real env > pinned in code > .env cascade` order depends on.
+    // Pin the bookkeeping that restores it: a key the cascade supplied is
+    // marked, a key the real env already held is not.
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn publish_marks_only_the_keys_the_cascade_actually_supplied() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "PUB_FROM_FILE=file\nPUB_FROM_REAL=file")?;
+            jail.set_env("PUB_FROM_REAL", "real");
+            load_cascade(Path::new("."), Environment::Development);
+
+            assert!(
+                published_from_cascade("PUB_FROM_FILE"),
+                "a committed file supplied this value, so it is not a deployment variable",
+            );
+            assert!(
+                !published_from_cascade("PUB_FROM_REAL"),
+                "set-if-absent skipped this key — the deployment still owns it",
+            );
+            assert!(!published_from_cascade("PUB_NEVER_SEEN"));
             Ok(())
         });
     }

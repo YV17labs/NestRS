@@ -15,10 +15,10 @@ crates you need** — it is what `nestrs new` scaffolds, what every exemplar
 app in the Publish workspace does, and what each module's adoption page
 means by `cargo add nest-rs-<crate>`. The
 [`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs)
-umbrella (one dependency, surface crates behind **Cargo features** such as
+umbrella (surface crates behind **Cargo features** such as
 `features = ["http", "seaorm", "graphql"]`, plus `nest_rs::prelude`) is a
-single-dependency alternative — the same crates underneath, with less granular
-control over the graph.
+version-alignment and prelude convenience on top of that — not a replacement
+for it. See [what the umbrella is](#what-the-nest-rs-umbrella-is--and-is-not).
 
 <Aside type="note">
 This page lists **framework crates** — the batteries NestRS ships. Product
@@ -31,7 +31,7 @@ slices.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs) | *(always)* | Re-exports core + optional surface crates; `nest_rs::prelude` for the common case | [Getting started](/getting-started/) |
+| [`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs) | *(always)* | Re-exports core + optional surface crates; `nest_rs::prelude` for the common case. One version to bump — **not** a substitute for the crates a decorator expands into | [Getting started](/getting-started/) |
 | [`nest-rs-core`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-core) | *(via umbrella)* | DI container, `#[module]`, lifecycle hooks, boot-time access graph | [Fundamentals](/fundamentals/) |
 
 Default features: `http`, `config` — every other surface crate is opt-in via
@@ -167,16 +167,35 @@ shows. Then import the matching **modules** in `AppModule` — for example
 `GraphqlModule`, `AuthzHttpModule`. The [Publish workspace](/publish/) and
 [Getting started](/getting-started/) walk through a full composition.
 
-Prefer a single dependency? The umbrella collapses the list:
+### What the `nest-rs` umbrella is — and is not
+
+The umbrella gives you **one version to bump** and **one prelude to import**:
 
 ```toml
 [dependencies]
 nest-rs = { version = "1.2", features = ["http", "seaorm", "graphql"] }
+# The crates whose names the decorators expand to, still listed:
+nest-rs-core = "1.2"
+nest-rs-http = "1.2"
+nest-rs-guards = "1.2"
 ```
 
-Same crates underneath — the umbrella is a packaging choice, not a different
-build. Name the crates individually when you want explicit control over the
-dependency graph.
+```rust
+use nest_rs::prelude::*;
+```
+
+It does **not** replace those entries, and cannot: a decorator is a procedural
+macro, and its expansion resolves absolute paths (`::nest_rs_core::…`,
+`::nest_rs_http::…`, `::nest_rs_guards::…`) against **your** crate's extern
+prelude. Rust has no transitive extern prelude, so a name reachable only through
+`nest-rs` is not a name a macro expansion can reach. Dropping the individual
+entries is `E0433: could not find nest_rs_core in the list of imported crates`,
+reported against the `#[injectable]` / `#[controller]` line.
+
+So: reach for the umbrella for version alignment and `nest_rs::prelude::*`; keep
+naming the surface crates a decorator expands into. **Naming the crates
+individually is the recommended path** — it is what `nestrs new` scaffolds and
+what every exemplar app does.
 
 ## Going further
 

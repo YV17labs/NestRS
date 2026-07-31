@@ -76,7 +76,12 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
             None => (env, Self::defaults()),
         };
         let config = Self::from_env(&env, base)?;
-        config.validate()?;
+        // Tagged with the namespace here rather than through a blanket `From`:
+        // the namespace is what tells an operator *which* config failed when
+        // several are loaded, and only this call site knows it.
+        config
+            .validate()
+            .map_err(|errors| crate::ConfigError::validation(Self::NAMESPACE, errors))?;
         Ok(config)
     }
 
@@ -156,7 +161,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env("NESTRS_TESTDB__MAX_CONNECTIONS", "0");
             let err = DbCfg::load().expect_err("max_connections = 0 violates min = 1");
-            assert!(matches!(err, ConfigError::Validation(_)));
+            assert!(matches!(err, ConfigError::Validation { .. }));
             Ok(())
         });
     }

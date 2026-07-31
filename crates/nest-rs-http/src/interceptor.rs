@@ -54,6 +54,13 @@ pub mod priority {
     /// Global filter pool (`use_filters_global`) — maps errors escaping
     /// the routing tree (including 404s and self-mount errors).
     pub const FILTERS: i32 = 50;
+    /// Where the transport renders a still-unhandled `Err` into its
+    /// `Response`. Not a wrap an app can register — the transport partitions
+    /// the sorted wrap list here so every band above observes a response,
+    /// which is what makes a global interceptor see 404s and 405s rather than
+    /// short-circuit on the router's `Err(NotFoundError)`. Costs nothing when
+    /// no wrap sits below it: the resolution folds into the base layer.
+    pub const ERROR_RESOLVE: i32 = 70;
     /// Global interceptor pool (`use_interceptors_global`) — wraps the
     /// routing tree: sees every request/response, including guard denials,
     /// 404s and self-mounted surfaces. Sits *inside* infra interceptors so

@@ -22,7 +22,18 @@ graph.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-health
+cargo add nest-rs-health anyhow
+```
+
+`anyhow` is not optional the moment you write an indicator: every
+`#[readiness]` / `#[liveness]` / `#[startup]` method returns
+`anyhow::Result<()>` (or any `Result<(), E: Into<anyhow::Error>>`), and
+`nest-rs-health` does not re-export it.
+
+```toml title="Cargo.toml"
+[dependencies]
+nest-rs-health = "1.2"
+anyhow = "1"
 ```
 
 ## Mount it

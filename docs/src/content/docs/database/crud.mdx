@@ -239,12 +239,29 @@ Only a guard, via the attribute, decides authn/authz; `bind_required` and
 the `Authorized` proof are enforcement plumbing the decision flows into.
 </Aside>
 
-<Aside type="note">
-The `#[authorize(Update, bind = PostsService)]` form is a shorthand:
-it keeps the posture explicit **and** binds the `Authorized<A, E>` subject
-for you (container-resolved service), so the body receives the proof
-without calling `bind_required` itself.
-</Aside>
+The `#[authorize(Update, bind = PostsService)]` form is a shorthand: it keeps
+the posture explicit **and** binds the `Authorized<A, E>` subject for you from
+the container-resolved service, so the body never calls `bind_required` itself.
+It also **synthesises the `id: String!` SDL argument** — so the method must not
+declare an `id` parameter of its own:
+
+```rust title="crates/features/src/posts/graphql/resolver.rs"
+use nest_rs_seaorm::Authorized;
+
+#[mutation]
+#[authorize(Update, bind = PostsService)]
+async fn publish_post(
+    &self,
+    _ctx: &Context<'_>,
+    subject: Authorized<Update, PostEntity>,   // the proof, already loaded
+) -> Result<Post> {
+    Ok(Post::from(&self.svc.publish(subject).await?))
+}
+```
+
+Writing `id: String` alongside it is `E0415: identifier 'id' is bound more than
+once in this parameter list`, reported against the `#[crud(…)]` attribute on the
+impl block rather than the method — drop the parameter, not the attribute.
 
 ## Pagination
 
@@ -361,9 +378,14 @@ Custom queries that use `Repo::scoped` must AND
 [`live_condition::<E>()`](https://docs.rs/nest-rs-seaorm/latest/nest_rs_seaorm/fn.live_condition.html)
 when `E: SoftDeletable` (e.g. login-by-email paths).
 
-An entity that does not declare `soft_delete_column` hard-deletes — the
-default, and the right shape for join tables and lookups (`orgs/` in Publish
-stays hard delete).
+An entity that does not declare `soft_delete_column` hard-deletes — the right
+shape for join tables and lookups (`orgs/` in Publish stays hard delete). Drop
+**both** halves together when you mean it: the entity flag makes the column
+addressable, the service override is what tombstones, and one without the other
+is the silent mismatch this section exists to prevent.
+
+`nestrs g resource` scaffolds both halves plus the three columns, matching the
+migration it tells you to generate next.
 
 ### Reference
 

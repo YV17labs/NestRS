@@ -106,12 +106,7 @@ pub fn run(opts: MigrationOptions) -> CliResult<()> {
         );
     }
 
-    finish(
-        s,
-        opts.dry_run,
-        &ws.root,
-        &format!("Created migration `{stem}`"),
-    )?;
+    finish(s, opts.dry_run, &ws.root, &format!("migration `{stem}`"))?;
     print_next_steps(&stem, &subject.table());
     Ok(())
 }

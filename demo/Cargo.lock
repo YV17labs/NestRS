@@ -3160,6 +3160,7 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-mcp",
+ "nest-rs-pipes",
  "nest-rs-resource",
  "nest-rs-worker",
  "nest-rs-ws",

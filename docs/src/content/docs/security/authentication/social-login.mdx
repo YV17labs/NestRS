@@ -14,7 +14,19 @@ provider turns on when its credentials are configured. A third party
 publishes a new provider as its own crate through the same seam — no
 fork, no framework change.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs-social
+```
+
+`SocialModule` and `SocialRegistry` live in `nest-rs-social`; the
+authorization-code machinery they drive (`OAuth2Client`, `TokenSet`) is
+`nest-rs-authn`, which comes along as a dependency.
+
 ```rust
+use nest_rs_social::SocialModule;
+
 #[module(imports = [SocialModule, OAuthHttpModule])]
 pub struct AuthModule;
 ```
@@ -22,6 +34,9 @@ pub struct AuthModule;
 `SocialModule` owns every registry entry, so it is the module gate — no
 `SocialModule`, no social login. Which providers come up inside that gate
 is a config decision, not a second import.
+
+`OAuthHttpModule` is **yours** — the two routes below are app code, for the
+reason [The request flow](#the-request-flow) explains.
 
 ## Wire it in
 
@@ -42,7 +57,7 @@ Three outcomes per provider, and no fourth:
 | Config for `NESTRS_SOCIAL__<PROVIDER>__*` | Outcome |
 |---|---|
 | Complete | active |
-| Absent entirely | inert — one boot `warn`, its routes `404` like an unknown key |
+| Absent entirely | inert — one boot `warn` naming the provider and its `NESTRS_SOCIAL__<PROVIDER>__*` namespace; the registry does not know the key, so your `:provider` route answers `404` |
 | Partial, or invalid | **boot fails**, naming the provider |
 
 Real credentials are a deployment's explicit intent, so a provider never
@@ -52,15 +67,52 @@ silently. Pinning config in code is the ordinary config seam — provide a
 
 ## The request flow
 
-Two HTTP legs, both dispatched by the `:provider` path segment:
+`nest-rs-social` ships **no routes**. A social provider is not a DI provider —
+it is reached only through `SocialRegistry`, which is what lets a third-party
+provider ship as two files with no module of its own. The flip side is that the
+two HTTP legs are **app code**: the path prefix, the throttle, the cookie name
+and what "resolve this profile to a local user" means are all yours.
 
-- `GET /social/:provider/authorize` — begins the redirect. Returns a
-  `302` to the provider with the PKCE/CSRF transaction in a signed,
-  short-lived cookie. Unknown provider ⇒ `404`.
-- `GET /social/:provider/callback` — the redirect URI. `OAuthGuard`
-  validates the `state` against the cookie, exchanges the code, fetches
-  the profile, resolves it to a local user, and issues this app's token.
-  A forged callback is a `401` denial.
+Two legs, both dispatched by a `:provider` path segment:
+
+- `GET /social/:provider/authorize` — begins the redirect. A plain handler:
+  ask the registry for the provider, call `authorize`, return a `302` with the
+  PKCE/CSRF transaction in a signed, short-lived cookie. Unknown provider ⇒
+  `404`.
+- `GET /social/:provider/callback` — the redirect URI. A `Strategy` bound with
+  `#[use_guards(OAuthGuard)]` validates the `state` against the cookie,
+  exchanges the code, fetches the profile, resolves it to a local user, and
+  hands the handler a `Ctx<Caller>` to issue this app's token from. A forged
+  callback is a `401` denial — do **not** mark this route `#[public]`, or the
+  guard's denial is absorbed and the failure surfaces as a missing principal
+  instead.
+
+```rust title="crates/features/src/oauth/http/controller.rs (abridged)"
+#[controller(path = "/")]
+pub struct OAuthController {
+    #[inject]
+    svc: Arc<OAuthService>,
+}
+
+#[routes]
+impl OAuthController {
+    #[get("/social/:provider/authorize")]
+    #[public]
+    async fn social_authorize(&self, provider: Path<String>) -> Result<Response> {
+        let authorization = self
+            .svc
+            .authorize(&provider)                       // → SocialRegistry
+            .ok_or_else(|| Error::from_status(StatusCode::NOT_FOUND))??;
+        Ok(redirect_with_transaction_cookie(authorization))
+    }
+
+    #[get("/social/:provider/callback")]
+    #[use_guards(OAuthGuard)]
+    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
+        Ok(Json(self.svc.issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?))
+    }
+}
+```
 
 Both legs run through the shared authorization-code flow — the same
 PKCE and stateless-CSRF machinery documented in

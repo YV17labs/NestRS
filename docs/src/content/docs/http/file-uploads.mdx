@@ -48,10 +48,13 @@ a stored object.
 
 ## Limits
 
-- The [`max_body_bytes` cap](/http/configuration/) gates the `RawBody` and
-  `Json` extractors — **not** `Multipart`, which poem reads independently.
-  A direct upload is bounded only by the field buffering below, so keep the
-  admin gate and rate limit the demo binds, or prefer the presigned path.
+- The [`max_body_bytes` cap](/http/configuration/) gates **every** body,
+  `Multipart` included. A direct upload larger than the cap answers `413
+  Payload Too Large` before a byte reaches your handler, and the default cap is
+  **2 MiB** — so a 3 MiB upload fails out of the box, and raising the ceiling
+  is `NESTRS_HTTP__MAX_BODY_BYTES`, not a compensating control in your code.
+  The admin gate and rate limit the demo binds are defence in depth, not the
+  size bound.
 - The uploaded part is buffered whole per field before it reaches storage
   (`field.bytes()`); for very large files the presigned PUT avoids proxying
   through the server entirely.

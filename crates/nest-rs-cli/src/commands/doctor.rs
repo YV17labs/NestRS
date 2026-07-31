@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::{CliError, CliResult};
 
@@ -17,8 +17,8 @@ pub struct DoctorReport {
     /// Set when workspace detection itself failed (e.g. a malformed manifest),
     /// as distinct from a clean "not a workspace" result.
     pub workspace_error: Option<String>,
-    pub env_database: Option<bool>,
-    pub env_queue: Option<bool>,
+    pub env_database: bool,
+    pub env_queue: bool,
     pub env_http_host: bool,
     pub env_http_port: bool,
 }
@@ -43,10 +43,12 @@ pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
         Err(e) => report.workspace_error = Some(e.to_string()),
     }
 
-    report.env_database = env_present("NESTRS_DATABASE__URL");
-    report.env_queue = env_present("NESTRS_QUEUE__URL");
-    report.env_http_host = std::env::var("NESTRS_HTTP__HOST").is_ok();
-    report.env_http_port = std::env::var("NESTRS_HTTP__PORT").is_ok();
+    // One cascade read for all four, rather than up to four files per variable.
+    let cascade = cascade_text(&start);
+    report.env_database = env_present(&cascade, "NESTRS_DATABASE__URL");
+    report.env_queue = env_present(&cascade, "NESTRS_QUEUE__URL");
+    report.env_http_host = env_present(&cascade, "NESTRS_HTTP__HOST");
+    report.env_http_port = env_present(&cascade, "NESTRS_HTTP__PORT");
 
     print_report(&report);
 
@@ -92,11 +94,7 @@ fn print_report(report: &DoctorReport) {
     if report.env_http_port {
         println!("  NESTRS_HTTP__PORT: set");
     }
-    if report.env_database != Some(true)
-        && report.env_queue != Some(true)
-        && !report.env_http_host
-        && !report.env_http_port
-    {
+    if !report.env_database && !report.env_queue && !report.env_http_host && !report.env_http_port {
         println!("  (none set — fine for bare HTTP apps on defaults)");
     }
     println!();
@@ -107,20 +105,58 @@ fn status_line(label: &str, ok: bool, detail: &str) {
     println!("  [{mark}] {label}: {detail}");
 }
 
-fn print_env_hint(name: &str, present: Option<bool>) {
-    match present {
-        Some(true) => println!("  {name}: set"),
-        Some(false) => println!("  {name}: not set"),
-        None => {}
-    }
+fn print_env_hint(name: &str, present: bool) {
+    println!("  {name}: {}", if present { "set" } else { "not set" });
 }
 
-fn env_present(name: &str) -> Option<bool> {
-    match std::env::var(name) {
-        Ok(value) if !value.trim().is_empty() => Some(true),
-        Ok(_) => Some(false),
-        Err(_) => Some(false),
+/// Whether an app started here would resolve `name` — the real process
+/// environment **or** the `.env` cascade.
+///
+/// Reading only `std::env` is the exact mistake `/database/migrations/` warns
+/// tool authors against, and it made doctor report `not set` for a variable the
+/// workspace's own generated `.env` defines — then reassure the reader that
+/// "none set" was fine.
+///
+/// The cascade is re-read here rather than borrowed from `nest-rs-config`: the
+/// CLI deliberately depends on no framework crate, so that `cargo install
+/// nest-rs-cli` stays independent of the version a project pins. Only presence
+/// is answered, so this stays a scan for the key, not a second value parser.
+fn env_present(cascade: &str, name: &str) -> bool {
+    matches!(std::env::var(name), Ok(v) if !v.trim().is_empty()) || file_defines(cascade, name)
+}
+
+/// Every cascade file rooted at `dir`, concatenated. Mirrors
+/// `nest_rs_config::dotenv`'s file set — including skipping `.env.local` under
+/// `NESTRS_ENV=test`, so doctor answers what an app would actually resolve.
+/// Precedence does not matter here: the question is presence, not value.
+fn cascade_text(dir: &Path) -> String {
+    let env = std::env::var("NESTRS_ENV").unwrap_or_else(|_| "development".to_owned());
+    let env = env.trim().to_owned();
+    let mut files = vec![format!(".env.{env}.local")];
+    if env != "test" {
+        files.push(".env.local".to_owned());
     }
+    files.push(format!(".env.{env}"));
+    files.push(".env".to_owned());
+    files
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(dir.join(file)).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One file's answer, split out so the line grammar (`export` prefix,
+/// comments, `KEY=` counting as unset) is unit-testable.
+fn file_defines(contents: &str, name: &str) -> bool {
+    contents.lines().any(|line| {
+        let line = line.trim();
+        if line.starts_with('#') {
+            return false;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        line.split_once('=')
+            .is_some_and(|(key, value)| key.trim() == name && !value.trim().is_empty())
+    })
 }
 
 fn rustc_version() -> Option<String> {
@@ -163,5 +199,56 @@ mod tests {
     fn parses_rustc_version() {
         assert!(version_at_least("rustc 1.96.0 (abc 2025-01-01)", (1, 96)));
         assert!(!version_at_least("rustc 1.95.0 (abc 2025-01-01)", (1, 96)));
+    }
+
+    // B9: doctor read only `std::env`, so it answered `not set` for a variable
+    // the workspace's own generated `.env` defines — and then reassured the
+    // reader that "none set" was fine for their DB-backed app.
+    #[test]
+    fn a_cascade_file_counts_as_set() {
+        assert!(file_defines(
+            "NESTRS_DATABASE__URL=postgres://x",
+            "NESTRS_DATABASE__URL"
+        ));
+        assert!(file_defines(
+            "export NESTRS_DATABASE__URL=postgres://x",
+            "NESTRS_DATABASE__URL"
+        ));
+        assert!(file_defines(
+            "# a comment\nNESTRS_QUEUE__URL=redis://x\n",
+            "NESTRS_QUEUE__URL"
+        ));
+    }
+
+    #[test]
+    fn a_commented_or_empty_assignment_does_not_count() {
+        assert!(!file_defines(
+            "# NESTRS_DATABASE__URL=postgres://x",
+            "NESTRS_DATABASE__URL"
+        ));
+        assert!(!file_defines(
+            "NESTRS_DATABASE__URL=",
+            "NESTRS_DATABASE__URL"
+        ));
+        assert!(!file_defines(
+            "NESTRS_DATABASE__URL=   ",
+            "NESTRS_DATABASE__URL"
+        ));
+        // A different key with a matching prefix must not answer for it.
+        assert!(!file_defines(
+            "NESTRS_DATABASE__URL_EXTRA=x",
+            "NESTRS_DATABASE__URL"
+        ));
+    }
+
+    #[test]
+    fn the_cascade_is_consulted_from_the_starting_directory() {
+        let dir = std::env::temp_dir().join(format!("nestrs-doctor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join(".env"), "NESTRS_DATABASE__URL=postgres://x\n").expect("write");
+        let cascade = cascade_text(&dir);
+        assert!(env_present(&cascade, "NESTRS_DATABASE__URL"));
+        assert!(!env_present(&cascade, "NESTRS_QUEUE__URL"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

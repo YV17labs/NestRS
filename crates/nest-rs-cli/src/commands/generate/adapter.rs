@@ -14,8 +14,8 @@ use std::path::PathBuf;
 
 use super::auth;
 use super::cargo::{
-    adapter_deps, auth_deps, ensure_features_deps, ensure_workspace_deps, graphql_authz_deps,
-    graphql_port_deps,
+    adapter_deps, app_host_deps, auth_deps, ensure_features_deps, ensure_workspace_deps,
+    graphql_authz_deps, graphql_port_deps,
 };
 use super::support::{finish, resolve_start, wire_into_app};
 use crate::context::{Context, NestrsWorkspace};
@@ -56,29 +56,37 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
     let handler = names.handler_for(transport);
     let tmodule = names.module_for(transport);
-    let r = Renderer::new(&names)
+    // A CRUD port's service has no `count()`, and its rows are only reachable
+    // behind an ability — both decide the handler this adapter renders, and
+    // (for GraphQL and HTTP) which template it takes.
+    let is_graphql = transport == Transport::Graphql;
+    let crud_port = is_crud_port(&ws, &names.snake);
+    let mut r = Renderer::new(&names)
         .with("handler", handler.clone())
         .with("handler_mod", transport.handler_mod())
         .with("tmodule", tmodule.clone());
-
-    // A CRUD port's service has no `count()`, and its rows are only reachable
-    // behind an ability — both decide which templates this adapter takes.
-    let is_graphql = transport == Transport::Graphql;
-    let crud_port = is_crud_port(&ws, &names.snake);
+    for (key, value) in crate::templates::crud_vars(crud_port, transport) {
+        r = r.with(key, value);
+    }
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
     let mut s = Scaffold::new();
     s.create(dir.join(transport.handler_file()), r.render(handler_tmpl));
 
-    // A guarded resolver is enforced through the GraphQL authz bridge, so its
-    // module imports it — through the same wiring transform an app's
-    // composition site takes, rather than a second copy of the module template.
+    // A guarded handler is enforced through its transport's authz bridge, so
+    // the adapter module imports it — through the same wiring transform an
+    // app's composition site takes, rather than a second copy of the module
+    // template. Without it the access graph fails the boot on the guards the
+    // generated `#[crud]` block names.
     let mut module_rs = r.render(module_tmpl);
-    if is_graphql
-        && crud_port
-        && let Some(wired) = ensure_module_imports(&[(
-            "crate::authz::AuthzGraphqlModule",
-            "AuthzGraphqlModule",
-        )])(&module_rs)
+    let authz_bridge = match (crud_port, transport) {
+        (true, Transport::Graphql) => {
+            Some(("crate::authz::AuthzGraphqlModule", "AuthzGraphqlModule"))
+        }
+        (true, Transport::Http) => Some(("crate::authz::AuthzHttpModule", "AuthzHttpModule")),
+        _ => None,
+    };
+    if let Some(bridge) = authz_bridge
+        && let Some(wired) = ensure_module_imports(&[bridge])(&module_rs)
     {
         module_rs = wired;
     }
@@ -190,12 +198,24 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         imports.extend(auth::APP_IMPORTS);
     }
     let wired_app = wire_into_app(&ctx, &mut s, &imports, None);
+    // The app crate needs the crate that owns the transport's root module —
+    // the one the printed next step tells the reader to import. Editing the
+    // app's `module.rs` while leaving its `Cargo.toml` alone made that step
+    // fail with `E0433: failed to resolve: use of undeclared crate`.
+    if wired_app.is_some()
+        && let Some(app) = ctx.current_app.as_ref()
+    {
+        s.edit(
+            app.join("Cargo.toml"),
+            ensure_features_deps(app_host_deps(transport)),
+        );
+    }
 
     finish(
         s,
         opts.dry_run,
         &ws.root,
-        &format!("Added {} adapter to `{}`", transport.folder(), names.snake),
+        &format!("the {} adapter for `{}`", transport.folder(), names.snake),
     )?;
     print_next_steps(
         &ctx,
@@ -217,20 +237,31 @@ fn is_crud_port(ws: &NestrsWorkspace, snake: &str) -> bool {
         .is_ok_and(|src| src.contains("impl CrudService for"))
 }
 
-/// The handler skeleton, and the `module.rs` that serves it. A CRUD port over
-/// GraphQL is the one pair that differs: `#[crud]` behind the app's guards,
-/// whose module imports the bridge enforcing them.
+/// The handler skeleton, and the `module.rs` that serves it.
+///
+/// Every transport whose default skeleton calls the `g feature` service's
+/// `count()` needs a CRUD twin: a `g resource` port's `CrudService` has no such
+/// method, so the shared skeleton produced a workspace that did not compile —
+/// against the CLI page's own "a freshly-generated port plus any adapter
+/// compiles immediately" guarantee. GraphQL's twin is the full `#[crud]`
+/// resolver; the rest are handler-shaped stubs, because their reads need an
+/// ambient ability a skeleton must not fabricate.
 pub(crate) fn templates_for(transport: Transport, crud_port: bool) -> (&'static str, &'static str) {
-    if transport == Transport::Graphql && crud_port {
-        return (adapter::GRAPHQL_RESOLVER_CRUD, adapter::MODULE);
-    }
-    match transport {
-        Transport::Http => (adapter::HTTP_CONTROLLER, adapter::MODULE),
-        Transport::Graphql => (adapter::GRAPHQL_RESOLVER, adapter::MODULE),
-        Transport::Ws => (adapter::WS_GATEWAY, adapter::WS_MODULE),
-        Transport::Queue => (adapter::QUEUE_PROCESSOR, adapter::MODULE),
-        Transport::Schedule => (adapter::SCHEDULE_TASKS, adapter::MODULE),
-        Transport::Mcp => (adapter::MCP_TOOL, adapter::MODULE),
+    match (transport, crud_port) {
+        // A CRUD port's service is a `CrudService`: no `count()`, and its rows
+        // are only reachable behind an ability. GraphQL and HTTP get the real
+        // guarded shape; the rest are handler-shaped stubs, because their reads
+        // need an ambient ability a skeleton must not fabricate.
+        (Transport::Graphql, true) => (adapter::GRAPHQL_RESOLVER_CRUD, adapter::MODULE),
+        (Transport::Http, true) => (crate::templates::resource::HTTP_CONTROLLER, adapter::MODULE),
+        // The rest render one template either way — the handler that differs
+        // arrives as `crud_vars`.
+        (Transport::Queue, _) => (adapter::QUEUE_PROCESSOR, adapter::MODULE),
+        (Transport::Http, false) => (adapter::HTTP_CONTROLLER, adapter::MODULE),
+        (Transport::Graphql, false) => (adapter::GRAPHQL_RESOLVER, adapter::MODULE),
+        (Transport::Ws, _) => (adapter::WS_GATEWAY, adapter::WS_MODULE),
+        (Transport::Schedule, _) => (adapter::SCHEDULE_TASKS, adapter::MODULE),
+        (Transport::Mcp, _) => (adapter::MCP_TOOL, adapter::MODULE),
     }
 }
 

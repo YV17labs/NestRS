@@ -65,6 +65,22 @@ pub(crate) fn real_env_var(name: &str) -> Option<String> {
     }
 }
 
+/// Read `name` from the **deployment** — the real process environment minus
+/// anything `Environment::init` merged in from a cascade file.
+///
+/// `init` publishes the cascade set-if-absent so raw `std::env::var` consumers
+/// (`NESTRS_LOG*`, a `migrate` binary) behave as the cascade says. That merge
+/// would otherwise promote every committed `.env` value into the deployment
+/// tier and silently outrank a `for_root` pin — the tier the docs place
+/// *above* every file. Subtracting the published names keeps the pin reachable
+/// in a scaffolded app.
+pub(crate) fn deployment_env_var(name: &str) -> Option<String> {
+    if crate::dotenv::published_from_cascade(name) {
+        return None;
+    }
+    real_env_var(name)
+}
+
 /// Where a [`ConfigService`](crate::ConfigService) reads raw values from. The
 /// default is [`EnvSource`] (process env + `.env` cascade); a third-party
 /// crate can ship an alternative (Vault, K8s ConfigMap, AWS Parameter Store)
@@ -108,9 +124,11 @@ impl ConfigSource for EnvSource {
     /// The real process environment only. A `.env` file is checked into the
     /// repository next to the code that pins the value, so it reads as another
     /// in-code default and loses to the pin; an actual deployment variable
-    /// wins.
+    /// wins. Values `Environment::init` merged **from** the cascade are
+    /// subtracted, so publishing does not promote a committed file into the
+    /// deployment tier.
     fn get_from_deployment(&self, var: &str) -> Option<String> {
-        real_env_var(var)
+        deployment_env_var(var)
     }
 }
 
@@ -203,6 +221,40 @@ mod tests {
             jail.set_env("NESTRS_PREC__Z", "");
             let map = HashMap::from([("NESTRS_PREC__Z".to_owned(), "from_dotenv".to_owned())]);
             assert_eq!(env_var_from("NESTRS_PREC__Z", &map), None);
+            Ok(())
+        });
+    }
+
+    // A6: `Environment::init` merges the cascade into `std::env`, which used to
+    // make every committed `.env` value indistinguishable from a deployment
+    // one — so a `for_root` pin lost to `.env`, inverting the documented tier
+    // in every scaffolded app. `get_from_deployment` must subtract what the
+    // cascade published.
+    #[test]
+    fn deployment_env_var_ignores_values_published_from_the_cascade() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                ".env",
+                "NESTRS_DEPLOY__FROM_FILE=file\nNESTRS_DEPLOY__FROM_REAL=file",
+            )?;
+            jail.set_env("NESTRS_DEPLOY__FROM_REAL", "real");
+            crate::dotenv::load_cascade(std::path::Path::new("."), crate::Environment::Development);
+
+            assert_eq!(
+                deployment_env_var("NESTRS_DEPLOY__FROM_FILE"),
+                None,
+                "a committed `.env` must lose to a value pinned in `for_root`",
+            );
+            assert_eq!(
+                deployment_env_var("NESTRS_DEPLOY__FROM_REAL").as_deref(),
+                Some("real"),
+                "a real deployment variable still outranks the pin",
+            );
+            // The plain read is unaffected — both tiers still resolve there.
+            assert_eq!(
+                EnvSource.get("NESTRS_DEPLOY__FROM_FILE").as_deref(),
+                Some("file"),
+            );
             Ok(())
         });
     }

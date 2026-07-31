@@ -21,6 +21,7 @@ nest-rs-guards = "{{nestrs_version}}"
 nest-rs-http = "{{nestrs_version}}"
 nest-rs-interceptors = "{{nestrs_version}}"
 poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
+validator = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]
 nest-rs-testing = "{{nestrs_version}}"

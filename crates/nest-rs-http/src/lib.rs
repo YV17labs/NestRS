@@ -29,7 +29,7 @@ mod transport;
 pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
 pub use client_ip::ClientIp;
 pub use config::HttpConfig;
-pub use context::Ctx;
+pub use context::{Ctx, RejectedCredential};
 pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb};
 pub use cors::CorsConfig;
 pub use endpoint::{EdgePosture, HttpEndpointMeta};

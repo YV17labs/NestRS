@@ -50,6 +50,19 @@ impl Storage {
         if let Some(store) = self.store.get() {
             return Ok(store);
         }
+        // Last line of defence for the plain-HTTP rule. `StorageConfig` already
+        // refuses the `http://` + `allow_http = false` pairing at load, so this
+        // is unreachable through the DI path; it stays for a hand-built
+        // `Storage::new`, where no config resolution ran. Checked here rather
+        // than per method because `object_store`'s own `with_allow_http` only
+        // gates *transfers* — presigning is a local computation, so a plaintext
+        // endpoint would otherwise hand clients a working URL carrying the
+        // SigV4 signature.
+        if crate::config::is_plaintext(&self.config.endpoint) && !self.config.allow_http {
+            return Err(StorageError::PlaintextEndpoint {
+                endpoint: self.config.endpoint.clone(),
+            });
+        }
         let built = AmazonS3Builder::new()
             .with_endpoint(&self.config.endpoint)
             .with_region(&self.config.region)
@@ -75,7 +88,9 @@ impl Storage {
         &self.config.bucket
     }
 
-    /// Sign a short-lived URL for `method` against `key`.
+    /// Sign a short-lived URL for `method` against `key`. The plain-HTTP rule
+    /// is enforced by [`store`](Self::store), which every operation goes
+    /// through.
     async fn presigned_url(&self, method: Method, key: &str, expires: Duration) -> Result<String> {
         let label = method.to_string();
         let url = self
@@ -156,7 +171,16 @@ impl Storage {
     }
 
     /// Upload bytes (e.g. a media worker writes a WebP variant).
-    pub async fn put_bytes(&self, key: &str, bytes: Vec<u8>, content_type: &str) -> Result<()> {
+    ///
+    /// Takes anything convertible to [`Bytes`], so a `Vec<u8>` and the `Bytes`
+    /// [`get_bytes`](Self::get_bytes) hands back both compose without a copy —
+    /// the read/write round-trip the storage docs show is one expression.
+    pub async fn put_bytes(
+        &self,
+        key: &str,
+        bytes: impl Into<Bytes> + Send,
+        content_type: &str,
+    ) -> Result<()> {
         let mut attributes = Attributes::new();
         attributes.insert(Attribute::ContentType, content_type.to_string().into());
         let opts = PutOptions {
@@ -164,10 +188,23 @@ impl Storage {
             ..Default::default()
         };
         self.store()?
-            .put_opts(&Path::from(key), bytes.into(), opts)
+            .put_opts(&Path::from(key), bytes.into().into(), opts)
             .await
             .map_err(StorageError::Put)?;
         Ok(())
+    }
+
+    /// Delete an object. Absent keys succeed, so retention sweeps and
+    /// failed-upload cleanup are idempotent.
+    ///
+    /// Without this an app had to drop to `object_store` directly to implement
+    /// a retention policy or a GDPR erasure — a seam the docs describe as
+    /// internal.
+    pub async fn delete(&self, key: &str) -> Result<()> {
+        match self.store()?.delete(&Path::from(key)).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Err(e) => Err(StorageError::Delete(e)),
+        }
     }
 }
 
@@ -175,4 +212,65 @@ impl Storage {
 pub struct HeadMetadata {
     /// The object's size in bytes, as reported by S3.
     pub byte_size: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(endpoint: &str, allow_http: bool) -> Storage {
+        Storage::new(Arc::new(StorageConfig {
+            endpoint: endpoint.into(),
+            allow_http,
+            ..Default::default()
+        }))
+    }
+
+    // G1: presigning is a local computation, so `object_store`'s allow_http
+    // never saw it — production minted working `http://` URLs carrying the
+    // SigV4 signature. `StorageConfig` now rejects the pairing at boot; this
+    // covers the one path that skips config resolution, `Storage::new`.
+    #[tokio::test]
+    async fn presigning_refuses_a_plaintext_endpoint_when_http_is_disallowed() {
+        let storage = client("http://minio.internal:9000", false);
+        for signed in [
+            storage
+                .presign_put("k", Duration::from_secs(900))
+                .await
+                .err(),
+            storage
+                .presign_get("k", Duration::from_secs(900))
+                .await
+                .err(),
+        ] {
+            let err = signed.expect("a plaintext presigned URL must never be minted");
+            assert!(
+                matches!(err, StorageError::PlaintextEndpoint { .. }),
+                "got {err:?}",
+            );
+            assert!(err.to_string().contains("NESTRS_STORAGE__ALLOW_HTTP"));
+        }
+    }
+
+    #[tokio::test]
+    async fn presigning_over_an_encrypted_endpoint_is_untouched() {
+        // Signing is local, so this needs no server — reaching the signer at
+        // all proves the guard did not fire.
+        let storage = client("https://s3.example", false);
+        storage
+            .presign_get("k", Duration::from_secs(900))
+            .await
+            .expect("https is always allowed");
+    }
+
+    // G13: the streaming page shows `Body::from_bytes_stream(stream)` fed
+    // straight from `get_stream`, which needs `E: Into<std::io::Error>`.
+    #[test]
+    fn a_storage_error_converts_into_io_error_so_streams_compose() {
+        let io: std::io::Error = StorageError::PlaintextEndpoint {
+            endpoint: "http://x".into(),
+        }
+        .into();
+        assert!(io.to_string().contains("plain HTTP"));
+    }
 }

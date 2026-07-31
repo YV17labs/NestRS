@@ -21,7 +21,7 @@ use validator::{Validate, ValidationError, ValidationErrors};
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
 #[config(namespace = "issuer")]
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct IssuerConfig {
     // The org id each client acts as is the framework client's generic payload.
     pub clients: Vec<RegisteredClient<Uuid>>,
@@ -132,9 +132,7 @@ A bad value fails the boot before any port opens:
 
 ```bash frame="terminal"
 $ NESTRS_ISSUER__DEFAULT_ORG_ID=not-a-uuid nestrs run dev auth
-Error: configuration parse error
-  variable: NESTRS_ISSUER__DEFAULT_ORG_ID
-  reason  : invalid character at 1: expected hyphen
+Error: invalid value for NESTRS_ISSUER__DEFAULT_ORG_ID: invalid character: found `n` at 0
 ```
 
 A failed validation runs after the load:
@@ -154,6 +152,14 @@ when a field's *safe* value differs by profile — the framework does this for
 three of its own:
 
 ```rust
+use nest_rs_config::Environment;
+
+/// Two lines, written per crate: the framework's own copies are private, so
+/// there is nothing to import.
+fn dev_profile() -> bool {
+    !matches!(Environment::from_env(), Environment::Production | Environment::Staging)
+}
+
 impl Config for StorageConfig {
     fn defaults() -> Self {
         let d = Self::default();

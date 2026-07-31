@@ -177,9 +177,13 @@ as an edit.
 2. **Exactly two legal suite names.** `integration` — the crate's public
    API in process, no DB/network. `e2e` — needs live infra, gated by the
    nextest filter `binary(e2e)`, **never** `#[ignore]`.
-3. **Inside the suite the module tree mirrors `src/`.** `main.rs` stays
-   thin (`//!` + `mod`). One exception: `nest-rs-testing` organizes by
-   concern.
+3. **Inside the suite the module tree mirrors `src/`.** `main.rs` is the
+   suite *root*, never a test module: `//!` + the `mod` list + the
+   fixtures the siblings share (`crate::…`) — **no `#[test]` function
+   lives there.** A test belongs to the module named for the `src/`
+   concern it covers, so "where is this asserted?" has the same answer as
+   "where is this implemented?". One exception: `nest-rs-testing`
+   organizes by concern.
 4. **Unit tests are untouched** — `#[cfg(test)] mod tests` in the file
    under test.
 5. **The runner is nextest.** Bare `cargo test` is unsupported except

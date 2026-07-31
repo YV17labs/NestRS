@@ -23,7 +23,7 @@ scope. Testable form: **a `*-macros` crate emits only `::std`/`::core`
 paths or paths routed through its surface crate's re-exports
 (`::nest_rs_<x>::<dep>`) — never a bare third-party path** (`::anyhow`,
 `::tracing`, …), which resolves against the *consumer's* extern prelude
-and breaks any app lacking that direct dep. Three sanctioned exceptions,
+and breaks any app lacking that direct dep. Four sanctioned exceptions,
 all deps the use site must already own: **emitted derives**
 (`::serde`/`::validator`/`::schemars` — a derive's own expansion targets
 the call-site prelude, so re-export routing would be false hygiene);
@@ -31,10 +31,23 @@ the call-site prelude, so re-export routing would be false hygiene);
 resource/crud macros (an entity crate owns those by definition); and
 **the HTTP handler surface** — `#[routes]`/`#[crud]` wrap each verb in
 poem's own `#[handler]`, whose expansion targets the call-site prelude,
-so a controller crate owns `poem` (and `nest-rs-interceptors`). The
-proof is compile-time: `nest-rs-macro-hygiene` (workspace,
+so a controller crate owns `poem` (and `nest-rs-interceptors`); and
+**the data-layer surface** — `#[crud]` (both the HTTP and the GraphQL
+one) emits `::nest_rs_seaorm::…` for `CrudService`, `Access`,
+`Creatable`/`Updatable`/`Deletable` and `graphql::parse_v7`, because a
+`#[crud]` use site owns that crate by definition: without it there is no
+`CrudService` to decorate. Same reasoning as the entity-site trio, and
+the reason `nest-rs-graphql-macros` may name a crate that is not its own
+surface — `nest-rs-seaorm` depends on `nest-rs-graphql`, so routing the
+paths back through the surface would be the circular dep the feature
+split exists to avoid.
+
+The proof is compile-time: `nest-rs-macro-hygiene` (workspace,
 `publish = false`) consumes decorators with **zero** third-party deps —
-extend it when adding a decorator.
+extend it when adding a decorator. It deliberately does **not** consume
+`#[crud]`/`#[expose]`: those need a real entity and a real service, so
+their contract is proved by the scaffolded-workspace tests in
+`nest-rs-cli` instead.
 
 **One naming exception, decided:** every host decorator is named for its
 role (`#[controller]` → `controller.rs`, `#[resolver]`, `#[gateway]`,

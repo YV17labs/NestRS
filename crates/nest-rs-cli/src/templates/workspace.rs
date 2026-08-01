@@ -15,22 +15,15 @@ edition = "2024"
 rust-version = "1.96"
 
 [workspace.dependencies]
-anyhow = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1.0"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }
-nest-rs-core = "{{nestrs_version}}"
-nest-rs-config = "{{nestrs_version}}"
-nest-rs-guards = "{{nestrs_version}}"
-nest-rs-http = "{{nestrs_version}}"
-nest-rs-interceptors = "{{nestrs_version}}"
-nest-rs-seaorm = { version = "{{nestrs_version}}", features = ["http"] }
-nest-rs-testing = "{{nestrs_version}}"
-poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
+nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm", "testing"] }
+poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls"] }
 sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
 sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
-validator = { version = "0.20", features = ["derive"] }
 
 # Release: the smallest, fastest single binary — production defaults.
 [profile.release]
@@ -51,11 +44,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-nest-rs-core.workspace = true
-nest-rs-guards.workspace = true
-nest-rs-http.workspace = true
-nest-rs-interceptors.workspace = true
-poem.workspace = true
+nest-rs.workspace = true
 "#;
 
 /// The feature-crate root. Every workspace starts with the app's own `hello`
@@ -76,14 +65,10 @@ publish = false
 
 [dependencies]
 features.workspace = true
-nest-rs-core.workspace = true
-nest-rs-config.workspace = true
-nest-rs-http.workspace = true
+nest-rs.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 
-[dev-dependencies]
-nest-rs-testing.workspace = true
 "#;
 
 pub const APP_LIB: &str = r#"mod module;
@@ -92,8 +77,8 @@ pub use module::{{module}};
 "#;
 
 pub const APP_MAIN: &str = r#"use anyhow::Result;
-use nest_rs_config::Environment;
-use nest_rs_core::App;
+use nest_rs::config::Environment;
+use nest_rs::core::App;
 
 use {{snake}}::{{module}};
 
@@ -113,8 +98,8 @@ async fn main() -> Result<()> {
 /// Composition only — the app's own module name and the feature module it
 /// serves share a snake name, in two different crates (`BlogModule` in
 /// `apps/blog/src/module.rs`, `BlogModule` in `crates/features/src/blog/`).
-pub const APP_MODULE: &str = r#"use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
+pub const APP_MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
 
 use features::{{snake}}::{{http_module}};
 

@@ -12,7 +12,7 @@ pub use module::{{module}};
 pub use service::{{service}};
 "#;
 
-pub const MODULE: &str = r#"use nest_rs_core::module;
+pub const MODULE: &str = r#"use nest_rs::core::module;
 
 use super::service::{{service}};
 
@@ -20,7 +20,7 @@ use super::service::{{service}};
 pub struct {{module}};
 "#;
 
-pub const SERVICE: &str = r#"use nest_rs_core::injectable;
+pub const SERVICE: &str = r#"use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]

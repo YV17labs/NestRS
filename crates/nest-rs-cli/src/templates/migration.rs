@@ -19,7 +19,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-nest-rs-seaorm.workspace = true
+nest-rs.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 tokio.workspace = true
@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let conn = nest_rs_seaorm::connect_from_env().await?;
+    let conn = nest_rs::seaorm::connect_from_env().await?;
     match std::env::args().nth(1).as_deref() {
         Some("up") => Migrator::up(&conn, None).await?,
         Some("down") => {
@@ -75,7 +75,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-nest-rs-seaorm.workspace = true
+nest-rs.workspace = true
 sea-orm.workspace = true
 tokio.workspace = true
 "#;
@@ -92,7 +92,7 @@ use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let conn = nest_rs_seaorm::connect_from_env().await?;
+    let conn = nest_rs::seaorm::connect_from_env().await?;
     conn.ping().await?;
 
     // Insert your fixtures here.

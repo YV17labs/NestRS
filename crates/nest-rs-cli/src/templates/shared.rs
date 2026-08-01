@@ -188,7 +188,7 @@ pub const SMOKE: &str = r#"//! In-process smoke test — boots the feature's own
 //! must stay infrastructure-free. Assert on the composed app in `tests/e2e/`.
 
 use {{smoke_use}};
-use nest_rs_testing::TestApp;
+use nest_rs::testing::TestApp;
 
 #[tokio::test]
 async fn hello_endpoint_greets() {
@@ -214,7 +214,7 @@ pub const E2E: &str = r#"//! End-to-end suite — the tests that need live infra
 //! `nestrs run test unit` excludes it, so the fast suite never needs a
 //! database up.
 //!
-//! Boot the app against a throwaway database with `nest_rs_testing`'s
+//! Boot the app against a throwaway database with `nest_rs::testing`'s
 //! `EphemeralDatabase` (feature `orm`), then drive it through `TestApp` the
 //! same way `tests/integration/main.rs` does without one.
 //!

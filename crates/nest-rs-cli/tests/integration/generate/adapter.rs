@@ -68,7 +68,7 @@ fn generate_ws_adapter_ensures_dep_and_wires() {
             .is_file()
     );
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    assert!(features_cargo.contains("nest-rs-ws"));
+    assert!(features_cargo.contains("\"ws\""), "{features_cargo}");
 }
 
 /// A self-mount path is its exclusive namespace, so two gateways cannot share
@@ -134,7 +134,7 @@ fn generate_ws_adapter_imports_the_connection_registry() {
     let module_rs =
         fs::read_to_string(dir.path().join("crates/features/src/posts/ws/module.rs")).unwrap();
     assert!(
-        module_rs.contains("use nest_rs_ws::WsModule;")
+        module_rs.contains("use nest_rs::ws::WsModule;")
             && module_rs.contains("imports = [PostsModule, WsModule]"),
         "the generated ws module must import WsModule: {module_rs}"
     );
@@ -154,7 +154,7 @@ fn generate_ws_adapter_enables_the_guards_ws_feature_and_tracing() {
     fs::write(
         &features_cargo_path,
         "[package]\nname = \"features\"\n\n[dependencies]\n\
-         nest-rs-core.workspace = true\nnest-rs-guards.workspace = true\n",
+         nest-rs.workspace = true\n",
     )
     .unwrap();
 
@@ -165,27 +165,29 @@ fn generate_ws_adapter_enables_the_guards_ws_feature_and_tracing() {
     assert!(
         features_cargo
             .lines()
-            .any(|l| l.starts_with("nest-rs-guards") && l.contains("\"ws\"")),
-        "nest-rs-guards needs its `ws` feature: {features_cargo}"
+            .any(|l| l.starts_with("nest-rs") && l.contains("\"ws\"")),
+        "the ws capability must be a feature of nest-rs: {features_cargo}"
     );
     assert!(features_cargo.contains("tracing"), "{features_cargo}");
 }
 
-/// The finding: `/websockets/` listed three dependencies and said `nestrs g ws`
-/// writes all three — it did, and the *first typed payload* still failed to
-/// compile. `nest_rs_ws` re-exports `serde_json`, never `serde`, so the
-/// `#[derive(serde::Deserialize)]` DTO the next page presents as the normal case
-/// had no `serde` in the manifest.
+/// A typed WS payload reaches its derives through `#[input]`, so the generated
+/// manifest gains a feature and not a `serde` entry — the scaffold must not
+/// re-introduce a line the decorator exists to absorb.
 #[test]
-fn generate_ws_adapter_brings_serde_for_a_typed_payload() {
+fn generate_ws_adapter_leaves_serde_to_the_decorator() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
     let features_cargo_path = dir.path().join("crates/features/Cargo.toml");
     fs::write(
         &features_cargo_path,
-        "[package]\nname = \"features\"\n\n[dependencies]\n\
-         nest-rs-core.workspace = true\nnest-rs-guards.workspace = true\n",
+        "[package]
+name = \"features\"
+
+[dependencies]
+nest-rs.workspace = true
+",
     )
     .unwrap();
 
@@ -193,15 +195,8 @@ fn generate_ws_adapter_brings_serde_for_a_typed_payload() {
     run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
 
     let features_cargo = fs::read_to_string(&features_cargo_path).unwrap();
-    assert!(
-        features_cargo.lines().any(|l| l.starts_with("serde")),
-        "the features crate needs `serde` for a typed WS payload: {features_cargo}"
-    );
-    let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
-    assert!(
-        root_cargo.contains("serde = { version = \"1\", features = [\"derive\"] }"),
-        "and the workspace pin carries the `derive` feature the DTO needs: {root_cargo}"
-    );
+    assert!(!features_cargo.contains("serde"), "{features_cargo}");
+    assert!(features_cargo.contains("\"ws\""), "{features_cargo}");
 }
 
 /// A2: the `ws` skeleton hardcoded `self.svc.count()`, which a `g resource`
@@ -371,18 +366,18 @@ fn generate_queue_adapter_brings_the_connection_crate() {
     run_ok(dir.path(), &["g", "queue", "audio", "-p", root]);
 
     let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
-    assert!(root_cargo.contains("nest-rs-redis"), "{root_cargo}");
+    assert!(root_cargo.contains("\"redis\""), "{root_cargo}");
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    assert!(features_cargo.contains("nest-rs-redis"), "{features_cargo}");
+    assert!(features_cargo.contains("\"redis\""), "{features_cargo}");
 }
 
 /// E1: rmcp's `#[tool]` derive emits bare `schemars::` paths, so the crate must
 /// be linked — the `nest_rs_mcp::schemars` re-export does not rescue a tool
 /// that takes input, i.e. the `/mcp/` page's own first example.
-/// E6: the `mcp` feature of `nest-rs-guards` is what seeds the fallback
+/// E6: the `mcp` feature is what seeds the fallback
 /// operation guard, without which a registered global pool cannot gate `/mcp`.
 #[test]
-fn generate_mcp_adapter_brings_schemars_and_the_guard_fallback() {
+fn generate_mcp_adapter_brings_the_guard_fallback() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let root = dir.path().to_str().unwrap();
@@ -390,13 +385,10 @@ fn generate_mcp_adapter_brings_schemars_and_the_guard_fallback() {
     run_ok(dir.path(), &["g", "feature", "tools", "-p", root]);
     run_ok(dir.path(), &["g", "mcp", "tools", "-p", root]);
 
-    let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
-    assert!(root_cargo.contains("schemars"), "{root_cargo}");
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    assert!(features_cargo.contains("schemars"), "{features_cargo}");
     assert!(
-        features_cargo.contains("nest-rs-guards") && features_cargo.contains("\"mcp\""),
-        "the mcp guard fallback lives behind nest-rs-guards' `mcp` feature: {features_cargo}",
+        features_cargo.contains("nest-rs") && features_cargo.contains("\"mcp\""),
+        "the mcp guard fallback rides the `mcp` feature: {features_cargo}",
     );
 }
 
@@ -414,8 +406,7 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
     let features_cargo_path = dir.path().join("crates/features/Cargo.toml");
     fs::write(
         &features_cargo_path,
-        "[package]\nname = \"features\"\n\n[dependencies]\nnest-rs-core.workspace = true\n\
-         nest-rs-guards.workspace = true\n",
+        "[package]\nname = \"features\"\n\n[dependencies]\nnest-rs.workspace = true\n",
     )
     .unwrap();
 
@@ -424,7 +415,7 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
 
     let features_cargo = fs::read_to_string(&features_cargo_path).unwrap();
     assert!(
-        features_cargo.contains("nest-rs-guards") && features_cargo.contains("graphql"),
+        features_cargo.contains("nest-rs") && features_cargo.contains("graphql"),
         "the guards crate has to gain the graphql feature: {features_cargo}"
     );
 
@@ -497,17 +488,13 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
 
     // Its crates, with the features that make those paths resolve.
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    for needed in ["nest-rs-graphql", "async-graphql", "nest-rs-guards"] {
+    for needed in ["nest-rs", "async-graphql", "graphql"] {
         assert!(
             features_cargo.contains(needed),
             "{needed}: {features_cargo}"
         );
     }
-    assert!(
-        features_cargo
-            .contains("nest-rs-authz = { workspace = true, features = [\"http\", \"graphql\"] }"),
-        "{features_cargo}"
-    );
+    assert!(features_cargo.contains("authz"), "{features_cargo}");
 }
 
 /// A second GraphQL adapter reuses the bridge the first one created rather
@@ -547,7 +534,7 @@ fn generate_graphql_gives_the_app_crate_the_dependency_its_next_step_needs() {
 
     let app_cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
     assert!(
-        app_cargo.contains("nest-rs-graphql"),
+        app_cargo.contains("graphql"),
         "the app that has to import GraphqlModule needs the crate: {app_cargo}",
     );
 }

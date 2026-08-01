@@ -31,7 +31,7 @@ pub use module::{{tmodule}};
 /// the job to the port service — the access graph fails the boot unless the port
 /// module is already there. Scaffolding the import costs nothing (registration
 /// is idempotent) and removes a boot error from the developer's first edit.
-pub const MODULE: &str = r#"use nest_rs_core::module;
+pub const MODULE: &str = r#"use nest_rs::core::module;
 
 use super::{{handler_mod}}::{{handler}};
 use crate::{{snake}}::{{module}};
@@ -45,7 +45,7 @@ pub struct {{tmodule}};
 
 pub const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
-use nest_rs_http::{controller, routes};
+use nest_rs::http::{controller, routes};
 
 use crate::{{snake}}::{{service}};
 
@@ -74,7 +74,7 @@ impl {{controller}} {
 pub const GRAPHQL_RESOLVER: &str = r#"use std::sync::Arc;
 
 use async_graphql::Result;
-use nest_rs_graphql::resolver;
+use nest_rs::graphql::resolver;
 
 use crate::{{snake}}::{{service}};
 
@@ -105,7 +105,7 @@ impl {{resolver}} {
 /// service, same ability, same rows, one transport over.
 pub const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 
-use nest_rs_graphql::{crud, resolver};
+use nest_rs::graphql::{crud, resolver};
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -136,8 +136,8 @@ impl {{resolver}} {}
 /// connection registry every `WsClient` reads, for the default namespace and for
 /// every `#[gateway(namespace = …)]` marker alike — so the generator writes it
 /// rather than leaving the app to discover it at boot.
-pub const WS_MODULE: &str = r#"use nest_rs_core::module;
-use nest_rs_ws::WsModule;
+pub const WS_MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::ws::WsModule;
 
 use super::{{handler_mod}}::{{handler}};
 use crate::{{snake}}::{{module}};
@@ -151,7 +151,7 @@ pub struct {{tmodule}};
 
 pub const WS_GATEWAY: &str = r#"use std::sync::Arc;
 
-use nest_rs_ws::{WsClient, gateway, messages};
+use nest_rs::ws::{WsClient, gateway, messages};
 
 use crate::{{snake}}::{{service}};
 
@@ -181,8 +181,8 @@ impl {{gateway}} {
 "#;
 
 pub const QUEUE_PROCESSOR: &str = r#"use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_queue::processor;
+use nest_rs::core::injectable;
+use nest_rs::queue::processor;
 
 use crate::{{snake}}::{{{command}}, {{queue_name}}};
 
@@ -210,12 +210,13 @@ impl {{processor}} {
 /// The default payload is a Command (the common case); rename it verb-led to
 /// the real action, or switch to an `…Event` (past tense) when a fact is
 /// published to several consumers.
-pub const QUEUE_COMMAND: &str = r#"use nest_rs_queue::queue;
-use serde::{Deserialize, Serialize};
+pub const QUEUE_COMMAND: &str = r#"use nest_rs::queue::queue;
+use nest_rs::queue::input;
 
 /// Imperative payload for the `{{kebab}}` queue — "do this work", handled by one
 /// processor. Rename it to the action it commands (e.g. `GenerateMediaVariantCommand`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[input]
 pub struct {{command}} {
     pub id: String,
 }
@@ -231,8 +232,8 @@ pub struct {{queue_name}};
 pub const SCHEDULE_TASKS: &str = r#"use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_schedule::scheduled;
+use nest_rs::core::injectable;
+use nest_rs::schedule::scheduled;
 
 use crate::{{snake}}::{{service}};
 
@@ -261,12 +262,16 @@ pub const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //! else the global guard pool (`use_guards_global`), else deny-all. Wire your
 //! app's `McpAbilityBridge` (`features::authz::mcp`) as `dyn McpOperationGuard`
 //! so callers are authenticated and the ambient `Ability` is installed; return
-//! entity rows through `nest_rs_authz::masked_output_ambient` to apply
+//! entity rows through `nest_rs::authz::masked_output_ambient` to apply
 //! field-level masking.
 use std::sync::Arc;
 
-use nest_rs_mcp::mcp;
-use nest_rs_mcp::{CallToolResult, ContentBlock, McpError, ServerHandler, tool, tool_handler, tool_router};
+use nest_rs::mcp::mcp;
+// `#[tool_router]` / `#[tool_handler]` are rmcp's own macros and expand to
+// relative `rmcp::` paths; this import resolves them, so the manifest needs no
+// `rmcp` entry and cannot drift from the major the framework built against.
+use nest_rs::mcp::rmcp;
+use nest_rs::mcp::{CallToolResult, ContentBlock, McpError, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::{{snake}}::{{service}};
 

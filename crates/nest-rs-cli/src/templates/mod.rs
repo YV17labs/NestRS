@@ -53,7 +53,7 @@ pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, St
             "        // `dyn McpOperationGuard` and import AuthzMcpModule (it brings\n",
             "        // `McpDataContext`, which installs the executor + ability per tool call),\n",
             "        // then replace the placeholder with `self.svc.list().await` and mask the\n",
-            "        // rows through `nest_rs_authz::masked_output_ambient`.\n",
+            "        // rows through `nest_rs::authz::masked_output_ambient`.\n",
             "        let _ = &self.svc;",
         ),
         // These three render no `{{op_body}}` over a resource: HTTP and GraphQL

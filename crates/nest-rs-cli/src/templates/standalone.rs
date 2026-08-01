@@ -13,18 +13,12 @@ rust-version = "1.96"
 [workspace]
 
 [dependencies]
-anyhow = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-nest-rs-core = "{{nestrs_version}}"
-nest-rs-config = "{{nestrs_version}}"
-nest-rs-guards = "{{nestrs_version}}"
-nest-rs-http = "{{nestrs_version}}"
-nest-rs-interceptors = "{{nestrs_version}}"
-poem = { version = "3", features = ["tower-compat", "anyhow", "rustls"] }
-validator = { version = "0.20", features = ["derive"] }
+anyhow = "1.0"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
+nest-rs = { version = "{{nestrs_version}}", features = ["http"] }
 
 [dev-dependencies]
-nest-rs-testing = "{{nestrs_version}}"
+nest-rs = { version = "{{nestrs_version}}", features = ["http", "testing"] }
 
 # Release: the smallest, fastest single binary — production defaults.
 [profile.release]
@@ -39,8 +33,8 @@ debug = "line-tables-only"
 "#;
 
 pub const MAIN: &str = r#"use anyhow::Result;
-use nest_rs_config::Environment;
-use nest_rs_core::App;
+use nest_rs::config::Environment;
+use nest_rs::core::App;
 
 use {{snake}}::{{module}};
 
@@ -66,8 +60,8 @@ pub use module::{{module}};
 
 /// The single crate's root module. `service.rs` and `controller.rs` are the
 /// shared [`super::hello`] templates — one starter, both layouts.
-pub const MODULE: &str = r#"use nest_rs_core::module;
-use nest_rs_http::HttpModule;
+pub const MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::http::HttpModule;
 
 use crate::controller::{{controller}};
 use crate::service::{{service}};

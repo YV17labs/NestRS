@@ -52,8 +52,10 @@ fn new_standalone_hello_template() {
 
     let cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
     assert!(cargo.contains("[workspace]"));
-    assert!(cargo.contains("nest-rs-guards"));
-    assert!(cargo.contains("nest-rs-interceptors"));
+    // One entry, capabilities as features — `http` carries guards, pipes and
+    // the layer crates the decorators expand into.
+    assert!(cargo.contains("nest-rs"), "{cargo}");
+    assert!(cargo.contains("\"http\""), "{cargo}");
     assert!(!cargo.contains("nest-rs-opentelemetry"));
     assert!(app.join(".gitignore").is_file());
     assert!(app.join("Justfile").is_file());
@@ -322,22 +324,19 @@ fn the_scaffolded_smoke_test_boots_the_feature_not_the_app_root() {
     assert!(smoke.contains("TestApp::builder()"), "{smoke}");
 }
 
-/// P3 / G15: `validator` is required by every hand-written `Config` (the
-/// `#[config]` derive names `Validate`), and `cargo add validator` resolves to
-/// a major the framework's own does not match — so the failure reads as "you
-/// wrote the impl wrong" rather than "you have two copies of the trait". The
-/// scaffold must pin it.
+/// P3 / G15, inverted: `validator` used to need a pin matching the framework's
+/// own major, because a `#[config]` struct derived `Validate` at the call site
+/// and two copies of the trait in one graph read as "you wrote the impl wrong".
+/// `#[config]` now carries the derive and points it back through the framework,
+/// so the scaffold must **not** write the entry at all — a pin here would put a
+/// second copy back in the graph, which is the defect it was invented to avoid.
 #[test]
-fn the_scaffold_pins_validator_to_the_frameworks_own_major() {
-    let expected = "validator = { version = \"0.20\"";
-
-    let dir = tempfile::tempdir().unwrap();
-    run_ok(dir.path(), &["new", "acme"]);
-    let root_cargo = fs::read_to_string(dir.path().join("acme/Cargo.toml")).unwrap();
-    assert!(root_cargo.contains(expected), "{root_cargo}");
-
-    let solo = tempfile::tempdir().unwrap();
-    run_ok(solo.path(), &["new", "solo", "--standalone"]);
-    let solo_cargo = fs::read_to_string(solo.path().join("solo/Cargo.toml")).unwrap();
-    assert!(solo_cargo.contains(expected), "{solo_cargo}");
+fn the_scaffold_leaves_validator_to_the_framework() {
+    for args in [vec!["new", "acme"], vec!["new", "solo", "--standalone"]] {
+        let name = args[1];
+        let dir = tempfile::tempdir().unwrap();
+        run_ok(dir.path(), &args);
+        let cargo = fs::read_to_string(dir.path().join(name).join("Cargo.toml")).unwrap();
+        assert!(!cargo.contains("validator"), "{cargo}");
+    }
 }

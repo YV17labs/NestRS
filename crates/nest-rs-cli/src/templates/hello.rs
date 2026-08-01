@@ -14,7 +14,7 @@
 //! directly under `src/` (see [`super::standalone`]).
 
 /// The greeting. Identical in both layouts — a provider with one method.
-pub const SERVICE: &str = r#"use nest_rs_core::injectable;
+pub const SERVICE: &str = r#"use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]
@@ -32,7 +32,7 @@ impl {{service}} {
 /// `crate::hello::HelloService` in a feature — so one template serves both.
 pub const CONTROLLER: &str = r#"use std::sync::Arc;
 
-use nest_rs_http::{controller, routes};
+use nest_rs::http::{controller, routes};
 
 use {{service_use}};
 
@@ -70,7 +70,7 @@ pub use module::{{module}};
 pub use service::{{service}};
 "#;
 
-pub const FEATURE_MODULE: &str = r#"use nest_rs_core::module;
+pub const FEATURE_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::service::{{service}};
 
@@ -85,7 +85,7 @@ pub use controller::{{controller}};
 pub use module::{{http_module}};
 "#;
 
-pub const FEATURE_HTTP_MODULE: &str = r#"use nest_rs_core::module;
+pub const FEATURE_HTTP_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::controller::{{controller}};
 use crate::{{snake}}::{{module}};

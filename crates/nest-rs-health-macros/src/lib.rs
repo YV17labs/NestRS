@@ -50,5 +50,5 @@ mod indicators;
 /// ```
 #[proc_macro_attribute]
 pub fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
-    indicators::indicators(args, input)
+    ::nest_rs_codegen::reroot(indicators::indicators(args, input).into()).into()
 }

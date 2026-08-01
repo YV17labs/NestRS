@@ -18,7 +18,6 @@
 use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigService, Result, config};
-use validator::Validate;
 
 /// Default socket-lifetime ceiling: 4 hours. Long enough not to disrupt a normal
 /// interactive session, short enough to bound how long a revoked or expired
@@ -34,7 +33,7 @@ pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// WebSocket transport options resolved at boot (namespace `ws`). See the
 /// module docs for why the socket-lifetime ceiling is a security control.
 #[config(namespace = "ws")]
-#[derive(Clone, Debug, Validate)]
+#[derive(Clone, Debug)]
 pub struct WsConfig {
     /// Maximum lifetime of a single WebSocket connection. When it elapses the
     /// server closes the socket through the normal disconnect path, so the peer

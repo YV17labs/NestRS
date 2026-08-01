@@ -27,7 +27,7 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
         } else if is_datetime_tz(&field.ty) {
             decls.push(quote! { #complexity pub #name: ::std::string::String });
             inits.push(quote! {
-                #name: ::chrono::DateTime::<::chrono::FixedOffset>::to_rfc3339(&model.#name)
+                #name: ::nest_rs_resource::chrono::DateTime::<::nest_rs_resource::chrono::FixedOffset>::to_rfc3339(&model.#name)
             });
         } else {
             let ty = &field.ty;
@@ -45,14 +45,20 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
     let graphql_derives = graphql_object_derive(model, "SimpleObject");
 
     quote! {
+        // Derives routed through the surface crate, each with its `crate = `
+        // override: a derive expands against the *call site's* prelude, so
+        // without the override the generated model would oblige the entity
+        // crate to declare `serde` and `schemars` for code it never wrote.
         #[derive(
             ::core::fmt::Debug,
             ::core::clone::Clone,
-            ::serde::Serialize,
-            ::serde::Deserialize,
+            ::nest_rs_resource::serde::Serialize,
+            ::nest_rs_resource::serde::Deserialize,
             #graphql_derives
-            ::schemars::JsonSchema,
+            ::nest_rs_resource::schemars::JsonSchema,
         )]
+        #[serde(crate = "::nest_rs_resource::serde")]
+        #[schemars(crate = "::nest_rs_resource::schemars")]
         #complex
         pub struct #output {
             #(#decls),*

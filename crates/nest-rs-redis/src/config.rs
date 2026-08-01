@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Result, config};
-use validator::Validate;
 
 const DEFAULT_URL: &str = "redis://127.0.0.1/";
 
@@ -19,7 +18,7 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// pinned through [`QueueModule::for_root`](crate::QueueModule::for_root). The
 /// URL is redacted in `Debug` output — it may embed credentials.
 #[config(namespace = "queue")]
-#[derive(Clone, Validate)]
+#[derive(Clone)]
 pub struct QueueConfig {
     /// The Redis connection URL (e.g. `redis://127.0.0.1/`).
     pub url: String,

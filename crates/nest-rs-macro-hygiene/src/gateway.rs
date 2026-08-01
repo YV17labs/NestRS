@@ -2,9 +2,9 @@
 //! emission (`::nest_rs_ws::tracing`, part of the M1 regression) and the
 //! message dispatch table.
 
-use nest_rs_core::{Layer, injectable};
-use nest_rs_guards::Guard;
-use nest_rs_ws::{gateway, messages};
+use nest_rs::core::{Layer, injectable};
+use nest_rs::guards::Guard;
+use nest_rs::ws::{gateway, messages};
 
 /// No-op guard: every `check_*` inherits the trait's `Ok(())` default.
 #[injectable]

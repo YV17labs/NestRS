@@ -27,3 +27,8 @@ pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 /// injectable [`Config`]. Re-exported from `nest-rs-config-macros` so apps write
 /// `nest_rs_config::config`.
 pub use nest_rs_config_macros::config;
+
+// `#[config]` injects the `Validate` derive and its `crate = ` override, so a
+// `#[config]` struct needs no `validator` line and no version to align.
+#[doc(hidden)]
+pub use validator;

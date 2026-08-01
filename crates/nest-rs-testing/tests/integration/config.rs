@@ -8,10 +8,9 @@ use std::sync::Arc;
 use nest_rs_config::{Config, ConfigModule, ConfigService, MapSource, config};
 use nest_rs_core::{ContainerBuilder, DynamicModule, injectable, module};
 use nest_rs_testing::TestApp;
-use validator::Validate;
 
 #[config(namespace = "demoapp")]
-#[derive(Clone, Debug, Validate)]
+#[derive(Clone, Debug)]
 struct DemoConfig {
     url: String,
     #[validate(range(min = 1))]

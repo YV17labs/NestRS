@@ -101,7 +101,7 @@ mod resolver;
 /// ```
 #[proc_macro_attribute]
 pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
-    resolver::resolver(args, input)
+    ::nest_rs_codegen::reroot(resolver::resolver(args, input).into()).into()
 }
 
 /// Generate a resolver's standard CRUD operations on a `#[resolver]`-shaped
@@ -143,7 +143,7 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
-    crud::entry(args, input)
+    ::nest_rs_codegen::reroot(crud::entry(args, input).into()).into()
 }
 
 /// Turn a data-layer impl block into batched DataLoaders — one per method.
@@ -194,5 +194,5 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
-    dataloader::dataloader(args, input)
+    ::nest_rs_codegen::reroot(dataloader::dataloader(args, input).into()).into()
 }

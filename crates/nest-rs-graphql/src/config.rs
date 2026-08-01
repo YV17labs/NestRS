@@ -7,7 +7,6 @@
 use std::path::PathBuf;
 
 use nest_rs_config::{Config, ConfigService, Result, config};
-use validator::Validate;
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
@@ -15,7 +14,7 @@ pub(crate) const DEFAULT_PATH: &str = "/graphql";
 /// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root). Every field
 /// defaults production-safe.
 #[config(namespace = "graphql")]
-#[derive(Clone, Debug, Validate)]
+#[derive(Clone, Debug)]
 pub struct GraphqlConfig {
     /// Endpoint path. Default `/graphql`.
     pub path: String,
@@ -92,6 +91,7 @@ impl Config for GraphqlConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use validator::Validate;
 
     #[test]
     fn defaults_are_production_safe() {

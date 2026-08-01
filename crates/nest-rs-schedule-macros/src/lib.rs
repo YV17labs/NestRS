@@ -49,5 +49,5 @@ mod scheduled;
 /// ```
 #[proc_macro_attribute]
 pub fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
-    scheduled::scheduled(args, input)
+    ::nest_rs_codegen::reroot(scheduled::scheduled(args, input).into()).into()
 }

@@ -1,5 +1,4 @@
 use nest_rs_config::{Config, ConfigError, ConfigService, Environment, config};
-use validator::Validate;
 
 /// S3-compatible object storage configuration, read from the
 /// framework-namespaced `NESTRS_STORAGE__*` keys.
@@ -9,7 +8,7 @@ use validator::Validate;
 /// container). For real AWS S3, leave [`endpoint`](Self::endpoint) empty and
 /// set [`force_path_style`](Self::force_path_style) to `false`.
 #[config(namespace = "storage")]
-#[derive(Clone, Validate)]
+#[derive(Clone)]
 pub struct StorageConfig {
     /// S3 endpoint URL (e.g. `http://rustfs:9000`). Empty ⇒ real AWS S3.
     pub endpoint: String,

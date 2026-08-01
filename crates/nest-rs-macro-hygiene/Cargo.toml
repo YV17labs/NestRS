@@ -6,21 +6,26 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Compile-time witness that nest-rs decorators emit only ::std/::core paths or surface-crate re-exports: this crate consumes them with zero third-party dependencies."
+description = "Compile-time witness that nest-rs decorators emit only ::std/::core paths or paths rooted at the umbrella: this crate consumes them through a single dependency, with no third-party crate."
 # Internal proof crate — never published; the proof is that it compiles.
 publish = false
 
 [dependencies]
-# Surface crates ONLY. Adding any third-party dependency here (anyhow, serde,
-# tracing, tokio, …) would defeat the crate's purpose: a decorator emitting a
-# bare third-party path must fail THIS crate's compile.
-nest-rs-core.workspace = true
-nest-rs-events.workspace = true
-# `ws`: `#[messages]` names `GuardAsWsMessageCheck`, gated behind that feature
-# — part of the documented consumer contract for WS gateways.
-nest-rs-guards = { workspace = true, features = ["ws"] }
-nest-rs-schedule.workspace = true
-nest-rs-ws.workspace = true
+# ONE dependency, and it must stay one. This crate is the witness named by
+# `CLAUDE.md`'s *The umbrella is the front door*: if a decorator's expansion
+# ever needs a second line here — a sibling `nest-rs-*` or any third-party
+# crate — the rule is broken and this crate stops compiling. That failure is
+# the point.
+#
+# The features are exactly the capabilities exercised below. A capability that
+# needs a satellite the developer would otherwise have to name is a hole in the
+# umbrella's feature matrix, and it surfaces here before it reaches a user.
+nest-rs = { path = "../nest-rs", default-features = false, features = [
+    "events",
+    "mcp",
+    "schedule",
+    "ws",
+] }
 
 [lints]
 workspace = true

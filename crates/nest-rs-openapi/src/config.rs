@@ -4,13 +4,12 @@
 use std::path::PathBuf;
 
 use nest_rs_config::{Config, ConfigService, Environment, Result, config};
-use validator::Validate;
 
 /// The OpenAPI document's `info` block plus the master enable switch, settable
 /// via `NESTRS_OPENAPI__*` or pinned through
 /// [`OpenApiModule::for_root`](crate::OpenApiModule::for_root).
 #[config(namespace = "openapi")]
-#[derive(Clone, Debug, Validate)]
+#[derive(Clone, Debug)]
 pub struct OpenApiConfig {
     /// Master switch for the documentation endpoints.
     ///

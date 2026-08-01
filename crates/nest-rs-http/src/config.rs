@@ -1,5 +1,4 @@
 use nest_rs_config::{Config, ConfigService, Result, config};
-use validator::Validate;
 
 use crate::cors::CorsConfig;
 use crate::raw_body::RawBody;
@@ -17,7 +16,7 @@ const DEFAULT_PORT: u16 = 3000;
 /// and every other `NESTRS_HTTP__*` key live. See [`Config`] for the full
 /// precedence chain.
 #[config(namespace = "http")]
-#[derive(Clone, Debug, Validate)]
+#[derive(Clone, Debug)]
 pub struct HttpConfig {
     /// Bind address; defaults to `0.0.0.0` (all interfaces).
     pub host: String,

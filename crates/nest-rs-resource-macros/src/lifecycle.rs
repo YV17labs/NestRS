@@ -34,21 +34,21 @@ fn emit_soft_deletable() -> TokenStream2 {
 fn emit_timestamps() -> TokenStream2 {
     quote! {
         #[::nest_rs_resource::async_trait]
-        impl ::sea_orm::ActiveModelBehavior for ActiveModel {
+        impl ::nest_rs_resource::sea_orm::ActiveModelBehavior for ActiveModel {
             async fn before_save<C>(
                 mut self,
                 _db: &C,
                 insert: bool,
-            ) -> ::core::result::Result<Self, ::sea_orm::DbErr>
+            ) -> ::core::result::Result<Self, ::nest_rs_resource::sea_orm::DbErr>
             where
-                C: ::sea_orm::ConnectionTrait,
+                C: ::nest_rs_resource::sea_orm::ConnectionTrait,
             {
-                let now: ::sea_orm::prelude::DateTimeWithTimeZone =
-                    ::chrono::Utc::now().fixed_offset();
+                let now: ::nest_rs_resource::sea_orm::prelude::DateTimeWithTimeZone =
+                    ::nest_rs_resource::chrono::Utc::now().fixed_offset();
                 if insert {
-                    self.created_at = ::sea_orm::ActiveValue::Set(now);
+                    self.created_at = ::nest_rs_resource::sea_orm::ActiveValue::Set(now);
                 }
-                self.updated_at = ::sea_orm::ActiveValue::Set(now);
+                self.updated_at = ::nest_rs_resource::sea_orm::ActiveValue::Set(now);
                 ::core::result::Result::Ok(self)
             }
         }

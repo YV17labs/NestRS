@@ -1,12 +1,11 @@
 //! [`ThrottlerConfig`] — rate-limit settings populated from `NESTRS_THROTTLER__*`.
 
 use nest_rs_config::{Config, ConfigService, Result, config};
-use validator::Validate;
 
 /// Rate-limit settings, settable via `NESTRS_THROTTLER__*` or pinned through
 /// [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root).
 #[config(namespace = "throttler")]
-#[derive(Clone, Debug, Default, Validate)]
+#[derive(Clone, Debug, Default)]
 pub struct ThrottlerConfig {
     /// Requests allowed per window. Unset ⇒ module default (60).
     pub limit: Option<u32>,

@@ -34,6 +34,7 @@ pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb};
 pub use cors::CorsConfig;
 pub use endpoint::{EdgePosture, HttpEndpointMeta};
 pub use module::{HttpModule, HttpSetup};
+pub use nest_rs_core::input;
 pub use nest_rs_core::{current_body_limit, current_request_scope, with_request_scope};
 pub use pipe::{IntoInner, Piped, Valid};
 pub use problem::{ProblemDetails, normalize_error_response};
@@ -59,9 +60,16 @@ pub use shaper::{MaskProbe, MaskProbedEndpoint, mask_probed, shaped};
 
 pub use poem;
 pub use schemars;
+// `#[input]` carries the DTO derives so the developer does not; routing them
+// through here is what keeps `serde` / `validator` / `schemars` out of their
+// manifest. Plumbing, not curated surface.
+#[doc(hidden)]
+pub use serde;
+#[doc(hidden)]
+pub use validator;
 
 pub use async_trait::async_trait;
 
 pub use nest_rs_http_macros::{
-    controller, crud, http_code, input, interceptor, redirect, response_header, routes,
+    controller, crud, http_code, interceptor, redirect, response_header, routes,
 };

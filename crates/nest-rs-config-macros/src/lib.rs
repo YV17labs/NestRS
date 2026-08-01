@@ -7,15 +7,10 @@ mod config;
 
 /// Mark a struct as a namespaced configuration.
 ///
-/// The struct must derive `serde::Deserialize` and `validator::Validate`. The
-/// macro emits **only** `impl ::nest_rs_config::Namespaced` (the `const
-/// NAMESPACE = <arg>`); you write `impl Config` (`from_env`) yourself — the
-/// namespace const is the single shared piece, so the dual-path config rule
-/// (env `NESTRS_<NAMESPACE>__*` *and* the pinned struct) stays the user's.
 ///
 /// ```ignore
 /// #[config(namespace = "database")]
-/// #[derive(Clone, Debug, serde::Deserialize, validator::Validate)]
+/// #[derive(Clone, Debug, serde::Deserialize)]
 /// pub struct DatabaseConfig {
 ///     pub url: String,
 ///     #[validate(range(min = 1))]
@@ -26,7 +21,6 @@ mod config;
 /// # Expands to
 ///
 /// ```ignore
-/// // the struct, unchanged, plus:
 /// impl ::nest_rs_config::Namespaced for DatabaseConfig {
 ///     const NAMESPACE: &'static str = "database";
 /// }
@@ -34,7 +28,11 @@ mod config;
 ///
 /// Must sit **above** the derives so it sees them intact. `namespace` must be
 /// a non-empty lowercase string.
+/// Carries the `Validate` derive itself, pointed back at the framework's own
+/// copy, so a `#[config]` struct declares no `validator` and keeps no version
+/// aligned. `#[config(namespace = "…", validate = "manual")]` suppresses it for
+/// a config that validates across fields and writes `impl Validate` by hand.
 #[proc_macro_attribute]
 pub fn config(args: TokenStream, input: TokenStream) -> TokenStream {
-    config::config(args, input)
+    ::nest_rs_codegen::reroot(config::config(args, input).into()).into()
 }

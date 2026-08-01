@@ -64,7 +64,7 @@ mod queue;
 /// ```
 #[proc_macro_attribute]
 pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
-    processor::processor(args, input)
+    ::nest_rs_codegen::reroot(processor::processor(args, input).into()).into()
 }
 
 /// Stamp a unit struct with a compile-time queue identity — its wire name and
@@ -90,5 +90,5 @@ pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
-    queue::queue(args, input)
+    ::nest_rs_codegen::reroot(queue::queue(args, input).into()).into()
 }

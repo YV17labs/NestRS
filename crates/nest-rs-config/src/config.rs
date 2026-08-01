@@ -156,6 +156,85 @@ mod tests {
         });
     }
 
+    /// One `port` config per namespace — the tier tests below each publish a
+    /// process-env name, and `load_cascade`'s set-if-absent write plus the
+    /// `PUBLISHED` set are process-global, so no two tests may share a name.
+    macro_rules! port_config {
+        ($ty:ident, $ns:literal) => {
+            #[derive(Clone, Validate)]
+            struct $ty {
+                port: u16,
+            }
+            impl Default for $ty {
+                fn default() -> Self {
+                    Self { port: 3000 }
+                }
+            }
+            impl Namespaced for $ty {
+                const NAMESPACE: &'static str = $ns;
+            }
+            impl Config for $ty {
+                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+                    Ok(Self {
+                        port: env.parse("PORT")?.unwrap_or(base.port),
+                    })
+                }
+            }
+        };
+    }
+
+    port_config!(PinnedVsFileCfg, "pinfile");
+    port_config!(PinnedVsDeployCfg, "pindeploy");
+
+    /// The precedence table `/configuration/` publishes — `real env > pinned in
+    /// code > .env cascade > defaults` — asserted end to end through the public
+    /// `resolve`, not at the `deployment_env_var` seam underneath it.
+    ///
+    /// It is the tier a reader is most likely to get backwards, because the
+    /// prose beside the table describes a pin as "the base the environment
+    /// overlays": true of the *real* environment, false of a committed `.env`.
+    /// The scaffolded shape is reproduced exactly — `Environment::init` merges
+    /// the cascade into `std::env` before anything resolves.
+    #[test]
+    fn a_committed_dotenv_file_loses_to_a_for_root_pin() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "NESTRS_PINFILE__PORT=3555")?;
+            crate::dotenv::load_cascade(std::path::Path::new("."), crate::Environment::Development);
+
+            assert_eq!(
+                PinnedVsFileCfg::load().expect("loads unpinned").port,
+                3555,
+                "with nothing pinned the cascade still outranks the in-code default",
+            );
+            assert_eq!(
+                PinnedVsFileCfg::resolve(Some(PinnedVsFileCfg { port: 8080 }))
+                    .expect("loads pinned")
+                    .port,
+                8080,
+                "a `.env` committed beside the code must not silently undo a `for_root` pin",
+            );
+            Ok(())
+        });
+    }
+
+    /// …and the tier above it: a variable the deployment actually exports wins,
+    /// which is the half the prose gets right.
+    #[test]
+    fn a_real_deployment_variable_outranks_a_for_root_pin() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_PINDEPLOY__PORT", "3555");
+
+            assert_eq!(
+                PinnedVsDeployCfg::resolve(Some(PinnedVsDeployCfg { port: 8080 }))
+                    .expect("loads pinned")
+                    .port,
+                3555,
+                "the deployment is the last word — it is the tier the code cannot see",
+            );
+            Ok(())
+        });
+    }
+
     #[test]
     fn load_validates_on_the_way_in() {
         figment::Jail::expect_with(|jail| {

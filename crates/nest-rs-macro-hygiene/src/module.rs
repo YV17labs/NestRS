@@ -1,11 +1,12 @@
 //! `#[module]` wiring every witness provider — the one DI module of the crate.
 
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use crate::gateway::{HygieneGateway, HygieneWsGuard};
 use crate::lifecycle::HygieneLifecycle;
 use crate::listener::HygieneListener;
 use crate::tasks::HygieneTasks;
+use crate::tool::HygieneTool;
 
 /// Root module for the witness providers.
 #[module(providers = [
@@ -14,5 +15,6 @@ use crate::tasks::HygieneTasks;
     HygieneLifecycle,
     HygieneListener,
     HygieneTasks,
+    HygieneTool,
 ])]
 pub struct MacroHygieneModule;

@@ -1,6 +1,6 @@
-use nest_rs_http::ProblemDetails;
-use nest_rs_queue::QueueError;
-use nest_rs_storage::StorageError;
+use nest_rs::http::ProblemDetails;
+use nest_rs::queue::QueueError;
+use nest_rs::storage::StorageError;
 use poem::error::ResponseError;
 use poem::http::StatusCode;
 use poem::{IntoResponse, Response};
@@ -30,7 +30,7 @@ impl ResponseError for AudioError {
 mod tests {
     use std::error::Error as _;
 
-    use nest_rs_queue::QueueError;
+    use nest_rs::queue::QueueError;
 
     use super::AudioError;
 

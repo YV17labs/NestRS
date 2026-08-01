@@ -1,6 +1,6 @@
 use features::authn::AuthnModule;
-use nest_rs_core::module;
-use nest_rs_ws::WsModule;
+use nest_rs::core::module;
+use nest_rs::ws::WsModule;
 
 use crate::chat::gateway::ChatGateway;
 use crate::chat::guard::ModeratedGuard;
@@ -13,8 +13,8 @@ pub struct ChatModule;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_authn::{JwtOptions, JwtService};
-    use nest_rs_core::{Container, Module};
+    use nest_rs::authn::{JwtOptions, JwtService};
+    use nest_rs::core::{Container, Module};
     use std::sync::Arc;
 
     #[test]

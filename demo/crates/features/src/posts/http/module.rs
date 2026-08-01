@@ -1,4 +1,4 @@
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use super::controller::PostsController;
 use super::exception_filter::PostProblemFilter;

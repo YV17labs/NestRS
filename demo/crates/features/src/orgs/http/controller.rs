@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nest_rs_http::{controller, crud};
+use nest_rs::http::{controller, crud};
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;

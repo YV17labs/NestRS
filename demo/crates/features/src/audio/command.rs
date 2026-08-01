@@ -1,4 +1,4 @@
-use nest_rs_queue::{QueueName, queue};
+use nest_rs::queue::{QueueName, queue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

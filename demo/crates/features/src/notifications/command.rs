@@ -1,4 +1,4 @@
-use nest_rs_queue::queue;
+use nest_rs::queue::queue;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

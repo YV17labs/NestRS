@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use nest_rs_authz::{AbilityBuilder, Action, with_ability};
-use nest_rs_seaorm::{Executor, Repo, with_executor};
+use nest_rs::authz::{AbilityBuilder, Action, with_ability};
+use nest_rs::seaorm::{Executor, Repo, with_executor};
 use poem::http::{StatusCode, header};
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
 use serde_json::json;

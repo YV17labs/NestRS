@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use nest_rs_core::injectable;
+use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]

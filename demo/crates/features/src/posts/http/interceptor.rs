@@ -1,6 +1,6 @@
-use nest_rs_core::{Layer, injectable};
-use nest_rs_http::async_trait;
-use nest_rs_interceptors::{Interceptor, Next};
+use nest_rs::core::{Layer, injectable};
+use nest_rs::http::async_trait;
+use nest_rs::interceptors::{Interceptor, Next};
 use poem::{Request, Response, Result};
 
 use crate::Claims;

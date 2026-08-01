@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
-use nest_rs_core::injectable;
-use nest_rs_queue::JobProducerExt;
-use nest_rs_redis::QueueConnection;
-use nest_rs_storage::Storage;
+use nest_rs::core::injectable;
+use nest_rs::queue::JobProducerExt;
+use nest_rs::redis::QueueConnection;
+use nest_rs::storage::Storage;
 use uuid::Uuid;
 
 use super::command::{AudioQueue, TranscodeCommand};

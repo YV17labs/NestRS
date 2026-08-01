@@ -1,5 +1,5 @@
-use nest_rs_core::injectable;
-use nest_rs_seaorm::{CrudService, Repo, ServiceError};
+use nest_rs::core::injectable;
+use nest_rs::seaorm::{CrudService, Repo, ServiceError};
 use sea_orm::Set;
 use uuid::Uuid;
 

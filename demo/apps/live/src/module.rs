@@ -1,8 +1,8 @@
-use nest_rs_config::ConfigModule;
-use nest_rs_core::module;
-use nest_rs_health::HealthModule;
-use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_seaorm::DatabaseModule;
+use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
+use nest_rs::health::HealthModule;
+use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::seaorm::DatabaseModule;
 
 use crate::chat::ChatModule as ChatFeatureModule;
 use crate::notify::NotifyModule;

@@ -1,11 +1,13 @@
-use nest_rs_authn::RegisteredClient;
-use nest_rs_config::{Config, ConfigError, ConfigService, config};
+use nest_rs::authn::RegisteredClient;
+use nest_rs::config::{Config, ConfigError, ConfigService, config};
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
 
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
-#[config(namespace = "issuer")]
+// Cross-field rules (a client id must be unique across the list), so this
+// one writes `impl Validate` by hand and opts out of the derive.
+#[config(namespace = "issuer", validate = "manual")]
 #[derive(Clone)]
 pub struct IssuerConfig {
     pub clients: Vec<RegisteredClient<Uuid>>,
@@ -36,7 +38,7 @@ impl Validate for IssuerConfig {
 }
 
 impl Config for IssuerConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
         let clients = match env.get("CLIENTS") {
             Some(raw) => serde_json::from_str(&raw)
                 .map_err(|e| ConfigError::parse(env.var_name("CLIENTS"), e.to_string()))?,

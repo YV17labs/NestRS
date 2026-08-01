@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use nest_rs_authz::{Action, masked_reply};
-use nest_rs_seaorm::{CrudService, ServiceError};
-use nest_rs_ws::{gateway, messages};
+use nest_rs::authz::{Action, masked_reply};
+use nest_rs::seaorm::{CrudService, ServiceError};
+use nest_rs::ws::{gateway, messages};
 use serde_json::Value;
 
 use crate::authn::AuthnGuard;

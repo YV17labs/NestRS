@@ -1,7 +1,7 @@
 use async_graphql::Context;
-use nest_rs_core::{Layer, injectable};
-use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::async_trait;
+use nest_rs::core::{Layer, injectable};
+use nest_rs::guards::{Denial, Guard};
+use nest_rs::http::async_trait;
 use poem::Request;
 use uuid::Uuid;
 

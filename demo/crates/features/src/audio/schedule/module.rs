@@ -1,5 +1,5 @@
-use nest_rs_config::ConfigModule;
-use nest_rs_core::module;
+use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
 
 use super::tasks::AudioTasks;
 use crate::audio::{AudioConfig, AudioModule};

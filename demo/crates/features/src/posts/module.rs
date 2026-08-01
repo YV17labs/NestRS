@@ -1,5 +1,5 @@
-use nest_rs_core::module;
-use nest_rs_events::EventsModule;
+use nest_rs::core::module;
+use nest_rs::events::EventsModule;
 
 use super::guard::PostAuthorGuard;
 use super::service::PostsService;

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use nest_rs_authn::{
+use nest_rs::authn::{
     AuthError, Authorization, JwtService, TokenError, authenticate_against_registry,
 };
-use nest_rs_core::injectable;
-use nest_rs_social::{SocialProfile, SocialRegistry};
+use nest_rs::core::injectable;
+use nest_rs::social::{SocialProfile, SocialRegistry};
 use uuid::Uuid;
 
 use super::config::IssuerConfig;
@@ -20,9 +20,9 @@ pub struct Caller {
     pub roles: Vec<Role>,
 }
 
-pub type AuthenticatedClient = nest_rs_authn::AuthenticatedClient<Uuid>;
+pub type AuthenticatedClient = nest_rs::authn::AuthenticatedClient<Uuid>;
 
-impl nest_rs_authn::PrincipalIdentity for Caller {
+impl nest_rs::authn::PrincipalIdentity for Caller {
     fn actor_id(&self) -> Option<String> {
         Some(self.user_id.to_string())
     }
@@ -203,7 +203,7 @@ fn token_error_from_auth(err: AuthError) -> TokenError {
 mod tests {
     use super::*;
 
-    use nest_rs_authn::{JwtOptions, JwtService};
+    use nest_rs::authn::{JwtOptions, JwtService};
     use std::time::Duration;
 
     fn jwt_with_ttl(ttl: Duration) -> JwtService {
@@ -328,8 +328,8 @@ mod tests {
         assert_eq!(claims.org_id, org);
     }
 
-    use nest_rs_authn::RegisteredClient;
-    use nest_rs_social::SocialRegistry;
+    use nest_rs::authn::RegisteredClient;
+    use nest_rs::social::SocialRegistry;
     use sea_orm::DatabaseConnection;
 
     use crate::users::UsersService;

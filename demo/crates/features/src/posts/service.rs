@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use nest_rs_core::injectable;
-use nest_rs_events::EventBus;
-use nest_rs_seaorm::{
+use nest_rs::core::injectable;
+use nest_rs::events::EventBus;
+use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
 };
 use sea_orm::IntoActiveModel;

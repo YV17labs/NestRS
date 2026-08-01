@@ -1,6 +1,6 @@
-use nest_rs_core::module;
-use nest_rs_graphql::{GraphqlBatchContext, GraphqlOperationGuard};
-use nest_rs_seaorm::graphql::LoaderScope;
+use nest_rs::core::module;
+use nest_rs::graphql::{GraphqlBatchContext, GraphqlOperationGuard};
+use nest_rs::seaorm::graphql::LoaderScope;
 
 use super::bridge::AppGraphqlGuard;
 use super::guard::GraphqlAuthnGuard;
@@ -17,4 +17,4 @@ use crate::authz::http::AuthzHttpModule;
 )]
 pub struct AuthzGraphqlModule;
 
-nest_rs_graphql::forward_principal!(Claims, GraphqlAuthnGuard);
+nest_rs::graphql::forward_principal!(Claims, GraphqlAuthnGuard);

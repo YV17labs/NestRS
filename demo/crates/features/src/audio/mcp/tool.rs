@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use nest_rs_mcp::mcp;
-use nest_rs_mcp::{
+use nest_rs::mcp::mcp;
+use nest_rs::mcp::{
     CallToolResult, ContentBlock, McpError, Parameters, ServerHandler, tool, tool_handler,
     tool_router,
 };
@@ -52,7 +52,7 @@ impl ServerHandler for AudioTool {}
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs_core::Discoverable;
+    use nest_rs::core::Discoverable;
 
     use super::AudioTool;
     use crate::audio::AudioService;

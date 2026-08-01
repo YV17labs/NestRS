@@ -10,20 +10,8 @@ publish = false
 description = "The product's feature library — vertical slices as port + adapter modules (entities, services, controllers, resolvers, gateways). Each feature exposes a core module plus per-transport edge modules; apps compose by listing the edges they serve."
 
 [dependencies]
-nest-rs-core.workspace = true
+nest-rs.workspace = true
 # `#[processor]` (audio queue) emits absolute `::nest_rs_worker::*` paths.
-nest-rs-worker.workspace = true
-nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "ws", "mcp"] }
-nest-rs-authn.workspace = true
-nest-rs-authz = { workspace = true, features = ["http", "graphql", "mcp"] }
-nest-rs-config.workspace = true
-nest-rs-events.workspace = true
-nest-rs-exception-filters.workspace = true
-nest-rs-graphql.workspace = true
-nest-rs-guards = { workspace = true, features = ["graphql"] }
-nest-rs-http.workspace = true
-nest-rs-interceptors.workspace = true
-nest-rs-mcp.workspace = true
 # The rmcp `#[tool_router]`/`#[tool_handler]`/`#[tool]` macros (re-exported by
 # nest-rs-mcp) expand to crate-relative `rmcp::` paths, which resolve only
 # against an extern crate literally named `rmcp` in this crate's prelude — the
@@ -32,15 +20,6 @@ nest-rs-mcp.workspace = true
 # same `rmcp` version the workspace (and nest-rs-mcp) resolve, never a divergent
 # one, or the macro-expanded types would clash with the framework's.
 rmcp.workspace = true
-nest-rs-pipes.workspace = true
-nest-rs-queue.workspace = true
-nest-rs-redis.workspace = true
-nest-rs-schedule.workspace = true
-nest-rs-social.workspace = true
-nest-rs-storage.workspace = true
-nest-rs-throttler.workspace = true
-nest-rs-ws.workspace = true
-nest-rs-resource = { workspace = true, features = ["graphql"] }
 async-graphql.workspace = true
 async-trait.workspace = true
 # The audio streaming download proxies object storage's chunk stream
@@ -67,17 +46,12 @@ tracing.workspace = true
 test-support = []
 
 [dev-dependencies]
+nest-rs.workspace = true
 # Enables `features::testing` for this crate's own e2e suite.
 features = { path = ".", features = ["test-support"] }
 tokio.workspace = true
-nest-rs-http.workspace = true
-nest-rs-testing = { workspace = true, features = ["orm"] }
-nest-rs-authn.workspace = true
-nest-rs-social.workspace = true
 poem = { workspace = true, features = ["test"] }
 serde_json.workspace = true
-nest-rs-authz.workspace = true
-nest-rs-seaorm.workspace = true
 async-graphql.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true

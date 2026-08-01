@@ -1,6 +1,6 @@
-use nest_rs_core::module;
-use nest_rs_mcp::{McpOperationGuard, McpToolContext};
-use nest_rs_seaorm::mcp::McpDataContext;
+use nest_rs::core::module;
+use nest_rs::mcp::{McpOperationGuard, McpToolContext};
+use nest_rs::seaorm::mcp::McpDataContext;
 
 use super::bridge::AppMcpGuard;
 use crate::authz::http::AuthzHttpModule;

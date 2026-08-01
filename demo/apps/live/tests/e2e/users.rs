@@ -1,7 +1,7 @@
 use features::Role;
 use futures_util::SinkExt;
-use nest_rs_http::HttpTransport;
-use nest_rs_http::poem::http::StatusCode;
+use nest_rs::http::HttpTransport;
+use nest_rs::http::poem::http::StatusCode;
 use serde_json::json;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
@@ -13,7 +13,7 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
     use sea_orm::{ConnectionTrait, Database};
 
     let bind = "127.0.0.1:13348";
-    nest_rs_testing::load_project_env();
+    nest_rs::testing::load_project_env();
     let url = std::env::var("NESTRS_DATABASE__URL")
         .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
     let db = Database::connect(&url).await.expect("connect to Postgres");

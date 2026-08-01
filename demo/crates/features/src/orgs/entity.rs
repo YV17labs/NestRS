@@ -1,4 +1,4 @@
-use nest_rs_resource::expose;
+use nest_rs::resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 

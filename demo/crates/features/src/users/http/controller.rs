@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use nest_rs_authz::{Create, Read};
-use nest_rs_http::{Ctx, Valid, controller, crud};
-use nest_rs_seaorm::Bind;
+use nest_rs::authz::{Create, Read};
+use nest_rs::http::{Ctx, Valid, controller, crud};
+use nest_rs::seaorm::Bind;
 use poem::Result;
 use poem::web::Json;
 

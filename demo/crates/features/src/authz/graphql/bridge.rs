@@ -1,4 +1,4 @@
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
+use nest_rs::authz::graphql::GraphqlAbilityBridge;
 
 use crate::authn::AuthnGuard;
 use crate::authz::http::AuthzGuard;

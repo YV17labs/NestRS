@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_authn::{AuthError, CredentialError, burn_verify, hash_password, verify_password};
-use nest_rs_authz::Action;
-use nest_rs_core::{hooks, injectable};
-use nest_rs_graphql::dataloader;
-use nest_rs_seaorm::{
+use nest_rs::authn::{AuthError, CredentialError, burn_verify, hash_password, verify_password};
+use nest_rs::authz::Action;
+use nest_rs::core::{hooks, injectable};
+use nest_rs::graphql::dataloader;
+use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Executor, Repo, ServiceError, Updatable,
     live_condition,
 };

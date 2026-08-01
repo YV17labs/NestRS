@@ -1,4 +1,4 @@
-use nest_rs_http::input;
+use nest_rs::http::input;
 
 #[input]
 #[derive(Debug)]

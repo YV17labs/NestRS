@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use features::orgs::{ActiveModel, Column, Entity, OrgsService};
-use nest_rs_authz::{Ability, AbilityBuilder, Action, with_ability};
-use nest_rs_seaorm::{Access, CrudService, Executor, with_request_executor};
-use nest_rs_testing::EphemeralDatabase;
+use nest_rs::authz::{Ability, AbilityBuilder, Action, with_ability};
+use nest_rs::seaorm::{Access, CrudService, Executor, with_request_executor};
+use nest_rs::testing::EphemeralDatabase;
 use sea_orm::{ActiveModelTrait, Set};
 use uuid::Uuid;
 

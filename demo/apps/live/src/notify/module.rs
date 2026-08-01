@@ -1,6 +1,6 @@
 use features::authn::AuthnModule;
-use nest_rs_core::module;
-use nest_rs_ws::WsModule;
+use nest_rs::core::module;
+use nest_rs::ws::WsModule;
 
 use crate::notify::gateway::NotifyGateway;
 

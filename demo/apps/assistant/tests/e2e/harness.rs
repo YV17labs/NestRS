@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assistant::AssistantModule;
-use nest_rs_authn::JwtConfig;
-use nest_rs_config::Config;
-use nest_rs_storage::{Storage, StorageConfig};
-use nest_rs_testing::{EphemeralDatabase, TestApp};
+use nest_rs::authn::JwtConfig;
+use nest_rs::config::Config;
+use nest_rs::storage::{Storage, StorageConfig};
+use nest_rs::testing::{EphemeralDatabase, TestApp};
 
 use features::testing::{DEV_PUBLIC_KEY, ORG_ID};
 

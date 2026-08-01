@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use nest_rs_core::injectable;
-use nest_rs_events::listeners;
-use nest_rs_queue::JobProducerExt;
-use nest_rs_redis::QueueConnection;
+use nest_rs::core::injectable;
+use nest_rs::events::listeners;
+use nest_rs::queue::JobProducerExt;
+use nest_rs::redis::QueueConnection;
 
 use crate::notifications::{NotifyCommand, NotifyQueue};
 use crate::posts::PostPublishedEvent;

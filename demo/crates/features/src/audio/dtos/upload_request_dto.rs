@@ -1,8 +1,7 @@
-use nest_rs_http::input;
-use serde::Serialize;
+use nest_rs::http::input;
 
 #[input]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct UploadRequestDto {
     #[validate(
         length(min = 1, max = 255),

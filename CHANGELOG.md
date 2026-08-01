@@ -5,6 +5,69 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Headed for **2.0.0** — the workspace already carries that version; the entry
+below moves under it at tag time.
+
+**One dependency.** `nest-rs` with the feature for the capability becomes the
+whole install, on every page of the documentation and every crate's crates.io
+landing page. A decorator's expansion no longer obliges the developer to declare
+anything.
+
+**Breaking.** An app that names the `nest-rs-*` crates directly keeps compiling,
+but a decorator used from such a crate now roots its expansion at the umbrella
+when one is present. The documented path is the umbrella; the sub-crates remain
+published compilation units.
+
+### The install contract
+
+- **`cargo add nest-rs --features <capability>`** — 17 of the 19 module pages
+  now install in exactly one line. `/database/` went from 7 to 1, `/graphql/`
+  from 6 to 2, `/configuration/` from 2 to 1.
+- **The `validator` version pin is gone.** `#[config]` carries the `Validate`
+  derive and points it back at the framework's own copy, so no `#[config]`
+  struct declares `validator` or keeps a major aligned. `validate = "manual"`
+  opts out for a config that validates across fields.
+- **`#[expose]` carries the derives it generates** — `serde`, `schemars`,
+  `validator` — each routed with a `crate = ` override, alongside the
+  entity-site trio (`sea_orm` / `uuid` / `chrono`). An entity crate declares
+  none of them.
+- **`#[input]` is the wire-DTO shorthand on every transport**, re-exported from
+  `nest_rs::{ws, queue, mcp}`. A typed payload needs no `serde` of its own.
+- **`features = ["full"]`** for an app that does not want to choose yet.
+- **A missing dependency now says what to add**, with a copy-pasteable line,
+  instead of `E0433: cannot find nest_rs_core` blamed on the attribute.
+
+### The mechanism
+
+- `nest-rs-codegen::reroot` resolves how the call site reaches the framework —
+  the umbrella for an app, the sibling crate inside the framework's own 14
+  crates, which cannot depend on their own facade — and re-roots the finished
+  expansion. Path literals included, so `#[serde(crate = "…")]` follows.
+- The umbrella's feature matrix now pulls **everything a capability's decorators
+  emit unconditionally**. `features = ["mcp"]` alone previously left
+  `nest-rs-guards/mcp` off, so the documented global-guard fallback never ran.
+- `nest-rs-macro-hygiene` is down to **one dependency** and gained `#[mcp]`
+  coverage; it is the compile-time witness the rule names.
+
+### Fixed
+
+- `nest_rs::testing::EphemeralDatabase` was unreachable through the umbrella —
+  the `seaorm` feature now forwards `nest-rs-testing/orm`.
+- `/websockets/server-push/` imported `nest_rs_schedule::every`, which is an
+  inner attribute of `#[scheduled]` and never an item. The page had never
+  compiled as written.
+
+### Tooling and product
+
+- `nestrs new` and `nestrs g <transport>` write the umbrella and its features;
+  the generator's crate tables became feature lists.
+- The Publish demo consumes the framework through **one** workspace dependency,
+  down from 27.
+- The docs page templates now prescribe the one-line form, so a new page cannot
+  reintroduce the old shape.
+
 ## [1.3.0] - 2026-07-31
 
 A clean-room QA campaign against the **published** 1.2.0 — crates.io releases and
@@ -1508,6 +1571,7 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
+[Unreleased]: https://github.com/YV17labs/NestRS/compare/v1.3.0...HEAD
 [1.3.0]: https://github.com/YV17labs/NestRS/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/YV17labs/NestRS/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/YV17labs/NestRS/compare/v1.1.0...v1.1.1

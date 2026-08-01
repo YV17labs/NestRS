@@ -37,8 +37,8 @@ inject).
 At the smallest scale, handlers live in the app itself:
 
 ```rust title="apps/blog/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
 use crate::controller::BlogController;
 use crate::service::BlogService;
 

@@ -30,36 +30,24 @@ run in [`live`](/publish/) on port **3004**.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-ws
+cargo add nest-rs --features ws
 ```
-
-`#[messages]` expands to the per-message guard chain, which lives behind
-`nest-rs-guards`' `ws` feature — so a crate defining a gateway declares it:
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
-nest-rs-ws = "1.3"
-nest-rs-guards = { version = "1.3", features = ["ws"] }
-serde = { version = "1", features = ["derive"] }   # any typed payload
-tracing = "0.1"                                    # if the gateway logs, which it should
+nest-rs = { version = "2.0", features = ["ws"] }
 ```
 
-`nestrs g ws <feature>` writes all four. Two are worth naming:
-
-- The `ws` **feature** on `nest-rs-guards`, because leaving it off can pass
-  `cargo check --workspace` — some other member's dev-dependency unifies it in —
-  while `cargo check -p features` fails. Build the crate on its own when you want
-  the truth about its manifest.
-- **`serde`**, because `nest_rs_ws` re-exports `serde_json` and not `serde`. The
-  moment a handler takes a typed payload — the normal case, one page along — its
-  DTO derives `serde::Deserialize`, and that derive needs the crate itself.
+`#[input]` on a typed payload carries its `serde` derives and routes them back
+through the framework, and `nest_rs::ws::tracing` is the gateway's logger — so
+the manifest stops at one line. `nestrs g ws <feature>` writes it.
 
 ## A one-event gateway
 
 The smallest possible gateway: one event, one reply.
 
 ```rust title="apps/live/src/chat/gateway.rs"
-use nest_rs_ws::{gateway, messages};
+use nest_rs::ws::{gateway, messages};
 
 #[gateway(path = "/ws")]
 #[derive(Default)]
@@ -83,9 +71,9 @@ same event name.
 Wire it in like any other provider:
 
 ```rust title="apps/live/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_ws::WsModule;
+use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::ws::WsModule;
 
 use crate::chat::gateway::PingGateway;
 

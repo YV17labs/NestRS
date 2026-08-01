@@ -19,7 +19,7 @@ work, push a job on the [Queue](/queue/) instead.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-events
+cargo add nest-rs --features events
 ```
 
 ## A first listener
@@ -30,8 +30,8 @@ method as a listener for the event type read from its parameter. Here the
 `notifications` slice reacts to a fact the `posts` slice publishes:
 
 ```rust title="crates/features/src/notifications/events/listener.rs (abridged)"
-use nest_rs_core::injectable;
-use nest_rs_events::listeners;
+use nest_rs::core::injectable;
+use nest_rs::events::listeners;
 
 use crate::posts::PostPublishedEvent;
 
@@ -163,8 +163,8 @@ built once. The producer's `PostsModule` lists `imports = [EventsModule]`
 to inject `Arc<EventBus>`; the listener's module does the same:
 
 ```rust title="crates/features/src/notifications/events/module.rs"
-use nest_rs_core::module;
-use nest_rs_events::EventsModule;
+use nest_rs::core::module;
+use nest_rs::events::EventsModule;
 
 use super::listener::NotificationsListener;
 
@@ -179,7 +179,7 @@ The app composes the producer and the listener; `EventsModule` arrives
 transitively through both (registration is idempotent):
 
 ```rust title="apps/api/src/module.rs (abridged)"
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use features::notifications::NotificationsEventsModule;
 use features::posts::PostsHttpModule;

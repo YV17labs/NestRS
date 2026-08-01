@@ -132,11 +132,11 @@ scaffold.
 | OpenAPI, Health, Rate limiting, OTel, Testing | the `api` app over `users`/`posts` |
 | Storage | post cover-image upload (`media` slice) |
 
-## F. Code truth — three checks the prose rules can't see
+## F. Code truth — the checks the prose rules can't see
 
 Style is half the job; a page that reads well and does not run is still a defect. Each of these
 was filed against a shipped release by a reader following a page verbatim, so the linter now
-greps for all three:
+greps for them:
 
 - **`version-pin`** — a literal `nest-rs* = "X.Y"` (either manifest form) must match
   `[workspace.package] version` in the repo root `Cargo.toml`, which is also what
@@ -154,6 +154,20 @@ greps for all three:
   hand-written handler is a one-line delegation and the `Model` → wire conversion plus the
   `ServiceError` mapping live in the service. Only handler blocks are checked; a service body
   converting `DbErr` through `?` is the correct shape.
+- **`install-stanza`** — a page that publishes its install list twice **under `## Install`** (a
+  `cargo add` line in a `bash` block, a `[dependencies]` block in `toml`) must have the two say
+  the same thing: same
+  crates, same features, same `default-features`, and an explicit `@<req>` on the `cargo add`
+  whenever the manifest constrains past the major. The reader runs the bash line first, so the
+  half that drifts is the half that breaks: 1.3.0 shipped `cargo add validator` (resolving 0.21)
+  above a `validator = "0.20"` pin, a `/database/` `cargo add` with every feature dropped, and a
+  `/mcp/` stanza naming neither crate `#[mcp]` expands to. Blocks written `workspace = true` are
+  not install stanzas and are skipped.
+- **`otel-guard`** — a snippet binding `OpenTelemetry::init` uses the name the crate's own boot
+  panic prescribes, read out of `nest-rs-opentelemetry`'s panic text rather than restated. 1.3.0
+  corrected the panic to `let _otel =` and left the page's canonical `main` on
+  `let _opentelemetry =`, so the reader who tripped the panic was told to write a line the
+  example he started from did not contain.
 
 ## Running the linter
 

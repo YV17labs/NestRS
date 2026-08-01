@@ -59,7 +59,7 @@ thing changing is the status, a header, or a redirect, three attribute
 macros sit beside the verb attribute:
 
 ```rust
-use nest_rs_http::{http_code, response_header, redirect};
+use nest_rs::http::{http_code, response_header, redirect};
 use poem::web::Json;
 
 #[post("/posts")]

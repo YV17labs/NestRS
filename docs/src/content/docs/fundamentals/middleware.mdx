@@ -71,8 +71,8 @@ in `main`.
 That's a guard. Gate the request, return `Err(Denial)` on rejection.
 
 ```rust
-use nest_rs_guards::prelude::*;
-use nest_rs_http::poem::Request as HttpRequest;
+use nest_rs::guards::prelude::*;
+use nest_rs::http::poem::Request as HttpRequest;
 
 #[injectable]
 #[derive(Default)]

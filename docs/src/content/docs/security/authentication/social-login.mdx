@@ -17,15 +17,14 @@ fork, no framework change.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-social
+cargo add nest-rs --features social
 ```
 
-`SocialModule` and `SocialRegistry` live in `nest-rs-social`; the
-authorization-code machinery they drive (`OAuth2Client`, `TokenSet`) is
-`nest-rs-authn`, which comes along as a dependency.
+The `social` feature implies `authn`: the authorization-code machinery
+`SocialModule` drives (`OAuth2Client`, `TokenSet`) arrives with it.
 
 ```rust
-use nest_rs_social::SocialModule;
+use nest_rs::social::SocialModule;
 
 #[module(imports = [SocialModule, OAuthHttpModule])]
 pub struct AuthModule;
@@ -176,7 +175,7 @@ Report `false` for a *partially* set config — that is what makes it fail
 environment.
 
 ```rust title="src/provider.rs"
-nest_rs_core::inventory::submit! {
+nest_rs::core::inventory::submit! {
     SocialProviderEntry {
         key: "acme",
         provider_type_name: || std::any::type_name::<AcmeProvider>(),

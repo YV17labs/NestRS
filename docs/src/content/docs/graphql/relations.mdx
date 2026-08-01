@@ -20,7 +20,7 @@ relation cannot leak across orgs.
 ## The declaration
 
 ```rust title="src/users/entity.rs"
-use nest_rs_resource::expose;
+use nest_rs::resource::expose;
 use sea_orm::entity::prelude::*;
 
 #[expose(name = "User", service = super::service::UsersService, graphql)]
@@ -208,7 +208,7 @@ When the unexposed relation opens the slot, write the replacement on the resolve
 
 ```rust title="src/orgs/graphql/resolver.rs"
 use async_graphql::{Context, Result, connection::*};
-use nest_rs_graphql::resolver;
+use nest_rs::graphql::resolver;
 
 use crate::orgs::Org;
 use crate::users::User;

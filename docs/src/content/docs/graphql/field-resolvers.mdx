@@ -21,7 +21,7 @@ return is the field's value.
 
 ```rust title="src/users/resolver.rs"
 use async_graphql::SimpleObject;
-use nest_rs_graphql::resolver;
+use nest_rs::graphql::resolver;
 
 #[derive(SimpleObject, Clone)]
 pub struct User {
@@ -66,7 +66,7 @@ Beyond `parent`, a `#[field_resolver]` accepts the same shapes a
 ```rust
 use std::sync::Arc;
 use async_graphql::{Context, Result, SimpleObject};
-use nest_rs_graphql::resolver;
+use nest_rs::graphql::resolver;
 
 #[derive(SimpleObject, Clone)]
 pub struct User {

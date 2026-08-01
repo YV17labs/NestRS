@@ -13,7 +13,7 @@ second branch: `define_visitor`. It receives no actor because there is
 none, and it grants nothing until you write a rule into it.
 
 ```rust title="crates/features/src/authz/ability.rs"
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 impl AbilityFactory for AppAbility {
     type Actor = Claims;

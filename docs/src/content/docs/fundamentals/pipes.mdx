@@ -16,10 +16,10 @@ and the pipe either returns the transformed value or rejects with a
 The trait lives in `nest-rs-pipes`, transport-agnostic, and binds **per
 argument on every transport**. Two forms, one surface:
 
-- **HTTP** wraps an *extractor*: `nest_rs_http::Piped<P, E>` /
+- **HTTP** wraps an *extractor*: `nest_rs::http::Piped<P, E>` /
   `Valid<E>` run the pipe over what `E` extracts.
 - **GraphQL, WebSockets, and queues** deserialize a single typed value,
-  so there is no extractor to wrap: `nest_rs_pipes::Piped<P, T>` /
+  so there is no extractor to wrap: `nest_rs::pipes::Piped<P, T>` /
   `Valid<T>` expose the wire type `T` and hand the handler the
   transformed value. The transport macro (`#[resolver]`, `#[messages]`,
   `#[processor]`) does the stripping and the call.
@@ -41,7 +41,7 @@ pipe is a pure transform, the same input always produces the same
 output, and the type name is enough to pick which one runs.
 
 ```rust
-use nest_rs_pipes::{Pipe, PipeError};
+use nest_rs::pipes::{Pipe, PipeError};
 
 pub struct Trim;
 
@@ -94,7 +94,7 @@ can always tell which field was wrong, not merely that something was.
 `E`, then validate.
 
 ```rust
-use nest_rs_http::Valid;
+use nest_rs::http::Valid;
 use poem::web::Json;
 use serde::Deserialize;
 use validator::Validate;
@@ -139,8 +139,8 @@ When the input needs a transform other than `Validate`, name the pipe at
 the call site:
 
 ```rust
-use nest_rs_http::Piped;
-use nest_rs_pipes::ParseUuidV7;
+use nest_rs::http::Piped;
+use nest_rs::pipes::ParseUuidV7;
 use poem::web::Path;
 
 #[get("/:id")]
@@ -162,7 +162,7 @@ not a stringly-typed handler doing its own `parse::<Uuid>()`.
 ## The same pipe beyond HTTP
 
 On GraphQL, WebSockets, and queues the argument *is* the wire value, so
-the binding is `nest_rs_pipes::Piped<P, T>` / `Valid<T>` — `T` is what
+the binding is `nest_rs::pipes::Piped<P, T>` / `Valid<T>` — `T` is what
 appears on the wire (the SDL argument type, the WS payload, the job
 payload); the handler body sees `P::Out` through `into_inner()` /
 `Deref`, exactly as on HTTP.
@@ -240,7 +240,7 @@ Three rules:
    field-level errors.
 
 ```rust
-use nest_rs_pipes::{Pipe, PipeError};
+use nest_rs::pipes::{Pipe, PipeError};
 
 pub struct NonEmpty;
 

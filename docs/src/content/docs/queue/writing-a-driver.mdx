@@ -56,7 +56,7 @@ priority hints — those are your driver's own API on the same struct.
 
 ```rust
 use async_trait::async_trait;
-use nest_rs_queue::QueueError;
+use nest_rs::queue::QueueError;
 
 /// Your driver's connection handle. The producer side of a queue.
 #[derive(Clone)]
@@ -66,12 +66,12 @@ pub struct YourConnection {
 }
 
 #[async_trait]
-impl nest_rs_queue::JobProducer for YourConnection {
+impl nest_rs::queue::JobProducer for YourConnection {
     async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError> {
         // (1) Wrap in the wire envelope — required for the
         //     macro-emitted consumer to decode it.
         let envelope = serde_json::json!({
-            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
+            "v": nest_rs::queue::WIRE_FORMAT_VERSION,
             "payload": payload,
         });
 
@@ -89,7 +89,7 @@ blanket impl on top of `push_json` — no extra code on your side.
 
 ## Step 2 — The worker (Transport)
 
-This is the meat. The worker is a `nest_rs_core::Transport`: the
+This is the meat. The worker is a `nest_rs::core::Transport`: the
 framework calls `configure` with the assembled container at boot, then
 `serve` with a cancellation token. Drain the inventory, route by queue
 name, hand each envelope to the matching `ProcessMethod::handler` — the
@@ -108,8 +108,8 @@ same whichever driver is underneath it.
 
 ```rust
 use async_trait::async_trait;
-use nest_rs_core::{Container, ReachableProviders, Transport, inventory};
-use nest_rs_queue::ProcessMethod;
+use nest_rs::core::{Container, ReachableProviders, Transport, inventory};
+use nest_rs::queue::ProcessMethod;
 use tokio_util::sync::CancellationToken;
 
 pub struct YourWorker {
@@ -201,7 +201,7 @@ A producer-only app (an API binary that enqueues but doesn't drain)
 imports the first; a worker app imports both.
 
 ```rust
-use nest_rs_core::{ContainerBuilder, DynamicModule, Module, TransportContribution};
+use nest_rs::core::{ContainerBuilder, DynamicModule, Module, TransportContribution};
 
 /// Producer-side activation. Seeds `YourConnection` from config.
 pub struct YourQueueModule;
@@ -220,7 +220,7 @@ impl DynamicModule for YourQueueSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         // Your code: build your client from config (env + pinned),
         // seed it as `YourConnection`, and bind it to
-        // `Arc<dyn nest_rs_queue::JobProducer>` so callers stay portable.
+        // `Arc<dyn nest_rs::queue::JobProducer>` so callers stay portable.
         builder
     }
 }

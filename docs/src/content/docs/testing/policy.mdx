@@ -25,7 +25,7 @@ The tests reconstruct an `Ability` the way the guard does: an
 role-shaped helpers keep each assertion to one line.
 
 ```rust title="crates/features/src/authz/ability.rs (abridged)"
-use nest_rs_authz::{Ability, AbilityBuilder, FieldSet};
+use nest_rs::authz::{Ability, AbilityBuilder, FieldSet};
 use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 
 fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {

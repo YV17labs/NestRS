@@ -17,11 +17,11 @@ truth across every transport.
 
 The bridges live in:
 
-- `nest_rs_authz::http` — feature `http`
-- `nest_rs_authz::graphql` — feature `graphql`
-- `nest_rs_authz::mcp` — feature `mcp`; the matching data context is
-  `nest_rs_seaorm::mcp::McpDataContext` (feature `mcp`)
-- `nest_rs_seaorm::ws` — the WS data-context (split avoids a
+- `nest_rs::authz::http` — feature `http`
+- `nest_rs::authz::graphql` — feature `graphql`
+- `nest_rs::authz::mcp` — feature `mcp`; the matching data context is
+  `nest_rs::seaorm::mcp::McpDataContext` (feature `mcp`)
+- `nest_rs::seaorm::ws` — the WS data-context (split avoids a
   circular dep)
 
 HTTP, GraphQL, WS, and MCP each ship a one-import `Authz<Transport>Module`

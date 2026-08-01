@@ -38,8 +38,7 @@ Add the dev-dependencies the test needs:
 
 ```toml title="apps/blog/Cargo.toml"
 [dev-dependencies]
-nest-rs-testing = { workspace = true, features = ["orm"] }
-nest-rs-authn = { workspace = true }
+nest-rs = { workspace = true, features = ["authn", "testing"] }
 migrations = { workspace = true }
 poem = { workspace = true, features = ["test"] }
 serde_json.workspace = true
@@ -59,8 +58,8 @@ because the controller is guarded, it also mints the bearer every request
 carries — the same `JwtService` the app verifies with.
 
 ```rust title="apps/blog/tests/e2e/main.rs"
-use nest_rs_authn::{JwtOptions, JwtService};
-use nest_rs_testing::{EphemeralDatabase, TestApp};
+use nest_rs::authn::{JwtOptions, JwtService};
+use nest_rs::testing::{EphemeralDatabase, TestApp};
 use poem::http::StatusCode;
 use serde_json::json;
 

@@ -24,7 +24,7 @@ Anything else is a `Strategy` you write yourself.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-authn
+cargo add nest-rs --features authn
 ```
 
 ## Bind the shipped JWT strategy
@@ -36,10 +36,10 @@ ships a single type alias and a tiny module:
 
 ```rust title="crates/features/src/authn/mod.rs"
 pub type AppJwtStrategy = JwtStrategy<Claims>;
-pub type AuthnGuard = nest_rs_authn::AuthnGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
 
 #[module(
-    imports = [nest_rs_authn::AuthnModule::for_root(None)],
+    imports = [nest_rs::authn::AuthnModule::for_root(None)],
     providers = [AppJwtStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
@@ -61,7 +61,7 @@ runs. The handler reads it with `Ctx<P>` — same primitive as any
 other guard-attached context.
 
 ```rust
-use nest_rs_http::Ctx;
+use nest_rs::http::Ctx;
 
 async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
     Json(self.svc.lookup(auth.sub).await?)
@@ -84,7 +84,7 @@ so authentication stays a pure request → principal mapping.
 
 ```rust
 use async_trait::async_trait;
-use nest_rs_authn::{AuthError, PrincipalIdentity, Strategy};
+use nest_rs::authn::{AuthError, PrincipalIdentity, Strategy};
 use poem::Request;
 
 #[injectable]

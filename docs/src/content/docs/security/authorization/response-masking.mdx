@@ -21,7 +21,7 @@ Declare it as a parameter; the `#[routes]` orchestrator detects it and
 installs the shaper:
 
 ```rust
-use nest_rs_authz::{Read, http::Authorize};
+use nest_rs::authz::{Read, http::Authorize};
 use sea_orm::EntityTrait;
 
 #[get("/")]

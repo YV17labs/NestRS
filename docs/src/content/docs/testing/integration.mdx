@@ -75,7 +75,7 @@ pub fn request(headers: &[(&str, &str)]) -> Request { /* … */ }
 ```
 
 ```rust title="crates/nest-rs-authn/tests/integration/jwt/config.rs"
-use nest_rs_authn::{JwtConfig, JwtKey, JwtService};
+use nest_rs::authn::{JwtConfig, JwtKey, JwtService};
 
 #[test]
 fn into_options_selects_eddsa_from_key_pair() {

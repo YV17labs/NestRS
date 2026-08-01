@@ -36,26 +36,19 @@ and abstractions, `nest-rs-redis` for the Redis-bound types.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-queue nest-rs-redis
+cargo add nest-rs --features redis
 ```
-
-Everything a handler needs, in full — `nest-rs-queue` for the macros and
-the abstractions, `nest-rs-redis` for the Redis-bound types, and the
-crates the handler body itself names:
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
-nest-rs-queue = "1.3"
-nest-rs-redis = "1.3"     # the app that owns the connection
-serde = { version = "1", features = ["derive"] }   # the job payload derives it
-anyhow = "1"              # a #[process] method returns anyhow::Result<()>
-tracing = "0.1"           # if the handler logs, which it should
+# `redis` implies `queue` — the Redis-bound types, the macros, the
+# worker-context seam and the pipe fold `#[process]` expands to, together.
+nest-rs = { version = "2.0", features = ["redis"] }
 ```
 
-Nothing else: the `#[processor]` expansion reaches the worker-context seam
-through `nest_rs_queue`, so a `#[process]` method never obliges the call
-site to name `nest-rs-worker`. `nestrs g queue <feature>` writes this
-stanza for you.
+`#[input]` on the job payload carries its `serde` derives; `anyhow` and
+`tracing` come through `nest_rs::core::anyhow` and `nest_rs::queue::tracing`.
+`nestrs g queue <feature>` writes the stanza for you.
 
 ## The queue's identity
 
@@ -64,10 +57,11 @@ the `queue/` adapter. The producer is usually the port's own service, so
 this is the artifact both sides reach for:
 
 ```rust title="crates/features/src/audio/command.rs"
-use nest_rs_queue::queue;
-use serde::{Deserialize, Serialize};
+use nest_rs::queue::queue;
+use nest_rs::queue::input;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[input]
 pub struct TranscodeCommand {
     pub file: String,
 }
@@ -89,9 +83,9 @@ method as a queue consumer.
 ```rust title="crates/features/src/audio/queue/processor.rs"
 use std::sync::Arc;
 
-use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_queue::processor;
+use nest_rs::core::anyhow::Result;
+use nest_rs::core::injectable;
+use nest_rs::queue::processor;
 
 use crate::audio::{AudioQueue, AudioService, TranscodeCommand};
 
@@ -244,9 +238,9 @@ Two modules, two roles:
   producer-only app does NOT import this.
 
 ```rust title="apps/worker/src/module.rs"
-use nest_rs_config::ConfigModule;
-use nest_rs_core::module;
-use nest_rs_redis::{QueueModule, QueueWorkerModule};
+use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
+use nest_rs::redis::{QueueModule, QueueWorkerModule};
 
 use features::audio::AudioQueueModule;
 
@@ -265,8 +259,8 @@ lists only the adapter — registration is idempotent.
 `main` is the universal skeleton:
 
 ```rust title="apps/worker/src/main.rs"
-use anyhow::Result;
-use nest_rs_core::App;
+use nest_rs::core::anyhow::Result;
+use nest_rs::core::App;
 
 use worker::WorkerModule;
 

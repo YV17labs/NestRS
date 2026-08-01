@@ -16,13 +16,13 @@ service names the queue; the transport adapter doesn't.
 ## The payload
 
 A job is any `Serialize + DeserializeOwned + Clone + Send + Sync + 'static`
-type — the marker `nest_rs_queue::Job` is auto-implemented for every
+type — the marker `nest_rs::queue::Job` is auto-implemented for every
 type that satisfies those bounds. No derive, no trait to write. The
 convention is to keep payloads small: a reference to the work, not the
 work itself.
 
 ```rust title="crates/features/src/audio/command.rs"
-use nest_rs_queue::queue;
+use nest_rs::queue::queue;
 use serde::{Deserialize, Serialize};
 
 /// Imperative payload for the `audio` queue — "transcode this file".
@@ -62,9 +62,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_queue::JobProducerExt;
-use nest_rs_redis::QueueConnection;
+use nest_rs::core::injectable;
+use nest_rs::queue::JobProducerExt;
+use nest_rs::redis::QueueConnection;
 
 use super::command::{AudioQueue, TranscodeCommand};
 
@@ -111,7 +111,7 @@ implements. Neither is the default path.
 
 <Aside>
 Inject `Arc<QueueConnection>` for the concrete type, or
-`Arc<dyn nest_rs_queue::JobProducer>` to keep the feature portable across
+`Arc<dyn nest_rs::queue::JobProducer>` to keep the feature portable across
 backends. `QueueModule::for_root` binds **both** names to the one connection,
 so either resolves from the container. Same publisher surface either way —
 `push_to` is on the extension trait, not the concrete type.
@@ -129,7 +129,7 @@ derives it along with `Deserialize` and `Validate`. A hand-derived DTO needs
 `#[derive(schemars::JsonSchema)]` and the `schemars` dependency to go with it.
 
 ```rust title="crates/features/src/audio/dto.rs"
-use nest_rs_http::input;
+use nest_rs::http::input;
 
 #[input]
 pub struct TranscodeDto {
@@ -140,7 +140,7 @@ pub struct TranscodeDto {
 ```rust title="crates/features/src/audio/http/controller.rs"
 use std::sync::Arc;
 
-use nest_rs_http::{controller, routes};
+use nest_rs::http::{controller, routes};
 use poem::http::StatusCode;
 use poem::web::Json;
 use poem::{Error, Result};

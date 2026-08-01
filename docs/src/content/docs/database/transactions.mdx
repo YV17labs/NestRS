@@ -99,7 +99,7 @@ transaction boundary:
 ```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 use std::time::Duration;
-use nest_rs_seaorm::retry::{
+use nest_rs::seaorm::retry::{
     retry_on_conflict, DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF,
 };
 use sea_orm::{DatabaseConnection, TransactionTrait};
@@ -144,7 +144,7 @@ which would hot-spin). Pass `usize::MAX` and the function still terminates
 in bounded time.
 
 <Aside>
-**This is a service primitive.** It lives in `nest_rs_seaorm::retry` and
+**This is a service primitive.** It lives in `nest_rs::seaorm::retry` and
 takes an `Arc<DatabaseConnection>` because the closure re-opens the
 transaction from scratch. A handler can't use it against the ambient
 `Executor::Txn` — that handle is already aborted past the first attempt's

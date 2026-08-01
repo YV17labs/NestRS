@@ -48,8 +48,8 @@ so guards plug into dedup-by-`TypeId` and declaration-order chaining.
 ### A minimal custom guard
 
 ```rust title="crates/features/src/posts/guard.rs"
-use nest_rs_guards::prelude::*;
-use nest_rs_http::poem::Request as HttpRequest;
+use nest_rs::guards::prelude::*;
+use nest_rs::http::poem::Request as HttpRequest;
 
 #[injectable]
 #[derive(Default)]
@@ -103,9 +103,9 @@ graph must reach.
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
-use nest_rs_authz::Read;
-use nest_rs_http::{controller, routes};
-use nest_rs_seaorm::Bind;
+use nest_rs::authz::Read;
+use nest_rs::http::{controller, routes};
+use nest_rs::seaorm::Bind;
 use poem::web::{Json, Path};
 use poem::Result;
 use uuid::Uuid;
@@ -154,7 +154,7 @@ pub struct PostsHttpModule;
 
 ```rust title="crates/features/src/authn/module.rs"
 #[module(
-    imports = [nest_rs_authn::AuthnModule::for_root(None)],
+    imports = [nest_rs::authn::AuthnModule::for_root(None)],
     providers = [AppJwtStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
@@ -215,7 +215,7 @@ Multiple guards in one attribute run in **declaration order**, outermost
 first — the first listed sees the request before the second.
 
 ```rust title="apps/blog/src/main.rs"
-use nest_rs_guards::{AppBuilderGuardsExt, guard};
+use nest_rs::guards::{AppBuilderGuardsExt, guard};
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 

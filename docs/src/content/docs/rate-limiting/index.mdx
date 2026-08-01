@@ -21,14 +21,14 @@ attached at that point.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-throttler
+cargo add nest-rs --features throttler
 ```
 
 ## Mount the throttler
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_throttler::ThrottlerModule;
+use nest_rs::core::module;
+use nest_rs::throttler::ThrottlerModule;
 
 #[module(imports = [ThrottlerModule::for_root(None)])]
 pub struct ApiModule;
@@ -55,8 +55,8 @@ NESTRS_THROTTLER__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
 ## Guard a controller
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs_http::controller;
-use nest_rs_throttler::ThrottlerGuard;
+use nest_rs::http::controller;
+use nest_rs::throttler::ThrottlerGuard;
 
 #[controller(path = "/posts")]
 #[use_guards(ThrottlerGuard)]
@@ -69,8 +69,8 @@ default limit applies unless a handler overrides it.
 ## Override per route
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs_http::{controller, routes};
-use nest_rs_throttler::{Throttle, ThrottlerGuard};
+use nest_rs::http::{controller, routes};
+use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
 #[controller(path = "/posts")]
 #[use_guards(ThrottlerGuard)]
@@ -145,7 +145,7 @@ Redis, and the implementation below is the whole of it:
 
 ```rust
 use std::net::IpAddr;
-use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
+use nest_rs::throttler::{Decision, Throttle, ThrottlerStore};
 
 pub struct RedisThrottler {
     client: redis::Client,

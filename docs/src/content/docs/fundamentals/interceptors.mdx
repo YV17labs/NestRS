@@ -56,8 +56,8 @@ on `async-trait = "0.1"` directly and `use async_trait::async_trait;` — both
 spellings must resolve to the same 0.1 macro.
 
 ```rust
-use nest_rs_core::{Layer, injectable};
-use nest_rs_interceptors::{Interceptor, Next, async_trait};
+use nest_rs::core::{Layer, injectable};
+use nest_rs::interceptors::{Interceptor, Next, async_trait};
 use poem::{Request, Response, Result};
 
 #[injectable]
@@ -85,7 +85,7 @@ or per handler.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs_interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level `HttpInterceptorMeta` wrap + the per-route shaper |
+| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs::interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level `HttpInterceptorMeta` wrap + the per-route shaper |
 | **Controller / Resolver / Gateway** | `#[use_interceptors(Tracer)]` on the struct | The container, at mount |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 

@@ -10,8 +10,8 @@ HTTP transport at boot. Pass `None` to read every option from the
 environment, or pin `HttpConfig` in code:
 
 ```rust title="apps/hello/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
 
 use features::hello::HelloHttpModule;
 
@@ -25,7 +25,7 @@ pub struct HelloModule;
 ```
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs::http::{HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
@@ -89,7 +89,7 @@ Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
 tests (production deploys carry secrets in the environment):
 
 ```rust
-use nest_rs_http::{HttpConfig, HttpModule, TlsConfig};
+use nest_rs::http::{HttpConfig, HttpModule, TlsConfig};
 
 let cert = std::fs::read("fullchain.pem")?;
 let key  = std::fs::read("privkey.pem")?;
@@ -123,7 +123,7 @@ NESTRS_HTTP__CORS_MAX_AGE=3600
 
 ```rust title="apps/api/src/module.rs"
 use std::time::Duration;
-use nest_rs_http::{CorsConfig, HttpConfig, HttpModule};
+use nest_rs::http::{CorsConfig, HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig {
@@ -159,7 +159,7 @@ NESTRS_HTTP__GLOBAL_PREFIX=/api
 or pin it in code with `with_global_prefix`:
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs::http::{HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig::default().with_global_prefix("/api")),
@@ -240,7 +240,7 @@ NESTRS_HTTP__HSTS=                           # empty ⇒ drop just HSTS
 ```
 
 ```rust
-use nest_rs_http::{HttpConfig, HttpModule, SecurityHeadersConfig};
+use nest_rs::http::{HttpConfig, HttpModule, SecurityHeadersConfig};
 
 HttpModule::for_root(HttpConfig {
     security_headers: SecurityHeadersConfig {

@@ -22,8 +22,8 @@ the counter at the call site is cheap and needs no extra field.
 ```rust
 use std::sync::Arc;
 
-use nest_rs_core::injectable;
-use nest_rs_opentelemetry::OpenTelemetryMeter;
+use nest_rs::core::injectable;
+use nest_rs::opentelemetry::OpenTelemetryMeter;
 
 #[injectable]
 pub struct SignupMetrics {

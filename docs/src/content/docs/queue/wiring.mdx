@@ -46,9 +46,9 @@ The worker imports both queue modules plus the feature's queue adapter.
 That's it — `AudioQueueModule` pulls in the `AudioModule` port itself.
 
 ```rust title="apps/worker/src/module.rs"
-use nest_rs_config::ConfigModule;
-use nest_rs_core::module;
-use nest_rs_redis::{QueueModule, QueueWorkerModule};
+use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
+use nest_rs::redis::{QueueModule, QueueWorkerModule};
 
 use features::audio::AudioQueueModule;
 
@@ -82,11 +82,11 @@ A producer-only binary imports `QueueModule::for_root(...)` and skips
 with — and no worker spawn, no drained inventory, no apalis monitor.
 
 ```rust title="apps/api/src/module.rs (abridged)"
-use nest_rs_config::ConfigModule;
-use nest_rs_core::module;
-use nest_rs_http::HttpModule;
-use nest_rs_redis::QueueModule;
-use nest_rs_seaorm::DatabaseModule;
+use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
+use nest_rs::http::HttpModule;
+use nest_rs::redis::QueueModule;
+use nest_rs::seaorm::DatabaseModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 

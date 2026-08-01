@@ -122,7 +122,7 @@ any binary of yours that reads `std::env::var` at startup.
 is unsound if it races a read on another thread. Call it at the top of `main`,
 before the runtime spawns anything — never from a task. A tool that only needs a
 database connection can skip it entirely and use
-[`nest_rs_seaorm::connect_from_env()`](/database/migrations/#run-them), which
+[`nest_rs::seaorm::connect_from_env()`](/database/migrations/#run-them), which
 routes through `ConfigService` and writes nothing.
 </Aside>
 

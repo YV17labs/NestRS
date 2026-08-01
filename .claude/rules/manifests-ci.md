@@ -3,6 +3,7 @@ paths:
   - "Cargo.toml"
   - "crates/*/Cargo.toml"
   - "demo/**/Cargo.toml"
+  - "bench/**/Cargo.toml"
   - "rust-toolchain.toml"
   - ".cargo/**"
   - ".github/**"
@@ -24,6 +25,38 @@ paths:
   manifest comments — respect the procedure, never bump casually.
   A new dependency answers to the 12-month freshness bar
   (`CLAUDE.md` hard no).
+
+### `major.minor` — the one requirement form
+
+**Every third-party requirement is spelled with exactly two
+components** (`"1.53"`, `"0.14"`, `"=2.0"`), in every manifest the repo
+owns: root, `demo/`, `bench/`, and the manifests the CLI *generates*
+(`src/templates/`, `src/commands/generate/cargo.rs`).
+
+- **The minor is the floor we actually build against** — the version
+  the lockfile resolved. A bare major (`"1"`) claims less than we know:
+  it accepts a 1.0 that never compiled here.
+- **The patch belongs to the publisher.** Pinning it (`"1.53.1"`)
+  rejects exactly the fixes a caret range exists to inherit.
+- It is the form the CLI already derives for `nest-rs-*`
+  (`version::framework_req`) — third parties now match it.
+
+**Bumping the minor is part of `cargo update`**: when the lock moves a
+minor, the requirement moves with it in the same change. Majors do not
+move that way — the pinned-major policy in the root manifest freezes
+several of them for the whole 1.x line, and any other major bump is an
+owner decision (`CLAUDE.md`, *stop and ask*). A `cargo update` that
+reports `available: vX` semver-incompatible releases is **reported, not
+taken**.
+
+**One exception, documented at its pin:** `async-graphql` /
+`async-graphql-poem` carry `=7.2.1` because `nest-rs-graphql` reads that
+crate's public-but-internal registry API. Nothing else carries a patch.
+
+`versions_are_major_minor`
+(`crates/nest-rs-cli/src/commands/generate/cargo.rs`) walks the repo's
+manifests and fails the suite on any other form — the generator's suite
+because a scaffolded workspace inherits these pins verbatim.
 - Intra-workspace dev-deps stay **path-only** (no `version`) so
   publishing doesn't drag test-only cycles.
 - Product crates under `demo/` set `publish = false`; `demo/` is its

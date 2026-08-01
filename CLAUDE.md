@@ -60,6 +60,9 @@ to require it, **stop and ask**.
 - **No collapsing the two workspaces.** `demo/apps/` and
   `demo/crates/features/` are fixed names.
 - **No feature flags for capabilities that don't exist yet.**
+- **No decorator that forces a manifest line.** A macro expansion never
+  obliges the developer to declare a crate. See *The umbrella is the
+  front door*.
 - **No backwards-compatibility shims** — no public API to preserve yet.
 - **No mocking the database in e2e tests.**
 - **No flat `tests/<x>.rs` and no third suite name.**
@@ -68,6 +71,13 @@ to require it, **stop and ask**.
 - **No two decorators for the same concern** — deprecate first.
 - **No new third-party crate without a release in ~12 months.** A
   failing candidate must be flagged explicitly, never adopted silently.
+- **No third-party version requirement outside `major.minor`.** Two
+  components, everywhere, in every manifest the repo owns *and*
+  generates: the minor is the floor we build against, the patch is the
+  publisher's. `"1"` and `"1.53.1"` are both defects. Move the minor
+  with `cargo update`; a semver-*incompatible* release is reported to
+  the owner, never taken. One documented exception, at its pin. See
+  `.claude/rules/manifests-ci.md`.
 
 ## Two workspaces — framework vs. product
 
@@ -85,6 +95,58 @@ in `demo/` — the path dep pulls live framework source.
 **Dividing rule:** `demo/crates/features/` when *any other app could
 reuse it*; `demo/apps/<x>/` only when *this app's exposure decides
 something the feature can't generalize*.
+
+## The umbrella is the front door
+
+A developer installs **one** crate — `nest-rs`, with the feature for the
+capability — and writes code. Cargo resolves the rest. This is the norm
+for Rust frameworks (tokio, bevy, rocket, tauri), and it is what makes
+the *thesis* true at install time, not just at call time.
+
+- **A macro never makes the developer declare anything.** Every path an
+  expansion needs is rooted at `::nest_rs::<concern>::` — never at a
+  sibling crate. Seams that are not public API stay `#[doc(hidden)]`
+  where they already live; the root is what matters, not the module.
+  A decorator whose expansion forces a second `nest-rs-*` line into the
+  consumer's manifest is a framework defect, not a documented caveat.
+- **Sub-crates are compilation units, not the install surface.** They
+  stay published and `nest-rs-*` named; the docs stop presenting them as
+  an entry point. Renaming the `nest-rs` dependency is unsupported —
+  the same limit tokio has, for the same reason.
+- **"The use site owns that crate by definition" is not a reason to make
+  it declare one.** Owning a capability means enabling its feature. That
+  argument, once accepted, justifies every line in a stanza.
+- **The developer's manifest names only what *their own source* names.**
+  `serde`, `anyhow`, `sea-orm` stay when their code writes them; every
+  `nest-rs-*` beyond the umbrella goes. Shrinking past that is
+  over-reach — it costs them feature control and a readable `cargo tree`.
+- **A capability that cannot hold "one dependency" is reported**, never
+  absorbed into prose in an `## Install` stanza. Adapting that prose is
+  what produced the state this rule replaces.
+
+**Shipping a new capability** means all of this, or it is not shipped:
+
+1. A feature in the umbrella's matrix pulling **everything its decorators
+   emit unconditionally** — a satellite left out is an `E0433` inside a
+   macro expansion, blamed on the attribute.
+2. A `pub use nest_rs_<x> as <x>;` re-export, so `::nest_rs::<x>::` resolves.
+3. `cargo add nest-rs --features <x>` in **both** the crate README (the
+   crates.io landing page) and the docs page's `## Install`. A README
+   saying `cargo add nest-rs-<x>` is an unfinished capability.
+4. Any derive the decorator emits routed through the surface crate **with
+   its `crate = ` override**, so the use site declares neither the crate
+   nor a version to keep aligned.
+5. A witness in `nest-rs-macro-hygiene`, and a fresh crate outside every
+   workspace that compiles the page's own snippet.
+
+**One exception, and only one: binaries.** `cargo add` puts a *library* in
+a manifest; `cargo install` puts a *command* on `PATH`. `nestrs` is a
+command, so `cargo install --locked nest-rs-cli` is correct and there is no
+`--features cli` that could replace it — the same split every Rust tool has.
+
+The compile-time witness is `nest-rs-macro-hygiene`: one dependency,
+`nest-rs`, all features. If its manifest needs a second line, the rule
+is broken.
 
 ## Naming — strict
 

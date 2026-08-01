@@ -23,24 +23,35 @@ scope. Testable form: **a `*-macros` crate emits only `::std`/`::core`
 paths or paths routed through its surface crate's re-exports
 (`::nest_rs_<x>::<dep>`) — never a bare third-party path** (`::anyhow`,
 `::tracing`, …), which resolves against the *consumer's* extern prelude
-and breaks any app lacking that direct dep. Four sanctioned exceptions,
-all deps the use site must already own: **emitted derives**
-(`::serde`/`::validator`/`::schemars` — a derive's own expansion targets
-the call-site prelude, so re-export routing would be false hygiene);
-**the entity-site trio** `::sea_orm`/`::uuid`/`::chrono` emitted by
-resource/crud macros (an entity crate owns those by definition); and
-**the HTTP handler surface** — `#[routes]`/`#[crud]` wrap each verb in
-poem's own `#[handler]`, whose expansion targets the call-site prelude,
-so a controller crate owns `poem` (and `nest-rs-interceptors`); and
-**the data-layer surface** — `#[crud]` (both the HTTP and the GraphQL
-one) emits `::nest_rs_seaorm::…` for `CrudService`, `Access`,
-`Creatable`/`Updatable`/`Deletable` and `graphql::parse_v7`, because a
-`#[crud]` use site owns that crate by definition: without it there is no
-`CrudService` to decorate. Same reasoning as the entity-site trio, and
-the reason `nest-rs-graphql-macros` may name a crate that is not its own
-surface — `nest-rs-seaorm` depends on `nest-rs-graphql`, so routing the
-paths back through the surface would be the circular dep the feature
-split exists to avoid.
+and breaks any app lacking that direct dep.
+
+**The root is the umbrella, not the sibling.** A `*-macros` crate emits
+`::std`/`::core` paths, or paths rooted at `::nest_rs::<concern>::` —
+never `::nest_rs_<sibling>::` directly, and never a bare third-party
+path. Non-API seams stay `#[doc(hidden)]` in the crate that owns them;
+the root is what carries the contract. The developer declares
+`nest-rs` with the capability's feature and nothing else; see *The
+umbrella is the front door* in `CLAUDE.md`. Routing through the umbrella
+is also what dissolves the cycles — `nest-rs-guards`, `nest-rs-authz`
+and `nest-rs-seaorm` sit *above* the transports, so a sibling root can
+never reach them, while `::nest_rs::` sits above all of them.
+
+Two exceptions survive, and neither is a licence:
+
+- **Emitted derives** (`::serde`/`::validator`/`::schemars`). A derive's
+  own expansion targets the call-site prelude, so re-export routing
+  would be false hygiene. The fix is the derive's `crate = ` override
+  plus a re-export from the surface crate; until a given derive has it,
+  the path is legal **only when the developer's own source writes that
+  derive**. Same for the entity-site trio `::sea_orm`/`::uuid`/
+  `::chrono`: an entity file names them itself.
+- **poem's `#[handler]`**, which `#[routes]`/`#[crud]` wrap and whose
+  expansion targets the call-site prelude. This one is a **known defect,
+  not a design** — a controller crate should not have to declare `poem`.
+  It is reported on `/http/`, never argued away.
+
+"The use site owns that crate by definition" is not an admissible
+reason. Owning a capability means enabling its feature.
 
 The proof is compile-time: `nest-rs-macro-hygiene` (workspace,
 `publish = false`) consumes decorators with **zero** third-party deps —

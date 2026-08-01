@@ -3,7 +3,6 @@
 use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigService, config};
-use validator::Validate;
 
 use crate::error::AuthError;
 use crate::jwt::JwtOptions;
@@ -16,7 +15,7 @@ use crate::jwt::service::HS256_MIN_SECRET_BYTES;
 /// present selects the signing mode; see [`into_options`](Self::into_options).
 /// No `Debug` derive: secrets must not leak through a format.
 #[config(namespace = "authn")]
-#[derive(Clone, Default, Validate)]
+#[derive(Clone, Default)]
 pub struct JwtConfig {
     /// HS256 shared secret (`NESTRS_AUTHN__SECRET`). Present ⇒ symmetric mode;
     /// must be ≥ 32 bytes. A verifier holding it can also mint tokens.

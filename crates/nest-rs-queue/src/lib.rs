@@ -58,4 +58,8 @@ pub use tracing;
 #[doc(hidden)]
 pub use nest_rs_worker;
 
+/// The wire-DTO shorthand — same decorator the HTTP layer uses, re-exported
+/// here so a payload crossing this transport needs no `serde` of its own.
+pub use nest_rs_core::input;
+
 pub use nest_rs_queue_macros::{processor, queue};

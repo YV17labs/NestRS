@@ -11,43 +11,117 @@ keywords = ["framework", "nestrs", "web", "backend", "async"]
 categories = ["web-programming", "asynchronous"]
 
 
+##
+## Capability features — the install contract.
+##
+## Enabling a capability MUST pull everything its decorators' expansions name
+## unconditionally, or the developer meets `E0433` inside a macro expansion —
+## the defect this matrix exists to prevent (`CLAUDE.md`, *The umbrella is the
+## front door*). Emissions that depend on an attribute the developer writes
+## themselves (`#[authorize]` → authz, `#[crud]` → seaorm) are their own
+## feature: one more feature, never one more dependency line.
+##
+## `dep?/feat` (weak) forwards a binding only when both sides are already on —
+## an HTTP-only build never compiles the GraphQL stack through those edges.
+## `dep/feat` (strong) also enables the optional dep, which is what a capability
+## wants for a crate its expansion always names.
+##
+## Adding an unconditional path to a macro without adding it here is how the
+## matrix drifts. `nest-rs-macro-hygiene` is the compile-time witness.
+##
 [features]
 default = ["http", "config"]
 
-http = ["dep:nest-rs-http"]
+# Everything, for someone who does not want to pick yet — the `tokio = { features
+# = ["full"] }` of this framework. Compile time and dependency tree grow with it;
+# narrow to the capabilities you use whenever you like, the imports do not move.
+full = [
+    "http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue",
+    "redis", "schedule", "events", "authn", "authz", "social", "opentelemetry",
+    "openapi", "health", "throttler", "server-timing", "guards", "pipes",
+    "interceptors", "filters", "exception-filters", "resource", "worker",
+    "storage",
+]
+
+# `#[controller]` / `#[routes]` expand to the per-route Layer System chain —
+# guard specs, pipe folds, interceptor/filter/exception-filter sites — all
+# unconditional, none of them a crate the developer names.
+http = [
+    "dep:nest-rs-http",
+    "guards",
+    "pipes",
+    "interceptors",
+    "filters",
+    "exception-filters",
+    "nest-rs-seaorm?/http",
+    "nest-rs-authz?/http",
+]
 config = ["dep:nest-rs-config"]
 database = ["dep:nest-rs-database"]
-seaorm = ["dep:nest-rs-seaorm", "database"]
-# `nest-rs-authz?/graphql` (weak dep feature): when an app pulls both `graphql`
-# and `authz` through the umbrella, activate authz's GraphQL binding — which
-# transitively turns on the `graphql` feature of the Layer System trait crates
-# (guards / filters / exception-filters / interceptors). No effect unless
-# `authz` is also enabled, so an HTTP-only build never compiles the GraphQL
-# stack via this edge.
-graphql = ["dep:nest-rs-graphql", "http", "nest-rs-authz?/graphql"]
-# Likewise for WS: the gateway reuses the HTTP guards, so authz's WS binding
-# lives behind its `http` feature (which forwards `nest-rs-guards/ws`).
-ws = ["dep:nest-rs-ws", "http", "nest-rs-authz?/http"]
-# Likewise for MCP: authz's MCP binding forwards `nest-rs-guards/mcp`, which is
-# what seeds the in-band global-pool fallback on `/mcp`.
-mcp = ["dep:nest-rs-mcp", "http", "nest-rs-authz?/mcp"]
-queue = ["dep:nest-rs-queue"]
+# `#[expose]` is the entity-side twin of `#[crud]`; a seaorm app always has one.
+# `nest-rs-testing?/orm` carries `EphemeralDatabase`: a suite that tests against
+# a real schema needs it, and "which extra feature turns the fixture on" is not
+# a question the app should have to answer.
+seaorm = [
+    "dep:nest-rs-seaorm",
+    "database",
+    "resource",
+    "nest-rs-testing?/orm",
+]
+# `#[resolver]` names the guard chain and the pipe fold unconditionally
+# (`resolver.rs`), so `graphql` owns them rather than inheriting them from a
+# feature the developer might not enable.
+graphql = [
+    "dep:nest-rs-graphql",
+    "http",
+    "nest-rs-guards/graphql",
+    "nest-rs-seaorm?/graphql",
+    "nest-rs-authz?/graphql",
+    "nest-rs-resource?/graphql",
+]
+# `#[messages]` names `GuardAsWsMessageCheck` and the per-message chain runner,
+# both behind guards' `ws`. The gateway reuses the HTTP guards, so authz's WS
+# binding rides its `http` feature.
+ws = [
+    "dep:nest-rs-ws",
+    "http",
+    "nest-rs-guards/ws",
+    "nest-rs-seaorm?/ws",
+    "nest-rs-authz?/http",
+]
+# `#[mcp]` mounts through `HttpEndpointMeta` and resolves its operation guard
+# against the global pool, which guards' `mcp` feature seeds.
+mcp = [
+    "dep:nest-rs-mcp",
+    "http",
+    "nest-rs-guards/mcp",
+    "nest-rs-seaorm?/mcp",
+    "nest-rs-authz?/mcp",
+]
+# `#[processor]` folds pipes over the job payload and reaches the worker-context
+# seam; neither is a crate a `#[process]` method names.
+queue = ["dep:nest-rs-queue", "worker", "pipes"]
 redis = ["dep:nest-rs-redis", "queue"]
 schedule = ["dep:nest-rs-schedule"]
 events = ["dep:nest-rs-events"]
 authn = ["dep:nest-rs-authn"]
+# The `#[authorize]` half: the developer writes the attribute, so they enable
+# the feature named after it. Transport bindings ride the transport features.
 authz = ["dep:nest-rs-authz"]
 social = ["dep:nest-rs-social", "authn"]
-opentelemetry = ["dep:nest-rs-opentelemetry"]
+# Same shape: the `with_test_telemetry` boot guard lives behind testing's
+# `opentelemetry` feature.
+opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-testing?/opentelemetry"]
 openapi = ["dep:nest-rs-openapi", "http"]
-health = ["dep:nest-rs-health", "http"]
+health = ["dep:nest-rs-health", "http", "nest-rs-seaorm?/health"]
 throttler = ["dep:nest-rs-throttler", "http"]
 server-timing = ["dep:nest-rs-server-timing", "http"]
 testing = ["dep:nest-rs-testing"]
 # Layer-System extension-point crates. Writing a custom `Guard` (the mandated
 # authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` — or a
-# `#[resource]`/worker provider — should not force a direct per-crate dep
-# (FACADE-I11).
+# `#[resource]`/worker provider — should not force a direct per-crate dep.
+# Capability features above depend on these by name, which is what makes a bare
+# `features = ["http"]` sufficient.
 guards = ["dep:nest-rs-guards"]
 pipes = ["dep:nest-rs-pipes"]
 interceptors = ["dep:nest-rs-interceptors"]

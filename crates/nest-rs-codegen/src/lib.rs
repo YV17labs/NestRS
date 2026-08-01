@@ -8,6 +8,8 @@
 //!
 //! This crate never depends on `nest-rs-core` or any other surface crate:
 //! emitted absolute-path tokens (`::nest_rs_core::*`) resolve at the call site.
+//! Which root actually resolves there depends on what the call site declared —
+//! see [`reroot`], which every decorator applies to what it returns.
 #![warn(missing_docs)]
 
 mod args;
@@ -15,6 +17,7 @@ mod attrs;
 mod casing;
 mod crud;
 mod inject;
+mod root;
 mod specs;
 mod ty;
 
@@ -29,6 +32,7 @@ pub use inject::{
     injected_methods_with_layers, injected_names_method, injected_names_with_layers, layer_deps,
     normalize_forwarded_args, optional_dependencies_method,
 };
+pub use root::reroot;
 pub use specs::{force_guard_typeids, scoped_specs};
 pub use ty::{
     PipeWrapper, UUID_V7_REQUIRED, generic_args, impl_self_ident, last_segment_ident,

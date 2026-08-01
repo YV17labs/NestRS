@@ -72,5 +72,5 @@ mod listeners;
 /// ```
 #[proc_macro_attribute]
 pub fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
-    listeners::listeners(args, input)
+    ::nest_rs_codegen::reroot(listeners::listeners(args, input).into()).into()
 }

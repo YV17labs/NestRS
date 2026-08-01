@@ -31,17 +31,20 @@ async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono
 nest-rs-graphql = { workspace = true, optional = true }
 sea-orm.workspace = true
 serde_json.workspace = true
+# Re-exported so `#[expose]`'s generated derives route back here with a
+# `crate = ` override. A real dependency, not a dev one: the consuming entity
+# crate must NOT have to declare any of the three for code it never wrote.
+serde.workspace = true
+schemars.workspace = true
+validator.workspace = true
+chrono.workspace = true
+uuid.workspace = true
 # Re-exported for `#[expose]`-generated code (lifecycle impl, loader logs) so
 # the consuming crate needs no direct dep on either.
 async-trait.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# `#[expose]` emits `::serde::`/`::schemars::`/`::validator::` paths that resolve
-# in the *consuming* crate, so this crate needs them only to compile its own
-# test fixtures — never as a dependency it imposes on consumers.
-serde.workspace = true
-schemars.workspace = true
 # Path-only, never `.workspace = true`: `nest-rs-seaorm` depends back on this
 # crate, so a versioned dev-edge would form a member cycle no publish order can
 # satisfy. Cargo strips a versionless dev-dep from the published manifest.
@@ -56,7 +59,6 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 nest-rs-core.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
-validator.workspace = true
 
 [lints]
 workspace = true

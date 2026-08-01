@@ -47,5 +47,5 @@ mod mcp;
 /// ```
 #[proc_macro_attribute]
 pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
-    mcp::mcp(args, input)
+    ::nest_rs_codegen::reroot(mcp::mcp(args, input).into()).into()
 }

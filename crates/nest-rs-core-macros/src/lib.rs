@@ -7,6 +7,7 @@ use proc_macro::TokenStream;
 
 mod hooks;
 mod injectable;
+mod input;
 mod module;
 
 /// Mark a struct as a DI provider built from the container.
@@ -58,7 +59,7 @@ mod module;
 /// lazily); `injected` is still reported for the access graph.
 #[proc_macro_attribute]
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
-    injectable::injectable(args, input)
+    ::nest_rs_codegen::reroot(injectable::injectable(args, input).into()).into()
 }
 
 /// Declare application lifecycle hooks on a provider's impl block, for the
@@ -107,7 +108,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
-    hooks::hooks(args, input)
+    ::nest_rs_codegen::reroot(hooks::hooks(args, input).into()).into()
 }
 
 /// `#[module(imports = [...], providers = [...])]`.
@@ -161,5 +162,27 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
-    module::module(args, input)
+    ::nest_rs_codegen::reroot(module::module(args, input).into()).into()
+}
+
+/// `#[input]` — shorthand for input DTOs. Appends
+/// `#[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
+/// and `#[serde(deny_unknown_fields)]` so an unknown field on the wire
+/// (e.g. `is_admin: true`) is rejected at parse time instead of silently
+/// dropped, and the DTO documents itself in the OpenAPI document without a
+/// second derive to remember.
+///
+/// # Expands to
+///
+/// The struct, with the derives + serde attribute prepended (stacking with any
+/// existing `#[derive(...)]`):
+///
+/// ```ignore
+/// #[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]
+/// #[serde(deny_unknown_fields)]
+/// struct CreateUser { /* … */ }
+/// ```
+#[proc_macro_attribute]
+pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(input::input(args, item).into()).into()
 }

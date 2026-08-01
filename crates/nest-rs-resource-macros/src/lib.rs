@@ -71,5 +71,5 @@ mod wire;
 /// ```
 #[proc_macro_attribute]
 pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
-    expose::expose(args, item)
+    ::nest_rs_codegen::reroot(expose::expose(args, item).into()).into()
 }

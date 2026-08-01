@@ -1,13 +1,12 @@
 use nest_rs_authn::OAuth2Config;
 use nest_rs_config::{Config, ConfigService, config};
-use validator::Validate;
 
 use crate::registry::SocialProviderConfig;
 
 /// Google OIDC deployment config. Dual-path (env `NESTRS_SOCIAL__GOOGLE__*`
 /// **and** the pinned struct). No `Debug`: `client_secret` must not leak.
 #[config(namespace = "social__google")]
-#[derive(Clone, Default, Validate)]
+#[derive(Clone, Default)]
 pub struct GoogleSocialConfig {
     /// The Google OAuth client id.
     #[validate(length(min = 1))]

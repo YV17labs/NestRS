@@ -115,7 +115,7 @@ pub mod prelude {
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
         ClientIp, Ctx, HttpConfig, HttpModule, RawBody, Reflector, Scoped, Valid, controller,
-        http_code, input, redirect, response_header, routes,
+        http_code, input, interceptor, redirect, response_header, routes,
     };
 
     // `Json`/`Path`/`Query` are `poem` extractors re-exported through
@@ -127,4 +127,35 @@ pub mod prelude {
 
     #[cfg(feature = "config")]
     pub use nest_rs_config::{Config, Namespaced, config};
+
+    #[cfg(feature = "events")]
+    pub use nest_rs_events::listeners;
+
+    #[cfg(feature = "graphql")]
+    pub use nest_rs_graphql::{dataloader, resolver};
+
+    #[cfg(feature = "health")]
+    pub use nest_rs_health::indicators;
+
+    #[cfg(feature = "mcp")]
+    pub use nest_rs_mcp::mcp;
+
+    #[cfg(feature = "queue")]
+    pub use nest_rs_queue::{processor, queue};
+
+    #[cfg(feature = "resource")]
+    pub use nest_rs_resource::expose;
+
+    #[cfg(feature = "schedule")]
+    pub use nest_rs_schedule::scheduled;
+
+    #[cfg(feature = "ws")]
+    pub use nest_rs_ws::{gateway, messages};
+
+    // `#[crud]` is deliberately **not** re-exported here: `nest_rs_http::crud`
+    // and `nest_rs_graphql::crud` are different decorators sharing a name, so a
+    // glob prelude carrying both would collide the moment an app enables
+    // `http` + `graphql`. Name the transport at the use site —
+    // `use nest_rs::graphql::crud;` — which is also what the file it decorates
+    // is about.
 }

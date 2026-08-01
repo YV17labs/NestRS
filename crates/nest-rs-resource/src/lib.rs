@@ -42,4 +42,24 @@ pub use nest_rs_resource_macros::expose;
 // derive path through a re-export would be false hygiene.
 pub use async_trait::async_trait;
 pub use serde_json;
+// `#[expose]` derives on the wire DTO and the create/update inputs it
+// generates; each derive carries a `crate = ` override pointing back here, so
+// an entity crate declares none of the three.
+// The entity-site trio. `#[expose]` emits `::sea_orm::`, `::uuid::` and
+// `::chrono::` for the ActiveModel plumbing and the lifecycle impl it
+// generates — code the entity crate never writes, so it must not have to
+// declare them either.
+#[doc(hidden)]
+pub use chrono;
+#[doc(hidden)]
+pub use sea_orm;
+#[doc(hidden)]
+pub use uuid;
+
+#[doc(hidden)]
+pub use schemars;
+#[doc(hidden)]
+pub use serde;
 pub use tracing;
+#[doc(hidden)]
+pub use validator;

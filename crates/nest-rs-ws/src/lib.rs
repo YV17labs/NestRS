@@ -112,6 +112,10 @@ pub use poem;
 // crate: a WS-only gateway crate needs no direct `nest-rs-http` dependency.
 pub use nest_rs_http;
 
+/// The wire-DTO shorthand — same decorator the HTTP layer uses, re-exported
+/// here so a payload crossing this transport needs no `serde` of its own.
+pub use nest_rs_core::input;
+
 pub use nest_rs_ws_macros::messages;
 
 /// The gateway decorator. `#[use_interceptors(...)]` / `#[use_filters(...)]`

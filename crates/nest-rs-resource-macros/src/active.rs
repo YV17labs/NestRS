@@ -24,7 +24,7 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
         .filter(|f| f.in_create && !f.is_pk)
         .map(|f| {
             let name = &f.ident;
-            quote! { __am.#name = ::sea_orm::ActiveValue::Set(self.#name); }
+            quote! { __am.#name = ::nest_rs_resource::sea_orm::ActiveValue::Set(self.#name); }
         })
         .collect();
     if setters.is_empty() {
@@ -35,7 +35,7 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
     let pk_seed = match model.fields.iter().find(|f| f.is_pk) {
         Some(pk) if is_uuid(&pk.ty) => {
             let id = &pk.ident;
-            quote! { __am.#id = ::sea_orm::ActiveValue::Set(::uuid::Uuid::now_v7()); }
+            quote! { __am.#id = ::nest_rs_resource::sea_orm::ActiveValue::Set(::nest_rs_resource::uuid::Uuid::now_v7()); }
         }
         _ => quote! {},
     };
@@ -60,7 +60,7 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
         .filter(|f| f.in_update && !f.is_pk)
         .map(|f| {
             let name = &f.ident;
-            quote! { __am.#name = ::sea_orm::ActiveValue::Set(self.#name); }
+            quote! { __am.#name = ::nest_rs_resource::sea_orm::ActiveValue::Set(self.#name); }
         })
         .collect();
     if setters.is_empty() {

@@ -39,14 +39,19 @@ fn input_struct(
     let graphql_derives = graphql_object_derive(model, "InputObject");
 
     quote! {
+        // Same routing as the wire DTO: these inputs are generated, so their
+        // derives must not reach for the entity crate's extern prelude.
         #[derive(
             ::core::fmt::Debug,
             ::core::clone::Clone,
-            ::serde::Deserialize,
+            ::nest_rs_resource::serde::Deserialize,
             #graphql_derives
-            ::validator::Validate,
-            ::schemars::JsonSchema,
+            ::nest_rs_resource::validator::Validate,
+            ::nest_rs_resource::schemars::JsonSchema,
         )]
+        #[serde(crate = "::nest_rs_resource::serde")]
+        #[validate(crate = ::nest_rs_resource::validator)]
+        #[schemars(crate = "::nest_rs_resource::schemars")]
         pub struct #name {
             #(#decls),*
         }

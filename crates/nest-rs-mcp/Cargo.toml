@@ -11,6 +11,9 @@ keywords = ["framework", "nestrs", "mcp", "rmcp", "ai"]
 categories = ["web-programming", "api-bindings"]
 
 [dependencies]
+# Source of the `#[input]` wire-DTO shorthand, re-exported so a payload
+# crossing this transport declares no `serde` of its own.
+nest-rs-http.workspace = true
 nest-rs-core.workspace = true
 nest-rs-mcp-macros.workspace = true
 poem.workspace = true
@@ -25,7 +28,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }
-nest-rs-http = { path = "../nest-rs-http" }
 # The fallback-guard tests drive `use_guards_global` onto `/mcp` through
 # `GlobalPoolMcpGuard`, which lives behind guards' `mcp` feature. Dev-dep cycle
 # (guards/mcp depends on this crate) is allowed by Cargo, same as

@@ -1,7 +1,6 @@
 //! [`OAuth2Config`] — env-driven OAuth2 provider endpoints.
 
 use nest_rs_config::{Config, ConfigService, config};
-use validator::Validate;
 
 // No `Debug`: `client_secret` must not leak through a derived format.
 /// Env-driven OAuth2 provider endpoints (namespace `authn`). Every URL/credential
@@ -9,7 +8,7 @@ use validator::Validate;
 /// loudly rather than running a broken flow. No `Debug`: `client_secret` must
 /// not leak through a format.
 #[config(namespace = "authn")]
-#[derive(Clone, Default, Validate)]
+#[derive(Clone, Default)]
 pub struct OAuth2Config {
     /// The registered OAuth2 client id.
     #[validate(length(min = 1))]
@@ -50,6 +49,7 @@ impl Config for OAuth2Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use validator::Validate;
 
     fn complete() -> OAuth2Config {
         OAuth2Config {

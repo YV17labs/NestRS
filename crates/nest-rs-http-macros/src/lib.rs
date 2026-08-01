@@ -9,7 +9,6 @@ use proc_macro::TokenStream;
 mod attr;
 mod controller;
 mod crud;
-mod input;
 mod interceptor;
 mod response;
 mod routes;
@@ -51,7 +50,7 @@ mod routes;
 /// ```
 #[proc_macro_attribute]
 pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
-    controller::controller(args, input)
+    ::nest_rs_codegen::reroot(controller::controller(args, input).into()).into()
 }
 
 /// Mark a struct as a **global** HTTP interceptor. Behaves like `#[injectable]`
@@ -85,7 +84,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
-    interceptor::interceptor(args, input)
+    ::nest_rs_codegen::reroot(interceptor::interceptor(args, input).into()).into()
 }
 
 /// Bind controller methods to HTTP routes. Applied to an `impl` block
@@ -155,7 +154,7 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
-    routes::routes(args, input)
+    ::nest_rs_codegen::reroot(routes::routes(args, input).into()).into()
 }
 
 /// Generate standard REST operations (list/get/create/update/delete) on a
@@ -209,29 +208,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
-    crud::entry(args, input)
-}
-
-/// `#[input]` — shorthand for input DTOs. Appends
-/// `#[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
-/// and `#[serde(deny_unknown_fields)]` so an unknown field on the wire
-/// (e.g. `is_admin: true`) is rejected at parse time instead of silently
-/// dropped, and the DTO documents itself in the OpenAPI document without a
-/// second derive to remember.
-///
-/// # Expands to
-///
-/// The struct, with the derives + serde attribute prepended (stacking with any
-/// existing `#[derive(...)]`):
-///
-/// ```ignore
-/// #[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]
-/// #[serde(deny_unknown_fields)]
-/// struct CreateUser { /* … */ }
-/// ```
-#[proc_macro_attribute]
-pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
-    input::input(args, item)
+    ::nest_rs_codegen::reroot(crud::entry(args, input).into()).into()
 }
 
 /// `#[http_code(N)]` — override the response status (`100..=999`). Passthrough
@@ -246,7 +223,7 @@ pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
 /// own status).
 #[proc_macro_attribute]
 pub fn http_code(args: TokenStream, item: TokenStream) -> TokenStream {
-    response::passthrough(args, item)
+    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
 }
 
 /// `#[response_header("name", "value")]` — append a header to the response.
@@ -262,7 +239,7 @@ pub fn http_code(args: TokenStream, item: TokenStream) -> TokenStream {
 /// stacks instead of overriding.
 #[proc_macro_attribute]
 pub fn response_header(args: TokenStream, item: TokenStream) -> TokenStream {
-    response::passthrough(args, item)
+    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
 }
 
 /// `#[redirect("url"[, code])]` — discard the handler's payload and return a
@@ -279,5 +256,5 @@ pub fn response_header(args: TokenStream, item: TokenStream) -> TokenStream {
 /// "url").finish()`, then applies any stacked `#[response_header]`.
 #[proc_macro_attribute]
 pub fn redirect(args: TokenStream, item: TokenStream) -> TokenStream {
-    response::passthrough(args, item)
+    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
 }

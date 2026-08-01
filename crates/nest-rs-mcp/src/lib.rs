@@ -74,4 +74,8 @@ pub use rmcp::transport::streamable_http_server::{
 #[doc(hidden)]
 pub use rmcp;
 
+/// The wire-DTO shorthand — same decorator the HTTP layer uses, re-exported
+/// here so a payload crossing this transport needs no `serde` of its own.
+pub use nest_rs_core::input;
+
 pub use nest_rs_mcp_macros::mcp;

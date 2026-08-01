@@ -7,8 +7,11 @@ use syn::punctuated::Punctuated;
 use syn::{ItemStruct, LitStr, MetaNameValue, Token, parse_macro_input};
 
 pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
-    let namespace = match parse_namespace(args.into()) {
-        Ok(ns) => ns,
+    let Args {
+        namespace,
+        manual_validate,
+    } = match parse_args(args.into()) {
+        Ok(args) => args,
         Err(err) => return err.to_compile_error().into(),
     };
 
@@ -17,7 +20,24 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let namespace_lit = namespace.value();
 
+    // The decorator carries `Validate` and points it back at the framework's
+    // own copy. Without the `crate = ` override the derive would emit
+    // `::validator::` against the *call site's* prelude, which is what used to
+    // force `validator = "0.20"` — and an exact version to align — into the
+    // manifest of every crate holding a `#[config]` struct.
+    //
+    // `validate = "manual"` opts out, for the config that validates across
+    // fields and writes the impl by hand: deriving on top of that is a
+    // conflicting impl, and cross-field rules are a real need, not a mistake.
+    let derive = (!manual_validate).then(|| {
+        quote! {
+            #[derive(::nest_rs_config::validator::Validate)]
+            #[validate(crate = ::nest_rs_config::validator)]
+        }
+    });
+
     quote! {
+        #derive
         #item
 
         impl #impl_generics ::nest_rs_config::Namespaced for #name #ty_generics #where_clause {
@@ -31,10 +51,16 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
 // shared helper parses a single `key = "..."` and cannot name an *unexpected*
 // argument, whereas `#[config]` rejects unknown keys by name (see the `other`
 // arm below). The friendlier diagnostic is worth the local parser.
-fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
+struct Args {
+    namespace: LitStr,
+    manual_validate: bool,
+}
+
+fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     let metas = Punctuated::<MetaNameValue, Token![,]>::parse_terminated.parse2(args)?;
 
     let mut namespace: Option<LitStr> = None;
+    let mut manual_validate = false;
     for meta in metas {
         let key = meta
             .path
@@ -50,10 +76,23 @@ fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
                     "database",
                 )?)
             }
+            "validate" => {
+                let lit = require_str_lit(&meta.value, "config", "validate", "manual")?;
+                if lit.value() != "manual" {
+                    return Err(syn::Error::new_spanned(
+                        &meta.value,
+                        "#[config] `validate` takes only `\"manual\"`, which suppresses the \
+                         derive so the struct can write `impl Validate` itself",
+                    ));
+                }
+                manual_validate = true;
+            }
             other => {
                 return Err(syn::Error::new_spanned(
                     &meta.path,
-                    format!("unknown #[config] argument `{other}`; expected `namespace`"),
+                    format!(
+                        "unknown #[config] argument `{other}`; expected `namespace` or `validate`"
+                    ),
                 ));
             }
         }
@@ -66,7 +105,10 @@ fn parse_namespace(args: TokenStream2) -> syn::Result<LitStr> {
         )
     })?;
     validate_namespace(&lit)?;
-    Ok(lit)
+    Ok(Args {
+        namespace: lit,
+        manual_validate,
+    })
 }
 
 /// Lowercase env-domain segment so it round-trips into `NESTRS_<DOMAIN>__`.

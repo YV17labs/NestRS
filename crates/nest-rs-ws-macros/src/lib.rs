@@ -45,7 +45,7 @@ mod messages;
 /// ```
 #[proc_macro_attribute]
 pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
-    gateway::gateway(args, input)
+    ::nest_rs_codegen::reroot(gateway::gateway(args, input).into()).into()
 }
 
 /// Bind a `#[gateway]` impl block's message handlers. Each
@@ -85,5 +85,5 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
-    messages::messages(args, input)
+    ::nest_rs_codegen::reroot(messages::messages(args, input).into()).into()
 }

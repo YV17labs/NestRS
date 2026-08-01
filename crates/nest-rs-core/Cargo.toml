@@ -31,6 +31,12 @@ tracing-subscriber = { workspace = true, optional = true }
 # Link-time registry: each `#[hooks]` method submits a lifecycle hook so `App`
 # composes them at boot with no central list (same mechanism as GraphQL).
 inventory.workspace = true
+# Re-exported for `#[input]`, whose derives route back here with a `crate = `
+# override. The kernel is the only crate every capability already has, so a
+# wire DTO costs no transport it does not otherwise use.
+serde.workspace = true
+schemars.workspace = true
+validator.workspace = true
 # Request-scope cache lock — poison-free locking off the request hot path.
 parking_lot.workspace = true
 

@@ -6,13 +6,12 @@ use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigService, Result, config};
 use sea_orm::ConnectOptions;
-use validator::Validate;
 
 /// Connection settings for [`DatabaseModule`](crate::DatabaseModule). Every
 /// field is settable via a `NESTRS_DATABASE__*` env var (see `from_env`) or
 /// pinned through [`DatabaseModule::for_root`](crate::DatabaseModule::for_root).
 #[config(namespace = "database")]
-#[derive(Clone, Default, Validate)]
+#[derive(Clone, Default)]
 pub struct DatabaseConfig {
     /// e.g. `postgres://user:pass@host/db`. Empty aborts the build.
     pub url: String,

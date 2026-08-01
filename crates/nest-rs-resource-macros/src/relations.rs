@@ -126,7 +126,7 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
                 )
                     #live
                     .filter(
-                        <Column as ::sea_orm::ColumnTrait>::is_in(
+                        <Column as ::nest_rs_resource::sea_orm::ColumnTrait>::is_in(
                             &Column::#pk_col,
                             __keys.iter().cloned(),
                         ),
@@ -271,7 +271,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                     // `cap × keys` and each parent's bucket is truncated, so an
                     // unbounded relation (millions of children under one parent)
                     // can never pull an unbounded result set into memory.
-                    use ::sea_orm::{QueryOrder as _, QuerySelect as _};
+                    use ::nest_rs_resource::sea_orm::{QueryOrder as _, QuerySelect as _};
                     let __cap = ::nest_rs_seaorm::RELATION_LOAD_CAP;
                     let __limit = __cap.saturating_mul(__keys.len() as u64);
                     let __conn = ::nest_rs_seaorm::Repo::<Entity>::conn()?;
@@ -280,7 +280,7 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
                     )
                         #live
                         .filter(
-                            <Column as ::sea_orm::ColumnTrait>::is_in(
+                            <Column as ::nest_rs_resource::sea_orm::ColumnTrait>::is_in(
                                 &Column::#fk_col_pascal,
                                 __keys.iter().cloned(),
                             ),
@@ -527,7 +527,7 @@ fn emit_has_many_method(
 fn wire_key_expr(ty: &Type, ident: &Ident) -> TokenStream2 {
     if is_uuid(ty) {
         quote! {
-            ::uuid::Uuid::parse_str(&self.#ident)
+            ::nest_rs_resource::uuid::Uuid::parse_str(&self.#ident)
                 .map_err(|__e| ::nest_rs_resource::graphql::async_graphql::Error::new(__e.to_string()))?
         }
     } else {

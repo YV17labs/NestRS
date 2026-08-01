@@ -117,6 +117,14 @@ pub use inventory;
 // (`anyhow::Result<()>`) resolves through the framework — a downstream app
 // using `#[hooks]` without a direct `anyhow` dependency must still compile.
 pub use anyhow;
+// `#[input]` carries the wire-DTO derives so the developer does not; routing
+// them through the kernel keeps them reachable from every capability.
+#[doc(hidden)]
+pub use schemars;
+#[doc(hidden)]
+pub use serde;
+#[doc(hidden)]
+pub use validator;
 
 pub use nest_rs_core_macros::{hooks, module};
 
@@ -135,3 +143,8 @@ pub use nest_rs_core_macros::{hooks, module};
 /// }
 /// ```
 pub use nest_rs_core_macros::injectable;
+
+/// The wire-DTO shorthand: carries `Serialize`/`Deserialize`/`Validate`/
+/// `JsonSchema` and routes each back here, so a DTO crossing any transport
+/// declares none of them.
+pub use nest_rs_core_macros::input;

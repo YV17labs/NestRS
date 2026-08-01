@@ -1,6 +1,5 @@
 use nest_rs_authn::OAuth2Config;
 use nest_rs_config::{Config, ConfigService, config};
-use validator::Validate;
 
 use crate::registry::SocialProviderConfig;
 
@@ -11,7 +10,7 @@ use crate::registry::SocialProviderConfig;
 /// Dual-path (env `NESTRS_SOCIAL__GITHUB__*` **and** the pinned struct). No
 /// `Debug`: `client_secret` must not leak through a derived format.
 #[config(namespace = "social__github")]
-#[derive(Clone, Default, Validate)]
+#[derive(Clone, Default)]
 pub struct GithubSocialConfig {
     /// The GitHub OAuth app's client id.
     #[validate(length(min = 1))]

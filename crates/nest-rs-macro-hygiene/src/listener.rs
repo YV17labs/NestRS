@@ -1,7 +1,7 @@
 //! `#[listeners]` + `#[on_event]`.
 
-use nest_rs_core::injectable;
-use nest_rs_events::listeners;
+use nest_rs::core::injectable;
+use nest_rs::events::listeners;
 
 /// A bus event — plain `Clone` struct, no serde.
 #[derive(Clone)]

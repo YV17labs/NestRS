@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.3.0"
+version = "2.0.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.96"
@@ -16,41 +16,28 @@ repository = "https://github.com/YV17labs/NestRS"
 homepage = "https://nestrs.dev"
 
 [workspace.dependencies]
-# ── Pinned-major policy (part of the 1.0 public-API contract) ────────────────
-# A handful of third-party crates are the PUBLIC surface of the framework —
-# their types appear in signatures the macros emit and downstream code names.
-# A MAJOR bump of any of them is therefore a breaking change for nestrs, so the
-# policy is: **the major version of each is tied to the nestrs major.** A major
-# bump ships only in a nestrs major; within a 1.x line these majors are frozen.
-#   • poem           = "3"        — HTTP transport surface (extractors, Request/Response,
-#                                   Endpoint, WebSocket); re-exported as `nest_rs_http::poem`.
-#   • sea-orm        = "=2.0"     — ORM surface (Repo bounds, Executor, DbErr,
-#                                   entities). Exact-pinned; see below.
-#   • async-graphql  = "=7.2.1"   — GraphQL surface; exact-pinned (registry internals).
-#   • rmcp           = "2.2"      — MCP surface (ServerHandler, tool params).
-#   • inventory      = "0.3"      — link-time discovery registry (macro contract).
-#   • validator      = "0.20"     — `#[validate]` edge-validation surface.
-#   • schemars       = "1"        — OpenAPI/MCP JSON-Schema derive surface.
-# Bumping a major here is a deliberate, reviewed nestrs-major change — never a
-# passive `cargo update`.
+# Every requirement here is `major.minor` — the floor we build against, patch
+# left to the publisher. Move the minor when `cargo update` does;
+# `versions_are_major_minor` (nest-rs-cli) fails the suite on any other form.
+#
+# Pinned majors: poem, sea-orm, async-graphql, rmcp, inventory, validator and
+# schemars ARE the public surface — their types appear in the signatures the
+# macros emit. A major bump of one breaks downstream code, so it ships in a
+# nestrs major, reviewed, never in a passing `cargo update`.
 #
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.53", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Tracing / logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# OpenTelemetry stack. SDK pinned with rt-tokio so batch exporters run on our
-# async runtime; OTLP exporter uses HTTP/protobuf over reqwest so we reuse the
-# rustls toolchain already in the workspace (no tonic/openssl).
+# OTLP over HTTP/protobuf on reqwest, so the workspace's rustls toolchain is
+# reused (no tonic/openssl). The batch processors export from a dedicated
+# non-Tokio thread, which is why the default blocking reqwest client is right.
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-# Defaults give us http-proto + reqwest-blocking-client + trace/metrics/logs.
-# The batch processors run their HTTP exports from a dedicated thread that is
-# *not* a Tokio reactor, so the blocking reqwest client is the right pick —
-# the upstream-recommended pairing for batch exporters.
 opentelemetry-otlp = "0.32"
 opentelemetry-http = "0.32"
 opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
@@ -58,73 +45,50 @@ opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
 
 # Errors
-thiserror = "2"
-anyhow = "1"
+thiserror = "2.0"
+anyhow = "1.0"
 
-# JWT — HS/RS/ES algorithms for token signing and verification.
-# `rust_crypto` selects the pure-Rust backend (no aws-lc-rs C dependency), matching
-# the workspace's rustls posture; jsonwebtoken 10 requires picking one explicitly.
-jsonwebtoken = { version = "10", features = ["rust_crypto"] }
-# OAuth2 Authorization Code flow (+ PKCE); the `reqwest` backend below drives its
-# token exchange. The per-provider strategy lives in the app.
-oauth2 = "5"
-# HTTP Basic decoding for OAuth2 client authentication (`Authorization: Basic`).
-# The de-facto standard base64 crate, already in the tree transitively via
-# oauth2/jsonwebtoken; pulled up as a direct dep for the `basic_credentials` helper.
-# NOTE: last release 0.22.1 (2024) is past the 12-month freshness bar, but the
-# crate is effectively feature-complete and ubiquitous — flagged, not silent.
-base64 = "0.22"
+# `rust_crypto` picks the pure-Rust backend (no aws-lc-rs C dependency),
+# matching the workspace's rustls posture; jsonwebtoken makes it explicit.
+jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
+oauth2 = "5.0"
+# `Authorization: Basic` decoding for the OAuth2 client credentials.
+base64 = "0.23"
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 # Config
 figment = { version = "0.10", features = ["toml", "env"] }
 
-# HTTP. The `anyhow` feature gives `poem::Error: From<anyhow::Error>` (→ 500), so a
-# handler can `?` a service's `anyhow::Result` straight through — no hand-written
-# error→response mapping in the app. `rustls` terminates TLS at the transport
-# (`HttpTransport::tls`) with no OpenSSL system dependency, keeping the
-# single-static-binary promise.
-poem = { version = "3", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
+# `anyhow` gives `poem::Error: From<anyhow::Error>` (→ 500), so a handler can
+# `?` a service's `anyhow::Result` with no hand-written error→response mapping.
+# `rustls` terminates TLS with no OpenSSL system dep (single static binary).
+poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
 
-# S3-compatible object storage (nest-rs-storage). `object_store` is the generic,
-# multi-driver object-store abstraction (S3/GCS/Azure/fs/memory) under Apache
-# Arrow; the `aws` feature brings the `AmazonS3` driver + its `Signer` (presign).
-# Chosen over `aws-sdk-s3` because it is reqwest/rustls-based with no
-# `aws-runtime` (which fails to build on the pinned toolchain). Last release
-# 0.14.1 (2026) — within the freshness bar.
+# Chosen over `aws-sdk-s3`: reqwest/rustls-based, no `aws-runtime` (which fails
+# to build on the pinned toolchain). `aws` brings AmazonS3 + its presign Signer.
 object_store = { version = "0.14", features = ["aws"] }
-# `object_store::signer::signed_url` takes a `reqwest::Method`, a re-export of
-# `http::Method`. Depend on `http` directly so nest-rs-storage stays decoupled
-# from whichever reqwest minor object_store pins internally.
-http = "1"
+# `signed_url` takes a `reqwest::Method` (a re-export of `http::Method`) — a
+# direct dep keeps nest-rs-storage off whichever reqwest minor object_store pins.
+http = "1.5"
 
-# Response-body plumbing for the access log: wrap poem's body stream in a byte
-# counter so the access event reports the exact size sent (poem stamps
-# Content-Length past the interceptor). `bytes::Bytes` is the chunk type,
-# `futures-core` the `Stream` trait the wrapper implements.
-bytes = "1"
+# The access log wraps poem's body stream in a byte counter to report the exact
+# size sent (poem stamps Content-Length past the interceptor).
+bytes = "1.12"
 futures-core = "0.3"
-# `StreamExt`/`SinkExt` for driving poem's `WebSocketStream` (a `Stream` + `Sink`)
-# in the WebSocket gateway connection loop (`nest-rs-ws`).
 futures-util = "0.3"
 
-# Async traits (needed for `dyn Trait` containing async methods)
 async-trait = "0.1"
 
-# Synchronisation primitives. parking_lot's locks have no poisoning, so the
-# framework's hot-path locks need no `.unwrap()`/`.expect()` (honouring the
-# "no unwrap on production paths" rule) and are smaller and faster than std's.
-# Already in the tree transitively (tokio/poem); pulled up as a direct dep so
-# every framework crate shares one lock primitive.
+# No lock poisoning, so the framework's hot-path locks need no `.unwrap()` —
+# one lock primitive shared by every crate.
 parking_lot = "0.12"
 
-# Constant-time byte comparison for the client-credentials grant. A hand-rolled
-# equality check leaks length via its early return; `subtle` is the audited
-# primitive (dalek). Already in the tree transitively; pulled up as a direct dep.
-subtle = "2"
+# Constant-time comparison for the client-credentials grant: a hand-rolled `==`
+# leaks length through its early return.
+subtle = "2.6"
 
 # GraphQL. `dataloader` gives us async-graphql's batching loader, surfaced via
 # the `#[dataloader]` decorator to kill field-resolver N+1s.
@@ -143,67 +107,44 @@ async-graphql-poem = "=7.2.1"
 # the schema composes itself at boot with no central list.
 inventory = "0.3"
 
-# Password hashing (Argon2id). Used by `nest-rs-authn::password` for credential storage.
 argon2 = "0.5"
+validator = { version = "0.21", features = ["derive"] }
+# `serde` so UUID-keyed entity rows serialize for the authz response masker.
+uuid = { version = "1.24", features = ["v7", "serde"] }
 
-# Input validation
-validator = { version = "0.20", features = ["derive"] }
-
-# UUIDs. `serde` so entity rows (whose ids are UUIDs) serialize for the authz
-# response masker and JSON responses.
-uuid = { version = "1", features = ["v7", "serde"] }
-
-# ORM. SeaORM 2.0 final. Postgres over the rustls toolchain already used across
-# the workspace.
-#
-# EXACT pin (`=`), not a caret range. sea-orm types saturate the ORM public
+# EXACT pin (`=`), not a caret range: sea-orm types saturate the ORM public
 # surface (`Repo` bounds, `Executor`'s `ConnectionTrait`, `ServiceError::Db`),
-# so its major is tied to the nestrs major (see the policy block above) and even
-# a minor lands as a deliberate, reviewed change — never a passive
-# `cargo update`. On bump, move both pins together and re-run the seaorm/storage
-# e2e suites.
+# so even a minor is a reviewed change. On bump, move both pins together and
+# re-run the seaorm/storage e2e suites.
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
-# Migration runner + schema builder. Same release line as sea-orm; the bundled
-# `cli` feature gives the `migrate` binary its up/down/fresh/status subcommands.
 sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 
 # HTTP client (rustls so we avoid an OpenSSL system dep)
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
-# Dev-only. Snapshot-tests the macro compile errors — the boot-time
-# diagnostics are pinned by integration tests; trybuild pins the compile-time
-# ones (`tests/integration/diagnostics/` in each macro's home crate), so the
-# framework's #1 differentiator can't regress silently. Owner-approved
-# (2026-07-19); actively maintained (dtolnay).
-trybuild = "1"
+# Dev-only. Pins the macros' compile-time diagnostics (the boot-time ones are
+# pinned by integration tests), so the framework's #1 differentiator cannot
+# regress silently.
+trybuild = "1.0"
 
-# MCP server SDK + JSON Schema derive used by tool parameters.
-# schemars must match rmcp's re-exported version so the derive resolves to the
-# same trait rmcp::handler::server::wrapper::Parameters expects.
+# schemars must match rmcp's re-exported version, or the derive resolves to a
+# different trait than `rmcp::handler::server::wrapper::Parameters` expects.
 rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
-# `uuid1` adds the `JsonSchema` impl for `uuid::Uuid` so UUID-typed DTO fields can
-# be documented (and typed at the edge) rather than passed around as strings.
-schemars = { version = "1", features = ["uuid1"] }
+schemars = { version = "1.2", features = ["uuid1"] }
 
-# Cron expression parsing for the #[cron("...")] attribute on #[scheduled] jobs.
-# croner accepts 5/6/7
-# fields (seconds optional), for flexible schedule expressions. chrono is its
-# time type; chrono-tz resolves an IANA name for the optional per-job timezone.
-croner = "3"
+# `#[cron("...")]` parsing. croner accepts 5/6/7 fields (seconds optional);
+# chrono-tz resolves the IANA name of the optional per-job timezone.
+croner = "3.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.10"
 
-# Redis-backed job queues. apalis is the
-# background-task framework; apalis-redis is its Redis storage backend. Pinned to
-# the 0.7 stable line — 1.0 is still churning through release candidates and does
-# not clear our "no pre-release in a foundation dep" bar.
+# Held at the 0.7 stable line: apalis 1.0 is still churning through release
+# candidates and does not clear the "no pre-release in a foundation dep" bar.
 apalis = "0.7"
 apalis-redis = "0.7"
-# Direct Redis client (same 0.32 line apalis-redis pins, so one connection
-# type). Used by nest-rs-redis for the connection manager it exposes and the
-# atomic fixed-window Lua script of the `throttler` feature. The single
-# workspace pin guarantees version unification with apalis-redis — a semver
-# divergence would break the `#[from]` conversion at compile time (wanted).
+# Same 0.32 line apalis-redis pins, so the two share one connection type — a
+# semver divergence would break the `#[from]` conversion at compile time
+# (wanted). This is why redis 1.x waits on apalis-redis 1.0.
 redis = { version = "0.32", default-features = false, features = [
     "aio",
     "connection-manager",
@@ -212,91 +153,80 @@ redis = { version = "0.32", default-features = false, features = [
 ] }
 
 # CLI (nest-rs-cli)
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 toml_edit = "0.25"
 
 # Proc-macro dependencies
 syn = { version = "3.0", features = ["full"] }
-quote = "1"
-proc-macro2 = "1"
+quote = "1.0"
+proc-macro2 = "1.0"
+# Resolves the name the call site reaches the framework by, so an expansion can
+# root itself at `::nest_rs::<concern>` in an app and at `::nest_rs_<concern>`
+# inside the framework's own crates. See `nest-rs-codegen`'s `reroot`.
+proc-macro-crate = "3.5"
 
 # Dev-only (test targets)
-tempfile = "3"
+tempfile = "3.27"
 tower = "0.5"
 libc = "0.2"
 
-# Internal crates (framework).
-# Workspace keys, package names, and directory names are all `nest-rs-*` — the
-# canonical kebab-case form on crates.io. Cargo's default hyphen→underscore
-# mapping makes the Rust import path `nest_rs_*` (no `[lib]` override needed), so
-# app code still writes `use nest_rs::prelude::*;` and proc-macros still emit
-# `::nest_rs_core::*`.
-nest-rs-core = { version = "1.3.0", path = "crates/nest-rs-core" }
-nest-rs-authn = { version = "1.3.0", path = "crates/nest-rs-authn" }
-nest-rs-throttler = { version = "1.3.0", path = "crates/nest-rs-throttler" }
-nest-rs-config = { version = "1.3.0", path = "crates/nest-rs-config" }
-nest-rs-config-macros = { version = "1.3.0", path = "crates/nest-rs-config-macros" }
-nest-rs-events = { version = "1.3.0", path = "crates/nest-rs-events" }
-nest-rs-events-macros = { version = "1.3.0", path = "crates/nest-rs-events-macros" }
-nest-rs-authz = { version = "1.3.0", path = "crates/nest-rs-authz" }
-nest-rs-codegen = { version = "1.3.0", path = "crates/nest-rs-codegen" }
-nest-rs-core-macros = { version = "1.3.0", path = "crates/nest-rs-core-macros" }
-nest-rs-graphql = { version = "1.3.0", path = "crates/nest-rs-graphql" }
-nest-rs-graphql-macros = { version = "1.3.0", path = "crates/nest-rs-graphql-macros" }
-nest-rs-guards = { version = "1.3.0", path = "crates/nest-rs-guards" }
-nest-rs-health = { version = "1.3.0", path = "crates/nest-rs-health" }
-nest-rs-health-macros = { version = "1.3.0", path = "crates/nest-rs-health-macros" }
-nest-rs-http = { version = "1.3.0", path = "crates/nest-rs-http" }
-nest-rs-http-macros = { version = "1.3.0", path = "crates/nest-rs-http-macros" }
-nest-rs-mcp = { version = "1.3.0", path = "crates/nest-rs-mcp" }
-nest-rs-mcp-macros = { version = "1.3.0", path = "crates/nest-rs-mcp-macros" }
-nest-rs-interceptors = { version = "1.3.0", path = "crates/nest-rs-interceptors" }
-nest-rs-filters = { version = "1.3.0", path = "crates/nest-rs-filters" }
-nest-rs-exception-filters = { version = "1.3.0", path = "crates/nest-rs-exception-filters" }
-nest-rs-openapi = { version = "1.3.0", path = "crates/nest-rs-openapi" }
-nest-rs-database = { version = "1.3.0", path = "crates/nest-rs-database" }
-nest-rs-seaorm = { version = "1.3.0", path = "crates/nest-rs-seaorm" }
-nest-rs-pipes = { version = "1.3.0", path = "crates/nest-rs-pipes" }
-nest-rs-queue = { version = "1.3.0", path = "crates/nest-rs-queue" }
-nest-rs-queue-macros = { version = "1.3.0", path = "crates/nest-rs-queue-macros" }
-nest-rs-redis = { version = "1.3.0", path = "crates/nest-rs-redis" }
-nest-rs-resource = { version = "1.3.0", path = "crates/nest-rs-resource" }
-nest-rs-resource-macros = { version = "1.3.0", path = "crates/nest-rs-resource-macros" }
-nest-rs-schedule = { version = "1.3.0", path = "crates/nest-rs-schedule" }
-nest-rs-schedule-macros = { version = "1.3.0", path = "crates/nest-rs-schedule-macros" }
-nest-rs-server-timing = { version = "1.3.0", path = "crates/nest-rs-server-timing" }
-nest-rs-social = { version = "1.3.0", path = "crates/nest-rs-social" }
-nest-rs-opentelemetry = { version = "1.3.0", path = "crates/nest-rs-opentelemetry" }
-nest-rs-testing = { version = "1.3.0", path = "crates/nest-rs-testing" }
-nest-rs-storage = { version = "1.3.0", path = "crates/nest-rs-storage" }
-nest-rs-worker = { version = "1.3.0", path = "crates/nest-rs-worker" }
-nest-rs-ws = { version = "1.3.0", path = "crates/nest-rs-ws" }
-nest-rs-ws-macros = { version = "1.3.0", path = "crates/nest-rs-ws-macros" }
+# Internal crates. Kebab-case everywhere (the crates.io form); Cargo's default
+# hyphen→underscore mapping gives the `nest_rs_*` import paths the macros emit.
+nest-rs-core = { version = "2.0.0", path = "crates/nest-rs-core" }
+nest-rs-authn = { version = "2.0.0", path = "crates/nest-rs-authn" }
+nest-rs-throttler = { version = "2.0.0", path = "crates/nest-rs-throttler" }
+nest-rs-config = { version = "2.0.0", path = "crates/nest-rs-config" }
+nest-rs-config-macros = { version = "2.0.0", path = "crates/nest-rs-config-macros" }
+nest-rs-events = { version = "2.0.0", path = "crates/nest-rs-events" }
+nest-rs-events-macros = { version = "2.0.0", path = "crates/nest-rs-events-macros" }
+nest-rs-authz = { version = "2.0.0", path = "crates/nest-rs-authz" }
+nest-rs-codegen = { version = "2.0.0", path = "crates/nest-rs-codegen" }
+nest-rs-core-macros = { version = "2.0.0", path = "crates/nest-rs-core-macros" }
+nest-rs-graphql = { version = "2.0.0", path = "crates/nest-rs-graphql" }
+nest-rs-graphql-macros = { version = "2.0.0", path = "crates/nest-rs-graphql-macros" }
+nest-rs-guards = { version = "2.0.0", path = "crates/nest-rs-guards" }
+nest-rs-health = { version = "2.0.0", path = "crates/nest-rs-health" }
+nest-rs-health-macros = { version = "2.0.0", path = "crates/nest-rs-health-macros" }
+nest-rs-http = { version = "2.0.0", path = "crates/nest-rs-http" }
+nest-rs-http-macros = { version = "2.0.0", path = "crates/nest-rs-http-macros" }
+nest-rs-mcp = { version = "2.0.0", path = "crates/nest-rs-mcp" }
+nest-rs-mcp-macros = { version = "2.0.0", path = "crates/nest-rs-mcp-macros" }
+nest-rs-interceptors = { version = "2.0.0", path = "crates/nest-rs-interceptors" }
+nest-rs-filters = { version = "2.0.0", path = "crates/nest-rs-filters" }
+nest-rs-exception-filters = { version = "2.0.0", path = "crates/nest-rs-exception-filters" }
+nest-rs-openapi = { version = "2.0.0", path = "crates/nest-rs-openapi" }
+nest-rs-database = { version = "2.0.0", path = "crates/nest-rs-database" }
+nest-rs-seaorm = { version = "2.0.0", path = "crates/nest-rs-seaorm" }
+nest-rs-pipes = { version = "2.0.0", path = "crates/nest-rs-pipes" }
+nest-rs-queue = { version = "2.0.0", path = "crates/nest-rs-queue" }
+nest-rs-queue-macros = { version = "2.0.0", path = "crates/nest-rs-queue-macros" }
+nest-rs-redis = { version = "2.0.0", path = "crates/nest-rs-redis" }
+nest-rs-resource = { version = "2.0.0", path = "crates/nest-rs-resource" }
+nest-rs-resource-macros = { version = "2.0.0", path = "crates/nest-rs-resource-macros" }
+nest-rs-schedule = { version = "2.0.0", path = "crates/nest-rs-schedule" }
+nest-rs-schedule-macros = { version = "2.0.0", path = "crates/nest-rs-schedule-macros" }
+nest-rs-server-timing = { version = "2.0.0", path = "crates/nest-rs-server-timing" }
+nest-rs-social = { version = "2.0.0", path = "crates/nest-rs-social" }
+nest-rs-opentelemetry = { version = "2.0.0", path = "crates/nest-rs-opentelemetry" }
+nest-rs-testing = { version = "2.0.0", path = "crates/nest-rs-testing" }
+nest-rs-storage = { version = "2.0.0", path = "crates/nest-rs-storage" }
+nest-rs-worker = { version = "2.0.0", path = "crates/nest-rs-worker" }
+nest-rs-ws = { version = "2.0.0", path = "crates/nest-rs-ws" }
+nest-rs-ws-macros = { version = "2.0.0", path = "crates/nest-rs-ws-macros" }
 
-# Lints opted into by the apps (via `[lints] workspace = true`). Config literals
-# always close with `..Default::default()` — the house convention that keeps an
-# import site forward-compatible as an options struct gains fields — so the
-# `needless_update` lint (which fires when every field happens to be specified
-# today) is deliberately silenced for that deliberate style.
-# Compiler-enforced unsafe-freedom: every crate opts in via `[lints]
-# workspace = true` — so `unsafe` is a compile error across all their targets
-# (lib AND integration tests) — except the 3 documented below. Config tests stay hermetic without `unsafe` by
-# injecting a `nest_rs_config::MapSource` (or `figment::Jail` for the two configs
-# that read raw env) instead of mutating process env. Only 3 crates keep a
-# source-level attribute, each for a single documented `unsafe` a workspace lint
-# can't express (it's unconditional and covers test targets):
-#   • nest-rs-config   — `#![cfg_attr(not(test), deny)]` + `#[allow]` at
-#                        `load_cascade` (the sole production env-write bootstrapper).
-#   • nest-rs-testing  — `#![cfg_attr(not(test), deny)]` + `#[allow]` at
-#                        `load_project_env` (`NESTRS_ENV=test` set-if-absent
-#                        inside the cascade `Once`, a lib fn).
-#   • nest-rs-schedule — `#![forbid]` (lib only) — its integration test needs
-#                        `unsafe { libc::raise(SIGINT) }` to drive the real
-#                        shutdown-signal path; a `[lints]` forbid would also
-#                        cover that test target and can't be overridden.
+# Every crate opts in with `[lints] workspace = true`, so `unsafe` is a compile
+# error in libs AND test targets. Three crates keep a source-level attribute
+# instead, each for one documented `unsafe` a workspace lint can't express:
+#   • nest-rs-config   — `load_cascade`, the sole production env-write bootstrapper.
+#   • nest-rs-testing  — `load_project_env` (`NESTRS_ENV=test` set-if-absent).
+#   • nest-rs-schedule — `#![forbid]` on the lib only: its integration test needs
+#                        `libc::raise(SIGINT)` to drive the real shutdown path,
+#                        which a `[lints]` forbid would cover and can't override.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Config literals always close with `..Default::default()` so an import site
+# stays forward-compatible as the options struct gains fields.
 [workspace.lints.clippy]
 needless_update = "allow"
 
@@ -307,8 +237,7 @@ lto = "fat"         # whole-program optimisation: best cross-crate dead-code eli
 codegen-units = 1   # a single unit gives the optimiser the most to work with
 strip = true        # drop symbols from the final binary (~18 MB -> ~15 MB)
 
-# Dev: fastest possible iterative compile. opt-level = 0 and incremental = true
-# are already the defaults; the win here is dropping full debuginfo while keeping
-# file:line in backtraces, which speeds up both codegen and linking.
+# opt-level = 0 and incremental are already the defaults; the win is dropping
+# full debuginfo while keeping file:line in backtraces.
 [profile.dev]
 debug = "line-tables-only"

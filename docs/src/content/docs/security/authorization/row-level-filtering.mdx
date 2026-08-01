@@ -85,7 +85,7 @@ service.
 ## The ambient ability
 
 `Repo::scoped(...)` reads the ability via
-`nest_rs_authz::current_ability()` — a `tokio::task_local!` set by
+`nest_rs::authz::current_ability()` — a `tokio::task_local!` set by
 the transport's authz guard. Three install depths cooperate:
 
 - **HTTP** — the `Authorize` shaper installs `with_ability(ability,
@@ -169,7 +169,7 @@ condition as a handler parameter via `Scope<E, A>` and join it
 yourself:
 
 ```rust
-use nest_rs_authz::{Read, http::Scope};
+use nest_rs::authz::{Read, http::Scope};
 
 #[get("/users/search")]
 async fn search(

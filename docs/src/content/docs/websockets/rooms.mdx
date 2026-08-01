@@ -25,7 +25,7 @@ spots the reference (distinct from an owned payload) and passes the
 current connection's handle:
 
 ```rust
-use nest_rs_ws::{gateway, messages, WsClient};
+use nest_rs::ws::{gateway, messages, WsClient};
 
 #[gateway(path = "/ws")]
 #[derive(Default)]

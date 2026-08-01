@@ -21,23 +21,16 @@ trait lets you ship one when you need Vault, K8s, or AWS Parameter Store.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-config
-cargo add validator --features derive
+cargo add nest-rs --features config
 ```
-
-A `#[config]` struct derives `validator::Validate` and carries `#[validate]`
-rules, and the crate re-exports neither the trait nor its derive — so the
-version has to match the one `nest-rs-config` compiles against, or the derive
-implements a *different* copy of the trait and the error reads as though you
-wrote the impl wrong:
 
 ```toml title="Cargo.toml"
 [dependencies]
-nest-rs-config = "1.3"
-validator = { version = "0.20", features = ["derive"] }
+nest-rs = { version = "2.0", features = ["config"] }
 ```
 
-`nestrs new` writes that pin into `[workspace.dependencies]` for you.
+`#[config]` carries the `Validate` derive itself, so a config struct needs no
+`validator` entry and no version to keep aligned with the framework's.
 
 ## A typed config — by example
 
@@ -45,11 +38,10 @@ The common case is three short blocks: a `#[config]` struct, a derived
 `Validate`, and a `from_env` that maps one line per variable.
 
 ```rust title="src/posts/config.rs"
-use nest_rs_config::{config, Config, ConfigService};
-use validator::Validate;
+use nest_rs::config::{config, Config, ConfigService};
 
 #[config(namespace = "posts")]
-#[derive(Clone, Validate)]
+#[derive(Clone)]
 pub struct PostsConfig {
     #[validate(range(min = 1, max = 500))]
     pub page_size: u32,
@@ -63,7 +55,7 @@ impl Default for PostsConfig {
 }
 
 impl Config for PostsConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
         Ok(Self {
             page_size: env.parse("PAGE_SIZE")?.unwrap_or(base.page_size),
             cache_enabled: env.flag("CACHE_ENABLED", base.cache_enabled)?,
@@ -123,6 +115,13 @@ pins the port as a *default* and leaves every `NESTRS_HTTP__*` key live.
 turns on TLS. The `..Default::default()` does not freeze the other fields
 alongside the one you meant to set.
 
+Read "the environment" there as the **real process environment only**. Once a
+field is pinned, the `.env` cascade no longer reaches it — the same
+`NESTRS_HTTP__PORT=3555` moves the port when it is exported into the process
+and is ignored when it sits in a committed `.env` file. That asymmetry is the
+whole point of the tier order below: a pin is a deliberate choice by the app's
+author, and a file committed next to the code must not undo it silently.
+
 The full precedence chain, highest first:
 
 | Tier | Wins over | Why |
@@ -167,7 +166,7 @@ The wiring is two module imports. The feature owns its config; the root
 module imports `ConfigModule::for_root()` once.
 
 ```rust title="src/posts/module.rs"
-use nest_rs_config::ConfigModule;
+use nest_rs::config::ConfigModule;
 use super::config::PostsConfig;
 use super::service::PostsService;
 
@@ -179,7 +178,7 @@ pub struct PostsModule;
 ```
 
 ```rust title="src/module.rs"
-use nest_rs_config::ConfigModule;
+use nest_rs::config::ConfigModule;
 
 #[module(
     imports = [

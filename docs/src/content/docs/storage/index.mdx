@@ -31,7 +31,7 @@ AWS SDK currently does not.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-storage
+cargo add nest-rs --features storage
 ```
 
 ## Wire it in
@@ -41,8 +41,8 @@ from `NESTRS_STORAGE__*`) and registers `Storage` as a singleton
 provider. Import it where a feature needs storage:
 
 ```rust title="src/media/module.rs"
-use nest_rs_core::module;
-use nest_rs_storage::StorageModule;
+use nest_rs::core::module;
+use nest_rs::storage::StorageModule;
 
 use crate::media::MediaService;
 
@@ -76,8 +76,8 @@ object store; a later call reads the object's metadata to finalize.
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::injectable;
-use nest_rs_storage::{Result, Storage};
+use nest_rs::core::injectable;
+use nest_rs::storage::{Result, Storage};
 
 #[injectable]
 pub struct MediaService {

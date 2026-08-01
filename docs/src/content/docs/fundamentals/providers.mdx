@@ -27,7 +27,7 @@ dependencies as `#[inject]` fields.
 
 ```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
-use nest_rs_core::injectable;
+use nest_rs::core::injectable;
 use sea_orm::DatabaseConnection;
 
 #[injectable]
@@ -51,7 +51,7 @@ mount on a transport:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
-use nest_rs_http::{controller, routes};
+use nest_rs::http::{controller, routes};
 
 #[controller(path = "/posts")]
 pub struct PostsController {
@@ -137,7 +137,7 @@ inject request-scoped types (they exist before any request). Reach them
 through the request boundary, not `#[inject]` on a singleton:
 
 ```rust
-use nest_rs_http::Scoped;
+use nest_rs::http::Scoped;
 
 #[get("/trace")]
 async fn trace(&self, log: Scoped<RequestLogger>) -> String {
@@ -150,8 +150,8 @@ HTTP, GraphQL, and MCP each install a fresh request scope per call
 (one per request for HTTP, one per operation for GraphQL and MCP).
 Within a scope, request-scoped providers are cached and shared; across
 scopes, fresh instances are built. GraphQL resolvers reach them with
-`nest_rs_graphql::Scoped<T>` (from the async-graphql `&Context`), MCP
-tools with `nest_rs_mcp::Scoped<T>` — the same shape as HTTP's
+`nest_rs::graphql::Scoped<T>` (from the async-graphql `&Context`), MCP
+tools with `nest_rs::mcp::Scoped<T>` — the same shape as HTTP's
 `Scoped<T>`. A request-scoped provider may itself inject another
 request-scoped provider (both share the per-request cache); a cycle
 panics at resolution with the named chain.

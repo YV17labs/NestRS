@@ -22,8 +22,8 @@ ask for the registry by injection, and call its push methods directly:
 ```rust
 use std::sync::Arc;
 
-use nest_rs_core::injectable;
-use nest_rs_ws::WsServer;
+use nest_rs::core::injectable;
+use nest_rs::ws::WsServer;
 
 #[injectable]
 pub struct NotifyService {
@@ -77,9 +77,9 @@ registry:
 ```rust
 use std::sync::Arc;
 
-use nest_rs_core::injectable;
-use nest_rs_schedule::{every, scheduled};
-use nest_rs_ws::WsServer;
+use nest_rs::core::injectable;
+use nest_rs::schedule::scheduled;
+use nest_rs::ws::WsServer;
 
 #[scheduled]
 #[injectable]

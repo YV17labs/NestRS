@@ -38,7 +38,7 @@ A Vault source that hits the API once at startup and caches the result:
 ```rust title="src/vault.rs"
 use std::collections::HashMap;
 use std::sync::Arc;
-use nest_rs_config::{ConfigService, ConfigSource};
+use nest_rs::config::{ConfigService, ConfigSource};
 
 pub struct VaultSource {
     snapshot: HashMap<String, String>,
@@ -75,7 +75,7 @@ Wire it in by building the `ConfigService` directly and calling
 `Config::from_env` yourself — bypassing `ConfigModule::for_feature`:
 
 ```rust title="src/main.rs"
-use nest_rs_config::ConfigService;
+use nest_rs::config::ConfigService;
 
 let vault = Arc::new(
     VaultSource::fetch(&vault_client, "secret/api").await?,

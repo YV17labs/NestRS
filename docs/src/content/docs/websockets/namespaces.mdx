@@ -38,7 +38,7 @@ comes from `WsModule` — the same module that provides the default one, so
 namespacing changes which registry is wired, not how it is wired:
 
 ```rust title="apps/live/src/notify/gateway.rs"
-use nest_rs_ws::{gateway, messages, WsClient};
+use nest_rs::ws::{gateway, messages, WsClient};
 
 pub struct NotifyNs;
 
@@ -68,8 +68,8 @@ registry directly:
 ```rust title="crates/features/src/notify/service.rs"
 use std::sync::Arc;
 
-use nest_rs_core::injectable;
-use nest_rs_ws::WsServer;
+use nest_rs::core::injectable;
+use nest_rs::ws::WsServer;
 
 use crate::notify::NotifyNs;
 

@@ -13,8 +13,8 @@ struct**. This is the real `IssuerConfig` from `features/oauth` (signs
 the OAuth clients accepted by `apps/auth`) — it needs both:
 
 ```rust title="crates/features/src/oauth/config.rs (abridged)"
-use nest_rs_authn::RegisteredClient;
-use nest_rs_config::{config, Config, ConfigError, ConfigService};
+use nest_rs::authn::RegisteredClient;
+use nest_rs::config::{config, Config, ConfigError, ConfigService};
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
 
@@ -45,7 +45,7 @@ impl Default for IssuerConfig {
 }
 
 impl Config for IssuerConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
         let clients = match env.get("CLIENTS") {
             Some(raw) => serde_json::from_str(&raw)
                 .map_err(|e| ConfigError::parse(env.var_name("CLIENTS"), e.to_string()))?,
@@ -78,7 +78,7 @@ Wiring and consumption do not change — the same `for_feature` import,
 the same `Arc<IssuerConfig>` injection:
 
 ```rust title="crates/features/src/oauth/module.rs"
-use nest_rs_config::ConfigModule;
+use nest_rs::config::ConfigModule;
 use super::config::IssuerConfig;
 use super::service::OAuthFlow;
 
@@ -90,7 +90,7 @@ pub struct OAuthModule;
 ```
 
 ```rust title="apps/auth/src/module.rs"
-use nest_rs_config::ConfigModule;
+use nest_rs::config::ConfigModule;
 
 #[module(
     imports = [
@@ -152,7 +152,7 @@ when a field's *safe* value differs by profile — the framework does this for
 three of its own:
 
 ```rust
-use nest_rs_config::Environment;
+use nest_rs::config::Environment;
 
 /// Two lines, written per crate: the framework's own copies are private, so
 /// there is nothing to import.

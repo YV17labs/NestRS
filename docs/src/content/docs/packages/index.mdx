@@ -5,20 +5,22 @@ description: Every opt-in crate the NestRS framework ships — grouped by concer
 
 import { Aside } from '@astrojs/starlight/components';
 
-NestRS is a **monorepo of crates**, not one fat dependency. Each concern —
-HTTP, GraphQL, queues, authorization, observability — is a separate package
-you **import only when the binary needs it**. A headless worker compiles no
-HTTP stack; an MCP-only assistant compiles no GraphQL schema.
+NestRS installs as **one dependency**. Each concern — HTTP, GraphQL, queues,
+authorization, observability — is a **Cargo feature** you enable when the
+binary needs it, and a feature you leave off is code you never compile. A
+headless worker compiles no HTTP stack; an MCP-only assistant compiles no
+GraphQL schema.
 
-**The recommended install path is depending on the individual `nest-rs-*`
-crates you need** — it is what `nestrs new` scaffolds, what every exemplar
-app in the Publish workspace does, and what each module's adoption page
-means by `cargo add nest-rs-<crate>`. The
-[`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs)
-umbrella (surface crates behind **Cargo features** such as
-`features = ["http", "seaorm", "graphql"]`, plus `nest_rs::prelude`) is a
-version-alignment and prelude convenience on top of that — not a replacement
-for it. See [what the umbrella is](#what-the-nest-rs-umbrella-is--and-is-not).
+```toml title="Cargo.toml"
+[dependencies]
+nest-rs = { version = "2.0", features = ["http", "seaorm", "graphql"] }
+```
+
+Undecided? `features = ["full"]` turns everything on — narrow it later without
+moving a single `use`. Either way `nest_rs::prelude::*` covers the decorators
+and types an app reaches for daily.
+
+The table below is a menu of **features**, not a list of crates to line up.
 
 <Aside type="note">
 This page lists **framework crates** — the batteries NestRS ships. Product
@@ -154,51 +156,54 @@ nest-rs-config.workspace = true
 nest-rs-http.workspace = true
 nest-rs-graphql.workspace = true
 nest-rs-openapi.workspace = true
-nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
+nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "authz", "health"] }
 nest-rs-authn.workspace = true
-nest-rs-authz = { workspace = true, features = ["http", "graphql"] }
 nest-rs-health.workspace = true
 ```
 
 In a fresh project outside this workspace, the same line is
-`cargo add nest-rs-<crate>` — exactly what each module's adoption page
-shows. Then import the matching **modules** in `AppModule` — for example
-`HttpModule::for_root(...)`, `DatabaseModule::for_root(...)`,
+`cargo add nest-rs --features <capability>` — exactly what each module's
+adoption page shows. Then import the matching **modules** in `AppModule` — for
+example `HttpModule::for_root(...)`, `DatabaseModule::for_root(...)`,
 `GraphqlModule`, `AuthzHttpModule`. The [Publish workspace](/publish/) and
 [Getting started](/getting-started/) walk through a full composition.
 
-### What the `nest-rs` umbrella is — and is not
+### Why one entry is enough
 
-The umbrella gives you **one version to bump** and **one prelude to import**:
+A decorator is a procedural macro, and its expansion resolves paths against
+**your** crate's extern prelude. NestRS decorators root theirs at
+`::nest_rs::<concern>::…`, which that single entry reaches — so the feature list
+*is* the install. Nothing a decorator expands into is a line you write.
 
-```toml
-[dependencies]
-nest-rs = { version = "1.3", features = ["http", "seaorm", "graphql"] }
-# The crates whose names the decorators expand to, still listed:
-nest-rs-core = "1.3"
-nest-rs-http = "1.3"
-nest-rs-guards = "1.3"
+Get it wrong and the compiler says so in your own terms:
+
+```text frame="terminal"
+error: this nestrs decorator expands into the framework, which this crate
+       cannot reach. Add to Cargo.toml:
+
+           nest-rs = { version = "2.0", features = ["http"] }
 ```
 
-```rust
-use nest_rs::prelude::*;
-```
+The `nest-rs-*` crates stay published and keep their names — they are separate
+compilation units, which is what makes an unused capability free. They are not
+the entry point, and renaming the `nest-rs` dependency is unsupported: the same
+limit `tokio` has, for the same reason.
 
-It does **not** replace those entries, and cannot: a decorator is a procedural
-macro, and its expansion resolves absolute paths (`::nest_rs_core::…`,
-`::nest_rs_http::…`, `::nest_rs_guards::…`) against **your** crate's extern
-prelude. Rust has no transitive extern prelude, so a name reachable only through
-`nest-rs` is not a name a macro expansion can reach. Dropping the individual
-entries is `E0433: could not find nest_rs_core in the list of imported crates`,
-reported against the `#[injectable]` / `#[controller]` line.
+### What stays in your manifest
 
-So: reach for the umbrella for version alignment and `nest_rs::prelude::*`; keep
-naming the surface crates a decorator expands into. **Naming the crates
-individually is the recommended path** — it is what `nestrs new` scaffolds and
-what every exemplar app does.
+Crates **your own code names**. A job payload deriving `serde::Serialize`, an
+indicator returning `anyhow::Result`, an entity written against `sea-orm` — those
+are yours, and hiding them behind a re-export would cost you their feature flags
+and a truthful `cargo tree`. No Rust framework hides them; NestRS does not
+either.
+
+One capability cannot hold the one-dependency promise: **GraphQL** also needs
+`async-graphql`, because `#[resolver]` builds on that crate's own `#[Object]`
+macro and a third-party derive expands against your prelude, not ours. It is
+stated on the [GraphQL page](/graphql/) rather than smoothed over.
 
 ## Going further
 
-- [Getting started](/getting-started/) — scaffold an app and import the first crates.
+- [Getting started](/getting-started/) — scaffold an app and write the first route.
 - [The Publish workspace](/publish/) — five apps that follow these binary profiles.
-- [Fundamentals](/fundamentals/) — the `nest-rs-core` container every crate wires into.
+- [Fundamentals](/fundamentals/) — the DI container every capability wires into.

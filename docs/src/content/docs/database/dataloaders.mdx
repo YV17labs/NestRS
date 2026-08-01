@@ -89,9 +89,9 @@ fixed by the trait:
 
 ```rust title="src/posts/service.rs"
 use std::collections::HashMap;
-use nest_rs_authz::Action;
-use nest_rs_graphql::dataloader;
-use nest_rs_seaorm::{Repo, ServiceError};
+use nest_rs::authz::Action;
+use nest_rs::graphql::dataloader;
+use nest_rs::seaorm::{Repo, ServiceError};
 
 #[dataloader]
 impl PostsService {

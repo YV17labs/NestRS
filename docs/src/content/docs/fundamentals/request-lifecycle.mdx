@@ -77,7 +77,7 @@ sites.
 `#[public]` and `#[meta(EXPR)]` are not layers — they are **route metadata** a
 guard reads after routing. `#[public]` marks a route as anonymous-admissible
 (the guard admits it through); `#[meta]` attaches per-handler data a guard reads
-via `nest_rs_http::Reflector`. A denial is an `Ok(4xx)` response, never an
+via `nest_rs::http::Reflector`. A denial is an `Ok(4xx)` response, never an
 `Err` — filters never see it; global interceptors do.
 
 ## What fails at boot

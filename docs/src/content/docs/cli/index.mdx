@@ -24,6 +24,9 @@ cargo install --locked nest-rs-cli
 nestrs version
 ```
 
+A binary, so it is the one thing that does not come through the `nest-rs`
+umbrella — there is no `--features cli`.
+
 Requires **Rust 1.96+** (edition 2024). That single install is all you need: the
 first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
 toolchain it drives — `just`, `bacon`, `cargo-nextest` — once. Run **`nestrs

@@ -26,8 +26,8 @@ it is not a value anyone can read off an open port.
 ```rust title="crates/features/src/upstream/health/indicator.rs"
 use std::sync::Arc;
 
-use nest_rs_core::injectable;
-use nest_rs_health::indicators;
+use nest_rs::core::injectable;
+use nest_rs::health::indicators;
 
 use crate::upstream::UpstreamClient;
 
@@ -47,7 +47,7 @@ impl UpstreamHealthIndicator {
 ```
 
 ```rust title="crates/features/src/upstream/health/module.rs"
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use crate::upstream::health::indicator::UpstreamHealthIndicator;
 
@@ -57,7 +57,7 @@ pub struct UpstreamHealthModule;
 
 ```rust title="apps/api/src/module.rs"
 use features::upstream::UpstreamHealthModule;
-use nest_rs_health::HealthModule;
+use nest_rs::health::HealthModule;
 
 #[module(imports = [HealthModule, UpstreamHealthModule])]
 pub struct ApiModule;
@@ -97,12 +97,12 @@ both `#[readiness]` and `#[startup]` — exactly what most apps want and
 zero code in the app:
 
 ```toml title="apps/api/Cargo.toml"
-nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
+nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "health"] }
 ```
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs_seaorm::{DatabaseHealthModule, DatabaseModule};
-use nest_rs_health::HealthModule;
+use nest_rs::seaorm::{DatabaseHealthModule, DatabaseModule};
+use nest_rs::health::HealthModule;
 
 #[module(
     imports = [

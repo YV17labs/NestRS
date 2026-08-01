@@ -107,7 +107,7 @@ impl PostsService {
         after: Option<Uuid>,
     ) -> Result<Page<Post>, ServiceError> {
         let conn = Repo::<Posts>::conn()?;
-        let limit = nest_rs_seaorm::page::clamp_page_size(first);
+        let limit = nest_rs::seaorm::page::clamp_page_size(first);
 
         let mut cursor = Repo::<Posts>::scoped(Action::Read)
             .filter(entity::Column::AuthorId.eq(author_id))
@@ -118,7 +118,7 @@ impl PostsService {
         cursor.first(limit + 1);
 
         let rows = cursor.all(&conn).await?;
-        let (rows, has_more) = nest_rs_seaorm::page::split_overfetched(rows, limit);
+        let (rows, has_more) = nest_rs::seaorm::page::split_overfetched(rows, limit);
         let next_cursor = has_more.then(|| rows.last()?.id);
 
         Ok(Page {

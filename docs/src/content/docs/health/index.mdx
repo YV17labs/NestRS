@@ -22,25 +22,24 @@ graph.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-health anyhow
+cargo add nest-rs --features health
+cargo add anyhow
 ```
-
-`anyhow` is not optional the moment you write an indicator: every
-`#[readiness]` / `#[liveness]` / `#[startup]` method returns
-`anyhow::Result<()>` (or any `Result<(), E: Into<anyhow::Error>>`), and
-`nest-rs-health` does not re-export it.
 
 ```toml title="Cargo.toml"
 [dependencies]
-nest-rs-health = "1.3"
+nest-rs = { version = "2.0", features = ["health"] }
+# Every `#[readiness]` / `#[liveness]` / `#[startup]` method returns
+# `anyhow::Result<()>`, so your own indicator names the crate. Reach it through
+# `nest_rs::core::anyhow` instead and this line goes too.
 anyhow = "1"
 ```
 
 ## Mount it
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_health::HealthModule;
+use nest_rs::core::module;
+use nest_rs::health::HealthModule;
 
 #[module(imports = [HealthModule])]
 pub struct ApiModule;

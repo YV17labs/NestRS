@@ -28,9 +28,9 @@ The data layer crates are
 (the SeaORM implementation, on top of [SeaORM](https://www.sea-ql.org/SeaORM/)).
 
 ```rust title="apps/blog/src/module.rs" {3, 10}
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_seaorm::DatabaseModule;
+use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::seaorm::DatabaseModule;
 
 use features::authn::AuthnModule;
 use features::authz::AuthzHttpModule;
@@ -49,7 +49,7 @@ pub struct BlogModule;
 Add the crate to the app's `Cargo.toml`:
 
 ```toml title="apps/blog/Cargo.toml"
-nest-rs-seaorm = { workspace = true, features = ["http"] }
+nest-rs = { workspace = true, features = ["http", "seaorm"] }
 ```
 
 The `http` feature flag turns on the ORM hooks the HTTP data layer

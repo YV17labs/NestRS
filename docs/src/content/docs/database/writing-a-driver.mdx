@@ -53,7 +53,7 @@ pub enum Executor {
     Transactional(/* your tx/session type, wrapped in Arc<Mutex<_>> */),
 }
 
-impl nest_rs_database::Executor for Executor {
+impl nest_rs::database::Executor for Executor {
     fn as_any(&self) -> &dyn Any { self }
 }
 ```
@@ -74,8 +74,8 @@ five places you write store-specific code.
 ```rust
 use std::sync::Arc;
 use async_trait::async_trait;
-use nest_rs_core::{Layer, injectable};
-use nest_rs_interceptors::{Interceptor, Next};
+use nest_rs::core::{Layer, injectable};
+use nest_rs::interceptors::{Interceptor, Next};
 use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use tokio::sync::Mutex;
@@ -100,7 +100,7 @@ impl Interceptor for YourDbContext {
         if !mutating {
             // (1) Safe route — install the non-transactional handle.
             //     Your code: clone your pool/client into Executor::Default(...).
-            return nest_rs_database::with_request_executor(
+            return nest_rs::database::with_request_executor(
                 Arc::new(Executor::Default(/* your handle clone */)),
                 next.run(req),
             ).await;
@@ -112,7 +112,7 @@ impl Interceptor for YourDbContext {
         let tx_arc = Arc::new(Mutex::new(tx));
 
         // (3) Install it as the request executor and run the handler.
-        let result = nest_rs_database::with_request_executor(
+        let result = nest_rs::database::with_request_executor(
             Arc::new(Executor::Transactional(tx_arc.clone())),
             next.run(req),
         ).await;
@@ -157,8 +157,8 @@ work.
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use nest_rs_core::injectable;
-use nest_rs_worker::JobContext;
+use nest_rs::core::injectable;
+use nest_rs::worker::JobContext;
 
 #[injectable]
 pub struct YourWorkerContext {
@@ -171,7 +171,7 @@ impl JobContext for YourWorkerContext {
         inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         // Your code: clone your pool/client into Executor::Default(...).
-        Box::pin(nest_rs_database::with_job_executor(
+        Box::pin(nest_rs::database::with_job_executor(
             Arc::new(Executor::Default(/* your handle clone */)),
             inner,
         ))
@@ -194,8 +194,8 @@ struct — the framework-wide dual-path rule.
 
 ```rust
 use std::sync::Arc;
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
+use nest_rs::config::ConfigModule;
+use nest_rs::core::{ContainerBuilder, DynamicModule};
 
 pub struct YourDbModule;
 
@@ -211,10 +211,10 @@ pub struct YourDbSetup {
 
 impl DynamicModule for YourDbSetup {
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = <YourDbContext as nest_rs_core::Discoverable>::register(builder);
+        let builder = <YourDbContext as nest_rs::core::Discoverable>::register(builder);
         let snapshot = builder.snapshot();
         let worker = YourWorkerContext::from_container(&snapshot);
-        builder.provide_dyn::<dyn nest_rs_worker::JobContext>(Arc::new(worker))
+        builder.provide_dyn::<dyn nest_rs::worker::JobContext>(Arc::new(worker))
     }
 
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
@@ -234,7 +234,7 @@ your enum, and hands the caller a store-native handle.
 
 ```rust
 pub fn current_executor() -> Option<Executor> {
-    nest_rs_database::current_executor()?
+    nest_rs::database::current_executor()?
         .as_any()
         .downcast_ref::<Executor>()
         .cloned()

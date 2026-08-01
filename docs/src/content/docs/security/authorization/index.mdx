@@ -23,7 +23,7 @@ in-memory check can never disagree row by row.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-authz
+cargo add nest-rs --features authz
 ```
 
 ## One factory, one ability per request
@@ -36,7 +36,7 @@ a `task_local!` for the data layer.
 A minimal policy is one statement — "members read their org's users":
 
 ```rust title="crates/features/src/authz/ability.rs"
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 #[injectable]
 #[derive(Default)]
@@ -88,8 +88,8 @@ no credential. It grants nothing until you write into it; see
 
 The `AuthzHttpModule` provides `AuthzGuard` — a **project type alias** for
 `AbilityGuard<AppAbility>` defined in `features/authz/http/guard.rs`, **not**
-exported from `nest_rs_authz`. Import `AuthzGuard` from your feature crate, or
-use `AbilityGuard<YourAbility>` directly from `nest_rs_authz::http`. Bind it
+exported from `nest_rs::authz`. Import `AuthzGuard` from your feature crate, or
+use `AbilityGuard<YourAbility>` directly from `nest_rs::authz::http`. Bind it
 after `AuthnGuard`:
 
 ```rust title="crates/features/src/users/http/controller.rs"
@@ -129,7 +129,7 @@ A handler that builds its own query (rare — prefer letting `Repo`
 scope itself) reads the `Condition` via `Scope<E, A>`:
 
 ```rust
-use nest_rs_authz::{Read, http::Scope};
+use nest_rs::authz::{Read, http::Scope};
 
 #[get("/users/search")]
 async fn search(
@@ -150,7 +150,7 @@ A service method or any code running under the request's task-local
 reads the ability directly:
 
 ```rust
-use nest_rs_authz::current_ability;
+use nest_rs::authz::current_ability;
 
 if let Some(ab) = current_ability() {
     if !ab.can::<user::Entity>(Action::Update, &model) {

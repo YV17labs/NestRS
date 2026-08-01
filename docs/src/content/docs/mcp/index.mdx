@@ -22,45 +22,43 @@ schemas the client reads.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-mcp
+cargo add nest-rs --features mcp
 ```
-
-`nest-rs-mcp` re-exports what a tool host names, with **one exception**: the
-`#[tool_router]` / `#[tool_handler]` macros come from `rmcp` and expand to bare
-`rmcp::` paths, so your manifest needs the crate directly — at the same major
-`nest-rs-mcp` was built against. Two majors in one graph put two
-`ServerHandler` traits in scope and every generated method mismatches:
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
-nest-rs-mcp = "1.3"
-rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
-# rmcp's `#[tool]` derive emits bare `schemars::` paths for a tool that takes
-# input — i.e. every non-trivial one, including the example below. The
-# `nest_rs_mcp::schemars` re-export does not rescue it: a derive expands
-# against the *call site's* prelude, so the crate has to be linked here.
-schemars = { version = "1", features = ["uuid1"] }
-# The fallback operation guard — what lets a registered global guard pool gate
-# `/mcp` instead of the endpoint staying deny-all — lives behind this feature.
-nest-rs-guards = { version = "1.3", features = ["mcp"] }
+nest-rs = { version = "2.0", features = ["mcp"] }
 ```
 
-`nestrs g mcp <feature>` writes all four, and a CLI test pins the `rmcp`
-requirement against the framework's own so the two cannot drift.
+The `mcp` feature pulls the HTTP transport the endpoint mounts on and the guard
+surface that gates it — including the fallback operation guard that lets a
+registered global pool gate `/mcp` instead of the endpoint staying deny-all.
+None of that is a line you write.
+
+`rmcp` is not a dependency either. Its `#[tool_router]` / `#[tool_handler]`
+macros expand to bare `rmcp::` paths, but those are **relative**, so one import
+resolves them:
+
+```rust
+use nest_rs::mcp::rmcp;
+```
+
+That keeps the SDK at the exact major `nest-rs` was built against — two majors
+in one graph put two `ServerHandler` traits in scope and every generated method
+mismatches. `nestrs g mcp <feature>` writes both the stanza and the import.
 
 ## The smallest possible tool
 
 The fastest way to see the shape: one tool, one string in, one string out.
 
 ```rust title="src/hello/tool.rs"
-use nest_rs_mcp::{
+use nest_rs::mcp::{
     mcp, tool, tool_handler, tool_router,
     CallToolResult, ContentBlock, McpError, Parameters, ServerHandler,
 };
-use schemars::JsonSchema;
-use serde::Deserialize;
+use nest_rs::mcp::input;
 
-#[derive(Deserialize, JsonSchema)]
+#[input]
 pub struct HelloParams {
     pub name: String,
 }
@@ -93,17 +91,14 @@ none registered it falls back to the global guard pool
 **deny-all** — every request answers `401`, so a schema-added tool can never
 leak unauthenticated.
 
-The fallback needs `nest-rs-guards`' `mcp` feature (the install stanza above).
-Without it the pool is never consulted and the boot line stays `no operation
-guard registered — mcp endpoint is deny-all mode="deny_all"` even with a pool
-registered — safe, but not what you asked for. With it, the line reads
-`mode="global_guard_pool"`.
+Which posture you got is in the boot line: `mode="deny_all"` with nothing
+registered, `mode="global_guard_pool"` once a pool is.
 
 A *deliberately* public tool has to say so, by binding `AllowAllMcpGuard`:
 
 ```rust title="src/hello/module.rs"
-use nest_rs_core::module;
-use nest_rs_mcp::{AllowAllMcpGuard, McpOperationGuard};
+use nest_rs::core::module;
+use nest_rs::mcp::{AllowAllMcpGuard, McpOperationGuard};
 
 use crate::hello::tool::HelloTool;
 
@@ -246,8 +241,8 @@ is already typed. For extra checks beyond shape — ranges, enums, mutual
 exclusion — pair `serde` with `validator`:
 
 ```rust title="src/weather/coords.rs"
-use nest_rs_mcp::schemars;
-use serde::Deserialize;
+use nest_rs::mcp::schemars;
+use nest_rs::mcp::input;
 use validator::Validate;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Validate)]
@@ -308,7 +303,7 @@ MCP defines two primitives beyond tools: **resources** (read-only documents the
 model can fetch) and **prompts** (parameterized templates the user picks).
 NestRS decorates the tool surface, which is the primitive the spec is built
 around; resources and prompts are reached through rmcp's `ServerHandler`,
-re-exported from `nest_rs_mcp`.
+re-exported from `nest_rs::mcp`.
 
 Implement `list_resources` / `read_resource` / `list_prompts` / `get_prompt`
 on your `#[mcp]` struct directly — `#[tool_handler]` is additive, not
@@ -325,7 +320,7 @@ server.
 
 ## Error handling
 
-`McpError` (re-exported as `nest_rs_mcp::McpError`, alias for rmcp's
+`McpError` (re-exported as `nest_rs::mcp::McpError`, alias for rmcp's
 `ErrorData`) gives the model a structured failure with a JSON-RPC error code.
 Six constructors cover the common cases:
 

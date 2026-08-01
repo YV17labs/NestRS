@@ -62,12 +62,12 @@ types with their HTTP mapping already wired:
 
 | Error | Source | Maps to |
 |-------|--------|---------|
-| `ServiceError::Db(DbErr)` | `nest_rs_seaorm` | `500` (body: `"database error"`) |
-| `ServiceError::Validation(ValidationErrors)` | `nest_rs_seaorm` | `422` |
-| `AuthError::*` | `nest_rs_authn` | `401` + `WWW-Authenticate: Bearer` |
-| `AuthError::Unavailable` | `nest_rs_authn` | `500`, logged at `error` — an outage is not a credential signal |
-| `CredentialError` | `nest_rs_authn` | `401` (opaque `"invalid credentials"`) |
-| `TokenError::*` | `nest_rs_authn::oauth` | RFC 6749 wire codes (`400` / `401` / `500`) |
+| `ServiceError::Db(DbErr)` | `nest_rs::seaorm` | `500` (body: `"database error"`) |
+| `ServiceError::Validation(ValidationErrors)` | `nest_rs::seaorm` | `422` |
+| `AuthError::*` | `nest_rs::authn` | `401` + `WWW-Authenticate: Bearer` |
+| `AuthError::Unavailable` | `nest_rs::authn` | `500`, logged at `error` — an outage is not a credential signal |
+| `CredentialError` | `nest_rs::authn` | `401` (opaque `"invalid credentials"`) |
+| `TokenError::*` | `nest_rs::authn::oauth` | RFC 6749 wire codes (`400` / `401` / `500`) |
 
 A service returns the framework type directly; `?` flows it to the
 boundary; the impl decides status and body. Every row above implements poem's
@@ -76,7 +76,7 @@ boundary; the impl decides status and body. Every row above implements poem's
 `error.rs` for these — the framework owns them once, every feature reuses them.
 
 ```rust
-use nest_rs_seaorm::ServiceError;
+use nest_rs::seaorm::ServiceError;
 
 impl UsersService {
     pub async fn create(&self, input: CreateUser) -> Result<User, ServiceError> {
@@ -116,8 +116,8 @@ Sometimes the mapping depends on the *route*, not the error. Maybe
 500 stays a 500. That's what `#[use_filters(...)]` is for.
 
 ```rust
-use nest_rs_core::{Layer, injectable};
-use nest_rs_filters::{Filter, RequestSnapshot, async_trait};
+use nest_rs::core::{Layer, injectable};
+use nest_rs::filters::{Filter, RequestSnapshot, async_trait};
 use poem::{http::StatusCode, Error, Response};
 
 #[injectable]
@@ -179,8 +179,8 @@ unmatched errors fall through to the next exception filter, then to any
 outer `Filter`, then to the transport's default renderer.
 
 ```rust
-use nest_rs_core::{Layer, injectable};
-use nest_rs_exception_filters::{ExceptionFilter, async_trait};
+use nest_rs::core::{Layer, injectable};
+use nest_rs::exception_filters::{ExceptionFilter, async_trait};
 use poem::{http::StatusCode, Response};
 
 #[derive(Debug, thiserror::Error)]

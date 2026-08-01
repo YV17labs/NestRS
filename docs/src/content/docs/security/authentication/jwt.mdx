@@ -16,7 +16,7 @@ token is minted.
 
 The implementation is a thin wrapper over
 [`jsonwebtoken`](https://docs.rs/jsonwebtoken). The crate's
-`Algorithm` enum is re-exported as `nest_rs_authn::Algorithm` so an app
+`Algorithm` enum is re-exported as `nest_rs::authn::Algorithm` so an app
 configures the algorithm without taking a direct dependency.
 
 ## The three-line setup
@@ -25,10 +25,10 @@ A resource-server app declares a type alias and a tiny module:
 
 ```rust title="crates/features/src/authn/mod.rs"
 pub type AppJwtStrategy = JwtStrategy<Claims>;
-pub type AuthnGuard = nest_rs_authn::AuthnGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
 
 #[module(
-    imports = [nest_rs_authn::AuthnModule::for_root(None)],
+    imports = [nest_rs::authn::AuthnModule::for_root(None)],
     providers = [AppJwtStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
@@ -75,7 +75,7 @@ The framework's `JwtStrategy<C>` is generic. `C` is any
 usually a struct with the standard `sub`, `exp`, plus whatever your app needs:
 
 ```rust title="crates/features/src/identity/claims.rs"
-use nest_rs_authn::PrincipalIdentity;
+use nest_rs::authn::PrincipalIdentity;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

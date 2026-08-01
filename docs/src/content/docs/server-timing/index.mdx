@@ -20,14 +20,14 @@ aggregations, reach for [OpenTelemetry](/opentelemetry/).
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-server-timing
+cargo add nest-rs --features server-timing
 ```
 
 ## Mount it
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_server_timing::ServerTimingModule;
+use nest_rs::core::module;
+use nest_rs::server_timing::ServerTimingModule;
 
 #[module(imports = [ServerTimingModule])]
 pub struct ApiModule;
@@ -54,8 +54,8 @@ out:
 ```rust title="crates/features/src/posts/http/controller.rs"
 use std::time::Instant;
 
-use nest_rs_http::{controller, routes};
-use nest_rs_server_timing::Timings;
+use nest_rs::http::{controller, routes};
+use nest_rs::server_timing::Timings;
 use poem::Request;
 
 #[controller(path = "/posts")]

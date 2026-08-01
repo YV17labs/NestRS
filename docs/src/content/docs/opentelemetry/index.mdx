@@ -33,7 +33,7 @@ Three signal types ship in one crate, behind one import:
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-opentelemetry
+cargo add nest-rs --features opentelemetry
 ```
 
 A headless binary (a queue worker) stops there; an app serving HTTP adds the
@@ -44,16 +44,16 @@ flags](#feature-flags) below.
 
 ```rust title="apps/auth/src/main.rs"
 use anyhow::Result;
-use nest_rs_config::Environment;
-use nest_rs_core::App;
-use nest_rs_opentelemetry::OpenTelemetry;
+use nest_rs::config::Environment;
+use nest_rs::core::App;
+use nest_rs::opentelemetry::OpenTelemetry;
 
 use auth::AuthModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
-    let _opentelemetry = OpenTelemetry::init("auth")?;
+    let _otel = OpenTelemetry::init("auth")?;
 
     App::builder()
         .module::<AuthModule>()
@@ -135,7 +135,7 @@ nest-rs-opentelemetry.workspace = true
 ```
 
 ```toml title="apps/auth/Cargo.toml"
-nest-rs-opentelemetry = { workspace = true, features = ["http"] }
+nest-rs = { workspace = true, features = ["http", "opentelemetry"] }
 ```
 
 ## Boot-time safety
@@ -144,7 +144,7 @@ nest-rs-opentelemetry = { workspace = true, features = ["http"] }
 thread 'main' panicked at 'OpenTelemetryModule was imported without calling
 `OpenTelemetry::init` first — the global tracer and meter are no-ops, so
 traces and metrics would be silently dropped. Add `let _otel =
-nest_rs_opentelemetry::OpenTelemetry::init("<service>")?;` at the top of
+nest_rs::opentelemetry::OpenTelemetry::init("<service>")?;` at the top of
 `main`, before building the app.'
 ```
 
@@ -157,7 +157,7 @@ binary locally.
 ## Tests
 
 ```rust
-use nest_rs_testing::TestApp;
+use nest_rs::testing::TestApp;
 
 #[tokio::test]
 async fn users_list_returns_a_page() {

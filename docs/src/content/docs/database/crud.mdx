@@ -20,7 +20,7 @@ just wires the endpoints.
 ```rust title="crates/features/src/orgs/http/controller.rs"
 use std::sync::Arc;
 
-use nest_rs_http::{controller, crud};
+use nest_rs::http::{controller, crud};
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -246,7 +246,7 @@ It also **synthesises the `id: String!` SDL argument** — so the method must no
 declare an `id` parameter of its own:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
-use nest_rs_seaorm::Authorized;
+use nest_rs::seaorm::Authorized;
 
 #[mutation]
 #[authorize(Update, bind = PostsService)]

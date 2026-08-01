@@ -12,8 +12,8 @@
 // frontmatter description present / ≤160 / no unquoted '#', closing "## Going further",
 // ≤3 Asides per page, example-canon ban list.
 // Plus the code-truth checks the prose rules can't see — `version-pin`, `unauthed-curl`,
-// `crud-error`, `bind-order`, `queue-name` — each documented on its constant below and filed
-// as a shipped defect first.
+// `crud-error`, `bind-order`, `queue-name`, `install-stanza`, `otel-guard` — each documented on
+// its constant below and filed as a shipped defect first.
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -119,18 +119,220 @@ const BIND_ORDER =
 const QUEUE_STRING_FORM = /#\[process\(\s*queue\s*=\s*"/g;
 const QUEUE_UNTYPED_PUSH = /\.(?:of::<[^>]*>\(|push\(\s*[A-Z_]{3,}\b)/g;
 
+/// The binding the crate's own panic text tells a reader to write when
+/// `OpenTelemetryModule` was imported without `OpenTelemetry::init`. Read out of
+/// the panic rather than restated: 1.3.0 corrected that message to `_otel` and
+/// left the page's canonical `main` on the old `_opentelemetry`, so the reader
+/// who tripped the panic was sent to a line the example he started from did not
+/// contain.
+function otelGuardBinding() {
+  const src = readFileSync(
+    join(DOCS_ROOT, '..', 'crates', 'nest-rs-opentelemetry', 'src', 'module.rs'), 'utf8');
+  const m = src.match(/Add `let (\w+) =/);
+  // Fail closed rather than skip: a reworded panic means the rule no longer has
+  // a name to check against, and silently dropping the check is how the two
+  // halves drifted apart in the first place.
+  if (!m) {
+    throw new Error('nest-rs-opentelemetry\'s boot panic no longer reads "Add `let <binding> ='
+      + '" — teach `otelGuardBinding` the new wording, do not delete the check');
+  }
+  return m[1];
+}
+
+const OTEL_BINDING = otelGuardBinding();
+
+/// A snippet that keeps the OTel guard alive — the binding has to be the one the
+/// panic names, or the two halves of the page contradict each other.
+const OTEL_INIT = /\blet\s+(\w+)\s*=\s*(?:nest_rs_opentelemetry::)?OpenTelemetry::init\s*\(/g;
+
+/// A module page publishes its install stanza **twice** — a `cargo add` line in
+/// a `bash` block and a `[dependencies]` block in `toml` — and the reader runs
+/// the first one. Three pages shipped 1.3.0 with the two disagreeing:
+/// `/configuration/` said `cargo add validator` (which resolves 0.21) beside a
+/// `validator = "0.20"` pin, `/database/` dropped every feature from its
+/// `cargo add`, and `/mcp/` listed neither crate `#[mcp]` expands to. In each
+/// case the page's own opening snippet failed to compile after its own install
+/// step. Two sources of truth for one fact drift, so they are held equal here:
+/// same crates, same features, same `default-features`, and an explicit
+/// `@<req>` whenever the manifest constrains beyond the major — a bare
+/// `cargo add` takes the newest major, which is the validator trap exactly.
+function cargoAddInvocations(blocks) {
+  const out = [];
+  for (const block of blocks) {
+    if (!SHELL_INFO.test(block.info)) continue;
+    for (const line of shellLines(block.body)) {
+      if (!/^cargo\s+add\b/.test(line)) continue;
+      const tokens = line.split(/\s+/).slice(2);
+      const pkgs = [];
+      const features = [];
+      let noDefault = false;
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (t === '--no-default-features') { noDefault = true; continue; }
+        if (t === '--features' || t === '-F') { features.push(...splitFeatures(tokens[++i])); continue; }
+        if (t.startsWith('--features=')) { features.push(...splitFeatures(t.slice(11))); continue; }
+        if (t.startsWith('-')) continue; // --dev, --build, --optional, …
+        const at = t.lastIndexOf('@');
+        pkgs.push(at > 0
+          ? { name: t.slice(0, at), req: t.slice(at + 1) }
+          : { name: t, req: null });
+      }
+      out.push({ line, pkgs, features, noDefault });
+    }
+  }
+  return out;
+}
+
+/// A comma-separated feature list in either form the two artifacts write it —
+/// `--features a,b` on the command line, `features = ["a", "b"]` in the
+/// manifest — normalized so the two can be compared.
+function splitFeatures(raw) {
+  return (raw ?? '').split(',')
+    .map((f) => f.trim().replace(/^["']|["']$/g, ''))
+    .filter(Boolean);
+}
+
+/// The `[dependencies]` table of one `toml` block, or null when the block is not
+/// an install stanza — no `[dependencies]` header, or entries written
+/// `workspace = true` (a workspace member's manifest, which carries no version
+/// and no `cargo add` counterpart).
+function parseDependencies(body) {
+  const start = body.indexOf('[dependencies]');
+  if (start === -1) return null;
+  const section = body.slice(start + '[dependencies]'.length)
+    .split(/\n\[/)[0]                 // up to the next table header
+    .replace(/#.*$/gm, '');           // comments, including a trailing one
+  const deps = new Map();
+  // Split on the start of the next `name =`, so an entry spanning several lines
+  // (sea-orm's feature list does) stays one chunk without tracking brackets.
+  for (const chunk of section.split(/\n(?=[A-Za-z0-9_-]+\s*=)/)) {
+    const entry = chunk.trim().match(/^([A-Za-z0-9_-]+)\s*=\s*([\s\S]+)$/);
+    if (!entry) continue;
+    const [, name, value] = entry;
+    if (/\bworkspace\s*=\s*true/.test(value)) return null;
+    const req = value.startsWith('{')
+      ? (value.match(/version\s*=\s*"([^"]+)"/) || [])[1] ?? null
+      : (value.match(/^"([^"]+)"/) || [])[1] ?? null;
+    deps.set(name, {
+      req,
+      features: splitFeatures((value.match(/features\s*=\s*\[([\s\S]*?)\]/) || [])[1]),
+      noDefault: /default-features\s*=\s*false/.test(value),
+    });
+  }
+  return deps.size ? deps : null;
+}
+
+/// Whether `cargo add <name>` has to carry an explicit `@<req>`. A bare add
+/// resolves the newest major, so anything the manifest constrains past the
+/// major (`0.20`, `2.0`, `0.1`) has to say so. `nest-rs*` pins are out of scope
+/// — `version-pin` already ties them to the release the repo builds, and the
+/// newest published major is that release by construction.
+function needsPinnedAdd(name, req) {
+  if (!req || name.startsWith('nest-rs')) return false;
+  return bareReq(req).includes('.');
+}
+
+function sortedFeatures(list) {
+  return [...list].sort().join(', ');
+}
+
+/// The `install-stanza` details for one page, or none when the page publishes
+/// its install list only once (a `## Install` with no manifest block, or a
+/// manifest with no `cargo add`) — there is nothing to hold equal.
+function installStanzaViolations(blocks) {
+  const installBlocks = blocks.filter((b) => b.section === 'Install');
+  const invocations = cargoAddInvocations(installBlocks);
+  const manifest = new Map();
+  for (const block of installBlocks) {
+    if (!/^toml\b/.test(block.info)) continue;
+    const deps = parseDependencies(block.body);
+    if (deps) for (const [name, dep] of deps) manifest.set(name, dep);
+  }
+  if (!invocations.length || !manifest.size) return [];
+
+  const out = [];
+  const installed = new Map();
+  for (const inv of invocations) {
+    if ((inv.features.length || inv.noDefault) && inv.pkgs.length > 1) {
+      out.push(`\`${inv.line}\` applies its features to every package it names — `
+        + 'split it, one crate per `cargo add`');
+    }
+    for (const p of inv.pkgs) {
+      installed.set(p.name, { req: p.req, features: inv.features, noDefault: inv.noDefault });
+    }
+  }
+  for (const [name, dep] of manifest) {
+    const got = installed.get(name);
+    if (!got) {
+      out.push(`${name} is in the Cargo.toml block, no \`cargo add\` installs it`);
+      continue;
+    }
+    const asked = sortedFeatures(got.features);
+    const declared = sortedFeatures(dep.features);
+    if (asked !== declared) {
+      out.push(`${name}: \`cargo add\` asks for [${asked}], the manifest declares [${declared}]`);
+    }
+    if (got.noDefault !== dep.noDefault) {
+      out.push(dep.noDefault
+        ? `${name}: the manifest sets \`default-features = false\` — \`cargo add\` needs \`--no-default-features\``
+        : `${name}: \`cargo add --no-default-features\` has no counterpart in the manifest`);
+    }
+    if (got.req && dep.req && got.req !== dep.req) {
+      out.push(`${name}: \`cargo add ${name}@${got.req}\` against a manifest pin of ${dep.req}`);
+    } else if (!got.req && needsPinnedAdd(name, dep.req)) {
+      out.push(`${name}: the manifest pins ${dep.req}, so the line has to say `
+        + `\`${name}@${dep.req}\` — a bare \`cargo add\` takes the newest major`);
+    }
+  }
+  for (const name of installed.keys()) {
+    if (!manifest.has(name)) {
+      out.push(`${name} is installed by \`cargo add\`, absent from the Cargo.toml block`);
+    }
+  }
+  return out;
+}
+
 /// Marks a snippet as a handler — the only layer where the check above applies.
 /// A **service** method returning `ServiceError` converts `DbErr` through `?`
 /// legitimately, and that is where the conversion belongs: the exemplar's
 /// services return the wire type, so a handler is a one-line delegation.
 const HANDLER_SNIPPET = /#\[(?:get|post|put|patch|delete)\(|#\[(?:query|mutation)\]/;
 
+/// Every fenced block, tagged with the `##` section it sits under. Most checks
+/// ignore the section; `install-stanza` is scoped by it, because "the install
+/// list" means the one under `## Install` and not a variant manifest shown
+/// further down the page.
 function fencedBlocks(src) {
+  const headings = [...src.matchAll(/^##\s+(.*)$/gm)];
   const out = [];
   const re = /```([^\n]*)\n([\s\S]*?)```/g;
   let m;
-  while ((m = re.exec(src)) !== null) out.push({ info: m[1].trim(), body: m[2] });
+  let h = 0;
+  while ((m = re.exec(src)) !== null) {
+    while (h < headings.length && headings[h].index < m.index) h += 1;
+    out.push({
+      info: m[1].trim(),
+      body: m[2],
+      section: h > 0 ? headings[h - 1][1].trim() : null,
+    });
+  }
   return out;
+}
+
+/// The fence languages that hold a pasteable shell command.
+const SHELL_INFO = /^(bash|sh|shell|console|zsh)\b/;
+
+/// The lines of a shell block as a reader would run them: continuations folded
+/// so an argument on the next line still belongs to its command, and a `$`
+/// prompt stripped.
+function shellLines(body) {
+  return body.replace(/\\\n\s*/g, ' ').split('\n')
+    .map((line) => line.replace(/^\s*\$\s*/, '').trim());
+}
+
+/// A version requirement without its comparison operator.
+function bareReq(req) {
+  return req.replace(/^[\^~=]/, '');
 }
 
 /// The guarded route root a `curl` targets, or null — the command names no
@@ -170,6 +372,7 @@ function lintFile(absPath) {
   const rel = relative(CONTENT, absPath).split('\\').join('/');
   const src = readFileSync(absPath, 'utf8');
   const prose = stripCode(src);
+  const blocks = fencedBlocks(src);
   const v = [];
   const add = (rule, detail) => v.push(`${rel}::${rule}::${detail}`);
 
@@ -226,7 +429,7 @@ function lintFile(absPath) {
 
   // 7. `nest-rs*` pins track the version the repo builds.
   for (const m of src.matchAll(NEST_RS_PIN)) {
-    const pinned = m[1].replace(/^[\^~=]/, '');
+    const pinned = bareReq(m[1]);
     const [major, minor] = pinned.split('.');
     if (`${major}.${minor}` !== VERSION_REQ) {
       add('version-pin', `${m[0].split('=')[0].trim()} pins ${pinned}, workspace is ${VERSION_REQ}`);
@@ -246,14 +449,13 @@ function lintFile(absPath) {
     add('queue-name', `${m[0]}… — enqueue with push_to::<Q>, not an untyped name`);
   }
 
-  for (const block of fencedBlocks(src)) {
-    const shell = /^(bash|sh|shell|console|zsh)\b/.test(block.info);
+  for (const block of blocks) {
+    const shell = SHELL_INFO.test(block.info);
 
     // 10. A pasteable `curl` against a guarded route carries a bearer — unless
     // the block is documenting the denial itself.
     if (shell && !/\b(401|403|Unauthorized|Forbidden)\b/.test(block.body)) {
-      // Fold shell line continuations so a header on the next line counts.
-      for (const line of block.body.replace(/\\\n\s*/g, ' ').split('\n')) {
+      for (const line of shellLines(block.body)) {
         if (!/\bcurl\b/.test(line) || /authorization:/i.test(line)) continue;
         const root = guardedCurlRoot(line);
         if (root) add('unauthed-curl', `/${root} without a bearer`);
@@ -269,6 +471,19 @@ function lintFile(absPath) {
       }
     }
   }
+
+  // 12. The OTel guard binds the name the crate's boot panic prescribes.
+  for (const m of src.matchAll(OTEL_INIT)) {
+    if (m[1] !== OTEL_BINDING) {
+      // No `::` in the detail — the console splits a violation on it.
+      add('otel-guard', `\`let ${m[1]} =\` binds the OTel guard, but the boot panic tells the `
+        + `reader to write \`let ${OTEL_BINDING} =\``);
+    }
+  }
+
+  // 13. Under `## Install`, the `cargo add` line and the `[dependencies]` block
+  // say the same thing.
+  for (const detail of installStanzaViolations(blocks)) add('install-stanza', detail);
 
   return v;
 }

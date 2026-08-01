@@ -22,7 +22,7 @@ the response check accepts cannot diverge.
 ## A minimal policy
 
 ```rust title="crates/features/src/authz/ability.rs"
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 #[injectable]
 #[derive(Default)]
@@ -45,7 +45,7 @@ response-side check on every loaded row.
 
 ## Subjects
 
-A subject is any type that implements `nest_rs_authz::Subject`. The
+A subject is any type that implements `nest_rs::authz::Subject`. The
 crate ships a blanket impl for every `sea_orm::EntityTrait`:
 
 ```rust

@@ -216,10 +216,10 @@ The wire shape stays the same envelope — clients branch on the presence of
 ## The envelope itself
 
 If you ever need to build or parse a frame by hand (a custom adapter,
-a test harness), `nest_rs_ws::WsEnvelope` is the canonical shape:
+a test harness), `nest_rs::ws::WsEnvelope` is the canonical shape:
 
 ```rust
-use nest_rs_ws::WsEnvelope;
+use nest_rs::ws::WsEnvelope;
 
 let frame = WsEnvelope::encode("ping", &"pong")?;
 let parsed: WsEnvelope = serde_json::from_str(&frame)?;

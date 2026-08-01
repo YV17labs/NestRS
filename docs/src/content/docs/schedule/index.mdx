@@ -21,7 +21,7 @@ wraps it for cron expression parsing (5/6/7-field), with `chrono` /
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-schedule
+cargo add nest-rs --features schedule
 ```
 
 ## A first scheduled method
@@ -35,8 +35,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_schedule::scheduled;
+use nest_rs::core::injectable;
+use nest_rs::schedule::scheduled;
 
 use crate::audio::AudioService;
 
@@ -77,9 +77,9 @@ owns the deps once, and as many decorated methods as you need share them.
 Mix triggers freely:
 
 ```rust title="crates/features/src/audio/schedule/tasks.rs (abridged)"
-use nest_rs_schedule::{scheduled, CronExpression};
+use nest_rs::schedule::{scheduled, CronExpression};
 
-use nest_rs_queue::QueueName;
+use nest_rs::queue::QueueName;
 
 use crate::audio::AudioQueue;
 
@@ -150,7 +150,7 @@ the job and the offending value — never silently skipped.
 The provider goes in its feature module like any other `#[injectable]`:
 
 ```rust title="crates/features/src/audio/schedule/module.rs"
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use super::tasks::AudioTasks;
 use crate::audio::AudioModule;
@@ -168,8 +168,8 @@ The app activates the scheduler by importing `ScheduleModule` —
 `ScheduleModule` contributes the scheduler to `App::run` itself:
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_schedule::ScheduleModule;
+use nest_rs::core::module;
+use nest_rs::schedule::ScheduleModule;
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 
 #[module(imports = [
@@ -181,7 +181,7 @@ pub struct ApiModule;
 ```
 
 ```rust title="apps/api/src/main.rs"
-use nest_rs_core::App;
+use nest_rs::core::App;
 use api::ApiModule;
 
 #[tokio::main]

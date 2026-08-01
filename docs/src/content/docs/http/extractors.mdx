@@ -53,7 +53,7 @@ and `Query<T>` work the same way — every poem extractor that exposes
 `IntoInner` is composable:
 
 ```rust
-use nest_rs_http::{Valid, input};
+use nest_rs::http::{Valid, input};
 use poem::web::Json;
 
 #[input]
@@ -84,8 +84,8 @@ the inner extractor produced. `Valid<Json<T>>` is exactly
 `Piped<ValidationPipe<T>, Json<T>>`:
 
 ```rust
-use nest_rs_http::Piped;
-use nest_rs_pipes::ParseUuid;
+use nest_rs::http::Piped;
+use nest_rs::pipes::ParseUuid;
 use poem::web::Path;
 use uuid::Uuid;
 
@@ -109,7 +109,7 @@ the whole body into [`Bytes`](https://docs.rs/bytes), capped at
 unbounded memory.
 
 ```rust
-use nest_rs_http::{ClientIp, RawBody};
+use nest_rs::http::{ClientIp, RawBody};
 use poem::Result;
 
 #[post("/webhooks/stripe")]
@@ -123,7 +123,7 @@ async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
 For a tighter cap on a specific route, take the body manually:
 
 ```rust
-use nest_rs_http::RawBody;
+use nest_rs::http::RawBody;
 use poem::{Result, RequestBody};
 
 #[post("/webhooks/small")]
@@ -140,7 +140,7 @@ Anything that can deserialize through `Json<T>` should use that instead —
 ## `ClientIp` — best-effort, observation-grade
 
 ```rust
-use nest_rs_http::ClientIp;
+use nest_rs::http::ClientIp;
 
 #[get("/whoami")]
 async fn whoami(&self, ip: ClientIp) -> String {
@@ -182,8 +182,8 @@ transaction handle, a per-request audit batch, a user-specific cache).
 `Scoped<T>` is how a handler reads it back:
 
 ```rust
-use nest_rs_core::injectable;
-use nest_rs_http::Scoped;
+use nest_rs::core::injectable;
+use nest_rs::http::Scoped;
 
 #[injectable(scope = request)]
 pub struct PerRequestAudit { /* ... */ }
@@ -217,7 +217,7 @@ can attach a typed value to the request. `Ctx<T>` is how the handler reads
 that value back:
 
 ```rust
-use nest_rs_http::Ctx;
+use nest_rs::http::Ctx;
 use crate::Claims;
 
 #[post("/posts")]
@@ -252,7 +252,7 @@ decorator attaches; the reader picks it up by type.
 Attach metadata on the route:
 
 ```rust
-use nest_rs_throttler::{Throttle, ThrottlerGuard};
+use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
 #[post("/login")]
 #[use_guards(ThrottlerGuard)]
@@ -269,7 +269,7 @@ handler only attaches metadata; the guard reads it back at decision
 time:
 
 ```rust
-use nest_rs_http::Reflector;
+use nest_rs::http::Reflector;
 use poem::Request;
 
 async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {

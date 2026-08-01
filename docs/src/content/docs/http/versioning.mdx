@@ -13,7 +13,7 @@ same thing.
 ## Mount one controller under a version
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs_http::{controller, routes};
+use nest_rs::http::{controller, routes};
 
 #[controller(path = "/posts", version = "1")]
 pub struct PostsV1Controller {
@@ -49,7 +49,7 @@ you have a reason not to.
 A controller per version, both provided by the feature's HTTP module:
 
 ```rust title="crates/features/src/posts/http/module.rs"
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use super::controller::{PostsV1Controller, PostsV2Controller};
 use crate::authz::AuthzHttpModule;

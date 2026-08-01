@@ -17,7 +17,7 @@ where you bind it.
 
 ## Two scopes, one trait
 
-`nest_rs_guards::Guard` is the same trait used for HTTP routes and
+`nest_rs::guards::Guard` is the same trait used for HTTP routes and
 GraphQL operations. It exposes three optional methods — `check_http`,
 `check_graphql`, `check_ws_message` — and a guard implements the ones
 it cares about. WebSockets reach both:
@@ -39,7 +39,7 @@ A connection-level guard runs once per connection, against the upgrade
 request, like any HTTP guard:
 
 ```rust
-use nest_rs_ws::{gateway, messages};
+use nest_rs::ws::{gateway, messages};
 use crate::auth::AuthnGuard;
 
 #[gateway(path = "/ws")]
@@ -70,10 +70,10 @@ A per-message guard runs every time the envelope's `event` matches a
 handler the guard is attached to:
 
 ```rust
-use nest_rs_ws::{messages, WsClient};
-use nest_rs_ws::serde_json::Value;
-use nest_rs_core::{Layer, injectable};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs::ws::{messages, WsClient};
+use nest_rs::ws::serde_json::Value;
+use nest_rs::core::{Layer, injectable};
+use nest_rs::guards::{Denial, Guard};
 use async_trait::async_trait;
 
 #[injectable]
@@ -167,7 +167,7 @@ through `check_ws_message`: it denies, fail-closed, when no ambient
 ability is present.
 
 See [Security](/security/) for the strategy + ability composition; the
-WS-specific bit — `WsDataContext` — lives in `nest_rs_seaorm` behind
+WS-specific bit — `WsDataContext` — lives in `nest_rs::seaorm` behind
 the `ws` feature (packaged by `AuthzWsModule`), alongside its HTTP and
 GraphQL sibling bridges.
 

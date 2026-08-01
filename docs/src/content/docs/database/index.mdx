@@ -22,48 +22,32 @@ pages, linked at the bottom.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs-seaorm nest-rs-resource
-cargo add sea-orm serde uuid schemars validator
+cargo add nest-rs --features seaorm,http
 ```
 
 Everything the entity below needs, in full:
 
 ```toml title="Cargo.toml"
 [dependencies]
-nest-rs-seaorm = { version = "1.3", features = ["http"] }
-nest-rs-resource = "1.3"
-sea-orm = { version = "2.0", default-features = false, features = [
-  "sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono",
-] }
-serde = { version = "1", features = ["derive"] }
-uuid = { version = "1", features = ["v7", "serde"] }
-# `#[expose]` derives these on the generated wire model. A derive's expansion
-# targets the *call site's* prelude, so re-exporting them would not help —
-# both have to be linked here.
-schemars = { version = "1", features = ["uuid1"] }
-validator = { version = "0.20", features = ["derive"] }
+nest-rs = { version = "2.0", features = ["seaorm", "http"] }
 ```
 
-`schemars` and `validator` are the two that look like they belong to the
-framework and do not: leaving either off is a resolution error *inside* the
-`#[expose]` expansion (`cannot find schemars in the crate root`), with no
-mention of which crate is missing. `nestrs g resource` writes the whole stanza.
+`#[expose]` generates the wire model, the create/update inputs and the
+ActiveModel plumbing — and carries their derives, each pointed back at the
+framework's own copy. The ORM, `uuid` and `chrono` come through the same route:
+an entity crate declares none of them. `nestrs g resource` writes the file.
 
 ## The entity
 
 ```rust title="src/posts/entity.rs"
-use nest_rs_resource::expose;
-use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use nest_rs::resource::expose;
+use nest_rs::seaorm::sea_orm;
+use nest_rs::seaorm::sea_orm::entity::prelude::*;
 
 #[expose(name = "Post", service = super::service::PostsService)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "post",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "post")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
@@ -105,9 +89,7 @@ auto-resolve through dataloaders when the relation field carries `#[expose]`
 REST/OpenAPI adopters can compile without pulling in GraphQL:
 
 ```toml title="Cargo.toml"
-nest-rs-resource = { version = "1.3", default-features = false }
-nest-rs-seaorm = { version = "1.3", features = ["http"] }
-nest-rs-authz = { version = "1.3", features = ["http"] }
+nest-rs = { version = "2.0", features = ["http", "seaorm", "resource", "authz"] }
 ```
 
 ```rust title="src/posts/entity.rs"
@@ -123,7 +105,7 @@ pub struct Model {
 GraphQL surface when you need it:
 
 ```toml
-nest-rs-resource = { version = "1.3", features = ["graphql"] }
+nest-rs = { version = "2.0", features = ["resource", "graphql"] }
 ```
 
 ```rust
@@ -139,9 +121,9 @@ unexposed (no `#[expose]`).
 ## The service
 
 ```rust title="src/posts/service.rs"
-use nest_rs_authz::Action;
-use nest_rs_core::injectable;
-use nest_rs_seaorm::{Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
+use nest_rs::authz::Action;
+use nest_rs::core::injectable;
+use nest_rs::seaorm::{Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
 use sea_orm::{ColumnTrait, QueryFilter};
 
 use super::entity::{self, CreatePost, Entity as Posts, Post, UpdatePost};
@@ -190,7 +172,7 @@ documented exception, covered on [Repo and executor](/database/repo-and-executor
 ## The module
 
 ```rust title="src/posts/module.rs"
-use nest_rs_core::module;
+use nest_rs::core::module;
 use super::service::PostsService;
 
 #[module(providers = [PostsService])]

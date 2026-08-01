@@ -28,8 +28,8 @@ integration. SeaORM stays the source of truth for the column types and
 the active-model semantics.
 
 ```rust title="crates/features/src/posts/service.rs"
-use nest_rs_core::injectable;
-use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
+use nest_rs::core::injectable;
+use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 
 use super::entity::{CreatePost, Entity as Posts, UpdatePost};
 
@@ -70,7 +70,7 @@ data layer installs it before the handler runs
 Register the service in the port module:
 
 ```rust title="crates/features/src/posts/module.rs"
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use super::service::PostsService;
 
@@ -93,7 +93,7 @@ cover.
 ```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
 
-use nest_rs_http::{controller, crud};
+use nest_rs::http::{controller, crud};
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -139,7 +139,7 @@ to the app, and appends a development `NESTRS_AUTHN__SECRET` to `.env`. Then
 grant the ability — the policy starts empty, so `Post` needs a rule:
 
 ```rust title="crates/features/src/authz/ability.rs" {2, 8}
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use crate::posts as post;
 
 impl AbilityFactory for AppAbility {
@@ -162,7 +162,7 @@ The feature's HTTP adapter is a separate module. It imports the port
 reachable — omit it and the access graph fails the boot by name.
 
 ```rust title="crates/features/src/posts/http/module.rs"
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use super::controller::PostsController;
 use crate::authz::AuthzHttpModule;
@@ -205,8 +205,8 @@ The app root imports the feature's HTTP adapter beside the greeting one the
 scaffold wired on page 1.
 
 ```rust title="apps/blog/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
 
 use features::authn::AuthnModule;
 use features::authz::AuthzHttpModule;

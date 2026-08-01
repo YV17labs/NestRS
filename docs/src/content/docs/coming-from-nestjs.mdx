@@ -69,7 +69,7 @@ exported. NestRS keeps one. `#[module]` accepts exactly two keys, `imports` and
 `providers`, and an unknown key is a compile error naming the two.
 
 ```rust title="crates/features/src/users/http/module.rs"
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use super::controller::UsersController;
 use crate::authz::AuthzHttpModule;
@@ -141,6 +141,11 @@ module config is reachable both ways:
 The two compose **per field, not per struct**: the pinned struct is the *base*
 the environment overlays. Pinning `port` in `HttpConfig` leaves
 `NESTRS_HTTP__COMPRESSION` free to move, and neither path erases the other.
+
+"The environment" here is the **real process environment only**. A `for_root`
+pin outranks a `.env` file committed beside the code; it does not outrank a
+variable actually present in the environment at startup — the full chain is on
+[Configuration](/configuration/#the-dual-path-rule).
 
 That is what pays off in a container. The image ships one binary with sane pins;
 the deployment moves any knob through the `env` block of a Compose file or a

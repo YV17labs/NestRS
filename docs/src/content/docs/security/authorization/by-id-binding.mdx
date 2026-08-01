@@ -27,8 +27,8 @@ there".
 ## What it looks like
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs_authz::Read;
-use nest_rs_seaorm::Bind;
+use nest_rs::authz::Read;
+use nest_rs::seaorm::Bind;
 
 #[get("/:id")]
 async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
@@ -141,7 +141,7 @@ match self.svc.access(Action::Read, id).await.map_err(ServiceError::from)? {
 ```
 
 `Bind` does this mapping for the HTTP transport. The GraphQL
-analog (`nest_rs_seaorm::graphql::bind`) does the same for resolvers.
+analog (`nest_rs::seaorm::graphql::bind`) does the same for resolvers.
 
 ## Updates and deletes — the by-id mutation path
 

@@ -19,7 +19,7 @@ service result and the wire shape just works.
 
 ```rust
 use async_graphql::{Error, Result};
-use nest_rs_graphql::resolver;
+use nest_rs::graphql::resolver;
 
 #[resolver]
 pub struct PostsResolver;
@@ -109,8 +109,8 @@ A resolver propagates that into a GraphQL `Result<T>` with `?`:
 
 ```rust
 use async_graphql::Result;
-use nest_rs_authz::Read;
-use nest_rs_graphql::resolver;
+use nest_rs::authz::Read;
+use nest_rs::graphql::resolver;
 
 #[resolver]
 impl PostsResolver {
@@ -132,7 +132,7 @@ For a richer envelope, wrap the conversion to attach a code:
 
 ```rust
 use async_graphql::{Error, ErrorExtensions, Result};
-use nest_rs_seaorm::ServiceError;
+use nest_rs::seaorm::ServiceError;
 
 fn graphql_from_service(err: ServiceError) -> Error {
     let code = match &err {

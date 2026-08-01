@@ -69,20 +69,20 @@ secret; split later without touching your features. See
 The two guards are project-local aliases written **once**:
 
 ```rust title="crates/features/src/authn/strategy.rs"
-pub type AppJwtStrategy = nest_rs_authn::JwtStrategy<Claims>;
+pub type AppJwtStrategy = nest_rs::authn::JwtStrategy<Claims>;
 
-pub type AuthnGuard = nest_rs_authn::AuthnGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
 ```
 
 ```rust title="crates/features/src/authz/http/guard.rs"
-use nest_rs_authz::http::AbilityGuard;
+use nest_rs::authz::http::AbilityGuard;
 
 use crate::authz::AppAbility;
 
 pub type AuthzGuard = AbilityGuard<AppAbility>;
 ```
 
-`AbilityGuard` lives at `nest_rs_authz::http`, behind the crate's `http`
+`AbilityGuard` lives at `nest_rs::authz::http`, behind the crate's `http`
 feature — not at the crate root. [`nestrs g auth`](/cli/#generate-features-and-adapters)
 writes both files, their modules, and the `Claims` they name.
 

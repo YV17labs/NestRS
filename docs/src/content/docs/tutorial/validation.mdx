@@ -25,7 +25,7 @@ body in `Valid<...>`:
 ```rust title="(expanded by #[crud] — you don't write this)"
 async fn create(
     &self,
-    __body: ::nest_rs_http::Valid<::poem::web::Json<CreatePost>>,
+    __body: ::nest_rs::http::Valid<::poem::web::Json<CreatePost>>,
 ) -> ::poem::Result<::poem::web::Json<Post>> {
     // delegates to CrudService::create
 }

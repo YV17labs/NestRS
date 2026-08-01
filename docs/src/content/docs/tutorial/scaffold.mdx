@@ -115,8 +115,8 @@ The root module is where transports come in. `HttpModule::for_root` pins
 the listen port in code — not in `.env`:
 
 ```rust title="apps/blog/src/module.rs"
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
 
 use features::blog::BlogHttpModule;
 
@@ -142,8 +142,8 @@ crates, no collision — the app only ever names the `…HttpModule` edge.
 
 ```rust title="apps/blog/src/main.rs"
 use anyhow::Result;
-use nest_rs_config::Environment;
-use nest_rs_core::App;
+use nest_rs::config::Environment;
+use nest_rs::core::App;
 
 use blog::BlogModule;
 

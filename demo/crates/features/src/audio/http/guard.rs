@@ -1,10 +1,10 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_authz::{Ability, Action};
-use nest_rs_core::{Layer, injectable};
-use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::async_trait;
+use nest_rs::authz::{Ability, Action};
+use nest_rs::core::{Layer, injectable};
+use nest_rs::guards::{Denial, Guard};
+use nest_rs::http::async_trait;
 use poem::Request;
 
 use crate::orgs::Entity as OrgEntity;

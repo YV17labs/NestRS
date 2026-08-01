@@ -9,7 +9,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let conn = nest_rs_seaorm::connect_from_env().await?;
+    let conn = nest_rs::seaorm::connect_from_env().await?;
     let inserted = seed::run(&conn).await?;
     tracing::info!(inserted, "seed complete");
     Ok(())

@@ -5,20 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-nest-rs-core.workspace = true
-nest-rs-authn.workspace = true
-nest-rs-config.workspace = true
-nest-rs-authz = { workspace = true, features = ["http", "graphql"] }
-nest-rs-graphql.workspace = true
-nest-rs-guards = { workspace = true, features = ["graphql"] }
-nest-rs-health.workspace = true
-nest-rs-http.workspace = true
-nest-rs-openapi.workspace = true
-nest-rs-seaorm = { workspace = true, features = ["http", "graphql", "health"] }
-nest-rs-redis.workspace = true
-nest-rs-schedule.workspace = true
-nest-rs-server-timing.workspace = true
-nest-rs-throttler.workspace = true
+nest-rs.workspace = true
 features.workspace = true
 poem.workspace = true
 tokio.workspace = true
@@ -28,15 +15,14 @@ sea-orm.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+nest-rs.workspace = true
 # Enables `features::testing` (dev keypair, org id, token minting) for e2e.
 features = { workspace = true, features = ["test-support"] }
 poem = { workspace = true, features = ["test"] }
-nest-rs-testing = { workspace = true, features = ["orm"] }
 migrations = { workspace = true }
 # The audio-storage e2e boots a worker to drain the `audio` queue and talks to
 # real RustFS directly: `nest-rs-storage` builds the client that ensures the
 # bucket, `reqwest` PUTs to / GETs from the presigned URLs the api mints.
-nest-rs-storage = { workspace = true }
 reqwest = { workspace = true }
 
 [lints]

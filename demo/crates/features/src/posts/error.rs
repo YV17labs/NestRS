@@ -1,4 +1,4 @@
-use nest_rs_seaorm::ServiceError;
+use nest_rs::seaorm::ServiceError;
 use poem::error::ResponseError;
 use poem::http::StatusCode;
 use uuid::Uuid;

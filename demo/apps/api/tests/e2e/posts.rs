@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use features::notifications::NotificationsQueueModule;
-use nest_rs_core::module;
-use nest_rs_redis::{QueueModule, QueueWorker, QueueWorkerModule};
-use nest_rs_seaorm::DatabaseModule;
-use nest_rs_testing::TestApp;
+use nest_rs::core::module;
+use nest_rs::redis::{QueueModule, QueueWorker, QueueWorkerModule};
+use nest_rs::seaorm::DatabaseModule;
+use nest_rs::testing::TestApp;
 use poem::http::header;
 use serde_json::json;
 use uuid::Uuid;

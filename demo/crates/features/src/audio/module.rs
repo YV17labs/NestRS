@@ -1,5 +1,5 @@
-use nest_rs_core::module;
-use nest_rs_storage::StorageModule;
+use nest_rs::core::module;
+use nest_rs::storage::StorageModule;
 
 use super::service::AudioService;
 

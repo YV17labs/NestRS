@@ -1,9 +1,9 @@
 use anyhow::Result;
 use features::authn::AuthnGuard;
 use features::authz::AuthzGuard;
-use nest_rs_config::Environment;
-use nest_rs_core::App;
-use nest_rs_guards::{AppBuilderGuardsExt, guard};
+use nest_rs::config::Environment;
+use nest_rs::core::App;
+use nest_rs::guards::{AppBuilderGuardsExt, guard};
 
 use api::ApiModule;
 

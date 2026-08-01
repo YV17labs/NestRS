@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use features::oauth::{AuthenticatedClient, IssuerConfig, OAuthService};
-use nest_rs_authn::{JwtOptions, JwtService, TokenError};
-use nest_rs_social::SocialRegistry;
+use nest_rs::authn::{JwtOptions, JwtService, TokenError};
+use nest_rs::social::SocialRegistry;
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 

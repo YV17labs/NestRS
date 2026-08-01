@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_schedule::{CronExpression, scheduled};
+use nest_rs::core::injectable;
+use nest_rs::schedule::{CronExpression, scheduled};
 
 use crate::audio::{AUDIO_QUEUE, AudioConfig, AudioService};
 
@@ -52,8 +52,8 @@ impl AudioTasks {
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs_core::{Discoverable, ReachableProviders};
-    use nest_rs_schedule::ScheduledMethod;
+    use nest_rs::core::{Discoverable, ReachableProviders};
+    use nest_rs::schedule::ScheduledMethod;
 
     use super::AudioTasks;
     use crate::audio::AudioService;
@@ -61,7 +61,7 @@ mod tests {
     #[test]
     fn three_methods_are_discovered_through_the_inventory() {
         let names: Vec<(&'static str, &'static str)> =
-            nest_rs_core::inventory::iter::<ScheduledMethod>()
+            nest_rs::core::inventory::iter::<ScheduledMethod>()
                 .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioTasks>())
                 .map(|m| (m.provider, m.method))
                 .collect();

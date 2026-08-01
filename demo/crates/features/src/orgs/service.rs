@@ -1,5 +1,5 @@
-use nest_rs_core::injectable;
-use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
+use nest_rs::core::injectable;
+use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 
 use super::entity::{self, CreateOrg, Entity as Orgs, UpdateOrg};
 

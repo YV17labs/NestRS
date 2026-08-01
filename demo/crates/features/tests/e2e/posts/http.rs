@@ -1,7 +1,7 @@
-use nest_rs_core::module;
-use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_seaorm::DatabaseModule;
-use nest_rs_testing::{EphemeralDatabase, TestApp};
+use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::seaorm::DatabaseModule;
+use nest_rs::testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
 use serde_json::json;
 use uuid::Uuid;
@@ -13,7 +13,7 @@ use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
 use features::testing::{DEV_PUBLIC_KEY, token};
 use features::users::{ActiveModel as UserActive, UserRole};
-use nest_rs_authn::JwtConfig;
+use nest_rs::authn::JwtConfig;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[module(

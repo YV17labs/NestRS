@@ -1,7 +1,7 @@
-use nest_rs_core::{Layer, injectable};
-use nest_rs_guards::{Denial, Guard};
-use nest_rs_ws::serde_json::Value;
-use nest_rs_ws::{WsClient, async_trait};
+use nest_rs::core::{Layer, injectable};
+use nest_rs::guards::{Denial, Guard};
+use nest_rs::ws::serde_json::Value;
+use nest_rs::ws::{WsClient, async_trait};
 
 #[injectable]
 #[derive(Default)]
@@ -38,7 +38,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use nest_rs_ws::{Global, WsServer};
+    use nest_rs::ws::{Global, WsServer};
     use serde_json::json;
 
     fn client() -> WsClient {

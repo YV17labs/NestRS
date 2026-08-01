@@ -10,7 +10,7 @@ pub mod http;
 pub use config::IssuerConfig;
 pub use dtos::{AccessTokenDto, LoginDto, TokenRequestDto};
 pub use module::OAuthModule;
-pub use nest_rs_authn::RegisteredClient;
+pub use nest_rs::authn::RegisteredClient;
 pub use scope::{role_from_db, roles_for_scope};
 pub use service::{AuthenticatedClient, Caller, OAuthService};
 pub use strategies::{ClientAuthnGuard, OAuthGuard};

@@ -1,6 +1,6 @@
-use nest_rs_config::ConfigModule;
-use nest_rs_core::module;
-use nest_rs_social::SocialModule;
+use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
+use nest_rs::social::SocialModule;
 
 use super::config::IssuerConfig;
 use super::service::OAuthService;

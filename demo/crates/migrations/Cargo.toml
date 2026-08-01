@@ -5,7 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-nest-rs-seaorm.workspace = true
+nest-rs.workspace = true
 sea-orm-migration.workspace = true
 sea-orm.workspace = true
 anyhow.workspace = true

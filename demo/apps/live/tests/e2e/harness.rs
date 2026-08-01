@@ -1,9 +1,9 @@
 use features::Role;
 use futures_util::{SinkExt, StreamExt};
 use live::LiveModule;
-use nest_rs_authn::JwtConfig;
-use nest_rs_http::poem::http::header;
-use nest_rs_testing::TestApp;
+use nest_rs::authn::JwtConfig;
+use nest_rs::http::poem::http::header;
+use nest_rs::testing::TestApp;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -19,7 +19,7 @@ pub(crate) async fn token_for_org(org_id: Uuid, role: Role) -> String {
     features::testing::token(org_id, vec![role], None)
 }
 
-pub(crate) fn boot_builder() -> nest_rs_testing::TestAppBuilder {
+pub(crate) fn boot_builder() -> nest_rs::testing::TestAppBuilder {
     TestApp::builder()
         .module::<LiveModule>()
         .provide(JwtConfig {

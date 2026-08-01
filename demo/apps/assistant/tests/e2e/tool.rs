@@ -1,8 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nest_rs_core::DiscoveryService;
-use nest_rs_http::HttpEndpointMeta;
-use nest_rs_testing::mcp::{initialize_request, open_session, post_message};
+use nest_rs::core::DiscoveryService;
+use nest_rs::http::HttpEndpointMeta;
+use nest_rs::testing::mcp::{initialize_request, open_session, post_message};
 use poem::http::StatusCode;
 use serde_json::json;
 

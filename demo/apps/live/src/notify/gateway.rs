@@ -1,4 +1,4 @@
-use nest_rs_ws::{WsClient, gateway, messages};
+use nest_rs::ws::{WsClient, gateway, messages};
 
 use features::authn::AuthnGuard;
 

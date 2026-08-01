@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use features::orgs::ActiveModel as OrgActiveModel;
 use features::users::{ActiveModel as UserActiveModel, SocialIdentity, UserRole, UsersService};
-use nest_rs_authn::AuthError;
-use nest_rs_seaorm::{Executor, with_request_executor};
-use nest_rs_testing::EphemeralDatabase;
+use nest_rs::authn::AuthError;
+use nest_rs::seaorm::{Executor, with_request_executor};
+use nest_rs::testing::EphemeralDatabase;
 use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, Set, Statement, Value};
 use uuid::Uuid;
 

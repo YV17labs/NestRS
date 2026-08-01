@@ -1,4 +1,4 @@
-use nest_rs_authn::{JwtOptions, JwtService};
+use nest_rs::authn::{JwtOptions, JwtService};
 use uuid::Uuid;
 
 use crate::{Claims, Role};

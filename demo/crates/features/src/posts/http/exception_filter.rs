@@ -1,6 +1,6 @@
-use nest_rs_core::{Layer, injectable};
-use nest_rs_exception_filters::ExceptionFilter;
-use nest_rs_http::async_trait;
+use nest_rs::core::{Layer, injectable};
+use nest_rs::exception_filters::ExceptionFilter;
+use nest_rs::http::async_trait;
 use poem::Response;
 use poem::error::ResponseError;
 use poem::http::StatusCode;

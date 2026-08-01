@@ -1,6 +1,6 @@
 use api::ApiModule;
-use nest_rs_authn::JwtConfig;
-use nest_rs_testing::{EphemeralDatabase, TestApp};
+use nest_rs::authn::JwtConfig;
+use nest_rs::testing::{EphemeralDatabase, TestApp};
 use poem::http::header;
 use serde_json::json;
 use uuid::Uuid;

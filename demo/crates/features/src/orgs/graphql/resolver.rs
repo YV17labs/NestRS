@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nest_rs_graphql::{crud, resolver};
+use nest_rs::graphql::{crud, resolver};
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;

@@ -1,4 +1,4 @@
-use nest_rs_testing::mcp::call_tool;
+use nest_rs::testing::mcp::call_tool;
 use sea_orm::sea_query::Query;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use nest_rs_config::Environment;
-use nest_rs_core::App;
+use nest_rs::config::Environment;
+use nest_rs::core::App;
 
 use worker::WorkerModule;
 

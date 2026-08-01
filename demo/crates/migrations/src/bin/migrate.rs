@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let conn = nest_rs_seaorm::connect_from_env().await?;
+    let conn = nest_rs::seaorm::connect_from_env().await?;
     match std::env::args().nth(1).as_deref() {
         Some("up") => Migrator::up(&conn, None).await?,
         Some("down") => {

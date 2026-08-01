@@ -1,6 +1,6 @@
-use nest_rs_core::module;
-use nest_rs_seaorm::ws::WsDataContext;
-use nest_rs_ws::{SocketContext, WsModule};
+use nest_rs::core::module;
+use nest_rs::seaorm::ws::WsDataContext;
+use nest_rs::ws::{SocketContext, WsModule};
 
 use crate::authz::http::AuthzHttpModule;
 

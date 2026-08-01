@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::injectable;
-use nest_rs_ws::{WsServer, serde_json};
+use nest_rs::core::injectable;
+use nest_rs::ws::{WsServer, serde_json};
 use parking_lot::Mutex;
 
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};

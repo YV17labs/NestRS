@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_queue::processor;
+use nest_rs::core::injectable;
+use nest_rs::queue::processor;
 
 use crate::notifications::{NotificationsService, NotifyCommand, NotifyQueue};
 

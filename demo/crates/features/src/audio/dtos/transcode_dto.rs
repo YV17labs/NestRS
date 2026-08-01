@@ -1,11 +1,10 @@
-use nest_rs_http::input;
-use serde::Serialize;
+use nest_rs::http::input;
 use validator::ValidationError;
 
 const ALLOWED_AUDIO_EXTENSIONS: [&str; 6] = ["mp3", "wav", "flac", "aac", "ogg", "m4a"];
 
 #[input]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct TranscodeDto {
     #[validate(
         length(min = 1, max = 255),

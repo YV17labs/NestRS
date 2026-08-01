@@ -24,7 +24,7 @@ impl Claims {
     }
 }
 
-impl nest_rs_authn::PrincipalIdentity for Claims {
+impl nest_rs::authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|sub| sub.to_string())
     }
@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn actor_id_is_the_sub_claim() {
-        use nest_rs_authn::PrincipalIdentity;
+        use nest_rs::authn::PrincipalIdentity;
         let with_sub = claims(vec![]);
         assert_eq!(with_sub.actor_id(), Some(Uuid::nil().to_string()));
         let mut subjectless = claims(vec![]);

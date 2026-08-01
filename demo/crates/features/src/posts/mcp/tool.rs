@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use nest_rs_mcp::{
+use nest_rs::mcp::{
     CallToolResult, ContentBlock, McpError, ServerHandler, mcp, tool, tool_handler, tool_router,
 };
-use nest_rs_seaorm::CrudService;
+use nest_rs::seaorm::CrudService;
 
 use crate::posts::PostsService;
 

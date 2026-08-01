@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use nest_rs_http::{Valid, controller, routes};
-use nest_rs_throttler::{Throttle, ThrottlerGuard};
+use nest_rs::http::{Valid, controller, routes};
+use nest_rs::throttler::{Throttle, ThrottlerGuard};
 use poem::http::StatusCode;
 use poem::web::sse::{Event, SSE};
 use poem::web::{Json, Query};

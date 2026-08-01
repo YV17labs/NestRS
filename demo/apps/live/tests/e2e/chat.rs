@@ -1,6 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_http::HttpTransport;
-use nest_rs_http::poem::http::StatusCode;
+use nest_rs::http::HttpTransport;
+use nest_rs::http::poem::http::StatusCode;
 use serde_json::json;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -273,7 +273,7 @@ async fn the_socket_lifetime_ceiling_closes_the_socket() {
 
     let app = boot_builder()
         .provide(
-            nest_rs_ws::WsConfig::default().with_max_connection(std::time::Duration::from_secs(1)),
+            nest_rs::ws::WsConfig::default().with_max_connection(std::time::Duration::from_secs(1)),
         )
         .build_headless()
         .await

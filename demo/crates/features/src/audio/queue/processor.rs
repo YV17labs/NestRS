@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_core::injectable;
-use nest_rs_queue::processor;
+use nest_rs::core::injectable;
+use nest_rs::queue::processor;
 
 use crate::audio::{AudioQueue, AudioService, TranscodeCommand};
 
@@ -25,15 +25,15 @@ impl AudioProcessor {
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs_core::Discoverable;
-    use nest_rs_queue::ProcessMethod;
+    use nest_rs::core::Discoverable;
+    use nest_rs::queue::ProcessMethod;
 
     use super::AudioProcessor;
     use crate::audio::{AUDIO_QUEUE, AudioService};
 
     #[test]
     fn process_method_is_discovered_through_the_inventory() {
-        let entries: Vec<&ProcessMethod> = nest_rs_core::inventory::iter::<ProcessMethod>()
+        let entries: Vec<&ProcessMethod> = nest_rs::core::inventory::iter::<ProcessMethod>()
             .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioProcessor>())
             .collect();
         let transcode = entries

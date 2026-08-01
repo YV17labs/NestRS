@@ -4,10 +4,10 @@ use crate::oauth::{
     AccessTokenDto, AuthenticatedClient, Caller, ClientAuthnGuard, LoginDto, OAuthGuard,
     OAuthService, TokenRequestDto,
 };
-use nest_rs_authn::OAuth2Client;
-use nest_rs_http::{Ctx, Piped, Valid, controller, routes};
-use nest_rs_pipes::Lowercase;
-use nest_rs_throttler::{Throttle, ThrottlerGuard};
+use nest_rs::authn::OAuth2Client;
+use nest_rs::http::{Ctx, Piped, Valid, controller, routes};
+use nest_rs::pipes::Lowercase;
+use nest_rs::throttler::{Throttle, ThrottlerGuard};
 use poem::http::{StatusCode, header};
 use poem::web::{Form, Json, Path};
 use poem::{Response, Result};

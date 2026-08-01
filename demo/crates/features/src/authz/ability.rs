@@ -1,5 +1,5 @@
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
-use nest_rs_core::injectable;
+use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::core::injectable;
 
 use crate::Claims;
 use crate::notifications as notification;
@@ -49,7 +49,7 @@ impl AbilityFactory for AppAbility {
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs_authz::{Ability, AbilityBuilder, FieldSet};
+    use nest_rs::authz::{Ability, AbilityBuilder, FieldSet};
     use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
     use uuid::Uuid;
 

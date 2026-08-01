@@ -1,4 +1,4 @@
-use nest_rs_core::module;
+use nest_rs::core::module;
 
 use super::resolver::PostsResolver;
 use crate::authz::graphql::AuthzGraphqlModule;

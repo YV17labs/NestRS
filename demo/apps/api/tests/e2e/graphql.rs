@@ -253,7 +253,7 @@ async fn has_many_relation_load_is_capped_at_relation_load_cap() {
         .string()
         .to_owned();
 
-    let seeded = nest_rs_seaorm::RELATION_LOAD_CAP + 5;
+    let seeded = nest_rs::seaorm::RELATION_LOAD_CAP + 5;
     let rows: Vec<String> = (0..seeded)
         .map(|i| format!("('{}','{org}','{author}','t{i}','b{i}')", Uuid::now_v7()))
         .collect();
@@ -295,7 +295,7 @@ async fn has_many_relation_load_is_capped_at_relation_load_cap() {
         .count() as u64;
     assert_eq!(
         loaded,
-        nest_rs_seaorm::RELATION_LOAD_CAP,
+        nest_rs::seaorm::RELATION_LOAD_CAP,
         "an exposed has_many load is bounded at RELATION_LOAD_CAP, not the {seeded} seeded",
     );
 }
@@ -354,7 +354,7 @@ async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
 }
 
 /// POST one query, returning the response body as plain JSON.
-async fn graphql(app: &nest_rs_testing::TestApp, bearer: &str, query: &str) -> serde_json::Value {
+async fn graphql(app: &nest_rs::testing::TestApp, bearer: &str, query: &str) -> serde_json::Value {
     let resp = app
         .http()
         .post("/graphql")

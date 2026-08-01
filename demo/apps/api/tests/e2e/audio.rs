@@ -2,11 +2,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use features::audio::AudioQueueModule;
-use nest_rs_config::Config;
-use nest_rs_core::module;
-use nest_rs_redis::{QueueModule, QueueWorker, QueueWorkerModule};
-use nest_rs_storage::{Storage, StorageConfig};
-use nest_rs_testing::TestApp;
+use nest_rs::config::Config;
+use nest_rs::core::module;
+use nest_rs::redis::{QueueModule, QueueWorker, QueueWorkerModule};
+use nest_rs::storage::{Storage, StorageConfig};
+use nest_rs::testing::TestApp;
 use poem::http::{StatusCode, header};
 use poem::test::{TestForm, TestFormField};
 use serde_json::json;

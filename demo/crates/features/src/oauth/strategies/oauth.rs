@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use nest_rs_authn::{AuthError, Strategy};
-use nest_rs_core::injectable;
+use nest_rs::authn::{AuthError, Strategy};
+use nest_rs::core::injectable;
 use poem::Request;
 use poem::http::header;
 use serde::Deserialize;
@@ -10,7 +10,7 @@ use serde::Deserialize;
 use super::super::http::TRANSACTION_COOKIE;
 use super::super::service::{Caller, OAuthService};
 
-pub type OAuthGuard = nest_rs_authn::AuthnGuard<OAuthStrategy>;
+pub type OAuthGuard = nest_rs::authn::AuthnGuard<OAuthStrategy>;
 
 #[derive(Debug, Default, Deserialize)]
 struct CallbackQuery {

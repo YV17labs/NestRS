@@ -1,8 +1,8 @@
 use auth::{AuthModule, IssuerConfig, RegisteredClient};
 use base64::Engine as _;
-use nest_rs_authn::{JwtConfig, JwtOptions, JwtService, hash_password};
-use nest_rs_social::{GithubSocialConfig, GoogleSocialConfig};
-use nest_rs_testing::{EphemeralDatabase, TestApp};
+use nest_rs::authn::{JwtConfig, JwtOptions, JwtService, hash_password};
+use nest_rs::social::{GithubSocialConfig, GoogleSocialConfig};
+use nest_rs::testing::{EphemeralDatabase, TestApp};
 use sea_orm::sea_query::{OnConflict, Query};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;

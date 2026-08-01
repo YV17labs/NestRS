@@ -24,21 +24,21 @@ fn generate_resource_creates_crud_slice_and_deps() {
     assert!(entity.contains("name = \"Post\""));
     assert!(entity.contains("table_name = \"post\""));
 
-    // Dependencies spliced into both manifests. `schemars` and `nest-rs-authz`
+    // Dependencies spliced into both manifests. `schemars` / `validator` /
+    // `uuid` / `chrono` are absent by design: `#[expose]` carries those derives
+    // and routes them back through the framework. `authz`
     // are what `#[expose]`/`#[crud]` expand to, so their absence would only
     // surface as macro-expansion errors on the first `cargo check`.
     let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
-    assert!(root_cargo.contains("nest-rs-seaorm"));
-    assert!(root_cargo.contains("schemars"));
-    assert!(root_cargo.contains("nest-rs-authz"));
+    assert!(root_cargo.contains("nest-rs"));
+    assert!(root_cargo.contains("seaorm"), "{root_cargo}");
     assert!(
         root_cargo.contains("sea-orm = { version = \"2.0\""),
         "the generated pin tracks the released sea-orm, not a release candidate: {root_cargo}"
     );
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    assert!(features_cargo.contains("nest-rs-seaorm"));
-    assert!(features_cargo.contains("schemars"));
-    assert!(features_cargo.contains("nest-rs-authz"));
+    assert!(features_cargo.contains("nest-rs"));
+    assert!(features_cargo.contains("authz"), "{features_cargo}");
 
     let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
     assert!(lib.contains("pub mod posts;"));

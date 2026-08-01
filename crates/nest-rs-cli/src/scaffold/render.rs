@@ -77,11 +77,11 @@ mod tests {
             crate::templates::workspace::ROOT_CARGO,
         ] {
             assert!(
-                cargo.contains("nest-rs-core = \"{{nestrs_version}}\""),
+                cargo.contains("version = \"{{nestrs_version}}\""),
                 "nest-rs pins must use the {{nestrs_version}} placeholder"
             );
             assert!(
-                !cargo.contains("nest-rs-core = \"0."),
+                !cargo.contains("nest-rs = { version = \"0."),
                 "a hard-coded nest-rs version would rot on release"
             );
         }
@@ -92,7 +92,7 @@ mod tests {
         let r = Renderer::new(&Names::parse("demo"));
         let rendered = r.render(crate::templates::standalone::CARGO);
         assert!(rendered.contains(&format!(
-            "nest-rs-core = \"{}\"",
+            "version = \"{}\"",
             crate::version::framework_req()
         )));
         assert!(!rendered.contains("{{nestrs_version}}"));

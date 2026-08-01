@@ -17,18 +17,28 @@ use crate::version::framework_req;
 pub(crate) struct Dep {
     name: &'static str,
     /// TOML value placed in `[workspace.dependencies]` when absent. **Ignored
-    /// for `nest-rs-*` crates** — their version tracks the CLI's own release
-    /// line (see [`framework_req`]), so leave it `""` for those.
+    /// for the umbrella** — see [`nest_rs`].
     workspace_value: &'static str,
     /// Features to enable in the `features` crate (`[]` ⇒ `{ workspace = true }`).
     features: &'static [&'static str],
 }
 
+/// A capability of the umbrella. `workspace_value` is unused for these — the
+/// version tracks the CLI's own release line (see [`framework_req`]) — and the
+/// name is always the single `nest-rs` entry every generated manifest carries.
+const fn nest_rs(features: &'static [&'static str]) -> Dep {
+    Dep {
+        name: "nest-rs",
+        workspace_value: "",
+        features,
+    }
+}
+
 impl Dep {
-    /// The `[workspace.dependencies]` value to insert. `nest-rs-*` crates pin
-    /// the lockstep framework requirement; everything else uses its literal.
+    /// The `[workspace.dependencies]` value to insert. The umbrella pins the
+    /// lockstep framework requirement; everything else uses its literal.
     fn workspace_item(&self) -> Item {
-        if self.name.starts_with("nest-rs-") {
+        if self.name.starts_with("nest-rs") {
             parse_value(&format!("\"{}\"", framework_req()))
         } else {
             parse_value(self.workspace_value)
@@ -36,111 +46,17 @@ impl Dep {
     }
 }
 
-// `nest-rs-*` crates: `workspace_value` is unused — `workspace_item` derives
-// the version from the CLI's own release line (`framework_req`).
-const SEAORM: Dep = Dep {
-    name: "nest-rs-seaorm",
-    workspace_value: "",
-    features: &["http"],
-};
-const RESOURCE: Dep = Dep {
-    name: "nest-rs-resource",
-    workspace_value: "",
-    features: &[],
-};
-const GRAPHQL: Dep = Dep {
-    name: "nest-rs-graphql",
-    workspace_value: "",
-    features: &[],
-};
-const WS: Dep = Dep {
-    name: "nest-rs-ws",
-    workspace_value: "",
-    features: &[],
-};
-const QUEUE: Dep = Dep {
-    name: "nest-rs-queue",
-    workspace_value: "",
-    features: &[],
-};
-const SCHEDULE: Dep = Dep {
-    name: "nest-rs-schedule",
-    workspace_value: "",
-    features: &[],
-};
-// The connection behind `QueueConnection` / `QueueModule` / `QueueWorkerModule`.
-// `nest-rs-queue` carries only the abstractions, so a generated producer that
-// follows `/queue/producing-jobs/` (`use nest_rs_redis::QueueConnection;`)
-// cannot compile without it — the one line the queue install stanza names that
-// the generator used to skip.
-const REDIS: Dep = Dep {
-    name: "nest-rs-redis",
-    workspace_value: "",
-    features: &[],
-};
-const MCP: Dep = Dep {
-    name: "nest-rs-mcp",
-    workspace_value: "",
-    features: &[],
-};
-// `/mcp`'s fallback operation guard — the seam that lets a registered global
-// guard pool gate tool calls instead of the endpoint staying deny-all — lives
-// behind `nest-rs-guards`' `mcp` feature. Same shape as `GUARDS_GRAPHQL` /
-// `GUARDS_WS`: the crate is already in every scaffolded workspace, so only the
-// feature is missing, and leaving it off silently reduced the two documented
-// ways to authenticate `/mcp` to one.
-const GUARDS_MCP: Dep = Dep {
-    name: "nest-rs-guards",
-    workspace_value: "",
-    features: &["mcp"],
-};
-const AUTHN: Dep = Dep {
-    name: "nest-rs-authn",
-    workspace_value: "",
-    features: &[],
-};
-const AUTHZ: Dep = Dep {
-    name: "nest-rs-authz",
-    workspace_value: "",
-    features: &["http"],
-};
-// The GraphQL trio. `#[resolver]` expands to `nest_rs_guards::{GraphqlChainCell,
-// GraphqlChainSources, run_layered_graphql_chain}`, which live behind that
-// crate's `graphql` feature — and `nest-rs-guards` is already a dependency of
-// every scaffolded `features` crate, so it is the *feature*, not the entry,
-// that has to be added. The other two carry the authz bridge
-// (`GraphqlAbilityBridge`) and its loader scope (`LoaderScope`); both keep
-// `http` because the bridge is written against the HTTP guards.
-const GUARDS_GRAPHQL: Dep = Dep {
-    name: "nest-rs-guards",
-    workspace_value: "",
-    features: &["graphql"],
-};
-const AUTHZ_GRAPHQL: Dep = Dep {
-    name: "nest-rs-authz",
-    workspace_value: "",
-    features: &["http", "graphql"],
-};
-const SEAORM_GRAPHQL: Dep = Dep {
-    name: "nest-rs-seaorm",
-    workspace_value: "",
-    features: &["http", "graphql"],
-};
-const RESOURCE_GRAPHQL: Dep = Dep {
-    name: "nest-rs-resource",
-    workspace_value: "",
-    features: &["graphql"],
-};
-// `#[messages]` expands to `nest_rs_guards::GuardAsWsMessageCheck`, which that
-// crate gates behind `ws`. Same shape as `GUARDS_GRAPHQL`: every scaffolded
-// workspace already depends on `nest-rs-guards`, so it is the feature that has
-// to be turned on. Leaving it off compiles only by feature unification with a
-// dev-dependency — `cargo check -p features` fails while `--workspace` passes.
-const GUARDS_WS: Dep = Dep {
-    name: "nest-rs-guards",
-    workspace_value: "",
-    features: &["ws"],
-};
+const SEAORM: Dep = nest_rs(&["seaorm", "http"]);
+const RESOURCE: Dep = nest_rs(&["resource"]);
+const GRAPHQL: Dep = nest_rs(&["graphql"]);
+const WS: Dep = nest_rs(&["ws"]);
+const SCHEDULE: Dep = nest_rs(&["schedule"]);
+// `redis` implies `queue`: the abstractions and the Redis-bound
+// `QueueConnection` / `QueueModule` arrive together.
+const REDIS: Dep = nest_rs(&["redis"]);
+const MCP: Dep = nest_rs(&["mcp"]);
+const AUTHN: Dep = nest_rs(&["authn"]);
+const AUTHZ: Dep = nest_rs(&["authz", "http"]);
 // Mirrors the feature set `nest-rs-seaorm` itself resolves — a divergent list
 // (or a release-candidate floor) would be a manifest the user inherits and has
 // to un-learn later.
@@ -149,34 +65,19 @@ const SEA_ORM: Dep = Dep {
     workspace_value: "{ version = \"2.0\", default-features = false, features = [\"sqlx-postgres\", \"runtime-tokio-rustls\", \"macros\", \"with-uuid\", \"with-chrono\"] }",
     features: &[],
 };
-const SERDE: Dep = Dep {
-    name: "serde",
-    workspace_value: "{ version = \"1\", features = [\"derive\"] }",
-    features: &[],
-};
 const UUID: Dep = Dep {
     name: "uuid",
-    workspace_value: "{ version = \"1\", features = [\"v7\", \"serde\"] }",
+    workspace_value: "{ version = \"1.24\", features = [\"v7\", \"serde\"] }",
     features: &[],
 };
-const VALIDATOR: Dep = Dep {
-    name: "validator",
-    workspace_value: "{ version = \"0.20\", features = [\"derive\"] }",
+const SERDE: Dep = Dep {
+    name: "serde",
+    workspace_value: "{ version = \"1.0\", features = [\"derive\"] }",
     features: &[],
 };
 const ASYNC_GRAPHQL: Dep = Dep {
     name: "async-graphql",
-    workspace_value: "{ version = \"7\", features = [\"dataloader\"] }",
-    features: &[],
-};
-// `nest-rs-mcp`'s macros expand to bare `rmcp::` paths, so the user's manifest
-// genuinely needs the crate — which makes this line a *contract* with what
-// `nest-rs-mcp` itself compiled against. A different major puts two
-// `ServerHandler` traits in one graph and every `#[tool_handler]` method
-// mismatches. `rmcp_pin_matches_the_frameworks_own` pins the two together.
-const RMCP: Dep = Dep {
-    name: "rmcp",
-    workspace_value: "{ version = \"2.2\", features = [\"server\", \"macros\", \"transport-streamable-http-server\"] }",
+    workspace_value: "{ version = \"7.2\", features = [\"dataloader\"] }",
     features: &[],
 };
 // Every adapter skeleton that logs (`queue`, `schedule`, `ws`) writes a
@@ -190,17 +91,7 @@ const TRACING: Dep = Dep {
 };
 const ANYHOW: Dep = Dep {
     name: "anyhow",
-    workspace_value: "\"1\"",
-    features: &[],
-};
-const SCHEMARS: Dep = Dep {
-    name: "schemars",
-    workspace_value: "{ version = \"1\", features = [\"uuid1\"] }",
-    features: &[],
-};
-const CHRONO: Dep = Dep {
-    name: "chrono",
-    workspace_value: "{ version = \"0.4\", features = [\"serde\"] }",
+    workspace_value: "\"1.0\"",
     features: &[],
 };
 const SEA_ORM_MIGRATION: Dep = Dep {
@@ -215,21 +106,18 @@ const TRACING_SUBSCRIBER: Dep = Dep {
 };
 const TOKIO: Dep = Dep {
     name: "tokio",
-    workspace_value: "{ version = \"1\", features = [\"macros\", \"rt-multi-thread\"] }",
+    workspace_value: "{ version = \"1.53\", features = [\"macros\", \"rt-multi-thread\"] }",
     features: &[],
 };
 
 /// The crates a resource port (DB-backed CRUD + HTTP) needs.
 ///
-/// `schemars` and `nest-rs-authz` are call-site deps of the decorators, not of
-/// the developer's own code: `#[expose]` derives `::schemars::JsonSchema` and
-/// `#[crud]` emits `::nest_rs_authz::http::Authorize<…>` parameters. Omitting
-/// either turns the very first `cargo check` after `g resource` into a wall of
-/// macro-expansion errors.
+/// `#[expose]` carries its own derives now, each routed back through the
+/// framework, so `schemars` / `validator` / `uuid` / `chrono` are no longer
+/// call-site deps. `authz` stays because `#[crud]` emits `Authorize<…>`
+/// parameters — the developer's `#[authorize]` is what turns it on.
 pub fn resource_deps() -> Vec<&'static Dep> {
-    vec![
-        &SEAORM, &RESOURCE, &AUTHZ, &SEA_ORM, &SERDE, &UUID, &VALIDATOR, &SCHEMARS, &CHRONO,
-    ]
+    vec![&SEAORM, &RESOURCE, &AUTHZ, &SEA_ORM, &SERDE]
 }
 
 /// The crates the authn/authz adapter (`g auth`) needs.
@@ -259,25 +147,11 @@ pub fn migrations_deps() -> Vec<&'static Dep> {
 pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http => vec![],
-        Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL, &GUARDS_GRAPHQL],
-        // `serde` is not optional the moment a handler takes a typed payload —
-        // the shape `/websockets/messages/` presents as the normal case, with
-        // `#[derive(serde::Deserialize)]` on a DTO. `nest_rs_ws` re-exports only
-        // `serde_json`, so without this the first typed handler fails to compile
-        // and the page's install list was wrong by omission.
-        Transport::Ws => vec![&WS, &GUARDS_WS, &SERDE, &TRACING],
-        // `nest-rs-redis` carries `QueueConnection`/`QueueModule`/
-        // `QueueWorkerModule`; `nest-rs-queue` is abstractions only. Without it
-        // the very first `push_to` — the page the generator points at — fails
-        // on `unresolved import nest_rs_redis`.
-        Transport::Queue => vec![&QUEUE, &REDIS, &SERDE, &ANYHOW, &TRACING],
+        Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL],
+        Transport::Ws => vec![&WS, &TRACING],
+        Transport::Queue => vec![&REDIS, &ANYHOW, &TRACING],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW, &TRACING],
-        // `schemars` is a call-site dep of rmcp's `#[tool]` derive, which emits
-        // bare `schemars::` paths — the crate has to be *linked*, so the
-        // `nest_rs_mcp::schemars` re-export does not rescue a tool that takes
-        // input (i.e. every non-trivial one). `GUARDS_MCP` turns on the
-        // fallback operation guard so a global pool can gate `/mcp`.
-        Transport::Mcp => vec![&MCP, &RMCP, &SCHEMARS, &GUARDS_MCP],
+        Transport::Mcp => vec![&MCP],
     }
 }
 
@@ -298,55 +172,52 @@ pub fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
 /// The crates the GraphQL authz adapter (`authz/graphql/`) needs — the
 /// per-operation bridge and the dataloader scope.
 pub fn graphql_authz_deps() -> Vec<&'static Dep> {
-    vec![&AUTHZ_GRAPHQL, &SEAORM_GRAPHQL, &GRAPHQL]
+    vec![&AUTHZ, &SEAORM, &GRAPHQL]
 }
 
 /// What exposing an entity over GraphQL needs: `#[expose(graphql)]` derives the
 /// async-graphql object through `nest_rs_resource::graphql`, which that crate
 /// only compiles under its own `graphql` feature.
 pub fn graphql_port_deps() -> Vec<&'static Dep> {
-    vec![&RESOURCE_GRAPHQL]
+    vec![&RESOURCE, &GRAPHQL]
 }
 
 /// Edit the root manifest: add any missing `[workspace.dependencies]` entries.
 pub fn ensure_workspace_deps(deps: Vec<&'static Dep>) -> Transform {
-    Box::new(move |content: &str| {
-        let mut doc = content.parse::<DocumentMut>().ok()?;
-        let table = doc["workspace"]["dependencies"]
-            .or_insert(toml_edit::table())
-            .as_table_mut()?;
-        let mut changed = false;
-        for dep in &deps {
-            if table.get(dep.name).is_none() {
-                table.insert(dep.name, dep.workspace_item());
-                changed = true;
-            }
-        }
-        changed.then(|| doc.to_string())
-    })
+    ensure_deps(deps, &["workspace", "dependencies"], Dep::workspace_item)
 }
 
 /// Edit the `features` manifest: add any missing `[dependencies]` entries as
-/// `{ workspace = true, features = [...] }` — and, for an entry that is already
-/// there, enable any feature it is missing. The second half is what a generator
-/// bolting a transport onto a crate the starter manifest already depends on
-/// needs: `nest-rs-guards` ships with every workspace, so `g graphql` can only
-/// reach `nest_rs_guards::run_layered_graphql_chain` by turning its `graphql`
-/// feature on.
+/// `{ workspace = true, features = [...] }`.
 pub fn ensure_features_deps(deps: Vec<&'static Dep>) -> Transform {
+    ensure_deps(deps, &["dependencies"], |_| Item::Value(workspace_value()))
+}
+
+/// The shared half: insert what is absent, then enable any feature the entry is
+/// missing. The second step is what a capability needs — it is a **feature** of
+/// the single `nest-rs` entry, so an already-present entry still has to gain
+/// it, or `g graphql` on an equipped workspace silently leaves it off.
+fn ensure_deps(
+    deps: Vec<&'static Dep>,
+    path: &'static [&'static str],
+    missing: fn(&Dep) -> Item,
+) -> Transform {
     Box::new(move |content: &str| {
         let mut doc = content.parse::<DocumentMut>().ok()?;
-        let table = doc["dependencies"]
-            .or_insert(toml_edit::table())
-            .as_table_mut()?;
+        let mut table = doc.as_table_mut() as &mut dyn toml_edit::TableLike;
+        for key in path {
+            table = table
+                .entry(key)
+                .or_insert(toml_edit::table())
+                .as_table_like_mut()?;
+        }
         let mut changed = false;
         for dep in &deps {
             if table.get(dep.name).is_none() {
-                table.insert(dep.name, Item::Value(workspace_value()));
+                table.insert(dep.name, missing(dep));
                 changed = true;
             }
-            let entry = table.get_mut(dep.name)?;
-            changed |= enable_features(entry, dep.features);
+            changed |= enable_features(table.get_mut(dep.name)?, dep.features);
         }
         changed.then(|| doc.to_string())
     })
@@ -414,20 +285,21 @@ mod tests {
 
     #[test]
     fn ensures_workspace_dep_idempotently() {
-        let src = "[workspace.dependencies]\nnest-rs-core = \"0.1\"\n";
+        let src = "[workspace.dependencies]\nanyhow = \"1\"\n";
         let t = ensure_workspace_deps(vec![&SEAORM]);
-        let out = t(src).expect("adds nest-rs-seaorm");
+        let out = t(src).expect("adds nest-rs");
         // The pin tracks the CLI's own release line, not a hard-coded literal.
-        assert!(out.contains(&format!("nest-rs-seaorm = \"{}\"", framework_req())));
+        assert!(out.contains("nest-rs"), "{out}");
+        assert!(out.contains("seaorm"), "{out}");
         // already present → no-op
         assert!(ensure_workspace_deps(vec![&SEAORM])(&out).is_none());
     }
 
     #[test]
     fn ensures_features_dep_with_features() {
-        let src = "[dependencies]\nnest-rs-core.workspace = true\n";
+        let src = "[dependencies]\nanyhow.workspace = true\n";
         let out = ensure_features_deps(vec![&SEAORM])(src).expect("adds dep");
-        assert!(out.contains("nest-rs-seaorm"));
+        assert!(out.contains("nest-rs"));
         assert!(out.contains("workspace = true"));
         assert!(out.contains("\"http\""));
     }
@@ -437,16 +309,16 @@ mod tests {
     // and without it `#[resolver]` expands to names that do not exist.
     #[test]
     fn enables_a_missing_feature_on_a_dependency_already_declared() {
-        let src = "[dependencies]\nnest-rs-guards.workspace = true\n";
-        let out = ensure_features_deps(vec![&GUARDS_GRAPHQL])(src).expect("enables graphql");
+        let src = "[dependencies]\nnest-rs.workspace = true\n";
+        let out = ensure_features_deps(vec![&GRAPHQL])(src).expect("enables graphql");
         assert!(out.contains("graphql"), "{out}");
         assert!(
-            ensure_features_deps(vec![&GUARDS_GRAPHQL])(&out).is_none(),
+            ensure_features_deps(vec![&GRAPHQL])(&out).is_none(),
             "a second run is a no-op: {out}",
         );
         let doc = out.parse::<DocumentMut>().expect("still valid TOML");
         assert_eq!(
-            doc["dependencies"]["nest-rs-guards"]["workspace"].as_bool(),
+            doc["dependencies"]["nest-rs"]["workspace"].as_bool(),
             Some(true),
             "the existing keys survive: {out}",
         );
@@ -454,8 +326,8 @@ mod tests {
 
     #[test]
     fn enabling_a_feature_keeps_the_ones_already_listed() {
-        let src = "[dependencies]\nnest-rs-seaorm = { workspace = true, features = [\"http\"] }\n";
-        let out = ensure_features_deps(vec![&SEAORM_GRAPHQL])(src).expect("adds graphql");
+        let src = "[dependencies]\nnest-rs = { workspace = true, features = [\"http\"] }\n";
+        let out = ensure_features_deps(vec![&SEAORM, &GRAPHQL])(src).expect("adds graphql");
         assert!(
             out.contains("\"http\"") && out.contains("\"graphql\""),
             "{out}"
@@ -498,15 +370,22 @@ mod tests {
                 };
                 let src = format!("{handler}{module}{extra}");
                 for (token, krate) in NAMED {
-                    if src.contains(token) {
-                        assert!(
-                            declared.contains(krate),
-                            "the {} skeleton writes `{token}` but `nestrs g {}` does not add \
-                             `{krate}` — the first `cargo check` after generating fails",
-                            transport.folder(),
-                            transport.folder(),
-                        );
+                    if !src.contains(token) {
+                        continue;
                     }
+                    // Two legal ways to reach it, and a skeleton must take one:
+                    // declare the crate, or import the framework's re-export
+                    // (`use nest_rs::mcp::rmcp;`) — which is what keeps the
+                    // generated manifest at a single `nest-rs` entry.
+                    let reexported = src.contains(&format!("::{};", krate.replace('-', "_")));
+                    assert!(
+                        declared.contains(krate) || reexported,
+                        "the {} skeleton writes `{token}` but `nestrs g {}` neither adds \
+                         `{krate}` nor imports it through the framework — the first \
+                         `cargo check` after generating fails",
+                        transport.folder(),
+                        transport.folder(),
+                    );
                 }
             }
         }
@@ -563,48 +442,83 @@ mod tests {
         }
     }
 
-    /// `rmcp` is the one third-party crate a generated manifest must pin to the
-    /// *same* major the framework compiled against: `#[tool_handler]` expands
-    /// against `nest-rs-mcp`'s `ServerHandler` while the user's `impl` resolves
-    /// against theirs, so two majors in one graph mismatch every method.
+    /// Every third-party requirement in the repo is spelled `major.minor` —
+    /// the floor we actually build against, patch left to the publisher.
+    /// `"1"` claims less than we know (it accepts a 1.0 that never compiled
+    /// here); `"1.53.1"` claims more than we mean (it rejects the patch
+    /// releases we want to inherit for free).
     ///
-    /// Read from the workspace manifest rather than restated, so bumping the
-    /// framework's `rmcp` fails here until the generator follows.
+    /// This lives in the generator's suite because the generator is what
+    /// propagates the form: a scaffolded workspace inherits these pins
+    /// verbatim, so a manifest that drifts teaches every new project to drift
+    /// with it. It walks the repo's manifests rather than the CLI's own so the
+    /// rule is enforced where it is written, not restated per crate.
     #[test]
-    fn the_rmcp_pin_matches_the_frameworks_own() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../Cargo.toml")
-            .canonicalize()
-            .expect("the framework workspace manifest");
-        let doc = std::fs::read_to_string(&root)
-            .expect("readable workspace manifest")
-            .parse::<DocumentMut>()
-            .expect("valid TOML");
-        let ours = doc["workspace"]["dependencies"]["rmcp"].to_string();
-        let ours = ours.trim();
-        let generated = RMCP.workspace_value;
-        assert_eq!(
-            normalize(generated),
-            normalize(ours),
-            "`nestrs g mcp` writes {generated} while the framework builds against {ours} — \
-             two rmcp majors in one graph make every `#[tool_handler]` method mismatch",
-        );
-    }
-
-    /// Whitespace-insensitive compare of two inline-table literals.
-    fn normalize(raw: &str) -> String {
-        raw.chars().filter(|c| !c.is_whitespace()).collect()
+    fn versions_are_major_minor() {
+        // Exact pin on the patch, with a bump procedure in the root manifest:
+        // `nest-rs-graphql` reads async-graphql's public-but-internal registry
+        // API, so a minor may silently change what it spells out.
+        const EXACT: [&str; 2] = ["async-graphql", "async-graphql-poem"];
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifests = [
+            "Cargo.toml",
+            "demo/Cargo.toml",
+            "bench/sut/nestrs/Cargo.toml",
+        ];
+        let mut checked = 0usize;
+        for rel in manifests {
+            let path = repo.join(rel);
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue; // packaged crate: the sibling workspaces aren't there
+            };
+            let doc = raw.parse::<DocumentMut>().expect("valid TOML");
+            let tables = [
+                doc.get("workspace").and_then(|w| w.get("dependencies")),
+                doc.get("dependencies"),
+                doc.get("dev-dependencies"),
+                doc.get("build-dependencies"),
+            ];
+            for table in tables.into_iter().flatten() {
+                let Some(table) = table.as_table_like() else {
+                    continue;
+                };
+                for (name, entry) in table.iter() {
+                    // `nest-rs-*` tracks the release line, not a third party.
+                    if name.starts_with("nest-rs") || EXACT.contains(&name) {
+                        continue;
+                    }
+                    let req = match entry.as_str() {
+                        Some(literal) => literal,
+                        // A path-only entry (a sibling product crate) has no
+                        // requirement to spell.
+                        None => match entry.get("version").and_then(Item::as_str) {
+                            Some(version) => version,
+                            None => continue,
+                        },
+                    };
+                    checked += 1;
+                    assert_eq!(
+                        req.trim_start_matches('=').split('.').count(),
+                        2,
+                        "{rel}: `{name} = \"{req}\"` — third-party requirements are \
+                         `major.minor`; a bare major accepts releases we never built \
+                         against, a patch component rejects the fixes we want",
+                    );
+                }
+            }
+        }
+        assert!(checked > 0, "no manifest was reachable to check");
     }
 
     // A hand-rolled manifest may pin a version literally; the feature list then
     // has nowhere to go until the entry is widened into a table.
     #[test]
     fn a_version_pinned_dependency_is_widened_to_carry_features() {
-        let src = "[dependencies]\nnest-rs-guards = \"1.1\"\n";
-        let out = ensure_features_deps(vec![&GUARDS_GRAPHQL])(src).expect("widens the entry");
+        let src = "[dependencies]\nnest-rs = \"1.1\"\n";
+        let out = ensure_features_deps(vec![&GRAPHQL])(src).expect("widens the entry");
         let doc = out.parse::<DocumentMut>().expect("still valid TOML");
         assert_eq!(
-            doc["dependencies"]["nest-rs-guards"]["version"].as_str(),
+            doc["dependencies"]["nest-rs"]["version"].as_str(),
             Some("1.1"),
             "the pin survives: {out}",
         );

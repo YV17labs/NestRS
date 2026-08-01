@@ -13,7 +13,7 @@ pub use claims::{Claims, Role};
 
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AppAbility` reads it to build the caller's rules.
-pub const IDENTITY_CLAIMS: &str = r#"use nest_rs_authn::PrincipalIdentity;
+pub const IDENTITY_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -56,7 +56,7 @@ pub use module::AuthnModule;
 pub use strategy::AuthnGuard;
 "#;
 
-pub const AUTHN_STRATEGY: &str = r#"use nest_rs_authn::JwtStrategy;
+pub const AUTHN_STRATEGY: &str = r#"use nest_rs::authn::JwtStrategy;
 
 use crate::identity::Claims;
 
@@ -64,15 +64,15 @@ pub type AppJwtStrategy = JwtStrategy<Claims>;
 
 /// Bind first, before the ability guard:
 /// `#[use_guards(AuthnGuard, AuthzGuard)]`.
-pub type AuthnGuard = nest_rs_authn::AuthnGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
 "#;
 
-pub const AUTHN_MODULE: &str = r#"use nest_rs_core::module;
+pub const AUTHN_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::strategy::{AppJwtStrategy, AuthnGuard};
 
 #[module(
-    imports = [nest_rs_authn::AuthnModule::for_root(None)],
+    imports = [nest_rs::authn::AuthnModule::for_root(None)],
     providers = [AppJwtStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
@@ -92,8 +92,8 @@ pub use http::{AuthzGuard, AuthzHttpModule};
 /// The whole policy, in one function. Empty on purpose: the data layer denies
 /// every row the ability does not grant, so an app that grants nothing serves
 /// nothing — a legible 403, never a silent empty list.
-pub const AUTHZ_ABILITY: &str = r#"use nest_rs_authz::{AbilityBuilder, AbilityFactory};
-use nest_rs_core::injectable;
+pub const AUTHZ_ABILITY: &str = r#"use nest_rs::authz::{AbilityBuilder, AbilityFactory};
+use nest_rs::core::injectable;
 
 use crate::identity::Claims;
 
@@ -109,7 +109,7 @@ impl AbilityFactory for AppAbility {
     /// crosses the data layer.
     ///
     /// ```ignore
-    /// use nest_rs_authz::Action;
+    /// use nest_rs::authz::Action;
     /// use crate::posts as post;
     ///
     /// ab.can(Action::Read, post::Entity);
@@ -126,7 +126,7 @@ impl AbilityFactory for AppAbility {
     /// you open with `#[public]` still serves no row without a grant.
     ///
     /// ```ignore
-    /// use nest_rs_authz::Action;
+    /// use nest_rs::authz::Action;
     /// use crate::posts as post;
     ///
     /// ab.can(Action::Read, post::Entity)
@@ -139,7 +139,7 @@ impl AbilityFactory for AppAbility {
 }
 "#;
 
-pub const AUTHZ_MODULE: &str = r#"use nest_rs_core::module;
+pub const AUTHZ_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::ability::AppAbility;
 use crate::authn::AuthnModule;
@@ -158,14 +158,14 @@ pub use guard::AuthzGuard;
 pub use module::AuthzHttpModule;
 "#;
 
-pub const AUTHZ_HTTP_GUARD: &str = r#"use nest_rs_authz::http::AbilityGuard;
+pub const AUTHZ_HTTP_GUARD: &str = r#"use nest_rs::authz::http::AbilityGuard;
 
 use crate::authz::AppAbility;
 
 pub type AuthzGuard = AbilityGuard<AppAbility>;
 "#;
 
-pub const AUTHZ_HTTP_MODULE: &str = r#"use nest_rs_core::module;
+pub const AUTHZ_HTTP_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::guard::AuthzGuard;
 use crate::authz::AuthzModule;
@@ -195,7 +195,7 @@ pub use module::AuthzGraphqlModule;
 /// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
 /// `AuthzGuard`) on the GraphQL request, then scopes the operation to the
 /// ability it produced — so one policy answers on both transports.
-pub const AUTHZ_GRAPHQL_BRIDGE: &str = r#"use nest_rs_authz::graphql::GraphqlAbilityBridge;
+pub const AUTHZ_GRAPHQL_BRIDGE: &str = r#"use nest_rs::authz::graphql::GraphqlAbilityBridge;
 
 use crate::authn::AuthnGuard;
 use crate::authz::http::AuthzGuard;
@@ -207,16 +207,16 @@ pub type AppGraphqlGuard = GraphqlAbilityBridge<AuthnGuard, AuthzGuard>;
 /// chain member: `forward_principal!` gates the principal it forwards on this
 /// type being reachable, which turns "did the app import the GraphQL authz
 /// module?" into a boot-time access-graph answer instead of a null at run time.
-pub const AUTHZ_GRAPHQL_GUARD: &str = r#"use nest_rs_core::injectable;
+pub const AUTHZ_GRAPHQL_GUARD: &str = r#"use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]
 pub struct GraphqlAuthnGuard;
 "#;
 
-pub const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs_core::module;
-use nest_rs_graphql::{GraphqlBatchContext, GraphqlOperationGuard};
-use nest_rs_seaorm::graphql::LoaderScope;
+pub const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::graphql::{GraphqlBatchContext, GraphqlOperationGuard};
+use nest_rs::seaorm::graphql::LoaderScope;
 
 use super::bridge::AppGraphqlGuard;
 use super::guard::GraphqlAuthnGuard;
@@ -235,7 +235,7 @@ pub struct AuthzGraphqlModule;
 
 // Forwards the verified principal into every operation's GraphQL context,
 // gated on `GraphqlAuthnGuard` being reachable from the running app.
-nest_rs_graphql::forward_principal!(Claims, GraphqlAuthnGuard);
+nest_rs::graphql::forward_principal!(Claims, GraphqlAuthnGuard);
 "#;
 
 /// Appended to the committed `.env`. HS256 needs ≥ 32 bytes or the app refuses

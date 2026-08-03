@@ -48,6 +48,12 @@ pub struct LifecycleHook {
     pub provider: &'static str,
     /// The hook method's name — the tiebreaker in the `(provider, method)` order.
     pub method: &'static str,
+    /// `module_path!()` at the `#[hooks]` site — the crate and module the
+    /// provider lives in. Reported alongside the provider so "which of my
+    /// modules owns this?" is answered by the log line, and used to decide
+    /// whether an unreachable hook is the developer's problem
+    /// ([`is_framework_owned`]).
+    pub origin: &'static str,
     /// Whether this hook's provider is resolvable in the assembled container.
     /// `#[hooks]` emits a `Container::get::<Provider>().is_some()` probe, so a
     /// hook whose provider was never listed in any reachable module is surfaced
@@ -69,15 +75,47 @@ fn hooks_for(phase: LifecyclePhase) -> Vec<&'static LifecycleHook> {
     hooks
 }
 
-/// Emit the inert-hook `warn`: a linked hook whose provider is unreachable from
-/// the running app's module tree never fires, so surface it instead of letting
-/// it disappear (mirrors the schedule/queue/resolver discovery warns).
-fn warn_unreachable_hook(hook: &LifecycleHook, phase: LifecyclePhase) {
+/// Whether a hook belongs to the framework rather than to the app.
+///
+/// A `nest-rs-*` crate is linked as soon as *any* of its capabilities is used,
+/// so its opt-in providers — the ones behind a `for_root` the app did not
+/// import — are unreachable in the normal case. `ProtectedResourceModule`'s
+/// audience check is the example: every app that imports the generated
+/// `AuthnModule` links `nest-rs-authn`, and none of them opts into the resource
+/// server.
+fn is_framework_owned(origin: &str) -> bool {
+    origin.starts_with("nest_rs_") || origin == "nest_rs" || origin.starts_with("nest_rs::")
+}
+
+/// Report an inert hook: linked, but its provider is unreachable from the
+/// running app's module tree, so it never fires.
+///
+/// **`warn` for the app's own code** — leftover code must stay visible instead
+/// of vanishing silently (the module-gated discovery rule), and the developer
+/// can act: import the module, or delete the hook.
+///
+/// **`debug` for the framework's** — the developer cannot act on it and it is
+/// not a mistake. A `warn` naming an internal type on a freshly scaffolded app
+/// teaches exactly one thing: that these warnings are noise. Security warnings
+/// share this target.
+fn report_inert_hook(hook: &LifecycleHook, phase: LifecyclePhase) {
+    if is_framework_owned(hook.origin) {
+        tracing::debug!(
+            target: "nest_rs::lifecycle",
+            ?phase,
+            provider = hook.provider,
+            method = hook.method,
+            origin = hook.origin,
+            "skipped lifecycle hook: framework capability not imported by this app",
+        );
+        return;
+    }
     tracing::warn!(
         target: "nest_rs::lifecycle",
         ?phase,
         provider = hook.provider,
         method = hook.method,
+        origin = hook.origin,
         "skipped lifecycle hook: provider unreachable from app's module tree",
     );
 }
@@ -86,7 +124,7 @@ fn warn_unreachable_hook(hook: &LifecycleHook, phase: LifecyclePhase) {
 pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> anyhow::Result<()> {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
-            warn_unreachable_hook(hook, phase);
+            report_inert_hook(hook, phase);
             continue;
         }
         tracing::debug!(
@@ -111,7 +149,7 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
 pub(crate) async fn run_phase_lenient(container: &Container, phase: LifecyclePhase) {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
-            warn_unreachable_hook(hook, phase);
+            report_inert_hook(hook, phase);
             continue;
         }
         if let Err(err) = (hook.run)(container).await {
@@ -158,6 +196,7 @@ mod tests {
             phase: LifecyclePhase::OnModuleInit,
             provider: "Probe",
             method: "touch",
+            origin: module_path!(),
             present: |container| container.get::<Probe>().is_some(),
             run: run_touch,
         }
@@ -204,6 +243,7 @@ mod tests {
             phase: LifecyclePhase::BeforeApplicationShutdown,
             provider: "Unreachable",
             method: "never",
+            origin: module_path!(),
             present: |_| false,
             run: run_unreachable,
         }
@@ -219,5 +259,31 @@ mod tests {
             .expect("a skipped hook must not fail the phase");
         // Shutdown runner: same skip, best-effort (also must not panic).
         run_phase_lenient(&container, LifecyclePhase::BeforeApplicationShutdown).await;
+    }
+
+    // Which *level* an inert hook is reported at, and why it matters: a `warn`
+    // naming a framework-internal provider shows up on every freshly scaffolded
+    // auth app (`AudienceBinding`, behind a `ProtectedResourceModule` nobody
+    // imported), is not actionable, and teaches the reader to ignore a target
+    // that also carries security events.
+    #[test]
+    fn a_framework_owned_hook_is_not_the_developers_problem() {
+        for origin in [
+            "nest_rs_authn::resource::module",
+            "nest_rs_events::module",
+            "nest_rs",
+            "nest_rs::authn",
+        ] {
+            assert!(is_framework_owned(origin), "{origin}");
+        }
+        // An app's own provider still warns — that is leftover code the
+        // developer can act on, and the whole reason the report exists.
+        for origin in [
+            "features::users::service",
+            "api::module",
+            "my_nest_rs_helpers::hooks",
+        ] {
+            assert!(!is_framework_owned(origin), "{origin}");
+        }
     }
 }

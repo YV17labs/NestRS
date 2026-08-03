@@ -97,6 +97,7 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
                     phase: ::nest_rs_core::LifecyclePhase::#phase_variant,
                     provider: #provider_lit,
                     method: #method_lit,
+                    origin: ::core::module_path!(),
                     present: |__container| ::std::option::Option::is_some(
                         &::nest_rs_core::Container::get::<#self_ty>(__container),
                     ),

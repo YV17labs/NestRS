@@ -11,11 +11,15 @@
 //!
 //! Extend this crate whenever a decorator is added. Decorators excluded by
 //! the documented contract (see `framework.md`) are deliberately not
-//! exercised: emitted derives, the entity-site trio
-//! `::sea_orm`/`::uuid`/`::chrono`, and the HTTP handler surface —
-//! `#[routes]`/`#[crud]` wrap each verb in poem's own `#[handler]`, whose
-//! expansion targets the call-site prelude, so a controller crate owns `poem`
-//! (and `nest-rs-interceptors`) by contract.
+//! exercised: emitted derives and the entity-site trio
+//! `::sea_orm`/`::uuid`/`::chrono`, whose expansions target the call-site
+//! prelude because the developer's own source writes them.
+//!
+//! `#[controller]`/`#[routes]` **are** witnessed ([`controller`]).
+//! `#[routes]` emits its own `Endpoint` impl instead of wrapping poem's
+//! `#[handler]`, so nothing in the expansion resolves against the call-site
+//! prelude and a controller crate needs no `poem` line — the exclusion this
+//! paragraph used to record no longer describes the macro.
 //!
 //! **Not witnessed here:** `#[expose]` (`nest-rs-resource`). Exercising it
 //! would require the entity-site trio + emitted derives, which reintroduces
@@ -23,6 +27,7 @@
 //! routing (`::nest_rs_resource::{async_trait, tracing, serde_json}`) rests on
 //! review, not this compile proof.
 
+pub mod controller;
 pub mod gateway;
 pub mod lifecycle;
 pub mod listener;

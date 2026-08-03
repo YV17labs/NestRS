@@ -27,6 +27,14 @@ impl WidgetsController {
     async fn list(&self) -> String {
         "[]".into()
     }
+
+    /// A route whose response *is* a header. `#[crud]`'s create is the other
+    /// producer of `Location`, and it needs an entity and a live database — this
+    /// one exercises the same `sets_location` path from decorator to served
+    /// document with neither.
+    #[get("/legacy")]
+    #[redirect("/widgets", 301)]
+    async fn legacy(&self) {}
 }
 
 /// The config is **pinned** rather than read from `NESTRS_OPENAPI__*`: the
@@ -80,6 +88,21 @@ async fn the_documented_import_serves_a_document_describing_the_app() {
     assert!(
         doc["paths"]["/widgets"]["get"].is_object(),
         "the document describes the controller actually linked in: {doc}",
+    );
+
+    // R10: a header the framework knows it sends must be declared, or the
+    // generated client never reads it — the gap the throttler's `Retry-After`
+    // had already closed for its `429`, left open on the success side.
+    let moved = &doc["paths"]["/widgets/legacy"]["get"]["responses"]["301"];
+    assert_eq!(
+        moved["headers"]["Location"]["schema"]["format"], "uri-reference",
+        "the redirect's own header reaches the served document: {moved}",
+    );
+    assert!(
+        doc["paths"]["/widgets"]["get"]["responses"]["200"]
+            .get("headers")
+            .is_none(),
+        "a route that sends no Location declares none: {doc}",
     );
 }
 

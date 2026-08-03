@@ -13,7 +13,8 @@ mod users;
 use api::ApiModule;
 use nest_rs::authn::JwtConfig;
 use nest_rs::testing::{EphemeralDatabase, TestApp};
-use poem::http::header;
+use poem::http::{StatusCode, header};
+use poem::test::TestResponse;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -92,14 +93,40 @@ pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> Strin
         .body_json(&json!({ "name": name }))
         .send()
         .await;
-    resp.assert_status_is_ok();
-    resp.json()
+    // `#[crud]`'s create answers `201 Created`, not `200`.
+    resp.assert_status(StatusCode::CREATED);
+    let location = location_of(&resp);
+    let id = resp
+        .json()
         .await
         .value()
         .object()
         .get("id")
         .string()
-        .to_owned()
+        .to_owned();
+    assert_created_location(location.as_deref(), "/orgs", &id);
+    id
+}
+
+/// The `Location` header, lifted out before `json()` consumes the response.
+pub(crate) fn location_of(resp: &TestResponse) -> Option<String> {
+    resp.0
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// R9-4: a `201` names what it created (RFC 9110 §15.3.2) — the collection the
+/// caller posted to plus the new id. Asserted here rather than in each test, so
+/// every generated create route the suite drives is covered by construction.
+#[track_caller]
+pub(crate) fn assert_created_location(location: Option<&str>, collection: &str, id: &str) {
+    assert_eq!(
+        location,
+        Some(format!("{collection}/{id}").as_str()),
+        "a `201` carries the URI of the row it minted",
+    );
 }
 
 pub(crate) async fn user_names(app: &TestApp, bearer: &str) -> Vec<String> {

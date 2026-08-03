@@ -86,7 +86,12 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             // so the body stays a plain (maskable) array.
             Paginate::Cursor => parse_quote! {
                 #[get("/")]
-                #[api(summary = #summary, tags(#tag))]
+                // The handler returns a hand-built `Response` (it carries
+                // `x-next-cursor`), so the document cannot read the payload off
+                // the signature — it is declared instead. Without it the list
+                // route advertised no schema at all and a generated client
+                // typed the collection as `any`.
+                #[api(summary = #summary, tags(#tag), response = ::std::vec::Vec<#output>)]
                 async fn list(
                     &self,
                     _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
@@ -162,20 +167,54 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         let summary = format!("Create {tag}");
         generated.push(parse_quote! {
             #[post("/")]
-            #[api(summary = #summary, tags(#tag))]
+            // The handler hands back a built `Response` (it carries
+            // `Location`), so the document cannot read the payload off the
+            // signature — it is declared, exactly as the paginated list op
+            // declares its array.
+            #[api(summary = #summary, tags(#tag), response = #output)]
             #[crud_write]
+            // Marker read by `#[routes]`: the handler below builds a `Location`,
+            // so the document declares it. Shipping the header without declaring
+            // it is the `Retry-After` gap on the throttler's `429`, mirrored.
+            #[crud_location]
+            // `201 Created` is what a route that mints a resource answers.
+            // Declared via `#[http_code]` (not a returned `StatusCode`) so
+            // `#[routes]` records it and the OpenAPI document advertises `201`,
+            // the same way the delete op advertises its `204` (OAPI-O3).
+            #[http_code(201)]
             async fn create(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Create, #entity>,
+                // The collection URI as the caller sent it — global prefix and
+                // version segment included. Reconstructing it from the mount
+                // metadata would re-derive what the request already states.
+                // Read through `original_uri` below, because a global prefix is
+                // mounted with `Route::nest`, which strips itself off `uri()`.
+                __req: &::nest_rs_http::poem::Request,
                 __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#create>>,
-            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
+            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
                 let __row = ::nest_rs_seaorm::Creatable::create(
                     &*self.#service,
                     __body.into_inner(),
                 )
                 .await
                 .map_err(::nest_rs_seaorm::crud_error)?;
-                ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__row)))
+                let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(
+                    ::nest_rs_http::poem::web::Json(#output::from(&__row)),
+                );
+                // RFC 9110 §15.3.2: a `201` names what it created. Absent only
+                // for an entity that does not key on a `Uuid` — every other
+                // `#[crud]` route already takes one as its path id.
+                if let ::core::option::Option::Some(__id) =
+                    ::nest_rs_seaorm::model_uuid::<#entity>(&__row)
+                {
+                    ::nest_rs_http::set_created_location(
+                        &mut __resp,
+                        __req.original_uri().path(),
+                        __id,
+                    );
+                }
+                ::core::result::Result::Ok(__resp)
             }
         });
     }
@@ -298,6 +337,30 @@ mod tests {
         assert!(out.contains("fn delete"), "delete expected: {out}");
         assert!(!out.contains("fn create"), "create must be absent: {out}");
         assert!(!out.contains("fn update"), "update must be absent: {out}");
+    }
+
+    /// R10: the create route builds a `Location`, and `#[routes]` only declares
+    /// it in the OpenAPI document when the handler says so — the marker is the
+    /// whole seam between "the header ships" and "a generated client can read
+    /// it". Asserted on the expansion, because a missing marker is not a
+    /// compile error anywhere: it is a silently poorer document.
+    #[test]
+    fn the_create_op_marks_the_location_it_sends() {
+        let out = generated_methods(quote! {
+            service = svc, entity = E, output = Thing, create = CreateThing
+        });
+        assert!(
+            out.contains("crud_location"),
+            "create stamps the marker `#[routes]` reads: {out}",
+        );
+        // Read ops send no `Location`, so they must not claim one.
+        let read_only = generated_methods(quote! {
+            service = svc, entity = E, output = Thing, ops = [list, get]
+        });
+        assert!(
+            !read_only.contains("crud_location"),
+            "only the create op declares a Location: {read_only}",
+        );
     }
 
     // Requesting a write op without its input type is a hard macro error.

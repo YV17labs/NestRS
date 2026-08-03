@@ -170,14 +170,36 @@ fn operation_object(
     // delete's `204`, or a `#[redirect(_, 301)]` no longer masquerade as `200`.
     let status = route.success_status;
     let mut ok = Map::new();
-    ok.insert("description".into(), json!(reason_phrase(status)));
     // A `204 No Content` and a `3xx` redirect carry no response body.
-    let has_body = status != 204 && !(300..400).contains(&status);
-    if has_body && let Some(schema_fn) = route.response {
+    let has_body = status != 204 && !is_redirect(status);
+    let schema = has_body.then_some(route.response).flatten();
+    // An ability-shaped route publishes its full shape and says so: the caller
+    // receives whichever of these properties its ability grants. Saying nothing
+    // — the previous behaviour — typed every `#[crud]` response as `any` in a
+    // generated client (OAPI-O5).
+    ok.insert(
+        "description".into(),
+        json!(match (route.masked, schema.is_some()) {
+            (true, true) => format!(
+                "{} — field-level authorization applies: properties the caller's ability \
+                 does not grant are omitted from the response.",
+                reason_phrase(status),
+            ),
+            _ => reason_phrase(status).to_owned(),
+        }),
+    );
+    if let Some(schema_fn) = schema {
         ok.insert(
             "content".into(),
             json!({ "application/json": { "schema": schema_fn(generator).to_value() } }),
         );
+    }
+    // The success pendant of the `429`'s `Retry-After` below: a `#[crud]`
+    // create's `201` names the row it minted and a `#[redirect]` names its
+    // target, both in `Location`. Declared for the same reason — a generated
+    // client only reads headers the document lists.
+    if route.sets_location {
+        ok.insert("headers".into(), location_header(status));
     }
     responses.insert(status.to_string(), Value::Object(ok));
     for (status, title) in error_statuses(route, full_path, global_guards) {
@@ -316,6 +338,13 @@ fn error_statuses(
     out
 }
 
+/// A `3xx`. Written once because two decisions must agree by construction: a
+/// redirect carries no response body, and its `Location` points at a target
+/// rather than at a row it created.
+fn is_redirect(status: u16) -> bool {
+    (300..400).contains(&status)
+}
+
 /// Reason phrase for a success status, for the response `description`. Reuses
 /// the `http` crate's canonical table (the same source `nest_rs_http::problem`
 /// draws error phrases from) rather than a hand-kept copy that would drift.
@@ -346,6 +375,27 @@ fn retry_after_header() -> Value {
         "Retry-After": {
             "description": "Seconds to wait before retrying, until the rate-limit window resets.",
             "schema": { "type": "integer", "format": "int32", "minimum": 0 }
+        }
+    })
+}
+
+/// The `Location` response header a route that mints or points elsewhere
+/// carries. An **absolute-path reference** on both paths the framework emits
+/// (`/orgs/<id>`, a redirect target), hence `uri-reference` rather than `uri`.
+///
+/// `required` is deliberately absent, as it is on `Retry-After`: a `#[crud]`
+/// create omits the header for an entity that does not key on a `Uuid`, and the
+/// document would be claiming a guarantee the route does not make.
+fn location_header(status: u16) -> Value {
+    let description = if is_redirect(status) {
+        "URI to follow for this resource."
+    } else {
+        "URI of the resource that was just created."
+    };
+    json!({
+        "Location": {
+            "description": description,
+            "schema": { "type": "string", "format": "uri-reference" }
         }
     })
 }
@@ -448,10 +498,12 @@ mod tests {
             description: None,
             request_body: None,
             response: None,
+            masked: false,
             path_params: &[],
             query_params: &[],
             may_conflict: false,
             throttled: false,
+            sets_location: false,
             success_status: 200,
             scoped_guarded: false,
             public: false,
@@ -488,6 +540,66 @@ mod tests {
         assert!(
             too_many["headers"]["Retry-After"]["schema"]["type"] == "integer",
             "429 must document the Retry-After header: {too_many}",
+        );
+    }
+
+    /// R10: the `Location` a `#[crud]` create ships went undeclared while the
+    /// `429` two lines away declared its `Retry-After` for the same stated
+    /// reason. A generated client reads the document, not the prose, so an
+    /// undeclared header is one no client will ever look at.
+    #[test]
+    fn a_create_route_declares_the_location_header_on_its_201() {
+        let mut g = generator();
+        let mut r = route("create", "/orgs");
+        r.verb = HttpVerb::Post;
+        r.success_status = 201;
+        r.sets_location = true;
+        let op = operation_object(&r, "/orgs", &mut g, false);
+        let created = &op["responses"]["201"];
+        assert_eq!(created["description"], "Created");
+        assert_eq!(
+            created["headers"]["Location"]["schema"]["format"], "uri-reference",
+            "201 must document the Location header: {created}",
+        );
+        assert!(
+            created["headers"]["Location"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("created")),
+            "the description names what the URI points at: {created}",
+        );
+    }
+
+    /// The other producer: a redirect's response *is* its `Location`, and its
+    /// description points at a target rather than a new row.
+    #[test]
+    fn a_redirect_declares_the_location_it_sends() {
+        let mut g = generator();
+        let mut r = route("legacy", "/old");
+        r.success_status = 301;
+        r.sets_location = true;
+        let op = operation_object(&r, "/old", &mut g, false);
+        let moved = &op["responses"]["301"];
+        assert_eq!(
+            moved["headers"]["Location"]["schema"]["format"], "uri-reference",
+            "a redirect documents the header it is built around: {moved}",
+        );
+        assert!(
+            moved["headers"]["Location"]["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("follow")),
+            "the description names a target, not a created row: {moved}",
+        );
+    }
+
+    /// The negative half — the document states what the framework knows it
+    /// emitted. A plain `200` route declares no header it does not send.
+    #[test]
+    fn a_route_that_sends_no_location_declares_none() {
+        let mut g = generator();
+        let op = operation_object(&route("list", "/orgs"), "/orgs", &mut g, false);
+        assert!(
+            op["responses"]["200"].get("headers").is_none(),
+            "a route with no Location must not declare one: {op}",
         );
     }
 
@@ -567,6 +679,45 @@ mod tests {
         r.response = Some(schema_for_dummy);
         let op = operation_object(&r, "/users/:id", &mut g, false);
         assert!(op["responses"]["200"]["content"]["application/json"]["schema"].is_object());
+    }
+
+    // OAPI-O5: a shaper masks *fields*, so the schema is published and the
+    // description says the field set is ability-dependent. Publishing nothing
+    // — the previous behaviour — typed every `#[crud]` response as `any` in a
+    // generated client.
+    #[test]
+    fn a_masked_route_publishes_its_schema_and_flags_the_field_set() {
+        let mut g = generator();
+        let mut r = route("list_users", "/users");
+        r.response = Some(schema_for_dummy);
+        r.masked = true;
+        let op = operation_object(&r, "/users", &mut g, false);
+        assert!(
+            op["responses"]["200"]["content"]["application/json"]["schema"].is_object(),
+            "the shape is published: {op}",
+        );
+        let description = op["responses"]["200"]["description"]
+            .as_str()
+            .expect("a description");
+        assert!(description.starts_with("OK"), "{description}");
+        assert!(
+            description.contains("ability"),
+            "and it says the fields depend on the caller: {description}",
+        );
+    }
+
+    // A `204` masked route has no body to describe, so the caveat would be
+    // noise — the description stays the plain reason phrase.
+    #[test]
+    fn a_masked_bodyless_response_keeps_the_plain_description() {
+        let mut g = generator();
+        let mut r = route("delete_user", "/users/:id");
+        r.response = Some(schema_for_dummy);
+        r.masked = true;
+        r.success_status = 204;
+        let op = operation_object(&r, "/users/:id", &mut g, false);
+        assert_eq!(op["responses"]["204"]["description"], "No Content");
+        assert!(op["responses"]["204"].get("content").is_none());
     }
 
     #[test]

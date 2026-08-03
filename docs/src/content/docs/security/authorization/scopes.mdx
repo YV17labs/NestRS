@@ -1,6 +1,6 @@
 ---
 title: OAuth scopes
-description: Gate a rule on the scope a token carries with .requires_scope(...) — the caller is refused with an RFC 6750 insufficient_scope challenge naming what to go request.
+description: Gate a rule on the scope a token carries with .requires_scope(...) — the refusal is an RFC 6750 insufficient_scope challenge naming what to request.
 sidebar:
   order: 8
 ---
@@ -165,3 +165,12 @@ Err(Denial::insufficient_scope(["audio:transcode"], "forbidden"))
 
 Every transport renders it the same way — the challenge is written once,
 at the transport edge, so a guard never formats a header itself.
+
+## Going further
+
+- [Issuer & resource server](/security/authentication/issuer-and-resource-server/) —
+  the discovery document the challenge points the client at.
+- [Policies](/security/authorization/policies/) — the role-driven
+  conditions a scope narrows.
+- [Row-level filtering](/security/authorization/row-level-filtering/) —
+  what a withheld rule means for the query.

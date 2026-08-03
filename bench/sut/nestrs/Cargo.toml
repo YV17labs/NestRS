@@ -8,16 +8,17 @@ publish = false
 [workspace]
 
 [dependencies]
+# One line, exactly as a user installs it — `cargo add nest-rs --features http`.
+# This SUT measures the product we ship, so it is wired the way we tell people
+# to wire it: naming `nest-rs-core`/`-http`/`-guards`/… individually would
+# benchmark an install shape that no longer exists.
+nest-rs = { path = "../../../crates/nest-rs", features = ["http"] }
 anyhow = "1.0"
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
+# `serde`/`schemars` stay: `dto.rs` writes those derives itself. `poem` does
+# not — the handler reaches it through `nest_rs::http::poem`.
 serde = { version = "1.0", features = ["derive"] }
 schemars = "1.2"
-nest-rs-core = { path = "../../../crates/nest-rs-core" }
-nest-rs-config = { path = "../../../crates/nest-rs-config" }
-nest-rs-guards = { path = "../../../crates/nest-rs-guards" }
-nest-rs-http = { path = "../../../crates/nest-rs-http" }
-nest-rs-interceptors = { path = "../../../crates/nest-rs-interceptors" }
-poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls"] }
 
 [profile.release]
 opt-level = 3

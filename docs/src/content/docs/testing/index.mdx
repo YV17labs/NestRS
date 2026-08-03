@@ -75,14 +75,21 @@ test result: ok. 142 passed in 0.21s
 
 ```bash frame="terminal"
 $ nestrs run test e2e               # e2e — Postgres required
-[+] Running container postgres:16-alpine
 test create_then_list_users ... ok
 test result: ok. 14 passed in 4.31s
 ```
 
 ```bash frame="terminal"
 $ nestrs run test cov               # full suite with coverage (llvm-cov)
+error: failed to find llvm-tools-preview, please install llvm-tools-preview,
+       or set LLVM_COV and LLVM_PROFDATA environment variables
 ```
+
+`cov` is the one recipe with a prerequisite the CLI does not bootstrap: it
+shells out to the LLVM tools, installed with
+`rustup component add llvm-tools-preview`. A toolchain without rustup
+(Homebrew, a distro package) points `LLVM_COV` / `LLVM_PROFDATA` at its own
+copies instead. `unit`, `e2e` and `doc` need nothing beyond the bootstrap.
 
 The split is by **what each command needs to run**, not by Rust test
 category. `nestrs run test unit` covers everything that runs without Postgres —
@@ -100,8 +107,9 @@ persistence. `nestrs run test e2e` covers the rest. The full suite is
 - **HTTP/GraphQL changes** are confirmed against a running binary:
   `nestrs run dev <app>` plus a `curl` on the affected endpoint. The e2e suite
   proves the wiring; the curl proves the wire shape.
-- **No DB mocking in e2e tests** — real Postgres via `EphemeralDatabase`
-  (testcontainers in CI). Unit tests of *pure* logic need no DB.
+- **No DB mocking in e2e tests** — a real database per run via
+  `EphemeralDatabase`, created on the server `NESTRS_DATABASE__URL` points at
+  and dropped when the guard drops. Unit tests of *pure* logic need no DB.
 
 ## Reference
 

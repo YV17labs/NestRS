@@ -271,14 +271,14 @@ reads to decide when to call each.
 
 Tool inputs are deserialized to a typed struct, so the schema the client reads
 is already typed. For extra checks beyond shape — ranges, enums, mutual
-exclusion — pair `serde` with `validator`:
+exclusion — add `validate(...)` attributes: `#[input]` already carries the
+`validator` derive, so no extra import and no extra manifest line.
 
 ```rust title="src/weather/coords.rs"
-use nest_rs::mcp::schemars;
 use nest_rs::mcp::input;
-use validator::Validate;
 
-#[derive(Debug, Deserialize, schemars::JsonSchema, Validate)]
+#[derive(Debug)]
+#[input]
 pub struct Coords {
     #[validate(range(min = -90.0, max = 90.0))]
     pub latitude: f64,

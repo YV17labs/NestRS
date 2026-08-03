@@ -33,7 +33,7 @@ slices.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs) | *(always)* | Re-exports core + optional surface crates; `nest_rs::prelude` for the common case. One version to bump — **not** a substitute for the crates a decorator expands into | [Getting started](/getting-started/) |
+| [`nest-rs`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs) | *(always)* | Re-exports core + optional surface crates; `nest_rs::prelude` for the common case. One version to bump, and the **only** framework line your manifest needs — a decorator's expansion resolves through it | [Getting started](/getting-started/) |
 | [`nest-rs-core`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-core) | *(via umbrella)* | DI container, `#[module]`, lifecycle hooks, boot-time access graph | [Fundamentals](/fundamentals/) |
 
 Default features: `http`, `config` — every other surface crate is opt-in via
@@ -59,8 +59,8 @@ Each transport is a module you import in `AppModule`. HTTP-shaped surfaces
 |---|---|---|---|
 | [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database) | `database` | ORM-agnostic executor seam — ambient request/job context any driver implements | [Database](/database/) · [Writing a driver](/database/writing-a-driver/) |
 | [`nest-rs-seaorm`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) | `seaorm` | First-class SeaORM integration — `DatabaseModule`, `Repo`, transactions, dataloaders | [Database](/database/) |
-| [`nest-rs-resource`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-resource) | *(direct dep)* | `#[expose]` — one entity declaration for GraphQL + OpenAPI + CRUD helpers | [CRUD](/database/crud/) · [Relations](/graphql/relations/) |
-| [`nest-rs-storage`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-storage) | *(direct dep)* | S3-compatible object storage — injectable `Storage`, presigned URLs, via `object_store` | [Storage](/storage/) |
+| [`nest-rs-resource`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-resource) | `resource` | `#[expose]` — one entity declaration for GraphQL + OpenAPI + CRUD helpers | [CRUD](/database/crud/) · [Relations](/graphql/relations/) |
+| [`nest-rs-storage`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-storage) | `storage` | S3-compatible object storage — injectable `Storage`, presigned URLs, via `object_store` | [Storage](/storage/) |
 
 ## Security
 
@@ -81,11 +81,11 @@ globally on `App::builder()` or per controller / resolver / gateway.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-guards`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-guards) | *(direct dep)* | The `Guard` trait — gates access before the handler runs | [Guards](/fundamentals/guards/) |
-| [`nest-rs-pipes`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-pipes) | *(direct dep)* | Stateless input validation and transformation at the edge | [Pipes](/fundamentals/pipes/) |
-| [`nest-rs-interceptors`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-interceptors) | *(direct dep)* | Wrap handler execution — logging, transactions, ability scope | [Interceptors](/fundamentals/interceptors/) |
-| [`nest-rs-filters`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-filters) | *(direct dep)* | Map inner errors to transport responses | [Exception filters](/fundamentals/exception-filters/) |
-| [`nest-rs-exception-filters`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-exception-filters) | *(direct dep)* | Typed exception filters — catch one concrete error type | [Exception filters](/fundamentals/exception-filters/) |
+| [`nest-rs-guards`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-guards) | `guards` | The `Guard` trait — gates access before the handler runs | [Guards](/fundamentals/guards/) |
+| [`nest-rs-pipes`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-pipes) | `pipes` | Stateless input validation and transformation at the edge | [Pipes](/fundamentals/pipes/) |
+| [`nest-rs-interceptors`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-interceptors) | `interceptors` | Wrap handler execution — logging, transactions, ability scope | [Interceptors](/fundamentals/interceptors/) |
+| [`nest-rs-filters`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-filters) | `filters` | Map inner errors to transport responses | [Exception filters](/fundamentals/exception-filters/) |
+| [`nest-rs-exception-filters`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-exception-filters) | `exception-filters` | Typed exception filters — catch one concrete error type | [Exception filters](/fundamentals/exception-filters/) |
 
 ## Background work
 
@@ -95,7 +95,7 @@ globally on `App::builder()` or per controller / resolver / gateway.
 | [`nest-rs-redis`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) | `redis` | Redis-backed producer and worker (via apalis) | [Queue wiring](/queue/wiring/) |
 | [`nest-rs-schedule`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-schedule) | `schedule` | Cron-style scheduled jobs — `#[scheduled]` + `ScheduleModule` | [Schedule](/schedule/) |
 | [`nest-rs-events`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-events) | `events` | Typed in-process event bus — `#[listeners]` / `#[on_event]` | [Events](/events/) |
-| [`nest-rs-worker`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-worker) | *(direct dep)* | Ambient job context seam for off-request transports | [Queue](/queue/) · [Writing a driver](/database/writing-a-driver/) |
+| [`nest-rs-worker`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-worker) | `worker` | Ambient job context seam for off-request transports | [Queue](/queue/) · [Writing a driver](/database/writing-a-driver/) |
 
 ## Platform
 
@@ -143,25 +143,20 @@ controllers per transport). It is workspace-local and not published to
 crates.io — copy [`crates/features/src/users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users/)
 as the exemplar.
 
-## Adding a crate to your app
+## Adding a capability to your app
 
-List the individual crates the binary needs — this is the real
-`apps/api/Cargo.toml` (REST + GraphQL + DB + authz), trimmed to the
-framework lines:
+Turn on its **feature**. There is one framework line, and adding a transport
+never adds a second — this is the real `apps/api/Cargo.toml` (REST + GraphQL +
+DB + authz), trimmed to the framework line:
 
 ```toml title="apps/api/Cargo.toml"
 [dependencies]
-nest-rs-core.workspace = true
-nest-rs-config.workspace = true
-nest-rs-http.workspace = true
-nest-rs-graphql.workspace = true
-nest-rs-openapi.workspace = true
-nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "authz", "health"] }
-nest-rs-authn.workspace = true
-nest-rs-health.workspace = true
+nest-rs = { workspace = true, features = [
+    "http", "config", "seaorm", "graphql", "openapi", "authn", "authz", "health",
+] }
 ```
 
-In a fresh project outside this workspace, the same line is
+In a fresh project the same step is
 `cargo add nest-rs --features <capability>` — exactly what each module's
 adoption page shows. Then import the matching **modules** in `AppModule` — for
 example `HttpModule::for_root(...)`, `DatabaseModule::for_root(...)`,
@@ -175,7 +170,7 @@ A decorator is a procedural macro, and its expansion resolves paths against
 `::nest_rs::<concern>::…`, which that single entry reaches — so the feature list
 *is* the install. Nothing a decorator expands into is a line you write.
 
-Get it wrong and the compiler says so in your own terms:
+Get the *dependency* wrong and the compiler says so in your own terms:
 
 ```text frame="terminal"
 error: this nestrs decorator expands into the framework, which this crate
@@ -183,6 +178,19 @@ error: this nestrs decorator expands into the framework, which this crate
 
            nest-rs = { version = "2.0", features = ["http"] }
 ```
+
+Get the **feature** wrong — the likelier mistake, since the dependency is
+already there — and the diagnostic is rustc's own. A missing feature reads as a
+missing item, with a `note` telling you which:
+
+```text frame="terminal"
+error[E0433]: failed to resolve: could not find `seaorm` in `nest_rs`
+   |
+   = note: found an item that was configured out
+   = note: the item is gated behind the `seaorm` feature
+```
+
+Add the feature named in the note to the `nest-rs` line — never a second crate.
 
 The `nest-rs-*` crates stay published and keep their names — they are separate
 compilation units, which is what makes an unused capability free. They are not

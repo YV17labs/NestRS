@@ -287,10 +287,14 @@ HTTP adapter in one shot.
 # Port only (service + module, no transport)
 nestrs g feature posts
 
-# DB-backed CRUD: #[expose] entity + CrudService + guarded #[crud] controller
+# DB-backed CRUD: #[expose] entity + CrudService + guarded #[crud] controller.
+# Bootstraps the auth adapter below when the workspace has none — its routes
+# name AuthnGuard/AuthzGuard, so they would not compile without it.
 nestrs g resource posts
 
-# The app's authn/authz adapter — Claims, AuthnGuard, AppAbility, AuthzGuard
+# The app's authn/authz adapter — Claims, AuthnGuard, AppAbility, AuthzGuard.
+# Run it *before* the first `g resource`, or not at all: it refuses when
+# `crates/features/src/authz/` already exists.
 nestrs g auth
 
 # A SeaORM migration, registered in lib.rs and migrator.rs
@@ -304,6 +308,13 @@ nestrs g queue posts       # processor
 nestrs g schedule posts    # scheduled tasks
 nestrs g mcp posts         # MCP tool
 ```
+
+`g graphql`, `g ws` and `g mcp` also write that transport's **authz bridge**
+under `crates/features/src/authz/` when the workspace has a policy to enforce,
+and wire it into the app. It is not optional wiring: `/graphql` and `/mcp` gate
+in band, per operation, so without the bridge `/mcp` denies every call and
+`/graphql` runs operations with no ability installed. A gateway's bridge carries
+the socket data context that scopes its rows.
 
 <Aside type="note">
 Generated entities default to wire-only `#[expose]` (no GraphQL tokens) — see
@@ -476,7 +487,7 @@ Give the moved controller its own prefix, or delete the starter `hello` feature
 and app once yours is serving.
 
 `crates/migrations/` and `crates/seed/` come from `nestrs new`, so the database
-verbs and `g migration` work from the first `nestrs run db migrate`. From here
+verbs and `g migration` work from the first `nestrs run db up`. From here
 every generator is available: `nestrs g http <feature>` and its siblings wire
 themselves into the app whose directory you are standing in.
 

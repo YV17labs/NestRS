@@ -97,10 +97,11 @@ runs.
 
 ```rust
 use async_graphql::InputObject;
+use nest_rs::core::input;
 use nest_rs::pipes::Valid;
-use validator::Validate;
 
-#[derive(InputObject, Validate)]
+#[derive(InputObject)]
+#[input]
 pub struct NameInput {
     #[validate(length(min = 1))]
     name: String,

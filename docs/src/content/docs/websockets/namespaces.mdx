@@ -154,9 +154,8 @@ port, same CORS, same TLS. The only thing that changes is which
 registry the macro wires:
 
 ```text frame="terminal"
-2026-06-08T10:23:14Z  INFO nest_rs::http: bound 2 gateways on 0.0.0.0:3004
-  GET /ws     -> ChatGateway   (4 messages, 2 lifecycle hooks)
-  GET /notify -> NotifyGateway (1 message,  0 lifecycle hooks)
+2026-06-08T10:23:14Z  INFO nest_rs::routes: mounted endpoint kind="ws" path="/ws"
+2026-06-08T10:23:14Z  INFO nest_rs::routes: mounted endpoint kind="ws" path="/notify"
 ```
 
 Listing both gateways' modules in `AppModule` is enough, provided each of those

@@ -102,11 +102,31 @@ async fn create(
 }
 ```
 
-`#[api]` accepts three keys today — **`summary`**, **`description`**, and
-**`tags(...)`** — and nothing else. Everything else on the operation
-(path, method, parameters, request and response schemas, `200` status) is
-inferred from the handler signature; the macro rejects unknown keys at compile
-time.
+`#[api]` accepts four keys — **`summary`**, **`description`**, **`tags(...)`**
+and **`response = Type`** — and nothing else. Everything else on the operation
+(path, method, parameters, request schema, success status) is inferred from the
+handler signature; the macro rejects unknown keys at compile time.
+
+`response` is the one escape hatch, for a handler that builds its own
+`Response` and therefore states no payload in its return type. The `#[crud]`
+paginated list is the case in the framework itself: it returns a `Response` so
+it can carry `x-next-cursor`, and declares
+`#[api(response = Vec<Post>)]` so the document still types the collection.
+
+```rust
+#[get("/")]
+#[api(summary = "List Users", response = Vec<User>)]
+async fn list(&self, _authz: Authorize<Read, UserEntity>) -> Result<Response> { /* ... */ }
+```
+
+### Ability-shaped responses
+
+A route with an `Authorize<_, _>` parameter masks its response per caller, so
+the fields a given client receives are a **subset** of the published schema.
+The document publishes the full shape anyway and says so in the response
+description — a schema a caller may see less of is far more useful to a
+generated client than no schema at all, which is what an `any`-typed CRUD
+response used to be.
 
 ## Tags — group operations in the UI
 

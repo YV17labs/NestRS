@@ -73,11 +73,11 @@ five places you write store-specific code.
 
 ```rust
 use std::sync::Arc;
-use async_trait::async_trait;
+use nest_rs::core::async_trait;
 use nest_rs::core::{Layer, injectable};
 use nest_rs::interceptors::{Interceptor, Next};
-use poem::http::{Method, StatusCode};
-use poem::{Error, Request, Response, Result};
+use nest_rs::http::poem::http::{Method, StatusCode};
+use nest_rs::http::poem::{Error, Request, Response, Result};
 use tokio::sync::Mutex;
 
 #[injectable]

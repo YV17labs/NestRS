@@ -56,7 +56,7 @@ use std::time::Instant;
 
 use nest_rs::http::{controller, routes};
 use nest_rs::server_timing::Timings;
-use poem::Request;
+use nest_rs::http::poem::Request;
 
 #[controller(path = "/posts")]
 pub struct PostsController {

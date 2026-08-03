@@ -73,8 +73,7 @@ handler the guard is attached to:
 use nest_rs::ws::{messages, WsClient};
 use nest_rs::ws::serde_json::Value;
 use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard};
-use async_trait::async_trait;
+use nest_rs::guards::{Denial, Guard, async_trait};
 
 #[injectable]
 #[derive(Default)]

@@ -24,11 +24,17 @@ The bridges live in:
 - `nest_rs::seaorm::ws` — the WS data-context (split avoids a
   circular dep)
 
-HTTP, GraphQL, WS, and MCP each ship a one-import `Authz<Transport>Module`
+HTTP, GraphQL, WS, and MCP each get a one-import `Authz<Transport>Module`
 in `crates/features/src/authz/`. Each wraps the framework bridge for its
 transport and registers it against the access graph, so an app imports
 the module and lists nothing else (see [MCP](#mcp--same-shape-as-http)
 below).
+
+You do not write them: `nestrs g auth` writes `authz/http/`, and
+`nestrs g graphql|ws|mcp` writes that transport's bridge alongside the adapter
+and wires it into the app. The blocks below are what those generators produce —
+read them to understand the wiring, copy them only into a workspace that was not
+scaffolded.
 
 ## The bridges
 

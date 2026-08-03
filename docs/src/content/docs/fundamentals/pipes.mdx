@@ -94,12 +94,10 @@ can always tell which field was wrong, not merely that something was.
 `E`, then validate.
 
 ```rust
-use nest_rs::http::Valid;
-use poem::web::Json;
-use serde::Deserialize;
-use validator::Validate;
+use nest_rs::http::poem::web::Json;
+use nest_rs::http::{Valid, input};
 
-#[derive(Deserialize, Validate, schemars::JsonSchema)]
+#[input]
 pub struct CreateUser {
     #[validate(email)]
     email: String,
@@ -141,7 +139,7 @@ the call site:
 ```rust
 use nest_rs::http::Piped;
 use nest_rs::pipes::ParseUuidV7;
-use poem::web::Path;
+use nest_rs::http::poem::web::Path;
 
 #[get("/:id")]
 async fn get(&self, id: Piped<ParseUuidV7, Path<String>>) -> Json<User> {

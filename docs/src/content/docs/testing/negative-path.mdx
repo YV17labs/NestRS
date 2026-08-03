@@ -34,7 +34,7 @@ catch bugs the happy path can't:
 ## Auth refused
 
 ```rust title="apps/api/tests/e2e/http.rs (abridged)"
-use poem::http::{StatusCode, header};
+use nest_rs::http::poem::http::{StatusCode, header};
 
 use super::harness::*;
 

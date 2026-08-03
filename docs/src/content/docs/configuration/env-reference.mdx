@@ -52,6 +52,7 @@ config survives adopting or dropping the observability stack.
 | `CORS_MAX_AGE` | preflight cache lifetime in seconds |
 | `COMPRESSION` | negotiate response compression from `Accept-Encoding` — default `false` (leave it to the proxy unless the app terminates responses) |
 | `ACCESS_LOG` | emit one access-log event per request — default `true` (read by `nest-rs-opentelemetry`) |
+| `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `X-Forwarded-For` / `X-Real-IP` are believed. Empty (the default) ⇒ neither header is read and every caller is its transport peer. Shared by [`ClientIp`](/http/extractors/) and the [throttler](/rate-limiting/); an unparseable entry aborts the boot |
 
 ## `database` — `NESTRS_DATABASE__*`
 
@@ -123,6 +124,47 @@ every field is required, so an unconfigured app fails boot naming the field:
 | `REDIRECT_URL` | this app's callback the provider returns to |
 | `USERINFO_URL` | provider endpoint the profile is fetched from |
 | `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
+
+`ProtectedResourceModule` shares the namespace too — it is what turns the app
+into a conformant OAuth 2.1 resource server (RFC 9728) and what an MCP server
+needs. Importing it makes `AUDIENCE` above **mandatory**: the boot fails without
+it rather than accepting a token minted for someone else.
+
+| Key | Meaning |
+|---|---|
+| `RESOURCE` | this deployment's canonical resource URI — the value tokens must carry as `aud`. **Required** under the module |
+| `AUTHORIZATION_SERVERS` | comma-separated issuer identifiers allowed to mint tokens for it. **At least one required** |
+| `SCOPES_SUPPORTED` | comma-separated minimal scope set, advertised in the metadata document and the `WWW-Authenticate` challenge |
+| `BEARER_METHODS_SUPPORTED` | how a token may be presented — defaults to `header`, the only form accepted |
+| `RESOURCE_NAME` | human-readable name for a consent screen |
+| `RESOURCE_DOCUMENTATION` | URL of developer documentation for this resource |
+
+## `mcp` — `NESTRS_MCP__*`
+
+| Key | Meaning |
+|---|---|
+| `ALLOWED_HOSTS` | comma-separated `Host` authorities accepted (anti-DNS-rebinding). Defaults to loopback, so a public deployment **must** name itself; an empty list disables the check and is reported at `warn` |
+| `LEGACY_SESSION_MODE` | keep sessions alive for protocol revisions older than `2026-07-28` — default `true` |
+| `JSON_RESPONSE` | answer simple operations with `application/json` instead of an SSE stream — default `false` |
+| `SSE_KEEP_ALIVE_SECS` | SSE keep-alive ping interval (`0` ⇒ none) — default `15` |
+| `SSE_RETRY_SECS` | `retry:` interval advertised on SSE priming events (`0` ⇒ none) — default `3` |
+| `MAX_REQUEST_BODY_BYTES` | cap on a single POST body, enforced while streaming — default 4 MiB |
+| `STATELESS_PROTOCOL_METADATA_REQUIRED` | require per-request protocol metadata on stateless POSTs (SEP-2243) — default `false` |
+
+## `social` — `NESTRS_SOCIAL__<PROVIDER>__*`
+
+One sub-namespace per provider (`GITHUB`, `GOOGLE`). Credentials decide the
+provider's fate: complete ⇒ active, absent ⇒ inert with a boot `warn`,
+partial ⇒ the boot fails naming the provider.
+
+| Key | Meaning |
+|---|---|
+| `CLIENT_ID` / `CLIENT_SECRET` | the provider's OAuth app credentials |
+| `REDIRECT_URL` | the registered callback this app is returned to |
+| `SCOPES` | comma-separated scopes; each provider has a sensible default when unset |
+
+The endpoint URLs are provider constants, not config — see
+[Social login](/security/authentication/social-login/).
 
 ## Other namespaces
 

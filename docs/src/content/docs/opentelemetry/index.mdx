@@ -119,7 +119,10 @@ reqwest client is the right pick, the upstream-recommended pairing.
 
 ## Feature flags
 
-`nest-rs-opentelemetry` ships two features:
+`nest-rs-opentelemetry` ships two features of its own. You never name them:
+the umbrella's `opentelemetry` feature turns on `otlp`, and its `http` feature
+turns on the interceptor's — so the two lines below differ only in whether the
+binary serves HTTP at all.
 
 - **`otlp`** (default) — pulls the `opentelemetry-*` crates, installs the OTLP
   exporters for traces / metrics / logs, and bridges `tracing` events into OTel
@@ -131,7 +134,7 @@ reqwest client is the right pick, the upstream-recommended pairing.
   `otlp` — the interceptor reads the trace id off the OTel span.
 
 ```toml title="Cargo.toml (headless binary)"
-nest-rs-opentelemetry.workspace = true
+nest-rs = { workspace = true, features = ["opentelemetry"] }
 ```
 
 ```toml title="apps/auth/Cargo.toml"

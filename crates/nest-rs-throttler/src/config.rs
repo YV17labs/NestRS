@@ -11,17 +11,17 @@ pub struct ThrottlerConfig {
     pub limit: Option<u32>,
     /// Window size in whole seconds. Unset ⇒ module default (60).
     pub window_secs: Option<u64>,
-    /// Proxies whose `X-Forwarded-For` chain may supply the client IP. An
-    /// unparseable IP aborts the boot.
-    pub trusted_proxies: Vec<String>,
 }
+
+// Trusted proxies live on `HttpConfig` (`NESTRS_HTTP__TRUSTED_PROXIES`), not
+// here: which reverse proxies a deployment believes decides who *every* request
+// is attributed to, the `ClientIp` extractor's answer as much as the bucket's.
 
 impl Config for ThrottlerConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
             limit: env.parse("LIMIT")?.or(base.limit),
             window_secs: env.parse("WINDOW_SECS")?.or(base.window_secs),
-            trusted_proxies: env.list("TRUSTED_PROXIES", base.trusted_proxies),
         })
     }
 }
@@ -39,7 +39,6 @@ mod tests {
         .expect("no error");
         assert!(cfg.limit.is_none(), "unset ⇒ module default applies later");
         assert!(cfg.window_secs.is_none());
-        assert!(cfg.trusted_proxies.is_empty());
     }
 
     #[test]
@@ -47,7 +46,6 @@ mod tests {
         let pinned = ThrottlerConfig {
             limit: Some(10),
             window_secs: Some(5),
-            trusted_proxies: vec!["10.0.0.9".into()],
         };
         let cfg = ThrottlerConfig::from_env(
             &ConfigService::with_vars("throttler", [("NESTRS_THROTTLER__LIMIT", "120")]),
@@ -56,11 +54,6 @@ mod tests {
         .expect("the overlay resolves");
         assert_eq!(cfg.limit, Some(120), "the env outranks the pin");
         assert_eq!(cfg.window_secs, Some(5), "the untouched pin survives");
-        assert_eq!(
-            cfg.trusted_proxies,
-            vec!["10.0.0.9".to_string()],
-            "including a list field",
-        );
     }
 
     #[test]
@@ -71,7 +64,6 @@ mod tests {
                 [
                     ("NESTRS_THROTTLER__LIMIT", "120"),
                     ("NESTRS_THROTTLER__WINDOW_SECS", "90"),
-                    ("NESTRS_THROTTLER__TRUSTED_PROXIES", "10.0.0.1,192.168.0.1"),
                 ],
             ),
             Default::default(),
@@ -79,9 +71,5 @@ mod tests {
         .expect("no error");
         assert_eq!(cfg.limit, Some(120));
         assert_eq!(cfg.window_secs, Some(90));
-        assert_eq!(
-            cfg.trusted_proxies,
-            vec!["10.0.0.1".to_string(), "192.168.0.1".into()],
-        );
     }
 }

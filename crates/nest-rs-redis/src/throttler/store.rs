@@ -15,7 +15,6 @@
 //! under a backend outage is an auth bypass, so the outage is logged at `warn`
 //! and the request is refused.
 
-use std::net::IpAddr;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -48,20 +47,17 @@ return {count, ttl}
 pub struct RedisThrottler {
     conn: QueueConnection,
     default: Throttle,
-    trusted_proxies: Vec<IpAddr>,
     script: Script,
 }
 
 impl RedisThrottler {
     /// `conn` is the app's shared Redis connection (reused, not reopened —
     /// [`QueueConnection::manager`] hands out the multiplexed handle). `default`
-    /// applies to routes that pin no `#[meta(Throttle)]`; `trusted_proxies`
-    /// mirrors the in-memory store's `X-Forwarded-For` trust list.
-    pub fn new(conn: QueueConnection, default: Throttle, trusted_proxies: Vec<IpAddr>) -> Self {
+    /// applies to routes that pin no `#[meta(Throttle)]`.
+    pub fn new(conn: QueueConnection, default: Throttle) -> Self {
         Self {
             conn,
             default,
-            trusted_proxies,
             script: Script::new(WINDOW_SCRIPT),
         }
     }
@@ -124,9 +120,5 @@ impl ThrottlerStore for RedisThrottler {
 
     fn default_limit(&self) -> Throttle {
         self.default
-    }
-
-    fn trusted_proxies(&self) -> &[IpAddr] {
-        &self.trusted_proxies
     }
 }

@@ -182,7 +182,6 @@ fn one_per_minute() -> ThrottlerConfig {
     ThrottlerConfig {
         limit: Some(1),
         window_secs: Some(60),
-        trusted_proxies: Vec::new(),
     }
 }
 

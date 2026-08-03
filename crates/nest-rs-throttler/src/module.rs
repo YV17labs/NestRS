@@ -3,7 +3,6 @@
 //! carrying the default rate limit. Configure at the import site with
 //! `ThrottlerModule::for_root(None)`.
 
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,9 +51,7 @@ impl DynamicModule for ThrottlerSetup {
                 let config = container
                     .get::<ThrottlerConfig>()
                     .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
-                let (default, trusted_proxies) = resolve(&config)?;
-                Ok(Arc::new(InMemoryThrottler::new(default, trusted_proxies))
-                    as Arc<dyn ThrottlerStore>)
+                Ok(Arc::new(InMemoryThrottler::new(resolve(&config))) as Arc<dyn ThrottlerStore>)
             });
         provide_guard(builder)
     }
@@ -87,32 +84,14 @@ pub fn provide_guard(builder: ContainerBuilder) -> ContainerBuilder {
     })
 }
 
-/// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] and the parsed
-/// trusted-proxy list every [`ThrottlerStore`] backend needs. Shared so the
-/// in-memory and Redis modules resolve config identically. A bad IP aborts the
-/// boot naming the variable — never a silent skip.
-pub fn resolve(config: &ThrottlerConfig) -> anyhow::Result<(Throttle, Vec<IpAddr>)> {
-    Ok((
-        throttle_from(config),
-        parse_trusted_proxies(&config.trusted_proxies)?,
-    ))
-}
-
-fn throttle_from(config: &ThrottlerConfig) -> Throttle {
+/// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] every
+/// [`ThrottlerStore`] backend needs. Shared so the in-memory and Redis modules
+/// resolve config identically.
+pub fn resolve(config: &ThrottlerConfig) -> Throttle {
     let limit = config.limit.unwrap_or(DEFAULT_THROTTLE.limit);
     let window = config
         .window_secs
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_THROTTLE.window);
     Throttle::new(limit, window)
-}
-
-fn parse_trusted_proxies(raw: &[String]) -> anyhow::Result<Vec<IpAddr>> {
-    raw.iter()
-        .map(|s| {
-            s.parse::<IpAddr>().map_err(|e| {
-                anyhow::anyhow!("NESTRS_THROTTLER__TRUSTED_PROXIES: invalid IP `{s}`: {e}")
-            })
-        })
-        .collect()
 }

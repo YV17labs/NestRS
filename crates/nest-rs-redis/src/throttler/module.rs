@@ -50,7 +50,7 @@ impl DynamicModule for RedisThrottlerSetup {
                 let config = container
                     .get::<ThrottlerConfig>()
                     .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
-                let (default, trusted_proxies) = nest_rs_throttler::resolve(&config)?;
+                let default = nest_rs_throttler::resolve(&config);
                 // Import order is a wiring mistake, so it is a boot error — the
                 // same channel `resolve` above already uses — not a panic.
                 let conn = container.get::<QueueConnection>().ok_or_else(|| {
@@ -59,11 +59,8 @@ impl DynamicModule for RedisThrottlerSetup {
                          before RedisThrottlerModule::for_root, whose store reuses that connection"
                     )
                 })?;
-                Ok(Arc::new(RedisThrottler::new(
-                    (*conn).clone(),
-                    default,
-                    trusted_proxies,
-                )) as Arc<dyn ThrottlerStore>)
+                Ok(Arc::new(RedisThrottler::new((*conn).clone(), default))
+                    as Arc<dyn ThrottlerStore>)
             });
         // The guard rides with the store on every backend — swapping the store
         // must not also change what a controller has to list in `providers`.

@@ -16,7 +16,6 @@
 //! [`ThrottlerStore`] over a shared store (Redis) and bind that guard instead.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -100,10 +99,10 @@ pub trait ThrottlerStore: Send + Sync + 'static {
 
     /// Default rate limit applied when a route does not pin one via
     /// `#[meta(Throttle::...)]`.
+    ///
+    /// A store counts hits; **who** a hit belongs to is the transport's answer
+    /// (`nest_rs_http::ClientOrigin`), not a backend's.
     fn default_limit(&self) -> Throttle;
-
-    /// IPs whose `X-Forwarded-For` is trusted to identify the real client.
-    fn trusted_proxies(&self) -> &[IpAddr];
 }
 
 struct Window {
@@ -133,7 +132,6 @@ impl Window {
 /// bounded map. A distributed deployment swaps in a shared-store implementor.
 pub struct InMemoryThrottler {
     default: Throttle,
-    trusted_proxies: Vec<IpAddr>,
     shards: Box<[Shard]>,
 }
 
@@ -155,11 +153,10 @@ impl Default for Shard {
 }
 
 impl InMemoryThrottler {
-    /// Build a throttler with the given default limit and trusted-proxy list.
-    pub fn new(default: Throttle, trusted_proxies: Vec<IpAddr>) -> Self {
+    /// Build a throttler with the given default limit.
+    pub fn new(default: Throttle) -> Self {
         Self {
             default,
-            trusted_proxies,
             shards: (0..SHARDS).map(|_| Shard::default()).collect(),
         }
     }
@@ -176,11 +173,6 @@ impl InMemoryThrottler {
         static SEED: LazyLock<RandomState> = LazyLock::new(RandomState::new);
         let index = SEED.hash_one(key) as usize % SHARDS;
         &self.shards[index]
-    }
-
-    /// IPs whose `X-Forwarded-For` is trusted to identify the real client.
-    pub fn trusted_proxies(&self) -> &[IpAddr] {
-        &self.trusted_proxies
     }
 
     /// The default rate limit for routes that pin none.
@@ -272,10 +264,6 @@ impl ThrottlerStore for InMemoryThrottler {
     fn default_limit(&self) -> Throttle {
         Self::default_limit(self)
     }
-
-    fn trusted_proxies(&self) -> &[IpAddr] {
-        Self::trusted_proxies(self)
-    }
 }
 
 #[cfg(test)]
@@ -284,7 +272,7 @@ mod tests {
 
     #[test]
     fn allows_up_to_the_limit_then_denies_within_the_window() {
-        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60));
         let limit = Throttle::new(2, Duration::from_secs(60));
 
         assert!(throttler.hit("k", limit).allowed);
@@ -302,7 +290,7 @@ mod tests {
         // release once the per-window counter passes `u32::MAX` — silently
         // releasing the rate limit. `saturating_add` caps it; saturation
         // is treated as denial (fail-closed overload defense).
-        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60));
         let limit = Throttle::new(u32::MAX, Duration::from_secs(60));
 
         // Pre-load the window to one shy of saturation via direct field
@@ -349,7 +337,7 @@ mod tests {
         // lenient short-window route once *its* window elapses — under the old
         // code that hit's short `limit.window` purged EVERY bucket, silently
         // resetting the strict counter.
-        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60));
         let long = Throttle::new(2, Duration::from_secs(60));
         let short = Throttle::new(100, Duration::from_millis(10));
 
@@ -390,7 +378,7 @@ mod tests {
         // minting fresh keys wants). Here the OLDEST bucket is denying; the old
         // oldest-start eviction would have chosen it. It must survive; an
         // allowed bucket is evicted instead.
-        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60));
         let now = Instant::now();
         // Capacity is per shard, so fill the shard the newcomer will land in.
         let shard = throttler.shard("newcomer");
@@ -441,7 +429,7 @@ mod tests {
     fn a_full_table_of_denying_buckets_refuses_new_keys_fail_closed() {
         // HTTP-S3: when every live bucket is actively denying, a new key must be
         // refused fail-closed rather than evict a denial to make room.
-        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60));
         let now = Instant::now();
         let shard = throttler.shard("newcomer");
         {
@@ -479,7 +467,7 @@ mod tests {
 
     #[test]
     fn resets_after_the_window_elapses() {
-        let throttler = InMemoryThrottler::new(Throttle::per_minute(60), Vec::new());
+        let throttler = InMemoryThrottler::new(Throttle::per_minute(60));
         let limit = Throttle::new(1, Duration::from_millis(20));
 
         assert!(throttler.hit("k", limit).allowed);

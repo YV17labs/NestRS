@@ -158,6 +158,82 @@ The bearer is signed by the issuer's private key; the API verifies
 with the public key. The API has no way to mint that token even if it
 wanted to.
 
+## Telling clients where the issuer is
+
+An OAuth client that has never met your API does not know which
+authorization server to ask. `ProtectedResourceModule` answers that,
+the way [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) and
+the MCP authorization spec require: it serves
+`/.well-known/oauth-protected-resource`, and it stamps a pointer to
+that document onto every `401` the app emits.
+
+```rust title="src/module.rs"
+#[module(imports = [
+    HttpModule::for_root(None),
+    AuthnModule::for_root(None),
+    ProtectedResourceModule::for_root(None),
+])]
+pub struct ApiModule;
+```
+
+```bash
+NESTRS_AUTHN__RESOURCE=https://api.example.com
+NESTRS_AUTHN__AUTHORIZATION_SERVERS=https://auth.example.com
+NESTRS_AUTHN__AUDIENCE=https://api.example.com
+NESTRS_AUTHN__SCOPES_SUPPORTED=users:read,users:write
+```
+
+The discovery walk, from a client that knows only one URL:
+
+```bash
+curl -si https://api.example.com/users | grep -i www-authenticate
+# www-authenticate: Bearer resource_metadata="https://api.example.com/.well-known/oauth-protected-resource", scope="users:read users:write"
+
+curl -s https://api.example.com/.well-known/oauth-protected-resource
+# {"resource":"https://api.example.com","authorization_servers":["https://auth.example.com"], …}
+```
+
+The metadata route is declared `#[public]`, because a client cannot
+hold a token before it has read the document that says where to get
+one. Everything else stays closed.
+
+When `RESOURCE` carries a path — `https://api.example.com/mcp` — the
+document is published at the path-aware URL RFC 9728 §3.1 defines,
+`https://api.example.com/.well-known/oauth-protected-resource/mcp`, and
+that is what the challenge advertises. The unsuffixed URL stays served
+for the bare-origin case and for clients that skip the challenge; a tail
+that is not this resource's path answers `404` rather than claiming an
+identity the deployment does not have.
+
+### The second refusal: a token that is merely too narrow
+
+The `401` above is "you have no token". Its counterpart is "your token
+verified, but it was not delegated enough" — a `403` carrying the RFC
+6750 §3.1 challenge:
+
+```http
+HTTP/1.1 403 Forbidden
+WWW-Authenticate: Bearer error="insufficient_scope",
+  resource_metadata="https://api.example.com/.well-known/oauth-protected-resource",
+  scope="users:write"
+```
+
+Both are written by the same interceptor at the transport edge, so HTTP,
+WS and MCP get them identically and neither can drift from the metadata
+document. What raises the `403` is a scope-gated authorization rule —
+see [OAuth scopes](/security/authorization/scopes/). Make sure every
+scope your rules gate on appears in `SCOPES_SUPPORTED`, or you are
+telling clients to request something discovery never names.
+
+**`NESTRS_AUTHN__AUDIENCE` stops being optional.** On its own,
+`JwtConfig` treats it as a nice-to-have; under this module boot fails
+without it, naming the variable. That is the confused-deputy defence:
+a resource server that does not pin `aud` accepts any token its issuer
+signed, including one a user granted to some other service, which that
+service can then replay against you. RFC 8707 makes the resource
+identifier *be* the audience — keep the two strings identical, and the
+framework warns at boot when they drift.
+
 ## Going further
 
 - [JWT](/security/authentication/jwt/) — `JwtConfig`, `JwtKey`,

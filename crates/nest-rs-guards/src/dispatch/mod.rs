@@ -46,8 +46,8 @@ mod validate;
 pub use chain::{GraphqlChainCell, GraphqlChainSources, run_layered_graphql_chain};
 #[cfg(feature = "graphql")]
 pub use denial_convert::denial_to_graphql_error;
-pub use denial_convert::denial_to_http_response;
 pub(crate) use denial_convert::deny_http;
+pub use denial_convert::{denial_to_http_error, denial_to_http_response};
 #[cfg(feature = "graphql")]
 pub use graphql_operation_guard::GlobalPoolOperationGuard;
 #[cfg(feature = "mcp")]

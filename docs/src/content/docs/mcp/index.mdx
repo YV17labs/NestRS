@@ -14,8 +14,13 @@ dependencies, `#[tool]` defines each tool, and the server self-mounts on the
 HTTP transport at the path you choose. Same DI, same access graph, same
 ambient ability — your tools live next to your controllers, not in a sidecar.
 
-`nest-rs-mcp` builds on [rmcp](https://docs.rs/rmcp) — the framework wraps it
-so a tool server is an `#[injectable]` struct that self-mounts on the HTTP
+That ambient ability covers **every** MCP capability, not tools alone. A
+prompt fetch, a resource read, a completion, a `tasks/*` call: each runs inside
+the caller's request scope, with the caller's ability installed and the
+operation's transaction around it. A handler writes no check on any of them.
+
+`nest-rs-mcp` builds on [rmcp](https://docs.rs/rmcp) 3.x — the framework wraps
+it so a server is an `#[injectable]` struct that self-mounts on the HTTP
 transport, with [schemars](https://docs.rs/schemars) deriving the tool input
 schemas the client reads.
 
@@ -132,8 +137,9 @@ $ nestrs run dev assistant
 ```
 
 ```text frame="terminal"
-2026-06-03T10:34:07.882Z  INFO nest_rs::http: bound 1 MCP server on 0.0.0.0:3003
-  POST /mcp → HelloTool (1 tool)
+INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
+DEBUG nest_rs::mcp: mcp operations gated mode="operation_guard"
+INFO nest_rs::http: transport listening addr=0.0.0.0:3003 tls=false
 ```
 
 Point an MCP-aware client at `http://localhost:3003/mcp`. With Claude Code, add
@@ -191,6 +197,33 @@ A tool that lists users gets only the users the caller is allowed to see — sam
 policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
 [per-transport bridges](/security/authorization/per-transport-bridges/) page for
 the four-transport story.
+
+Guarding the endpoint closes it; it does not tell a client how to open it. The
+MCP authorization spec requires the server to publish that, so add
+`ProtectedResourceModule` and name the deployment:
+
+```rust title="src/module.rs"
+imports = [/* … */, ProtectedResourceModule::for_root(None)]
+```
+
+```bash
+NESTRS_AUTHN__RESOURCE=https://mcp.example.com
+NESTRS_AUTHN__AUTHORIZATION_SERVERS=https://auth.example.com
+NESTRS_AUTHN__AUDIENCE=https://mcp.example.com
+```
+
+Every `401` from `/mcp` then carries the RFC 9728 pointer, and
+`/.well-known/oauth-protected-resource` serves the document behind it:
+
+```
+www-authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"
+```
+
+That is the first hop of the client's flow — rmcp implements the rest of it, so
+an MCP client reaches your authorization server without being configured with
+its address. `NESTRS_AUTHN__AUDIENCE` becomes mandatory under this module: see
+[issuer and resource server](/security/authentication/issuer-and-resource-server/)
+for why a resource server that skips it can be handed someone else's token.
 
 ## Multiple tools on one server
 
@@ -299,16 +332,42 @@ the namespace — no extra primitive to learn.
 
 ## Resources and prompts
 
-MCP defines two primitives beyond tools: **resources** (read-only documents the
-model can fetch) and **prompts** (parameterized templates the user picks).
-NestRS decorates the tool surface, which is the primitive the spec is built
-around; resources and prompts are reached through rmcp's `ServerHandler`,
-re-exported from `nest_rs::mcp`.
+MCP defines two primitives beyond tools: **prompts** (parameterized templates
+the user picks) and **resources** (documents the model can list and fetch).
 
-Implement `list_resources` / `read_resource` / `list_prompts` / `get_prompt`
-on your `#[mcp]` struct directly — `#[tool_handler]` is additive, not
-exclusive, so the decorated tools and the hand-written methods compose on one
-server.
+Prompts have their own decorator pair — `#[prompt_router]` collects
+`#[prompt]` methods exactly as `#[tool_router]` collects `#[tool]` ones. The
+two handler attributes stack on one `impl ServerHandler`:
+
+```rust title="src/posts/mcp/tool.rs (abridged)"
+#[prompt_router]
+impl PostsTool {
+    #[prompt(description = "Draft a follow-up post, primed with the titles the caller can already read.")]
+    async fn draft_follow_up(&self) -> Result<GetPromptResult, McpError> {
+        let rows = CrudService::list(&*self.svc).await.map_err(Self::opaque)?;
+        let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
+
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            format!("Draft a follow-up post. Existing titles:\n{}", titles.join("\n")),
+        )]))
+    }
+}
+
+#[tool_handler]
+#[prompt_handler]
+impl ServerHandler for PostsTool {}
+```
+
+Resources have no decorator, because a resource surface is a mapping from URIs
+to rows rather than a set of methods: implement `list_resources` /
+`read_resource` / `list_resource_templates` on the same `impl ServerHandler`.
+
+Either way the guarantee is the same one the tool gets. `CrudService::list`
+above writes no organization filter — the ambient ability applies it, so a
+caller from another org gets an empty prompt, and `read_resource` answers
+`resource_not_found` for a row that exists but is not theirs. The demo asserts
+exactly that in `apps/assistant/tests/e2e/posts_tool.rs`.
 
 <Aside type="caution">
   Lean on tools first. The MCP spec is tool-centric: anything you can phrase as
@@ -317,6 +376,57 @@ server.
   identifiers the model itself doesn't know; reach for prompts when the **user**
   picks a template the client substitutes.
 </Aside>
+
+Everything else the protocol defines — completion, logging levels,
+subscriptions, the `tasks/*` extension, elicitation, custom methods — is a
+`ServerHandler` method on the same struct, and gets the same treatment. The
+protocol types live under `nest_rs::mcp::model`, the per-operation handles
+under `nest_rs::mcp::service`, and anything newer than this page under
+`nest_rs::mcp::rmcp`.
+
+## Configuration
+
+`McpConfig` carries the streamable-HTTP options, dual-path like every
+`nest-rs-*` config: `NESTRS_MCP__*` env vars over an optional pinned base.
+Importing `McpModule` is what resolves it; without the import every mount runs
+on the defaults.
+
+```rust title="src/module.rs"
+#[module(imports = [
+    HttpModule::for_root(None),
+    McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+])]
+pub struct AssistantModule;
+```
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `NESTRS_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
+| `NESTRS_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
+| `NESTRS_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
+| `NESTRS_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
+| `NESTRS_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
+
+The host allowlist is a **security control**, and its default is why a
+deployment reached under a real hostname answers `403` until it names itself: a
+page on an attacker's origin can point its own hostname at `127.0.0.1` and POST
+to a locally running MCP server, which would otherwise answer with the user's
+tools and data. Name your hostnames; do not empty the list.
+
+The default looks strict for a public deployment, and that is the point:
+DNS rebinding only reaches a host the victim's browser can resolve to but the
+attacker cannot call directly — loopback and the local network. The vulnerable
+server is the developer's local one, which is exactly the one that configures
+nothing. A default of "off" would disarm the control in the only case the
+attack works. A refused `Host` is logged with the offending value; the
+effective allowlist is logged at `debug` when the endpoint mounts
+(`target: nest_rs::mcp`).
+
+The browser `Origin` half is **not** an MCP setting. It is the HTTP transport's
+CORS policy, `NESTRS_HTTP__CORS_ORIGINS`, and `/mcp` inherits it: the CORS layer
+wraps the whole route tree, and a disallowed `Origin` gets `403` on every
+method, not just the preflight. One knob, and it covers `/graphql` and `/ws`
+too.
 
 ## Error handling
 
@@ -365,12 +475,19 @@ the access graph rejects accidental coupling at boot.
 
 ### Reference
 
-- `apps/assistant/` + `demo/crates/features/src/audio/mcp/` — the demo's
-  guarded MCP surface: a JWT-authenticated `transcode_status` tool over the
-  Publish audio pipeline (no token ⇒ the endpoint refuses).
-- `crates/nest-rs-mcp/` — `#[mcp]`, the streamable-HTTP endpoint factory,
-  and the re-exported rmcp surface (`tool_router`, `tool`, `tool_handler`,
-  `ServerHandler`, `McpError`, `Parameters`, `CallToolResult`, `Content`).
+- `apps/assistant/` + `demo/crates/features/src/posts/mcp/` — one host serving
+  all three capabilities (tool, prompt, resources) over the same row-filtered
+  service; `demo/crates/features/src/audio/mcp/` — a JWT-authenticated
+  `transcode_status` tool over the Publish audio pipeline (no token ⇒ the
+  endpoint refuses).
+- `crates/nest-rs-mcp/` — `#[mcp]`, `McpMount`, `McpConfig`, the
+  streamable-HTTP endpoint factory, and the re-exported rmcp surface
+  (`tool_router`/`tool`/`tool_handler`, `prompt_router`/`prompt`/
+  `prompt_handler`, `ServerHandler`, `McpError`, `Parameters`, `Json`,
+  `CallToolResult`, plus the whole `model` / `service` / `handler` /
+  `transport` modules).
+- `crates/nest-rs-mcp/tests/integration/propagate.rs` — the proof that
+  every `ServerHandler` method reaches your host rather than an SDK default.
 - `crates/nest-rs-authz/` (with the `mcp` feature) — `McpAbilityBridge`
   (masking inside a tool body is `masked_output_ambient`);
   `crates/nest-rs-seaorm/` (with the `mcp` feature) — `McpDataContext`. Both

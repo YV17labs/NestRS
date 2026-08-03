@@ -129,13 +129,13 @@ trybuild = "1.0"
 
 # schemars must match rmcp's re-exported version, or the derive resolves to a
 # different trait than `rmcp::handler::server::wrapper::Parameters` expects.
-rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
-schemars = { version = "1.2", features = ["uuid1"] }
+rmcp = { version = "3.1", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
+schemars = { version = "1.2", features = ["uuid1", "chrono04"] }
 
 # `#[cron("...")]` parsing. croner accepts 5/6/7 fields (seconds optional);
 # chrono-tz resolves the IANA name of the optional per-job timezone.
 croner = "3.0"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 chrono-tz = "0.10"
 
 # Held at the 0.7 stable line: apalis 1.0 is still churning through release

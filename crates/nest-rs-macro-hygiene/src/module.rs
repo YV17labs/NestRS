@@ -8,7 +8,6 @@ use crate::listener::HygieneListener;
 use crate::tasks::HygieneTasks;
 use crate::tool::HygieneTool;
 
-/// Root module for the witness providers.
 #[module(providers = [
     HygieneGateway,
     HygieneWsGuard,

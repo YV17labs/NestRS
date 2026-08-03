@@ -93,12 +93,58 @@ pub(crate) struct Rule {
 #[derive(Default)]
 pub struct Ability {
     rules: HashMap<(Action, TypeId), Vec<Rule>>,
+    /// Scopes that would have unlocked a rule this actor's credential could not
+    /// reach — recorded when [`RuleSpec::requires_scope`] withholds one, so a
+    /// refusal can name what to ask for instead of being an opaque `403`.
+    ///
+    /// [`RuleSpec::requires_scope`]: crate::RuleSpec::requires_scope
+    withheld: HashMap<(Action, TypeId), Vec<String>>,
     visitor: bool,
 }
 
 impl Ability {
     pub(crate) fn add_rule(&mut self, action: Action, subject: TypeId, rule: Rule) {
         self.rules.entry((action, subject)).or_default().push(rule);
+    }
+
+    /// Record that a rule was withheld for lack of `scopes`. The rule itself is
+    /// never added — a withheld grant must not widen anything.
+    pub(crate) fn withhold(&mut self, action: Action, subject: TypeId, scopes: Vec<String>) {
+        let entry = self.withheld.entry((action, subject)).or_default();
+        for scope in scopes {
+            if !entry.contains(&scope) {
+                entry.push(scope);
+            }
+        }
+    }
+
+    /// The scopes that would have granted `action` on `subject`, had this
+    /// actor's credential carried them.
+    ///
+    /// **Read this only after [`can_class`](Self::can_class) already said no.**
+    /// A withheld rule and a granted one can coexist — a narrow token may still
+    /// reach the subject by another rule — and in that case the operation is
+    /// allowed and there is nothing to ask for. Reading it as "the caller is
+    /// missing these scopes" without checking the gate first would report a
+    /// denial that never happened.
+    ///
+    /// Empty means the refusal was not about scope: the caller may not perform
+    /// this operation at all, and no wider token changes that.
+    pub fn missing_scopes(&self, action: Action, subject: TypeId) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        // Widened over the same keys as `rules_for`: a `Manage` rule is the
+        // action wildcard, so a scope withheld there is equally the answer to
+        // "why can't I read this?". Encoding that widening twice is how the
+        // refusal comes to name the wrong scopes.
+        for scope in keys_for(action, subject)
+            .filter_map(|key| self.withheld.get(&key))
+            .flatten()
+        {
+            if !out.contains(scope) {
+                out.push(scope.clone());
+            }
+        }
+        out
     }
 
     pub(crate) fn mark_visitor(&mut self) {
@@ -130,13 +176,9 @@ impl Ability {
     /// Rules relevant to `action` on `subject`: those keyed under the action
     /// itself plus those under [`Action::Manage`] (the action wildcard).
     fn rules_for(&self, action: Action, subject: TypeId) -> impl Iterator<Item = &Rule> {
-        let specific = self.rules.get(&(action, subject)).into_iter().flatten();
-        let wildcard = if action == Action::Manage {
-            None
-        } else {
-            self.rules.get(&(Action::Manage, subject))
-        };
-        specific.chain(wildcard.into_iter().flatten())
+        keys_for(action, subject)
+            .filter_map(|key| self.rules.get(&key))
+            .flatten()
     }
 
     /// Layer ① — the coarse, class-level gate the access guard/extractor uses:
@@ -299,6 +341,18 @@ impl Ability {
     pub fn permitted_fields<E: EntityTrait>(&self, action: Action, model: &E::Model) -> FieldSet {
         self.evaluate::<E>(action, model).fields
     }
+}
+
+/// The rule-map keys an operation reads: the action itself, plus
+/// [`Action::Manage`] (the action wildcard) unless that *is* the action.
+///
+/// The single encoding of the wildcard's semantics — both the grant side
+/// ([`Ability::rules_for`]) and the refusal side ([`Ability::missing_scopes`])
+/// iterate it, so a change to the action lattice cannot widen one and not the
+/// other.
+fn keys_for(action: Action, subject: TypeId) -> impl Iterator<Item = (Action, TypeId)> {
+    let wildcard = (action != Action::Manage).then_some((Action::Manage, subject));
+    std::iter::once((action, subject)).chain(wildcard)
 }
 
 /// What one rule scan concluded about a model: whether it is visible, and which

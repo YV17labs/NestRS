@@ -4,6 +4,7 @@ use std::any::TypeId;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use nest_rs_guards::{Denial, denial_to_http_error};
 use poem::http::StatusCode;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
 
@@ -67,15 +68,37 @@ where
             )
         })?;
         if ability.can_class(A::ACTION, TypeId::of::<S>()) {
-            Ok(Authorize(PhantomData))
-        } else {
+            return Ok(Authorize(PhantomData));
+        }
+        // Asked only once the gate has already refused: a withheld rule beside
+        // a granted one is not a denial, so `missing_scopes` is the *reason*
+        // for this refusal, never a check of its own.
+        let missing = ability.missing_scopes(A::ACTION, TypeId::of::<S>());
+        if missing.is_empty() {
             tracing::warn!(
                 target: "nest_rs::authz",
                 action = ?A::ACTION,
                 subject = std::any::type_name::<S>(),
+                reason = "no_class_grant",
                 "authorization denied",
             );
-            Err(Error::from_string("forbidden", StatusCode::FORBIDDEN))
+            return Err(denial_to_http_error(Denial::forbidden("forbidden")));
         }
+        // A token that verified but is too narrow. The scopes ride to the edge,
+        // where the resource-server interceptor turns them into the RFC 6750
+        // `insufficient_scope` challenge — so the client learns what to ask the
+        // authorization server for instead of retrying the same token.
+        tracing::warn!(
+            target: "nest_rs::authz",
+            action = ?A::ACTION,
+            subject = std::any::type_name::<S>(),
+            scopes = ?missing,
+            reason = "insufficient_scope",
+            "authorization denied",
+        );
+        Err(denial_to_http_error(Denial::insufficient_scope(
+            missing,
+            "forbidden",
+        )))
     }
 }

@@ -5,19 +5,19 @@ use nest_rs_authn::{basic_credentials, bearer_token};
 
 #[test]
 fn bearer_token_extracts_non_empty_value() {
-    let req = crate::common::request(&[("Authorization", "Bearer token-123")]);
+    let req = crate::request(&[("Authorization", "Bearer token-123")]);
     assert_eq!(bearer_token(&req), Some("token-123"));
 }
 
 #[test]
 fn bearer_token_rejects_missing_blank_and_malformed() {
-    assert_eq!(bearer_token(&crate::common::request(&[])), None);
+    assert_eq!(bearer_token(&crate::request(&[])), None);
     assert_eq!(
-        bearer_token(&crate::common::request(&[("Authorization", "Bearer   ")])),
+        bearer_token(&crate::request(&[("Authorization", "Bearer   ")])),
         None
     );
     assert_eq!(
-        bearer_token(&crate::common::request(&[("Authorization", "Basic abc")])),
+        bearer_token(&crate::request(&[("Authorization", "Basic abc")])),
         None
     );
 }
@@ -25,7 +25,7 @@ fn bearer_token_rejects_missing_blank_and_malformed() {
 #[test]
 fn basic_credentials_decodes_id_and_secret() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"client-id:client-secret");
-    let req = crate::common::request(&[("Authorization", &format!("Basic {encoded}"))]);
+    let req = crate::request(&[("Authorization", &format!("Basic {encoded}"))]);
     assert_eq!(
         basic_credentials(&req),
         Some(("client-id".into(), "client-secret".into()))
@@ -38,7 +38,7 @@ fn basic_credentials_matches_scheme_case_insensitively() {
     // decode exactly like `Basic` (mirrors `bearer_token`).
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"client-id:client-secret");
     for scheme in ["basic", "BASIC", "BaSiC"] {
-        let req = crate::common::request(&[("Authorization", &format!("{scheme} {encoded}"))]);
+        let req = crate::request(&[("Authorization", &format!("{scheme} {encoded}"))]);
         assert_eq!(
             basic_credentials(&req),
             Some(("client-id".into(), "client-secret".into())),
@@ -46,14 +46,14 @@ fn basic_credentials_matches_scheme_case_insensitively() {
         );
     }
     // A different scheme still refuses.
-    let req = crate::common::request(&[("Authorization", &format!("Bearer {encoded}"))]);
+    let req = crate::request(&[("Authorization", &format!("Bearer {encoded}"))]);
     assert_eq!(basic_credentials(&req), None);
 }
 
 #[test]
 fn basic_credentials_allows_colons_in_secret() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"id:sec:ret:with:colons");
-    let req = crate::common::request(&[("Authorization", &format!("Basic {encoded}"))]);
+    let req = crate::request(&[("Authorization", &format!("Basic {encoded}"))]);
     assert_eq!(
         basic_credentials(&req),
         Some(("id".into(), "sec:ret:with:colons".into()))

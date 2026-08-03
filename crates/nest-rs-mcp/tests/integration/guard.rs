@@ -9,9 +9,9 @@ use nest_rs_core::module;
 use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::async_trait;
 use nest_rs_mcp::{
-    AllowAllMcpGuard, BoxFuture, CallToolResult, Captured, ContentBlock, McpError,
-    McpOperationGuard, OperationOutcome, ServerHandler, endpoint_with_guard, mcp, tool,
-    tool_handler, tool_router,
+    AllowAllMcpGuard, BoxFuture, CallToolResult, Captured, ContentBlock, McpError, McpMount,
+    McpOperationGuard, OperationOutcome, ServerHandler, endpoint, mcp, tool, tool_handler,
+    tool_router,
 };
 use nest_rs_testing::{TestApp, mcp::call_tool};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
@@ -43,10 +43,9 @@ impl DummyHandler {}
 impl ServerHandler for DummyHandler {}
 
 #[tokio::test]
-async fn endpoint_with_guard_rejects_before_the_handler_runs() {
-    let guarded = endpoint_with_guard(
-        Arc::new(RejectGuard) as Arc<dyn McpOperationGuard>,
-        None,
+async fn a_mounted_guard_rejects_before_the_handler_runs() {
+    let guarded = endpoint(
+        McpMount::deny_all().with_guard(Arc::new(RejectGuard) as Arc<dyn McpOperationGuard>),
         || DummyHandler,
     );
     let resp = TestClient::new(guarded).post("/").send().await;
@@ -58,7 +57,7 @@ async fn endpoint_with_guard_rejects_before_the_handler_runs() {
 // pool fails closed rather than serving the tool surface open.
 #[tokio::test]
 async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
-    let open = nest_rs_mcp::endpoint(|| DummyHandler);
+    let open = endpoint(McpMount::deny_all(), || DummyHandler);
     let resp = TestClient::new(open).post("/").send().await;
     assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
 }
@@ -147,7 +146,9 @@ impl ServerHandler for AmbientProbeTool {}
 #[tokio::test]
 async fn an_operation_guards_around_installs_ambient_state_with_no_tool_context() {
     let guard = Arc::new(AmbientGuard) as Arc<dyn McpOperationGuard>;
-    let client = TestClient::new(endpoint_with_guard(guard, None, || AmbientProbeTool));
+    let client = TestClient::new(endpoint(McpMount::deny_all().with_guard(guard), || {
+        AmbientProbeTool
+    }));
 
     let body = call_tool(&client, "/", "probe_ambient", None).await;
 

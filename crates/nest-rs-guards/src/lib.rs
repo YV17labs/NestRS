@@ -112,11 +112,13 @@ mod endpoint;
 mod guard;
 pub mod prelude;
 mod registry;
+mod scope;
 
 pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 pub use denial::Denial;
 pub use endpoint::{GuardEndpoint, GuardExt};
 pub use guard::{Guard, GuardPhase, PrincipalClaim};
+pub use scope::{GrantedScopes, RequiredScopes};
 // The WS bridge the `#[messages]` macro wraps per-event guards in — only
 // exists (and is only needed) when the `ws` feature is on.
 #[cfg(feature = "ws")]
@@ -139,4 +141,4 @@ pub use async_trait::async_trait;
 pub use dispatch::{
     GraphqlChainCell, GraphqlChainSources, denial_to_graphql_error, run_layered_graphql_chain,
 };
-pub use dispatch::{RouteShaper, denial_to_http_response};
+pub use dispatch::{RouteShaper, denial_to_http_error, denial_to_http_response};

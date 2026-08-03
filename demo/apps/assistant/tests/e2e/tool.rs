@@ -6,7 +6,7 @@ use nest_rs::testing::mcp::{initialize_request, open_session, post_message};
 use poem::http::StatusCode;
 use serde_json::json;
 
-use super::harness::*;
+use crate::*;
 
 #[tokio::test]
 async fn health_live_probe_is_ok() {

@@ -11,7 +11,7 @@ use poem::http::{StatusCode, header};
 use poem::test::{TestForm, TestFormField};
 use serde_json::json;
 
-use super::harness::*;
+use crate::*;
 
 #[tokio::test]
 async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {

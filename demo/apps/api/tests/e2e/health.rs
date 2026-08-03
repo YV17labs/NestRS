@@ -1,4 +1,4 @@
-use super::harness::*;
+use crate::*;
 
 #[tokio::test]
 async fn health_live_probe_is_ok() {

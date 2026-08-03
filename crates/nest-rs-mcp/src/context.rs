@@ -1,8 +1,8 @@
-//! Per-operation ambient-state bridge for MCP tool bodies — the MCP mirror of
-//! `nest-rs-ws`'s `SocketContext`.
+//! Per-operation ambient-state bridge for MCP handler bodies — the MCP mirror
+//! of `nest-rs-ws`'s `SocketContext`.
 //!
-//! rmcp dispatches every tool call on its own spawned task, so a task-local
-//! installed around the poem endpoint is gone by the time a tool runs. rmcp
+//! rmcp dispatches every operation on its own spawned task, so a task-local
+//! installed around the poem endpoint is gone by the time a handler runs. rmcp
 //! does, however, inject the request's [`Parts`](poem::http::request::Parts) —
 //! extensions included — into each operation's `RequestContext`. That is the
 //! carrier this module rides: the endpoint stashes an [`McpAmbient`] in the
@@ -14,13 +14,13 @@
 //! and authz ability); `nest_rs_seaorm::mcp::McpDataContext` is the first-party one.
 //! List it `as dyn McpToolContext` on the tool host's module.
 
-use std::any::Any;
+use std::any::{Any, type_name};
 use std::sync::Arc;
 
 use nest_rs_core::RequestScope;
 use poem::Request;
 use poem::http::request::Parts;
-use rmcp::model::{Extensions, ServerResult};
+use rmcp::model::Extensions;
 
 use crate::McpError;
 use crate::guard::BoxFuture;
@@ -30,8 +30,44 @@ use crate::guard::BoxFuture;
 /// [`around`](McpToolContext::around).
 pub type Captured = Arc<dyn Any + Send + Sync>;
 
+/// The success value of one MCP operation, type-erased.
+///
+/// Every rmcp `ServerHandler` method has its own result type — `CallToolResponse`,
+/// `GetPromptResponse`, `ListResourcesResult`, `GetTaskResult`, … — but the
+/// [`McpToolContext`] and [`McpOperationGuard`](crate::McpOperationGuard) seams
+/// are `dyn`, so they cannot be generic over it. Erasing the value is what lets
+/// **one** `around` implementation wrap **every** MCP capability instead of the
+/// tool call alone; a wrapper only ever inspects `Ok`/`Err` (commit vs
+/// rollback), never the value itself.
+pub struct OperationValue(Box<dyn Any + Send>);
+
+impl OperationValue {
+    pub(crate) fn new<T: Send + 'static>(value: T) -> Self {
+        Self(Box::new(value))
+    }
+
+    /// Recover the concrete result. A miss means an `around` implementation
+    /// substituted a value of a different type, which is a framework bug in
+    /// that implementation — reported as an opaque internal error rather than a
+    /// panic on the dispatch path.
+    pub(crate) fn take<T: Send + 'static>(self) -> Result<T, McpError> {
+        match self.0.downcast::<T>() {
+            Ok(value) => Ok(*value),
+            Err(_) => {
+                tracing::error!(
+                    target: "nest_rs::mcp",
+                    expected = type_name::<T>(),
+                    reason = "operation_value_downcast_miss",
+                    "mcp operation wrapper returned a foreign value",
+                );
+                Err(McpError::internal_error("internal error".to_string(), None))
+            }
+        }
+    }
+}
+
 /// What one MCP operation resolves to — the unit a [`McpToolContext`] wraps.
-pub type OperationOutcome = Result<ServerResult, McpError>;
+pub type OperationOutcome = Result<OperationValue, McpError>;
 
 /// Re-installs ambient per-request state around each MCP operation.
 ///
@@ -43,9 +79,17 @@ pub trait McpToolContext: Send + Sync + 'static {
     /// Snapshot what the operation will need, from the post-guard request.
     fn capture(&self, req: &Request) -> Captured;
 
-    /// Wrap one *request* operation with the captured state installed — a tool
-    /// call, resource read or prompt fetch. Notifications are excluded on
-    /// purpose: fire-and-forget has no outcome to commit or roll back on.
+    /// Wrap one *request* operation with the captured state installed — every
+    /// MCP capability the server answers: `tools/call`, `prompts/get`,
+    /// `resources/read`, `completion/complete`, `logging/setLevel`, the
+    /// `tasks/*` trio, and any custom method.
+    ///
+    /// Two kinds of operation are excluded, both on purpose. **Notifications**
+    /// are fire-and-forget: there is no outcome to commit or roll back on.
+    /// **`subscriptions/listen`** runs for the lifetime of the subscription, so
+    /// holding a transaction open across it would leak a connection; it gets
+    /// the request scope and the guard's ability, and a handler that needs the
+    /// data layer hands the work to a request-shaped path.
     fn around<'a>(
         &'a self,
         captured: &'a Captured,

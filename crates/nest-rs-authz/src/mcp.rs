@@ -10,9 +10,9 @@
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
-use nest_rs_guards::{Guard, denial_to_http_response};
+use nest_rs_guards::{Guard, denial_to_http_error};
 use nest_rs_mcp::{BoxFuture, Captured, McpOperationGuard, OperationOutcome};
-use poem::{Error, Request, Result};
+use poem::{Request, Result};
 
 use crate::{Ability, run_ability_chain, with_ability};
 
@@ -35,7 +35,7 @@ impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
             // in the chain reach the client as a `429`.
             run_ability_chain(&*self.auth, &*self.ability, req)
                 .await
-                .map_err(|denial| Error::from_response(denial_to_http_response(denial)))
+                .map_err(denial_to_http_error)
         })
     }
 

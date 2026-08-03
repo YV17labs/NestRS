@@ -5,7 +5,7 @@ use std::any::TypeId;
 
 use nest_rs_graphql::async_graphql::{Context, Error, Result};
 
-use super::context::{ability, forbidden, unauthenticated};
+use super::context::{ability, forbidden, insufficient_scope, unauthenticated};
 use crate::{ActionMarker, Subject};
 
 /// Class-level gate: require action `A` on subject `S`. Returns a GraphQL
@@ -32,13 +32,29 @@ pub fn authorize<A: ActionMarker, S: Subject>(ctx: &Context<'_>) -> Result<()> {
     let ability = ability(ctx)?;
     // Authentication first, and separately: an anonymous caller is refused for
     // want of a principal, whatever the visitor branch granted.
-    let (reason, denial) = if ability.is_visitor() {
-        ("anonymous_caller", unauthenticated as fn() -> Error)
-    } else if ability.can_class(A::ACTION, TypeId::of::<S>()) {
+    if ability.is_visitor() {
+        return Err(deny::<A, S>("anonymous_caller", unauthenticated()));
+    }
+    if ability.can_class(A::ACTION, TypeId::of::<S>()) {
         return Ok(());
-    } else {
-        ("no_class_grant", forbidden as fn() -> Error)
-    };
+    }
+    // A refusal that a wider token would have fixed says so, on this transport
+    // too. GraphQL has no `401` for the resource-server interceptor to enrich,
+    // but a scope refusal is an ordinary error frame here — so the same fact
+    // reaches the client, in this transport's native shape.
+    let missing = ability.missing_scopes(A::ACTION, TypeId::of::<S>());
+    if missing.is_empty() {
+        return Err(deny::<A, S>("no_class_grant", forbidden()));
+    }
+    Err(deny::<A, S>(
+        "insufficient_scope",
+        insufficient_scope(&missing),
+    ))
+}
+
+/// The one `warn` every gate refusal passes through, so a denial cannot reach
+/// the client without leaving the queryable trace an incident is answered from.
+fn deny<A: ActionMarker, S: Subject>(reason: &'static str, error: Error) -> Error {
     tracing::warn!(
         target: "nest_rs::authz",
         transport = "graphql",
@@ -47,5 +63,5 @@ pub fn authorize<A: ActionMarker, S: Subject>(ctx: &Context<'_>) -> Result<()> {
         reason,
         "authorization denied",
     );
-    Err(denial())
+    error
 }

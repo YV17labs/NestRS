@@ -23,6 +23,9 @@ validator.workspace = true
 # re-exported by the HTTP surface.
 nest-rs-http.workspace = true
 nest-rs-guards.workspace = true
+# `ResourceChallenge` is the infra `#[interceptor]` that stamps the RFC 9728
+# discovery pointer onto every 401 — the one seam HTTP, WS and MCP share.
+nest-rs-interceptors.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on
@@ -52,6 +55,18 @@ anyhow.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# The discovery-flow proof boots a real app and walks 401 → metadata → AS.
+nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-core = { workspace = true }
+# `mcp` brings `GlobalPoolMcpGuard`, the fallback that folds the global guard
+# pool in-band on `/mcp`. Without it a `use_guards_global` denial never reaches
+# the MCP endpoint and the step-up parity test silently proves nothing.
+nest-rs-guards = { workspace = true, features = ["mcp"] }
+# The challenge is attached once at the transport edge; these prove it reaches
+# an MCP client and a WS client, not only an HTTP one.
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+nest-rs-ws = { path = "../nest-rs-ws" }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 jsonwebtoken = { workspace = true }
 serde = { workspace = true }

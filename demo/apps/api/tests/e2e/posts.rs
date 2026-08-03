@@ -9,7 +9,7 @@ use poem::http::header;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::harness::*;
+use crate::*;
 
 #[tokio::test]
 async fn posts_graphql_scopes_reads_and_publish_transitions() {

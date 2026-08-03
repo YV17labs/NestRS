@@ -1,6 +1,8 @@
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
+use crate::authz::constants;
+
 use crate::Claims;
 use crate::notifications as notification;
 use crate::orgs as org;
@@ -21,10 +23,15 @@ impl AbilityFactory for AppAbility {
             ab.can(Action::Manage, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Manage, org::Entity);
+            // The scope rides on the rule it conditions. An admin token minted
+            // without `posts:write` cannot write posts — scopes narrow what a
+            // token may exercise, they never widen what a role allows.
             ab.can(Action::Read, post::Entity)
-                .when(|p| p.eq(post::Column::OrgId, actor.org_id));
+                .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+                .requires_scope(constants::POSTS_READ);
             ab.can(Action::Manage, post::Entity)
-                .when(|p| p.eq(post::Column::OrgId, actor.org_id));
+                .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+                .requires_scope(constants::POSTS_WRITE);
             ab.can(Action::Read, notification::Entity)
                 .when(|p| p.eq(notification::Column::OrgId, actor.org_id));
         } else {
@@ -36,9 +43,11 @@ impl AbilityFactory for AppAbility {
             ab.can(Action::Read, org::Entity)
                 .when(|p| p.eq(org::Column::Id, actor.org_id));
             ab.can(Action::Read, post::Entity)
-                .when(|p| p.eq(post::Column::OrgId, actor.org_id));
+                .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+                .requires_scope(constants::POSTS_READ);
             ab.can(Action::Create, post::Entity)
-                .when(|p| p.eq(post::Column::OrgId, actor.org_id));
+                .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+                .requires_scope(constants::POSTS_WRITE);
             ab.can(Action::Read, notification::Entity)
                 .when(|p| p.eq(notification::Column::OrgId, actor.org_id));
         }
@@ -57,13 +66,20 @@ mod tests {
     use crate::identity::Role;
 
     fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {
+        ability_scoped(roles, org_id, constants::all())
+    }
+
+    /// The rules as built for a token carrying exactly `scopes` — the shape a
+    /// delegated (MCP) client holds.
+    fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Ability {
         let claims = Claims {
             sub: Some(Uuid::nil()),
             org_id,
             roles,
+            scopes: scopes.clone(),
             exp: 0,
         };
-        let mut b = AbilityBuilder::new();
+        let mut b = AbilityBuilder::new().with_granted_scopes(Some(scopes.into()));
         AppAbility.define(&claims, &mut b);
         b.build().expect("valid test ability")
     }
@@ -242,6 +258,59 @@ mod tests {
             Action::Delete,
             &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
         ));
+    }
+
+    #[test]
+    fn a_read_only_delegation_cannot_write_even_as_admin() {
+        // The property scopes exist for: an *admin* token narrowed to
+        // `posts:read` loses the write rule entirely. Roles decide what the
+        // identity may do; scopes decide how much of it this token may
+        // exercise, and they only ever narrow.
+        let org = Uuid::now_v7();
+        let ab = ability_scoped(
+            vec![Role::Admin],
+            org,
+            vec![constants::POSTS_READ.to_owned()],
+        );
+
+        assert!(
+            ab.can_class(Action::Read, TypeId::of::<post::Entity>()),
+            "the scope it does carry still works",
+        );
+        assert!(!ab.can_class(Action::Manage, TypeId::of::<post::Entity>()));
+        assert_eq!(
+            ab.missing_scopes(Action::Manage, TypeId::of::<post::Entity>()),
+            [constants::POSTS_WRITE],
+            "and the refusal names what to go ask the authorization server for",
+        );
+    }
+
+    #[test]
+    fn a_delegation_carrying_no_post_scope_reads_nothing() {
+        let org = Uuid::now_v7();
+        let ab = ability_scoped(
+            vec![Role::Admin],
+            org,
+            vec![constants::AUDIO_TRANSCODE.to_owned()],
+        );
+
+        assert!(!ab.can_class(Action::Read, TypeId::of::<post::Entity>()));
+        assert!(
+            !ab.can::<post::Entity>(
+                Action::Read,
+                &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
+            ),
+            "the withheld rule must not leak through the row check either",
+        );
+    }
+
+    #[test]
+    fn scopes_never_widen_what_the_role_denies() {
+        // The other direction, and the one a reviewer must be able to trust: a
+        // member holding every scope still cannot manage users.
+        let org = Uuid::now_v7();
+        let ab = ability_scoped(vec![Role::User], org, constants::all());
+        assert!(!ab.can_class(Action::Manage, TypeId::of::<user::Entity>()));
     }
 
     #[test]

@@ -22,7 +22,7 @@ homepage = "https://nestrs.dev"
 # One entry, capabilities as features — the shape every app consuming NestRS
 # uses. The demo is the reference product: if it needed a second framework
 # line, no user could avoid one either.
-nest-rs = { version = "2.0.0", path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis", "schedule", "events", "authn", "authz", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "resource", "worker", "storage"] }
+nest-rs = { version = "2.0", path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis", "schedule", "events", "authn", "authz", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "resource", "worker", "storage"] }
 
 # Third-party crates this product's own source names. Requirements are
 # `major.minor` and the exact pins mirror the framework's — see the root
@@ -46,7 +46,6 @@ uuid = { version = "1.24", features = ["v7", "serde"] }
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
 sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
 schemars = { version = "1.2", features = ["uuid1"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Dev-only. WebSocket client driving the live gateway in e2e tests.

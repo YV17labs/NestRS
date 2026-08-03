@@ -4,6 +4,8 @@ use poem::error::ResponseError;
 use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 
+use crate::resource::NoBearerChallenge;
+
 /// Opaque "wrong credentials" failure for any password-login path.
 ///
 /// Returned by services that verify a password against a stored hash: missing
@@ -138,16 +140,22 @@ impl ResponseError for AuthError {
 
 /// Same `?`-propagation for the login path, which returns the opaque
 /// credential rejection rather than a token failure. A password mismatch is not
-/// a `Bearer` challenge, so no `WWW-Authenticate` header goes out.
+/// a `Bearer` challenge, so no `WWW-Authenticate` header goes out — and the
+/// [`NoBearerChallenge`] marker keeps the resource-server interceptor from
+/// adding one at the edge, where it can no longer tell the two kinds of `401`
+/// apart. `POST /auth/login` is not a protected resource; pointing that caller
+/// at an authorization server would be misdirection, not discovery.
 impl ResponseError for CredentialError {
     fn status(&self) -> StatusCode {
         StatusCode::UNAUTHORIZED
     }
 
     fn as_response(&self) -> Response {
-        Response::builder()
+        let mut response = Response::builder()
             .status(StatusCode::UNAUTHORIZED)
-            .body(self.to_string())
+            .body(self.to_string());
+        response.extensions_mut().insert(NoBearerChallenge);
+        response
     }
 }
 

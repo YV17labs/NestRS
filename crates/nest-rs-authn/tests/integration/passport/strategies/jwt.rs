@@ -30,7 +30,7 @@ async fn authenticates_with_valid_bearer_token() {
             exp: get_current_timestamp() + 3600,
         })
         .expect("sign");
-    let mut req = crate::common::request(&[("Authorization", &format!("Bearer {token}"))]);
+    let mut req = crate::request(&[("Authorization", &format!("Bearer {token}"))]);
 
     let claims = strategy.authenticate(&mut req).await.expect("authenticate");
     assert_eq!(claims.sub, "alice");
@@ -42,7 +42,7 @@ async fn missing_bearer_credentials_are_rejected() {
         JwtService::new(JwtOptions::new("strategy-secret-padded-to-thirty-two")).expect("jwt"),
     );
     let strategy = JwtStrategy::<TestClaims>::new(jwt);
-    let mut req = crate::common::request(&[]);
+    let mut req = crate::request(&[]);
 
     assert!(matches!(
         strategy.authenticate(&mut req).await,
@@ -56,7 +56,7 @@ async fn invalid_bearer_token_is_rejected() {
         JwtService::new(JwtOptions::new("strategy-secret-padded-to-thirty-two")).expect("jwt"),
     );
     let strategy = JwtStrategy::<TestClaims>::new(jwt);
-    let mut req = crate::common::request(&[("Authorization", "Bearer not-a-jwt")]);
+    let mut req = crate::request(&[("Authorization", "Bearer not-a-jwt")]);
 
     assert!(matches!(
         strategy.authenticate(&mut req).await,

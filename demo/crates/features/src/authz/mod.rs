@@ -1,6 +1,8 @@
 mod ability;
 mod module;
 
+pub mod constants;
+
 pub mod graphql;
 pub mod http;
 pub mod mcp;

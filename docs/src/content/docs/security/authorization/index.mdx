@@ -210,6 +210,10 @@ controller with the transport's authz module, and write a
   as internals (skip on a first pass).
 - [Public reads](/security/authorization/public-reads/) —
   `define_visitor`, the anonymous branch a `#[public]` route reads.
+- [OAuth scopes](/security/authorization/scopes/) — `.requires_scope(...)`
+  narrows a rule to the scope a *token* carries, and refuses with an
+  `insufficient_scope` challenge naming what to request. Read it when
+  you hand tokens to third-party clients (MCP, in particular).
 - [Per-transport bridges](/security/authorization/per-transport-bridges/)
   — how GraphQL, WS, and MCP re-establish the ambient ability
   (explanation — useful once you add a second transport, not before).

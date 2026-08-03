@@ -25,9 +25,10 @@ are in place.
 - **Transparent security across every transport.** Authn, authz, row-level
   filtering, response masking and transactions are carried by the framework and
   verified at boot. `nest-rs-mcp` carries the same guarantee as HTTP and
-  GraphQL: its guard chain is deny-all by default, and the request scope,
-  executor and ability reach a tool body, so a `Repo`-backed MCP tool is
-  row-filtered exactly like a controller.
+  GraphQL, across the **whole** MCP surface: its guard chain is deny-all by
+  default, and the request scope, executor and ability reach every operation —
+  `tools/call`, `prompts/get`, `resources/read`, completion, `tasks/*` — so a
+  `Repo`-backed prompt or resource is row-filtered exactly like a controller.
 - **crates.io publishing** — every `nest-rs-*` framework crate is on
   [crates.io](https://crates.io/crates/nest-rs); `apps/` and the product crates
   under `demo/` stay `publish = false`.

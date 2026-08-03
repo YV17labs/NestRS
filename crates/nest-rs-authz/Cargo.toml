@@ -115,9 +115,6 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
 # since the generated `#[Object]` code names `async_graphql::` paths.
 async-graphql.workspace = true
-# Same rule for the MCP bridge test's tool host: the rmcp `#[tool_router]` /
-# `#[tool_handler]` macros (re-exported by nest-rs-mcp) expand to `rmcp::` paths.
-rmcp.workspace = true
 serde_json.workspace = true
 # The alias pin-test's un-shaped routes emit an OpenAPI response schema, which
 # puts a `JsonSchema` bound on their `Json<T>` payloads.

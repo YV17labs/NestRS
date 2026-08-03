@@ -60,6 +60,35 @@ bypassed. Exemplars: `nest-rs-seaorm`'s `public_visitor` e2e, and the
 [Public reads](https://nestrs.dev/security/authorization/public-reads/)
 page.
 
+**Scopes gate a rule, they are not a second decision site.**
+`.requires_scope("posts:read")` on an `AbilityBuilder` rule withholds
+that rule when the caller's credential does not carry the scope — the
+rule is *not added*, so the gate, the query pre-filter and the mask all
+refuse together exactly as for a rule nobody wrote. The decision stays
+in the guard; the scope only says what the credential must carry for the
+rule to exist. Scopes **narrow, never widen**: they cannot grant what
+the role denies.
+
+The credential reports what it carries through
+`PrincipalIdentity::scopes()` — `None` (the default) means *not
+scope-aware*, so scoped rules apply in full; `Some(&[])` means *an OAuth
+credential delegated nothing*, so they are all withheld. A bearer-token
+claims type returns `Some`; conflating the two is the fail-open reading.
+`AuthnGuard` publishes it as `nest_rs_guards::GrantedScopes`, which is
+how authn tells authz without either crate depending on the other.
+
+A refusal for want of a scope is `Denial::InsufficientScope`, not
+`Forbidden` — the client can act on the first and not the second. It
+reaches the edge as `RequiredScopes` on the response, where
+`ResourceChallenge` renders the RFC 6750 `insufficient_scope` challenge
+for HTTP/WS/MCP, and as an `INSUFFICIENT_SCOPE` + `requiredScopes` error
+frame on GraphQL. **Convert a denial to a poem `Err` with
+`denial_to_http_error`, never `Error::from_response(denial_to_http_response(..))`**
+— poem's `into_response` overwrites the response's extensions, silently
+dropping the evidence. Every scope a rule requires must appear in
+`NESTRS_AUTHN__SCOPES_SUPPORTED`, or the client is told to request what
+discovery never names (reported at `warn`, `reason="scope_not_advertised"`).
+
 **Non-CRUD routes: a capability-only guard IS the sanctioned pattern.**
 A route whose response is not an entity row (a presigned URL, a computed
 report) gates through a custom `Guard` that checks the ability
@@ -111,7 +140,7 @@ DB, **never RPC each other**.
 | `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>` — **alias in `features`, not in `nest-rs-authz`**), `AuthzHttpModule` |
 | `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthnGuard` (context-seed owner marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
 | `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `AuthzWsModule` |
-| `authz/mcp/` | `AppMcpGuard` (`nest_rs_mcp::authz::McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `AuthzMcpModule` |
+| `authz/mcp/` | `AppMcpGuard` (`nest_rs_authz::mcp::McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `AuthzMcpModule` |
 
 **No app-side `authz/` folder** — bridges live with the rest of authz.
 
@@ -126,7 +155,7 @@ bring every layer they need).
 | HTTP | `#[controller]` | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct + per-route posture `#[authorize(Action, Entity)]` / `#[public]` — optional (a non-CRUD route gates through a capability-only guard instead) | `[<Feature>Module, AuthzHttpModule]` |
 | GraphQL | `#[resolver]` | `#[use_guards(...)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error** | `[<Feature>Module, AuthzGraphqlModule]` |
 | WS | `#[gateway]` + `#[messages]` | `#[use_guards(...)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
-| MCP | `#[mcp]` tool host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **none registered ⇒ the global guard pool, else deny-all** — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint | `[<Feature>Module, AuthzMcpModule]` |
+| MCP | `#[mcp]` host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **none registered ⇒ the global guard pool, else deny-all** — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint | `[<Feature>Module, AuthzMcpModule]` |
 
 ### Why GraphQL uses a marker but WS binds real guards
 
@@ -161,6 +190,15 @@ anonymous operation through to the resolver gates, and `/mcp` does not — an
 unauthenticated tool call is refused; and MCP's *no-pool* tail is deny-all
 rather than pass-through, so the fallback can only ever widen what
 `use_guards_global` opted into.
+
+**The MCP bridge gates every capability, not `tools/call`.** rmcp 3.x replaced
+its single dispatch method with a `ServerHandler` trait, so `PropagatingHandler`
+delegates the whole surface and applies guard + ability + transaction per
+operation. `prompts/get`, `resources/read`, `completion/complete` and `tasks/*`
+are therefore scoped exactly like a tool call; the two documented exceptions are
+notifications and the long-lived `subscriptions/listen`.
+`crates/nest-rs-mcp/tests/integration/propagate.rs` is what keeps a future
+rmcp method from silently escaping the chain — extend it when rmcp grows one.
 
 ## Bound mutations (GraphQL)
 

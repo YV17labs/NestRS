@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{HandlerMetadata, Layer, injectable};
-use nest_rs_guards::{Denial, Guard, GuardPhase, PrincipalClaim};
+use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::{Reflector, async_trait};
 use nest_rs_ws::WsClient;
 use poem::Request;
@@ -42,9 +42,17 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         // Build against a *borrowed* actor: the rules are read from it and never
         // outlive this block, so cloning the principal (claims, role list, …)
         // on every request bought nothing. The borrow ends before the insert.
+        // What the credential was granted, published by the authn guard. Absent
+        // ⇒ the principal is not scope-aware and no rule is scope-gated; the
+        // overwhelmingly common case, and the reason this costs a non-OAuth app
+        // nothing.
+        let granted = req
+            .extensions()
+            .get::<GrantedScopes>()
+            .map(GrantedScopes::shared);
         let built = match req.extensions().get::<F::Actor>() {
             Some(actor) => {
-                let mut builder = AbilityBuilder::new();
+                let mut builder = AbilityBuilder::new().with_granted_scopes(granted);
                 self.factory.define(actor, &mut builder);
                 Some(builder.build())
             }
@@ -55,7 +63,11 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             // The result flows through the same match as the authenticated
             // branch: a malformed visitor rule denies rather than degrading.
             None if Reflector::new(req).is_public() => {
-                let mut builder = AbilityBuilder::new();
+                // The anonymous caller holds no credential, so it carries no
+                // scopes — `Some(empty)`, not `None`. A `define_visitor` rule
+                // gated on a scope is therefore withheld rather than granted to
+                // everyone, which is the fail-closed reading of the pair.
+                let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
                 self.factory.define_visitor(&mut builder);
                 // `build_visitor`, not `build`: the ability carries the fact
                 // that no principal backs it, so a transport declaring posture

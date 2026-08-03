@@ -26,6 +26,9 @@ use nest_rs_http::{Reflector, async_trait};
 use nest_rs_mcp::{
     AllowAllMcpGuard, McpOperationGuard, ServerHandler, mcp, tool_handler, tool_router,
 };
+// The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve
+// against — supplied by the framework's re-export, not by a manifest entry.
+use nest_rs_mcp::rmcp;
 use nest_rs_testing::{TestApp, TestResponse, mcp::post_message};
 use poem::Request;
 use poem::http::StatusCode;

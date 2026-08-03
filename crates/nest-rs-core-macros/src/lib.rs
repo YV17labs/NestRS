@@ -165,12 +165,17 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(module::module(args, input).into()).into()
 }
 
-/// `#[input]` — shorthand for input DTOs. Appends
-/// `#[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
-/// and `#[serde(deny_unknown_fields)]` so an unknown field on the wire
-/// (e.g. `is_admin: true`) is rejected at parse time instead of silently
-/// dropped, and the DTO documents itself in the OpenAPI document without a
-/// second derive to remember.
+/// `#[input]` — the wire-DTO shorthand. Appends
+/// `#[derive(::serde::Serialize, ::serde::Deserialize, ::validator::Validate,
+/// ::schemars::JsonSchema)]` and `#[serde(deny_unknown_fields)]` so an unknown
+/// field on the wire (e.g. `is_admin: true`) is rejected at parse time instead
+/// of silently dropped, and the DTO documents itself in the OpenAPI document
+/// without a second derive to remember.
+///
+/// `Serialize` is in the list because a wire DTO travels both ways: the same
+/// type is returned as `Json<T>` from a handler. Adding a manual
+/// `#[derive(serde::Serialize)]` next to `#[input]` is therefore a conflicting
+/// impl (`E0119`), not a top-up — the shorthand already carries it.
 ///
 /// # Expands to
 ///
@@ -178,7 +183,7 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 /// existing `#[derive(...)]`):
 ///
 /// ```ignore
-/// #[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]
+/// #[derive(::serde::Serialize, ::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]
 /// #[serde(deny_unknown_fields)]
 /// struct CreateUser { /* … */ }
 /// ```

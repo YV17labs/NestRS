@@ -1,4 +1,4 @@
-//! `#[input]` carries every derive an HTTP input DTO needs.
+//! `#[input]` carries every derive an HTTP wire DTO needs.
 //!
 //! The gap this pins: it used to append `Deserialize` + `Validate` +
 //! `deny_unknown_fields` but not `JsonSchema`, which is not optional in
@@ -8,6 +8,8 @@
 //! shipped that way. The shorthand exists to absorb exactly this boilerplate.
 
 use nest_rs_http::input;
+use nest_rs_http::poem::IntoResponse;
+use nest_rs_http::poem::web::Json;
 use schemars::JsonSchema;
 use validator::Validate;
 
@@ -43,6 +45,29 @@ fn input_rejects_an_unknown_field_at_parse_time() {
         err.to_string().contains("is_admin"),
         "the error names the offending field: {err}",
     );
+}
+
+/// R9-1: the shorthand also derives `Serialize` — the derive that lets one
+/// `#[input]` type be *returned* as `Json<T>`, which is what the docs' response
+/// snippets do. It went undocumented, so a reader adding it by hand hit `E0119`
+/// on a conflicting impl. Asserted through a real `Json<T>` response rather
+/// than a bound, so it pins the behaviour the snippets rely on.
+#[test]
+fn input_derives_serialize_so_a_dto_can_be_returned_as_json() {
+    /// `Json<T>` is only a response when `T: Serialize` — the bound the docs'
+    /// `-> Json<GreetReply>` snippets lean on.
+    fn assert_returnable<T: serde::Serialize>()
+    where
+        Json<T>: IntoResponse,
+    {
+    }
+    assert_returnable::<CreateUser>();
+
+    let reply = CreateUser {
+        name: "ada".to_owned(),
+    };
+    let body = serde_json::to_value(&reply).expect("an `#[input]` DTO serializes");
+    assert_eq!(body["name"], "ada");
 }
 
 #[test]

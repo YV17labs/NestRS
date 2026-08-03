@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use nest_rs_config::{Config, ConfigService, Result, config};
 
 use crate::cors::CorsConfig;
@@ -64,6 +66,18 @@ pub struct HttpConfig {
     /// proxy in most deployments; flip on with `NESTRS_HTTP__COMPRESSION=true`
     /// when the app terminates responses directly.
     pub compression: bool,
+    /// Reverse proxies whose `X-Forwarded-For` / `X-Real-IP` this deployment
+    /// believes. Empty by default — with no entry the framework reads neither
+    /// header and every caller is identified by its transport peer, which is
+    /// the only value a client cannot forge.
+    ///
+    /// Name the balancer here (`NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2`)
+    /// and both [`ClientIp`](crate::ClientIp) and the throttler's rate-limit
+    /// bucket start resolving the real client behind it — one list, so the two
+    /// can never disagree about who a request came from. An unparseable entry
+    /// **aborts the boot** naming the variable. See
+    /// [`ClientOrigin`](crate::ClientOrigin) for the resolution rule.
+    pub trusted_proxies: Vec<IpAddr>,
 }
 
 impl Default for HttpConfig {
@@ -80,6 +94,7 @@ impl Default for HttpConfig {
             fail_secure_strict: true,
             security_headers: SecurityHeadersConfig::default(),
             compression: false,
+            trusted_proxies: Vec::new(),
         }
     }
 }
@@ -139,8 +154,35 @@ impl Config for HttpConfig {
             fail_secure_strict: env.flag("FAIL_SECURE_STRICT", base.fail_secure_strict)?,
             security_headers: SecurityHeadersConfig::from_env(env, base.security_headers)?,
             compression: env.flag("COMPRESSION", base.compression)?,
+            trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
         })
     }
+}
+
+/// Parse `NESTRS_HTTP__TRUSTED_PROXIES` into addresses. A typo here silently
+/// disables the trust it was meant to grant — the proxy would never match the
+/// peer and every caller behind it would collapse onto the balancer's address —
+/// so a bad entry fails the boot naming the variable and the offending value,
+/// never a silent skip.
+fn parse_trusted_proxies(env: &ConfigService, base: Vec<IpAddr>) -> Result<Vec<IpAddr>> {
+    const KEY: &str = "TRUSTED_PROXIES";
+    // `ConfigService` has no typed-list reader, so the raw list is parsed here.
+    // The pinned base short-circuits rather than round-tripping through strings.
+    let Some(raw) = env.get(KEY) else {
+        return Ok(base);
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<IpAddr>().map_err(|e| {
+                nest_rs_config::ConfigError::parse(
+                    env.var_name(KEY),
+                    format!("invalid IP `{s}`: {e}"),
+                )
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -166,6 +208,71 @@ mod tests {
             !d.compression,
             "compression opt-in — proxy-terminated by default"
         );
+        assert!(
+            d.trusted_proxies.is_empty(),
+            "no proxy is believed until the deployment names one",
+        );
+    }
+
+    #[test]
+    fn trusted_proxies_are_parsed_from_the_env_list() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(
+                "NESTRS_HTTP__TRUSTED_PROXIES",
+                "10.0.0.1, 2001:db8::1,10.0.0.2",
+            );
+            let env = ConfigService::for_namespace("http");
+            let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
+            assert_eq!(
+                cfg.trusted_proxies,
+                vec![
+                    "10.0.0.1".parse::<IpAddr>().unwrap(),
+                    "2001:db8::1".parse().unwrap(),
+                    "10.0.0.2".parse().unwrap(),
+                ],
+            );
+            Ok(())
+        });
+    }
+
+    // A typo here would silently disable the trust it grants: the entry never
+    // matches a peer, so every caller behind the balancer collapses onto its
+    // address and the deployment looks like it has one client. Fail the boot.
+    #[test]
+    fn an_unparseable_trusted_proxy_fails_instead_of_being_skipped() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_HTTP__TRUSTED_PROXIES", "10.0.0.1,10.0.0.oops");
+            let env = ConfigService::for_namespace("http");
+            let err = HttpConfig::from_env(&env, Default::default())
+                .expect_err("a bad IP must abort the boot");
+            let msg = err.to_string();
+            // The variable name is derived from the reader's namespace, not
+            // retyped — a `#[config]` struct read under another namespace would
+            // otherwise blame a variable nobody set.
+            assert!(msg.contains("NESTRS_HTTP__TRUSTED_PROXIES"), "{msg}");
+            assert!(msg.contains("10.0.0.oops"), "{msg}");
+            Ok(())
+        });
+    }
+
+    // The dual-path config rule: a pinned list survives when the env sets none.
+    #[test]
+    fn a_pinned_trusted_proxy_list_survives_an_unrelated_env_override() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("NESTRS_HTTP__PORT", "8080");
+            let pinned = HttpConfig {
+                trusted_proxies: vec!["10.0.0.9".parse().unwrap()],
+                ..Default::default()
+            };
+            let env = ConfigService::for_namespace("http");
+            let cfg = HttpConfig::from_env(&env, pinned).expect("env parses");
+            assert_eq!(cfg.port, 8080);
+            assert_eq!(
+                cfg.trusted_proxies,
+                vec!["10.0.0.9".parse::<IpAddr>().unwrap()]
+            );
+            Ok(())
+        });
     }
 
     #[test]

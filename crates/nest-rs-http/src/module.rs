@@ -65,6 +65,10 @@ impl DynamicModule for HttpSetup {
                 http = http.fail_secure_strict(cfg.fail_secure_strict);
                 http = http.security_headers(cfg.security_headers.clone());
                 http = http.compression(cfg.compression);
+                // `trusted_proxies` is deliberately not handed to the transport:
+                // it is a boot-time constant, so `ClientOrigin` reads it off the
+                // `HttpConfig` in the container rather than through per-request
+                // state (see `ClientOrigin::of`).
                 Ok(Box::new(http))
             },
         })

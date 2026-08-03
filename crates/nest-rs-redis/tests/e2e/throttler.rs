@@ -16,7 +16,7 @@ use crate::{connect, unique_key};
 async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
     // A generous window so the counter can't roll over mid-test.
     let limit = Throttle::new(3, Duration::from_secs(30));
-    let store = RedisThrottler::new(connect().await, limit, Vec::new());
+    let store = RedisThrottler::new(connect().await, limit);
     let key = unique_key("cap");
 
     for n in 1..=3 {
@@ -38,7 +38,7 @@ async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
 #[tokio::test]
 async fn distinct_keys_have_independent_budgets() {
     let limit = Throttle::new(1, Duration::from_secs(30));
-    let store = RedisThrottler::new(connect().await, limit, Vec::new());
+    let store = RedisThrottler::new(connect().await, limit);
     let key_a = unique_key("indep-a");
     let key_b = unique_key("indep-b");
 
@@ -65,8 +65,8 @@ async fn distinct_keys_have_independent_budgets() {
 async fn the_budget_is_shared_across_store_instances() {
     let limit = Throttle::new(2, Duration::from_secs(30));
     // Two independent connections → two independent stores, same Redis.
-    let replica_a = RedisThrottler::new(connect().await, limit, Vec::new());
-    let replica_b = RedisThrottler::new(connect().await, limit, Vec::new());
+    let replica_a = RedisThrottler::new(connect().await, limit);
+    let replica_b = RedisThrottler::new(connect().await, limit);
     let key = unique_key("shared");
 
     assert!(

@@ -27,7 +27,7 @@ mod tls;
 mod transport;
 
 pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
-pub use client_ip::ClientIp;
+pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::HttpConfig;
 pub use context::{Ctx, RejectedCredential};
 pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb};

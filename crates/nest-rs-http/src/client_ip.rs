@@ -1,43 +1,153 @@
-//! Client IP extractor with a documented fallback chain.
+//! Who the request came from — [`ClientOrigin`], the one resolution every
+//! consumer shares, and [`ClientIp`], the extractor over it.
 //!
-//! Resolution order, first hit wins:
+//! # Why a trusted-proxy list is not optional
 //!
-//! 1. the transport peer reported by poem (`req.remote_addr().as_socket_addr()`);
-//! 2. the leftmost entry of the `X-Forwarded-For` header (parsed as `IpAddr`,
-//!    optionally with a port, including the bracketed IPv6 forms `[ip]` and
-//!    `[ip]:port` per RFC 7239);
-//! 3. the `X-Real-IP` header (parsed as `IpAddr`);
-//! 4. `0.0.0.0` as a last-resort default — the extractor never fails.
+//! `X-Forwarded-For` and `X-Real-IP` are client-authored strings. Honoring them
+//! unconditionally lets any caller claim any address; ignoring them entirely
+//! means an app behind a load balancer only ever sees the balancer. Neither is
+//! usable, so the resolution is gated on the **direct peer**:
 //!
-//! [`ClientIp::forwarded`] is `true` when the address came from one of the
-//! headers (2 or 3), `false` when it came from the peer socket (1) or the
-//! default (4).
+//! 1. no peer address at all (unix socket, or a proxy that hides it) ⇒
+//!    [`ClientOrigin::Unknown`];
+//! 2. the peer is not in `NESTRS_HTTP__TRUSTED_PROXIES` ⇒ that peer *is* the
+//!    client ([`ClientOrigin::Peer`]) and the headers are ignored;
+//! 3. the peer is a trusted proxy ⇒ the forwarding headers are read, and the
+//!    client is the **rightmost** `X-Forwarded-For` hop that is not itself a
+//!    trusted proxy ([`ClientOrigin::Forwarded`]).
 //!
-//! # Security
+//! **Rightmost, never leftmost.** A proxy *appends* the address it received the
+//! request from to the right of the chain, so the genuine client is the last
+//! hop infrastructure wrote. A caller can only *prepend*, and a prepended entry
+//! lands to the left of the genuine one — which is why it can neither mint a
+//! fresh identity nor impersonate a victim's (B-HTTP-1). Keying on the leftmost
+//! hop is the spoofable rule.
 //!
-//! **`X-Forwarded-For` and `X-Real-IP` are spoofable.** Any client can put
-//! whatever value it likes in those headers; the extractor parses them as a
-//! best-effort fallback only. If your deployment terminates TLS at a load
-//! balancer, the load balancer must **strip and rewrite** these headers so
-//! only its own value reaches the app — otherwise a caller can forge the
-//! client IP at will. Trusted-proxy validation (peer ∈ allow-list before
-//! honoring `X-Forwarded-For`) is the throttler's job, not this extractor's.
+//! With no trusted proxy configured — the default — step 2 always wins and the
+//! headers are never read. That is the safe default, not a limitation: an app
+//! that is genuinely behind a balancer names it, and only then does the
+//! framework believe what the balancer says.
 //!
-//! Treat the result as observational (logging, geolocation hints, sampling
-//! keys), never as an authentication or authorization input.
+//! # Two consumers, one answer
+//!
+//! [`ClientIp`] (observational: logging, geolocation hints, sampling keys) and
+//! the throttler's rate-limit bucket must not disagree about who the caller is
+//! — a request rate-limited as one address and logged as another is
+//! unauditable. Both go through [`ClientOrigin::of`], so the deployment
+//! declares its proxies once, in `HttpConfig`.
+//!
+//! Treat the result as observational, never as an authentication or
+//! authorization input: the peer is trustworthy, the hop behind it is only as
+//! trustworthy as the proxy that wrote it.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use nest_rs_core::current_request_scope;
 use poem::{FromRequest, Request, RequestBody, Result};
 
-/// Best-effort client IP for the current request. Always present (see the
-/// module doc for the resolution order and the security caveat).
+use crate::HttpConfig;
+
+/// Who a request is attributed to, and on what evidence. The variants are what
+/// let each consumer react differently to the same resolution: the throttler
+/// warns on [`Unknown`](Self::Unknown) and
+/// [`TrustedProxy`](Self::TrustedProxy) (both collapse every caller into one
+/// bucket), while [`ClientIp`] only needs the address and whether a header
+/// supplied it.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum ClientOrigin {
+    /// The direct transport peer, which is not a configured trusted proxy.
+    /// Forwarding headers were present or not — either way they were ignored.
+    Peer(IpAddr),
+    /// A hop read from `X-Forwarded-For` / `X-Real-IP`, admitted because the
+    /// direct peer is a configured trusted proxy.
+    Forwarded(IpAddr),
+    /// The peer is a trusted proxy but forwarded no usable client address.
+    /// Every caller behind it is indistinguishable.
+    TrustedProxy(IpAddr),
+    /// No peer address at all — a unix socket, or a proxy that hides it.
+    Unknown,
+}
+
+impl ClientOrigin {
+    /// Resolve from a live request, reading the trusted-proxy list off the
+    /// [`HttpConfig`] the app booted with.
+    ///
+    /// The list is a **boot-time constant**, so it is read from the container
+    /// rather than pushed through per-request state: an extension insert costs
+    /// one box each and the first one allocates the whole per-request anymap,
+    /// which is the trade
+    /// [`RequestScope`](nest_rs_core::RequestScope)'s own doc rejects. Off the
+    /// request task (a hand-built `Request` in a unit test) nothing is trusted,
+    /// which is the same answer an unconfigured deployment gives.
+    pub fn of(req: &Request) -> Self {
+        let scope = current_request_scope();
+        let config = scope.as_ref().and_then(|s| s.root().get::<HttpConfig>());
+        let header = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
+        Self::resolve(
+            header("x-forwarded-for"),
+            header("x-real-ip"),
+            req.remote_addr().as_socket_addr().map(SocketAddr::ip),
+            config.as_deref().map_or(&[][..], |c| &c.trusted_proxies),
+        )
+    }
+
+    /// The resolution itself, over plain values — the whole security argument
+    /// of this module lives here, and so do its tests.
+    pub fn resolve(
+        forwarded_for: Option<&str>,
+        real_ip: Option<&str>,
+        peer: Option<IpAddr>,
+        trusted_proxies: &[IpAddr],
+    ) -> Self {
+        let Some(peer) = peer else {
+            return Self::Unknown;
+        };
+        // Anyone but a trusted proxy could have forged the headers, so the peer
+        // is the client and nothing else is read.
+        if !trusted_proxies.contains(&peer) {
+            return Self::Peer(peer);
+        }
+
+        // Scanned lazily in both directions rather than collected: `split` on a
+        // `char` is double-ended, so neither pass allocates on a path that runs
+        // per request.
+        let hops = || {
+            forwarded_for
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(parse_forwarded_entry)
+        };
+        // The hop infrastructure appended most recently that is not itself ours.
+        if let Some(client) = hops().rev().find(|ip| !trusted_proxies.contains(ip)) {
+            return Self::Forwarded(client);
+        }
+        // nginx's single-hop form. Read after the chain because it carries no
+        // ordering of its own, and skipped when it names a proxy we already
+        // know is infrastructure.
+        if let Some(ip) = real_ip
+            .and_then(parse_forwarded_entry)
+            .filter(|ip| !trusted_proxies.contains(ip))
+        {
+            return Self::Forwarded(ip);
+        }
+        // Degenerate: every recorded hop is itself a trusted proxy. The
+        // outermost recorded address is still more specific than the peer.
+        if let Some(outermost) = hops().next() {
+            return Self::Forwarded(outermost);
+        }
+        Self::TrustedProxy(peer)
+    }
+}
+
+/// Best-effort client IP for the current request. Always present — see
+/// [`ClientOrigin`] for the resolution and the security caveat.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ClientIp {
-    /// The resolved address. `0.0.0.0` only when nothing in the chain matched.
+    /// The resolved address. `0.0.0.0` only when the request has no peer
+    /// address at all.
     pub ip: IpAddr,
-    /// `true` when the address came from `X-Forwarded-For` or `X-Real-IP`,
-    /// `false` when it came from the transport peer or the default.
+    /// `true` when a trusted proxy's `X-Forwarded-For` / `X-Real-IP` supplied
+    /// the address, `false` when it is the direct peer (or the default).
     pub forwarded: bool,
 }
 
@@ -51,9 +161,27 @@ impl ClientIp {
     }
 }
 
-/// Parse one `X-Forwarded-For` entry — strip whitespace, accept a bare IP,
-/// `IP:port`, or a bracketed IPv6 (`[ip]` or `[ip]:port` per RFC 7239 — nginx
-/// and HAProxy emit the bracketed form).
+impl From<ClientOrigin> for ClientIp {
+    fn from(origin: ClientOrigin) -> Self {
+        match origin {
+            ClientOrigin::Forwarded(ip) => Self {
+                ip,
+                forwarded: true,
+            },
+            ClientOrigin::Peer(ip) | ClientOrigin::TrustedProxy(ip) => Self {
+                ip,
+                forwarded: false,
+            },
+            ClientOrigin::Unknown => Self::unknown(),
+        }
+    }
+}
+
+/// Parse one forwarded entry — strip whitespace, accept a bare IP, `IP:port`,
+/// or a bracketed IPv6 (`[ip]` or `[ip]:port` per RFC 7239 — nginx and HAProxy
+/// emit the bracketed form). An unparseable entry yields `None` and is skipped
+/// rather than accepted as a key, so a caller cannot inject an arbitrary string
+/// into a rate-limit bucket name or a log field.
 fn parse_forwarded_entry(raw: &str) -> Option<IpAddr> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -70,45 +198,9 @@ fn parse_forwarded_entry(raw: &str) -> Option<IpAddr> {
     trimmed.parse::<SocketAddr>().ok().map(|sa| sa.ip())
 }
 
-fn resolve(req: &Request) -> ClientIp {
-    if let Some(addr) = req.remote_addr().as_socket_addr() {
-        return ClientIp {
-            ip: addr.ip(),
-            forwarded: false,
-        };
-    }
-
-    if let Some(ip) = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|chain| chain.split(',').next())
-        .and_then(parse_forwarded_entry)
-    {
-        return ClientIp {
-            ip,
-            forwarded: true,
-        };
-    }
-
-    if let Some(ip) = req
-        .headers()
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|raw| raw.trim().parse::<IpAddr>().ok())
-    {
-        return ClientIp {
-            ip,
-            forwarded: true,
-        };
-    }
-
-    ClientIp::unknown()
-}
-
 impl<'a> FromRequest<'a> for ClientIp {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        Ok(resolve(req))
+        Ok(ClientOrigin::of(req).into())
     }
 }
 
@@ -116,114 +208,297 @@ impl<'a> FromRequest<'a> for ClientIp {
 mod tests {
     use super::*;
 
-    fn req_with_header(name: &'static str, value: &'static str) -> Request {
-        Request::builder().header(name, value).finish()
+    fn ip(s: &str) -> IpAddr {
+        s.parse().expect("test literal is an IP")
     }
 
-    #[tokio::test]
-    async fn missing_everything_falls_back_to_0_0_0_0_not_forwarded() {
-        let req = Request::builder().finish();
-        let (req, mut body) = req.split();
-        let ip = ClientIp::from_request(&req, &mut body)
-            .await
-            .expect("infallible");
-        assert_eq!(ip, ClientIp::unknown());
-        assert!(!ip.forwarded);
+    fn resolve(xff: Option<&str>, peer: Option<IpAddr>, trusted: &[IpAddr]) -> ClientOrigin {
+        ClientOrigin::resolve(xff, None, peer, trusted)
     }
 
-    #[tokio::test]
-    async fn xff_leftmost_entry_wins_over_xri() {
-        // A built `Request` has no socket peer, so headers take over.
-        let req = Request::builder()
-            .header("x-forwarded-for", "203.0.113.10, 198.51.100.10")
-            .header("x-real-ip", "198.51.100.20")
-            .finish();
-        let (req, mut body) = req.split();
-        let ip = ClientIp::from_request(&req, &mut body).await.unwrap();
-        assert_eq!(ip.ip, IpAddr::from([203, 0, 113, 10]));
-        assert!(ip.forwarded);
+    // ── The peer gate ───────────────────────────────────────────────────────
+
+    #[test]
+    fn no_peer_address_is_unknown() {
+        assert_eq!(
+            resolve(Some("203.0.113.50"), None, &[]),
+            ClientOrigin::Unknown,
+        );
     }
 
-    #[tokio::test]
-    async fn xff_with_whitespace_around_the_leftmost_entry_is_trimmed() {
-        let req = req_with_header("x-forwarded-for", "   203.0.113.7  , 10.0.0.1");
-        let (req, mut body) = req.split();
-        let ip = ClientIp::from_request(&req, &mut body).await.unwrap();
-        assert_eq!(ip.ip, IpAddr::from([203, 0, 113, 7]));
-        assert!(ip.forwarded);
+    // The default deployment: nothing is trusted, so a header a caller set is
+    // never read. This is the regression that mattered — the extractor used to
+    // return the peer with `forwarded = false` for a *different* reason (a
+    // `return` above the header branches), which read as correct behaviour
+    // while making the trusted-proxy case unreachable too.
+    #[test]
+    fn an_untrusted_peer_ignores_forwarding_headers() {
+        let origin = resolve(Some("203.0.113.50"), Some(ip("192.0.2.10")), &[]);
+        assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
+
+        // Even a well-formed multi-hop chain from an untrusted peer.
+        let origin = resolve(
+            Some("203.0.113.50, 10.0.0.99"),
+            Some(ip("192.0.2.10")),
+            &[ip("10.0.0.1")],
+        );
+        assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
     }
 
-    #[tokio::test]
-    async fn xff_with_port_on_the_leftmost_entry_keeps_only_the_ip() {
-        let req = req_with_header("x-forwarded-for", "203.0.113.42:51000, 10.0.0.1");
-        let (req, mut body) = req.split();
-        let ip = ClientIp::from_request(&req, &mut body).await.unwrap();
-        assert_eq!(ip.ip, IpAddr::from([203, 0, 113, 42]));
-        assert!(ip.forwarded);
+    // ── Behind a trusted proxy ──────────────────────────────────────────────
+
+    // B-HTTP-1: the real client is the hop the proxy APPENDED (the rightmost
+    // non-trusted), not the leftmost — the leftmost is the client-authored,
+    // spoofable value.
+    #[test]
+    fn a_trusted_proxy_yields_the_rightmost_untrusted_hop() {
+        let proxy = ip("10.0.0.1");
+        // The proxy received the request from 192.0.2.1 and appended it; the
+        // leftmost "203.0.113.50" is a header the client set.
+        let origin = resolve(Some("203.0.113.50, 192.0.2.1"), Some(proxy), &[proxy]);
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("192.0.2.1")));
     }
 
-    #[tokio::test]
-    async fn x_real_ip_used_when_xff_is_absent() {
-        let req = req_with_header("x-real-ip", "198.51.100.20");
-        let (req, mut body) = req.split();
-        let ip = ClientIp::from_request(&req, &mut body).await.unwrap();
-        assert_eq!(ip.ip, IpAddr::from([198, 51, 100, 20]));
-        assert!(ip.forwarded);
+    // B-HTTP-1 (the core exploit): an attacker prepends a random or victim IP.
+    // The genuine hop sits to its right and is the one selected, so the
+    // prepended value can neither mint a fresh identity nor claim a victim's.
+    #[test]
+    fn a_prepended_spoofed_hop_cannot_change_the_answer() {
+        let proxy = ip("10.0.0.1");
+        let genuine = ClientOrigin::Forwarded(ip("203.0.113.50"));
+        assert_eq!(
+            resolve(Some("203.0.113.50"), Some(proxy), &[proxy]),
+            genuine
+        );
+        assert_eq!(
+            resolve(Some("1.2.3.4, 203.0.113.50"), Some(proxy), &[proxy]),
+            genuine,
+            "a rotating leading hop cannot mint a fresh identity",
+        );
+        assert_eq!(
+            resolve(Some("198.51.100.7, 203.0.113.50"), Some(proxy), &[proxy]),
+            genuine,
+            "a forged victim address cannot be targeted",
+        );
     }
 
-    #[tokio::test]
-    async fn malformed_xff_leftmost_entry_falls_through_to_x_real_ip() {
-        // An empty leading entry (`, …`) is not a valid IP — XRI must win.
-        let req = Request::builder()
-            .header("x-forwarded-for", "not-an-ip, 10.0.0.1")
-            .header("x-real-ip", "198.51.100.20")
-            .finish();
-        let (req, mut body) = req.split();
-        let ip = ClientIp::from_request(&req, &mut body).await.unwrap();
-        assert_eq!(ip.ip, IpAddr::from([198, 51, 100, 20]));
-        assert!(ip.forwarded);
-    }
+    // A two-layer chain (LB → nginx → app): both infra hops are trusted, so the
+    // client is the rightmost hop that is not one of them.
+    #[test]
+    fn a_two_layer_proxy_chain_selects_the_real_client() {
+        let nginx = ip("10.0.0.1");
+        let lb = ip("10.0.0.2");
+        // client(203.0.113.50) → lb appended it → nginx appended lb.
+        let origin = resolve(Some("203.0.113.50, 10.0.0.2"), Some(nginx), &[nginx, lb]);
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
 
-    #[tokio::test]
-    async fn malformed_everything_falls_through_to_the_default() {
-        let req = Request::builder()
-            .header("x-forwarded-for", "garbage")
-            .header("x-real-ip", "also-garbage")
-            .finish();
-        let (req, mut body) = req.split();
-        let ip = ClientIp::from_request(&req, &mut body).await.unwrap();
-        assert_eq!(ip, ClientIp::unknown());
+        // And a spoofed hop prepended inside that chain is still skipped.
+        let origin = resolve(
+            Some("9.9.9.9, 203.0.113.50, 10.0.0.2"),
+            Some(nginx),
+            &[nginx, lb],
+        );
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
     }
 
     #[test]
-    fn parse_forwarded_entry_accepts_ipv4_ipv6_and_socketaddr() {
-        let ipv6: IpAddr = "2001:db8::1".parse().unwrap();
+    fn an_unparseable_hop_is_skipped_never_used_as_a_key() {
+        let proxy = ip("10.0.0.1");
+        let origin = resolve(Some("not-an-ip, 192.0.2.1"), Some(proxy), &[proxy]);
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("192.0.2.1")));
+    }
 
-        // Bare IPv4.
-        assert_eq!(
-            parse_forwarded_entry("  203.0.113.1  "),
-            Some(IpAddr::from([203, 0, 113, 1])),
+    #[test]
+    fn hop_parsing_accepts_the_shapes_real_proxies_emit() {
+        let proxy = ip("10.0.0.1");
+        let cases = [
+            ("   203.0.113.50  ", "203.0.113.50"),
+            ("203.0.113.42:51000", "203.0.113.42"),
+            ("2001:db8::1", "2001:db8::1"),
+            ("[2001:db8::1]", "2001:db8::1"),
+            ("[2001:db8::1]:8080", "2001:db8::1"),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(
+                resolve(Some(raw), Some(proxy), &[proxy]),
+                ClientOrigin::Forwarded(ip(expected)),
+                "hop {raw:?}",
+            );
+        }
+        // Malformed shapes yield no hop at all.
+        for raw in ["[malformed::]", "not-an-ip"] {
+            assert_eq!(
+                resolve(Some(raw), Some(proxy), &[proxy]),
+                ClientOrigin::TrustedProxy(proxy),
+                "hop {raw:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn x_real_ip_answers_when_the_chain_does_not() {
+        let proxy = ip("10.0.0.1");
+        let origin = ClientOrigin::resolve(None, Some("198.51.100.20"), Some(proxy), &[proxy]);
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("198.51.100.20")));
+
+        // The chain outranks it when it carries a usable hop.
+        let origin = ClientOrigin::resolve(
+            Some("203.0.113.50"),
+            Some("198.51.100.20"),
+            Some(proxy),
+            &[proxy],
         );
-        // Bare IPv4 again, no padding.
-        assert_eq!(
-            parse_forwarded_entry("10.0.0.1"),
-            Some(IpAddr::from([10, 0, 0, 1])),
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
+
+        // And an untrusted peer's X-Real-IP is ignored like everything else.
+        let origin =
+            ClientOrigin::resolve(None, Some("198.51.100.20"), Some(ip("192.0.2.10")), &[]);
+        assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
+    }
+
+    // Degenerate: every recorded hop is itself a trusted proxy — the outermost
+    // recorded address is still more specific than the peer.
+    #[test]
+    fn an_all_trusted_chain_falls_back_to_the_outermost_hop() {
+        let (a, b, c) = (ip("10.0.0.1"), ip("10.0.0.2"), ip("10.0.0.3"));
+        let origin = resolve(Some("10.0.0.2, 10.0.0.3"), Some(a), &[a, b, c]);
+        assert_eq!(origin, ClientOrigin::Forwarded(b));
+    }
+
+    #[test]
+    fn a_trusted_proxy_that_forwards_nothing_is_reported_as_such() {
+        let proxy = ip("10.0.0.1");
+        for chain in [None, Some(""), Some(",,,")] {
+            assert_eq!(
+                resolve(chain, Some(proxy), &[proxy]),
+                ClientOrigin::TrustedProxy(proxy),
+                "chain {chain:?}",
+            );
+        }
+    }
+
+    // ── The extractor over the resolution ───────────────────────────────────
+
+    /// A request carrying a real transport peer — what a built `Request` lacks,
+    /// and what every branch past `Unknown` needs. `poem`'s builder cannot set
+    /// one, so the parts are assembled directly.
+    fn req_from(peer: &str, headers: &[(&str, &str)]) -> Request {
+        use poem::Addr;
+        use poem::web::{LocalAddr, RemoteAddr};
+
+        let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
+        let (mut parts, _) = poem::http::Request::new(()).into_parts();
+        for (name, value) in headers {
+            parts.headers.insert(
+                poem::http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                poem::http::HeaderValue::from_str(value).expect("header value"),
+            );
+        }
+        Request::from_parts(
+            (
+                parts,
+                LocalAddr::default(),
+                RemoteAddr(Addr::socket(socket)),
+                poem::http::uri::Scheme::HTTP,
+            )
+                .into(),
+            poem::Body::empty(),
+        )
+    }
+
+    /// Extract under an ambient request scope over a container holding `config`
+    /// — the shape the transport edge installs, and the only place the
+    /// trusted-proxy list comes from.
+    async fn extract_under(config: Option<HttpConfig>, req: Request) -> ClientIp {
+        let mut builder = nest_rs_core::Container::builder();
+        if let Some(config) = config {
+            builder = builder.provide(config);
+        }
+        let scope = std::sync::Arc::new(nest_rs_core::RequestScope::new(builder.build()));
+        nest_rs_core::with_request_scope(scope, None, extract(req)).await
+    }
+
+    fn trusting(proxies: &[&str]) -> HttpConfig {
+        HttpConfig {
+            trusted_proxies: proxies.iter().map(|p| ip(p)).collect(),
+            ..HttpConfig::default()
+        }
+    }
+
+    // The wiring, end to end: a peer, a forwarding header, and an `HttpConfig`
+    // naming that peer. Every unit above tests the rule; this tests that the
+    // extractor actually reaches it.
+    #[tokio::test]
+    async fn the_extractor_reads_the_trusted_proxies_off_the_booted_config() {
+        let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
+        let extracted = extract_under(Some(trusting(&["10.0.0.1"])), req).await;
+        assert_eq!(extracted.ip, ip("203.0.113.50"));
+        assert!(extracted.forwarded);
+    }
+
+    // The default deployment — `trusted_proxies` empty, so the same request
+    // resolves to the peer. This is the regression: the extractor used to
+    // answer the peer here *and* in the case above, because the header branches
+    // were unreachable on TCP.
+    #[tokio::test]
+    async fn an_empty_trusted_proxy_list_resolves_the_same_request_to_the_peer() {
+        let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
+        let extracted = extract_under(Some(HttpConfig::default()), req).await;
+        assert_eq!(extracted.ip, ip("10.0.0.1"));
+        assert!(!extracted.forwarded);
+    }
+
+    // No config in reach at all (a hand-built request off the transport task):
+    // the same answer an unconfigured deployment gives, never a panic.
+    #[tokio::test]
+    async fn no_reachable_config_trusts_nothing() {
+        let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
+        assert_eq!(extract_under(None, req).await.ip, ip("10.0.0.1"));
+        let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
+        assert_eq!(extract(req).await.ip, ip("10.0.0.1"), "and off any scope");
+    }
+
+    async fn extract(req: Request) -> ClientIp {
+        let (req, mut body) = req.split();
+        ClientIp::from_request(&req, &mut body)
+            .await
+            .expect("the extractor is infallible")
+    }
+
+    #[tokio::test]
+    async fn a_request_with_no_peer_and_no_trusted_proxy_extracts_the_default() {
+        // A built `Request` has no peer socket — the `Unknown` branch.
+        let ip = extract(Request::builder().finish()).await;
+        assert_eq!(ip, ClientIp::unknown());
+    }
+
+    // The end-to-end shape of the bug: headers present, no trusted proxy
+    // declared, so the extractor reports the peer and says so.
+    #[tokio::test]
+    async fn headers_alone_never_set_forwarded() {
+        let req = Request::builder()
+            .header("x-forwarded-for", "9.9.9.9")
+            .header("x-real-ip", "9.9.9.9")
+            .finish();
+        let extracted = extract(req).await;
+        assert_eq!(extracted, ClientIp::unknown());
+        assert!(
+            !extracted.forwarded,
+            "an unverified header must never be reported as a forwarded address",
         );
-        // IPv4 with port (SocketAddr path).
+    }
+
+    #[test]
+    fn forwarded_is_set_only_by_the_forwarded_variant() {
+        let addr = ip("203.0.113.50");
+        assert!(ClientIp::from(ClientOrigin::Forwarded(addr)).forwarded);
+        assert!(!ClientIp::from(ClientOrigin::Peer(addr)).forwarded);
+        assert!(!ClientIp::from(ClientOrigin::TrustedProxy(addr)).forwarded);
         assert_eq!(
-            parse_forwarded_entry("10.0.0.1:8080"),
-            Some(IpAddr::from([10, 0, 0, 1])),
+            ClientIp::from(ClientOrigin::TrustedProxy(addr)).ip,
+            addr,
+            "an address is still reported, it is just not a client's",
         );
-        // Bare IPv6.
-        assert_eq!(parse_forwarded_entry("2001:db8::1"), Some(ipv6));
-        // Bracketed IPv6 with port (regression pin).
-        assert_eq!(parse_forwarded_entry("[2001:db8::1]:8080"), Some(ipv6));
-        // Bracketed IPv6 without a port — the case nginx/HAProxy emit per
-        // RFC 7239 and that the bare-IpAddr / SocketAddr parsers both reject.
-        assert_eq!(parse_forwarded_entry("[2001:db8::1]"), Some(ipv6));
-        // Malformed bracketed entry fails gracefully.
-        assert_eq!(parse_forwarded_entry("[malformed::]"), None);
-        assert_eq!(parse_forwarded_entry(""), None);
-        assert_eq!(parse_forwarded_entry("not-an-ip"), None);
+        assert_eq!(ClientIp::from(ClientOrigin::Unknown), ClientIp::unknown());
     }
 }

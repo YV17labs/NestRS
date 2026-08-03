@@ -5,7 +5,7 @@ use nest_rs::testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
 use serde_json::json;
 
-use super::harness::*;
+use crate::*;
 
 #[tokio::test]
 async fn responses_are_gzip_compressed_when_the_client_accepts_it() {

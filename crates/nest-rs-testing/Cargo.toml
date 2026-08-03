@@ -59,10 +59,10 @@ sea-orm-migration = { workspace = true, optional = true }
 nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp"] }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
-# A crate defining a `#[resolver]` / an `#[mcp]` tool host needs these directly:
-# the generated code names `async_graphql::` and `rmcp::` paths.
+# A crate defining a `#[resolver]` needs this directly: the generated `#[Object]`
+# code names `async_graphql::` paths. rmcp's tool macros name `rmcp::` too, but
+# those resolve through `nest_rs_mcp::rmcp` at the use site — no entry here.
 async-graphql.workspace = true
-rmcp.workspace = true
 tokio.workspace = true
 # The config DI test boots a module wiring `ConfigModule::for_feature` and a
 # service injecting the loaded config; `nest-rs-config` is already a normal

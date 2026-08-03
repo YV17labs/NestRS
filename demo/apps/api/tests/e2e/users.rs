@@ -7,7 +7,7 @@ use sea_orm::{EntityTrait, IntoActiveModel, Set};
 use serde_json::json;
 use uuid::Uuid;
 
-use super::harness::*;
+use crate::*;
 
 #[tokio::test]
 async fn users_are_scoped_to_their_org_and_bound_by_id() {

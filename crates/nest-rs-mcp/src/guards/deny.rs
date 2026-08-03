@@ -11,7 +11,7 @@ use crate::guard::McpOperationGuard;
 pub(crate) struct DenyAllMcpGuard;
 
 /// The fail-closed posture, said once at boot. Both mount paths — an explicit
-/// `endpoint_with_guard(None, ..)` and
+/// [`McpMount::deny_all`](crate::McpMount::deny_all) and
 /// [`resolve_operation_guard`](crate::resolve_operation_guard) finding neither
 /// a registered guard nor a global pool — land here, so the endpoint can never
 /// open silently.

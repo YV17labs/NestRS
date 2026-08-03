@@ -1,20 +1,61 @@
 //! The wrapper that carries ambient request state across rmcp's spawn.
 //!
-//! rmcp's [`Service`] blanket-implements over every [`ServerHandler`], and
-//! `handle_request` is its single dispatch point — every tool call, resource
-//! read and prompt fetch funnels through it. Wrapping that one method therefore
-//! covers the whole surface without delegating rmcp's 50-odd handler methods
-//! (and without breaking when it grows one).
+//! rmcp dispatches every operation on its own spawned task, so a task-local
+//! installed around the poem endpoint is gone by the time a handler method
+//! runs. [`PropagatingHandler`] re-installs it *inside* the dispatch.
+//!
+//! # Why this delegates every method
+//!
+//! Up to rmcp 2.x the whole server surface funnelled through one
+//! `Service::handle_request`, and wrapping that single method covered
+//! everything. rmcp 3.x moved the dispatch into a blanket
+//! `impl<H: ServerHandler> Service<RoleServer> for H` and bounded
+//! `StreamableHttpService` on [`ServerHandler`] itself, so the single seam no
+//! longer exists: the wrapper has to *be* a `ServerHandler`, and every method
+//! it does not delegate silently reverts to rmcp's default (`ListToolsResult`
+//! empty, `prompts/get` method-not-found) — the inner handler's own
+//! implementation would be dropped, not merely unwrapped.
+//!
+//! So the delegation below is **exhaustive by construction, and must stay that
+//! way**: rmcp's `ServerHandler` is the list, `propagate.rs` in the
+//! integration suite is the proof. Adding a capability to rmcp means adding it
+//! here, otherwise the framework quietly answers for the tool host.
+//!
+//! # What each kind of operation gets
+//!
+//! | Kind | Request scope | Guard ability | Data context |
+//! |---|---|---|---|
+//! | Requests (`tools/call`, `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`, `tasks/*`, lifecycle, custom) | yes | yes | yes |
+//! | `subscriptions/listen` | yes | yes | no — it outlives any sane transaction |
+//! | Notifications | yes | no | no — nothing to commit or roll back on |
+//! | Synchronous accessors (`get_info`, `get_tool`, …) | — | — | — |
 
+// `subscribe` / `unsubscribe` are SEP-2575-deprecated in rmcp but still part of
+// the trait for legacy protocol versions; a wrapper must forward them or a
+// legacy client silently loses the inner handler's implementation.
+#![expect(deprecated)]
+
+use std::borrow::Cow;
+use std::future::Future;
 use std::sync::Arc;
 
-use rmcp::model::ServerResult;
-use rmcp::model::{ClientNotification, ClientRequest};
-use rmcp::service::{NotificationContext, RequestContext, RoleServer};
-use rmcp::{ServerHandler, Service};
+use rmcp::ServerHandler;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CancelTaskParams, CancelledNotificationParam,
+    CompleteRequestParams, CompleteResult, CustomNotification, CustomRequest, CustomResult,
+    DiscoverResult, GetPromptRequestParams, GetPromptResponse, GetTaskParams, GetTaskResult,
+    InitializeRequestParams, InitializeResult, ListPromptsResult, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
+    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ServerInfo,
+    SetLevelRequestParams, SubscribeRequestParams, SubscriptionFilter, Tool,
+    UnsubscribeRequestParams, UpdateTaskParams,
+};
+use rmcp::service::{
+    MaybeSendFuture, NotificationContext, RequestContext, RoleServer, SubscriptionContext,
+};
 
 use crate::McpError;
-use crate::context::{McpAmbient, McpToolContext, OperationOutcome};
+use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
 use crate::guard::{BoxFuture, McpOperationGuard};
 use crate::scope::maybe_with_request_scope;
 
@@ -22,8 +63,8 @@ use crate::scope::maybe_with_request_scope;
 /// operation guard's ambient state, and the registered [`McpToolContext`]'s
 /// state installed.
 ///
-/// Built by [`endpoint_with_guard`](crate::endpoint_with_guard) around the
-/// handler the `#[mcp]` factory produces — never constructed by hand.
+/// Built by [`endpoint`](crate::endpoint) around the handler the `#[mcp]`
+/// factory produces — never constructed by hand.
 pub struct PropagatingHandler<H> {
     inner: H,
     guard: Arc<dyn McpOperationGuard>,
@@ -42,63 +83,173 @@ impl<H> PropagatingHandler<H> {
             context,
         }
     }
-}
 
-impl<H: ServerHandler> Service<RoleServer> for PropagatingHandler<H> {
-    async fn handle_request(
+    /// The nesting every wrapped operation shares: the data context (which owns
+    /// the operation's transaction) wraps the guard's `around` (which installs
+    /// the caller's ability), which wraps the request scope, which wraps the
+    /// dispatch. Identical to the GraphQL bridge's order, so the two transports
+    /// cannot drift.
+    ///
+    /// With no data context registered the guard still installs the ability —
+    /// the handler then reads through a scoped `Ability` with no executor, which
+    /// is `Repo`'s fail-closed case rather than a silently unscoped one.
+    async fn dispatch<T, F>(
         &self,
-        request: ClientRequest,
-        context: RequestContext<RoleServer>,
-    ) -> Result<ServerResult, McpError> {
-        // rmcp injects the HTTP `Parts` (extensions included) into every
-        // operation's context; the endpoint stashed the ambient state there
-        // before handing the request over.
+        ambient: McpAmbient,
+        context: Option<&Arc<dyn McpToolContext>>,
+        inner: F,
+    ) -> Result<T, McpError>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, McpError>> + Send,
+    {
         let McpAmbient {
             scope,
-            captured,
+            captured: context_captured,
             guard_captured,
-        } = McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
+        } = ambient;
 
-        let dispatch = self.inner.handle_request(request, context);
-        let scoped: BoxFuture<'_, OperationOutcome> =
-            Box::pin(maybe_with_request_scope(scope, dispatch));
+        // One box, not two: the type erasure the guard's `around` needs and the
+        // scope installation are the same future, and this runs on every MCP
+        // operation.
+        let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(async move {
+            maybe_with_request_scope(scope, inner)
+                .await
+                .map(OperationValue::new)
+        });
 
-        // Nesting mirrors GraphQL: the data context (which owns the operation's
-        // transaction) wraps the guard's `around` (which installs the caller's
-        // ability), which wraps the dispatch. With no data context registered
-        // the guard still installs the ability — the tool then reads through a
-        // scoped `Ability` with no executor, which is `Repo`'s fail-closed case
-        // rather than a silently unscoped one.
-        let guarded: BoxFuture<'_, OperationOutcome> = match &guard_captured {
+        let guarded = match &guard_captured {
             Some(captured) => self.guard.around(captured, scoped),
             None => scoped,
         };
 
-        match (&self.context, &captured) {
+        let outcome = match (context, &context_captured) {
             (Some(context), Some(captured)) => context.around(captured, guarded).await,
             _ => guarded.await,
+        };
+
+        outcome.and_then(OperationValue::take::<T>)
+    }
+}
+
+/// Delegate one request-shaped method: read the ambient state off the
+/// operation's context, then run the inner handler inside the full nesting.
+///
+/// Written as a macro because the 18 request methods differ only in their
+/// parameters and result type — spelling each body out would invite exactly the
+/// per-method drift this wrapper exists to prevent.
+macro_rules! request_method {
+    ($name:ident ( $($arg:ident : $arg_ty:ty),* ) -> $out:ty) => {
+        fn $name(
+            &self,
+            $($arg: $arg_ty,)*
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<$out, McpError>> + MaybeSendFuture + '_ {
+            async move {
+                let ambient = McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
+                self.dispatch(
+                    ambient,
+                    self.context.as_ref(),
+                    self.inner.$name($($arg,)* context),
+                )
+                .await
+            }
         }
+    };
+}
+
+/// Delegate one notification: the request scope is installed so `Scoped<T>`
+/// resolves uniformly, and nothing else is — see the table in the module doc.
+macro_rules! notification_method {
+    ($name:ident ( $($arg:ident : $arg_ty:ty),* )) => {
+        fn $name(
+            &self,
+            $($arg: $arg_ty,)*
+            context: NotificationContext<RoleServer>,
+        ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+            async move {
+                let scope = McpAmbient::from_extensions(&context.extensions)
+                    .and_then(|ambient| ambient.scope);
+                maybe_with_request_scope(scope, self.inner.$name($($arg,)* context)).await
+            }
+        }
+    };
+}
+
+impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
+    // --- lifecycle & discovery ---------------------------------------------
+    request_method!(ping() -> ());
+    request_method!(initialize(request: InitializeRequestParams) -> InitializeResult);
+    request_method!(discover() -> DiscoverResult);
+
+    // --- tools --------------------------------------------------------------
+    request_method!(call_tool(request: CallToolRequestParams) -> CallToolResponse);
+    request_method!(list_tools(request: Option<PaginatedRequestParams>) -> ListToolsResult);
+
+    // --- prompts ------------------------------------------------------------
+    request_method!(get_prompt(request: GetPromptRequestParams) -> GetPromptResponse);
+    request_method!(list_prompts(request: Option<PaginatedRequestParams>) -> ListPromptsResult);
+
+    // --- resources ----------------------------------------------------------
+    request_method!(read_resource(request: ReadResourceRequestParams) -> ReadResourceResponse);
+    request_method!(list_resources(request: Option<PaginatedRequestParams>) -> ListResourcesResult);
+    request_method!(
+        list_resource_templates(request: Option<PaginatedRequestParams>)
+            -> ListResourceTemplatesResult
+    );
+    request_method!(subscribe(request: SubscribeRequestParams) -> ());
+    request_method!(unsubscribe(request: UnsubscribeRequestParams) -> ());
+
+    // --- completion & logging -----------------------------------------------
+    request_method!(complete(request: CompleteRequestParams) -> CompleteResult);
+    request_method!(set_level(request: SetLevelRequestParams) -> ());
+
+    // --- tasks (SEP-2663) ----------------------------------------------------
+    request_method!(get_task(request: GetTaskParams) -> GetTaskResult);
+    request_method!(update_task(request: UpdateTaskParams) -> ());
+    request_method!(cancel_task(request: CancelTaskParams) -> ());
+
+    // --- custom methods ------------------------------------------------------
+    request_method!(on_custom_request(request: CustomRequest) -> CustomResult);
+
+    // --- notifications -------------------------------------------------------
+    notification_method!(on_cancelled(notification: CancelledNotificationParam));
+    notification_method!(on_progress(notification: ProgressNotificationParam));
+    notification_method!(on_initialized());
+    notification_method!(on_roots_list_changed());
+    notification_method!(on_custom_notification(notification: CustomNotification));
+
+    /// `subscriptions/listen` (SEP-2575) runs until the subscription is
+    /// cancelled, so it takes the request scope and the guard's ability but
+    /// **not** the data context: a transaction held open for the life of a
+    /// subscription would pin a pooled connection for the same duration.
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
+        let ambient =
+            McpAmbient::from_extensions(&context.request_context().extensions).unwrap_or_default();
+        self.dispatch(ambient, None, self.inner.listen(context))
+            .await
     }
 
-    /// Notifications carry the same `Parts`, so the request scope is installed
-    /// here too and `Scoped<T>` resolves uniformly. The [`McpToolContext`] is
-    /// **not** applied: a notification is fire-and-forget with no result to
-    /// commit or roll back on, so wrapping it in a transaction would invent
-    /// semantics the protocol does not have. A notification handler that needs
-    /// the data layer should hand the work to a request-shaped path.
-    async fn handle_notification(
+    // --- synchronous accessors ------------------------------------------------
+    // No ambient state to install: these are pure reads of the inner handler's
+    // own declaration, called by rmcp outside any operation dispatch.
+
+    fn accepted_subscription_filter(
         &self,
-        notification: ClientNotification,
-        context: NotificationContext<RoleServer>,
-    ) -> Result<(), McpError> {
-        let scope =
-            McpAmbient::from_extensions(&context.extensions).and_then(|ambient| ambient.scope);
-
-        let dispatch = self.inner.handle_notification(notification, context);
-        maybe_with_request_scope(scope, dispatch).await
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        self.inner.accepted_subscription_filter(requested)
     }
 
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        ServerHandler::get_info(&self.inner)
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.inner.get_tool(name)
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        self.inner.supported_protocol_versions()
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        self.inner.get_info()
     }
 }

@@ -99,8 +99,8 @@ fn invalid_signature_is_rejected() {
 
 #[test]
 fn verify_only_service_cannot_sign() {
-    let jwt = JwtService::new(JwtOptions::eddsa_verify(crate::common::DEV_PUBLIC_KEY))
-        .expect("verify-only");
+    let jwt =
+        JwtService::new(JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY)).expect("verify-only");
     assert!(matches!(
         jwt.sign(&claims(jwt.expiry(), None)),
         Err(AuthError::Failed(_))
@@ -250,8 +250,8 @@ fn unsigned_alg_none_token_is_rejected() {
 #[test]
 fn eddsa_sign_and_verify_round_trip() {
     let jwt = JwtService::new(JwtOptions::eddsa(
-        crate::common::DEV_PRIVATE_KEY,
-        crate::common::DEV_PUBLIC_KEY,
+        crate::DEV_PRIVATE_KEY,
+        crate::DEV_PUBLIC_KEY,
     ))
     .expect("EdDSA service");
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");

@@ -11,15 +11,6 @@ description = "The product's feature library — vertical slices as port + adapt
 
 [dependencies]
 nest-rs.workspace = true
-# `#[processor]` (audio queue) emits absolute `::nest_rs_worker::*` paths.
-# The rmcp `#[tool_router]`/`#[tool_handler]`/`#[tool]` macros (re-exported by
-# nest-rs-mcp) expand to crate-relative `rmcp::` paths, which resolve only
-# against an extern crate literally named `rmcp` in this crate's prelude — the
-# framework's `nest_rs_mcp::rmcp` re-export cannot supply that name. So a crate
-# hosting an MCP tool must keep the direct dep. Lockstep contract: pin it to the
-# same `rmcp` version the workspace (and nest-rs-mcp) resolve, never a divergent
-# one, or the macro-expanded types would clash with the framework's.
-rmcp.workspace = true
 async-graphql.workspace = true
 async-trait.workspace = true
 # The audio streaming download proxies object storage's chunk stream

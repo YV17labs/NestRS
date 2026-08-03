@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::harness::*;
+use crate::*;
 
 #[tokio::test]
 async fn openapi_document_describes_the_routes() {

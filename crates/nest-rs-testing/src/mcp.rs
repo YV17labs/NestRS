@@ -8,7 +8,7 @@
 //!
 //! Nothing here depends on `nest-rs-mcp`: it is JSON over HTTP, so it works
 //! against a [`TestApp`](crate::TestApp)'s client and against a bare
-//! `endpoint_with_guard(..)` alike.
+//! `endpoint(..)` mount alike.
 
 use poem::Endpoint;
 use poem::test::{TestClient, TestResponse};
@@ -18,15 +18,23 @@ use serde_json::{Value, json};
 /// edit, not a grep.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 
-/// The `initialize` request body.
+/// The `initialize` request body, declaring no client capabilities.
 pub fn initialize_request() -> Value {
+    initialize_request_with(json!({}))
+}
+
+/// [`initialize_request`] with explicit client `capabilities` — what a suite
+/// needs to reach a capability-gated method (`tasks/*` answers `-32021`
+/// *Missing Required Client Capability* until the client declares
+/// `extensions: { "io.modelcontextprotocol/tasks": {} }`).
+pub fn initialize_request_with(capabilities: Value) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
         "params": {
             "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
+            "capabilities": capabilities,
             "clientInfo": { "name": "nest-rs-testing", "version": "0" }
         }
     })
@@ -65,7 +73,24 @@ pub async fn open_session<E: Endpoint>(
     path: &str,
     bearer: Option<&str>,
 ) -> String {
-    let init = post_message(client, path, None, bearer, &initialize_request()).await;
+    open_session_with(client, path, bearer, json!({})).await
+}
+
+/// [`open_session`] declaring client `capabilities` on the handshake.
+pub async fn open_session_with<E: Endpoint>(
+    client: &TestClient<E>,
+    path: &str,
+    bearer: Option<&str>,
+    capabilities: Value,
+) -> String {
+    let init = post_message(
+        client,
+        path,
+        None,
+        bearer,
+        &initialize_request_with(capabilities),
+    )
+    .await;
     init.assert_status_is_ok();
     let session = init
         .0
@@ -87,6 +112,57 @@ pub async fn open_session<E: Endpoint>(
     session
 }
 
+/// Send one JSON-RPC **request** on an open session and return the raw
+/// response body. `params` is the method's params object (`json!({})` when it
+/// takes none).
+///
+/// The tool-shaped [`call_tool`] is the common case; this is the general one,
+/// for the rest of the MCP surface — `prompts/get`, `resources/read`,
+/// `completion/complete`, `tasks/get`, a custom method.
+pub async fn call_method<E: Endpoint>(
+    client: &TestClient<E>,
+    path: &str,
+    session: &str,
+    bearer: Option<&str>,
+    method: &str,
+    params: Value,
+) -> String {
+    let response = post_message(
+        client,
+        path,
+        Some(session),
+        bearer,
+        &json!({ "jsonrpc": "2.0", "id": 99, "method": method, "params": params }),
+    )
+    .await;
+    response
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a JSON-RPC response body")
+}
+
+/// Send one JSON-RPC **notification** (no `id`, no response) on an open
+/// session.
+pub async fn notify<E: Endpoint>(
+    client: &TestClient<E>,
+    path: &str,
+    session: &str,
+    bearer: Option<&str>,
+    method: &str,
+    params: Value,
+) {
+    post_message(
+        client,
+        path,
+        Some(session),
+        bearer,
+        &json!({ "jsonrpc": "2.0", "method": method, "params": params }),
+    )
+    .await;
+}
+
 /// Drive the full handshake and call `tool` with no arguments, returning the
 /// response body — what a suite asserts on.
 pub async fn call_tool<E: Endpoint>(
@@ -96,19 +172,13 @@ pub async fn call_tool<E: Endpoint>(
     bearer: Option<&str>,
 ) -> String {
     let session = open_session(client, path, bearer).await;
-    let call = post_message(
+    call_method(
         client,
         path,
-        Some(&session),
+        &session,
         bearer,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": { "name": tool, "arguments": {} }
-        }),
+        "tools/call",
+        json!({ "name": tool, "arguments": {} }),
     )
-    .await;
-    call.assert_status_is_ok();
-    call.0.into_body().into_string().await.expect("body")
+    .await
 }

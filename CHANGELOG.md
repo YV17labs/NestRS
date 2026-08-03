@@ -39,6 +39,162 @@ published compilation units.
 - **A missing dependency now says what to add**, with a copy-pasteable line,
   instead of `E0433: cannot find nest_rs_core` blamed on the attribute.
 
+### MCP is the whole protocol now — rmcp 2.2 → 3.1
+
+**Breaking, and the reason it ships in a major.** rmcp 3.x is a new major of the
+SDK whose types appear in the signatures `#[mcp]` hosts write: SEP-2663 tasks,
+SEP-2575 discovery and subscriptions, SEP-2549 cache hints, SEP-2322 multi-round
+tool responses, SEP-2243 standard HTTP headers, and the `stateful_mode` →
+`legacy_session_mode` rename.
+
+- **Every MCP capability now gets the framework's transparent security**, not
+  `tools/call` alone. rmcp 3.x retired the single `Service::handle_request` seam
+  the old wrapper hooked and bounded its server on `ServerHandler`, so
+  `PropagatingHandler` delegates the **whole** trait: the request scope, the
+  caller's ability and the operation's transaction are installed around
+  `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`,
+  the `tasks/*` trio, custom methods and the protocol lifecycle. Two documented
+  exceptions: notifications (nothing to commit) and `subscriptions/listen`
+  (outlives any sane transaction — it gets scope and ability, no transaction).
+  A method left undelegated would have reverted to an SDK default and answered
+  *for* the host, so `propagate.rs` drives all 27 over a real
+  streamable-HTTP endpoint and fails if one goes missing.
+- **Prompts have decorators.** `#[prompt_router]` / `#[prompt]` /
+  `#[prompt_handler]` are re-exported beside the tool trio and stack on one
+  `impl ServerHandler`. Resources stay hand-written methods — a resource surface
+  is a URI-to-row mapping, not a set of methods.
+- **The protocol is re-exported wholesale** — `nest_rs::mcp::{model, service,
+  handler, transport}` plus the `rmcp` escape hatch, now documented rather than
+  `#[doc(hidden)]`. A capability a future rmcp adds is reachable the day it
+  ships, with no framework release in between.
+- **`McpConfig` + `McpModule`** expose the streamable-HTTP options on the
+  dual-path rule (`NESTRS_MCP__*` over a pinned base). `McpModule` configures;
+  it activates nothing — listing the `#[mcp]` provider is still what mounts an
+  endpoint. A registered `dyn SessionStore` is picked up for rmcp 3.x
+  cross-instance session recovery.
+- **Security note for existing deployments.** rmcp 3.x validates the inbound
+  `Host` header against a **loopback-only** allowlist by default
+  (anti-DNS-rebinding). A server reached under a real hostname answers `421`
+  until `NESTRS_MCP__ALLOWED_HOSTS` names it. That default is deliberately not
+  widened by the framework.
+- **`rmcp` leaves every consumer manifest.** Its macros expand to bare `rmcp::`
+  paths resolved against the *call site's* scope, so `use nest_rs::mcp::rmcp;`
+  supplies the name — the claim that a re-export "cannot supply it" was wrong,
+  and the entry is gone from `demo/crates/features`, `nest-rs-authz` and
+  `nest-rs-testing`. `nest-rs-macro-hygiene` now compiles a full tools **and**
+  prompts host, with typed input, on its single `nest-rs` dependency.
+- `endpoint_with_guard` is replaced by `endpoint(McpMount, factory)`;
+  `McpMount::from_container` is the one place the mount resolves its guard, data
+  context, config and session store. `OperationOutcome` carries a type-erased
+  `OperationValue`, which is what lets one `around` wrap every capability.
+
+### The server half of OAuth discovery — RFC 9728
+
+An app protected by a bearer token could refuse a caller but never tell it where
+to go get one. The MCP authorization spec makes that a **MUST**, and HTTP and WS
+are resource servers on exactly the same terms, so the capability lives in
+`nest-rs-authn` and serves all of them at once.
+
+- **`ProtectedResourceModule::for_root(..)`** serves
+  `GET /.well-known/oauth-protected-resource` (RFC 9728 §3) and stamps
+  `WWW-Authenticate: Bearer resource_metadata="…"` — plus `scope` when the
+  deployment advertises one — onto every `401` the process emits. The route is
+  declared `#[public]`, because a client cannot hold a token before reading the
+  document that says where to obtain it.
+- **One seam, three transports.** The challenge is attached at the transport
+  edge rather than inside `AuthError`, so it covers the guard-denial `401`, the
+  WS upgrade refusal, `/mcp`'s in-band denial (`EdgePosture::Exempt` skips
+  guards, not this band) and `401`s the framework never wrote itself.
+  `/graphql` is the deliberate exception: it answers an unauthenticated
+  operation with `200` + an `UNAUTHENTICATED` frame, so its clients discover
+  through the well-known document — the equal alternative the spec defines.
+- **`NESTRS_AUTHN__AUDIENCE` becomes mandatory** under this module, checked at
+  `on_module_init` so import order cannot skip it, and boot fails naming the
+  variable. Without it a resource server accepts any token its issuer signed,
+  including one a user granted to another service — the confused deputy RFC 8707
+  exists to close. A `resource` that disagrees with `aud` warns at boot.
+- **`ProtectedResourceConfig`** is dual-path (`NESTRS_AUTHN__RESOURCE`,
+  `__AUTHORIZATION_SERVERS`, `__SCOPES_SUPPORTED`, … over a pinned base) and
+  refuses a non-canonical identity at boot: no scheme, a fragment, an empty
+  authorization-server list, or a scope carrying a space are all build breaks
+  rather than a document that misleads a client.
+- **`McpConfig::allowed_origins` is gone.** The browser `Origin` control was a
+  second knob for something the HTTP transport already owns:
+  `NESTRS_HTTP__CORS_ORIGINS` rejects a disallowed origin with `403` on every
+  method, and the CORS layer wraps the whole route tree, so `/mcp` inherits it.
+  Set the origin allowlist there; `allowed_hosts` stays, being the
+  anti-DNS-rebinding control with no transport-wide equivalent.
+- `crates/nest-rs-authn/tests/integration/resource/controller.rs` is the
+  conformance proof, in the spirit of `propagate.rs`: a client that knows
+  only a protected URL walks `401` → `resource_metadata` → the metadata document
+  → the authorization server's own metadata, every hop a real request, and the
+  AS is discovered by falling through the RFC 8414 §3.1 priority order.
+
+### The client half of OAuth discovery — scopes and the step-up refusal
+
+Discovery told a tokenless client where to get a token. It said nothing to the
+client that *had* one and was merely delegated too little — a bare `403` whose
+only recovery was guesswork. That is the case MCP made ordinary, so the scope
+becomes a first-class dimension of a rule and of a denial.
+
+- **`.requires_scope("posts:read")` on an ability rule.** One declaration,
+  three effects, and no second decision site: the rule is **withheld** when the
+  credential does not carry the scope — not added at all, so the class gate, the
+  query pre-filter and the response mask refuse together exactly as for a rule
+  nobody wrote — the refusal remembers the scope, and the scope stays readable
+  beside the permission it conditions. Scopes **narrow, never widen**: an admin
+  token minted without `posts:write` cannot write posts, and no scope grants
+  what the role denies. Call it more than once to require all of them.
+- **`PrincipalIdentity::scopes()`**, defaulted, is how a credential reports what
+  it carries. `None` — every existing principal — means *not scope-aware*, so
+  scoped rules apply in full and a session-authenticated app is untouched;
+  `Some(&[])` means *an OAuth credential delegated nothing*. `AuthnGuard`
+  publishes the result as `nest_rs_guards::GrantedScopes`, which is how authn
+  informs authz without either crate depending on the other.
+- **`nest_rs::authn::scope::space_delimited`** parses the RFC 6749 §3.3 `scope`
+  claim — accepting the array form several authorization servers emit, because
+  the deployment does not choose its AS's spelling. Getting this wrong by hand
+  yields one scope named `"posts:read posts:write"` that matches nothing and
+  looks like an authorization bug.
+- **`Denial::InsufficientScope`** is distinct from `Forbidden` for the reason
+  RFC 6750 §3.1 separates them: the first is actionable, the second final. It
+  reaches the edge as `RequiredScopes` on the response, where the same
+  interceptor that writes the `401` pointer renders
+  `WWW-Authenticate: Bearer error="insufficient_scope", …, scope="posts:write"`
+  for HTTP, WS and MCP alike. An ordinary `403` still carries no challenge —
+  advertising a recovery that cannot succeed is worse than a plain refusal.
+- **GraphQL stops being the transport that learns less.** It has no `401` to
+  enrich, but a scope refusal is an ordinary error frame, so it carries
+  `code: "INSUFFICIENT_SCOPE"` and a structural `requiredScopes` list.
+- **`insufficient_scope_challenge` had no caller.** It was public, tested, and
+  dead — the `403` half of the RFC was declared and never wired. It is now the
+  single renderer of that challenge.
+- A scope a rule requires but `NESTRS_AUTHN__SCOPES_SUPPORTED` omits is a dead
+  end for the client; it is reported at `warn` (`reason="scope_not_advertised"`)
+  at the one point both halves are known.
+
+### Fixed — the poem `Err` path dropped a denial's evidence
+
+`Error::from_response(denial_to_http_response(d))` reads as a faithful
+conversion and is not: poem's `into_response` ends with
+`*resp.extensions_mut() = self.extensions`, overwriting whatever the carried
+response held. Every denial travelling the `Err` path — the MCP ability bridge,
+the global-pool MCP fallback, the `Authorize` extractor — therefore reached the
+edge stripped of its extensions, at the moment a client was being refused.
+`nest_rs_guards::denial_to_http_error` is now the one conversion, and the trap
+is documented at the function that replaces it.
+
+### Fixed — the well-known document ignored a path-carrying resource
+
+RFC 9728 §3.1 inserts the well-known string **between the authority and the
+resource's path**, so `https://api.example.com/mcp` publishes at
+`…/.well-known/oauth-protected-resource/mcp`. The document was hung off the
+origin instead, which is the URL a *different* resource sharing that host would
+claim. Both forms are now served — the path-aware one is advertised, the
+unsuffixed one stays for bare-origin resources and clients that skip the
+challenge — and a tail that is not this resource's path answers `404` rather
+than asserting an identity the deployment does not have.
+
 ### The mechanism
 
 - `nest-rs-codegen::reroot` resolves how the call site reaches the framework —

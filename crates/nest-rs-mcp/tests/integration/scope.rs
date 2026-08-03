@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use nest_rs_core::{Container, RequestScope};
 use nest_rs_mcp::{
-    AllowAllMcpGuard, CallToolResult, ContentBlock, McpError, McpOperationGuard, Scoped,
-    ServerHandler, endpoint_with_guard, tool, tool_handler, tool_router,
+    AllowAllMcpGuard, CallToolResult, ContentBlock, McpError, McpMount, McpOperationGuard, Scoped,
+    ServerHandler, endpoint, tool, tool_handler, tool_router,
 };
 use nest_rs_testing::mcp::call_tool;
 use poem::test::TestClient;
@@ -65,7 +65,9 @@ fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
 #[tokio::test]
 async fn ambient_request_scope_reaches_a_tool_body() {
     let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
-    let app = with_scope_extension(endpoint_with_guard(guard, None, || ScopeProbeTool));
+    let app = with_scope_extension(endpoint(McpMount::deny_all().with_guard(guard), || {
+        ScopeProbeTool
+    }));
     let client = TestClient::new(app);
 
     let body = call_tool(&client, "/", "probe_scope", None).await;

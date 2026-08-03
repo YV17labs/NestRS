@@ -33,8 +33,8 @@ fn into_options_rejects_a_short_hmac_secret() {
 #[test]
 fn into_options_selects_eddsa_from_key_pair() {
     let options = JwtConfig {
-        private_key: Some(crate::common::DEV_PRIVATE_KEY.into()),
-        public_key: Some(crate::common::DEV_PUBLIC_KEY.into()),
+        private_key: Some(crate::DEV_PRIVATE_KEY.into()),
+        public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         ..Default::default()
     }
     .into_options()
@@ -46,7 +46,7 @@ fn into_options_selects_eddsa_from_key_pair() {
 #[test]
 fn into_options_verify_only_from_public_key() {
     let options = JwtConfig {
-        public_key: Some(crate::common::DEV_PUBLIC_KEY.into()),
+        public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         ..Default::default()
     }
     .into_options()

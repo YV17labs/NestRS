@@ -42,7 +42,7 @@ impl Strategy for RejectWith {
 
 /// A request carrying the `#[public]` marker the route macro attaches.
 fn public_request() -> Request {
-    let mut req = crate::common::request(&[]);
+    let mut req = crate::request(&[]);
     req.extensions_mut().insert(nest_rs_core::Public);
     req
 }
@@ -50,7 +50,7 @@ fn public_request() -> Request {
 #[tokio::test]
 async fn attaches_principal_on_success() {
     let guard = AuthnGuard::new(Arc::new(AuthenticateAs("alice")));
-    let mut req = crate::common::request(&[]);
+    let mut req = crate::request(&[]);
 
     guard.check_http(&mut req).await.expect("guard passes");
     assert_eq!(req.extensions().get::<&'static str>(), Some(&"alice"));
@@ -59,7 +59,7 @@ async fn attaches_principal_on_success() {
 #[tokio::test]
 async fn strategy_error_denies_as_unauthorized() {
     let guard = AuthnGuard::new(Arc::new(FailWith));
-    let mut req = crate::common::request(&[]);
+    let mut req = crate::request(&[]);
 
     let denial = guard.check_http(&mut req).await.expect_err("auth failed");
     assert!(matches!(denial, Denial::Unauthorized { .. }));

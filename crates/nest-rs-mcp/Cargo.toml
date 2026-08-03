@@ -14,6 +14,9 @@ categories = ["web-programming", "api-bindings"]
 # Source of the `#[input]` wire-DTO shorthand, re-exported so a payload
 # crossing this transport declares no `serde` of its own.
 nest-rs-http.workspace = true
+# `McpConfig` is a `#[config]` struct: `NESTRS_MCP__*` env over a pinned base,
+# the framework-wide dual-path rule.
+nest-rs-config.workspace = true
 nest-rs-core.workspace = true
 nest-rs-mcp-macros.workspace = true
 poem.workspace = true

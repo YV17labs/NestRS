@@ -46,7 +46,10 @@ them. In NestJS, Spring, Rails, axum, or Loco, tenant filtering is discipline �
 a scope you remember, a middleware you apply, a review comment. In NestRS it is
 structural: the data layer applies it from the caller's ability, and an
 operation with no declared access posture is refused — at compile time on
-GraphQL, at boot on HTTP.
+GraphQL, at boot on HTTP. MCP gets the same guarantee across the *whole*
+protocol, not `tools/call` alone: scope, ability and transaction reach
+`prompts/get`, `resources/read`, completion and the `tasks/*` trio, so a
+`Repo`-backed prompt is row-filtered exactly like a controller.
 
 The numbers behind the tagline — against the same hello-world service in
 NestJS 11, idiomatic on both sides, byte-identical HTTP contract,
@@ -70,16 +73,32 @@ nestrs new hello --standalone && cd hello
 nestrs run dev   # → Hello World on :3000
 ```
 
+Adding NestRS to a crate you already have is **one dependency**. Every
+capability — `http`, `graphql`, `seaorm`, `ws`, `mcp`, `queue`, `schedule`, … —
+is a feature of the umbrella, and a feature you leave off is code you never
+compile. No decorator ever asks you to declare a second crate:
+
+```bash
+cargo add nest-rs --features http,seaorm
+```
+
 → [Why not axum?](https://nestrs.dev/why-not-axum/) ·
 [Coming from NestJS](https://nestrs.dev/coming-from-nestjs/) ·
 [Why NestRS](https://nestrs.dev/why/)
 
 ## Stability
 
-**NestRS is stable at `1.0` and ready for production.** The public API is
-frozen for the `1.x` line: breaking changes wait for `2.0`. Every `nest-rs-*`
+**NestRS is stable at `2.0` and ready for production.** The public API is
+frozen for the `2.x` line: breaking changes wait for `3.0`. Every `nest-rs-*`
 crate publishes at the same version in lockstep, so one NestRS version names
-exactly one compatible resolution.
+exactly one compatible resolution — down to the third-party crates that surface
+in your own signatures (`poem`, `sea-orm`, `async-graphql`, `rmcp`, `schemars`),
+whose majors are tied to the NestRS major and frozen for the whole `2.x` line.
+
+Coming from `1.x`? [`CHANGELOG.md`](CHANGELOG.md) lists what moved: the install
+collapsed onto the `nest-rs` umbrella (a decorator's expansion now roots at the
+facade), and `nest-rs-mcp` moved to rmcp 3.x, which changes types that appear in
+the signatures an MCP host writes.
 
 ## Documentation
 
@@ -121,7 +140,8 @@ database/test recipes resolve.
 
 ```
 nestrs/
-├─ crates/              the framework — one nest-rs-* crate per capability
+├─ crates/              the framework — nest-rs (the umbrella apps install)
+│  │                     over one nest-rs-* compilation unit per capability
 │  ├─ nest-rs-core/      IoC container, modules, DI, bootstrap
 │  ├─ nest-rs-http/      REST controllers & routing
 │  └─ …                 (members = ["crates/*"])
@@ -141,13 +161,15 @@ nestrs/
    └─ (members = ["apps/*", "crates/*"])
 ```
 
-The **`demo/`** workspace references the framework by relative path
-(`nest-rs-* = { path = "../crates/nest-rs-*" }`), so it builds against the
-live framework source. You `cd demo` and drive it as if it were the app's own
+The **`demo/`** workspace references the framework by relative path — one
+workspace dependency, `nest-rs = { path = "../crates/nest-rs", features = [
+…] }`, exactly the shape a real app has — so it builds against the live
+framework source. You `cd demo` and drive it as if it were the app's own
 repository — see [`demo/README.md`](demo/README.md) for running the apps, the
 command table, the Publish map, and Docker.
 
-- **`crates/nest-rs-*/`** — the framework: generic, product-agnostic building blocks.
+- **`crates/nest-rs-*/`** — the framework: generic, product-agnostic building
+  blocks, reached through the `nest-rs` umbrella rather than named one by one.
 - **`demo/apps/<name>/`** — `main.rs` + `module.rs` listing the edge modules the binary serves.
 - **`demo/crates/features/`** — the product's vertical slices; apps import the edges they serve.
 
@@ -167,7 +189,7 @@ app map, and the Docker build are documented in
 
 ## Community & contributing
 
-NestRS is stable at `1.0` and actively developed — contributors shape where it
+NestRS is stable at `2.0` and actively developed — contributors shape where it
 goes next, and you don't have to write Rust to help.
 
 - 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/YV17labs/NestRS/discussions).

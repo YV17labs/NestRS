@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{HandlerMetadata, Layer, injectable};
-use nest_rs_guards::{Denial, Guard, GuardPhase, PrincipalClaim};
+use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::{Reflector, RejectedCredential, async_trait};
 use poem::Request;
 
@@ -59,6 +59,14 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                     tracing::debug!(target: "nest_rs::authn", strategy, actor_id, "authenticated");
                 } else {
                     tracing::debug!(target: "nest_rs::authn", strategy, "authenticated");
+                }
+                // Publish what the credential was granted, so the authorization
+                // layer can withhold the rules it does not reach. A principal
+                // that is not scope-aware publishes nothing at all — the
+                // absence is what tells the ability layer scope gating does not
+                // apply, and is why a non-OAuth app is untouched by any of this.
+                if let Some(scopes) = crate::PrincipalIdentity::scopes(&principal) {
+                    req.extensions_mut().insert(GrantedScopes::new(scopes));
                 }
                 req.extensions_mut().insert(principal);
                 Ok(())

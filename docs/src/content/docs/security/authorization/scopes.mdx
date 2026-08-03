@@ -1,0 +1,167 @@
+---
+title: OAuth scopes
+description: Gate a rule on the scope a token carries with .requires_scope(...) — the caller is refused with an RFC 6750 insufficient_scope challenge naming what to go request.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A user hands an MCP client a token. It should be able to read their
+posts and nothing else — not because of *who they are* (they are an
+admin) but because of *what this token was delegated*.
+
+Roles and scopes answer different questions, and both have to hold:
+
+- **Roles** say who the caller is. They come from your identity model
+  and drive the conditions in [policies](/security/authorization/policies/).
+- **Scopes** say how much of that identity *this particular token* may
+  exercise. They only ever narrow — an admin token minted without
+  `posts:write` cannot write posts.
+
+## Declare the scope on the rule it conditions
+
+```rust title="crates/features/src/authz/ability.rs" {5,9}
+impl AbilityFactory for AppAbility {
+    type Actor = Claims;
+
+    fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
+        ab.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+            .requires_scope("posts:read");
+
+        ab.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+            .requires_scope("posts:write");
+    }
+}
+```
+
+That is the whole declaration. When the caller's token does not carry
+the scope, the rule is **withheld** — not added at all — so every layer
+refuses together, exactly as they would for a rule you never wrote: the
+class gate says no, the [query pre-filter](/security/authorization/row-level-filtering/)
+matches nothing, the [response mask](/security/authorization/response-masking/)
+has nothing to expose.
+
+Call it more than once to require **all** the named scopes. Scopes are
+opaque tokens compared exactly (RFC 6749 §3.3) — `posts:*` is a value
+you may mint, never a pattern the framework expands.
+
+<Aside type="caution" title="It narrows, it never widens">
+A scope cannot grant what the role denies. `requires_scope` adds a
+condition to an existing rule; it never creates one. If a member may not
+manage users, no scope makes them able to.
+</Aside>
+
+## Tell the framework what the token carries
+
+Scopes reach the ability layer from the principal. Implement
+`PrincipalIdentity::scopes` on your claims type, and read the standard
+space-delimited `scope` claim with the `serde` helper the framework
+ships:
+
+```rust title="crates/features/src/identity/claims.rs" {6-11,19-21}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: Option<Uuid>,
+    pub org_id: Uuid,
+    pub roles: Vec<Role>,
+    #[serde(
+        default,
+        rename = "scope",
+        with = "nest_rs::authn::scope::space_delimited",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub scopes: Vec<String>,
+    pub exp: u64,
+}
+
+impl PrincipalIdentity for Claims {
+    fn actor_id(&self) -> Option<String> {
+        self.sub.map(|sub| sub.to_string())
+    }
+
+    fn scopes(&self) -> Option<&[String]> {
+        Some(&self.scopes)
+    }
+}
+```
+
+The authentication guard publishes the result and the ability guard
+reads it. You write nothing else.
+
+<Aside type="tip" title="`None` and `Some(&[])` are different answers">
+`None` — the default — means **this credential is not scope-aware**: a
+session cookie, an mTLS identity, a test actor. Scope gating does not
+apply to it and every scoped rule materializes in full. That is why
+adding `requires_scope` to a rule cannot break an app that authenticates
+by session.
+
+`Some(&[])` means **an OAuth credential that was delegated nothing**, so
+every scoped rule is withheld. For a bearer token, returning `Some` is
+the fail-closed choice: a token arriving with no `scope` claim was
+granted no scopes, not exempted from them.
+</Aside>
+
+## What the refused caller receives
+
+A client that cannot tell "you may never do this" from "come back with a
+wider token" either gives up too early or retries the same token
+forever. So the two refusals are distinct on every transport.
+
+On HTTP, WS and MCP, a scope refusal is a `403` carrying the RFC 6750
+§3.1 challenge — provided the app is a
+[protected resource server](/security/authentication/issuer-and-resource-server/):
+
+```http
+HTTP/1.1 403 Forbidden
+WWW-Authenticate: Bearer error="insufficient_scope",
+  resource_metadata="https://api.example.com/.well-known/oauth-protected-resource",
+  scope="posts:write"
+```
+
+The client now knows the exact scope to request and the document to
+request it from. An **ordinary** `403` — the caller may not do this at
+all — deliberately carries no challenge: advertising a recovery that
+cannot succeed is worse than a plain refusal.
+
+On GraphQL there is no `403` to enrich, so the same facts ride the error
+frame the transport already speaks:
+
+```json
+{
+  "errors": [{
+    "message": "insufficient_scope",
+    "extensions": { "code": "INSUFFICIENT_SCOPE", "requiredScopes": ["posts:write"] }
+  }]
+}
+```
+
+## Advertise every scope you gate on
+
+The scopes your rules require and the scopes your resource server
+advertises must be the same set:
+
+```bash title=".env"
+NESTRS_AUTHN__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
+```
+
+A scope a rule requires but the metadata document omits is a dead end —
+the client is told to request something discovery never names. The
+framework reports it at `warn` (`reason="scope_not_advertised"`) the
+first time such a refusal is emitted; keeping the names in one
+`constants.rs` and reading them from both sides is what stops it
+happening.
+
+## Raising a scope refusal from your own guard
+
+A [non-CRUD route](/security/authorization/policies/) gated by a
+capability-only guard raises the same denial directly:
+
+```rust
+Err(Denial::insufficient_scope(["audio:transcode"], "forbidden"))
+```
+
+Every transport renders it the same way — the challenge is written once,
+at the transport edge, so a guard never formats a header itself.

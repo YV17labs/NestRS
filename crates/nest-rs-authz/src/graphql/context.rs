@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use nest_rs_graphql::GraphqlContextSeed;
 use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
+use nest_rs_guards::Denial;
 
 use crate::Ability;
 
@@ -49,6 +50,24 @@ pub(crate) fn forbidden() -> Error {
 pub(crate) fn forbidden_fields(fields: &[String]) -> Error {
     let names = fields.to_vec();
     forbidden().extend_with(move |_, e| e.set("fields", names))
+}
+
+/// The refusal a *wider token* would have fixed — code `INSUFFICIENT_SCOPE`,
+/// with the scopes to ask the authorization server for in `requiredScopes`.
+///
+/// Distinct from [`forbidden`] for the reason RFC 6750 §3.1 separates them on
+/// HTTP: a plain `forbidden` is final, this one is actionable, and a client that
+/// cannot tell them apart either gives up too early or retries forever.
+///
+/// Rendered *by* `nest_rs_guards::denial_to_graphql_error` rather than beside
+/// it: an operation refused by the gate and one refused by a guard must read
+/// identically on the wire, and two renderers agreeing today is not that
+/// guarantee.
+pub(crate) fn insufficient_scope(required: &[String]) -> Error {
+    nest_rs_guards::denial_to_graphql_error(Denial::insufficient_scope(
+        required.to_vec(),
+        "insufficient_scope",
+    ))
 }
 
 /// A GraphQL `unauthenticated` error — the anonymous caller's answer to a

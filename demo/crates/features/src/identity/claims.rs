@@ -15,6 +15,20 @@ pub struct Claims {
     pub sub: Option<Uuid>,
     pub org_id: Uuid,
     pub roles: Vec<Role>,
+    /// What the authorization server delegated to this token, from the standard
+    /// space-delimited `scope` claim.
+    ///
+    /// Roles say who the caller *is*; scopes say how much of that identity this
+    /// particular token may exercise. They narrow, never widen — an admin token
+    /// issued without `posts:write` cannot write posts — which is what makes a
+    /// token safe to hand to an MCP client.
+    #[serde(
+        default,
+        rename = "scope",
+        with = "nest_rs::authn::scope::space_delimited",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub scopes: Vec<String>,
     pub exp: u64,
 }
 
@@ -28,6 +42,14 @@ impl nest_rs::authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|sub| sub.to_string())
     }
+
+    /// `Some`, always — this is an OAuth credential, so a token carrying no
+    /// `scope` claim was delegated nothing and every scoped rule is withheld.
+    /// Returning `None` here would mean "scope does not apply to this
+    /// principal", which for a bearer token is the fail-open reading.
+    fn scopes(&self) -> Option<&[String]> {
+        Some(&self.scopes)
+    }
 }
 
 #[cfg(test)]
@@ -39,6 +61,7 @@ mod tests {
             sub: Some(Uuid::nil()),
             org_id: Uuid::nil(),
             roles,
+            scopes: Vec::new(),
             exp: 0,
         }
     }
@@ -79,6 +102,7 @@ mod tests {
             sub: None,
             org_id: Uuid::nil(),
             roles: vec![Role::User],
+            scopes: Vec::new(),
             exp: 42,
         };
         let json = serde_json::to_value(&machine).expect("serialize");
@@ -88,17 +112,38 @@ mod tests {
 
     #[test]
     fn user_grant_carries_sub_through_round_trip() {
+        use crate::authz::constants::POSTS_READ;
         let sub = Uuid::now_v7();
         let user = Claims {
             sub: Some(sub),
             org_id: Uuid::now_v7(),
             roles: vec![Role::User],
+            scopes: vec![POSTS_READ.into()],
             exp: 100,
         };
         let json = serde_json::to_value(&user).expect("serialize");
+        assert_eq!(
+            json["scope"], POSTS_READ,
+            "the claim goes out in the space-delimited form RFC 6749 §3.3 defines",
+        );
         let back: Claims = serde_json::from_value(json).expect("deserialize");
         assert_eq!(back.sub, Some(sub));
         assert_eq!(back.exp, 100);
+        assert_eq!(back.scopes, [POSTS_READ]);
+    }
+
+    #[test]
+    fn a_token_with_no_scope_claim_is_delegated_nothing() {
+        // `Some(&[])`, never `None`: a bearer token is an OAuth credential, so
+        // the absence of a `scope` claim means nothing was delegated — not that
+        // scope does not apply. The other reading is the fail-open one.
+        use nest_rs::authn::PrincipalIdentity;
+        let bare = claims(vec![Role::Admin]);
+        assert_eq!(
+            bare.scopes(),
+            Some([].as_slice()),
+            "an admin token delegated nothing exercises nothing scope-gated",
+        );
     }
 
     #[test]

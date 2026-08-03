@@ -150,6 +150,11 @@ pub(crate) fn issue_with_jwt(
         sub,
         org_id,
         roles: roles.clone(),
+        // A first-party login is not a delegated grant — the user is present
+        // and authenticating to this product directly — so the token may
+        // exercise everything their roles allow. A third-party client's token
+        // is minted narrower, which is what the scope rules gate.
+        scopes: crate::authz::constants::all(),
         exp: jwt_svc.expiry(),
     };
     let access_token = jwt_svc

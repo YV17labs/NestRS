@@ -1,4 +1,62 @@
-mod harness;
+//! e2e suite root: the module list plus the fixtures the siblings share.
 
+mod authorization;
 mod posts_tool;
 mod tool;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use assistant::AssistantModule;
+use nest_rs::authn::JwtConfig;
+use nest_rs::config::Config;
+use nest_rs::storage::{Storage, StorageConfig};
+use nest_rs::testing::{EphemeralDatabase, TestApp};
+
+use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
+
+pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("create + migrate a throwaway database");
+    let app = TestApp::builder()
+        .module::<AssistantModule>()
+        .provide_arc(db.connection())
+        .provide(JwtConfig {
+            public_key: Some(DEV_PUBLIC_KEY.into()),
+            // `ProtectedResourceModule` requires the audience to be pinned —
+            // that is the confused-deputy defence, and this seed is what the
+            // app's verifier reads instead of `NESTRS_AUTHN__AUDIENCE`.
+            audience: Some(AUDIENCE.into()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("AssistantModule boots against the throwaway database");
+    (db, app)
+}
+
+pub(crate) fn bearer_for(org_id: &str) -> String {
+    format!(
+        "Bearer {}",
+        features::testing::token_for(org_id, "admin", None)
+    )
+}
+
+pub(crate) fn bearer() -> String {
+    bearer_for(ORG_ID)
+}
+
+pub(crate) fn storage_client() -> Storage {
+    let config = StorageConfig::load().expect("storage config parses from env");
+    Storage::new(Arc::new(config))
+}
+
+pub(crate) async fn ensure_bucket() {
+    if let Ok(url) = storage_client()
+        .presign_put("", Duration::from_secs(60))
+        .await
+    {
+        let _ = reqwest::Client::new().put(&url).send().await;
+    }
+}

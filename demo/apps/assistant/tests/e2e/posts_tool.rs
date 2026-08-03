@@ -1,9 +1,10 @@
-use nest_rs::testing::mcp::call_tool;
+use nest_rs::testing::mcp::{call_method, call_tool, open_session};
 use sea_orm::sea_query::Query;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
+use serde_json::json;
 use uuid::Uuid;
 
-use super::harness::*;
+use crate::*;
 
 #[derive(DeriveIden)]
 enum Org {
@@ -124,5 +125,98 @@ async fn a_tool_never_sees_another_orgs_rows() {
         !body.contains("globex-only-post"),
         "row-level filtering must apply inside the tool body — the tool writes \
          no filter, the ambient ability does. Body: {body}",
+    );
+}
+
+// --- the same guarantee, on the other two capabilities ---------------------
+//
+// Tools were the only MCP capability the framework used to scope, because rmcp
+// 2.x funnelled every operation through one dispatch method. rmcp 3.x does not,
+// so `PropagatingHandler` delegates the whole `ServerHandler` surface — and
+// these are the product-level proof that a prompt and a resource read are
+// row-filtered by exactly the same ambient ability, with no check written in
+// either handler.
+
+#[tokio::test]
+async fn a_prompt_is_row_filtered_like_a_tool() {
+    let (db, app) = boot().await;
+    let conn = db.connection();
+    let acme = seed_org_with_post(&conn, "Acme", "acme-only-post").await;
+    seed_org_with_post(&conn, "Globex", "globex-only-post").await;
+
+    let bearer = bearer_for(&acme.to_string());
+    let session = open_session(app.http(), "/posts/mcp", Some(&bearer)).await;
+    let body = call_method(
+        app.http(),
+        "/posts/mcp",
+        &session,
+        Some(&bearer),
+        "prompts/get",
+        json!({ "name": "draft_follow_up" }),
+    )
+    .await;
+
+    assert!(
+        body.contains("acme-only-post"),
+        "the prompt reads the caller's own rows: {body}",
+    );
+    assert!(
+        !body.contains("globex-only-post"),
+        "a prompt is a read like any other — the ambient ability must scope it \
+         too, or the framework leaks another org's data through `prompts/get`. \
+         Body: {body}",
+    );
+}
+
+#[tokio::test]
+async fn a_resource_read_cannot_reach_another_orgs_row() {
+    let (db, app) = boot().await;
+    let conn = db.connection();
+    let acme = seed_org_with_post(&conn, "Acme", "acme-only-post").await;
+    let globex = seed_org_with_post(&conn, "Globex", "globex-only-post").await;
+
+    // Acme lists its own resources, and sees exactly one.
+    let acme_bearer = bearer_for(&acme.to_string());
+    let session = open_session(app.http(), "/posts/mcp", Some(&acme_bearer)).await;
+    let listed = call_method(
+        app.http(),
+        "/posts/mcp",
+        &session,
+        Some(&acme_bearer),
+        "resources/list",
+        json!({}),
+    )
+    .await;
+    assert!(
+        listed.contains("acme-only-post") && !listed.contains("globex-only-post"),
+        "`resources/list` is scoped by the ambient ability: {listed}",
+    );
+
+    // Globex asks for the same URI Acme just saw. The row exists, so only the
+    // ability stands between the caller and it.
+    let uri = listed
+        .split("\"uri\":\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the listing carries a post:// uri")
+        .to_owned();
+
+    let globex_bearer = bearer_for(&globex.to_string());
+    let session = open_session(app.http(), "/posts/mcp", Some(&globex_bearer)).await;
+    let denied = call_method(
+        app.http(),
+        "/posts/mcp",
+        &session,
+        Some(&globex_bearer),
+        "resources/read",
+        json!({ "uri": uri }),
+    )
+    .await;
+
+    assert!(
+        !denied.contains("seeded") && denied.contains("error"),
+        "`resources/read` must fail closed on another org's row — the handler \
+         writes no org check, `CrudService::access` and the ambient ability do. \
+         Body: {denied}",
     );
 }

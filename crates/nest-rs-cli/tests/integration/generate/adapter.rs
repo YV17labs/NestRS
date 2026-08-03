@@ -371,11 +371,14 @@ fn generate_queue_adapter_brings_the_connection_crate() {
     assert!(features_cargo.contains("\"redis\""), "{features_cargo}");
 }
 
-/// E1: rmcp's `#[tool]` derive emits bare `schemars::` paths, so the crate must
-/// be linked — the `nest_rs_mcp::schemars` re-export does not rescue a tool
-/// that takes input, i.e. the `/mcp/` page's own first example.
-/// E6: the `mcp` feature is what seeds the fallback
-/// operation guard, without which a registered global pool cannot gate `/mcp`.
+/// E6: the `mcp` feature is what seeds the fallback operation guard, without
+/// which a registered global pool cannot gate `/mcp`.
+///
+/// (E1 — rmcp's `#[tool]` emitting bare `schemars::` paths, which used to force
+/// a second manifest line on any tool taking input — is closed as of rmcp 3.x:
+/// the input schema is built through `rmcp::handler::server::common`, so the
+/// `use nest_rs::mcp::rmcp;` the template already writes covers it.
+/// `nest-rs-macro-hygiene` compiles that exact shape with one dependency.)
 #[test]
 fn generate_mcp_adapter_brings_the_guard_fallback() {
     let dir = tempfile::tempdir().unwrap();

@@ -21,10 +21,10 @@ use std::sync::Arc;
 
 use nest_rs_core::Container;
 use nest_rs_mcp::{BoxFuture, McpOperationGuard};
-use poem::{Error, Request, Result};
+use poem::{Request, Result};
 
 use crate::denial::Denial;
-use crate::dispatch::denial_convert::denial_to_http_response;
+use crate::dispatch::denial_convert::denial_to_http_error;
 use crate::dispatch::global_pool::GlobalPoolChain;
 
 /// Runs the global guard pool in-band per MCP operation — the fallback
@@ -66,14 +66,15 @@ impl McpOperationGuard for GlobalPoolMcpGuard {
                     reason = "global guard pool resolved empty",
                     "mcp operation denied",
                 );
-                return Err(Error::from_response(denial_to_http_response(
-                    Denial::unauthorized("no guard resolved for this endpoint"),
+                return Err(denial_to_http_error(Denial::unauthorized(
+                    "no guard resolved for this endpoint",
                 )));
             }
-            self.pool
-                .check(req)
-                .await
-                .map_err(|denial| Error::from_response(denial_to_http_response(denial)))
+            // `denial_to_http_error`, not `Error::from_response(...)`: the
+            // latter drops the response's extensions, which is how a pooled
+            // guard's `insufficient_scope` evidence would reach `/mcp`'s edge
+            // stripped of the scopes a client needs.
+            self.pool.check(req).await.map_err(denial_to_http_error)
         })
     }
 }

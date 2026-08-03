@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
+// rmcp's `#[tool_router]` / `#[tool_handler]` / `#[tool]` macros expand to bare
+// `rmcp::` paths resolved against this module's scope; the re-export supplies
+// the name, so the manifest carries no `rmcp` entry to keep aligned.
 use nest_rs::mcp::mcp;
+use nest_rs::mcp::rmcp;
 use nest_rs::mcp::{
     CallToolResult, ContentBlock, McpError, Parameters, ServerHandler, tool, tool_handler,
     tool_router,

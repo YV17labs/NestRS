@@ -14,6 +14,10 @@ use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
+// The rmcp `#[tool_router]` / `#[tool_handler]` macros expand to bare `rmcp::`
+// paths resolved against this module's scope, so the re-export supplies the
+// name and the manifest needs no `rmcp` entry of its own.
+use nest_rs_mcp::rmcp;
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, McpError, McpOperationGuard, ServerHandler, mcp, tool,
     tool_handler, tool_router,

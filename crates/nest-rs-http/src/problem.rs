@@ -272,6 +272,17 @@ pub async fn normalize_error_response(resp: Response) -> Response {
     // limits) survives. Content/transfer-encoding are dropped too: the
     // replacement body is fresh and uncompressed, so a stale `Content-Encoding`
     // copied from a compressed original would make the client fail to decode it.
+    //
+    // **The original wins.** The envelope stamps its own defaults (a bare
+    // `Bearer` on every 401); where the original names the same header it is
+    // strictly more specific — an RFC 9728 pointer, a step-up
+    // `error="insufficient_scope"` — so the first occurrence *replaces* the
+    // default rather than surviving beside it as a uselessly bare duplicate a
+    // client reading only the first value would follow. Later occurrences of a
+    // name append, so a genuinely multi-valued header (`Set-Cookie`) still
+    // arrives whole. Stated generically: the next envelope-level default gets
+    // the same treatment without this function learning its name.
+    let mut replaced = std::collections::HashSet::new();
     for (name, value) in parts.headers.iter() {
         if name == header::CONTENT_TYPE
             || name == header::CONTENT_LENGTH
@@ -280,7 +291,11 @@ pub async fn normalize_error_response(resp: Response) -> Response {
         {
             continue;
         }
-        response.headers_mut().append(name.clone(), value.clone());
+        if replaced.insert(name.clone()) {
+            response.headers_mut().insert(name.clone(), value.clone());
+        } else {
+            response.headers_mut().append(name.clone(), value.clone());
+        }
     }
     response
 }
@@ -418,6 +433,35 @@ mod tests {
                 .headers()
                 .get(header::WWW_AUTHENTICATE)
                 .is_none(),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_richer_challenge_replaces_the_envelope_default_rather_than_stacking() {
+        // A client reads the first `WWW-Authenticate` it finds. Two values —
+        // the envelope's bare `Bearer` and the response's RFC 9728 pointer —
+        // would send a conformant client down the useless one.
+        let raw = Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header(
+                header::WWW_AUTHENTICATE,
+                "Bearer resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\"",
+            )
+            .body("nope");
+        let normalized = normalize_error_response(raw).await;
+
+        let challenges: Vec<_> = normalized
+            .headers()
+            .get_all(header::WWW_AUTHENTICATE)
+            .iter()
+            .collect();
+        assert_eq!(challenges.len(), 1, "exactly one challenge: {challenges:?}");
+        assert!(
+            challenges[0]
+                .to_str()
+                .expect("ascii")
+                .contains("resource_metadata"),
+            "the specific challenge is the one that survives",
         );
     }
 

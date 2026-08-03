@@ -238,6 +238,76 @@ pub struct AuthzGraphqlModule;
 nest_rs::graphql::forward_principal!(Claims, GraphqlAuthnGuard);
 "#;
 
+// ── authz/ws/ — the socket-side context (`nestrs g ws`) ────────────────────
+//
+// A WS upgrade is an HTTP GET, so the gateway reuses the HTTP guards
+// (`#[use_guards(AuthnGuard, AuthzGuard)]`) rather than a bridge of its own.
+// What it does need is the `dyn SocketContext` that carries the connection's
+// data scope — without it a guarded gateway serves rows nobody scoped, and the
+// generated gateway's own SECURITY comment tells the reader to import a module
+// nothing was writing.
+
+pub const AUTHZ_WS_MOD: &str = r#"mod module;
+
+pub use module::AuthzWsModule;
+"#;
+
+pub const AUTHZ_WS_MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::seaorm::ws::WsDataContext;
+use nest_rs::ws::{SocketContext, WsModule};
+
+use crate::authz::http::AuthzHttpModule;
+
+#[module(
+    imports = [AuthzHttpModule, WsModule],
+    providers = [
+        WsDataContext as dyn SocketContext,
+    ],
+)]
+pub struct AuthzWsModule;
+"#;
+
+// ── authz/mcp/ — the per-operation bridge (`nestrs g mcp`) ─────────────────
+//
+// `/mcp` is one endpoint gated in band, per operation, through an
+// `McpOperationGuard`. With none registered the endpoint is **deny-all**: every
+// tool call answers 401, which is the boot warning `nestrs g mcp` prints. These
+// three providers are what turn that into a real posture.
+
+pub const AUTHZ_MCP_MOD: &str = r#"mod bridge;
+mod module;
+
+pub use module::AuthzMcpModule;
+"#;
+
+/// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
+/// `AuthzGuard`) on the MCP request, then installs the ambient `Ability` a tool
+/// returns masked rows through — so one policy answers on every transport.
+pub const AUTHZ_MCP_BRIDGE: &str = r#"use nest_rs::authz::mcp::McpAbilityBridge;
+
+use crate::authn::AuthnGuard;
+use crate::authz::http::AuthzGuard;
+
+pub type AppMcpGuard = McpAbilityBridge<AuthnGuard, AuthzGuard>;
+"#;
+
+pub const AUTHZ_MCP_MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::mcp::{McpOperationGuard, McpToolContext};
+use nest_rs::seaorm::mcp::McpDataContext;
+
+use super::bridge::AppMcpGuard;
+use crate::authz::http::AuthzHttpModule;
+
+#[module(
+    imports = [AuthzHttpModule],
+    providers = [
+        AppMcpGuard as dyn McpOperationGuard,
+        McpDataContext as dyn McpToolContext,
+    ],
+)]
+pub struct AuthzMcpModule;
+"#;
+
 /// Appended to the committed `.env`. HS256 needs ≥ 32 bytes or the app refuses
 /// to boot; this placeholder is deliberately obvious so nobody ships it.
 pub const ENV_AUTHN: &str = r#"

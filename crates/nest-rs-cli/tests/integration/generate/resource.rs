@@ -40,6 +40,23 @@ fn generate_resource_creates_crud_slice_and_deps() {
     assert!(features_cargo.contains("nest-rs"));
     assert!(features_cargo.contains("authz"), "{features_cargo}");
 
+    // R9-3: `/tutorial/entity/` prints both manifests and says the generator
+    // writes exactly them. Only the feature *set* is asserted — the entry form
+    // (dotted vs inline) follows whatever the manifest already used — but the
+    // set is what the page copies, and `authn` is the one it had missed:
+    // `g resource` bootstraps the auth adapter, so the resource pulls it in.
+    for feature in ["seaorm", "http", "resource", "authz", "authn"] {
+        let quoted = format!("\"{feature}\"");
+        assert!(
+            features_cargo.contains(&quoted),
+            "the features crate enables `{feature}`: {features_cargo}",
+        );
+        assert!(
+            root_cargo.contains(&quoted),
+            "the workspace pin enables `{feature}`: {root_cargo}",
+        );
+    }
+
     let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
     assert!(lib.contains("pub mod posts;"));
 }

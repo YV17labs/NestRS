@@ -24,6 +24,7 @@ nest_rs_core::inventory::submit! {
         phase: LifecyclePhase::OnApplicationBootstrap,
         provider: "SocialModule",
         method: "install",
+        origin: module_path!(),
         present: |_| true,
         run: install,
     }

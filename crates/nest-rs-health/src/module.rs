@@ -28,6 +28,7 @@ nest_rs_core::inventory::submit! {
         phase: LifecyclePhase::OnApplicationBootstrap,
         provider: "HealthModule",
         method: "install_container",
+        origin: module_path!(),
         present: |_| true,
         run: install_container,
     }

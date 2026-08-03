@@ -425,14 +425,23 @@ async fn a_global_interceptor_sees_matched_routes_denials_404s_and_405s() {
     matched.assert_status_is_ok();
     matched.assert_header("x-trace", "hit");
 
-    // The docs' own trailing-slash scenario.
+    // R9-5: the trailing-slash form used to be this test's 404 case. The edge
+    // now trims the slash before routing, so it is the *same* route — which is
+    // the point: the interceptor stamps it either way, and the request no
+    // longer 404s on a spelling.
     let trailing = app.http().get("/edgeband/ok/").send().await;
-    trailing.assert_status(StatusCode::NOT_FOUND);
+    trailing.assert_status_is_ok();
     trailing.assert_header("x-trace", "hit");
 
     let bogus = app.http().get("/totally-bogus").send().await;
     bogus.assert_status(StatusCode::NOT_FOUND);
     bogus.assert_header("x-trace", "hit");
+
+    // A genuine 404 stays one with the slash on — normalization matches
+    // existing routes, it does not invent them.
+    let bogus_slashed = app.http().get("/totally-bogus/").send().await;
+    bogus_slashed.assert_status(StatusCode::NOT_FOUND);
+    bogus_slashed.assert_header("x-trace", "hit");
 
     let wrong_method = app.http().post("/edgeband/ok").send().await;
     wrong_method.assert_status(StatusCode::METHOD_NOT_ALLOWED);

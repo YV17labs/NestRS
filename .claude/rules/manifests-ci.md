@@ -57,6 +57,22 @@ crate's public-but-internal registry API. Nothing else carries a patch.
 (`crates/nest-rs-cli/src/commands/generate/cargo.rs`) walks the repo's
 manifests and fails the suite on any other form — the generator's suite
 because a scaffolded workspace inherits these pins verbatim.
+
+### One `nest-rs*` line per consumer
+
+**A manifest that consumes the framework names the umbrella and nothing
+else.** A second `nest-rs-*` line is the defect *The umbrella is the
+front door* describes, not a local shortcut.
+`consumers_name_only_the_umbrella` (same file) walks every consumer the
+repo owns — `demo/` and each of its members, `bench/sut/nestrs`, and
+`nest-rs-macro-hygiene` — and fails naming the offending crate.
+
+`bench/sut/nestrs` is on that list because it is the one consumer
+**outside both workspaces**: it carries its own empty `[workspace]`
+table, so `cargo clippy --workspace` never reaches it and it drifted
+back to a five-crate stanza unobserved. Anything else added outside the
+workspaces inherits the same blind spot and belongs on the list the day
+it is created.
 - Intra-workspace dev-deps stay **path-only** (no `version`) so
   publishing doesn't drag test-only cycles.
 - Product crates under `demo/` set `publish = false`; `demo/` is its

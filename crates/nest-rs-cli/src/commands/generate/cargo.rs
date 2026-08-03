@@ -510,6 +510,72 @@ mod tests {
         assert!(checked > 0, "no manifest was reachable to check");
     }
 
+    /// Every manifest that **consumes** the framework names exactly one
+    /// `nest-rs*` dependency: the umbrella. A second line is the defect *The
+    /// umbrella is the front door* describes — a capability whose decorators
+    /// oblige the developer to declare a satellite.
+    ///
+    /// It lives beside [`versions_are_major_minor`] for the same reason and
+    /// walks the same way: these manifests are what the generator propagates
+    /// and what a reader copies, so the rule is enforced where it is written.
+    /// `bench/sut/nestrs` is on the list deliberately — it sits outside both
+    /// workspaces, so `cargo clippy --workspace` never reaches it and it is the
+    /// one consumer that can drift unobserved. It did.
+    #[test]
+    fn consumers_name_only_the_umbrella() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifests = [
+            // The product, workspace table and every member.
+            "demo/Cargo.toml",
+            "demo/apps/api/Cargo.toml",
+            "demo/apps/assistant/Cargo.toml",
+            "demo/apps/auth/Cargo.toml",
+            "demo/apps/live/Cargo.toml",
+            "demo/apps/worker/Cargo.toml",
+            "demo/crates/features/Cargo.toml",
+            "demo/crates/migrations/Cargo.toml",
+            "demo/crates/seed/Cargo.toml",
+            // The benchmark SUT: it measures what we ship, so it installs the
+            // way we tell people to install.
+            "bench/sut/nestrs/Cargo.toml",
+            // The compile-time witness. CLAUDE.md: "If its manifest needs a
+            // second line, the rule is broken."
+            "crates/nest-rs-macro-hygiene/Cargo.toml",
+        ];
+        let mut checked = 0usize;
+        for rel in manifests {
+            let path = repo.join(rel);
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue; // packaged crate: the sibling workspaces aren't there
+            };
+            let doc = raw.parse::<DocumentMut>().expect("valid TOML");
+            let tables = [
+                doc.get("workspace").and_then(|w| w.get("dependencies")),
+                doc.get("dependencies"),
+                doc.get("dev-dependencies"),
+                doc.get("build-dependencies"),
+            ];
+            for table in tables.into_iter().flatten() {
+                let Some(table) = table.as_table_like() else {
+                    continue;
+                };
+                for (name, _) in table.iter() {
+                    if !name.starts_with("nest-rs") {
+                        continue;
+                    }
+                    checked += 1;
+                    assert_eq!(
+                        name, "nest-rs",
+                        "{rel}: declares `{name}`. A consumer names the umbrella and \
+                         nothing else — enable the capability's feature on `nest-rs` \
+                         instead. See *The umbrella is the front door* in CLAUDE.md",
+                    );
+                }
+            }
+        }
+        assert!(checked > 0, "no consumer manifest was reachable to check");
+    }
+
     // A hand-rolled manifest may pin a version literally; the feature list then
     // has nowhere to go until the entry is widened into a table.
     #[test]

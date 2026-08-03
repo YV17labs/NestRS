@@ -46,17 +46,17 @@ impl Dep {
     }
 }
 
-const SEAORM: Dep = nest_rs(&["seaorm", "http"]);
-const RESOURCE: Dep = nest_rs(&["resource"]);
-const GRAPHQL: Dep = nest_rs(&["graphql"]);
-const WS: Dep = nest_rs(&["ws"]);
-const SCHEDULE: Dep = nest_rs(&["schedule"]);
+pub(super) const SEAORM: Dep = nest_rs(&["seaorm", "http"]);
+pub(super) const RESOURCE: Dep = nest_rs(&["resource"]);
+pub(super) const GRAPHQL: Dep = nest_rs(&["graphql"]);
+pub(super) const WS: Dep = nest_rs(&["ws"]);
+pub(super) const SCHEDULE: Dep = nest_rs(&["schedule"]);
 // `redis` implies `queue`: the abstractions and the Redis-bound
 // `QueueConnection` / `QueueModule` arrive together.
-const REDIS: Dep = nest_rs(&["redis"]);
-const MCP: Dep = nest_rs(&["mcp"]);
-const AUTHN: Dep = nest_rs(&["authn"]);
-const AUTHZ: Dep = nest_rs(&["authz", "http"]);
+pub(super) const REDIS: Dep = nest_rs(&["redis"]);
+pub(super) const MCP: Dep = nest_rs(&["mcp"]);
+pub(super) const AUTHN: Dep = nest_rs(&["authn"]);
+pub(super) const AUTHZ: Dep = nest_rs(&["authz", "http"]);
 // Mirrors the feature set `nest-rs-seaorm` itself resolves — a divergent list
 // (or a release-candidate floor) would be a manifest the user inherits and has
 // to un-learn later.
@@ -169,11 +169,9 @@ pub fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
     }
 }
 
-/// The crates the GraphQL authz adapter (`authz/graphql/`) needs — the
-/// per-operation bridge and the dataloader scope.
-pub fn graphql_authz_deps() -> Vec<&'static Dep> {
-    vec![&AUTHZ, &SEAORM, &GRAPHQL]
-}
+// The crates each `authz/<transport>/` bridge needs are listed on the bridge
+// itself (`generate::auth`), beside the files that name them — one row per
+// transport rather than a helper per transport.
 
 /// What exposing an entity over GraphQL needs: `#[expose(graphql)]` derives the
 /// async-graphql object through `nest_rs_resource::graphql`, which that crate

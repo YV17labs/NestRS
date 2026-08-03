@@ -73,6 +73,25 @@ fn new_standalone_hello_template() {
     assert!(test_just.contains("e2e:"));
     assert!(test_just.contains("doc:"));
     assert!(test_just.contains("cargo test --doc"));
+    assert_cov_names_its_prerequisite(&test_just);
+}
+
+/// R9-2: `cov` is the only recipe that needs something the CLI's first-run
+/// bootstrap does not install — `cargo-llvm-cov` shells out to the LLVM tools,
+/// which a non-rustup toolchain simply does not have. It failed with a raw
+/// `failed to find llvm-tools-preview` and nothing in the project said why, so
+/// the recipe carries the prerequisite next to the command.
+#[track_caller]
+fn assert_cov_names_its_prerequisite(test_just: &str) {
+    assert!(test_just.contains("cov:"), "{test_just}");
+    assert!(
+        test_just.contains("llvm-tools-preview"),
+        "the `cov` recipe names the rustup component it needs: {test_just}",
+    );
+    assert!(
+        test_just.contains("LLVM_COV"),
+        "…and the escape hatch for a toolchain without rustup: {test_just}",
+    );
 }
 
 #[test]
@@ -127,6 +146,7 @@ fn new_workspace_greenfield() {
     assert!(test_just.contains("unit:"));
     assert!(test_just.contains("e2e:"));
     assert!(test_just.contains("cargo test --workspace --doc"));
+    assert_cov_names_its_prerequisite(&test_just);
     let db_just = fs::read_to_string(root.join("db.just")).unwrap();
     assert!(db_just.contains("up:"));
     assert!(db_just.contains("reset: fresh seed"));

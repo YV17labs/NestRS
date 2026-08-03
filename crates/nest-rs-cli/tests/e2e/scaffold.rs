@@ -99,3 +99,25 @@ fn a_generated_crud_resource_compiles() {
     // derives the decorators emit and the auth adapter the guards require.
     scaffold_and_check(&[&["g", "resource", "post"]], "a generated CRUD resource");
 }
+
+#[test]
+fn the_generated_ws_and_mcp_authz_bridges_compile() {
+    // F4: `g ws` and `g mcp` named `AuthzWsModule` / `features::authz::mcp` in
+    // their own output while writing neither. They write both now — and a
+    // bridge module is exactly the shape the `integration` suite cannot judge:
+    // it asserts on the *text* a generator produced, so a `#[module]` naming a
+    // provider behind a feature the manifest never enabled reads as correct
+    // there and fails on the user's first `cargo check`.
+    //
+    // One workspace, both adapters: the `authz/` tree is shared, so this also
+    // pins that two bridges land side by side without clobbering each other's
+    // index lines.
+    scaffold_and_check(
+        &[
+            &["g", "resource", "post"],
+            &["g", "ws", "post"],
+            &["g", "mcp", "post"],
+        ],
+        "the generated WS and MCP authz bridges",
+    );
+}

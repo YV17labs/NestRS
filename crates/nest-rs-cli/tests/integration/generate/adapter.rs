@@ -571,3 +571,78 @@ fn generate_adapter_requires_existing_feature() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("not found"));
 }
+
+/// F4: `g ws` and `g mcp` used to *name* an authz module in their output and in
+/// the code they generated — `AuthzWsModule` in the gateway's SECURITY comment,
+/// `features::authz::mcp` in the MCP next step and the tool's own doc — while no
+/// generator wrote either. A reader following the docs end to end got a boot
+/// `warn` on an unguarded self-mount edge, a `/mcp` answering 401 to everything,
+/// and the repo's demo as the only source for the two modules.
+///
+/// One case per transport, in one test: the obligation is identical, and it is
+/// the *set* of transports that carries it which regressed.
+#[test]
+fn generate_ws_and_mcp_write_the_authz_bridges_their_own_output_names() {
+    // (transport, bridge dir, module, a provider only that bridge registers)
+    const CASES: [(&str, &str, &str, &str); 2] = [
+        ("ws", "ws", "AuthzWsModule", "dyn SocketContext"),
+        ("mcp", "mcp", "AuthzMcpModule", "dyn McpOperationGuard"),
+    ];
+
+    for (transport, bridge_dir, module, provider) in CASES {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let app = write_fake_app(dir.path(), "api");
+        let path = dir.path().to_str().unwrap();
+
+        run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+        // Run from inside the app, so the composition site is wired too.
+        run_ok(&app, &["g", transport, "posts"]);
+
+        let src = dir.path().join("crates/features/src");
+        let bridge_module = fs::read_to_string(src.join(format!("authz/{bridge_dir}/module.rs")))
+            .unwrap_or_else(|_| panic!("`g {transport}` writes authz/{bridge_dir}/module.rs"));
+        assert!(
+            bridge_module.contains(provider),
+            "the {transport} bridge registers {provider}: {bridge_module}"
+        );
+
+        // Reachable from the feature crate's root, and from the app that serves
+        // the adapter — an unimported AuthzMcpModule leaves /mcp deny-all.
+        let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
+        assert!(
+            authz_mod.contains(&format!("pub use {bridge_dir}::{module};")),
+            "{authz_mod}"
+        );
+        let app_module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+        assert!(
+            app_module.contains(module),
+            "the app composes {module}: {app_module}"
+        );
+    }
+}
+
+/// The bridge is scaffolded only where there is a policy to enforce. A `g
+/// feature` port in a workspace with no auth adapter has none, so `g ws` writes
+/// the adapter and stops — scaffolding a whole authn/authz slice off the back of
+/// a WebSocket stub would be the generator deciding something the developer has
+/// not.
+#[test]
+fn generate_ws_without_an_auth_adapter_writes_no_bridge() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
+
+    let src = dir.path().join("crates/features/src");
+    assert!(
+        src.join("posts/ws/gateway.rs").is_file(),
+        "the adapter lands"
+    );
+    assert!(
+        !src.join("authz/ws").exists(),
+        "no policy to bridge, so no bridge",
+    );
+}

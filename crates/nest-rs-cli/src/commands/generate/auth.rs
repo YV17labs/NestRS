@@ -14,6 +14,7 @@ use super::cargo::{auth_deps, ensure_features_deps, ensure_workspace_deps};
 use super::support::{finish, resolve_start, wire_into_app};
 use crate::context::{Context, NestrsWorkspace};
 use crate::error::{CliError, CliResult};
+use crate::naming::Transport;
 use crate::scaffold::{Scaffold, ensure_lines};
 use crate::templates::auth;
 
@@ -70,8 +71,8 @@ pub(super) fn lib_decls() -> Vec<String> {
 ///
 /// `authz_decls` are extra index lines for `authz/mod.rs` — a caller
 /// scaffolding a transport bridge in the same transaction passes
-/// [`graphql_decls`], since the file is created here and an `edit` targets what
-/// is already on disk.
+/// [`AuthzBridge::decls`], since the file is created here and an `edit` targets
+/// what is already on disk.
 pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<String>) {
     let src = ws.features_root();
 
@@ -96,18 +97,7 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
         auth::AUTHZ_ABILITY.to_string(),
     );
     s.create(src.join("authz/module.rs"), auth::AUTHZ_MODULE.to_string());
-    s.create(
-        src.join("authz/http/mod.rs"),
-        auth::AUTHZ_HTTP_MOD.to_string(),
-    );
-    s.create(
-        src.join("authz/http/guard.rs"),
-        auth::AUTHZ_HTTP_GUARD.to_string(),
-    );
-    s.create(
-        src.join("authz/http/module.rs"),
-        auth::AUTHZ_HTTP_MODULE.to_string(),
-    );
+    HTTP_BRIDGE.queue(s, ws);
 
     // Every scaffolded workspace has one; a hand-rolled tree may not, and a
     // missing `.env` is not a reason to refuse the whole adapter.
@@ -136,40 +126,176 @@ pub(super) fn exists(ws: &NestrsWorkspace) -> bool {
     ws.features_root().join("authz").is_dir()
 }
 
-// ── authz/graphql/ — the per-operation bridge `nestrs g graphql` needs ───────
+// ── authz/<transport>/ — the bridge a guarded adapter is enforced through ───
 //
-// Lives here, beside the HTTP one: `authz/` is one tree with one layout, and a
-// second transport bridge (WS, MCP) belongs next to these rather than in the
-// generator that happens to want it first.
+// Every transport bridge lives here, HTTP's included: `authz/` is one tree with
+// one layout, and which generator happens to want a bridge first is not a reason
+// to scatter them. One table rather than a trio of near-identical helpers per
+// transport — three copies is how `ws` and `mcp` came to be named by generated
+// code and boot warnings while no generator wrote them.
 
-pub(super) fn graphql_exists(ws: &NestrsWorkspace) -> bool {
-    ws.features_root().join("authz/graphql").is_dir()
+/// One `authz/<dir>/` bridge: the files, the paths that name it, and the crates
+/// it needs. Plain fields — it is a `pub(super)` table, and a getter per field
+/// would be one more place a row has to be read through.
+pub(super) struct AuthzBridge {
+    /// Folder under `crates/features/src/authz/`.
+    pub dir: &'static str,
+    /// The module type the `authz/mod.rs` index, the adapter and the app name.
+    pub module: &'static str,
+    /// How an adapter's own `module.rs` reaches it (inside the features crate).
+    pub feature_path: &'static str,
+    /// How an app's composition site reaches it.
+    pub app_path: &'static str,
+    /// `(file name, template)`, mirroring `demo/crates/features/src/authz/<dir>/`.
+    pub files: &'static [(&'static str, &'static str)],
+    /// What this bridge buys, printed as the run's next steps. Kept beside the
+    /// files so the explanation and the code cannot drift apart.
+    pub rationale: &'static [&'static str],
+    /// Umbrella features the bridge's own source names.
+    pub deps: &'static [&'static super::cargo::Dep],
+    /// `g auth` writes this one as part of the base adapter, so an adapter
+    /// generator must not re-create it. True for HTTP alone.
+    pub written_by_g_auth: bool,
 }
 
-/// The `authz/mod.rs` index lines the GraphQL bridge adds — a `Vec` like
-/// [`lib_decls`], so a caller folds them into whichever single edit (or file
-/// body) they belong to.
-pub(super) fn graphql_decls() -> Vec<String> {
-    ["pub mod graphql;", "pub use graphql::AuthzGraphqlModule;"]
-        .map(str::to_owned)
-        .to_vec()
+impl AuthzBridge {
+    /// Already on disk — a second `g <transport>` must not re-create it.
+    pub(super) fn exists(&self, ws: &NestrsWorkspace) -> bool {
+        ws.features_root().join("authz").join(self.dir).is_dir()
+    }
+
+    /// The `authz/mod.rs` index lines this bridge adds — a `Vec` like
+    /// [`lib_decls`], so a caller folds them into whichever single edit (or
+    /// file body) they belong to.
+    pub(super) fn decls(&self) -> Vec<String> {
+        vec![
+            format!("pub mod {};", self.dir),
+            format!("pub use {}::{};", self.dir, self.module),
+        ]
+    }
+
+    /// Queue the bridge's files.
+    pub(super) fn queue(&self, s: &mut Scaffold, ws: &NestrsWorkspace) {
+        let dir = ws.features_root().join("authz").join(self.dir);
+        for (name, body) in self.files {
+            s.create(dir.join(name), (*body).to_string());
+        }
+    }
 }
 
-/// Queue the bridge's four files. Mirrors
-/// `demo/crates/features/src/authz/graphql/`.
-pub(super) fn queue_graphql(s: &mut Scaffold, ws: &NestrsWorkspace) {
-    let dir = ws.features_root().join("authz/graphql");
-    s.create(dir.join("mod.rs"), auth::AUTHZ_GRAPHQL_MOD.to_string());
-    s.create(
-        dir.join("bridge.rs"),
-        auth::AUTHZ_GRAPHQL_BRIDGE.to_string(),
-    );
-    s.create(dir.join("guard.rs"), auth::AUTHZ_GRAPHQL_GUARD.to_string());
-    s.create(
-        dir.join("module.rs"),
-        auth::AUTHZ_GRAPHQL_MODULE.to_string(),
-    );
+/// The bridge that enforces `transport`, whoever writes it — `None` for the
+/// transports that need none: **queue** and **schedule** have no caller to
+/// authenticate, since a job runs on the app's own behalf.
+pub(super) fn bridge_for(transport: Transport) -> Option<&'static AuthzBridge> {
+    match transport {
+        Transport::Http => Some(&HTTP_BRIDGE),
+        Transport::Graphql => Some(&GRAPHQL_BRIDGE),
+        Transport::Ws => Some(&WS_BRIDGE),
+        Transport::Mcp => Some(&MCP_BRIDGE),
+        Transport::Queue | Transport::Schedule => None,
+    }
 }
+
+/// The base bridge: `AbilityGuard<AppAbility>` on the HTTP request, which every
+/// other bridge re-runs. Written by `g auth`, not by `g http`.
+static HTTP_BRIDGE: AuthzBridge = AuthzBridge {
+    dir: "http",
+    module: "AuthzHttpModule",
+    feature_path: "crate::authz::AuthzHttpModule",
+    app_path: "features::authz::AuthzHttpModule",
+    files: &[
+        ("mod.rs", auth::AUTHZ_HTTP_MOD),
+        ("guard.rs", auth::AUTHZ_HTTP_GUARD),
+        ("module.rs", auth::AUTHZ_HTTP_MODULE),
+    ],
+    rationale: &[
+        "The guard runs on the HTTP request and attaches the caller's Ability, which",
+        "every other transport's bridge re-runs. Controllers serving rows bind",
+        "#[use_guards(AuthnGuard, AuthzGuard)] and import AuthzHttpModule.",
+    ],
+    deps: &[&super::cargo::AUTHZ],
+    written_by_g_auth: true,
+};
+
+/// `/graphql` is one endpoint with no guard at the HTTP edge: authn and the
+/// ability run **in band, per operation**, through a `GraphqlOperationGuard`.
+/// Without these providers the endpoint falls back to a chain that installs no
+/// ability at all, and every `#[authorize]` operation answers on rows nobody
+/// scoped.
+static GRAPHQL_BRIDGE: AuthzBridge = AuthzBridge {
+    dir: "graphql",
+    module: "AuthzGraphqlModule",
+    feature_path: "crate::authz::AuthzGraphqlModule",
+    app_path: "features::authz::AuthzGraphqlModule",
+    files: &[
+        ("mod.rs", auth::AUTHZ_GRAPHQL_MOD),
+        ("bridge.rs", auth::AUTHZ_GRAPHQL_BRIDGE),
+        ("guard.rs", auth::AUTHZ_GRAPHQL_GUARD),
+        ("module.rs", auth::AUTHZ_GRAPHQL_MODULE),
+    ],
+    rationale: &[
+        "/graphql has no guard at the HTTP edge — authn and the ability run in band,",
+        "per operation, through AuthzGraphqlModule. Every resolver serving rows",
+        "imports it and declares #[authorize(Action, Entity)] or #[public].",
+    ],
+    deps: &[
+        &super::cargo::AUTHZ,
+        &super::cargo::SEAORM,
+        &super::cargo::GRAPHQL,
+    ],
+    written_by_g_auth: false,
+};
+
+/// A WS upgrade is an HTTP GET, so a gateway reuses the HTTP guards rather than
+/// a bridge of its own — what it needs is the `dyn SocketContext` carrying the
+/// connection's data scope.
+static WS_BRIDGE: AuthzBridge = AuthzBridge {
+    dir: "ws",
+    module: "AuthzWsModule",
+    feature_path: "crate::authz::AuthzWsModule",
+    app_path: "features::authz::AuthzWsModule",
+    files: &[
+        ("mod.rs", auth::AUTHZ_WS_MOD),
+        ("module.rs", auth::AUTHZ_WS_MODULE),
+    ],
+    rationale: &[
+        "A gateway reuses the HTTP guards — bind #[use_guards(AuthnGuard, AuthzGuard)]",
+        "on the struct and import AuthzWsModule in the adapter's module.rs. It carries",
+        "the dyn SocketContext that scopes the connection's rows to the caller.",
+    ],
+    deps: &[
+        &super::cargo::AUTHZ,
+        &super::cargo::SEAORM,
+        &super::cargo::WS,
+    ],
+    written_by_g_auth: false,
+};
+
+/// `/mcp` gates in band, per operation. With no `McpOperationGuard` registered
+/// it is **deny-all** — every tool call answers 401, which is the boot warning
+/// `g mcp` prints and the state a reader following the docs used to land in.
+static MCP_BRIDGE: AuthzBridge = AuthzBridge {
+    dir: "mcp",
+    module: "AuthzMcpModule",
+    feature_path: "crate::authz::AuthzMcpModule",
+    app_path: "features::authz::AuthzMcpModule",
+    files: &[
+        ("mod.rs", auth::AUTHZ_MCP_MOD),
+        ("bridge.rs", auth::AUTHZ_MCP_BRIDGE),
+        ("module.rs", auth::AUTHZ_MCP_MODULE),
+    ],
+    rationale: &[
+        "/mcp denies every request until an McpOperationGuard is bound. AuthzMcpModule",
+        "binds one: callers are authenticated and the ambient Ability is installed, so",
+        "a tool can return entity rows through nest_rs::authz::masked_output_ambient.",
+    ],
+    deps: &[
+        &super::cargo::AUTHZ,
+        &super::cargo::SEAORM,
+        &super::cargo::MCP,
+    ],
+    written_by_g_auth: false,
+};
 
 /// Append the HS256 dev secret unless the file already sets one — an app with
 /// no `NESTRS_AUTHN__*` key material refuses to boot.

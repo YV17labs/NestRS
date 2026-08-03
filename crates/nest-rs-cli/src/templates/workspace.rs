@@ -208,6 +208,13 @@ unit:
 e2e:
     cargo nextest run --workspace -E 'binary(e2e)' --no-tests=pass
 
+# Coverage over the full suite, e2e included. The only recipe with a prerequisite
+# the CLI does not bootstrap: `cargo install cargo-llvm-cov` plus the LLVM tools
+# it shells out to — `rustup component add llvm-tools-preview`. On a toolchain
+# without rustup (Homebrew, distro packages) set LLVM_COV / LLVM_PROFDATA instead.
+cov:
+    cargo llvm-cov nextest --workspace
+
 # Doctests only — the code examples inside `///` doc comments.
 doc:
     cargo test --workspace --doc

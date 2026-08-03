@@ -55,10 +55,22 @@ reason. Owning a capability means enabling its feature.
 
 The proof is compile-time: `nest-rs-macro-hygiene` (workspace,
 `publish = false`) consumes decorators with **zero** third-party deps —
-extend it when adding a decorator. It deliberately does **not** consume
-`#[crud]`/`#[expose]`: those need a real entity and a real service, so
-their contract is proved by the scaffolded-workspace tests in
-`nest-rs-cli` instead.
+extend it when adding a decorator. It holds **decorators only**: a module
+import there proves nothing about a macro and squats a proof that belongs
+in the owning crate's own suite (see *Shipping a new capability* step 5
+in `CLAUDE.md`).
+
+It deliberately does **not** consume `#[crud]`/`#[expose]`: those need a
+real entity and a real service, so their contract is proved by
+`crates/nest-rs-cli/tests/e2e/scaffold.rs` — which scaffolds a workspace,
+generates a resource, repoints `nest-rs` at the working tree through
+`[patch.crates-io]`, and runs a real `cargo check` over the result.
+
+**That distinction is load-bearing.** The `integration` suite asserts on
+the *text* the generator wrote, which catches a wrong dependency and can
+never catch a template that emits code the compiler rejects — only a user
+would find that. A template change is not done until the `e2e` suite has
+run; it shares the repo's target directory, so a warm run is seconds.
 
 **One naming exception, decided:** every host decorator is named for its
 role (`#[controller]` → `controller.rs`, `#[resolver]`, `#[gateway]`,

@@ -1,0 +1,166 @@
+//! Covers `src/module.rs` — the composition contract `OpenApiModule` publishes.
+//!
+//! One import, no `main.rs` wiring, two endpoints. Every assertion here is a
+//! sentence the module's own documentation makes, checked against a booted app
+//! rather than against the mount table: the document describes the routes that
+//! are actually linked in, `enabled = false` serves nothing, and the endpoints
+//! are reachable **without authentication** — the exposure that makes the
+//! disable switch matter in production.
+
+use nest_rs_core::{Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
+use nest_rs_testing::TestApp;
+use poem::Request;
+use poem::http::StatusCode;
+use serde_json::Value;
+
+/// A route with something to document, so "the document describes the app" is
+/// an observation rather than an assumption about an empty `paths` object.
+#[controller(path = "/widgets")]
+struct WidgetsController;
+
+#[routes]
+impl WidgetsController {
+    #[get("/")]
+    async fn list(&self) -> String {
+        "[]".into()
+    }
+}
+
+/// The config is **pinned** rather than read from `NESTRS_OPENAPI__*`: the
+/// unpinned default is deliberately environment-dependent (off outside a dev
+/// profile), so a suite that let the ambient environment decide would assert
+/// one thing on a laptop and another on a build agent.
+fn openapi(enabled: bool) -> OpenApiSetup {
+    OpenApiModule::for_root(OpenApiConfig {
+        enabled,
+        title: "Widget API".into(),
+        version: "9.9.9".into(),
+        // Left off explicitly: an enabled emit would write `openapi.json` into
+        // whatever directory the test runner happens to be in.
+        emit_document: false,
+        ..OpenApiConfig::default()
+    })
+}
+
+#[module(imports = [openapi(true)], providers = [WidgetsController])]
+struct DocumentedApp;
+
+#[module(imports = [openapi(false)], providers = [WidgetsController])]
+struct UndocumentedApp;
+
+#[tokio::test]
+async fn the_documented_import_serves_a_document_describing_the_app() {
+    let app = TestApp::for_module::<DocumentedApp>()
+        .await
+        .expect("importing OpenApiModule is the whole wiring");
+
+    let resp = app.http().get("/api-json").send().await;
+    resp.assert_status_is_ok();
+
+    let body = resp.0.into_body().into_bytes().await.expect("a body");
+    let doc: Value = serde_json::from_slice(&body).expect("/api-json is JSON");
+
+    // `3.1.x`, not an exact string: the patch digit tracks the spec revision
+    // schemars emits, and pinning it would turn a harmless upstream bump into a
+    // failing suite. The `3.1` line is the contract — a `3.0` document would be
+    // a different format for every consumer.
+    let version = doc["openapi"].as_str().expect("an openapi version");
+    assert!(
+        version.starts_with("3.1."),
+        "an OpenAPI 3.1 document, got `{version}`: {doc}",
+    );
+    assert_eq!(
+        doc["info"]["title"], "Widget API",
+        "the pinned config reaches the info block",
+    );
+    assert_eq!(doc["info"]["version"], "9.9.9");
+    assert!(
+        doc["paths"]["/widgets"]["get"].is_object(),
+        "the document describes the controller actually linked in: {doc}",
+    );
+}
+
+#[tokio::test]
+async fn the_swagger_ui_and_its_assets_are_served() {
+    // The UI is only useful if its bundled assets resolve; they hang off `/api/`
+    // *relative* to the docs path, which is why the two must stay siblings.
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+
+    app.http().get("/api").send().await.assert_status_is_ok();
+    app.http()
+        .get("/api/swagger-ui-bundle.js")
+        .send()
+        .await
+        .assert_status_is_ok();
+    app.http()
+        .get("/api/swagger-ui.css")
+        .send()
+        .await
+        .assert_status_is_ok();
+}
+
+#[tokio::test]
+async fn disabled_serves_neither_endpoint() {
+    // The production posture. The unit tests prove the mount table is empty;
+    // this proves the consequence a deployment actually cares about — that no
+    // anonymous caller can read the schema.
+    let app = TestApp::for_module::<UndocumentedApp>()
+        .await
+        .expect("a disabled module still boots — it is an opt-out, not an error");
+
+    for path in ["/api-json", "/api", "/api/swagger-ui-bundle.js"] {
+        assert_eq!(
+            app.http().get(path).send().await.0.status(),
+            StatusCode::NOT_FOUND,
+            "`{path}` must not answer when the documentation is disabled",
+        );
+    }
+}
+
+/// Refuses every caller, registered globally — the strictest posture an app can
+/// declare.
+#[injectable]
+#[derive(Default)]
+struct DenyEveryone;
+
+impl Layer for DenyEveryone {}
+
+#[async_trait]
+impl Guard for DenyEveryone {
+    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+        Err(Denial::unauthorized("no"))
+    }
+}
+
+#[module(imports = [openapi(true)], providers = [WidgetsController, DenyEveryone])]
+struct GuardedApp;
+
+#[tokio::test]
+async fn the_documentation_endpoints_ignore_the_global_guard_chain() {
+    // `EdgePosture::Exempt`, stated as a consequence rather than a comment: an
+    // app that denies every request still publishes its full schema to anyone.
+    // That is the documented behaviour and the whole reason `enabled = false`
+    // exists — if this ever starts returning 401, the disable switch stopped
+    // being the only thing standing between a schema and the public.
+    let app = TestApp::builder()
+        .module::<GuardedApp>()
+        .use_guards_global([guard::<DenyEveryone>()])
+        .build()
+        .await
+        .expect("boots");
+
+    app.http()
+        .get("/widgets")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    app.http()
+        .get("/api-json")
+        .send()
+        .await
+        .assert_status_is_ok();
+}

@@ -34,5 +34,14 @@ tokio.workspace = true
 # imported-but-off `OpenApiModule` is never silently inert.
 tracing.workspace = true
 
+[dev-dependencies]
+# The integration suite boots a real app and reads `/api-json` back, which is
+# what separates it from the mount-table unit tests in `src/module.rs`.
+nest-rs-testing = { path = "../nest-rs-testing" }
+tokio = { workspace = true, features = ["macros", "rt"] }
+# A global deny-all guard, to prove the documentation edges are `Exempt` — the
+# exposure that makes `enabled = false` the production posture.
+nest-rs-guards = { path = "../nest-rs-guards" }
+
 [lints]
 workspace = true

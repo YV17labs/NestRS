@@ -125,7 +125,7 @@ impl OAuthFlow {
 $ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]' \
   nestrs run dev auth
 2026-06-03T10:42:11Z INFO nest_rs::config: loaded issuer (2 fields)
-2026-06-03T10:42:11Z INFO nest_rs::http: bound 5 routes on 0.0.0.0:3000
+2026-06-03T10:42:11Z INFO nest_rs::routes: mounted route controller="TokenController" method="POST" path="/oauth/token" handler="token"
 ```
 
 A bad value fails the boot before any port opens:

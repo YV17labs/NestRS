@@ -24,7 +24,7 @@ never trips.
 use api::ApiModule;
 use nest_rs::authn::JwtConfig;
 use nest_rs::testing::{EphemeralDatabase, TestApp};
-use poem::http::header;
+use nest_rs::http::poem::http::header;
 use serde_json::json;
 
 pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {

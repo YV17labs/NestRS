@@ -48,15 +48,23 @@ mounts:
 
 | Verb     | Path        | Authz check        | Body                  | Returns                |
 |----------|-------------|--------------------|-----------------------|------------------------|
-| `GET`    | `/orgs`     | `Read` on `Org`    | —                     | `Vec<Org>` + cursor    |
-| `GET`    | `/orgs/:id` | `Read` on `Org`    | —                     | `Org` (404/403)        |
-| `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrg`         | `Org`                  |
-| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrg`         | `Org` (404/403)        |
+| `GET`    | `/orgs`     | `Read` on `Org`    | —                     | `200` `Vec<Org>` + cursor |
+| `GET`    | `/orgs/:id` | `Read` on `Org`    | —                     | `200` `Org` (404/403)  |
+| `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrg`         | `201` `Org` + `Location` |
+| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrg`         | `200` `Org` (404/403)  |
 | `DELETE` | `/orgs/:id` | `Delete` on `Org`  | —                     | `204` (404/403)        |
 
 Every handler delegates to the same `OrgsService` instance, which goes through
 `Repo` against the ambient executor — so reads are pool, mutations sit inside
 the request's transaction, and `Ability` filters every row.
+
+The `201` carries `Location: /orgs/<id>` — the row it just minted, as RFC 9110
+§15.3.2 asks. The path is the one the caller posted to, so a global prefix or a
+`/v1` segment is already part of it, and the value is an absolute-path
+reference: naming a host would mean trusting the `Host` header. The OpenAPI
+document declares the header, so a generated client reads it rather than
+discarding it. An entity keyed on something other than a `Uuid` gets the `201`
+and the body without the header.
 
 ### `PATCH` takes a whole `Update<Name>`
 
@@ -285,11 +293,24 @@ the row through `Repo` (so the ability's `Condition` filters it), then
 checks the **field-level** rules of `Ability::can` against the loaded
 model. The result tells the handler which HTTP status to return:
 
-| `Access` outcome    | Meaning                                          | HTTP  |
-|---------------------|--------------------------------------------------|-------|
-| `Access::Found(m)`  | Row visible, action allowed                      | proceed |
-| `Access::Missing`   | Row absent (or invisible at the row level)       | `404` |
-| `Access::Denied`    | Row visible, action denied by a field-level rule | `403` |
+The load is deliberately **unscoped**, so an existing row the caller may not
+touch is `Denied`, not hidden as `Missing`:
+
+| `Access` outcome    | Meaning                                                     | HTTP  |
+|---------------------|-------------------------------------------------------------|-------|
+| `Access::Found(m)`  | Row exists, action allowed                                   | proceed |
+| `Access::Missing`   | Row does not exist                                           | `404` |
+| `Access::Denied`    | Row exists, action denied by a row-level or field-level rule | `403` |
+
+<Aside type="caution">
+That is a deliberate posture, and it means **`403` confirms the row exists**.
+A caller can tell "no such id" from "not yours" — an existence oracle, which is
+the right default for an API where ids are not secrets and a bare `404` would
+send a legitimate caller hunting for a typo. When ids *are* guessable and their
+existence is itself sensitive, fold `403` into `404`: see
+[Denied vs missing](/security/authorization/by-id-binding/), which is the
+reference for this behaviour.
+</Aside>
 
 `#[crud]` also rejects non-UUID-v7 ids before any load (route-model
 binding's validation half) — a malformed id is `400 Bad Request`, never a
@@ -406,7 +427,8 @@ migration it tells you to generate next.
   what makes `Read` / `Create` / `Update` / `Delete` mean what they
   mean here.
 - [OpenAPI](/openapi/) — every generated route ships with an `#[api]`
-  summary and the right `tags`, so the document at `GET /api-json`
+  summary, the right `tags`, and the response schema of the `#[expose]`d entity,
+  so the document at `GET /api-json`
   composes automatically.
 - [GraphQL](/graphql/) — the `#[crud]` twin on a resolver; relations and
   field resolvers backed by dataloaders.

@@ -28,13 +28,13 @@ Works as a return type too — serializes `T`, sets
 the same schema:
 
 ```rust
-use poem::web::Json;
-use serde::{Deserialize, Serialize};
+use nest_rs::http::poem::web::Json;
+use nest_rs::http::input;
 
-#[derive(Deserialize, schemars::JsonSchema)]
+#[input]
 struct CreatePost { title: String }
 
-#[derive(Serialize, schemars::JsonSchema)]
+#[input]
 struct Post { id: Uuid, title: String }
 
 #[post("/posts")]
@@ -54,7 +54,7 @@ and `Query<T>` work the same way — every poem extractor that exposes
 
 ```rust
 use nest_rs::http::{Valid, input};
-use poem::web::Json;
+use nest_rs::http::poem::web::Json;
 
 #[input]
 struct CreateUser {
@@ -65,8 +65,11 @@ struct CreateUser {
 }
 ```
 
-`#[input]` carries `JsonSchema` too, so a DTO behind it needs no second derive
-for the OpenAPI document; a hand-derived DTO (like `CreatePost` above) does.
+`#[input]` carries `Serialize`, `Deserialize`, `Validate` **and** `JsonSchema`,
+so a DTO behind it needs no second derive — not for validation, not for the
+OpenAPI document, and not to come back out as `Json<T>`. A DTO derived by hand
+carries all four itself; adding one of them *next to* `#[input]` is a
+conflicting impl (`E0119`).
 
 ```rust
 #[post("/users")]
@@ -86,7 +89,7 @@ the inner extractor produced. `Valid<Json<T>>` is exactly
 ```rust
 use nest_rs::http::Piped;
 use nest_rs::pipes::ParseUuid;
-use poem::web::Path;
+use nest_rs::http::poem::web::Path;
 use uuid::Uuid;
 
 #[get("/posts/:id")]
@@ -110,7 +113,7 @@ unbounded memory.
 
 ```rust
 use nest_rs::http::{ClientIp, RawBody};
-use poem::Result;
+use nest_rs::http::poem::Result;
 
 #[post("/webhooks/stripe")]
 async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
@@ -124,7 +127,7 @@ For a tighter cap on a specific route, take the body manually:
 
 ```rust
 use nest_rs::http::RawBody;
-use poem::{Result, RequestBody};
+use nest_rs::http::poem::{Result, RequestBody};
 
 #[post("/webhooks/small")]
 async fn small(&self, mut body: RequestBody) -> Result<&'static str> {
@@ -148,30 +151,40 @@ async fn whoami(&self, ip: ClientIp) -> String {
 }
 ```
 
-`ClientIp` resolves in this order, first hit wins:
+`ClientIp` resolves against the **transport peer**, and only believes a
+forwarding header when that peer is a proxy you listed:
 
-1. The transport peer reported by [poem](https://docs.rs/poem)
-   (`remote_addr().as_socket_addr()`);
-2. The **leftmost** entry of `X-Forwarded-For` (a bare IP, `IP:port`,
-   bracketed IPv6 `[ip]`, or `[ip]:port` per RFC 7239);
-3. `X-Real-IP`;
-4. `0.0.0.0` as a last-resort default — the extractor never fails.
+1. No peer address at all (a unix socket, or a proxy that hides it) ⇒
+   `0.0.0.0`, `forwarded = false`. The extractor never fails.
+2. The peer is **not** in `NESTRS_HTTP__TRUSTED_PROXIES` ⇒ that peer is the
+   client, `forwarded = false`, and the headers are not read.
+3. The peer **is** a trusted proxy ⇒ the client is the **rightmost**
+   `X-Forwarded-For` hop that is not itself a trusted proxy, then `X-Real-IP`;
+   `forwarded = true`. Hops parse as a bare IP, `IP:port`, or a bracketed IPv6
+   (`[ip]`, `[ip]:port` per RFC 7239).
 
-`ip.forwarded` is `true` when the address came from a header (2 or 3),
-`false` when it came from the transport peer or the default.
+With no trusted proxy configured — the default — step 2 always wins, so
+`forwarded` stays `false` and a header a caller sets changes nothing.
+
+```bash frame="terminal"
+# The deployment's ingress, named once. Read by ClientIp *and* the throttler.
+NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
+```
+
+**Rightmost, not leftmost.** A proxy appends the address it received the request
+from to the right of the chain, so the genuine client is the last hop your
+infrastructure wrote; a caller can only prepend, and a prepended entry lands to
+the left of it. Keying on the leftmost hop is the spoofable rule.
 
 <Aside type="caution">
-**`X-Forwarded-For` and `X-Real-IP` are spoofable.** Any client can put
-whatever value it likes in those headers — `ClientIp` does no trusted-proxy
-validation. Treat the result as **observational only** (logging,
-geolocation hints, sampling keys), never as an authn or authz input. If
-your deployment terminates TLS at a load balancer, the LB must strip and
-rewrite those headers so only its own value reaches the app.
+Treat the result as **observational** (logging, geolocation hints, sampling
+keys), never as an authn or authz input. The peer is trustworthy; the hop behind
+it is only as trustworthy as the proxy that wrote it — list an ingress here only
+if it strips and rewrites the client's own `X-Forwarded-For`.
 
-Trusted-proxy validation (peer ∈ allow-list before honoring
-`X-Forwarded-For`) lives in the [throttler](/rate-limiting/), not here — the
-throttler is the one place where the spoofable header is consumed for a
-behavioural decision.
+The [throttler](/rate-limiting/) resolves the client through this same
+mechanism, from this same list, so a request is never rate-limited as one
+address and logged as another.
 </Aside>
 
 ## `Scoped<T>` — resolve a request-scoped provider
@@ -270,7 +283,7 @@ time:
 
 ```rust
 use nest_rs::http::Reflector;
-use poem::Request;
+use nest_rs::http::poem::Request;
 
 async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
     let throttle = Reflector::new(req)

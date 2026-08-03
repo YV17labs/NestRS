@@ -101,15 +101,18 @@ publish = false
 
 [dependencies]
 features.workspace = true
-nest-rs-core.workspace = true
-nest-rs-config.workspace = true
-nest-rs-http.workspace = true
+nest-rs.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-nest-rs-testing.workspace = true
+nest-rs.workspace = true
 ```
+
+One `nest-rs` line, and it stays one for the rest of this tutorial: the
+capabilities arrive as **features** on it (`[workspace.dependencies]` in the
+root manifest is where the list lives). `tokio` and `anyhow` are there because
+`main.rs` writes them.
 
 The root module is where transports come in. `HttpModule::for_root` pins
 the listen port in code — not in `.env`:

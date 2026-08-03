@@ -227,6 +227,8 @@ struct, expose a `pub trait` and keep the impl module-private:
 ```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 
+use nest_rs::core::async_trait;
+
 #[async_trait]
 pub trait PostsService: Send + Sync {
     async fn list(&self) -> Result<Vec<Post>, Error>;
@@ -246,6 +248,10 @@ impl PostsService for PostsServiceImpl { /* ... */ }
 #[module(providers = [PostsServiceImpl as dyn PostsService])]
 pub struct PostsModule;
 ```
+
+`#[async_trait]` is required on both the trait and the impl — an async method
+in a `dyn`-compatible trait needs the boxed-future desugaring. It comes from
+`nest_rs::core`, so this is not a manifest line.
 
 Consumers inject `Arc<dyn PostsService>`, never `PostsServiceImpl`. There
 is **no `exports = [...]`** list — Rust visibility plus the

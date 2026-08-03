@@ -118,7 +118,7 @@ Sometimes the mapping depends on the *route*, not the error. Maybe
 ```rust
 use nest_rs::core::{Layer, injectable};
 use nest_rs::filters::{Filter, RequestSnapshot, async_trait};
-use poem::{http::StatusCode, Error, Response};
+use nest_rs::http::poem::{http::StatusCode, Error, Response};
 
 #[injectable]
 #[derive(Default)]
@@ -181,7 +181,7 @@ outer `Filter`, then to the transport's default renderer.
 ```rust
 use nest_rs::core::{Layer, injectable};
 use nest_rs::exception_filters::{ExceptionFilter, async_trait};
-use poem::{http::StatusCode, Response};
+use nest_rs::http::poem::{http::StatusCode, Response};
 
 #[derive(Debug, thiserror::Error)]
 #[error("domain failure: {0}")]

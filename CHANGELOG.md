@@ -195,6 +195,147 @@ unsuffixed one stays for bare-origin resources and clients that skip the
 challenge — and a tail that is not this resource's path answers `404` rather
 than asserting an identity the deployment does not have.
 
+### Fixed — round-9 QA against the local 2.0.0
+
+The same pass re-read the docs against the round-8 fixes. Two behaviours were
+left to the owner to settle; both are settled the way the rules settle them —
+the framework carries the concern, and there is one way to do it.
+
+- **`#[crud]`'s `201 Created` carried no `Location`.** RFC 9110 §15.3.2 asks a
+  created response to name what it created, and the generated route knows both
+  halves: the collection the caller posted to and the primary key it inserted.
+  It emits `Location: <collection>/<id>` — an absolute-path reference, because
+  the only host a request carries is the `Host` header. Read from
+  `original_uri`, so a global prefix and a version segment are in it; absent for
+  an entity that does not key on a `Uuid`. The create handler now builds its
+  response, so it declares its schema with `#[api(response = …)]` the way the
+  paginated list already did — the document still advertises `201` + the entity.
+- **…and the OpenAPI document declares it.** The header shipped and was
+  described in prose, which no generated client reads — the same gap the
+  throttler's `429` had already closed by declaring its `Retry-After`, left open
+  on the success side. `HttpRouteMeta::sets_location` carries it, set by
+  `#[crud]`'s create and by `#[redirect]` (whose response *is* a `Location`), so
+  both producers are written rather than one. `required` is deliberately absent:
+  a create omits the header for an entity that does not key on a `Uuid`.
+- **A trailing slash answered `404`.** `/kitchen` served and `/kitchen/` did
+  not, and that `404` came from the router — before the route's guards,
+  interceptors and filters, so it read as a broken feature rather than as a
+  spelling. The transport edge now trims the trailing slash before anything
+  routes on it, and it is not configurable: a flag would be a second way to
+  spell one path. Interior slashes are untouched (`/a//b` is a different path),
+  a genuine `404` stays one, and the query string survives. It rides in the
+  fused `EdgeEndpoint` rather than a `NormalizePath` middleware, so a canonical
+  path costs one `ends_with('/')` test and no allocation.
+- **The demo's own e2e disagreed with itself about the `201`.** The `create_org`
+  fixture expected `201` while the test beside it still asserted `200` on the
+  same route — a failure the round-8 change introduced and that no run caught.
+  Both now assert the status *and* the `Location`.
+- **`#[input]`'s published derive list was missing `Serialize`** — the derive
+  that lets a wire DTO come back out as `Json<T>`, which is what the rewritten
+  response snippets do. A reader trusting the list adds it by hand and gets
+  `E0119` from a conflicting impl. The rustdoc, `/http/controllers/`,
+  `/http/extractors/` and the decorator index all name four derives now, and a
+  unit test reads the expansion's own `quote!` block back against the rustdoc so
+  the two cannot drift again.
+- **`nestrs run test cov` is the one recipe with a prerequisite the CLI does not
+  bootstrap** — `cargo-llvm-cov` shells out to LLVM tools that a non-rustup
+  toolchain does not have. The generated `test.just` and `/testing/` name
+  `rustup component add llvm-tools-preview` and the `LLVM_COV` / `LLVM_PROFDATA`
+  escape hatch; the generator's suite asserts the recipe still says so.
+- **`/tutorial/entity/` printed a manifest the generator does not write.** The
+  feature crate gets the dotted form and the `authn` feature (`g resource`
+  bootstraps the auth adapter); the page now matches `nestrs g resource posts`
+  byte for byte, and the generator's suite pins the feature set the page copies.
+
+### Fixed — round-8 QA against the local 2.0.0
+
+A QA pass read the local docs and applied them literally against the unreleased
+workspace. Four framework defects, each closed with the test that keeps it
+closed.
+
+- **`#[routes]` broke on a parameter named `body` or `req`.** The generated
+  wrapper bound its own `req`/`body`/`__ctrl` locals in the same namespace as
+  the developer's parameters, so `Json(body): Json<T>` — the destructure
+  `/http/extractors/` teaches — masked the `RequestBody` every *later* extractor
+  read. The error landed on the `#[routes]` attribute and named neither the
+  parameter nor the collision. The wrapper's locals now sit on
+  `Span::mixed_site()`, which closes the class rather than the case;
+  `nest-rs-codegen::mixed_site_ident` is the seam every decorator emitting a
+  local should use. `nest-rs-macro-hygiene` gained a controller, which also
+  proves what the old exclusion note denied: `#[routes]` emits no bare `poem`
+  path, so a controller crate needs no `poem` line.
+- **`ClientIp` never read `X-Forwarded-For` or `X-Real-IP`.** On TCP the peer
+  branch always matched, so the documented chain's remaining steps were dead and
+  `forwarded` was always `false` — behind a load balancer the extractor reported
+  the balancer, forever. Resolution now lives in one place,
+  `nest_rs_http::ClientOrigin`, gated on a trusted-proxy list and taking the
+  **rightmost** non-trusted `X-Forwarded-For` hop.
+- **The trusted-proxy list moved to the transport.** `HttpConfig::trusted_proxies`
+  / `NESTRS_HTTP__TRUSTED_PROXIES` replaces `NESTRS_THROTTLER__TRUSTED_PROXIES`,
+  and `ThrottlerStore::trusted_proxies` is gone from the trait — a store counts
+  hits; who a hit belongs to is the transport's answer. Two lists is how the
+  throttler came to key on the real client while `ClientIp` reported the
+  balancer; one list means a `429` and the log line explaining it can never name
+  different callers.
+- **`#[crud]` routes published no response schema.** An ability shaper was read
+  as "the field set depends on the caller, so say nothing", which typed every
+  generated client's CRUD response as `any` — on exactly the surface `#[expose]`
+  exists to serve. The document now publishes the shape and says in the response
+  description that the fields are ability-dependent. `#[api(response = Type)]`
+  is the new escape hatch for a handler that builds its own `Response`; the
+  paginated list uses it. A `#[crud]` create answers **`201 Created`**.
+- **`nestrs g ws` and `nestrs g mcp` named authz modules no generator wrote.**
+  Both now scaffold `authz/ws/` and `authz/mcp/` the way `g graphql` scaffolds
+  `authz/graphql/`, and wire them into the app — without the MCP bridge the
+  endpoint denies every call. The three bridges are one table rather than three
+  copies of the same trio of helpers.
+- **A framework capability the app never imported warned at boot.** Every
+  scaffolded auth app printed `skipped lifecycle hook … provider="AudienceBinding"`
+  — a security check, named at `warn`, on an internal type, with nothing the
+  developer could do. An inert hook owned by the framework reports at `debug`
+  now; an inert hook owned by the app still warns, because that one is leftover
+  code the developer can act on.
+- **`#[redirect]` made a clean build dirty.** The macro answers without calling
+  the handler, so rustc reported the method as never used; the expansion carries
+  the `allow` itself.
+- **`nestrs run test cov` did not exist** in a scaffolded workspace, though two
+  pages and `apps.md` document it. The scaffolded `test.just` has it.
+
+### Documentation — round 8
+
+- **The umbrella sweep reached the five pages it had missed** — `/packages/`
+  (the install page, which published a hybrid 8-line manifest under "list the
+  individual crates"), `/tutorial/scaffold/`, `/tutorial/entity/`,
+  `/tutorial/http/`, `/opentelemetry/`. Eight crates labelled *(direct dep)* are
+  umbrella features and now say so.
+- **`/tutorial/entity/` did not compile as written**: it declared three
+  `nest-rs-*` crates absent from the `[workspace.dependencies]` block it had
+  just written, and replaced the scaffold's feature list with one that dropped
+  `seaorm` and `testing`. It now mirrors what `nestrs g resource` produces.
+- **`EphemeralDatabase` does not use testcontainers.** Three pages sent a
+  developer whose e2e suite failed looking for a Docker daemon; it reads
+  `NESTRS_DATABASE__URL` and creates a database on that server.
+- **Two security statements were wrong.** `/database/crud/` said an
+  invisible-at-row-level row answers `404`; it answers `403`, deliberately, as
+  `/security/authorization/by-id-binding/` documents in detail — a reader
+  trusting the table believed they had closed an existence oracle that was open.
+  `/rate-limiting/` described the throttler as keying on the **leftmost**
+  `X-Forwarded-For` hop, which is the spoofable rule the code exists to avoid.
+- **Four pages printed a boot line the framework never emits** (`bound N routes
+  on …`), one of them building an instruction on it — on the page explaining why
+  a route looks missing.
+- **Every HTTP snippet imported `poem` and `schemars` bare**, which no crate
+  following the one-dependency install can resolve. They route through
+  `nest_rs::http::poem` and `#[input]` now. `async_trait` is reachable as
+  `nest_rs::core::async_trait` — a service trait had to go through
+  `nest_rs::guards` to find one.
+- **`/configuration/env-reference/` claimed to be exhaustive** while omitting six
+  `authn` keys and the whole `mcp` and `social` namespaces.
+- Smaller: the GraphQL playground is off by default (`/tutorial/graphql/` said
+  otherwise), `/fundamentals/guards/` contradicted itself on a postureless
+  route, `cli/index.mdx` cited a `db migrate` recipe that is `db up`, and
+  `g resource` bootstrapping the auth slice is now stated where a reader meets it.
+
 ### The mechanism
 
 - `nest-rs-codegen::reroot` resolves how the call site reaches the framework —

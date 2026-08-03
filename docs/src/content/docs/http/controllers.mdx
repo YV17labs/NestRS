@@ -65,24 +65,30 @@ Run it:
 ```bash frame="terminal"
 $ nestrs run dev
 …
-2026-06-03T10:14:22Z  INFO nest_rs::http: bound 1 route on 0.0.0.0:3000
-  GET / → HelloController::hello
+2026-06-03T10:14:22Z  INFO nest_rs::routes: mounted route controller="HelloController" method="GET" path="/" handler="hello"
 
 $ curl http://localhost:3000
 Hello World
 ```
 
-**The boot line is authoritative about the served path.** `#[get("/")]` on
-`#[controller(path = "/greetings")]` serves `/greetings`, not `/greetings/` —
-requesting the trailing-slash form is a `404`, and one that still carries any
-global interceptor's headers, which reads convincingly like a broken feature.
-When a route seems missing, compare your URL against the `GET … →` line rather
-than against the attribute.
+**The boot line is authoritative about the served path.** One
+`nest_rs::routes: mounted route` event per route, with the full path in the
+`path` field — the transport logs what it actually mounted, prefix and version
+folded in.
+
+`#[get("/")]` on `#[controller(path = "/greetings")]` serves `/greetings`, and
+`/greetings/` reaches the same handler: the transport edge trims the trailing
+slash before anything routes on the path, so both spellings run the same
+guards, interceptors and filters. The mounted path — the one the event above
+prints, the one the OpenAPI document lists — is the trimmed form. Interior
+slashes are left alone: `/greetings//hello` is a different path, not a typo.
+When a route seems missing, compare your URL against the `path` field of that
+event rather than against the attribute.
 
 ## Adding a path parameter
 
 ```rust
-use poem::web::Path;
+use nest_rs::http::poem::web::Path;
 
 #[get("/:name")]
 async fn greet(&self, Path(name): Path<String>) -> String {
@@ -109,10 +115,10 @@ Hello, Ada!
 ## Reading query parameters
 
 ```rust
-use poem::web::Query;
-use serde::Deserialize;
+use nest_rs::http::poem::web::Query;
+use nest_rs::http::input;
 
-#[derive(Deserialize, schemars::JsonSchema)]
+#[input]
 struct Greet {
     lang: Option<String>,
 }
@@ -134,11 +140,9 @@ Bonjour le monde
 ## Accepting a JSON body, validated
 
 ```rust
+use nest_rs::http::poem::Result;
+use nest_rs::http::poem::web::Json;
 use nest_rs::http::{Valid, input};
-use poem::web::Json;
-use poem::Result;
-use serde::Serialize;
-use validator::Validate;
 
 #[input]
 struct GreetInput {
@@ -146,7 +150,7 @@ struct GreetInput {
     name: String,
 }
 
-#[derive(Serialize, schemars::JsonSchema)]
+#[input]
 struct GreetReply {
     greeting: String,
 }
@@ -159,14 +163,18 @@ async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<Gree
 }
 ```
 
-- **`#[input]`** is the shorthand for input DTOs. It appends
-  `#[derive(::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
+- **`#[input]`** is the shorthand for **wire** DTOs — the ones crossing the
+  edge in either direction. It appends
+  `#[derive(::serde::Serialize, ::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
   and `#[serde(deny_unknown_fields)]` — an unknown field on the wire
   (`{"name":"Ada","is_admin":true}`) is rejected with `400` at parse time
-  instead of silently dropped. Don't use `#[input]` together with a manual
-  `#[derive(Deserialize, Validate)]` — pick one (the macro errors on a
-  double-derive otherwise). Need a custom `Deserialize` shape (e.g.
-  untagged enums)? Skip `#[input]` and derive by hand.
+  instead of silently dropped. `Serialize` is in that list on purpose: it is
+  what lets the same attribute carry a *response* type such as `GreetReply`
+  below, returned as `Json<T>`. Don't top the list up by hand — a manual
+  `#[derive(Serialize)]`, `#[derive(Deserialize)]` or `#[derive(Validate)]`
+  next to `#[input]` is a conflicting impl (`E0119`), not an addition. Need a
+  custom `Deserialize` shape (e.g. untagged enums)? Skip `#[input]` and derive
+  all four by hand.
 - **`Json<T>`** parses the request body into `T`. Malformed JSON is `400`.
 - **`Valid<E>`** runs [validator](https://docs.rs/validator) on the
   extracted value. A failure returns `400` with the structured error list

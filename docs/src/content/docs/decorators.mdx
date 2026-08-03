@@ -40,7 +40,7 @@ position without leaving the page.
 | `#[meta]` | method | Attaches typed metadata read back via `Reflector` (repeatable) | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[interceptor]` | struct | Marks a struct as a global HTTP interceptor | [Interceptors](/fundamentals/interceptors/) |
-| `#[input]` | struct | Shorthand for input DTOs (`Deserialize` + `Validate` + `JsonSchema` + `deny_unknown_fields`) | [Extractors](/http/extractors/) |
+| `#[input]` | struct | Shorthand for wire DTOs (`Serialize` + `Deserialize` + `Validate` + `JsonSchema` + `deny_unknown_fields`) | [Extractors](/http/extractors/) |
 
 ## GraphQL
 

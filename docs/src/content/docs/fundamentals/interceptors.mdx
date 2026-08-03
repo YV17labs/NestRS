@@ -58,7 +58,7 @@ spellings must resolve to the same 0.1 macro.
 ```rust
 use nest_rs::core::{Layer, injectable};
 use nest_rs::interceptors::{Interceptor, Next, async_trait};
-use poem::{Request, Response, Result};
+use nest_rs::http::poem::{Request, Response, Result};
 
 #[injectable]
 #[derive(Default)]

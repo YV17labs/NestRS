@@ -28,37 +28,40 @@ same folder so the tutorial can extend it in place.
 
 The `posts` module ships under the workspace's `features` crate. Its
 dependencies ride versions pinned in the workspace root, so both manifests
-need an entry. Add the pins first:
+need an entry. Add the pins first — note the `nest-rs` line **gains** features
+rather than being replaced: `nestrs new` already put `http`, `seaorm` and
+`testing` there, and dropping either of the first two breaks the app you just
+scaffolded. `authn` rides along because a resource also gets the auth adapter
+its guards need.
 
-```toml title="Cargo.toml"
+```toml title="Cargo.toml" {2}
 [workspace.dependencies]
-nest-rs = { version = "2.0", features = ["http", "resource", "authz"] }
-schemars = { version = "1", features = ["uuid1"] }
-serde = { version = "1", features = ["derive"] }
-uuid = { version = "1", features = ["v7", "serde"] }
-validator = { version = "0.20", features = ["derive"] }
+nest-rs = { version = "2.0", features = ["http", "seaorm", "testing", "resource", "authz", "authn"] }
+sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.24", features = ["v7", "serde"] }
 ```
 
-`nest-rs-seaorm` and `sea-orm` are already there — the `migrations` crate the
-workspace ships uses them. Then the feature crate:
+`sea-orm` is already there — the `migrations` crate the workspace ships uses
+it. Then the feature crate:
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
-nest-rs-authz.workspace = true
-nest-rs-resource.workspace = true
-nest-rs-seaorm.workspace = true
-schemars.workspace = true
-sea-orm.workspace = true
-serde.workspace = true
-uuid.workspace = true
-validator.workspace = true
+nest-rs.workspace = true
+nest-rs.features = ["seaorm", "http", "resource", "authz", "authn"]
+sea-orm = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
 ```
 
-Two of those are call-site dependencies of the decorators rather than of your
-own code: `#[expose]` derives `schemars::JsonSchema`, and the `#[crud]` you add
-on the [HTTP page](/tutorial/http/) expands to `nest_rs::authz` types. A derive
-resolves against *your* crate's prelude, so the framework cannot supply them for
-you. `nestrs g resource posts` writes both manifests for you.
+Three third-party lines, and each is there because **your own** `entity.rs`
+writes it: `sea_orm::entity::prelude::*`, `serde` on the derive list SeaORM
+generates, `Uuid` as the primary-key type. The derives `#[expose]` emits —
+`schemars::JsonSchema`, `validator::Validate` — are routed back through the
+framework with a `crate = ` override, so neither appears here.
+
+`nestrs g resource posts` writes both manifests for you — byte for byte the two
+blocks above, dotted keys included.
 
 ## The first cut
 

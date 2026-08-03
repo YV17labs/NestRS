@@ -106,8 +106,8 @@ use std::sync::Arc;
 use nest_rs::authz::Read;
 use nest_rs::http::{controller, routes};
 use nest_rs::seaorm::Bind;
-use poem::web::{Json, Path};
-use poem::Result;
+use nest_rs::http::poem::web::{Json, Path};
+use nest_rs::http::poem::Result;
 use uuid::Uuid;
 
 use crate::authn::AuthnGuard;
@@ -137,9 +137,12 @@ impl PostsController {
 ```
 
 `AdminGuard` runs *on top of* the controller's two guards. Per-handler
-binding is **additive** — it does not replace the controller list. A route
-with no guards stays open *by intent*; omitting `#[use_guards(...)]` is
-the explicit decision.
+binding is **additive** — it does not replace the controller list.
+
+A route with no guards stays open, but silence is not a decision: the boot
+reports every route that binds no guard and is not marked `#[public]` in a
+single `warn` naming them ([below](#declare-on-the-provider)). Declaring
+the posture — a guard, or `#[public]` — is what makes it intentional.
 
 The HTTP adapter imports the auth bridges transitively — same pattern as
 `UsersHttpModule` in the repo:

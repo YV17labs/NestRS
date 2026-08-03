@@ -23,8 +23,8 @@ The pattern is `thiserror::Error` for the error type,
 [poem](https://docs.rs/poem)'s `ResponseError` for the status:
 
 ```rust
-use poem::http::StatusCode;
-use poem::error::ResponseError;
+use nest_rs::http::poem::http::StatusCode;
+use nest_rs::http::poem::error::ResponseError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -74,8 +74,8 @@ structured error body conforming to
 
 ```rust
 use nest_rs::http::ProblemDetails;
-use poem::Result;
-use poem::web::Json;
+use nest_rs::http::poem::Result;
+use nest_rs::http::poem::web::Json;
 
 #[get("/posts/:id")]
 async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Post>, ProblemDetails> {

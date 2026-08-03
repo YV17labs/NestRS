@@ -55,7 +55,7 @@ producer to implement. Per-job options, batching, scheduled jobs,
 priority hints — those are your driver's own API on the same struct.
 
 ```rust
-use async_trait::async_trait;
+use nest_rs::queue::async_trait;
 use nest_rs::queue::QueueError;
 
 /// Your driver's connection handle. The producer side of a queue.
@@ -107,7 +107,7 @@ your receive loop, the way `nest-rs-redis` does, so a handler behaves the
 same whichever driver is underneath it.
 
 ```rust
-use async_trait::async_trait;
+use nest_rs::queue::async_trait;
 use nest_rs::core::{Container, ReachableProviders, Transport, inventory};
 use nest_rs::queue::ProcessMethod;
 use tokio_util::sync::CancellationToken;

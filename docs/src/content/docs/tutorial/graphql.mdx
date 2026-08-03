@@ -161,10 +161,15 @@ endpoint, and the feature's GraphQL adapter for the operations.
         GraphqlModule::for_root(None),
 ```
 
-`GraphqlModule::for_root(...)` mounts `POST /graphql` (the endpoint)
-and `GET /graphql` (the playground) on the HTTP transport. The schema
-itself is composed from every `#[resolver]` the access graph reaches —
-no central `queries = [...]` list to keep in sync.
+`GraphqlModule::for_root(...)` mounts `POST /graphql` on the HTTP transport.
+`GET /graphql` serves the playground **only when it is switched on** — it is
+off by default, so an unconfigured deployment exposes no interactive console
+and `GET /graphql` answers `405`. Turn it on for local work with
+`NESTRS_GRAPHQL__PLAYGROUND=true` (see
+[GraphQL configuration](/graphql/configuration/)).
+
+The schema itself is composed from every `#[resolver]` the access graph
+reaches — no central `queries = [...]` list to keep in sync.
 
 ## Run a query
 

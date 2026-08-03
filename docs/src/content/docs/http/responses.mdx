@@ -17,13 +17,13 @@ body.
 
 `Json<T>` is the everyday case — serializes `T`, sets
 `Content-Type: application/json`, and feeds the OpenAPI document with
-the same `schemars::JsonSchema`:
+the same JSON schema:
 
 ```rust
-use poem::web::Json;
-use serde::Serialize;
+use nest_rs::http::poem::web::Json;
+use nest_rs::http::input;
 
-#[derive(Serialize, schemars::JsonSchema)]
+#[input]
 struct GreetReply {
     greeting: String,
 }
@@ -41,7 +41,7 @@ when one route returns `202 Accepted` and another stays on the default
 `200`:
 
 ```rust
-use poem::http::StatusCode;
+use nest_rs::http::poem::http::StatusCode;
 
 #[post("/queue")]
 async fn enqueue(&self) -> (StatusCode, &'static str) {
@@ -60,7 +60,7 @@ macros sit beside the verb attribute:
 
 ```rust
 use nest_rs::http::{http_code, response_header, redirect};
-use poem::web::Json;
+use nest_rs::http::poem::web::Json;
 
 #[post("/posts")]
 #[http_code(201)]
@@ -140,8 +140,8 @@ whether an entity already existed, the headers depend on the resolved
 user — go back to a plain tuple return and let the handler decide:
 
 ```rust
-use poem::http::StatusCode;
-use poem::IntoResponse;
+use nest_rs::http::poem::http::StatusCode;
+use nest_rs::http::poem::IntoResponse;
 
 #[post("/posts")]
 async fn upsert(&self, body: Valid<Json<CreatePost>>) -> Result<impl IntoResponse> {

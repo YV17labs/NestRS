@@ -49,7 +49,8 @@ rest of the framework follows.
 ```bash frame="terminal"
 NESTRS_THROTTLER__LIMIT=120
 NESTRS_THROTTLER__WINDOW_SECS=60
-NESTRS_THROTTLER__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
+# Not a throttler setting — the transport's, shared with `ClientIp`.
+NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
 ```
 
 ## Guard a controller
@@ -102,17 +103,34 @@ inherits the module default. Forms:
 The client key is the **direct peer IP** by default — every request
 coming from the same IP shares the same window. If the request arrives
 through a reverse proxy you have listed in
-`NESTRS_THROTTLER__TRUSTED_PROXIES`, the throttler reads the leftmost
-`X-Forwarded-For` hop instead and counts that as the client.
+`NESTRS_HTTP__TRUSTED_PROXIES`, the throttler reads the **rightmost**
+`X-Forwarded-For` hop that is not itself a trusted proxy, and counts that as
+the client.
 
-The rule is strict and adversarial-aware:
+**Rightmost, not leftmost** — and the difference is the whole defence. A proxy
+*appends* the address it received the request from to the right of the chain,
+so the genuine client is the last hop your infrastructure wrote. A caller can
+only *prepend*, and a prepended entry lands to the **left** of the genuine one:
+it can neither mint a fresh bucket by rotating a value nor drain a victim's by
+forging theirs. Keying on the leftmost hop is exactly the spoofable rule this
+avoids — if you reproduce this keying anywhere else, reproduce it in this
+direction.
 
-- An unconfigured `X-Forwarded-For` is **ignored** — a direct client
-  cannot bypass its own bucket by setting the header.
+The rest of the rule:
+
+- An `X-Forwarded-For` from a peer that is **not** a listed proxy is
+  **ignored** — a direct client cannot bypass its own bucket by setting it.
+- An unparseable hop in the chain is skipped, never used as a key.
 - An unparseable IP in `TRUSTED_PROXIES` **aborts the boot** naming
   the offending value — never a silent skip.
 - A request with no peer addr (synthetic, in-process) is counted
   against a literal `"global"` bucket.
+
+The list is `NESTRS_HTTP__TRUSTED_PROXIES`, on the transport, not on the
+throttler: which proxies a deployment believes decides who *every* request is
+attributed to — the [`ClientIp`](/http/extractors/) extractor's answer as much
+as the rate-limit bucket's. One list, so a `429` and the log line explaining it
+can never name different callers.
 
 <Aside>
 Trust the proxy header **only** when the request arrived through a

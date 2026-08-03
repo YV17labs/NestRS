@@ -126,6 +126,14 @@ pub use serde;
 #[doc(hidden)]
 pub use validator;
 
+// A `pub trait` + `as dyn Trait` provider — the documented way to hide an impl
+// behind the DI container — needs `#[async_trait]` on both the trait and the
+// impl. That is a *container* concern, not a transport one, so it is reachable
+// as `nest_rs::core::async_trait`. Every surface crate re-exports it too, but
+// routing a plain service trait through `nest_rs::guards::async_trait` (the
+// only path that used to exist for one) reads as a mistake.
+pub use async_trait::async_trait;
+
 pub use nest_rs_core_macros::{hooks, module};
 
 /// The provider decorator. Every `#[inject]` field must be an `Arc<T>` or

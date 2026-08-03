@@ -83,8 +83,22 @@ pub struct HttpRouteMeta {
     /// Schema builder for the `Json<T>` request body, or `None` for a
     /// non-JSON/absent body.
     pub request_body: Option<SchemaFn>,
-    /// Schema builder for the `Json<T>` response, or `None` for a non-JSON return.
+    /// Schema builder for the response payload — inferred from a `Json<T>`
+    /// return, or declared with `#[api(response = T)]` when the handler builds
+    /// its own [`Response`](poem::Response) (the `#[crud]` paginated list does).
+    /// `None` only when neither applies.
     pub response: Option<SchemaFn>,
+    /// An ability shaper (`Authorize<_, _>`) masks this route's response, so a
+    /// caller may receive a **subset** of [`response`](Self::response)'s
+    /// properties — whichever ones its ability grants.
+    ///
+    /// The schema is published anyway. Publishing nothing was the honest
+    /// reading of "the field set depends on the caller", and it typed every
+    /// generated client's `#[crud]` response as `any` — losing the whole point
+    /// of `#[expose]`, whose entity feeds the handler, the GraphQL schema and
+    /// this document from one type. The document now carries the shape *and*
+    /// says the fields are ability-dependent.
+    pub masked: bool,
     /// Schema builders for the handler's `Path<T>` extractor components, in
     /// path order (a `Path<(A, B)>` tuple yields one per element). Empty when
     /// the handler binds its id another way (`Bind<_, _>`) — the doc then falls
@@ -111,6 +125,17 @@ pub struct HttpRouteMeta {
     /// detection the masking-arm check uses); a hand-written handler that
     /// throttles by other means leaves it `false`.
     pub throttled: bool,
+    /// The route's success response carries a `Location` header — `#[crud]`'s
+    /// create names the row it just minted (RFC 9110 §15.3.2), `#[redirect]`
+    /// names the target. The OpenAPI document declares the header so a
+    /// generated client can read it, the same reason a throttled route's `429`
+    /// declares `Retry-After`: a header that ships and is not declared is a
+    /// header no generated client will ever look at.
+    ///
+    /// A hand-written handler that sets `Location` itself leaves this `false` —
+    /// like [`throttled`](Self::throttled), it states what the framework knows
+    /// it emitted, never what a handler might.
+    pub sets_location: bool,
     /// The effective **success** HTTP status this route emits — `200` unless a
     /// `#[http_code(N)]` or `#[redirect(_, code)]` overrides it. Used by the
     /// OpenAPI document so the advertised success response matches the wire
@@ -257,10 +282,12 @@ mod tests {
             tags: &["Users"],
             request_body: None,
             response: None,
+            masked: false,
             path_params: &[],
             query_params: &[],
             may_conflict: false,
             throttled: false,
+            sets_location: false,
             success_status: 200,
             scoped_guarded: false,
             public: false,
@@ -303,10 +330,12 @@ mod tests {
             tags: &[],
             request_body: None,
             response: None,
+            masked: false,
             path_params: &[],
             query_params: &[],
             may_conflict: false,
             throttled: false,
+            sets_location: false,
             success_status: 200,
             scoped_guarded,
             public,

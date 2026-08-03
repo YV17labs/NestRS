@@ -7,6 +7,7 @@
 //! generated handler wrapper (see [`take_response_shapers`] and
 //! [`apply_response_shapers`]).
 
+use nest_rs_codegen::mixed_site_ident;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -355,13 +356,21 @@ pub(crate) fn apply_response_shapers(
     wrapper_args: &[syn::Ident],
     returns_result: bool,
 ) -> TokenStream2 {
+    // Bound in the same scope as the developer's extractor bindings, so they
+    // take the same definition-site hygiene the wrapper's own locals do — see
+    // the `mixed_site_ident` note in `routes.rs`. Safe by span, not by the
+    // order these statements happen to be emitted in.
+    let out = mixed_site_ident("__out");
+    let ok = mixed_site_ident("__ok");
+    let response = mixed_site_ident("__response");
+
     if let Some(redirect) = &shapers.redirect {
         let url = &redirect.url;
         let status_lit = match &redirect.code {
             Some(lit) => quote! { #lit },
             None => quote! { 307u16 },
         };
-        let header_writes = headers_tokens(&shapers.headers);
+        let header_writes = headers_tokens(&shapers.headers, &response);
         return quote! {
             {
                 // The user method is not called — `#[redirect]` produces the
@@ -370,7 +379,7 @@ pub(crate) fn apply_response_shapers(
                 // One tuple discard makes the "read but unused" intent explicit
                 // at `cargo expand` time without N repetitive lines.
                 let _ = (#(&#wrapper_args,)*);
-                let mut __response: ::nest_rs_http::poem::Response =
+                let mut #response: ::nest_rs_http::poem::Response =
                     ::nest_rs_http::poem::Response::builder()
                         .status(
                             ::nest_rs_http::poem::http::StatusCode::from_u16(#status_lit)
@@ -379,21 +388,21 @@ pub(crate) fn apply_response_shapers(
                         .header(::nest_rs_http::poem::http::header::LOCATION, #url)
                         .finish();
                 #header_writes
-                ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(__response)
+                ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(#response)
             }
         };
     }
 
     let status_apply = match &shapers.http_code {
         Some(lit) => quote! {
-            __response.set_status(
+            #response.set_status(
                 ::nest_rs_http::poem::http::StatusCode::from_u16(#lit)
                     .expect("status validated at compile time"),
             );
         },
         None => quote! {},
     };
-    let header_writes = headers_tokens(&shapers.headers);
+    let header_writes = headers_tokens(&shapers.headers, &response);
 
     // Bug 1 / Bug 5: matching the Result inside the wrapper keeps the
     // handler's error status (e.g. 403 via `ResponseError`) instead of
@@ -402,7 +411,7 @@ pub(crate) fn apply_response_shapers(
     // (i.e. `From<E> for poem::Error`) is available.
     let unwrap_ok = if returns_result {
         quote! {
-            let __ok = match __out {
+            let #ok = match #out {
                 ::core::result::Result::Ok(v) => v,
                 ::core::result::Result::Err(e) => {
                     return ::core::result::Result::Err(::core::convert::From::from(e));
@@ -410,18 +419,18 @@ pub(crate) fn apply_response_shapers(
             };
         }
     } else {
-        quote! { let __ok = __out; }
+        quote! { let #ok = #out; }
     };
 
     quote! {
         {
-            let __out = #call_expr;
+            let #out = #call_expr;
             #unwrap_ok
-            let mut __response: ::nest_rs_http::poem::Response =
-                ::nest_rs_http::poem::IntoResponse::into_response(__ok);
+            let mut #response: ::nest_rs_http::poem::Response =
+                ::nest_rs_http::poem::IntoResponse::into_response(#ok);
             #status_apply
             #header_writes
-            ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(__response)
+            ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(#response)
         }
     }
 }
@@ -432,7 +441,7 @@ pub(crate) fn apply_response_shapers(
 /// `IntoResponse` impl already set, dodging the duplicate-header footgun.
 /// Multi-value headers in `is_multi_value_header` (today: `Set-Cookie`) use
 /// `.append()` so the shaper stacks instead of clobbering prior cookies.
-fn headers_tokens(headers: &[(LitStr, LitStr)]) -> TokenStream2 {
+fn headers_tokens(headers: &[(LitStr, LitStr)], response: &syn::Ident) -> TokenStream2 {
     if headers.is_empty() {
         return quote! {};
     }
@@ -443,7 +452,7 @@ fn headers_tokens(headers: &[(LitStr, LitStr)]) -> TokenStream2 {
             quote! { insert }
         };
         quote! {
-            __response.headers_mut().#method(
+            #response.headers_mut().#method(
                 ::nest_rs_http::poem::http::HeaderName::from_static(#name),
                 ::nest_rs_http::poem::http::HeaderValue::from_static(#value),
             );

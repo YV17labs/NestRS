@@ -301,6 +301,27 @@ pub fn forwarded_idents<'a>(
     Ok(idents)
 }
 
+/// An identifier for a local **the expansion binds for itself**, on
+/// `Span::mixed_site()` — the span that resolves local variables at the macro's
+/// *definition* site instead of the call site.
+///
+/// Reach for this for every `let` a wrapper introduces alongside identifiers the
+/// developer chose. A wrapper that binds `req`/`body` on `Span::call_site()` and
+/// then extracts a handler parameter the developer spelled `body` produces two
+/// bindings of the *same* name: the second masks the first, and every later
+/// statement silently reads the wrong one. The compiler blames the attribute,
+/// never the parameter — see the `#[routes]` regression in
+/// `nest-rs-http/tests/integration/route_decorators.rs`.
+///
+/// A prefix convention (`__nestrs_body`) only narrows the window; hygiene closes
+/// it, and lets the emitted code keep readable names under `cargo expand`.
+///
+/// Struct fields and method names are matched by spelling, not hygiene — keep
+/// those on `Span::call_site()`.
+pub fn mixed_site_ident(name: &str) -> Ident {
+    Ident::new(name, proc_macro2::Span::mixed_site())
+}
+
 /// Rewrite each value argument's pattern to the plain identifier it forwards
 /// under, so the sequence can serve as a generated wrapper's parameter list.
 /// Returns those identifiers in order, index-aligned with the value arguments.

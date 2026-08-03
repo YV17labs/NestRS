@@ -57,6 +57,7 @@ pub use page::{LIST_CAP, Page, PageParams, RELATION_LOAD_CAP};
 pub use repo::{Repo, scope_for};
 pub use service::{
     Access, Authorized, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel,
+    model_uuid,
 };
 pub use slug::resolve_unique_slug;
 pub use soft_delete::{SoftDeletable, live_condition};

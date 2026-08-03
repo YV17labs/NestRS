@@ -1,8 +1,8 @@
 //! Route-level HTTP decorators — `#[http_code]`, `#[response_header]`, `#[redirect]`,
 //! and `Result<T, E>` error paths. Boots a real controller through `HttpTransport`.
 
-use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{HttpTransport, controller, routes};
+use nest_rs_core::module;
+use nest_rs_http::{controller, routes};
 use poem::error::ResponseError;
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
@@ -25,9 +25,10 @@ impl DecoratorProbeController {
         "Hello World"
     }
 
+    // No `#[allow(dead_code)]`: the macro emits it, and this suite compiles
+    // under `-D warnings`.
     #[get("/docs")]
     #[redirect("https://docs.nestrs.dev", 301)]
-    #[allow(dead_code, reason = "body discarded by #[redirect]")]
     async fn docs(&self) {}
 
     #[post("/forbidden")]
@@ -69,20 +70,7 @@ impl ResponseError for ForbiddenError {
 struct DecoratorProbeModule;
 
 async fn boot() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    let app = App::builder()
-        .module::<DecoratorProbeModule>()
-        .build()
-        .await
-        .expect("module boots");
-    let mut transport = HttpTransport::new();
-    transport
-        .configure(app.container())
-        .await
-        .expect("transport configures against the live container");
-    let endpoint = transport
-        .take_endpoint()
-        .expect("configure populates the endpoint");
-    TestClient::new(endpoint)
+    crate::boot::<DecoratorProbeModule>().await
 }
 
 #[tokio::test]

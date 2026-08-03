@@ -18,7 +18,9 @@ mod widget {
     use sea_orm::entity::prelude::*;
     use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+    #[derive(
+        Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize, schemars::JsonSchema,
+    )]
     #[sea_orm(table_name = "widgets")]
     pub struct Model {
         #[sea_orm(primary_key)]
@@ -46,7 +48,11 @@ impl WireModelDefaults for widget::Entity {
     }
 }
 
-#[derive(Serialize)]
+// `JsonSchema` too: an `Authorize`-shaped route publishes its response schema
+// (OAPI-O5), so the bound `Json<T>` has always carried on an unshaped route now
+// applies uniformly — adding `#[authorize]` no longer silently drops a route's
+// documented shape.
+#[derive(Serialize, schemars::JsonSchema)]
 struct WidgetDto {
     id: i32,
     name: String,
@@ -359,4 +365,37 @@ async fn a_non_json_response_passes_through() {
         .await;
     resp.assert_status_is_ok();
     resp.assert_text("hello").await;
+}
+
+/// OAPI-O5: an ability shaper masks *fields*, so a route behind one publishes
+/// its full shape and flags it — it does not publish nothing.
+///
+/// Suppressing the schema was the honest reading of "the field set depends on
+/// the caller", and it typed every `#[crud]` response as `any` in a generated
+/// client, on exactly the surface `#[expose]` exists to serve. Asserted on the
+/// route metadata rather than on a rendered document so the contract is pinned
+/// where it is produced — `#[routes]` — and with no database in reach.
+#[tokio::test]
+async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked() {
+    let app = boot().await;
+    let discovery = nest_rs_core::DiscoveryService::new(app.container());
+    let controllers = discovery.meta::<nest_rs_http::HttpControllerMeta>();
+    let routes: Vec<_> = controllers
+        .iter()
+        .flat_map(|d| d.meta.routes.iter())
+        .collect();
+    assert!(!routes.is_empty(), "the controller is discovered at all");
+
+    for route in routes {
+        assert!(
+            route.masked,
+            "every route here is shaped, so every one is masked: {}",
+            route.handler,
+        );
+        assert!(
+            route.response.is_some(),
+            "a masked route publishes the shape a caller may see a subset of: {}",
+            route.handler,
+        );
+    }
 }

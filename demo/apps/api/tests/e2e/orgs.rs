@@ -17,9 +17,15 @@ async fn create_org_persists_and_is_listed_with_a_bearer_token() {
         .body_json(&json!({ "name": name }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    // `#[crud]`'s create answers `201 Created` and names the row it minted —
+    // not the `200` this test asserted while the helper below already expected
+    // the `201`.
+    created.assert_status(StatusCode::CREATED);
+    let location = location_of(&created);
     let created_json = created.json().await;
-    assert_eq!(created_json.value().object().get("name").string(), name);
+    let created_obj = created_json.value().object();
+    assert_eq!(created_obj.get("name").string(), name);
+    assert_created_location(location.as_deref(), "/orgs", created_obj.get("id").string());
 
     let listed = app
         .http()

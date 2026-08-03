@@ -7,13 +7,14 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    Attribute, Expr, FnArg, ImplItem, ItemImpl, LitStr, Meta, Path, ReturnType, Token, Type,
-    parse_macro_input,
+    Attribute, Expr, FnArg, ImplItem, ItemImpl, LitStr, Path, ReturnType, Token, Type,
+    parse_macro_input, parse_quote,
 };
 
 use nest_rs_codegen::{
     expr_str, force_guard_typeids, impl_self_ident, injected_methods_with_layers, layer_deps,
-    normalize_forwarded_args, nth_generic_type, scoped_specs, take_flag_attr, take_path_list,
+    mixed_site_ident, normalize_forwarded_args, nth_generic_type, scoped_specs, take_flag_attr,
+    take_path_list,
 };
 
 use crate::attr::opt_str;
@@ -186,6 +187,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         // uniqueness violation, so the document advertises that response. Always
         // stripped here so it never reaches the compiler.
         let may_conflict = take_flag_attr(&mut method.attrs, "crud_write");
+        // The same kind of marker, for the `Location` a `#[crud]` create sends
+        // with its `201`. Stamped by the generated handler because only it knows
+        // it built the header; `#[redirect]` is added to it below, since a
+        // redirect's whole response *is* a `Location`.
+        let mut sets_location = take_flag_attr(&mut method.attrs, "crud_location");
 
         // Drained after the `use_*` attributes so error spans for a misuse of
         // a response decorator point past the layers — and *before* emitting
@@ -202,8 +208,37 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         // route (OAPI-O3): a `#[redirect]`/`#[http_code(N)]` overrides the 200
         // default.
         let success_status = response_shapers.success_status();
+        if response_shapers.redirect.is_some() {
+            // A redirect *is* a `Location` — the shaper builds the response
+            // around that one header — so the document declares it without a
+            // marker of its own.
+            sets_location = true;
+            // And `#[redirect]` produces the response itself, never calling the
+            // method, so rustc sees a method nothing invokes and reports
+            // `dead_code` on code that is correct and documented. The macro
+            // knows better than the lint here, so it says so — leaving a clean
+            // build clean.
+            method.attrs.push(parse_quote! {
+                #[allow(dead_code, reason = "#[redirect] answers without calling the handler")]
+            });
+        }
 
-        let call_expr = quote! { __ctrl.#method_name(#(#arg_idents),*).await };
+        // Every local the wrapper binds for itself sits on `Span::mixed_site()`
+        // — the span that gives *definition-site* hygiene to local variables —
+        // so a handler parameter spelled `req`, `body`, `__ctrl` or `res` binds
+        // a genuinely different variable and cannot shadow the wrapper's own.
+        // Without it, `Json(body): Json<T>` — the idiom `/http/extractors/`
+        // teaches — masked the `RequestBody` every *later* extractor reads, and
+        // the mismatched-type error was reported on `#[routes]`, naming neither
+        // the parameter nor the collision (HTTP-M1). The response shapers bind
+        // three more (`response.rs`); they take the same span, so the guarantee
+        // does not rest on statement order.
+        let req_var = mixed_site_ident("req");
+        let body_var = mixed_site_ident("body");
+        let ctrl_var = mixed_site_ident("__ctrl");
+        let res_var = mixed_site_ident("res");
+
+        let call_expr = quote! { #ctrl_var.#method_name(#(#arg_idents),*).await };
         let returns_result = match &method.sig.output {
             ReturnType::Type(_, ty) => result_inner(ty).is_some(),
             ReturnType::Default => false,
@@ -212,7 +247,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             (return_type.clone(), call_expr)
         } else {
             let mut wrapper_args: Vec<syn::Ident> = Vec::with_capacity(arg_idents.len() + 1);
-            wrapper_args.push(syn::Ident::new("__ctrl", proc_macro2::Span::call_site()));
+            wrapper_args.push(ctrl_var.clone());
             wrapper_args.extend(arg_idents.iter().cloned());
             let body = crate::response::apply_response_shapers(
                 &response_shapers,
@@ -241,7 +276,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                     let ty = &pt.ty;
                     Some(quote! {
                         let #pat = <#ty as ::nest_rs_http::poem::FromRequest>::from_request(
-                            &req, &mut body,
+                            &#req_var, &mut #body_var,
                         )
                         .await?;
                     })
@@ -261,15 +296,15 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 #[allow(unused_mut)]
                 async fn call(
                     &self,
-                    mut req: ::nest_rs_http::poem::Request,
+                    mut #req_var: ::nest_rs_http::poem::Request,
                 ) -> ::nest_rs_http::poem::Result<Self::Output> {
-                    let (req, mut body) = req.split();
+                    let (#req_var, mut #body_var) = #req_var.split();
                     #(#extractor_stmts)*
-                    let __ctrl = &self.__ctrl;
-                    let res: #wrapper_return_type = async move { #wrapper_body }.await;
-                    let res = ::nest_rs_http::poem::error::IntoResult::into_result(res);
+                    let #ctrl_var = &self.__ctrl;
+                    let #res_var: #wrapper_return_type = async move { #wrapper_body }.await;
+                    let #res_var = ::nest_rs_http::poem::error::IntoResult::into_result(#res_var);
                     ::std::result::Result::map(
-                        res,
+                        #res_var,
                         ::nest_rs_http::poem::IntoResponse::into_response,
                     )
                 }
@@ -364,14 +399,26 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             },
             None => quote! { ::core::option::Option::None },
         };
-        // A shaped (masked) response has no static schema — the fields it
-        // carries depend on the caller's ability — so skip schema capture there.
-        let response = match (shaper.is_some(), response_payload(&method.sig.output)) {
-            (false, Some(ty)) => quote! {
+        // The payload the document advertises: `#[api(response = T)]` when the
+        // handler states it, else the `Json<T>` the return type carries.
+        //
+        // A shaper (`Authorize<_, _>`) no longer suppresses this. It masks
+        // *fields*, so the caller receives a subset of this shape — which the
+        // route records as `masked` and the document says in the response
+        // description. Suppressing the schema instead typed every generated
+        // client's `#[crud]` response as `any`, on exactly the surface
+        // `#[expose]` exists to serve (OAPI-O5).
+        let response = match api
+            .response
+            .clone()
+            .or_else(|| response_payload(&method.sig.output))
+        {
+            Some(ty) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn)
             },
-            _ => quote! { ::core::option::Option::None },
+            None => quote! { ::core::option::Option::None },
         };
+        let masked = shaper.is_some();
 
         // `Path<T>` extractor types (in path order) and `Query<T>` payload
         // types — the OpenAPI doc turns the former into real path-param schemas
@@ -401,11 +448,13 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 tags: #tags,
                 request_body: #request_body,
                 response: #response,
+                masked: #masked,
                 path_params: #path_params,
                 query_params: #query_params,
                 may_conflict: #may_conflict,
                 throttled: #method_throttled
                     || <#self_ty>::__nestrs_controller_has_throttler(),
+                sets_location: #sets_location,
                 success_status: #success_status,
                 scoped_guarded: #method_guarded
                     || !<#self_ty>::__nestrs_controller_guard_specs().is_empty(),
@@ -769,35 +818,65 @@ struct ApiMeta {
     summary: Option<LitStr>,
     description: Option<LitStr>,
     tags: Vec<LitStr>,
+    /// `#[api(response = T)]` — the payload the document advertises when the
+    /// return type cannot state it: a handler that builds its own `Response`
+    /// (the `#[crud]` paginated list, which carries `x-next-cursor`) returns
+    /// no `Json<T>` for the macro to read.
+    response: Option<Type>,
 }
 
+/// What `#[api]` accepts, in the error every rejection quotes. One `const` so
+/// the list cannot be worded two ways.
+const API_KEYS: &str = "#[api] accepts `summary = \"...\"`, `description = \"...\"`, \
+                        `tags(\"a\", \"b\")`, and `response = Type`";
+
+/// Parse `#[api(...)]` straight into [`ApiMeta`].
+///
+/// Hand-rolled rather than routed through `syn::Meta`: a `Meta::NameValue` holds
+/// an **expression**, and `response = Vec<Post>` is a *type* — read as an
+/// expression it is a chain of comparisons, so the whole attribute failed with
+/// "comparison operators cannot be chained" pointing at the decorator, on a type
+/// the developer never wrote.
 fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
-    let mut out = ApiMeta::default();
-    let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
-    for meta in metas {
-        match meta {
-            Meta::NameValue(nv) if nv.path.is_ident("summary") => {
-                out.summary = Some(expr_str(&nv.value)?);
+    attr.parse_args_with(|input: syn::parse::ParseStream<'_>| {
+        let mut out = ApiMeta::default();
+        while !input.is_empty() {
+            let key: syn::Ident = input
+                .parse()
+                .map_err(|_| syn::Error::new(input.span(), API_KEYS))?;
+            match key.to_string().as_str() {
+                "summary" => {
+                    input.parse::<Token![=]>()?;
+                    out.summary = Some(expr_str(&input.parse::<Expr>()?)?);
+                }
+                "description" => {
+                    input.parse::<Token![=]>()?;
+                    out.description = Some(expr_str(&input.parse::<Expr>()?)?);
+                }
+                "response" => {
+                    input.parse::<Token![=]>()?;
+                    out.response = Some(input.parse()?);
+                }
+                "tags" => {
+                    let content;
+                    syn::parenthesized!(content in input);
+                    out.tags = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?
+                        .into_iter()
+                        .collect();
+                }
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        &key,
+                        format!("`{other}` is not an #[api] argument — {API_KEYS}"),
+                    ));
+                }
             }
-            Meta::NameValue(nv) if nv.path.is_ident("description") => {
-                out.description = Some(expr_str(&nv.value)?);
-            }
-            Meta::List(list) if list.path.is_ident("tags") => {
-                out.tags = list
-                    .parse_args_with(Punctuated::<LitStr, Token![,]>::parse_terminated)?
-                    .into_iter()
-                    .collect();
-            }
-            other => {
-                return Err(syn::Error::new_spanned(
-                    other,
-                    "#[api] accepts `summary = \"...\"`, `description = \"...\"`, and \
-                     `tags(\"a\", \"b\")`",
-                ));
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
             }
         }
-    }
-    Ok(out)
+        Ok(out)
+    })
 }
 
 /// The JSON payload type behind an extractor: `Json<T>`, `Valid<Json<T>>`, and
@@ -928,5 +1007,45 @@ mod tests {
         assert!(!guard_path_is_throttler(&lookalike));
         // The *last* segment is `helper`, not the guard type — no match.
         assert!(!guard_path_is_throttler(&module_named));
+    }
+
+    fn api_attr(tokens: TokenStream2) -> syn::Result<ApiMeta> {
+        let attr: Attribute = parse_quote!(#[api(#tokens)]);
+        parse_api_attr(&attr)
+    }
+
+    // `response = Vec<Post>` is a **type**. Read as `syn::Meta` its value would
+    // be an expression, and a generic argument list reads there as a chain of
+    // comparisons — so the whole `#[crud]` expansion failed with "comparison
+    // operators cannot be chained" pointing at the decorator, on a type the
+    // developer never wrote.
+    #[test]
+    fn api_response_accepts_a_generic_type_beside_the_string_arguments() {
+        let meta = match api_attr(quote! {
+            summary = "List Posts", tags("Post"), response = ::std::vec::Vec<Post>
+        }) {
+            Ok(meta) => meta,
+            Err(err) => panic!("the argument list must parse: {err}"),
+        };
+        assert_eq!(
+            meta.summary.map(|s| s.value()).as_deref(),
+            Some("List Posts")
+        );
+        assert_eq!(meta.tags.len(), 1);
+        let ty = meta.response.expect("a response type");
+        assert_eq!(
+            quote!(#ty).to_string(),
+            quote!(::std::vec::Vec<Post>).to_string(),
+        );
+    }
+
+    #[test]
+    fn an_unknown_api_argument_names_itself_and_the_accepted_set() {
+        let msg = match api_attr(quote! { returns = Post }) {
+            Ok(_) => panic!("an unknown key must be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(msg.contains("returns"), "{msg}");
+        assert!(msg.contains("response = Type"), "{msg}");
     }
 }

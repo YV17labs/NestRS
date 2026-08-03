@@ -465,6 +465,17 @@ fn model_pk<E: EntityTrait>(model: &E::Model) -> Option<sea_orm::Value> {
     Some(model.get(pk_col))
 }
 
+/// The same first primary key, narrowed to a `Uuid` — what a caller needs to
+/// address the row it just created (`#[crud]`'s `201` names it in `Location`).
+///
+/// `None` for a primary-key-less entity, and for one keyed on anything else:
+/// `#[crud]`'s by-id routes take a `Uuid` path segment, but `ops = [create]`
+/// alone imposes no such bound, so this stays a question rather than a trait
+/// bound that would reject those resources outright.
+pub fn model_uuid<E: EntityTrait>(model: &E::Model) -> Option<Uuid> {
+    <Uuid as sea_orm::sea_query::ValueType>::try_from(model_pk::<E>(model)?).ok()
+}
+
 /// Equality condition over **all** of a model's primary-key columns, used to
 /// re-select a freshly inserted row for the scoped create re-check. Spans
 /// composite keys, so it is correct for junction entities too.

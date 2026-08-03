@@ -140,6 +140,13 @@ chrono-tz = "0.10"
 
 # Held at the 0.7 stable line: apalis 1.0 is still churning through release
 # candidates and does not clear the "no pre-release in a foundation dep" bar.
+# Checked 2026-08-03: newest stable `apalis-redis` is 0.7.4 (2025-11-18), newest
+# of any kind is 1.0.0-rc.8 (2026-05-07) — upstream is alive, its *stable* line
+# is not moving. That dates the freshness bar: ~2026-11 is when a still-RC 1.0
+# turns this pin into a flag to raise, not a note to keep.
+# The 0.7 build carries a future-incompat warning (never-type fallback); the
+# crate now lives at github.com/apalis-dev/apalis-redis, split out of
+# geofmureithi/apalis, and no issue there tracks it yet.
 apalis = "0.7"
 apalis-redis = "0.7"
 # Same 0.32 line apalis-redis pins, so the two share one connection type — a

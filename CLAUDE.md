@@ -136,8 +136,29 @@ the *thesis* true at install time, not just at call time.
 4. Any derive the decorator emits routed through the surface crate **with
    its `crate = ` override**, so the use site declares neither the crate
    nor a version to keep aligned.
-5. A witness in `nest-rs-macro-hygiene`, and a fresh crate outside every
-   workspace that compiles the page's own snippet.
+5. Two witnesses, and they are **inside the framework** — there is no
+   snippet crate outside the workspaces, and adding one is out of scope:
+   - **The expansion** — a use site in `nest-rs-macro-hygiene`, whose one
+     dependency proves a decorator needs no second manifest line. It holds
+     *decorators only*: a module import there proves nothing about a
+     macro, and squats a proof that belongs next door.
+   - **The composition** — a test in the capability's **own crate** that
+     boots the documented wiring through `nest_rs_testing::TestApp` (or
+     `App::builder`) and asserts what a caller gets back. Every `for_root`
+     seam has one; that is the bar. Composition is *executed*, never
+     merely compiled — a boot test also proves the access graph, the
+     resolved config and the mounted routes, which compiling cannot.
+
+   This mirrors the split every framework of this shape settles on:
+   `@nestjs/testing` + `sample/` — a testing module and real example
+   apps, not a parallel scratch project. `demo/` is our `sample/`; a page
+   whose snippet has no counterpart in `demo/` or in the owning crate's
+   suite is undocumented, not under-tooled.
+
+   **Assert against shared constants, never a copied literal.** A test
+   that re-types `"posts:read audio:transcode"` passes while the policy
+   and the deployment drift apart; one that reads
+   `features::authz::constants::ALL` fails the moment they do.
 
 **One exception, and only one: binaries.** `cargo add` puts a *library* in
 a manifest; `cargo install` puts a *command* on `PATH`. `nestrs` is a

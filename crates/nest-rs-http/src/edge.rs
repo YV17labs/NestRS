@@ -1,6 +1,7 @@
 //! The fused transport-edge endpoint — one layer carrying the per-request
-//! concerns every route shares: request-scope install, body-size cap,
-//! request timeout, and the default response headers (security + `Server`).
+//! concerns every route shares: path normalization, request-scope install,
+//! body-size cap, request timeout, and the default response headers
+//! (security + `Server`).
 //!
 //! Before the fusion each concern was its own boxed wrap (an `.around()`
 //! closure or a poem middleware), so every request paid one virtual dispatch
@@ -12,6 +13,11 @@
 //!
 //! Order and error-path behavior mirror the previous layered composition:
 //!
+//! - The trailing slash is trimmed first, so routing, guards, interceptors and
+//!   the route table all see one spelling of a path. It lives here rather than
+//!   in a `NormalizePath` middleware for the reason the rest of the layer does:
+//!   the fast path is a single `ends_with('/')` test, with no extra boxed
+//!   endpoint and no allocation when the path is already canonical.
 //! - The request scope is installed before anything inward can resolve
 //!   `#[injectable(scope = request)]` providers via [`Scoped`](crate::Scoped).
 //! - A `413` (body cap) and a `504` (timeout) are produced *inside* the
@@ -30,12 +36,14 @@
 
 use std::future::{Future, poll_fn};
 use std::pin::pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
 use nest_rs_core::{Container, RequestScope, with_request_scope};
 use poem::error::ReadBodyError;
+use poem::http::uri::{PathAndQuery, Uri};
 use poem::http::{HeaderName, HeaderValue, StatusCode};
 use poem::web::headers::{ContentLength, HeaderMapExt};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
@@ -43,6 +51,56 @@ use poem::{Endpoint, IntoResponse, Request, Response, Result};
 /// A bare status-only response — the edge's own rejections (`413`, `504`).
 fn bare(status: StatusCode) -> Response {
     Response::builder().status(status).finish()
+}
+
+/// The path a trailing slash should have been written as, or `None` when the
+/// path is already canonical (the overwhelming majority — no allocation, no
+/// URI rebuild on the hot path).
+///
+/// `/kitchen/` → `/kitchen`; `//` → `/`; `/` and `/kitchen` are untouched. Only
+/// the trailing run is touched: an interior `//` is left alone, because an
+/// empty segment mid-path is a different path, not a slip of the pen.
+fn canonical_path(path: &str) -> Option<&str> {
+    if !path.ends_with('/') || path == "/" {
+        return None;
+    }
+    let trimmed = path.trim_end_matches('/');
+    // `//`, `///`, … all name the root.
+    Some(if trimmed.is_empty() { "/" } else { trimmed })
+}
+
+/// Rewrite the request URI onto [`canonical_path`], query preserved.
+///
+/// Only `uri()` is rewritten — `original_uri()` keeps what the client sent, so
+/// anything echoing the request back (the `Location` on a `#[crud]` create)
+/// still sees the caller's own spelling.
+fn trim_trailing_slash(req: &mut Request) {
+    let Some(path_and_query) = req.uri().path_and_query() else {
+        return;
+    };
+    let Some(canonical) = canonical_path(path_and_query.path()) else {
+        return;
+    };
+    let rebuilt = match path_and_query.query() {
+        Some(query) => format!("{canonical}?{query}"),
+        None => canonical.to_owned(),
+    };
+    // Both halves came out of a URI that already parsed, so a failure here is
+    // unreachable — and if it ever were reachable, leaving the path as sent is
+    // the safe outcome: a 404, never a request routed somewhere else.
+    let Ok(path_and_query) = PathAndQuery::from_str(&rebuilt) else {
+        return;
+    };
+    // Cloned rather than `mem::take`n out of the request: `Uri::from_parts` is
+    // fallible, and a take that failed would leave the request holding
+    // `Uri::default()` — routing every such request to `/` instead of leaving
+    // it where the caller aimed it. The clone costs one refcount pair, and only
+    // on the branch that already decided to rewrite.
+    let mut parts = req.uri().clone().into_parts();
+    parts.path_and_query = Some(path_and_query);
+    if let Ok(uri) = Uri::from_parts(parts) {
+        *req.uri_mut() = uri;
+    }
 }
 
 /// The single transport-edge layer assembled by
@@ -111,6 +169,13 @@ where
     E::Output: IntoResponse,
 {
     async fn handle(&self, mut req: Request) -> Result<Response> {
+        // Trailing-slash normalization, before anything routes on the path.
+        // `/kitchen` and `/kitchen/` are the same resource; the router is
+        // exact-match, so without this the second one 404s — and a 404 leaves
+        // the route's guards, interceptors and filters unrun, which makes the
+        // mistake read as a broken feature rather than a typo.
+        trim_trailing_slash(&mut req);
+
         // Body cap (B-HTTP-2) — every extractor sits under it. Four cases,
         // cheapest first:
         //
@@ -294,6 +359,36 @@ mod tests {
         resp.assert_status_is_ok();
         resp.assert_text("ok").await;
     }
+
+    /// R9-5: `/kitchen` served and `/kitchen/` 404'd. The router matches
+    /// exactly, so the trailing slash has to go before routing.
+    #[test]
+    fn a_trailing_slash_is_not_part_of_the_path() {
+        assert_eq!(canonical_path("/kitchen/"), Some("/kitchen"));
+        assert_eq!(canonical_path("/kitchen///"), Some("/kitchen"));
+        assert_eq!(
+            canonical_path("/v1/kitchen/items/"),
+            Some("/v1/kitchen/items")
+        );
+        // `//` and friends name the root, which is spelled with one slash.
+        assert_eq!(canonical_path("//"), Some("/"));
+    }
+
+    /// The no-op half: a canonical path is left exactly as it is, so the hot
+    /// path neither allocates nor rebuilds the URI.
+    #[test]
+    fn a_canonical_path_is_left_alone() {
+        assert_eq!(canonical_path("/"), None);
+        assert_eq!(canonical_path("/kitchen"), None);
+        assert_eq!(canonical_path(""), None);
+        // An interior empty segment is a different path, not a typo to fix.
+        assert_eq!(canonical_path("/kitchen//items"), None);
+    }
+
+    // The behaviour these two rules produce — the slashed form reaching the
+    // route, the query surviving — is asserted through the real controller /
+    // transport composition in `tests/integration/edge.rs`. Here the pure
+    // function is enough.
 
     #[tokio::test]
     async fn declared_length_over_the_cap_is_rejected_with_headers() {

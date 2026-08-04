@@ -251,34 +251,44 @@ becomes implicit (which vars exist? what are their types?). With
 
 ## Your own prefix
 
-`NESTRS` is a default, not a fixture. Declare your own once and every
-framework variable follows — `ACME_ENV`, `ACME_LOG`, `ACME_HTTP__PORT`,
+`NESTRS` is a default, not a fixture. Name your own once and every framework
+variable follows — `ACME_ENV`, `ACME_LOG`, `ACME_HTTP__PORT`,
 `ACME_DATABASE__URL`:
 
-```rust title="crates/features/src/lib.rs"
-nest_rs::env_prefix!("ACME");
+```yaml title="compose.yml"
+environment:
+  NESTRS_ENV_PREFIX: ACME
+  ACME_DATABASE__URL: postgres://…
 ```
 
-`nestrs new acme --env-prefix ACME` writes that line for you, plus the
-`.env` cascade under the new names and the `[workspace.metadata.nestrs]`
-entry the CLI reads back (so `nestrs doctor` and `nestrs g auth` speak your
-names, not ours).
+There is exactly one place to write it, and it is an environment variable
+because the prefix belongs to the *deployment*, not to the source: the same
+image runs in staging and in production, and each container names its own
+variables. The CLI reads the same variable from its own environment, so
+`nestrs doctor` and `nestrs g auth` speak your names, not ours.
+
+`nestrs new acme --env-prefix ACME` sets it in the generated `Justfile` (which
+is what `nestrs run` starts every process through) and in the `Dockerfile`, and
+writes the `.env` cascade under the new names.
 
 Three things are worth knowing:
 
-- **Write it in a crate every binary *and* every test binary links** — the
-  shared feature crate in a workspace, `src/lib.rs` standalone. Declared in
-  an app's `main.rs`, the app would resolve `ACME_*` while its own test
-  suites still resolved `NESTRS_*`.
-- **It is a rename, not an alias.** Once declared, `NESTRS_HTTP__PORT` is
-  just another variable in the environment — inert. That is deliberate: a
-  stale value silently winning is the failure mode a fallback would create.
-- **`RUST_LOG` keeps its name.** It belongs to the ecosystem, not to us.
+- **It must be set on the process, before it starts.** The prefix selects the
+  `.env` cascade and configures logging before `main` builds anything, so a
+  `.env` file cannot carry it — it is read too late to have chosen itself. The
+  framework aborts naming both values rather than let the rename silently not
+  happen.
+- **It is a rename, not an alias.** Once set, `NESTRS_HTTP__PORT` is just
+  another variable in the environment — inert. That is deliberate: a stale
+  value silently winning is the failure mode a fallback would create.
+- **`RUST_LOG` keeps its name.** It belongs to the ecosystem, not to us — and
+  so, for the same reason, does `NESTRS_ENV_PREFIX` itself: it is the one name
+  no prefix can rename.
 
-The literal is checked at compile time (uppercase ASCII, digits and
-underscores, no trailing `_` — the framework supplies the separator), and
-two different prefixes declared in one binary abort at boot naming both
-sites.
+The value is checked on the first read (uppercase ASCII, digits and
+underscores, no trailing `_` — the framework supplies the separator), and a
+malformed one aborts rather than fall back to `NESTRS`, which would be just as
+wrong and silent.
 
 ## Advanced
 

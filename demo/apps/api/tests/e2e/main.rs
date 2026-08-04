@@ -93,7 +93,6 @@ pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> Strin
         .body_json(&json!({ "name": name }))
         .send()
         .await;
-    // `#[crud]`'s create answers `201 Created`, not `200`.
     resp.assert_status(StatusCode::CREATED);
     let location = location_of(&resp);
     let id = resp

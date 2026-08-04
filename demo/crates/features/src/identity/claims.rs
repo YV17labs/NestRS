@@ -134,9 +134,6 @@ mod tests {
 
     #[test]
     fn a_token_with_no_scope_claim_is_delegated_nothing() {
-        // `Some(&[])`, never `None`: a bearer token is an OAuth credential, so
-        // the absence of a `scope` claim means nothing was delegated — not that
-        // scope does not apply. The other reading is the fail-open one.
         use nest_rs::authn::PrincipalIdentity;
         let bare = claims(vec![Role::Admin]);
         assert_eq!(

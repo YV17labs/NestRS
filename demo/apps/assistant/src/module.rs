@@ -16,16 +16,7 @@ use nest_rs::server_timing::ServerTimingModule;
         ServerTimingModule,
         HealthModule,
         HttpModule::for_root(HttpConfig { port: 3003, ..Default::default() }),
-        // Resolves `NESTRS_MCP__*` for every `#[mcp]` mount — the `Host`
-        // allowlist above all, which is loopback-only until a deployment names
-        // itself. Importing it activates nothing: the tool hosts below are what
-        // mount the endpoints.
         McpModule,
-        // This app is an OAuth 2.1 resource server, so it says so the way the
-        // MCP authorization spec requires: `/.well-known/oauth-protected-resource`
-        // is served, and every 401 points at it. Configured through
-        // `NESTRS_AUTHN__*` — a deployment names its own canonical URI and its
-        // issuer, so there is nothing here worth pinning in code.
         ProtectedResourceModule::for_root(None),
         DatabaseModule::for_root(None),
         QueueModule::for_root(None),

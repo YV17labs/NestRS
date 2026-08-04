@@ -75,10 +75,6 @@ impl PostsService {
             .await
             .map_err(ServiceError::from)?;
 
-        // Audit side-effect riding the same request transaction: the post just
-        // cleared the scoped `Update` above, and `post_publication` carries no
-        // column an ability rule predicates on — a system write, not an
-        // authorized create.
         let conn = Repo::<publication::Entity>::conn().map_err(ServiceError::from)?;
         Repo::<publication::Entity>::insert_unscoped(
             publication::ActiveModel {

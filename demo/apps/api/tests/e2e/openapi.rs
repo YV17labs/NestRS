@@ -42,12 +42,6 @@ async fn openapi_document_describes_the_routes() {
         "the :id path param is typed uuid",
     );
 
-    // OAPI-O5: the generated CRUD surface types its **responses**, not only its
-    // inputs. It used to publish none — an ability shaper was read as "the
-    // field set depends on the caller, so say nothing" — which typed every
-    // `#[crud]` response as `any` in a generated client, on exactly the surface
-    // `#[expose]` exists to serve. The document now carries the shape and says
-    // the fields are ability-dependent.
     let list_ok = &doc["paths"]["/orgs"]["get"]["responses"]["200"];
     assert_eq!(
         list_ok["content"]["application/json"]["schema"]["items"]["$ref"],
@@ -72,8 +66,6 @@ async fn openapi_document_describes_the_routes() {
         "a masked response says its field set is ability-dependent: {list_ok}",
     );
 
-    // A route that mints a resource answers `201 Created`, and the document
-    // says so rather than advertising a `200` the wire never sends.
     let created = &doc["paths"]["/orgs"]["post"]["responses"]["201"];
     assert_eq!(
         created["content"]["application/json"]["schema"]["$ref"], "#/components/schemas/Org",
@@ -85,8 +77,6 @@ async fn openapi_document_describes_the_routes() {
             .is_none(),
         "no bogus 200 next to the 201",
     );
-    // …and the `Location` it ships is declared, for the reason the `429` below
-    // declares its `Retry-After`: a generated client reads the document.
     assert_eq!(
         created["headers"]["Location"]["schema"]["format"], "uri-reference",
         "the 201 documents the Location header it sends: {created}",

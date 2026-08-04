@@ -128,15 +128,6 @@ async fn a_tool_never_sees_another_orgs_rows() {
     );
 }
 
-// --- the same guarantee, on the other two capabilities ---------------------
-//
-// Tools were the only MCP capability the framework used to scope, because rmcp
-// 2.x funnelled every operation through one dispatch method. rmcp 3.x does not,
-// so `PropagatingHandler` delegates the whole `ServerHandler` surface — and
-// these are the product-level proof that a prompt and a resource read are
-// row-filtered by exactly the same ambient ability, with no check written in
-// either handler.
-
 #[tokio::test]
 async fn a_prompt_is_row_filtered_like_a_tool() {
     let (db, app) = boot().await;
@@ -175,7 +166,6 @@ async fn a_resource_read_cannot_reach_another_orgs_row() {
     let acme = seed_org_with_post(&conn, "Acme", "acme-only-post").await;
     let globex = seed_org_with_post(&conn, "Globex", "globex-only-post").await;
 
-    // Acme lists its own resources, and sees exactly one.
     let acme_bearer = bearer_for(&acme.to_string());
     let session = open_session(app.http(), "/posts/mcp", Some(&acme_bearer)).await;
     let listed = call_method(
@@ -192,8 +182,6 @@ async fn a_resource_read_cannot_reach_another_orgs_row() {
         "`resources/list` is scoped by the ambient ability: {listed}",
     );
 
-    // Globex asks for the same URI Acme just saw. The row exists, so only the
-    // ability stands between the caller and it.
     let uri = listed
         .split("\"uri\":\"")
         .nth(1)

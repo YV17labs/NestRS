@@ -344,7 +344,6 @@ async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
         "the denial names the columns it refused, as a list: {refused}",
     );
 
-    // Same query, unrestricted grant: the admin still reads every column.
     let admin_view = graphql(&app, &admin_org, "{ users { id name email } }").await;
     assert!(admin_view.get("errors").is_none(), "{admin_view}");
     assert_eq!(
@@ -393,7 +392,6 @@ async fn graphql_validation_errors_name_the_offending_fields() {
         errors.get("name").is_some(),
         "`name` was rejected but is not named: {rejected}",
     );
-    // The message is the constant every transport uses; the detail is structural.
     assert_eq!(
         rejected["errors"][0]["message"], "validation failed",
         "{rejected}"

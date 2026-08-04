@@ -430,6 +430,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 
@@ -1772,6 +1773,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "inventory",
  "nest-rs-authz",
  "nest-rs-config",
  "nest-rs-core",
@@ -2315,6 +2317,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",

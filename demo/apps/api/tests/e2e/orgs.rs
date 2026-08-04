@@ -17,9 +17,6 @@ async fn create_org_persists_and_is_listed_with_a_bearer_token() {
         .body_json(&json!({ "name": name }))
         .send()
         .await;
-    // `#[crud]`'s create answers `201 Created` and names the row it minted —
-    // not the `200` this test asserted while the helper below already expected
-    // the `201`.
     created.assert_status(StatusCode::CREATED);
     let location = location_of(&created);
     let created_json = created.json().await;

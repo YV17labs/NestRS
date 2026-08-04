@@ -23,9 +23,6 @@ impl AbilityFactory for AppAbility {
             ab.can(Action::Manage, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Manage, org::Entity);
-            // The scope rides on the rule it conditions. An admin token minted
-            // without `posts:write` cannot write posts — scopes narrow what a
-            // token may exercise, they never widen what a role allows.
             ab.can(Action::Read, post::Entity)
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id))
                 .requires_scope(constants::POSTS_READ);
@@ -262,10 +259,6 @@ mod tests {
 
     #[test]
     fn a_read_only_delegation_cannot_write_even_as_admin() {
-        // The property scopes exist for: an *admin* token narrowed to
-        // `posts:read` loses the write rule entirely. Roles decide what the
-        // identity may do; scopes decide how much of it this token may
-        // exercise, and they only ever narrow.
         let org = Uuid::now_v7();
         let ab = ability_scoped(
             vec![Role::Admin],
@@ -306,8 +299,6 @@ mod tests {
 
     #[test]
     fn scopes_never_widen_what_the_role_denies() {
-        // The other direction, and the one a reviewer must be able to trust: a
-        // member holding every scope still cannot manage users.
         let org = Uuid::now_v7();
         let ab = ability_scoped(vec![Role::User], org, constants::all());
         assert!(!ab.can_class(Action::Manage, TypeId::of::<user::Entity>()));

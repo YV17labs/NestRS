@@ -72,7 +72,6 @@ async fn a_read_only_delegation_reads_but_cannot_write() {
 
     let read_only = narrow_bearer(&org, author, &[constants::POSTS_READ]);
 
-    // The scope it holds works, all the way through the row filter.
     app.http()
         .get("/posts")
         .header(header::AUTHORIZATION, &read_only)
@@ -80,8 +79,6 @@ async fn a_read_only_delegation_reads_but_cannot_write() {
         .await
         .assert_status_is_ok();
 
-    // The one it does not is refused — and this is an *admin* token, so nothing
-    // but the scope is standing in the way.
     assert_eq!(
         create_post_with(&app, &read_only).await.status(),
         StatusCode::FORBIDDEN,
@@ -91,9 +88,6 @@ async fn a_read_only_delegation_reads_but_cannot_write() {
 
 #[tokio::test]
 async fn widening_the_delegation_is_what_unblocks_the_write() {
-    // The other half of the same claim: the refusal above is about the scope
-    // and nothing else, so the identical caller with `posts:write` succeeds.
-    // Without this, a bug that refused every write would pass the test above.
     let (_db, app) = boot().await;
     let (org, author) = org_with_author(&app, "ScopeGlobex").await;
 
@@ -112,8 +106,6 @@ async fn widening_the_delegation_is_what_unblocks_the_write() {
 
 #[tokio::test]
 async fn a_delegation_with_no_post_scope_reads_nothing() {
-    // A token scoped to a different capability entirely: the posts rules are
-    // withheld, so the read gate refuses rather than returning rows.
     let (_db, app) = boot().await;
     let (org, author) = org_with_author(&app, "ScopeInitech").await;
 

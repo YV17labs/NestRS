@@ -5,8 +5,6 @@ use validator::{Validate, ValidationError, ValidationErrors};
 
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
-// Cross-field rules (a client id must be unique across the list), so this
-// one writes `impl Validate` by hand and opts out of the derive.
 #[config(namespace = "issuer", validate = "manual")]
 #[derive(Clone)]
 pub struct IssuerConfig {

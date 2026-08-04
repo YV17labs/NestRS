@@ -9,10 +9,6 @@
 
 use std::sync::Arc;
 
-// rmcp's `#[tool_router]` / `#[prompt_router]` / `#[tool]` / `#[prompt]` macros
-// expand to bare `rmcp::` paths resolved against this module's scope; the
-// re-export supplies the name, so the manifest carries no `rmcp` entry to keep
-// aligned.
 use nest_rs::authz::Action;
 use nest_rs::mcp::model::{
     GetPromptResult, ListResourcesResult, PaginatedRequestParams, PromptMessage,
@@ -97,9 +93,6 @@ impl PostsTool {
     }
 }
 
-// `#[tool_handler]` and `#[prompt_handler]` stack on one `impl ServerHandler`;
-// the resource half is written out, because a resource surface is a mapping
-// from URIs to rows rather than a set of decorated methods.
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for PostsTool {
@@ -143,9 +136,6 @@ impl ServerHandler for PostsTool {
                 McpError::resource_not_found(format!("unknown resource `{}`", request.uri), None)
             })?;
 
-        // `access` is the audited read path. It distinguishes "no such row"
-        // from "the caller may not read it"; both answer the same way here, so
-        // the resource surface leaks no existence.
         let post = match CrudService::access(&*self.svc, Action::Read, id)
             .await
             .map_err(Self::opaque)?

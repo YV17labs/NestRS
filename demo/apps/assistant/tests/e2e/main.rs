@@ -24,9 +24,6 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
         .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
-            // `ProtectedResourceModule` requires the audience to be pinned —
-            // that is the confused-deputy defence, and this seed is what the
-            // app's verifier reads instead of `NESTRS_AUTHN__AUDIENCE`.
             audience: Some(AUDIENCE.into()),
             ..Default::default()
         })

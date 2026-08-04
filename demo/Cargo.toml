@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.1.0"
+version = "3.0.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.96"
@@ -22,7 +22,7 @@ homepage = "https://nestrs.dev"
 # One entry, capabilities as features — the shape every app consuming NestRS
 # uses. The demo is the reference product: if it needed a second framework
 # line, no user could avoid one either.
-nest-rs = { version = "2.1", path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis", "schedule", "events", "authn", "authz", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "resource", "worker", "storage"] }
+nest-rs = { version = "3.0", path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis", "schedule", "events", "authn", "authz", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "resource", "worker", "storage"] }
 
 # Third-party crates this product's own source names. Requirements are
 # `major.minor` and the exact pins mirror the framework's — see the root

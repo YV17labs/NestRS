@@ -43,7 +43,7 @@ cargo add nest-rs --features redis
 [dependencies]
 # `redis` implies `queue` — the Redis-bound types, the macros, the
 # worker-context seam and the pipe fold `#[process]` expands to, together.
-nest-rs = { version = "2.0", features = ["redis"] }
+nest-rs = { version = "2.1", features = ["redis"] }
 ```
 
 `#[input]` on the job payload carries its `serde` derives; `anyhow` and

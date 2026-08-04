@@ -28,7 +28,7 @@ cargo add anyhow
 
 ```toml title="Cargo.toml"
 [dependencies]
-nest-rs = { version = "2.0", features = ["health"] }
+nest-rs = { version = "2.1", features = ["health"] }
 # Every `#[readiness]` / `#[liveness]` / `#[startup]` method returns
 # `anyhow::Result<()>`, so your own indicator names the crate. Reach it through
 # `nest_rs::core::anyhow` instead and this line goes too.

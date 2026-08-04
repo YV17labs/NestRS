@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-08-04
 
 ### The env prefix is the application's
 
@@ -1978,7 +1978,8 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
-[Unreleased]: https://github.com/YV17labs/NestRS/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/YV17labs/NestRS/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/YV17labs/NestRS/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/YV17labs/NestRS/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/YV17labs/NestRS/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/YV17labs/NestRS/compare/v1.1.1...v1.2.0

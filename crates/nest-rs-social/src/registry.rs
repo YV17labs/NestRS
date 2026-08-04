@@ -143,7 +143,7 @@ impl SocialRegistry {
                     provider = entry.key,
                     // `var_name` with `*` as the key: the glob the operator
                     // needs is the same join every real variable uses, so the
-                    // hint follows a custom `env_prefix!` instead of naming
+                    // hint follows a custom prefix instead of naming
                     // variables the app would never read.
                     env_namespace = nest_rs_config::var_name(entry.config_namespace, "*"),
                     "linked social provider has no credentials configured; inert",

@@ -88,7 +88,7 @@ pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
 pub use discoverable::Discoverable;
 pub use discovery::{Discovered, DiscoveryService};
-pub use env_prefix::{EnvPrefix, EnvPrefixDecl};
+pub use env_prefix::EnvPrefix;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
@@ -110,11 +110,6 @@ pub use layer_chain::{ResolvedLayer, check_specs_resolvable, compose_chain};
 // the boot inventory. Hidden at its definition; kept off the curated list here.
 #[doc(hidden)]
 pub use module::__module_registered;
-
-// `env_prefix!` expands to a `const _: () = $crate::assert_env_prefix(…)`, so
-// the shape check must be reachable from the crate root the macro names.
-#[doc(hidden)]
-pub use env_prefix::assert_env_prefix;
 
 // Re-exported so `#[hooks]`-generated `inventory::submit!` resolves through the
 // framework — apps never depend on `inventory` directly.

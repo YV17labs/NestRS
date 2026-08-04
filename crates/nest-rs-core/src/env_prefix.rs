@@ -1,5 +1,5 @@
 //! The prefix every framework environment variable carries — `NESTRS` unless
-//! the application declares its own with [`env_prefix!`](crate::env_prefix!).
+//! the deployment sets [`EnvPrefix::VAR`].
 //!
 //! Two shapes sit under it, and both come from here so a rename can never do
 //! half the job:
@@ -9,61 +9,54 @@
 //! - **namespaced config** — `<PREFIX>_<DOMAIN>__<KEY>`, built by
 //!   `nest_rs_config::var_name` on top of the same value.
 //!
-//! # Why a link-time declaration
+//! # Why the environment, and why one fixed name
+//!
+//! The prefix is a property of the *deployment*, not of the source: the same
+//! image runs in staging and in production, and each container names its own
+//! variables. So it is read from the environment, like everything else it
+//! governs — and the one name that cannot itself be prefixed is this one.
+//! `NESTRS_ENV_PREFIX` is therefore spelled literally, for the same reason
+//! `RUST_LOG` is: it is not the application's variable, it is the bootstrap's.
+//!
+//! # It must be set before the process
 //!
 //! The prefix has to be known before anything reads the environment:
 //! `<PREFIX>_ENV` selects the `.env` cascade, and the console subscriber reads
-//! `<PREFIX>_LOG` before `main` has built anything. A setter would therefore
-//! carry an ordering rule nobody can verify — call it too late and the app
-//! silently resolves nothing. `inventory` removes the ordering question
-//! entirely: the declaration is a link-time fact, already true when the first
-//! read happens, wherever in the binary it is written.
+//! `<PREFIX>_LOG` before `main` has built anything. A value the *program* sets
+//! for itself would therefore arrive too late — which is why the `.env` cascade
+//! cannot carry it, and why `nest_rs_config` refuses one written there: a prefix
+//! that shows up after the first read would rename nothing, silently.
 //!
 //! Resolution is cached in a `OnceLock<&'static str>`, so every later read is a
 //! pointer load and no allocation is added to any path that was allocation-free.
 
 use std::sync::OnceLock;
 
-/// One `env_prefix!` declaration, collected at link time.
-///
-/// Constructed only by the [`env_prefix!`](crate::env_prefix!) macro — an app
-/// never names this type. It is public because the macro expansion must, and
-/// carries the declaring module so a conflict can name both sites.
-pub struct EnvPrefixDecl {
-    prefix: &'static str,
-    declared_in: &'static str,
-}
-
-impl EnvPrefixDecl {
-    /// Wrap a validated prefix literal with the module that declared it.
-    #[doc(hidden)]
-    pub const fn new(prefix: &'static str, declared_in: &'static str) -> Self {
-        Self {
-            prefix,
-            declared_in,
-        }
-    }
-}
-
-inventory::collect!(EnvPrefixDecl);
-
 /// The active environment-variable prefix.
 pub struct EnvPrefix;
 
 impl EnvPrefix {
-    /// What an application gets without declaring anything.
+    /// What a deployment gets without setting anything.
     pub const DEFAULT: &'static str = "NESTRS";
 
-    /// The active prefix — the declared one, or [`DEFAULT`](Self::DEFAULT).
+    /// The variable the prefix itself is read from, spelled literally because
+    /// it is the one name no prefix can rename.
+    pub const VAR: &'static str = "NESTRS_ENV_PREFIX";
+
+    /// The active prefix — the one the environment set, or
+    /// [`DEFAULT`](Self::DEFAULT).
     ///
-    /// Resolved once per process and cached; the scan below never runs twice.
+    /// Resolved once per process and cached; the read below never runs twice.
+    /// An empty value means unset, the way an empty variable does everywhere
+    /// else; a malformed one aborts rather than resolve names no operator
+    /// wrote.
     pub fn current() -> &'static str {
         static RESOLVED: OnceLock<&'static str> = OnceLock::new();
         RESOLVED.get_or_init(resolve)
     }
 
     /// A framework-wide variable name: `ENV` ⇒ `NESTRS_ENV`, or `ACME_ENV`
-    /// under `env_prefix!("ACME")`.
+    /// under `NESTRS_ENV_PREFIX=ACME`.
     ///
     /// Namespaced config variables do **not** go through here — they carry a
     /// domain segment and are built by `nest_rs_config::var_name`.
@@ -72,107 +65,58 @@ impl EnvPrefix {
     }
 }
 
-/// Read the single declaration out of the link-time registry.
+/// Read the prefix once, validating its shape.
 ///
-/// Repeating the *same* prefix is allowed on purpose: a workspace where both
-/// the shared library crate and a binary declare it is consistent, and refusing
-/// it would push apps into inventing a "who owns the declaration" rule. Two
-/// **different** prefixes have no defensible winner — one half of the app would
-/// read variables the other half never writes — so that aborts, naming both
-/// sites.
+/// A bad value aborts here rather than propagating: every name the process is
+/// about to build would carry it, so there is nothing useful to degrade to —
+/// `NESTRS` would be just as wrong as the typo, and silently so. Empty is
+/// unset, though: `FOO=` is how a shell says "no value", and rejecting it would
+/// abort on the one spelling that means the default.
 fn resolve() -> &'static str {
-    let mut declarations = inventory::iter::<EnvPrefixDecl>.into_iter();
-    let Some(first) = declarations.next() else {
+    let declared = std::env::var(EnvPrefix::VAR).unwrap_or_default();
+    if declared.is_empty() {
         return EnvPrefix::DEFAULT;
-    };
-    for decl in declarations {
-        assert!(
-            decl.prefix == first.prefix,
-            "conflicting `env_prefix!` declarations: `{}` in `{}` and `{}` in `{}`. \
-             An application declares exactly one environment-variable prefix.",
-            first.prefix,
-            first.declared_in,
-            decl.prefix,
-            decl.declared_in,
-        );
     }
-    first.prefix
+    if let Err(reason) = validate_env_prefix(&declared) {
+        panic!("{}=`{declared}` {reason}", EnvPrefix::VAR);
+    }
+    // One leak per process, on a value that is read for the process's whole
+    // life — the alternative is an allocation on every name built from it.
+    String::leak(declared)
 }
 
-/// Compile-time shape check for the [`env_prefix!`](crate::env_prefix!) literal,
-/// so a lowercase or trailing-underscore prefix is a build error rather than a
-/// deployment where nothing resolves.
-///
-/// A `const fn` because the macro calls it from a `const _: () = …` item: the
-/// diagnostic then points at the literal, and no check reaches runtime.
-#[doc(hidden)]
-pub const fn assert_env_prefix(prefix: &str) {
+/// The shape a prefix must have, as the trailing half of a message reading
+/// `NESTRS_ENV_PREFIX=`ac-me` <reason>`.
+fn validate_env_prefix(prefix: &str) -> Result<(), &'static str> {
     let bytes = prefix.as_bytes();
-    if bytes.is_empty() {
-        panic!("env_prefix! must not be empty");
-    }
     if !bytes[0].is_ascii_uppercase() {
-        panic!("env_prefix! must start with an uppercase ASCII letter, e.g. env_prefix!(\"ACME\")");
+        return Err("must start with an uppercase ASCII letter, e.g. ACME");
     }
     if bytes[bytes.len() - 1] == b'_' {
-        panic!(
-            "env_prefix! must not end with `_` — the framework adds the separator \
-             (\"ACME\" yields ACME_ENV, ACME_DATABASE__URL)"
+        return Err(
+            "must not end with `_` — the framework supplies the separator \
+             (ACME yields ACME_ENV, ACME_DATABASE__URL)",
         );
     }
-    let mut i = 0;
-    while i < bytes.len() {
-        let byte = bytes[i];
-        if !(byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_') {
-            panic!(
-                "env_prefix! takes uppercase ASCII letters, digits and underscores only, \
-                 e.g. env_prefix!(\"ACME\")"
-            );
-        }
-        i += 1;
+    if !bytes
+        .iter()
+        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_')
+    {
+        return Err("takes uppercase ASCII letters, digits and underscores only, e.g. ACME");
     }
-}
-
-/// Declare this application's environment-variable prefix, replacing `NESTRS`.
-///
-/// Write it **once**, at the root of a crate every binary of the project links
-/// — the shared library crate in a workspace, `main.rs` in a single-binary app.
-/// Every framework variable follows: `ACME_ENV`, `ACME_LOG`,
-/// `ACME_DATABASE__URL`, `ACME_HTTP__PORT`.
-///
-/// ```
-/// nest_rs_core::env_prefix!("ACME");
-/// # fn main() {}
-/// ```
-///
-/// The literal is checked at compile time (uppercase ASCII, digits and
-/// underscores, no trailing `_` — the framework supplies the separator).
-///
-/// # Put it where the tests see it
-///
-/// The declaration is a property of the *binary*, so a prefix declared in
-/// `main.rs` is invisible to the crate's own test binaries, which would then
-/// resolve `NESTRS_*` while the app resolves `ACME_*`. Declaring it in a
-/// library crate the binaries and the tests both link keeps them in step.
-#[macro_export]
-macro_rules! env_prefix {
-    ($prefix:literal) => {
-        const _: () = $crate::assert_env_prefix($prefix);
-
-        $crate::inventory::submit! {
-            $crate::EnvPrefixDecl::new($prefix, ::core::module_path!())
-        }
-    };
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // No `env_prefix!` in this binary, so the default stands — and the same
-    // read twice must give the same answer (the cache is not re-resolving).
+    // The resolved value is per-process and frozen on first read, so these
+    // cover the shape rules and the default; the environment-driven paths are
+    // exercised by `nest-rs-config`'s integration suite, which owns a process
+    // per prefix.
     #[test]
-    fn an_undeclared_prefix_is_nestrs() {
+    fn an_unset_prefix_is_nestrs() {
         assert_eq!(EnvPrefix::current(), "NESTRS");
         assert_eq!(EnvPrefix::current(), EnvPrefix::DEFAULT);
     }
@@ -183,14 +127,23 @@ mod tests {
         assert_eq!(EnvPrefix::var("LOG_FORMAT"), "NESTRS_LOG_FORMAT");
     }
 
-    // The shape rules are a `const fn`, so the real proof is a compile
-    // failure; this pins the accepting half, which is what a valid literal
-    // relies on.
     #[test]
     fn the_shape_check_accepts_the_documented_forms() {
-        assert_env_prefix("ACME");
-        assert_env_prefix("MY_PROJECT");
-        assert_env_prefix("ACME2");
-        assert_env_prefix("NESTRS");
+        for prefix in ["ACME", "MY_PROJECT", "ACME2", "NESTRS"] {
+            assert!(
+                validate_env_prefix(prefix).is_ok(),
+                "{prefix} must be legal"
+            );
+        }
+    }
+
+    #[test]
+    fn the_shape_check_rejects_what_would_resolve_nothing() {
+        for prefix in ["acme", "1ACME", "ACME_", "ACME-CORP", "ACME CORP"] {
+            assert!(
+                validate_env_prefix(prefix).is_err(),
+                "{prefix} must be rejected",
+            );
+        }
     }
 }

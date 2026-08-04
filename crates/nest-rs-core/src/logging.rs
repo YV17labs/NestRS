@@ -15,7 +15,7 @@
 //!   event; off by default (widens every line, leaks source paths in prod).
 //!
 //! `NESTRS` is the default prefix; under
-//! [`env_prefix!`](crate::env_prefix!) the three become `<PREFIX>_LOG*`.
+//! [`EnvPrefix::VAR`](crate::EnvPrefix::VAR) the three become `<PREFIX>_LOG*`.
 //! `RUST_LOG` is not prefixed — it is the ecosystem's variable, not ours.
 //!
 //! The same three variables drive the console layer of any richer subscriber

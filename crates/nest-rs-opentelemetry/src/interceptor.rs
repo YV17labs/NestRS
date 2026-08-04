@@ -33,7 +33,7 @@ use crate::access_log::{AccessLog, AccessLogBody};
 /// are exact — poem stamps `Content-Length` past this interceptor, so the
 /// body is wrapped in a byte-counting stream (see [`crate::access_log`]).
 ///
-/// Toggle via `NESTRS_HTTP__ACCESS_LOG` (default `true`); the OTel span is
+/// Toggle via `<PREFIX>_HTTP__ACCESS_LOG` (default `true`); the OTel span is
 /// always created so propagation and OTLP export keep working.
 #[interceptor]
 #[derive(Clone, Copy, Debug)]
@@ -44,7 +44,13 @@ pub(crate) struct OpenTelemetryHttp {
 impl Default for OpenTelemetryHttp {
     fn default() -> Self {
         Self {
-            access_log: parse_access_log_flag(env_var("NESTRS_HTTP__ACCESS_LOG").as_deref()),
+            // The `http` namespace, not this crate's: the access log is an
+            // HTTP knob this subscriber honours. Built through `var_name` so it
+            // follows the app's `env_prefix!` — a literal here would make the
+            // toggle silently dead on a renamed project.
+            access_log: parse_access_log_flag(
+                env_var(&nest_rs_config::var_name("http", "ACCESS_LOG")).as_deref(),
+            ),
         }
     }
 }

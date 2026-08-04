@@ -16,7 +16,7 @@ use crate::env::load_project_env;
 ///
 /// Each run uses a unique `nest_rs_e2e_*` name; orphans from crashed runs are
 /// reaped (age-gated) on the next [`create`](Self::create). Admin URL comes
-/// from `NESTRS_DATABASE__URL`.
+/// from `<PREFIX>_DATABASE__URL`.
 pub struct EphemeralDatabase {
     admin_url: String,
     name: String,
@@ -26,14 +26,15 @@ pub struct EphemeralDatabase {
 
 impl EphemeralDatabase {
     /// Create and migrate a fresh database, taking the admin URL from
-    /// `NESTRS_DATABASE__URL` (loading the project `.env` first). The usual
+    /// `<PREFIX>_DATABASE__URL` (loading the project `.env` first). The usual
     /// entry point; errors if the URL is unset.
     pub async fn create<M: MigratorTrait>() -> Result<Self> {
         // The admin URL is read before any `App` boots, so load `.env` first.
         load_project_env();
-        let admin_url = std::env::var("NESTRS_DATABASE__URL").map_err(|_| {
+        let var = nest_rs_config::var_name("database", "URL");
+        let admin_url = std::env::var(&var).map_err(|_| {
             anyhow!(
-                "NESTRS_DATABASE__URL is unset and no `.env` was found above the test's working \
+                "{var} is unset and no `.env` was found above the test's working \
                  directory — point it at a reachable Postgres for e2e"
             )
         })?;

@@ -97,8 +97,11 @@ impl McpMount {
             tracing::debug!(
                 target: "nest_rs::mcp",
                 allowed_hosts = ?config.allowed_hosts,
-                hint = "a Host outside this list is refused with 403; set NESTRS_MCP__ALLOWED_HOSTS \
-                        to this deployment's own hostnames",
+                hint = %format!(
+                    "a Host outside this list is refused with 403; set {} to this \
+                     deployment's own hostnames",
+                    nest_rs_config::var_name("mcp", "ALLOWED_HOSTS"),
+                ),
                 "mcp host allowlist resolved",
             );
         }

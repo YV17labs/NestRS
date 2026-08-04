@@ -57,7 +57,7 @@ pub struct SocialProviderEntry {
     /// The provider config's [`Namespaced::NAMESPACE`](nest_rs_config::Namespaced)
     /// — write `GithubSocialConfig::NAMESPACE`, never a hand-typed copy. The
     /// "not configured" boot warning renders the env prefix from it
-    /// (via the crate's `env_prefix` helper), so the namespace is spelled once, in the `#[config]`
+    /// (via `nest_rs_config::var_name`), so the namespace is spelled once, in the `#[config]`
     /// attribute, and a rename cannot leave a stale hint behind.
     pub config_namespace: &'static str,
     /// Build the provider from whatever configuration the deployment supplied.
@@ -141,7 +141,11 @@ impl SocialRegistry {
                 None => tracing::warn!(
                     target: "nest_rs::social",
                     provider = entry.key,
-                    env_namespace = env_prefix(entry.config_namespace),
+                    // `var_name` with `*` as the key: the glob the operator
+                    // needs is the same join every real variable uses, so the
+                    // hint follows a custom `env_prefix!` instead of naming
+                    // variables the app would never read.
+                    env_namespace = nest_rs_config::var_name(entry.config_namespace, "*"),
                     "linked social provider has no credentials configured; inert",
                 ),
             }
@@ -173,14 +177,6 @@ impl SocialRegistry {
     pub fn keys(&self) -> Vec<&'static str> {
         self.resolved.get().map(sorted_keys).unwrap_or_default()
     }
-}
-
-/// The `NESTRS_*` env prefix a config namespace reads from, for the inert
-/// provider's boot warning — `social__github` ⇒ `NESTRS_SOCIAL__GITHUB__*`.
-/// Mirrors how `ConfigService::for_namespace` builds the same prefix, so the
-/// hint always names the variables that would actually be read.
-fn env_prefix(namespace: &str) -> String {
-    format!("NESTRS_{}__*", namespace.to_uppercase())
 }
 
 /// The map's keys, sorted — the stable order shared by the boot log and

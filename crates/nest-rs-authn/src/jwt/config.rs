@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, config};
+use nest_rs_config::{Config, ConfigService, config, var_name};
 
 use crate::error::AuthError;
 use crate::jwt::JwtOptions;
@@ -65,21 +65,24 @@ impl JwtConfig {
                     target: "nest_rs::authn",
                     secret_present = true,
                     eddsa_present = true,
-                    "ignoring NESTRS_AUTHN__SECRET in favour of EdDSA keys"
+                    secret_var = %var_name("authn", "SECRET"),
+                    "ignoring the shared secret in favour of EdDSA keys"
                 );
                 JwtOptions::eddsa(private.clone(), public.clone())
             }
             (Some(secret), _, _) if secret.trim().is_empty() => {
-                return Err(AuthError::Failed(
-                    "NESTRS_AUTHN__SECRET must not be empty".into(),
-                ));
+                return Err(AuthError::Failed(format!(
+                    "{} must not be empty",
+                    var_name("authn", "SECRET"),
+                )));
             }
             // HS256 derives its security from the secret's entropy. A short
             // secret is brute-forceable, so refuse anything under 256 bits
             // (32 bytes) at boot rather than minting forgeable tokens.
             (Some(secret), _, _) if secret.len() < HS256_MIN_SECRET_BYTES => {
                 return Err(AuthError::Failed(format!(
-                    "NESTRS_AUTHN__SECRET must be at least {HS256_MIN_SECRET_BYTES} bytes for HS256"
+                    "{} must be at least {HS256_MIN_SECRET_BYTES} bytes for HS256",
+                    var_name("authn", "SECRET"),
                 )));
             }
             (Some(secret), _, _) => JwtOptions::new(secret.clone()),
@@ -88,16 +91,18 @@ impl JwtConfig {
             }
             (None, None, Some(public)) => JwtOptions::eddsa_verify(public.clone()),
             (None, Some(_), None) => {
-                return Err(AuthError::Failed(
-                    "NESTRS_AUTHN__PRIVATE_KEY is set without NESTRS_AUTHN__PUBLIC_KEY".into(),
-                ));
+                return Err(AuthError::Failed(format!(
+                    "{} is set without {}",
+                    var_name("authn", "PRIVATE_KEY"),
+                    var_name("authn", "PUBLIC_KEY"),
+                )));
             }
             (None, None, None) => {
-                return Err(AuthError::Failed(
-                    "no JWT key configured: set NESTRS_AUTHN__SECRET (HS256) or \
-                     NESTRS_AUTHN__PUBLIC_KEY (EdDSA)"
-                        .into(),
-                ));
+                return Err(AuthError::Failed(format!(
+                    "no JWT key configured: set {} (HS256) or {} (EdDSA)",
+                    var_name("authn", "SECRET"),
+                    var_name("authn", "PUBLIC_KEY"),
+                )));
             }
         };
         options.leeway = leeway;

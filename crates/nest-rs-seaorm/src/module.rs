@@ -61,7 +61,10 @@ pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
 /// The URL may carry credentials, so it is never logged.
 async fn connect(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> {
     if config.url.is_empty() {
-        anyhow::bail!("NESTRS_DATABASE__URL must be set");
+        anyhow::bail!(
+            "{} must be set",
+            nest_rs_config::var_name("database", "URL")
+        );
     }
     tracing::info!(
         target: "nest_rs::orm",

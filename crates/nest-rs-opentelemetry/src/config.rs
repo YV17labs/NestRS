@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use nest_rs_config::env_var;
+use nest_rs_config::{ConfigService, env_var};
+use nest_rs_core::EnvPrefix;
 
 /// The OTel SDK's own metric export period, restated so it is a named,
 /// documented default rather than a number buried in a dependency.
@@ -140,34 +141,41 @@ impl OpenTelemetryConfig {
     /// `service_name` is the default; `NESTRS_OPENTELEMETRY__SERVICE_NAME` overrides.
     pub fn from_env(service_name: impl Into<String>) -> Self {
         let mut cfg = Self::new(service_name);
+        // The ordinary namespaced reader — constructing one has no side effect
+        // and needs no container, which matters here: `from_env` runs before
+        // the container exists, being what builds the subscriber it logs
+        // through. The two knobs below that warn-and-default rather than fail
+        // keep their own parse, and take the name from `var_name` for the
+        // report.
+        let env = ConfigService::for_namespace("opentelemetry");
 
-        if let Some(v) = env_var("NESTRS_OPENTELEMETRY__SERVICE_NAME") {
+        if let Some(v) = env.get("SERVICE_NAME") {
             cfg.service_name = v;
         }
-        cfg.service_version = env_var("NESTRS_OPENTELEMETRY__SERVICE_VERSION");
-        cfg.deployment_environment = env_var("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT");
-        cfg.service_instance_id = env_var("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID");
+        cfg.service_version = env.get("SERVICE_VERSION");
+        cfg.deployment_environment = env.get("SERVICE_ENVIRONMENT");
+        cfg.service_instance_id = env.get("SERVICE_INSTANCE_ID");
 
         // The console layer answers to the framework-wide logging family
-        // (`NESTRS_LOG*`, owned by nest-rs-core's fallback logger) — an app's
+        // (`<PREFIX>_LOG*`, owned by nest-rs-core's fallback logger) — an app's
         // log config survives adopting or dropping this crate unchanged.
-        if let Some(v) = env_var("NESTRS_LOG").or_else(|| env_var("RUST_LOG")) {
+        if let Some(v) = env_var(&EnvPrefix::var("LOG")).or_else(|| env_var("RUST_LOG")) {
             cfg.log_filter = v;
         }
-        if let Some(raw) = env_var("NESTRS_LOG_FORMAT")
+        if let Some(raw) = env_var(&EnvPrefix::var("LOG_FORMAT"))
             && let Some(fmt) = LogFormat::parse(&raw)
         {
             cfg.log_format = fmt;
         }
-        if let Some(raw) = env_var("NESTRS_LOG_SOURCE_LOCATION") {
+        if let Some(raw) = env_var(&EnvPrefix::var("LOG_SOURCE_LOCATION")) {
             cfg.log_source_location = parse_bool(&raw).unwrap_or(false);
         }
 
-        cfg.otlp_endpoint = env_var("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT");
-        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__SAMPLE_RATIO") {
+        cfg.otlp_endpoint = env.get("OTLP_ENDPOINT");
+        if let Some(raw) = env.get("SAMPLE_RATIO") {
             match raw.trim().parse::<f64>() {
                 Ok(r) => cfg.trace_sample_ratio = r.clamp(0.0, 1.0),
-                Err(_) => warn_unparseable("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", &raw),
+                Err(_) => warn_unparseable(&env.var_name("SAMPLE_RATIO"), &raw),
             }
         }
         // `0` is the documented sentinel for "keep the default"; anything
@@ -175,12 +183,12 @@ impl OpenTelemetryConfig {
         // framework-wide "set-but-unparseable is never a silent fallback"
         // contract. This runs before any subscriber exists (it is what
         // configures one), so the report goes to stderr — the same channel
-        // `Environment::from_env` uses for an unrecognised `NESTRS_ENV`.
-        if let Some(raw) = env_var("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS") {
+        // `Environment::from_env` uses for an unrecognised `<PREFIX>_ENV`.
+        if let Some(raw) = env.get("METRIC_INTERVAL_SECS") {
             match raw.trim().parse::<u64>() {
                 Ok(0) => {}
                 Ok(secs) => cfg.metric_interval = Duration::from_secs(secs),
-                Err(_) => warn_unparseable("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS", &raw),
+                Err(_) => warn_unparseable(&env.var_name("METRIC_INTERVAL_SECS"), &raw),
             }
         }
 

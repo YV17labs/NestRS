@@ -47,7 +47,7 @@ impl OpenTelemetry {
         if initialized() {
             return;
         }
-        let filter = std::env::var("NESTRS_LOG")
+        let filter = std::env::var(nest_rs_core::EnvPrefix::var("LOG"))
             .ok()
             .and_then(|spec| EnvFilter::try_new(&spec).ok())
             .or_else(|| EnvFilter::try_from_default_env().ok())

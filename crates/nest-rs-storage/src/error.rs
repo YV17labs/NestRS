@@ -43,7 +43,8 @@ pub enum StorageError {
     /// carrying the SigV4 signature.
     #[error(
         "refusing to address {endpoint} over plain HTTP: \
-         NESTRS_STORAGE__ALLOW_HTTP is false, so credentials must not travel unencrypted"
+         {allow_http_var} is false, so credentials must not travel unencrypted",
+        allow_http_var = ::nest_rs_config::var_name("storage", "ALLOW_HTTP"),
     )]
     PlaintextEndpoint {
         /// The offending endpoint.

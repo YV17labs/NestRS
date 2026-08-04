@@ -86,7 +86,7 @@ impl Config for QueueConfig {
         let connect_timeout = match env.parse::<u64>("CONNECT_TIMEOUT_SECS")? {
             Some(0) => {
                 return Err(ConfigError::parse(
-                    "NESTRS_QUEUE__CONNECT_TIMEOUT_SECS",
+                    env.var_name("CONNECT_TIMEOUT_SECS"),
                     "must be at least 1 second — a zero budget cannot bound the connect",
                 ));
             }
@@ -113,7 +113,7 @@ fn resolve_url(raw: Option<String>, environment: Environment) -> Result<String> 
         _ => {
             if matches!(environment, Environment::Production | Environment::Staging) {
                 return Err(ConfigError::parse(
-                    "NESTRS_QUEUE__URL",
+                    nest_rs_config::var_name("queue", "URL"),
                     format!(
                         "must be set in the `{}` environment (no localhost fallback outside dev/test)",
                         environment.as_str()

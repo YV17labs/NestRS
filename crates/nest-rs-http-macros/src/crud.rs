@@ -188,8 +188,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 // The collection URI as the caller sent it — global prefix and
                 // version segment included. Reconstructing it from the mount
                 // metadata would re-derive what the request already states.
-                // Read through `original_uri` below, because a global prefix is
-                // mounted with `Route::nest`, which strips itself off `uri()`.
+                // Read through `caller_path` below: the router strips a global
+                // prefix off `uri()`, and `original_uri()` is populated on the
+                // hyper path only.
                 __req: &::nest_rs_http::poem::Request,
                 __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#create>>,
             ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
@@ -210,7 +211,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 {
                     ::nest_rs_http::set_created_location(
                         &mut __resp,
-                        __req.original_uri().path(),
+                        ::nest_rs_http::caller_path(__req),
                         __id,
                     );
                 }

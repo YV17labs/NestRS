@@ -48,6 +48,8 @@ use poem::http::{HeaderName, HeaderValue, StatusCode};
 use poem::web::headers::{ContentLength, HeaderMapExt};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
+use crate::location::CallerUri;
+
 /// A bare status-only response — the edge's own rejections (`413`, `504`).
 fn bare(status: StatusCode) -> Response {
     Response::builder().status(status).finish()
@@ -71,9 +73,10 @@ fn canonical_path(path: &str) -> Option<&str> {
 
 /// Rewrite the request URI onto [`canonical_path`], query preserved.
 ///
-/// Only `uri()` is rewritten — `original_uri()` keeps what the client sent, so
-/// anything echoing the request back (the `Location` on a `#[crud]` create)
-/// still sees the caller's own spelling.
+/// Runs before the edge captures [`CallerUri`], so anything echoing the request
+/// back (the `Location` on a `#[crud]` create) names the canonical path rather
+/// than the caller's trailing slash — one spelling per resource, whichever one
+/// was typed.
 fn trim_trailing_slash(req: &mut Request) {
     let Some(path_and_query) = req.uri().path_and_query() else {
         return;
@@ -175,6 +178,15 @@ where
         // the route's guards, interceptors and filters unrun, which makes the
         // mistake read as a broken feature rather than a typo.
         trim_trailing_slash(&mut req);
+
+        // The URI the caller addressed, kept for the handlers that echo it back
+        // (`nest_rs_http::caller_path`). This is the last point that sees it
+        // whole: the router strips a global prefix off `uri()` on the way in,
+        // and poem's `original_uri()` is populated by the hyper path only, so a
+        // `TestApp` request would carry `/`. One refcount bump for the `Uri`
+        // plus the insert a `.data()` middleware would cost anyway.
+        let caller_uri = req.uri().clone();
+        req.extensions_mut().insert(CallerUri(caller_uri));
 
         // Body cap (B-HTTP-2) — every extractor sits under it. Four cases,
         // cheapest first:

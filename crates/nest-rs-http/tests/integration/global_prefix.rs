@@ -1,11 +1,22 @@
 //! `HttpConfig.global_prefix` — boot the real `App`, mount two controllers,
 //! drive them through `poem::TestClient`, and pin that the prefix is applied
 //! exactly once at the root (200 on `/api/<ctrl>`, 404 without it).
+//!
+//! Also the executed witness for `caller_path`: the prefix is the one segment
+//! the router strips off `uri()` before a handler runs, so a `Location` built
+//! from anything else silently drops it.
 
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{HttpConfig, HttpTransport, controller, routes};
+use nest_rs_http::{
+    HttpConfig, HttpTransport, caller_path, controller, routes, set_created_location,
+};
+use poem::http::StatusCode;
 use poem::test::TestClient;
+
+/// The id the create route below hands back — a fixture, not a generated value:
+/// the assertions compare the whole `Location`, so it has to be nameable.
+const NEW_ORG_ID: &str = "018f3f9c-0000-7000-8000-000000000001";
 
 #[controller(path = "/users")]
 struct UsersController;
@@ -26,6 +37,18 @@ impl OrgsController {
     #[get("/")]
     async fn list_orgs(&self) -> &'static str {
         "orgs"
+    }
+
+    /// What `#[crud]`'s generated create does, by hand: the two calls its
+    /// expansion emits, on a route this crate can mount without an entity or a
+    /// service behind it.
+    #[post("/")]
+    async fn create_org(&self, req: &poem::Request) -> poem::Response {
+        let mut resp = poem::Response::builder()
+            .status(StatusCode::CREATED)
+            .finish();
+        set_created_location(&mut resp, caller_path(req), NEW_ORG_ID);
+        resp
     }
 }
 
@@ -65,6 +88,36 @@ async fn global_prefix_serves_controllers_under_the_prefix() {
     let orgs = client.get("/api/orgs").send().await;
     orgs.assert_status_is_ok();
     orgs.assert_text("orgs").await;
+}
+
+/// The `Location` on a `201` names the collection **the caller addressed** —
+/// prefix included. Read off `uri()` it would say `/orgs/<id>`, a path that
+/// 404s on this very app; read off `original_uri()` it would say `/<id>` under
+/// the test client. Both spellings of the collection are driven, since the edge
+/// canonicalizes the trailing slash before the capture.
+#[tokio::test]
+async fn a_created_location_carries_the_global_prefix() {
+    let client = boot_with_prefix(Some("/api")).await;
+
+    for path in ["/api/orgs", "/api/orgs/"] {
+        let created = client.post(path).send().await;
+        created.assert_status(StatusCode::CREATED);
+        created.assert_header(
+            poem::http::header::LOCATION,
+            format!("/api/orgs/{NEW_ORG_ID}"),
+        );
+    }
+}
+
+/// The same route with no prefix configured — pins that the capture is the
+/// path as sent, not a prefix bolted on unconditionally.
+#[tokio::test]
+async fn a_created_location_without_a_prefix_is_the_declared_collection() {
+    let client = boot_with_prefix(None).await;
+
+    let created = client.post("/orgs").send().await;
+    created.assert_status(StatusCode::CREATED);
+    created.assert_header(poem::http::header::LOCATION, format!("/orgs/{NEW_ORG_ID}"));
 }
 
 #[tokio::test]

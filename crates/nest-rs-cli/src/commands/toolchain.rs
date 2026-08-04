@@ -37,6 +37,11 @@ const TOOLCHAIN: &[Tool] = &[
 ];
 
 /// Env var that disables the first-run bootstrap (CI / offline).
+///
+/// Not affected by a project's `--env-prefix`: this configures the `nestrs`
+/// **tool**, which is the same binary whatever a project renamed its own
+/// variables to. Prefixing it per project would mean the same CI step needs a
+/// different variable per repository.
 const NO_BOOTSTRAP_ENV: &str = "NESTRS_NO_BOOTSTRAP";
 
 /// Ensures every tool in [`TOOLCHAIN`] is on PATH, installing what is missing.

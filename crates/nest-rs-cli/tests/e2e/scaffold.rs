@@ -77,8 +77,21 @@ fn scaffold_and_check(generate: &[&[&str]], what: &str) {
 /// check — for the half of the contract the generators do not emit: what the
 /// docs tell the reader to *write* into a scaffolded feature.
 fn scaffold_write_and_check(generate: &[&[&str]], write: &[(&str, &str)], what: &str) {
+    scaffold_write_and_check_with(&["new", "acme"], generate, write, what, |_| {});
+}
+
+/// The same, with the `nestrs new` invocation under the caller's control and an
+/// inspection hook over the generated tree — for a flag whose effect is spread
+/// across the manifest, the source and the `.env` cascade.
+fn scaffold_write_and_check_with(
+    new: &[&str],
+    generate: &[&[&str]],
+    write: &[(&str, &str)],
+    what: &str,
+    inspect: impl FnOnce(&Path),
+) {
     let dir = tempfile::tempdir().expect("a temp dir");
-    nestrs(dir.path(), &["new", "acme"]);
+    nestrs(dir.path(), new);
     let workspace = dir.path().join("acme");
     for args in generate {
         nestrs(&workspace, args);
@@ -87,10 +100,17 @@ fn scaffold_write_and_check(generate: &[&[&str]], write: &[(&str, &str)], what: 
         std::fs::write(workspace.join(path), body).expect("the generated tree is writable");
     }
 
+    inspect(&workspace);
+
     patch_to_working_tree(&workspace);
     if let Err(stderr) = cargo_check(&workspace) {
         panic!("{what} does not compile:\n{stderr}");
     }
+}
+
+fn read(workspace: &Path, path: &str) -> String {
+    std::fs::read_to_string(workspace.join(path))
+        .unwrap_or_else(|e| panic!("the generated tree has {path}: {e}"))
 }
 
 #[test]
@@ -154,6 +174,56 @@ fn a_feature_can_log_and_return_a_fallible_hook() {
             LIFECYCLE_PAGE_SERVICE,
         )],
         "a feature service that logs and returns a fallible hook",
+    );
+}
+
+#[test]
+fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
+    // `--env-prefix` is only real if all three sides agree: the declaration the
+    // *runtime* resolves, the metadata the *CLI* reads back, and the `.env`
+    // keys the deployment exports. A project where one of them still says
+    // NESTRS boots with defaults and no error — which is the failure this
+    // asserts against, and the reason `g auth` runs here: it appends a key to
+    // an existing cascade, so it is the generator most able to disagree.
+    scaffold_write_and_check_with(
+        &["new", "acme", "--env-prefix", "ACME"],
+        &[&["g", "auth"]],
+        &[],
+        "a workspace scaffolded with a custom env prefix",
+        |workspace| {
+            // One declaration per *binary*: `env_prefix!` is a link-time fact,
+            // and the two `db` tools link neither `features` nor each other, so
+            // a single declaration in the feature crate would leave
+            // `nestrs run db up` resolving NESTRS_* against an ACME_* cascade.
+            for lib in [
+                "crates/features/src/lib.rs",
+                "crates/migrations/src/lib.rs",
+                "crates/seed/src/main.rs",
+            ] {
+                assert!(
+                    read(workspace, lib).contains(r#"nest_rs::env_prefix!("ACME");"#),
+                    "{lib} must declare the prefix its binary resolves",
+                );
+            }
+            assert!(
+                read(workspace, "Cargo.toml").contains(r#"env-prefix = "ACME""#),
+                "tooling learns the same prefix from the workspace metadata",
+            );
+
+            for file in [".env", ".env.development", ".env.example"] {
+                let body = read(workspace, file);
+                assert!(
+                    !body.contains("NESTRS_"),
+                    "{file} still writes a NESTRS_ key the app will never read:\n{body}",
+                );
+            }
+            assert!(read(workspace, ".env").contains("ACME_DATABASE__URL="));
+            assert!(read(workspace, ".env.development").contains("ACME_LOG="));
+            assert!(
+                read(workspace, ".env").contains("ACME_AUTHN__SECRET="),
+                "`g auth` must append its dev secret under the project's own prefix",
+            );
+        },
     );
 }
 

@@ -47,6 +47,13 @@ impl Renderer {
         // The `nest-rs-*` version every generated manifest pins — derived from
         // the CLI's own version so it can never go stale (see `crate::version`).
         put("nestrs_version", crate::version::framework_req());
+        // Every env-var name a template writes goes through this key. The
+        // framework default stands unless a caller that knows the project
+        // (`nestrs new --env-prefix`, any generator holding a workspace)
+        // overrides it — a template must never spell `NESTRS_` itself, which
+        // `templates::tests::templates_use_the_env_prefix_placeholder_not_a_literal`
+        // enforces.
+        put("env_prefix", crate::context::DEFAULT_ENV_PREFIX.to_owned());
         Self { vars }
     }
 

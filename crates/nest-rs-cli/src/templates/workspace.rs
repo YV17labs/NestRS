@@ -36,7 +36,7 @@ strip = true        # drop symbols for a smaller binary
 # Dev: fastest iterative rebuilds; keep file:line in backtraces.
 [profile.dev]
 debug = "line-tables-only"
-"#;
+{{env_prefix_metadata}}"#;
 
 /// The feature crate's manifest.
 ///
@@ -63,7 +63,7 @@ tracing.workspace = true
 /// feature declared here (see [`super::hello`]).
 pub const FEATURES_LIB: &str = r#"//! Product features — vertical slices shared across apps.
 
-pub mod {{snake}};
+{{env_prefix_decl}}pub mod {{snake}};
 
 pub use {{snake}}::{{http_module}};
 "#;

@@ -45,7 +45,7 @@ pub fn run(opts: AuthOptions) -> CliResult<()> {
     let wired_app = wire(&ctx, &mut s);
 
     finish(s, opts.dry_run, &ws.root, "the auth adapter")?;
-    print_next_steps(wired_app.is_some());
+    print_next_steps(&ws.metadata.env_prefix, wired_app.is_some());
     Ok(())
 }
 
@@ -101,11 +101,16 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
 
     // Every scaffolded workspace has one; a hand-rolled tree may not, and a
     // missing `.env` is not a reason to refuse the whole adapter.
+    // Rendered, not copied: the key has to carry this project's prefix, or the
+    // scaffolded secret is a line the app never reads and auth refuses to boot.
+    // One placeholder, so a `Renderer` (and the `Names` it needs) would be two
+    // dozen substitutions for nothing.
+    let env_authn = auth::ENV_AUTHN.replace("{{env_prefix}}", &ws.metadata.env_prefix);
     let env = ws.root.join(".env");
     if env.is_file() {
-        s.edit(env, append_authn_secret());
+        s.edit(env, append_authn_secret(&ws.metadata.env_prefix, env_authn));
     } else {
-        s.create(env, auth::ENV_AUTHN.trim_start().to_string());
+        s.create(env, env_authn.trim_start().to_string());
     }
 }
 
@@ -298,17 +303,20 @@ static MCP_BRIDGE: AuthzBridge = AuthzBridge {
 };
 
 /// Append the HS256 dev secret unless the file already sets one — an app with
-/// no `NESTRS_AUTHN__*` key material refuses to boot.
-fn append_authn_secret() -> crate::scaffold::Transform {
-    Box::new(|content: &str| {
-        if content.contains("NESTRS_AUTHN__") {
+/// no `<PREFIX>_AUTHN__*` key material refuses to boot.
+fn append_authn_secret(env_prefix: &str, rendered: String) -> crate::scaffold::Transform {
+    // An empty key yields the namespace prefix `<PREFIX>_AUTHN__` — the same
+    // join every real name uses, rather than a second hand-built one.
+    let marker = crate::context::var_name(env_prefix, "AUTHN", "");
+    Box::new(move |content: &str| {
+        if content.contains(&marker) {
             return None;
         }
-        Some(format!("{content}{}", auth::ENV_AUTHN))
+        Some(format!("{content}{rendered}"))
     })
 }
 
-fn print_next_steps(wired: bool) {
+fn print_next_steps(env_prefix: &str, wired: bool) {
     println!();
     println!("Next steps:");
     println!("  1. Add your rules in `crates/features/src/authz/ability.rs` — nothing is");
@@ -320,5 +328,5 @@ fn print_next_steps(wired: bool) {
         println!("     `features::authz::AuthzHttpModule` in your app's `module.rs`.");
     }
     println!("  3. `.env` carries a development HS256 secret — replace it through the");
-    println!("     real environment before deploying (NESTRS_AUTHN__SECRET).");
+    println!("     real environment before deploying ({env_prefix}_AUTHN__SECRET).");
 }

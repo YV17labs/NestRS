@@ -46,7 +46,7 @@ impl Default for OpenTelemetryHttp {
         Self {
             // The `http` namespace, not this crate's: the access log is an
             // HTTP knob this subscriber honours. Built through `var_name` so it
-            // follows the app's `env_prefix!` — a literal here would make the
+            // follows the app's `env prefix` — a literal here would make the
             // toggle silently dead on a renamed project.
             access_log: parse_access_log_flag(
                 env_var(&nest_rs_config::var_name("http", "ACCESS_LOG")).as_deref(),

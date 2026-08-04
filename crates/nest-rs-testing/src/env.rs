@@ -23,7 +23,7 @@ pub fn load_project_env() {
         // Before the `.env` lookup — even with no file found, env-aware
         // defaults (GraphQL playground, SDL emit) must see `test`. An explicit
         // value wins (e.g. CI asserting prod behaviour). The name comes from
-        // `Environment` rather than a literal: under `env_prefix!` a hardcoded
+        // `Environment` rather than a literal: under a custom prefix a hardcoded
         // `NESTRS_ENV` here would set a variable the app never reads, and every
         // test would silently run as `development`.
         let env_var = Environment::var_name();

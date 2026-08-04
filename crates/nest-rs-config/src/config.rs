@@ -1,7 +1,7 @@
 //! Namespaced, injectable configuration: the **type is the token**.
 //!
 //! A `#[config(namespace = "…")]` struct supplies its namespace; the crate
-//! writes `from_env` mapping each `NESTRS_<NAMESPACE>__*` variable to a field.
+//! writes `from_env` mapping each `<PREFIX>_<NAMESPACE>__*` variable to a field.
 //! `ConfigModule::for_feature::<T>()` loads once at boot and registers
 //! `Arc<T>`, injected directly by any provider.
 
@@ -10,18 +10,18 @@ use validator::Validate;
 use crate::Result;
 use crate::service::ConfigService;
 
-/// The `<DOMAIN>` in `NESTRS_<DOMAIN>__<KEY>`. Supplied by the [`config`](crate::config)
-/// macro from `#[config(namespace = "…")]`.
+/// The `<DOMAIN>` in `<PREFIX>_<DOMAIN>__<KEY>`. Supplied by the
+/// [`config`](crate::config) macro from `#[config(namespace = "…")]`.
 pub trait Namespaced {
-    /// The `<DOMAIN>` segment of every `NESTRS_<DOMAIN>__<KEY>` this type reads.
+    /// The `<DOMAIN>` segment of every `<PREFIX>_<DOMAIN>__<KEY>` this type reads.
     const NAMESPACE: &'static str;
 }
 
 /// A namespaced configuration type.
 ///
 /// [`from_env`](Self::from_env) is the **explicit** field-by-field overlay of
-/// `NESTRS_<NAMESPACE>__<KEY>` variables over a base value — the single place to
-/// look for the env contract of a feature.
+/// `<PREFIX>_<NAMESPACE>__<KEY>` variables over a base value — the single place
+/// to look for the env contract of a feature.
 ///
 /// # The environment can always override, per field
 ///
@@ -42,7 +42,7 @@ pub trait Namespaced {
 /// a test wanting hermetic values takes.
 pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized + 'static {
     /// Field-by-field overlay of this namespace's environment over `base`: every
-    /// field takes its `NESTRS_<NAMESPACE>__<KEY>` value when the variable is
+    /// field takes its `<PREFIX>_<NAMESPACE>__<KEY>` value when the variable is
     /// set, and the matching field of `base` when it is not. One body serves
     /// both the pinned and the unpinned path, so no field can be reachable one
     /// way only.

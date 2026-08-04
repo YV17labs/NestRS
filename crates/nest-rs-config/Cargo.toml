@@ -34,3 +34,7 @@ nest-rs-config-macros.workspace = true
 figment = { workspace = true, features = ["test"] }
 # trybuild pins the `#[config]` macro's compile diagnostics as a contract (CORE-I10).
 trybuild.workspace = true
+# The custom-prefix suite boots a real app (`ConfigModule::for_feature` is an
+# async factory), which is what proves the declared prefix reaches the field —
+# compiling only proves the name was built.
+tokio.workspace = true

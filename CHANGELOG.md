@@ -5,6 +5,68 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### The env prefix is the deployment's, and it is one variable
+
+2.1.0 made the prefix the application's, declared in source with
+`nest_rs::env_prefix!("ACME")`. It is now the *deployment's*, set on the
+process like everything else it governs:
+
+```yaml
+environment:
+  NESTRS_ENV_PREFIX: ACME
+  ACME_DATABASE__URL: postgres://…
+```
+
+**Breaking.** `env_prefix!` and `EnvPrefixDecl` are removed — no shim. A project
+on 2.1.0 deletes its declarations and sets one variable instead.
+
+- **One write, and everything downstream follows.** The link-time declaration
+  had to be repeated per binary — the `migrations` and `seed` tools link neither
+  the feature crate nor each other — and a binary added later silently resolved
+  `NESTRS_*` against an `ACME_*` cascade. A variable on the process reaches every
+  binary, every test and every container without being written anywhere twice,
+  and the CLI reads the same variable from its own environment, so
+  `[workspace.metadata.nestrs] env-prefix` is gone too: there is no second source
+  left to disagree.
+- **`.env` cannot carry it, and saying so is enforced.** The prefix selects the
+  cascade, so a value inside that cascade arrives after it was needed. It would
+  have renamed nothing, silently; `Environment::init` now aborts naming both
+  values instead.
+- **A malformed value aborts on first read** rather than falling back to
+  `NESTRS` — which would be just as wrong, and quiet. The shape is unchanged
+  (uppercase ASCII, digits, underscores, no trailing `_`); the check simply moved
+  from compile time to the first read.
+- **`nestrs new --env-prefix ACME`** now writes the variable into the generated
+  `Justfile` and `Dockerfile` — the processes the project starts — and the `.env`
+  cascade under the new names. **`nestrs doctor` reports where the prefix came
+  from**, and says plainly when the shell names none, because a project whose
+  deployment renames its variables looks untouched from a terminal that does not.
+- **`NESTRS_ENV_PREFIX` is spelled literally**, joining `RUST_LOG` and
+  `NESTRS_NO_BOOTSTRAP` as a name that is not the app's. It is the one name no
+  prefix can rename.
+
+Existing apps that never renamed anything are unaffected: setting nothing keeps
+`NESTRS`.
+
+### Fixed — a created `Location` named a path that was not the caller's
+
+The `Location` a `#[crud]` create stamps was read off poem's
+`original_uri()`, which the hyper path populates and `Request::builder()` does
+not: the same route answered `/orgs/<id>` on the wire and `/<id>` under
+`TestClient`, so an in-process witness failed on a route that was correct.
+Reading `uri()` instead only moves the wrongness — a global prefix is mounted
+with `Route::nest`, which strips itself off before the handler runs, so the
+header would name a path that `404`s on that very app.
+
+The edge now captures the URI once, after canonicalization and before the
+router sees it, and `nest_rs_http::caller_path` reads that capture — one value
+in process and on the wire. A trailing slash resolves to the canonical spelling
+rather than being echoed back, so a resource has one `Location` whichever
+spelling was typed. `nest-rs-http`'s global-prefix suite is the executed
+witness for both.
+
 ## [2.1.0] - 2026-08-04
 
 ### The env prefix is the application's

@@ -47,7 +47,7 @@ pub const COMPOSE: &str = r#"# Local development services. Start them with:
 #
 #   docker compose up -d
 #
-# The committed `.env` points NESTRS_DATABASE__URL / NESTRS_QUEUE__URL at these
+# The committed `.env` points {{env_prefix}}_DATABASE__URL / {{env_prefix}}_QUEUE__URL at these
 # on localhost. `nestrs run db up` then applies your migrations.
 
 services:
@@ -110,45 +110,45 @@ pub const ENV: &str = r#"# {{env_label}} — committed base config (`.env` casca
 # see `.env.example`.
 #
 # Precedence (highest first):
-#   real env  >  pinned in `module.rs`  >  .env.<NESTRS_ENV>.local  >  .env.local
-#   >  .env.<NESTRS_ENV>  >  .env
+#   real env  >  pinned in `module.rs`  >  .env.<{{env_prefix}}_ENV>.local  >  .env.local
+#   >  .env.<{{env_prefix}}_ENV>  >  .env
 
 # HTTP server listen port (default: 3000).
-NESTRS_HTTP__PORT=3000
+{{env_prefix}}_HTTP__PORT=3000
 "#;
 
 /// Workspace root `.env` — the HTTP port's *default* lives in each app's
-/// `module.rs`, but every `NESTRS_HTTP__*` key stays live over it.
+/// `module.rs`, but every `<PREFIX>_HTTP__*` key stays live over it.
 pub const ENV_WORKSPACE: &str = r#"# {{env_label}} — committed base config (`.env` cascade).
 #
 # Each app's root `module.rs` sets its own HTTP defaults
 # (`HttpConfig { port: …, ..Default::default() }`). Those are defaults, not a
-# lock: any `NESTRS_HTTP__*` key set in the real environment still wins, field
+# lock: any `{{env_prefix}}_HTTP__*` key set in the real environment still wins, field
 # by field — so a deployment moves the port or turns on TLS without touching
 # the code.
 #
 # Postgres + Redis as `compose.yml` exposes them on localhost. Start them with
 # `docker compose up -d`, then `nestrs run db up`. An app only connects if it
 # imports DatabaseModule / a queue module, so these are inert for a plain HTTP app.
-NESTRS_DATABASE__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
-NESTRS_QUEUE__URL=redis://localhost:6379
+{{env_prefix}}_DATABASE__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
+{{env_prefix}}_QUEUE__URL=redis://localhost:6379
 #
 # Precedence (highest first):
-#   real env  >  pinned in `module.rs`  >  .env.<NESTRS_ENV>.local  >  .env.local
-#   >  .env.<NESTRS_ENV>  >  .env
+#   real env  >  pinned in `module.rs`  >  .env.<{{env_prefix}}_ENV>.local  >  .env.local
+#   >  .env.<{{env_prefix}}_ENV>  >  .env
 "#;
 
-pub const ENV_DEVELOPMENT: &str = r#"# {{env_label}} — development-only overrides (NESTRS_ENV=development, the default).
+pub const ENV_DEVELOPMENT: &str = r#"# {{env_label}} — development-only overrides ({{env_prefix}}_ENV=development, the default).
 # Committed; layered on top of `.env`, below `.env.local` and the real environment.
 
 # Verbose, human-readable logs while developing.
-NESTRS_LOG=debug
-NESTRS_LOG_FORMAT=text
-NESTRS_LOG_SOURCE_LOCATION=true
+{{env_prefix}}_LOG=debug
+{{env_prefix}}_LOG_FORMAT=text
+{{env_prefix}}_LOG_SOURCE_LOCATION=true
 "#;
 
 /// The file that *instructs* a developer to write `.env.local`, so it is where
-/// the exception belongs: the cascade skips `.env.local` under `NESTRS_ENV=test`
+/// the exception belongs: the cascade skips `.env.local` under `<PREFIX>_ENV=test`
 /// (hermetic by design). Without that line, a developer whose Postgres is not on
 /// the default port edits `.env.local`, watches `nestrs run test e2e` fail to
 /// connect, and has nothing pointing at the file being ignored.
@@ -156,14 +156,14 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 #
 #   cp .env.example .env.local
 #
-# Tests are hermetic: under NESTRS_ENV=test the cascade skips `.env.local`, so a
+# Tests are hermetic: under {{env_prefix}}_ENV=test the cascade skips `.env.local`, so a
 # machine-specific test override (a different Postgres port, say) goes in
 # `.env.test.local` — also git-ignored. See https://nestrs.dev/configuration/env-cascade/
 #
 # Uncomment when you add a database (https://nestrs.dev/configuration/).
 
-# NESTRS_DATABASE__URL=postgres://user:pass@localhost:5432/{{kebab}}
-# NESTRS_QUEUE__URL=redis://localhost:6379
+# {{env_prefix}}_DATABASE__URL=postgres://user:pass@localhost:5432/{{kebab}}
+# {{env_prefix}}_QUEUE__URL=redis://localhost:6379
 "#;
 
 /// The scaffolded smoke test. `{{smoke_use}}` / `{{smoke_module}}` name the

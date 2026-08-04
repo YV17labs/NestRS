@@ -92,6 +92,27 @@ mod tests {
         include_str!("workspace.rs"),
     ];
 
+    /// A template that spells `NESTRS_` writes a variable an `--env-prefix`
+    /// project never reads — a `.env` key silently inert, or a generated tool
+    /// looking at the wrong name. The placeholder is the only legal form, so
+    /// the guard is mechanical rather than a review habit.
+    #[test]
+    fn templates_use_the_env_prefix_placeholder_not_a_literal() {
+        let literals: Vec<&str> = SOURCES
+            .iter()
+            .flat_map(|src| src.lines())
+            // Rust doc/line comments in the CLI's own source describe the
+            // scheme; only the emitted template strings are the contract.
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .filter(|line| line.contains("NESTRS_"))
+            .map(str::trim)
+            .collect();
+        assert!(
+            literals.is_empty(),
+            "templates must write {{{{env_prefix}}}}_, not a literal: {literals:#?}",
+        );
+    }
+
     /// `CLAUDE.md`: *metadata is mandatory — a bare log is a defect*. A scaffold
     /// emits what the rules mandate, so a template that logs without a field
     /// ships that defect into every generated project. The whole framework holds

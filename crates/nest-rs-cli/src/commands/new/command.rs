@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{standalone, workspace};
-use crate::context::NestrsWorkspace;
+use crate::context::{DEFAULT_ENV_PREFIX, NestrsWorkspace};
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold};
@@ -22,6 +22,8 @@ pub struct NewOptions {
     pub name: String,
     pub output: PathBuf,
     pub standalone: bool,
+    /// `None` ⇒ the framework default (`NESTRS`).
+    pub env_prefix: Option<String>,
     pub dry_run: bool,
 }
 
@@ -32,15 +34,72 @@ pub fn run(opts: NewOptions) -> CliResult<()> {
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
 
+    if let Some(prefix) = &opts.env_prefix {
+        crate::context::validate_env_prefix(prefix)
+            .map_err(|e| CliError::Anyhow(anyhow::anyhow!(e)))?;
+    }
+    let env_prefix = opts.env_prefix.as_deref().unwrap_or(DEFAULT_ENV_PREFIX);
+
     if opts.standalone {
-        return standalone::scaffold(&opts.output, &names, opts.dry_run);
+        return standalone::scaffold(&opts.output, &names, env_prefix, opts.dry_run);
     }
 
     if let Some(ws) = NestrsWorkspace::discover(&opts.output)? {
+        // The prefix is a property of the project, declared once at its root:
+        // a second app cannot hold a different one, and silently ignoring the
+        // flag would leave the caller believing it took.
+        if let Some(requested) = &opts.env_prefix
+            && requested != &ws.metadata.env_prefix
+        {
+            return Err(CliError::Anyhow(anyhow::anyhow!(
+                "this workspace already uses the `{}` env prefix — `--env-prefix` applies to \
+                 project creation only. Change it in the root `Cargo.toml` \
+                 (`[workspace.metadata.nestrs] env-prefix`) and in the `env_prefix!` \
+                 declaration in `crates/features/src/lib.rs`.",
+                ws.metadata.env_prefix,
+            )));
+        }
         return workspace::scaffold_app(&ws, &names, opts.dry_run);
     }
 
-    workspace::scaffold_root(&opts.output, &names, opts.dry_run)
+    workspace::scaffold_root(&opts.output, &names, env_prefix, opts.dry_run)
+}
+
+/// The source line that tells the **runtime** which prefix to resolve — empty
+/// on the default, so an ordinary project carries no noise about a prefix it
+/// never changed.
+///
+/// One per generated *binary*: `env_prefix!` is a link-time fact, so the crates
+/// a binary does not link (the `migrations`/`seed` tools do not link `features`)
+/// each need their own. Repeating the same literal is allowed by design.
+///
+/// Trailing blank line, no leading one: the same value then reads right at the
+/// top of a standalone `lib.rs` and under the `//!` of a crate that has one.
+pub(crate) fn env_prefix_decl(env_prefix: &str) -> String {
+    if env_prefix == DEFAULT_ENV_PREFIX {
+        return String::new();
+    }
+    format!("nest_rs::env_prefix!(\"{env_prefix}\");\n\n")
+}
+
+/// Seed both prefix placeholders on a renderer that writes a manifest *and*
+/// source: the `[<table>.metadata.nestrs]` entry tooling reads back, and
+/// [`env_prefix_decl`]. `table` is `workspace` for a monorepo root, `package`
+/// for a standalone crate.
+pub(crate) fn with_env_prefix(r: Renderer, env_prefix: &str, table: &str) -> Renderer {
+    let metadata = if env_prefix == DEFAULT_ENV_PREFIX {
+        String::new()
+    } else {
+        format!(
+            "\n# Every framework env var carries this prefix ({env_prefix}_ENV, \
+             {env_prefix}_HTTP__PORT, …).\n\
+             # `nestrs` reads it here; the app declares it to the runtime with `env_prefix!`.\n\
+             [{table}.metadata.nestrs]\nenv-prefix = \"{env_prefix}\"\n",
+        )
+    };
+    r.with("env_prefix", env_prefix)
+        .with("env_prefix_metadata", metadata)
+        .with("env_prefix_decl", env_prefix_decl(env_prefix))
 }
 
 pub fn project_dir_for_check(opts: &NewOptions, names: &Names) -> CliResult<PathBuf> {
@@ -54,14 +113,20 @@ pub fn project_dir_for_check(opts: &NewOptions, names: &Names) -> CliResult<Path
 }
 
 /// Queue the committed `.env` cascade (`.env`, `.env.development`, `.env.example`).
+///
+/// Every key in those files is written through `{{env_prefix}}`, so a project
+/// created with `--env-prefix` gets a cascade its app actually reads.
 pub(crate) fn queue_env_files(
     s: &mut Scaffold,
     base: &Path,
     names: &Names,
     env_label: &str,
+    env_prefix: &str,
     env_template: &str,
 ) {
-    let r = Renderer::new(names).with("env_label", env_label);
+    let r = Renderer::new(names)
+        .with("env_label", env_label)
+        .with("env_prefix", env_prefix);
     s.create_if_missing(base.join(".env"), r.render(env_template));
     s.create_if_missing(
         base.join(".env.development"),

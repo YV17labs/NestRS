@@ -8,4 +8,6 @@ mod detect;
 mod workspace;
 
 pub use detect::Context;
-pub use workspace::NestrsWorkspace;
+pub use workspace::{
+    DEFAULT_ENV_PREFIX, NestrsWorkspace, package_env_prefix, validate_env_prefix, var_name,
+};

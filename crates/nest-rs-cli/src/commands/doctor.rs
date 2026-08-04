@@ -17,11 +17,33 @@ pub struct DoctorReport {
     /// Set when workspace detection itself failed (e.g. a malformed manifest),
     /// as distinct from a clean "not a workspace" result.
     pub workspace_error: Option<String>,
-    pub env_database: bool,
-    pub env_queue: bool,
-    pub env_http_host: bool,
-    pub env_http_port: bool,
+    /// The env prefix this project's variables carry. Every name below is
+    /// built from it — reporting `NESTRS_DATABASE__URL: not set` to a project
+    /// that renamed its variables is worse than saying nothing.
+    pub env_prefix: String,
+    /// Each optional variable doctor looked for, resolved name and all, in
+    /// report order. Names are stored rather than rebuilt at print time: the
+    /// name reported is then the name probed, by construction.
+    pub env_vars: Vec<EnvVar>,
 }
+
+#[derive(Debug)]
+pub struct EnvVar {
+    pub name: String,
+    pub present: bool,
+    /// Listed even when unset — the two backends an app is most likely to be
+    /// missing. The rest are only worth a line when they *are* set.
+    always_reported: bool,
+}
+
+/// The optional variables doctor answers for, as `(namespace, key, always
+/// reported)`.
+const CHECKED: &[(&str, &str, bool)] = &[
+    ("DATABASE", "URL", true),
+    ("QUEUE", "URL", true),
+    ("HTTP", "HOST", false),
+    ("HTTP", "PORT", false),
+];
 
 pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
     let start = opts
@@ -37,18 +59,35 @@ pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
         .is_some_and(|v| version_at_least(v, MIN_RUST_VERSION));
     report.cargo_ok = which("cargo");
 
-    match crate::context::NestrsWorkspace::discover(&start) {
-        Ok(Some(_)) => report.in_nestrs_workspace = true,
-        Ok(None) => {}
-        Err(e) => report.workspace_error = Some(e.to_string()),
-    }
+    // One discovery: the workspace answers both "am I in one?" and "which env
+    // prefix?", so a second walk would re-parse every manifest above `start`.
+    report.env_prefix = match crate::context::NestrsWorkspace::discover(&start) {
+        Ok(Some(ws)) => {
+            report.in_nestrs_workspace = true;
+            ws.metadata.env_prefix
+        }
+        // The layout `discover` cannot answer for — a standalone crate declares
+        // the prefix on its own package.
+        Ok(None) => crate::context::package_env_prefix(&start),
+        Err(e) => {
+            report.workspace_error = Some(e.to_string());
+            crate::context::package_env_prefix(&start)
+        }
+    };
 
     // One cascade read for all four, rather than up to four files per variable.
-    let cascade = cascade_text(&start);
-    report.env_database = env_present(&cascade, "NESTRS_DATABASE__URL");
-    report.env_queue = env_present(&cascade, "NESTRS_QUEUE__URL");
-    report.env_http_host = env_present(&cascade, "NESTRS_HTTP__HOST");
-    report.env_http_port = env_present(&cascade, "NESTRS_HTTP__PORT");
+    let cascade = cascade_text(&start, &report.env_prefix);
+    report.env_vars = CHECKED
+        .iter()
+        .map(|&(namespace, key, always_reported)| {
+            let name = crate::context::var_name(&report.env_prefix, namespace, key);
+            EnvVar {
+                present: env_present(&cascade, &name),
+                name,
+                always_reported,
+            }
+        })
+        .collect();
 
     print_report(&report);
 
@@ -86,15 +125,17 @@ fn print_report(report: &DoctorReport) {
 
     println!();
     println!("Environment (optional — only needed for DB/Redis apps):");
-    print_env_hint("NESTRS_DATABASE__URL", report.env_database);
-    print_env_hint("NESTRS_QUEUE__URL", report.env_queue);
-    if report.env_http_host {
-        println!("  NESTRS_HTTP__HOST: set");
+    // Named even on the default, so the answers below are unambiguous: a reader
+    // seeing `not set` can tell a missing value from a prefix mismatch.
+    println!("  env prefix: {}", report.env_prefix);
+    for var in &report.env_vars {
+        if var.present {
+            println!("  {}: set", var.name);
+        } else if var.always_reported {
+            println!("  {}: not set", var.name);
+        }
     }
-    if report.env_http_port {
-        println!("  NESTRS_HTTP__PORT: set");
-    }
-    if !report.env_database && !report.env_queue && !report.env_http_host && !report.env_http_port {
+    if report.env_vars.iter().all(|var| !var.present) {
         println!("  (none set — fine for bare HTTP apps on defaults)");
     }
     println!();
@@ -103,10 +144,6 @@ fn print_report(report: &DoctorReport) {
 fn status_line(label: &str, ok: bool, detail: &str) {
     let mark = if ok { "ok" } else { "FAIL" };
     println!("  [{mark}] {label}: {detail}");
-}
-
-fn print_env_hint(name: &str, present: bool) {
-    println!("  {name}: {}", if present { "set" } else { "not set" });
 }
 
 /// Whether an app started here would resolve `name` — the real process
@@ -127,10 +164,11 @@ fn env_present(cascade: &str, name: &str) -> bool {
 
 /// Every cascade file rooted at `dir`, concatenated. Mirrors
 /// `nest_rs_config::dotenv`'s file set — including skipping `.env.local` under
-/// `NESTRS_ENV=test`, so doctor answers what an app would actually resolve.
+/// `<PREFIX>_ENV=test`, so doctor answers what an app would actually resolve.
 /// Precedence does not matter here: the question is presence, not value.
-fn cascade_text(dir: &Path) -> String {
-    let env = std::env::var("NESTRS_ENV").unwrap_or_else(|_| "development".to_owned());
+fn cascade_text(dir: &Path, env_prefix: &str) -> String {
+    let env =
+        std::env::var(format!("{env_prefix}_ENV")).unwrap_or_else(|_| "development".to_owned());
     let env = env.trim().to_owned();
     let mut files = vec![format!(".env.{env}.local")];
     if env != "test" {
@@ -246,9 +284,26 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         std::fs::write(dir.join(".env"), "NESTRS_DATABASE__URL=postgres://x\n").expect("write");
-        let cascade = cascade_text(&dir);
+        let cascade = cascade_text(&dir, "NESTRS");
         assert!(env_present(&cascade, "NESTRS_DATABASE__URL"));
         assert!(!env_present(&cascade, "NESTRS_QUEUE__URL"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A project that renamed its variables must be answered in its own names.
+    /// Reporting `NESTRS_DATABASE__URL: not set` there is worse than silence:
+    /// it sends the reader to add a key the app will never read.
+    #[test]
+    fn a_custom_prefix_project_is_answered_in_its_own_variable_names() {
+        let dir = std::env::temp_dir().join(format!("nestrs-doctor-acme-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join(".env"), "ACME_DATABASE__URL=postgres://x\n").expect("write");
+        let cascade = cascade_text(&dir, "ACME");
+        assert!(env_present(&cascade, "ACME_DATABASE__URL"));
+        assert!(
+            !env_present(&cascade, "NESTRS_DATABASE__URL"),
+            "the default name must not answer for a renamed project",
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

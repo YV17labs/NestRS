@@ -5,15 +5,16 @@ use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, rustfmt};
 use crate::templates::{hello, shared, standalone};
 
+use super::command::with_env_prefix;
 use super::queue_env_files;
 
-pub fn scaffold(output: &Path, names: &Names, dry_run: bool) -> CliResult<()> {
+pub fn scaffold(output: &Path, names: &Names, env_prefix: &str, dry_run: bool) -> CliResult<()> {
     let root = output.join(&names.kebab);
     if root.exists() {
         return Err(CliError::AlreadyExists(root));
     }
 
-    let r = Renderer::new(names);
+    let r = with_env_prefix(Renderer::new(names), env_prefix, "package");
     let mut s = Scaffold::new();
 
     s.create(root.join("Cargo.toml"), r.render(standalone::CARGO));
@@ -27,7 +28,7 @@ pub fn scaffold(output: &Path, names: &Names, dry_run: bool) -> CliResult<()> {
     s.create(root.join("test.just"), r.render(standalone::TEST_JUSTFILE));
     s.create(root.join("README.md"), r.render(standalone::README));
     s.create(root.join("Dockerfile"), r.render(standalone::DOCKERFILE));
-    queue_env_files(&mut s, &root, names, &names.kebab, shared::ENV);
+    queue_env_files(&mut s, &root, names, &names.kebab, env_prefix, shared::ENV);
 
     queue_sources(&mut s, &root.join("src"), names);
 

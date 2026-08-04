@@ -67,6 +67,11 @@ pub enum Command {
         #[arg(long, short = 'o', default_value = ".")]
         output: PathBuf,
 
+        /// Prefix every framework env var carries, instead of `NESTRS`
+        /// (e.g. `ACME` ⇒ `ACME_ENV`, `ACME_HTTP__PORT`). Uppercase ASCII.
+        #[arg(long, value_name = "PREFIX")]
+        env_prefix: Option<String>,
+
         /// Run `cargo check` after scaffolding.
         #[arg(long)]
         check: bool,
@@ -183,6 +188,7 @@ pub fn run(cli: Cli) -> CliResult<()> {
             name,
             standalone,
             output,
+            env_prefix,
             check,
             dry_run,
         } => {
@@ -191,6 +197,7 @@ pub fn run(cli: Cli) -> CliResult<()> {
                 name,
                 output: output.clone(),
                 standalone,
+                env_prefix,
                 dry_run,
             };
             commands::run_new(opts.clone())?;

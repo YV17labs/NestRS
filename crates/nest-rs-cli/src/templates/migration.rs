@@ -32,7 +32,7 @@ tracing-subscriber.workspace = true
 
 /// The binary behind every `nestrs run db <verb>`. `connect_from_env` is the
 /// single connector for tools outside the DI container: it resolves
-/// `NESTRS_DATABASE__*` through the same `.env` cascade the apps use, so a tool
+/// `<PREFIX>_DATABASE__*` through the same `.env` cascade the apps use, so a tool
 /// and its app can never disagree about which database they mean.
 pub const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;
@@ -41,9 +41,13 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // `EnvPrefix::var` rather than a literal: this binary then reads the same
+    // log variable the apps do, including after the project declares its own
+    // `env_prefix!`.
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_env("NESTRS_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_env(nest_rs::core::EnvPrefix::var("LOG"))
+                .unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -82,13 +86,17 @@ tokio.workspace = true
 
 /// `nestrs run db seed`. Empty, but connected: the wiring a fixture needs is
 /// already here, so adding one is a body edit rather than a new crate.
+///
+/// It carries its own `env_prefix!` because it is a binary crate of its own:
+/// the declaration in `crates/features/` is a link-time fact of the *apps*, and
+/// this one links neither `features` nor `migrations`.
 pub const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
 //!
 //! `nestrs run db reset` runs `fresh` and then this, and you will run it again
 //! on a database that already has rows — so every insert here must be
 //! idempotent (find-or-create, or `ON CONFLICT DO NOTHING`).
 
-use anyhow::Result;
+{{env_prefix_decl}}use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {

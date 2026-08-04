@@ -313,8 +313,8 @@ pub struct AuthzMcpModule;
 pub const ENV_AUTHN: &str = r#"
 # JWT verification (`nestrs g auth`). HS256 shared secret — a holder can also
 # MINT tokens, so this value is a local-development placeholder only: set a
-# real `NESTRS_AUTHN__SECRET` through the real environment in every deployed
-# environment, or switch to EdDSA (`NESTRS_AUTHN__PRIVATE_KEY` on the issuing
-# app, `NESTRS_AUTHN__PUBLIC_KEY` on the resource servers).
-NESTRS_AUTHN__SECRET=dev-only-insecure-secret-change-me-32b
+# real `{{env_prefix}}_AUTHN__SECRET` through the real environment in every deployed
+# environment, or switch to EdDSA (`{{env_prefix}}_AUTHN__PRIVATE_KEY` on the issuing
+# app, `{{env_prefix}}_AUTHN__PUBLIC_KEY` on the resource servers).
+{{env_prefix}}_AUTHN__SECRET=dev-only-insecure-secret-change-me-32b
 "#;

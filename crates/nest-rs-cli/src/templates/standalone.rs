@@ -33,7 +33,7 @@ strip = true        # drop symbols for a smaller binary
 # Dev: fastest iterative rebuilds; keep file:line in backtraces.
 [profile.dev]
 debug = "line-tables-only"
-"#;
+{{env_prefix_metadata}}"#;
 
 pub const MAIN: &str = r#"use anyhow::Result;
 use nest_rs::config::Environment;
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 }
 "#;
 
-pub const LIB: &str = r#"mod controller;
+pub const LIB: &str = r#"{{env_prefix_decl}}mod controller;
 mod module;
 mod service;
 

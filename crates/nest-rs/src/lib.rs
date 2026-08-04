@@ -10,6 +10,17 @@
 
 pub use nest_rs_core as core;
 
+/// Declare this application's environment-variable prefix, replacing the
+/// default `NESTRS` on every framework variable (`ACME_ENV`, `ACME_LOG`,
+/// `ACME_DATABASE__URL`, …). Write it once, in a crate every binary **and**
+/// every test binary of the project links.
+///
+/// ```
+/// nest_rs::env_prefix!("ACME");
+/// # fn main() {}
+/// ```
+pub use nest_rs_core::env_prefix;
+
 #[cfg(feature = "http")]
 pub use nest_rs_http as http;
 

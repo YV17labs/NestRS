@@ -8,11 +8,15 @@
 //!
 //! - `NESTRS_LOG` (falling back to `RUST_LOG`) — `EnvFilter` directives,
 //!   default `info`. Set-but-unparseable aborts boot, the same posture as
-//!   every other `NESTRS_*` var.
+//!   every other framework var.
 //! - `NESTRS_LOG_FORMAT` — `text` or `json`; defaults by build profile
 //!   (text in debug, JSON in release), unrecognized values keep the default.
 //! - `NESTRS_LOG_SOURCE_LOCATION` — append the emitting `file:line` to each
 //!   event; off by default (widens every line, leaks source paths in prod).
+//!
+//! `NESTRS` is the default prefix; under
+//! [`env_prefix!`](crate::env_prefix!) the three become `<PREFIX>_LOG*`.
+//! `RUST_LOG` is not prefixed — it is the ecosystem's variable, not ours.
 //!
 //! The same three variables drive the console layer of any richer subscriber
 //! the framework ships (`nest-rs-opentelemetry`), so an app's log config
@@ -24,6 +28,8 @@
 
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
+
+use crate::env_prefix::EnvPrefix;
 
 /// Console output shape for the fallback subscriber.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,12 +67,13 @@ fn bool_from_env(name: &str) -> bool {
     })
 }
 
-/// Build the filter from `NESTRS_LOG` / `RUST_LOG` / `"info"`. A set-but-
+/// Build the filter from `<PREFIX>_LOG` / `RUST_LOG` / `"info"`. A set-but-
 /// unparseable directive is a config error that aborts boot, never a silent
 /// downgrade to the default.
 fn filter_from_env() -> Result<EnvFilter> {
-    let (var, spec) = match std::env::var("NESTRS_LOG") {
-        Ok(v) => ("NESTRS_LOG", v),
+    let log_var = EnvPrefix::var("LOG");
+    let (var, spec) = match std::env::var(&log_var) {
+        Ok(v) => (log_var.as_str(), v),
         Err(_) => match std::env::var("RUST_LOG") {
             Ok(v) => ("RUST_LOG", v),
             Err(_) => ("", "info".to_owned()),
@@ -84,14 +91,15 @@ pub(crate) fn init_fallback() -> Result<()> {
         return Ok(());
     }
     let filter = filter_from_env()?;
-    let source_location = bool_from_env("NESTRS_LOG_SOURCE_LOCATION");
+    let source_location = bool_from_env(&EnvPrefix::var("LOG_SOURCE_LOCATION"));
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_file(source_location)
         .with_line_number(source_location);
     // A lost race against a concurrent install is the "already set" case —
     // the fallback steps aside; it never unseats another subscriber.
-    let _ = match LogFormat::resolve(std::env::var("NESTRS_LOG_FORMAT").ok().as_deref()) {
+    let format = std::env::var(EnvPrefix::var("LOG_FORMAT")).ok();
+    let _ = match LogFormat::resolve(format.as_deref()) {
         LogFormat::Text => builder.try_init(),
         LogFormat::Json => builder
             .json()

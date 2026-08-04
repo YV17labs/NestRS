@@ -34,7 +34,7 @@ pub use context::{Ctx, RejectedCredential};
 pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb};
 pub use cors::CorsConfig;
 pub use endpoint::{EdgePosture, HttpEndpointMeta};
-pub use location::set_created_location;
+pub use location::{caller_path, set_created_location};
 pub use module::{HttpModule, HttpSetup};
 pub use nest_rs_core::input;
 pub use nest_rs_core::{current_body_limit, current_request_scope, with_request_scope};

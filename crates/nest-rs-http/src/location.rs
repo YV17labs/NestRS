@@ -11,16 +11,46 @@
 
 use std::fmt::Display;
 
-use poem::Response;
-use poem::http::{HeaderValue, header::LOCATION};
+use poem::http::{HeaderValue, Uri, header::LOCATION};
+use poem::{Request, Response};
+
+/// The URI the caller addressed, captured at the transport edge.
+///
+/// poem's own `original_uri()` cannot serve this: it is populated only on the
+/// hyper path, and a request built through `Request::builder()` — which
+/// `TestClient`, and therefore every `TestApp` suite, goes through — carries a
+/// `Default` state whose URI is `/`. Reading it would make a `201` name
+/// `/<id>` in process and `/orgs/<id>` on the wire: the in-process witness
+/// would fail on a route that is correct, which is the opposite of what a boot
+/// test is for.
+#[derive(Clone)]
+pub(crate) struct CallerUri(pub(crate) Uri);
+
+/// The path the caller addressed — the collection a `#[crud]` create posted to.
+///
+/// Read from the edge's capture rather than off `uri()`, which the router
+/// rewrites: a global prefix is mounted with `Route::nest`, which strips itself
+/// off before the handler runs. Same value in process and on the wire, so a
+/// `TestApp` assertion about the `201`'s `Location` means what it says.
+pub fn caller_path(req: &Request) -> &str {
+    match req.extensions().get::<CallerUri>() {
+        Some(CallerUri(uri)) => uri.path(),
+        // The edge captures on every routed request, so this is an endpoint
+        // driven without one — a bare `Route` in a unit test. `uri()` rather
+        // than `original_uri()`: whoever built the request populated it, and
+        // the only segment it can be missing is a global prefix, which a tree
+        // assembled without the edge has not applied either.
+        None => req.uri().path(),
+    }
+}
 
 /// Stamp `Location: <collection_path>/<id>` onto a create response.
 ///
 /// An **absolute-path reference**, which RFC 9110 §10.2.2 permits and which
 /// costs nothing in trust: an absolute URI would have to name a host, and the
 /// only host a request carries is the `Host` header — the one field a client
-/// controls. Pass the collection path as the caller sent it, so a global prefix
-/// or a `/v1` segment is already part of the answer.
+/// controls. Pass the collection path as the caller sent it — [`caller_path`]
+/// — so a global prefix or a `/v1` segment is already part of the answer.
 ///
 /// A header value that will not build is dropped rather than raised: an id that
 /// renders as ASCII and a routed path cannot produce one, and a `201` whose body
@@ -59,5 +89,28 @@ mod tests {
         assert_eq!(location_of("/api/v1/posts"), format!("/api/v1/posts/{ID}"));
         assert_eq!(location_of("/posts/"), format!("/posts/{ID}"));
         assert_eq!(location_of("/"), format!("/{ID}"));
+    }
+
+    /// The capture wins over `uri()` — the case that separates a request the
+    /// router has already stripped a global prefix from (`/posts`) from what
+    /// the caller actually addressed (`/api/posts`).
+    #[test]
+    fn caller_path_reads_the_edges_capture() {
+        let mut req = Request::builder().uri_str("/posts").finish();
+        req.extensions_mut()
+            .insert(CallerUri(Uri::from_static("/api/posts")));
+
+        assert_eq!(caller_path(&req), "/api/posts");
+    }
+
+    /// No edge, no capture: `uri()` answers. `original_uri()` would say `/`
+    /// here — poem populates it on the hyper path only — which is the whole
+    /// reason this function exists.
+    #[test]
+    fn caller_path_falls_back_to_the_request_uri() {
+        let req = Request::builder().uri_str("/posts").finish();
+
+        assert_eq!(caller_path(&req), "/posts");
+        assert_eq!(req.original_uri().path(), "/");
     }
 }

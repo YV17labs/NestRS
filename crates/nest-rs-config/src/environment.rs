@@ -1,16 +1,19 @@
 //! Active runtime [`Environment`] — selects the `.env` cascade and branches
 //! code paths.
 
+use nest_rs_core::EnvPrefix;
+
 use crate::source::real_env_var;
 
-/// Read from the reserved `NESTRS_ENV`. This is the one framework variable
-/// **outside** the `NESTRS_<DOMAIN>__<KEY>` scheme — it selects which `.env`
-/// files to load, so it must come from the real process environment, not a
-/// `.env` file. Unset or unrecognised ⇒ [`Development`](Self::Development).
+/// Read from the reserved `<PREFIX>_ENV` (`NESTRS_ENV` by default). This is the
+/// one framework variable **outside** the `<PREFIX>_<DOMAIN>__<KEY>` scheme —
+/// it selects which `.env` files to load, so it must come from the real process
+/// environment, not a `.env` file.
+/// Unset or unrecognised ⇒ [`Development`](Self::Development).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Environment {
-    /// Local development — the default when `NESTRS_ENV` is unset or unrecognised.
+    /// Local development — the default when `<PREFIX>_ENV` is unset or unrecognised.
     #[default]
     Development,
     /// `.env.local` is **not** loaded so tests stay hermetic.
@@ -52,12 +55,13 @@ impl Environment {
         env
     }
 
-    /// Read the active environment from `NESTRS_ENV` (real process env only).
+    /// Read the active environment from `<PREFIX>_ENV` (real process env only).
     pub fn from_env() -> Self {
-        // `NESTRS_ENV` selects the cascade, so it must come from the real
+        // `<PREFIX>_ENV` selects the cascade, so it must come from the real
         // process env, never a `.env` file — read it without the dotenv
         // fallback (which would also recurse through `dotenv_values`).
-        let raw = real_env_var("NESTRS_ENV");
+        let var = Self::var_name();
+        let raw = real_env_var(&var);
         let (env, unrecognized) = classify(raw.as_deref());
         // Set but UNRECOGNIZED (a typo like `producton`) must not silently load
         // the dev cascade in production (CONF-I4). This runs at the top of
@@ -65,12 +69,21 @@ impl Environment {
         // where it is guaranteed visible rather than as a dropped log.
         if let Some(value) = unrecognized {
             eprintln!(
-                "nestrs: WARNING — unrecognized NESTRS_ENV={value:?}; falling back to \
+                "nestrs: WARNING — unrecognized {var}={value:?}; falling back to \
                  `development`. A misspelled production value loads the development `.env` \
                  cascade in production. Use one of: development, test, staging, production."
             );
         }
         env
+    }
+
+    /// The variable this reads — `NESTRS_ENV`, or `<PREFIX>_ENV` under
+    /// [`env_prefix!`](nest_rs_core::env_prefix!). Public because a harness that
+    /// must decide the environment before the framework does (`nest-rs-testing`)
+    /// has to name the same variable, and a second literal there is exactly how
+    /// a rename half-lands.
+    pub fn var_name() -> String {
+        EnvPrefix::var("ENV")
     }
 
     /// The lowercase name of this environment (`"development"`, `"production"`, …).

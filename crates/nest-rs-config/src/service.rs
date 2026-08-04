@@ -1,5 +1,9 @@
-//! Framework env-var scheme `NESTRS_<DOMAIN>__<KEY>` and the typed
+//! Framework env-var scheme `<PREFIX>_<DOMAIN>__<KEY>` and the typed
 //! [`ConfigService`] reader handed to a config's `from_env`.
+//!
+//! `<PREFIX>` is `NESTRS` unless the app declared its own with
+//! [`env_prefix!`](nest_rs_core::env_prefix!); every name in this crate is built
+//! from [`var_name`], so the two can never drift.
 //!
 //! Domain = owning crate's name with the `nest-rs-` prefix stripped. A crate
 //! maps **its own** domain; sibling vars may only be borrowed via an
@@ -9,10 +13,31 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use nest_rs_core::EnvPrefix;
+
 use crate::error::ConfigError;
 use crate::source::{ConfigSource, EnvSource, MapSource};
 
-const PREFIX: &str = "NESTRS_";
+/// The fully-qualified name of a namespaced config variable:
+/// `<PREFIX>_<DOMAIN>__<KEY>`.
+///
+/// The primitive [`ConfigService::var_name`] delegates to, exposed for the
+/// places that must cite a variable with no reader in hand — a `Validate` impl,
+/// a `thiserror` message, a boot check on a pinned struct. Hardcoding the name
+/// there would print a variable that does not exist under a custom prefix,
+/// which is the one thing an operator reads such a message for.
+///
+/// ```
+/// assert_eq!(nest_rs_config::var_name("database", "URL"), "NESTRS_DATABASE__URL");
+/// ```
+pub fn var_name(namespace: &str, key: &str) -> String {
+    format!(
+        "{}_{}__{}",
+        EnvPrefix::current(),
+        namespace.to_ascii_uppercase(),
+        key.to_ascii_uppercase(),
+    )
+}
 
 /// Which tiers of the environment outrank the value a field falls back to.
 ///
@@ -33,7 +58,7 @@ pub enum Precedence {
     OverPinned,
 }
 
-/// Typed reader bound to one namespace; resolves `NESTRS_<NAMESPACE>__<KEY>`.
+/// Typed reader bound to one namespace; resolves `<PREFIX>_<NAMESPACE>__<KEY>`.
 pub struct ConfigService {
     namespace: String,
     source: Arc<dyn ConfigSource>,
@@ -52,7 +77,9 @@ impl ConfigService {
     /// constructing this reader).
     pub fn with_source(namespace: &str, source: Arc<dyn ConfigSource>) -> Self {
         Self {
-            namespace: namespace.to_ascii_uppercase(),
+            // Stored verbatim: `var_name` uppercases both segments, so casing
+            // here would only be a second pass over the same bytes.
+            namespace: namespace.to_owned(),
             source,
             precedence: Precedence::OverDefaults,
         }
@@ -73,8 +100,9 @@ impl ConfigService {
     }
 
     /// Convenience over [`with_source`](Self::with_source) + [`MapSource`]: a
-    /// reader backed by an in-memory map of fully-qualified `NESTRS_<NS>__<KEY>`
-    /// vars. Resolves hermetically (no process env, no `.env`), so config tests
+    /// reader backed by an in-memory map of fully-qualified
+    /// `<PREFIX>_<NS>__<KEY>` vars.
+    /// Resolves hermetically (no process env, no `.env`), so config tests
     /// and fixtures need no `unsafe { std::env::set_var }`. An empty `vars`
     /// yields all in-code defaults.
     ///
@@ -91,10 +119,10 @@ impl ConfigService {
         Self::with_source(namespace, Arc::new(MapSource::from_iter(vars)))
     }
 
-    /// The full `NESTRS_<NAMESPACE>__<KEY>` variable **name** (not its value)
+    /// The full `<PREFIX>_<NAMESPACE>__<KEY>` variable **name** (not its value)
     /// — for error messages and docs that must cite the exact variable.
     pub fn var_name(&self, key: &str) -> String {
-        format!("{PREFIX}{}__{}", self.namespace, key.to_ascii_uppercase())
+        var_name(&self.namespace, key)
     }
 
     /// The raw string value for `key` in this namespace, or `None` if unset in
@@ -168,6 +196,18 @@ mod tests {
         assert_eq!(
             env.var_name("max_connections"),
             "NESTRS_DATABASE__MAX_CONNECTIONS"
+        );
+    }
+
+    // The readerless primitive must agree with the method, since the two are
+    // what an operator compares: an error message built one way and a `.env`
+    // line built the other.
+    #[test]
+    fn the_free_var_name_matches_the_readers() {
+        assert_eq!(var_name("database", "url"), "NESTRS_DATABASE__URL");
+        assert_eq!(
+            var_name("queue", "CONNECT_TIMEOUT_SECS"),
+            ConfigService::for_namespace("queue").var_name("connect_timeout_secs"),
         );
     }
 

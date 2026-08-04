@@ -249,6 +249,37 @@ becomes implicit (which vars exist? what are their types?). With
 - A reviewer reads the contract by reading ten lines, not by chasing
   serde attributes.
 
+## Your own prefix
+
+`NESTRS` is a default, not a fixture. Declare your own once and every
+framework variable follows — `ACME_ENV`, `ACME_LOG`, `ACME_HTTP__PORT`,
+`ACME_DATABASE__URL`:
+
+```rust title="crates/features/src/lib.rs"
+nest_rs::env_prefix!("ACME");
+```
+
+`nestrs new acme --env-prefix ACME` writes that line for you, plus the
+`.env` cascade under the new names and the `[workspace.metadata.nestrs]`
+entry the CLI reads back (so `nestrs doctor` and `nestrs g auth` speak your
+names, not ours).
+
+Three things are worth knowing:
+
+- **Write it in a crate every binary *and* every test binary links** — the
+  shared feature crate in a workspace, `src/lib.rs` standalone. Declared in
+  an app's `main.rs`, the app would resolve `ACME_*` while its own test
+  suites still resolved `NESTRS_*`.
+- **It is a rename, not an alias.** Once declared, `NESTRS_HTTP__PORT` is
+  just another variable in the environment — inert. That is deliberate: a
+  stale value silently winning is the failure mode a fallback would create.
+- **`RUST_LOG` keeps its name.** It belongs to the ecosystem, not to us.
+
+The literal is checked at compile time (uppercase ASCII, digits and
+underscores, no trailing `_` — the framework supplies the separator), and
+two different prefixes declared in one binary abort at boot naming both
+sites.
+
 ## Advanced
 
 Hand-writing `from_env` (for custom validation, or a field carrying a structured payload, or a rule spanning the whole struct) is covered on [Advanced configuration](/configuration/advanced/) with the real `IssuerConfig` as the worked example.

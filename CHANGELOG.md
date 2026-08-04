@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### The env prefix is the application's
+
+`NESTRS_` was a fixture; it is now a default. An app declares its own once and
+every framework variable follows — `ACME_ENV`, `ACME_LOG`, `ACME_HTTP__PORT`,
+`ACME_DATABASE__URL`:
+
+```rust
+nest_rs::env_prefix!("ACME");
+```
+
+- **A link-time declaration, not a setter.** The prefix is read before anything
+  else — `<PREFIX>_ENV` selects the `.env` cascade, `<PREFIX>_LOG` configures
+  the subscriber before `main` has built anything — so a setter would carry an
+  ordering rule nobody can verify. `inventory` makes the declaration a fact
+  already true at the first read, wherever in the binary it is written.
+  Resolution caches into a `OnceLock<&'static str>`: no allocation added to any
+  path that was allocation-free.
+- **It is a rename, not an alias.** Once declared, `NESTRS_HTTP__PORT` is inert.
+  A fallback would let a stale value silently win.
+- **Every name is built from it**, including the ones outside the
+  `<PREFIX>_<DOMAIN>__<KEY>` scheme: `<PREFIX>_ENV`, the three `<PREFIX>_LOG*`
+  variables, and the OpenTelemetry namespace. `RUST_LOG` keeps its name — it is
+  the ecosystem's, not ours.
+- **Error messages name the variable the operator actually has.** Every
+  hardcoded `NESTRS_AUTHN__SECRET`-style literal in authn, redis, seaorm and the
+  test harness now goes through `nest_rs_config::var_name`, the readerless
+  primitive `ConfigService::var_name` delegates to.
+- **`nestrs new <name> --env-prefix ACME`** writes the declaration, the `.env`
+  cascade under the new names, and a `[workspace.metadata.nestrs] env-prefix`
+  entry — which is how `nestrs doctor` and `nestrs g auth` learn the project's
+  names instead of assuming ours. `doctor` reports the prefix it resolved.
+  One declaration per generated *binary*: the `migrations` and `seed` tools link
+  neither the feature crate nor each other, so `nestrs run db up` would
+  otherwise resolve `NESTRS_*` against an `ACME_*` cascade.
+- **Compile-time shape check** (uppercase ASCII, digits, underscores, no
+  trailing `_`), and two conflicting declarations in one binary abort at boot
+  naming both sites.
+
+Existing apps are unaffected: declaring nothing keeps `NESTRS`.
+
 ## [2.0.0] - 2026-08-03
 
 **One dependency.** `nest-rs` with the feature for the capability becomes the

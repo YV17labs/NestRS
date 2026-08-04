@@ -1,8 +1,8 @@
 //! Framework env-var scheme `<PREFIX>_<DOMAIN>__<KEY>` and the typed
 //! [`ConfigService`] reader handed to a config's `from_env`.
 //!
-//! `<PREFIX>` is `NESTRS` unless the app declared its own with
-//! [`env_prefix!`](nest_rs_core::env_prefix!); every name in this crate is built
+//! `<PREFIX>` is `NESTRS` unless the deployment named its own through
+//! [`EnvPrefix::VAR`](nest_rs_core::EnvPrefix::VAR); every name in this crate is built
 //! from [`var_name`], so the two can never drift.
 //!
 //! Domain = owning crate's name with the `nest-rs-` prefix stripped. A crate

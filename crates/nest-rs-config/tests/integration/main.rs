@@ -1,11 +1,9 @@
 //! Integration tests for the config crate's public macro surface.
 //!
-//! The whole binary runs under a **custom** env prefix: `env_prefix!` is a
-//! link-time declaration, so a suite wanting both prefixes would need two
-//! binaries, and the shipped default (`NESTRS`) is already covered by the unit
-//! tests inside `src/`. Declaring `ACME` here is what makes the override an
-//! executed contract rather than a documented intention.
-nest_rs_core::env_prefix!("ACME");
+//! The custom-prefix tests set `NESTRS_ENV_PREFIX` and read it back in the same
+//! process, which nextest makes honest: it runs every test in its own process,
+//! so the `OnceLock` each one freezes is its own. Bare `cargo test` would share
+//! one process between them and is unsupported for exactly this class of reason.
 
 mod diagnostics;
 mod env_prefix;

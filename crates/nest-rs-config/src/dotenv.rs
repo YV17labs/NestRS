@@ -23,6 +23,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::{LazyLock, OnceLock, RwLock};
 
+use nest_rs_core::EnvPrefix;
+
 use crate::environment::Environment;
 
 /// The parsed `.env` cascade for the active [`Environment`], rooted at the
@@ -36,9 +38,9 @@ pub(crate) fn dotenv_values() -> &'static HashMap<String, String> {
 }
 
 /// Parse the `.env` cascade rooted at `dir` into a map (most-specific file
-/// wins). Pure: reads files only, never touches the process environment and
-/// never consults the real env — real-env precedence is applied at read time by
-/// `env_var`.
+/// wins). Reads files only and never touches the process environment — real-env
+/// precedence is applied at read time by `env_var`. Its one refusal is the env
+/// prefix, below.
 pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, String> {
     let e = env.as_str();
     // Most specific first: `or_insert` makes the first writer win, so this
@@ -54,7 +56,33 @@ pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, Strin
     for file in files {
         merge_file(&dir.join(file), &mut values);
     }
+    assert_prefix_not_from_cascade(&values);
     values
+}
+
+/// Abort if the cascade tries to name the env prefix.
+///
+/// On the shared parse rather than on one of its consumers: `dotenv_values`
+/// (every config read, including tools that never call `Environment::init`) and
+/// `load_cascade` (the explicit bootstrapper `nest-rs-testing` uses) both come
+/// through here, so neither can be the path that skips the check. A prefix
+/// written into a file would otherwise sit in this map having renamed nothing —
+/// the cascade it appears in was chosen before it was read.
+fn assert_prefix_not_from_cascade(values: &HashMap<String, String>) {
+    let Some(declared) = values.get(EnvPrefix::VAR) else {
+        return;
+    };
+    // Equal is redundant, not wrong: the process env must already carry it for
+    // the resolution to match, so the file is merely restating a settled fact.
+    let resolved = EnvPrefix::current();
+    assert!(
+        declared == resolved,
+        "{} is `{declared}` in the `.env` cascade, but `{resolved}` was already resolved. \
+         The prefix chooses which cascade to read, so a value inside it arrives too late \
+         to have done so — set it on the process instead (your container, your shell, the \
+         Justfile).",
+        EnvPrefix::VAR,
+    );
 }
 
 /// Merge one `.env` file's assignments into `values` (set-if-absent — the

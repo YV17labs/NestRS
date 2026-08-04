@@ -26,16 +26,12 @@ pub struct MigrationOptions {
 /// fresh tree instead of failing on a package that doesn't exist — and by
 /// `g migration`'s bootstrap path with its first migration, so a workspace
 /// scaffolded before these crates existed self-heals in one transaction.
-pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, mods: &[String], env_prefix: &str) {
+pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, mods: &[String]) {
     s.create(
         root.join("crates/migrations/Cargo.toml"),
         migration::CRATE_CARGO.to_string(),
     );
-    let decl = crate::commands::env_prefix_decl(env_prefix);
-    s.create(
-        root.join("crates/migrations/src/lib.rs"),
-        render_lib(mods, &decl),
-    );
+    s.create(root.join("crates/migrations/src/lib.rs"), render_lib(mods));
     s.create(
         root.join("crates/migrations/src/migrator.rs"),
         render_migrator(mods),
@@ -50,7 +46,7 @@ pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, mods: &[String], en
     );
     s.create(
         root.join("crates/seed/src/main.rs"),
-        migration::SEED_BIN.replace("{{env_prefix_decl}}", &decl),
+        migration::SEED_BIN.to_string(),
     );
 }
 
@@ -88,7 +84,7 @@ pub fn run(opts: MigrationOptions) -> CliResult<()> {
         // `create` writes are staged in memory, so an `edit` on a file this
         // same transaction creates would read it off disk and fail — render
         // both registrations into the created files instead.
-        queue_db_crates(&mut s, &ws.root, &mods, &ws.metadata.env_prefix);
+        queue_db_crates(&mut s, &ws.root, &mods);
         s.edit(
             ws.root.join("Cargo.toml"),
             ensure_workspace_deps(migrations_deps()),
@@ -143,7 +139,7 @@ fn next_seq(existing: &[String], date: &str) -> u32 {
 
 /// Render `lib.rs` from the sorted module list — the `mod` registry `g
 /// migration` appends to and [`render_migrator`] reads back.
-fn render_lib(mods: &[String], env_prefix_decl: &str) -> String {
+fn render_lib(mods: &[String]) -> String {
     let decls = mods
         .iter()
         .map(|m| format!("mod {m};\n"))
@@ -155,7 +151,7 @@ fn render_lib(mods: &[String], env_prefix_decl: &str) -> String {
          //! here, and regenerates `migrator.rs` from that list — the two registrations\n\
          //! cannot drift.\n\
          \n\
-         {env_prefix_decl}{decls}mod migrator;\n\
+         {decls}mod migrator;\n\
          \n\
          pub use migrator::{{Migrator, migrate}};\n"
     )

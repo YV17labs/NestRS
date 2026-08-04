@@ -14,7 +14,7 @@ pub fn scaffold(output: &Path, names: &Names, env_prefix: &str, dry_run: bool) -
         return Err(CliError::AlreadyExists(root));
     }
 
-    let r = with_env_prefix(Renderer::new(names), env_prefix, "package");
+    let r = with_env_prefix(Renderer::new(names), env_prefix);
     let mut s = Scaffold::new();
 
     s.create(root.join("Cargo.toml"), r.render(standalone::CARGO));
@@ -28,7 +28,7 @@ pub fn scaffold(output: &Path, names: &Names, env_prefix: &str, dry_run: bool) -
     s.create(root.join("test.just"), r.render(standalone::TEST_JUSTFILE));
     s.create(root.join("README.md"), r.render(standalone::README));
     s.create(root.join("Dockerfile"), r.render(standalone::DOCKERFILE));
-    queue_env_files(&mut s, &root, names, &names.kebab, env_prefix, shared::ENV);
+    queue_env_files(&mut s, &root, &r, &names.kebab, shared::ENV);
 
     queue_sources(&mut s, &root.join("src"), names);
 

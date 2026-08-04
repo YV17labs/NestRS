@@ -12,11 +12,18 @@ fn repo() -> PathBuf {
         .expect("the repo root resolves")
 }
 
-/// Run `nestrs <args…>` with cwd at `dir`, asserting success.
-fn nestrs(dir: &Path, args: &[&str]) {
+/// Run `nestrs <args…>` with cwd at `dir` and `env` on the process, asserting
+/// success.
+///
+/// The environment is explicit because the CLI reads the project's env prefix
+/// from its own: a generator writing variable names behaves differently in a
+/// shell that names one and a shell that does not. Passing it here is what a
+/// developer's `direnv`, devcontainer or `nestrs run` does.
+fn nestrs(dir: &Path, args: &[&str], env: &[(&str, &str)]) {
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
         .args(args)
         .current_dir(dir)
+        .envs(env.iter().copied())
         .output()
         .expect("the nestrs binary runs");
     assert!(
@@ -77,24 +84,25 @@ fn scaffold_and_check(generate: &[&[&str]], what: &str) {
 /// check — for the half of the contract the generators do not emit: what the
 /// docs tell the reader to *write* into a scaffolded feature.
 fn scaffold_write_and_check(generate: &[&[&str]], write: &[(&str, &str)], what: &str) {
-    scaffold_write_and_check_with(&["new", "acme"], generate, write, what, |_| {});
+    scaffold_write_and_check_in(&["new", "acme"], generate, &[], write, what, |_| {});
 }
 
-/// The same, with the `nestrs new` invocation under the caller's control and an
-/// inspection hook over the generated tree — for a flag whose effect is spread
-/// across the manifest, the source and the `.env` cascade.
-fn scaffold_write_and_check_with(
+/// The same, with the `nestrs new` invocation, the environment every `nestrs`
+/// runs under, and an inspection hook over the generated tree — for a flag whose
+/// effect is spread across the Justfile, the Dockerfile and the `.env` cascade.
+fn scaffold_write_and_check_in(
     new: &[&str],
     generate: &[&[&str]],
+    env: &[(&str, &str)],
     write: &[(&str, &str)],
     what: &str,
     inspect: impl FnOnce(&Path),
 ) {
     let dir = tempfile::tempdir().expect("a temp dir");
-    nestrs(dir.path(), new);
+    nestrs(dir.path(), new, env);
     let workspace = dir.path().join("acme");
     for args in generate {
-        nestrs(&workspace, args);
+        nestrs(&workspace, args, env);
     }
     for (path, body) in write {
         std::fs::write(workspace.join(path), body).expect("the generated tree is writable");
@@ -117,7 +125,23 @@ fn read(workspace: &Path, path: &str) -> String {
 fn a_greenfield_workspace_compiles() {
     // The first thing anyone does with the CLI. If this breaks, `nestrs new`
     // hands a new user a repository that does not build.
-    scaffold_and_check(&[], "the scaffolded workspace");
+    scaffold_write_and_check_in(
+        &["new", "acme"],
+        &[],
+        &[],
+        &[],
+        "the scaffolded workspace",
+        |workspace| {
+            // A prefix placeholder is empty on the default, and `cargo check`
+            // would never notice one left unrendered in a non-Rust file — the
+            // Justfile is read by `just`, not by the compiler.
+            let justfile = read(workspace, "Justfile");
+            assert!(
+                !justfile.contains("{{env_prefix"),
+                "the Justfile carries an unrendered placeholder:\n{justfile}",
+            );
+        },
+    );
 }
 
 #[test]
@@ -179,35 +203,28 @@ fn a_feature_can_log_and_return_a_fallible_hook() {
 
 #[test]
 fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
-    // `--env-prefix` is only real if all three sides agree: the declaration the
-    // *runtime* resolves, the metadata the *CLI* reads back, and the `.env`
-    // keys the deployment exports. A project where one of them still says
-    // NESTRS boots with defaults and no error — which is the failure this
-    // asserts against, and the reason `g auth` runs here: it appends a key to
-    // an existing cascade, so it is the generator most able to disagree.
-    scaffold_write_and_check_with(
+    // `--env-prefix` is only real if two sides agree: the variable that *sets*
+    // the prefix on every process this project starts, and the `.env` keys
+    // those processes then read. A project where one of them still says NESTRS
+    // boots with defaults and no error — which is the failure this asserts
+    // against, and the reason `g auth` runs here: it appends a key to an
+    // existing cascade, so it is the generator most able to disagree.
+    scaffold_write_and_check_in(
         &["new", "acme", "--env-prefix", "ACME"],
         &[&["g", "auth"]],
+        // What the developer's shell, devcontainer or `nestrs run` supplies —
+        // and what `g auth` must build its key from.
+        &[("NESTRS_ENV_PREFIX", "ACME")],
         &[],
         "a workspace scaffolded with a custom env prefix",
         |workspace| {
-            // One declaration per *binary*: `env_prefix!` is a link-time fact,
-            // and the two `db` tools link neither `features` nor each other, so
-            // a single declaration in the feature crate would leave
-            // `nestrs run db up` resolving NESTRS_* against an ACME_* cascade.
-            for lib in [
-                "crates/features/src/lib.rs",
-                "crates/migrations/src/lib.rs",
-                "crates/seed/src/main.rs",
-            ] {
-                assert!(
-                    read(workspace, lib).contains(r#"nest_rs::env_prefix!("ACME");"#),
-                    "{lib} must declare the prefix its binary resolves",
-                );
-            }
+            // The prefix is set on the process, not declared in a crate. The
+            // Justfile is where `nestrs run` picks it up, so a missing export
+            // there means every recipe starts an app reading NESTRS_* against
+            // an ACME_* cascade.
             assert!(
-                read(workspace, "Cargo.toml").contains(r#"env-prefix = "ACME""#),
-                "tooling learns the same prefix from the workspace metadata",
+                read(workspace, "Justfile").contains(r#"export NESTRS_ENV_PREFIX := "ACME""#),
+                "the Justfile must set the prefix for every process it starts",
             );
 
             for file in [".env", ".env.development", ".env.example"] {
@@ -217,6 +234,13 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
                     "{file} still writes a NESTRS_ key the app will never read:\n{body}",
                 );
             }
+            // `.env` must not carry the prefix *variable* either: it is read
+            // after the prefix has already chosen which cascade to read, so the
+            // framework aborts on it rather than let the rename silently fail.
+            assert!(
+                !read(workspace, ".env").contains("ENV_PREFIX"),
+                "the prefix cannot come from `.env` — the runtime aborts on it",
+            );
             assert!(read(workspace, ".env").contains("ACME_DATABASE__URL="));
             assert!(read(workspace, ".env.development").contains("ACME_LOG="));
             assert!(

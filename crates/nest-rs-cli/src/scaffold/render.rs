@@ -47,13 +47,21 @@ impl Renderer {
         // The `nest-rs-*` version every generated manifest pins — derived from
         // the CLI's own version so it can never go stale (see `crate::version`).
         put("nestrs_version", crate::version::framework_req());
-        // Every env-var name a template writes goes through this key. The
+        // Every env-var name a template writes goes through these keys. The
         // framework default stands unless a caller that knows the project
-        // (`nestrs new --env-prefix`, any generator holding a workspace)
-        // overrides it — a template must never spell `NESTRS_` itself, which
+        // (`nestrs new --env-prefix`) overrides it — a template must never spell
+        // `NESTRS_` itself, which
         // `templates::tests::templates_use_the_env_prefix_placeholder_not_a_literal`
         // enforces.
         put("env_prefix", crate::context::DEFAULT_ENV_PREFIX.to_owned());
+        put("env_prefix_var", crate::context::ENV_PREFIX_VAR.to_owned());
+        // The two lines that *set* the prefix on the processes a project starts
+        // — empty unless overridden, because a project on the default sets
+        // nothing. Seeded here rather than only in `with_env_prefix`: a renderer
+        // that forgot the override would otherwise write the placeholder itself
+        // into a Justfile, which no compiler would ever notice.
+        put("env_prefix_export", String::new());
+        put("env_prefix_env", String::new());
         Self { vars }
     }
 

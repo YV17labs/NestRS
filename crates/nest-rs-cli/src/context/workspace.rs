@@ -15,11 +15,16 @@ const NESTRS_WORKSPACE_MARKERS: &[&str] = &["crates/*", "apps/*"];
 /// Default HTTP port handed to the first app in a fresh workspace.
 pub const DEFAULT_PORT_BASE: u16 = 3000;
 
-/// The framework's own env-var prefix, and what a project gets unless it
-/// declares another. Kept as a literal rather than borrowed from
+/// The framework's own env-var prefix, and what a project gets unless the
+/// environment names another. Kept as a literal rather than borrowed from
 /// `nest-rs-core`: the CLI depends on no framework crate, so that
 /// `cargo install nest-rs-cli` stays independent of the version a project pins.
 pub const DEFAULT_ENV_PREFIX: &str = "NESTRS";
+
+/// The variable the prefix is read from — the one name no prefix can rename,
+/// which is why it is spelled here (`nest_rs_core::EnvPrefix::VAR` is the same
+/// literal, for the same reason).
+pub const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
 
 #[derive(Debug, Clone)]
 pub struct NestrsWorkspace {
@@ -33,21 +38,12 @@ pub struct NestrsWorkspace {
 pub struct Metadata {
     /// Base port for app port allocation.
     pub port_base: u16,
-    /// The prefix every framework env var carries in this project — `NESTRS`
-    /// unless `nestrs new --env-prefix` set another.
-    ///
-    /// The runtime learns it from `env_prefix!` in the project's source; this
-    /// entry is how *tooling* learns the same fact, since a generator writing
-    /// `NESTRS_AUTHN__SECRET` into an `ACME` project's `.env` would emit a key
-    /// the app never reads. `nestrs new` writes both.
-    pub env_prefix: String,
 }
 
 impl Default for Metadata {
     fn default() -> Self {
         Self {
             port_base: DEFAULT_PORT_BASE,
-            env_prefix: DEFAULT_ENV_PREFIX.to_owned(),
         }
     }
 }
@@ -142,20 +138,16 @@ fn read_workspace(dir: &Path) -> CliResult<Option<NestrsWorkspace>> {
         return Ok(None);
     }
 
-    let metadata = read_metadata(workspace);
-
     Ok(Some(NestrsWorkspace {
         root: dir.to_path_buf(),
-        metadata,
+        metadata: read_metadata(workspace),
     }))
 }
 
-/// Read `[<container>.metadata.nestrs]` — `container` being the `workspace`
-/// table of a monorepo root or the `package` table of a standalone crate, which
-/// is why this takes the containing table rather than the document.
-fn read_metadata(container: &toml_edit::Table) -> Metadata {
+/// Read `[workspace.metadata.nestrs]` off the `workspace` table.
+fn read_metadata(workspace: &toml_edit::Table) -> Metadata {
     let mut meta = Metadata::default();
-    let Some(table) = container
+    let Some(table) = workspace
         .get("metadata")
         .and_then(Item::as_table)
         .and_then(|m| m.get("nestrs"))
@@ -169,36 +161,58 @@ fn read_metadata(container: &toml_edit::Table) -> Metadata {
     {
         meta.port_base = port;
     }
-    // A malformed value keeps the default rather than propagating a prefix no
-    // `env_prefix!` could have declared — the shape is checked where it is
-    // written (`nestrs new`), and `doctor` reports what it resolved.
-    if let Some(prefix) = table.get("env-prefix").and_then(|v| v.as_str())
-        && validate_env_prefix(prefix).is_ok()
-    {
-        meta.env_prefix = prefix.to_owned();
-    }
     meta
 }
 
-/// The env prefix a **standalone** crate at `dir` declares in
-/// `[package.metadata.nestrs]`, defaulting to `NESTRS`.
+/// Where the CLI's idea of the prefix comes from — the same environment the app
+/// will read, so the two cannot disagree about a project they both see.
 ///
-/// Inside a workspace, read `NestrsWorkspace::metadata` instead — this is the
-/// fallback for the layout `discover` cannot answer for. Never fails: a project
-/// may legitimately have no manifest here (`nestrs doctor` runs anywhere), and
-/// the default is then the honest answer.
-pub fn package_env_prefix(dir: &Path) -> String {
-    let Ok(source) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
-        return DEFAULT_ENV_PREFIX.to_owned();
-    };
-    let Ok(doc) = source.parse::<DocumentMut>() else {
-        return DEFAULT_ENV_PREFIX.to_owned();
-    };
-    doc.get("package")
-        .and_then(Item::as_table)
-        .map(read_metadata)
-        .unwrap_or_default()
-        .env_prefix
+/// There is deliberately no project file to fall back on: a second source is
+/// how a rename half-lands, and `doctor` reporting `ACME` from a manifest while
+/// the deployed process resolves `NESTRS` is precisely the failure the single
+/// variable exists to remove.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum EnvPrefixSource {
+    /// Nothing names one; every variable is built from `NESTRS`.
+    #[default]
+    Unset,
+    /// The environment names it, and it is usable.
+    Environment(String),
+    /// The environment names something the *app* would abort on, so the CLI
+    /// must not quietly build names from the default and look correct. Carries
+    /// the validator's sentence, which already quotes the offending value.
+    Invalid(String),
+}
+
+impl EnvPrefixSource {
+    /// Read the environment this process was given.
+    pub fn detect() -> Self {
+        let Ok(value) = std::env::var(ENV_PREFIX_VAR) else {
+            return Self::Unset;
+        };
+        // Empty is unset, the way an empty variable is everywhere else.
+        if value.is_empty() {
+            return Self::Unset;
+        }
+        match validate_env_prefix(&value) {
+            Ok(()) => Self::Environment(value),
+            Err(reason) => Self::Invalid(reason),
+        }
+    }
+
+    /// The prefix to build names from — the default whenever there is no usable
+    /// one, which is also what the app resolves in that case.
+    pub fn prefix(&self) -> &str {
+        match self {
+            Self::Environment(prefix) => prefix,
+            Self::Unset | Self::Invalid(_) => DEFAULT_ENV_PREFIX,
+        }
+    }
+}
+
+/// The prefix every name this CLI writes or checks must carry.
+pub fn env_prefix() -> String {
+    EnvPrefixSource::detect().prefix().to_owned()
 }
 
 /// A framework variable's full name, `<PREFIX>_<NAMESPACE>__<KEY>` — the CLI's
@@ -210,7 +224,7 @@ pub fn var_name(env_prefix: &str, namespace: &str, key: &str) -> String {
     format!("{env_prefix}_{namespace}__{key}")
 }
 
-/// The shape `env_prefix!` accepts, restated for the CLI (which links no
+/// The shape the runtime accepts, restated for the CLI (which links no
 /// framework crate). Uppercase ASCII, digits and underscores, starting with a
 /// letter and not ending in `_` — the framework supplies the separator.
 pub fn validate_env_prefix(prefix: &str) -> Result<(), String> {

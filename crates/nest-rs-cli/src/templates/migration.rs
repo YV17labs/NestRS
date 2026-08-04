@@ -42,8 +42,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<()> {
     // `EnvPrefix::var` rather than a literal: this binary then reads the same
-    // log variable the apps do, including after the project declares its own
-    // `env_prefix!`.
+    // log variable the apps do, including under a project's own prefix.
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_env(nest_rs::core::EnvPrefix::var("LOG"))
@@ -86,17 +85,13 @@ tokio.workspace = true
 
 /// `nestrs run db seed`. Empty, but connected: the wiring a fixture needs is
 /// already here, so adding one is a body edit rather than a new crate.
-///
-/// It carries its own `env_prefix!` because it is a binary crate of its own:
-/// the declaration in `crates/features/` is a link-time fact of the *apps*, and
-/// this one links neither `features` nor `migrations`.
 pub const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
 //!
 //! `nestrs run db reset` runs `fresh` and then this, and you will run it again
 //! on a database that already has rows — so every insert here must be
 //! idempotent (find-or-create, or `ON CONFLICT DO NOTHING`).
 
-{{env_prefix_decl}}use anyhow::Result;
+use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {

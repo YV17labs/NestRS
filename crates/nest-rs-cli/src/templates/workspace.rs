@@ -36,7 +36,7 @@ strip = true        # drop symbols for a smaller binary
 # Dev: fastest iterative rebuilds; keep file:line in backtraces.
 [profile.dev]
 debug = "line-tables-only"
-{{env_prefix_metadata}}"#;
+"#;
 
 /// The feature crate's manifest.
 ///
@@ -63,7 +63,7 @@ tracing.workspace = true
 /// feature declared here (see [`super::hello`]).
 pub const FEATURES_LIB: &str = r#"//! Product features — vertical slices shared across apps.
 
-{{env_prefix_decl}}pub mod {{snake}};
+pub mod {{snake}};
 
 pub use {{snake}}::{{http_module}};
 "#;
@@ -165,7 +165,7 @@ Import edge modules in each app's root `module.rs` — see
 in the framework repo.
 "#;
 
-pub const JUSTFILE: &str = r#"_default:
+pub const JUSTFILE: &str = r#"{{env_prefix_export}}_default:
     @just --list
 
 # Run an app with auto-reload — watches the source, rebuilds and restarts on

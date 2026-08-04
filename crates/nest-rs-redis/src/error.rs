@@ -28,9 +28,10 @@ pub enum RedisError {
     /// indistinguishable from a hung process.
     #[error(
         "could not reach Redis at {endpoint} within {}s ({attempts} attempt(s)): \
-         check NESTRS_QUEUE__URL, or widen the budget with \
-         NESTRS_QUEUE__CONNECT_TIMEOUT_SECS",
-        budget.as_secs()
+         check {url_var}, or widen the budget with {timeout_var}",
+        budget.as_secs(),
+        url_var = ::nest_rs_config::var_name("queue", "URL"),
+        timeout_var = ::nest_rs_config::var_name("queue", "CONNECT_TIMEOUT_SECS"),
     )]
     Unreachable {
         /// The configured endpoint with any userinfo stripped — the URL may

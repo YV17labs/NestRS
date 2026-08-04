@@ -418,9 +418,9 @@ impl Transport for HttpTransport {
                 anyhow::bail!(
                     "fail-secure: imperative mount(...) endpoints bypass the global guard pool: \
                      {} — route them through a #[controller], guard them explicitly, or opt out \
-                     with HttpTransport::fail_secure_strict(false) / \
-                     NESTRS_HTTP__FAIL_SECURE_STRICT=false",
+                     with HttpTransport::fail_secure_strict(false) / {}=false",
                     paths.join(", "),
+                    nest_rs_config::var_name("http", "FAIL_SECURE_STRICT"),
                 );
             }
             tracing::warn!(

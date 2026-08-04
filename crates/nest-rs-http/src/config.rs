@@ -133,17 +133,13 @@ impl Config for HttpConfig {
         Ok(Self {
             host: env.get("HOST").unwrap_or(base.host),
             port: env.parse("PORT")?.unwrap_or(base.port),
+            // The reader owns the name: a literal here would cite a variable
+            // the operator does not have once the app declares its own prefix.
             tls: TlsConfig::from_env(env, base.tls).map_err(|e| {
-                nest_rs_config::ConfigError::Parse {
-                    var: "NESTRS_HTTP__TLS_*".into(),
-                    message: e.to_string(),
-                }
+                nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), e.to_string())
             })?,
             cors: CorsConfig::from_env(env, base.cors).map_err(|e| {
-                nest_rs_config::ConfigError::Parse {
-                    var: "NESTRS_HTTP__CORS_*".into(),
-                    message: e.to_string(),
-                }
+                nest_rs_config::ConfigError::parse(env.var_name("CORS_*"), e.to_string())
             })?,
             server_header: env.flag("SERVER_HEADER", base.server_header)?,
             global_prefix,

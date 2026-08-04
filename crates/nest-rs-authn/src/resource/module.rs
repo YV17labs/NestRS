@@ -135,9 +135,10 @@ fn require_audience_binding(
     let audience = jwt.audience.as_deref().map(str::trim).unwrap_or_default();
     if audience.is_empty() {
         anyhow::bail!(
-            "NESTRS_AUTHN__AUDIENCE is required when ProtectedResourceModule is imported: \
+            "{} is required when ProtectedResourceModule is imported: \
              without it this server accepts any token its issuer signed, including one minted \
              for another service. Set it to `{}`",
+            nest_rs_config::var_name("authn", "AUDIENCE"),
             metadata.resource(),
         );
     }

@@ -1,7 +1,7 @@
 //! [`ProtectedResourceConfig`] — who this resource server is, and which
 //! authorization servers issue tokens for it (RFC 9728 §2).
 
-use nest_rs_config::{Config, ConfigService, config};
+use nest_rs_config::{Config, ConfigService, config, var_name};
 
 use crate::error::AuthError;
 use crate::resource::metadata::ProtectedResourceMetadata;
@@ -99,11 +99,11 @@ impl ProtectedResourceConfig {
         let resource = self.resource.unwrap_or_default();
         let resource = resource.trim();
         if resource.is_empty() {
-            return Err(AuthError::Failed(
-                "NESTRS_AUTHN__RESOURCE must name this deployment's canonical URI \
-                 (for example https://api.example.com)"
-                    .into(),
-            ));
+            return Err(AuthError::Failed(format!(
+                "{} must name this deployment's canonical URI \
+                 (for example https://api.example.com)",
+                var_name("authn", "RESOURCE"),
+            )));
         }
         validate_canonical_uri(resource)?;
 
@@ -114,11 +114,11 @@ impl ProtectedResourceConfig {
             .filter(|s| !s.is_empty())
             .collect();
         if authorization_servers.is_empty() {
-            return Err(AuthError::Failed(
-                "NESTRS_AUTHN__AUTHORIZATION_SERVERS must list at least one issuer — \
-                 RFC 9728 metadata without `authorization_servers` tells a client nothing"
-                    .into(),
-            ));
+            return Err(AuthError::Failed(format!(
+                "{} must list at least one issuer — RFC 9728 metadata without \
+                 `authorization_servers` tells a client nothing",
+                var_name("authn", "AUTHORIZATION_SERVERS"),
+            )));
         }
         for issuer in &authorization_servers {
             validate_canonical_uri(issuer)?;

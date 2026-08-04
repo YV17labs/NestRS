@@ -45,7 +45,8 @@ pub fn run(opts: AuthOptions) -> CliResult<()> {
     let wired_app = wire(&ctx, &mut s);
 
     finish(s, opts.dry_run, &ws.root, "the auth adapter")?;
-    print_next_steps(&ws.metadata.env_prefix, wired_app.is_some());
+    let env_prefix = crate::context::env_prefix();
+    print_next_steps(&env_prefix, wired_app.is_some());
     Ok(())
 }
 
@@ -105,10 +106,11 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
     // scaffolded secret is a line the app never reads and auth refuses to boot.
     // One placeholder, so a `Renderer` (and the `Names` it needs) would be two
     // dozen substitutions for nothing.
-    let env_authn = auth::ENV_AUTHN.replace("{{env_prefix}}", &ws.metadata.env_prefix);
+    let env_prefix = crate::context::env_prefix();
+    let env_authn = auth::ENV_AUTHN.replace("{{env_prefix}}", &env_prefix);
     let env = ws.root.join(".env");
     if env.is_file() {
-        s.edit(env, append_authn_secret(&ws.metadata.env_prefix, env_authn));
+        s.edit(env, append_authn_secret(&env_prefix, env_authn));
     } else {
         s.create(env, env_authn.trim_start().to_string());
     }

@@ -69,6 +69,8 @@ pub enum Command {
 
         /// Prefix every framework env var carries, instead of `NESTRS`
         /// (e.g. `ACME` ⇒ `ACME_ENV`, `ACME_HTTP__PORT`). Uppercase ASCII.
+        /// Written into the Justfile and Dockerfile, which set it on the
+        /// processes they start; your deployment must set it too.
         #[arg(long, value_name = "PREFIX")]
         env_prefix: Option<String>,
 

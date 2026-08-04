@@ -33,7 +33,7 @@ strip = true        # drop symbols for a smaller binary
 # Dev: fastest iterative rebuilds; keep file:line in backtraces.
 [profile.dev]
 debug = "line-tables-only"
-{{env_prefix_metadata}}"#;
+"#;
 
 pub const MAIN: &str = r#"use anyhow::Result;
 use nest_rs::config::Environment;
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 }
 "#;
 
-pub const LIB: &str = r#"{{env_prefix_decl}}mod controller;
+pub const LIB: &str = r#"mod controller;
 mod module;
 mod service;
 
@@ -96,11 +96,11 @@ RUN cargo build --release
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 COPY --from=builder /app/target/release/{{kebab}} /usr/local/bin/app
 EXPOSE 3000
-USER nonroot:nonroot
+{{env_prefix_env}}USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/app"]
 "#;
 
-pub const JUSTFILE: &str = r#"_default:
+pub const JUSTFILE: &str = r#"{{env_prefix_export}}_default:
     @just --list
 
 # Run the app with auto-reload — watches the source, rebuilds and restarts on

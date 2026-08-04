@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::context::{ENV_PREFIX_VAR, EnvPrefixSource};
 use crate::error::{CliError, CliResult};
 
 const MIN_RUST_VERSION: (u32, u32) = (1, 96);
@@ -17,14 +18,23 @@ pub struct DoctorReport {
     /// Set when workspace detection itself failed (e.g. a malformed manifest),
     /// as distinct from a clean "not a workspace" result.
     pub workspace_error: Option<String>,
-    /// The env prefix this project's variables carry. Every name below is
-    /// built from it — reporting `NESTRS_DATABASE__URL: not set` to a project
-    /// that renamed its variables is worse than saying nothing.
-    pub env_prefix: String,
+    /// Where the prefix came from — reported rather than just resolved,
+    /// because "this shell names none" and "this shell names ACME" produce the
+    /// same variable list only by accident, and the operator needs to know
+    /// which of the two they are looking at.
+    pub env_prefix_source: EnvPrefixSource,
     /// Each optional variable doctor looked for, resolved name and all, in
     /// report order. Names are stored rather than rebuilt at print time: the
     /// name reported is then the name probed, by construction.
     pub env_vars: Vec<EnvVar>,
+}
+
+impl DoctorReport {
+    /// The prefix every name below is built from — derived, never stored, so
+    /// the two cannot disagree.
+    pub fn env_prefix(&self) -> &str {
+        self.env_prefix_source.prefix()
+    }
 }
 
 #[derive(Debug)]
@@ -59,28 +69,23 @@ pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
         .is_some_and(|v| version_at_least(v, MIN_RUST_VERSION));
     report.cargo_ok = which("cargo");
 
-    // One discovery: the workspace answers both "am I in one?" and "which env
-    // prefix?", so a second walk would re-parse every manifest above `start`.
-    report.env_prefix = match crate::context::NestrsWorkspace::discover(&start) {
-        Ok(Some(ws)) => {
-            report.in_nestrs_workspace = true;
-            ws.metadata.env_prefix
-        }
-        // The layout `discover` cannot answer for — a standalone crate declares
-        // the prefix on its own package.
-        Ok(None) => crate::context::package_env_prefix(&start),
-        Err(e) => {
-            report.workspace_error = Some(e.to_string());
-            crate::context::package_env_prefix(&start)
-        }
-    };
+    match crate::context::NestrsWorkspace::discover(&start) {
+        Ok(Some(_)) => report.in_nestrs_workspace = true,
+        Ok(None) => {}
+        Err(e) => report.workspace_error = Some(e.to_string()),
+    }
+
+    // Read from *this* environment, which is the same source the app reads —
+    // no project file to disagree with. The layout is irrelevant here: a
+    // workspace and a standalone crate resolve the prefix identically.
+    report.env_prefix_source = EnvPrefixSource::detect();
 
     // One cascade read for all four, rather than up to four files per variable.
-    let cascade = cascade_text(&start, &report.env_prefix);
+    let cascade = cascade_text(&start, report.env_prefix());
     report.env_vars = CHECKED
         .iter()
         .map(|&(namespace, key, always_reported)| {
-            let name = crate::context::var_name(&report.env_prefix, namespace, key);
+            let name = crate::context::var_name(report.env_prefix(), namespace, key);
             EnvVar {
                 present: env_present(&cascade, &name),
                 name,
@@ -91,7 +96,10 @@ pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
 
     print_report(&report);
 
-    if !report.rustc_ok || !report.cargo_ok {
+    // An unusable prefix blocks like a missing toolchain does: every app in
+    // this environment aborts on the first name it builds.
+    let prefix_ok = !matches!(report.env_prefix_source, EnvPrefixSource::Invalid(_));
+    if !report.rustc_ok || !report.cargo_ok || !prefix_ok {
         return Err(CliError::Anyhow(anyhow::anyhow!(
             "doctor found blocking issues — fix them before continuing"
         )));
@@ -126,8 +134,26 @@ fn print_report(report: &DoctorReport) {
     println!();
     println!("Environment (optional — only needed for DB/Redis apps):");
     // Named even on the default, so the answers below are unambiguous: a reader
-    // seeing `not set` can tell a missing value from a prefix mismatch.
-    println!("  env prefix: {}", report.env_prefix);
+    // seeing `not set` can tell a missing value from a prefix mismatch. The
+    // source comes with it, because doctor answers for the shell it runs in —
+    // a project whose deployment renames its variables looks untouched from a
+    // terminal that does not.
+    match &report.env_prefix_source {
+        EnvPrefixSource::Environment(prefix) => {
+            println!("  env prefix: {prefix} (from {ENV_PREFIX_VAR})");
+        }
+        EnvPrefixSource::Unset => {
+            println!(
+                "  env prefix: {} (default — {ENV_PREFIX_VAR} is not set here, so the names \
+                 below are this shell's view, not your deployment's)",
+                report.env_prefix(),
+            );
+        }
+        EnvPrefixSource::Invalid(reason) => {
+            println!("  env prefix: {ENV_PREFIX_VAR} is unusable — {reason}");
+            println!("              an app started with it set aborts at boot.");
+        }
+    }
     for var in &report.env_vars {
         if var.present {
             println!("  {}: set", var.name);

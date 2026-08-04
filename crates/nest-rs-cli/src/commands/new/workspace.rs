@@ -8,7 +8,7 @@ use crate::port::next_http_port;
 use crate::scaffold::{Renderer, Scaffold, ensure_lines, rustfmt};
 use crate::templates::{hello, shared, workspace};
 
-use super::command::{env_prefix_decl, with_env_prefix};
+use super::command::with_env_prefix;
 use super::queue_env_files;
 
 const HELLO_APP_PORT: u16 = 3000;
@@ -24,7 +24,7 @@ pub fn scaffold_root(
         return Err(CliError::AlreadyExists(root));
     }
 
-    let r = with_env_prefix(Renderer::new(names), env_prefix, "workspace");
+    let r = with_env_prefix(Renderer::new(names), env_prefix);
     let mut s = Scaffold::new();
 
     s.create(root.join("Cargo.toml"), r.render(workspace::ROOT_CARGO));
@@ -37,21 +37,15 @@ pub fn scaffold_root(
         root.join("crates/features/Cargo.toml"),
         r.render(workspace::FEATURES_CARGO),
     );
-    queue_db_crates(&mut s, &root, &[], env_prefix);
+    queue_db_crates(&mut s, &root, &[]);
     queue_root_files(&mut s, &root, names, env_prefix);
 
     // The first app is always `hello`, whatever the workspace is called.
     let hello_names = Names::parse("hello");
     let hello_r = Renderer::new(&hello_names);
-    // The declaration belongs to the feature crate, not an app binary:
-    // every app *and* every test binary links it, so the runtime and the
-    // suites resolve the same prefix.
     s.create(
         root.join("crates/features/src/lib.rs"),
-        hello_r
-            .clone()
-            .with("env_prefix_decl", env_prefix_decl(env_prefix))
-            .render(workspace::FEATURES_LIB),
+        hello_r.render(workspace::FEATURES_LIB),
     );
     queue_hello_feature(
         &mut s,
@@ -106,9 +100,10 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
         ]),
     );
     queue_app(&mut s, &root, names, port);
-    // Adding an app to an existing workspace: the prefix was decided when the
-    // workspace was created, so it is read back rather than chosen again.
-    queue_root_files(&mut s, &ws.root, names, &ws.metadata.env_prefix);
+    // Adding an app to an existing workspace: the prefix belongs to the
+    // environment that runs it, so it is read from there rather than chosen
+    // again.
+    queue_root_files(&mut s, &ws.root, names, &crate::context::env_prefix());
 
     let report = s.apply(dry_run)?;
     if !dry_run {
@@ -185,15 +180,11 @@ fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
 }
 
 fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names, env_prefix: &str) {
-    let r = Renderer::new(names);
-    queue_env_files(
-        s,
-        base,
-        names,
-        "nestrs workspace",
-        env_prefix,
-        shared::ENV_WORKSPACE,
-    );
+    // Seeded, not bare: the Justfile below is what sets the prefix on every
+    // process `nestrs run` starts, so a renderer that does not know it would
+    // write the placeholder out verbatim.
+    let r = with_env_prefix(Renderer::new(names), env_prefix);
+    queue_env_files(s, base, &r, "nestrs workspace", shared::ENV_WORKSPACE);
     s.create_if_missing(base.join("Justfile"), r.render(workspace::JUSTFILE));
     s.create_if_missing(base.join("test.just"), r.render(workspace::TEST_JUSTFILE));
     s.create_if_missing(base.join("db.just"), r.render(shared::DB_JUSTFILE));

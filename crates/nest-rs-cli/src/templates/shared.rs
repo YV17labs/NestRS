@@ -79,6 +79,26 @@ volumes:
   redisdata:
 "#;
 
+/// The line that puts the project's env prefix on every process `just` starts.
+///
+/// A template rather than a `format!` in the command module: everything the CLI
+/// writes into a generated project lives here, which is also what keeps it under
+/// the mechanical guards in `super::tests`.
+pub const ENV_PREFIX_JUSTFILE: &str = r#"# Every framework variable carries this prefix ({{env_prefix}}_ENV, {{env_prefix}}_HTTP__PORT, …).
+# It must be set on the process, so it lives here and in your deployment —
+# never in `.env`, which is read too late to have chosen itself.
+export {{env_prefix_var}} := "{{env_prefix}}"
+
+"#;
+
+/// The same, baked into the image — overridable at `docker run` time, so one
+/// image can still be run under another prefix.
+pub const ENV_PREFIX_DOCKERFILE: &str = r#"
+# Every framework variable carries this prefix. Override at `docker run`
+# time to run the same image under another one.
+ENV {{env_prefix_var}}={{env_prefix}}
+"#;
+
 pub const GITIGNORE: &str = r#"/target
 **/*.rs.bk
 

@@ -15,6 +15,9 @@ rust-version = "1.96"
 [dependencies]
 anyhow = "1.0"
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
+# The logging façade a service reaches for at `debug`. Ships from the scaffold
+# so the first `tracing::debug!` in `src/service.rs` compiles.
+tracing = "0.1"
 nest-rs = { version = "{{nestrs_version}}", features = ["http"] }
 
 [dev-dependencies]

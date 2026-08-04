@@ -56,6 +56,9 @@ fn new_standalone_hello_template() {
     // the layer crates the decorators expand into.
     assert!(cargo.contains("nest-rs"), "{cargo}");
     assert!(cargo.contains("\"http\""), "{cargo}");
+    // R12 L-1, standalone half: `src/service.rs` is where a `tracing::debug!`
+    // lands here, so the façade ships with the crate that holds it.
+    assert!(cargo.contains("tracing = "), "{cargo}");
     assert!(!cargo.contains("nest-rs-opentelemetry"));
     assert!(app.join(".gitignore").is_file());
     assert!(app.join("Justfile").is_file());
@@ -162,6 +165,31 @@ fn new_workspace_greenfield() {
 
     let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(cargo.contains("members = [\"crates/*\", \"apps/*\"]"));
+    assert_feature_code_can_log_and_fail(&cargo, &root);
+}
+
+/// R12 L-1: the workspace shipped `tracing-subscriber` in the root manifest and
+/// no `tracing` anywhere — so the crate the developer actually writes in could
+/// configure logging and not emit a line. Thirteen docs pages write `tracing::`
+/// in feature code and none says to add it; the same page adds
+/// `-> anyhow::Result<()>` on a `#[hooks]` method, and `anyhow` was missing from
+/// the features crate too. Both are the developer's *own* source naming its own
+/// crate (`CLAUDE.md`: the manifest names what the source names), so the
+/// scaffold declares them rather than the umbrella re-exporting them.
+///
+/// Text-level here; `tests/e2e/scaffold.rs` compiles a feature that uses both.
+fn assert_feature_code_can_log_and_fail(workspace: &str, root: &std::path::Path) {
+    let features = fs::read_to_string(root.join("crates/features/Cargo.toml")).unwrap();
+    for dep in ["anyhow", "tracing"] {
+        assert!(
+            workspace.contains(&format!("\n{dep} = ")),
+            "`[workspace.dependencies]` must declare `{dep}`: {workspace}"
+        );
+        assert!(
+            features.contains(&format!("{dep}.workspace = true")),
+            "the features crate must declare `{dep}`: {features}"
+        );
+    }
 }
 
 #[test]

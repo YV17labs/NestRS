@@ -402,8 +402,19 @@ when `E: SoftDeletable` (e.g. login-by-email paths).
 An entity that does not declare `soft_delete_column` hard-deletes — the right
 shape for join tables and lookups (`orgs/` in Publish stays hard delete). Drop
 **both** halves together when you mean it: the entity flag makes the column
-addressable, the service override is what tombstones, and one without the other
-is the silent mismatch this section exists to prevent.
+addressable, the service override is what tombstones.
+
+Keeping only one half is **a boot failure**, not a caveat. `#[expose(...,
+soft_delete)]` on an entity whose service never overrides the column would
+answer `DELETE` with the same `204` a tombstone answers, having destroyed the
+row — so `DatabaseModule` refuses to start and names both sides:
+
+```text frame="terminal"
+Error: soft delete is declared on the entity but not on the service:
+  - `post` is `#[expose(..., soft_delete)]` but `features::posts::PostService`
+    does not override `CrudService::soft_delete_column`: DELETE would erase the
+    row for good and reads would never filter `deleted_at`.
+```
 
 `nestrs g resource` scaffolds both halves plus the three columns, matching the
 migration it tells you to generate next.

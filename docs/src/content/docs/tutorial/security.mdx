@@ -188,6 +188,7 @@ The app root — `api`, not `blog` — imports `AuthnModule` and
 use features::authn::AuthnModule;
 use features::authz::AuthzHttpModule;
 use features::users::UsersHttpModule;
+use nest_rs::core::module;
 
 #[module(
     imports = [

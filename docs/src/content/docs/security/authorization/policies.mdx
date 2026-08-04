@@ -23,6 +23,7 @@ the response check accepts cannot diverge.
 
 ```rust title="crates/features/src/authz/ability.rs"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]

@@ -227,7 +227,7 @@ struct, expose a `pub trait` and keep the impl module-private:
 ```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 
-use nest_rs::core::async_trait;
+use nest_rs::core::{async_trait, injectable};
 
 #[async_trait]
 pub trait PostsService: Send + Sync {

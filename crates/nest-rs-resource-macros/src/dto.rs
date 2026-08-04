@@ -6,7 +6,10 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-use crate::attr::{ResourceModel, complexity_attr, graphql_object_derive, is_datetime_tz, is_uuid};
+use crate::attr::{
+    ResourceModel, complexity_attr, graphql_crate_attr, graphql_object_derive, is_datetime_tz,
+    is_uuid,
+};
 
 pub fn emit(model: &ResourceModel) -> TokenStream2 {
     let output = &model.output_ident;
@@ -43,6 +46,7 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
     };
 
     let graphql_derives = graphql_object_derive(model, "SimpleObject");
+    let graphql_crate = graphql_crate_attr(model);
 
     quote! {
         // Derives routed through the surface crate, each with its `crate = `
@@ -59,6 +63,7 @@ pub fn emit(model: &ResourceModel) -> TokenStream2 {
         )]
         #[serde(crate = "::nest_rs_resource::serde")]
         #[schemars(crate = "::nest_rs_resource::schemars")]
+        #graphql_crate
         #complex
         pub struct #output {
             #(#decls),*

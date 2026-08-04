@@ -50,6 +50,8 @@ That's an interceptor.
 #[derive(Default)]
 pub struct RequestId;
 
+impl Layer for RequestId {}
+
 #[async_trait]
 impl Interceptor for RequestId {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {

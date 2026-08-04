@@ -12,8 +12,9 @@
 // frontmatter description present / ≤160 / no unquoted '#', closing "## Going further",
 // ≤3 Asides per page, example-canon ban list.
 // Plus the code-truth checks the prose rules can't see — `version-pin`, `unauthed-curl`,
-// `crud-error`, `bind-order`, `queue-name`, `install-stanza`, `otel-guard` — each documented on
-// its constant below and filed as a shipped defect first.
+// `crud-error`, `bind-order`, `queue-name`, `install-stanza`, `otel-guard`, `decorator-import`,
+// `layer-impl`, `exception-response-error`, `bare-log`, `config-table` — each documented on its
+// constant below and filed as a shipped defect first.
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -59,14 +60,20 @@ const CANON_SHAPES = [
   [/#\[(?:get|post|patch|put|delete)\("\/(?:items|products|orders)\b/, 'off-canon feature route'],
 ];
 
+/// A file in the repo the docs live in, by repo-relative path. Every code-truth
+/// check that derives its rule from the framework rather than restating it goes
+/// through here, so the tree layout is spelled once.
+function frameworkSource(rel) {
+  return readFileSync(join(DOCS_ROOT, '..', ...rel.split('/')), 'utf8');
+}
+
 /// `major.minor` of the framework the repo currently builds — what every
 /// documented `nest-rs*` pin has to say, and what `nestrs g resource` writes
 /// into a generated manifest.
 function workspaceVersionReq() {
-  const manifest = join(DOCS_ROOT, '..', 'Cargo.toml');
-  const m = readFileSync(manifest, 'utf8')
+  const m = frameworkSource('Cargo.toml')
     .match(/^\[workspace\.package\]$[\s\S]*?^version\s*=\s*"(\d+\.\d+)\./m);
-  if (!m) throw new Error(`no [workspace.package] version in ${manifest}`);
+  if (!m) throw new Error('no [workspace.package] version in the repo root Cargo.toml');
   return m[1];
 }
 
@@ -126,9 +133,8 @@ const QUEUE_UNTYPED_PUSH = /\.(?:of::<[^>]*>\(|push\(\s*[A-Z_]{3,}\b)/g;
 /// who tripped the panic was sent to a line the example he started from did not
 /// contain.
 function otelGuardBinding() {
-  const src = readFileSync(
-    join(DOCS_ROOT, '..', 'crates', 'nest-rs-opentelemetry', 'src', 'module.rs'), 'utf8');
-  const m = src.match(/Add `let (\w+) =/);
+  const m = frameworkSource('crates/nest-rs-opentelemetry/src/module.rs')
+    .match(/Add `let (\w+) =/);
   // Fail closed rather than skip: a reworded panic means the rule no longer has
   // a name to check against, and silently dropping the check is how the two
   // halves drifted apart in the first place.
@@ -140,6 +146,35 @@ function otelGuardBinding() {
 }
 
 const OTEL_BINDING = otelGuardBinding();
+
+/// The `#[config]` structs whose page publishes a key table, keyed by page and
+/// carrying the source that owns the fields. A table read as exhaustive — every
+/// one of these pages says so above it — that omits a field publishes a key the
+/// reader has no way to learn about. `/storage/` shipped 2.0.0 listing five of
+/// `StorageConfig`'s seven fields, and the missing `ALLOW_HTTP` is the one that
+/// decides a boot refusal.
+///
+/// Kept a list rather than derived: mentioning `NESTRS_X__…` is not publishing a
+/// key table, and no grep separates the two. Add a page when it grows one.
+const CONFIG_TABLES = new Map([
+  ['storage/index.mdx', { source: 'crates/nest-rs-storage/src/config.rs', struct: 'StorageConfig' }],
+]);
+
+/// The field names of a `#[config]` struct, plus whether its `defaults()` is
+/// profile-dependent — the second thing `/storage/` got wrong, publishing the
+/// dev branch of a profile-split default as *the* default.
+function configFields({ source, struct }) {
+  const src = frameworkSource(source);
+  const body = src.match(new RegExp(`struct ${struct} \\{([\\s\\S]*?)\\n\\}`));
+  // Fail closed: a moved struct means the rule has nothing to check against.
+  if (!body) {
+    throw new Error(`no \`struct ${struct}\` in ${source} — teach \`CONFIG_TABLES\` `
+      + 'where it moved, do not delete the check');
+  }
+  const fields = [...body[1].matchAll(/^\s*pub\s+(\w+)\s*:/gm)].map((m) => m[1]);
+  const defaults = src.match(/fn defaults\(\)[\s\S]*?\n    \}/);
+  return { fields, profileSplit: !!defaults && /dev_profile\(\)/.test(defaults[0]) };
+}
 
 /// A snippet that keeps the OTel guard alive — the binding has to be the one the
 /// panic names, or the two halves of the page contradict each other.
@@ -292,6 +327,136 @@ function installStanzaViolations(blocks) {
   return out;
 }
 
+/// The two rules read out of the framework's own sources, in **one** pass over
+/// `crates/` — the tree is ~560 files, and walking it twice to read it twice
+/// cost more than linting the whole docs corpus.
+///
+/// `layerSubtraits` — every trait declared `: Layer`. The blanket impl a reader
+/// expects does not exist (the marker carries the per-layer scope metadata, so
+/// it is opted into per type), and a page that shows the sub-trait impl and
+/// drops `impl Layer for T {}` hands out an `E0277` naming `nest_rs_core::Layer`,
+/// which does not say "add a one-line impl". `/fundamentals/middleware/` shipped
+/// 2.0.0 that way while the guard snippet on the same page carried its line, and
+/// `/fundamentals/interceptors/` quoted a real framework file with the line
+/// stripped. Derived, because a hand-written list is wrong the day a sub-trait
+/// is added: the first version listed four and missed `GlobalPipe`.
+///
+/// `decorators` — every decorator the umbrella exports, from the `*-macros`
+/// crate roots. Also derived, and it has to be exact in both directions: a name
+/// missing here hides a broken snippet, a name that is not a macro flags a
+/// working one. Only `#[proc_macro_attribute]` entries count — the attributes an
+/// orchestrator consumes (`#[query]`, `#[get]`, `#[on_module_init]`,
+/// `#[public]`) are inert tokens read by the host macro, so they resolve without
+/// an import of their own and must never be demanded.
+function frameworkRules() {
+  const traits = new Set();
+  const decorators = new Set();
+  for (const file of walk(join(DOCS_ROOT, '..', 'crates'), ['.rs'])) {
+    const src = readFileSync(file, 'utf8');
+    for (const m of src.matchAll(/pub trait (\w+)\s*:\s*Layer\b/g)) traits.add(m[1]);
+    if (!/-macros[\\/]src[\\/]lib\.rs$/.test(file)) continue;
+    for (const m of src.matchAll(/#\[proc_macro_attribute\]\s*pub fn (\w+)/g)) {
+      decorators.add(m[1]);
+    }
+  }
+  // Fail closed rather than skip: an empty set silently disables the check.
+  if (!traits.size) {
+    throw new Error('no `pub trait <T>: Layer` found under crates/ — teach `frameworkRules` '
+      + 'where the Layer System moved, do not delete the check');
+  }
+  if (!decorators.size) {
+    throw new Error('no `#[proc_macro_attribute]` found under crates/*-macros — teach '
+      + '`frameworkRules` where the decorators moved, do not delete the check');
+  }
+  return { traits, decorators: [...decorators] };
+}
+
+const { traits: LAYER_SUBTRAITS, decorators: DECORATORS } = frameworkRules();
+
+/// A rust snippet — the fence language the code-truth checks read.
+const RUST_INFO = /^rust\b/;
+
+/// One pair of patterns per decorator — the applied attribute and the `use` that
+/// would import it. Built once: they depend only on the decorator name, and
+/// `missingDecoratorImports` would otherwise recompile both for every decorator
+/// on every rust block on every page.
+const DECORATOR_PATTERNS = DECORATORS.map((d) => ({
+  name: d,
+  applied: new RegExp(`^\\s*#\\[${d}[\\](]`, 'm'),
+  imported: new RegExp(`use [^;]*\\b${d}\\b[^;]*;`, 's'),
+}));
+
+/// A snippet showing **no** `use` at all is read as a fragment; one that shows
+/// its imports is read as complete, and a reader pastes it whole. Twenty-four
+/// blocks imported the types they name and dropped the decorator that shapes
+/// them — `use nest_rs::openapi::OpenApiModule;` above a `#[module(...)]` with
+/// no `use nest_rs::core::module;`, which is `error: cannot find attribute
+/// `module` in this scope` on the first build. `configuration/` and
+/// `http/configuration.mdx` held four and three of them: the pages opened
+/// precisely to copy a stanza out of.
+///
+/// A `prelude::*` covers every decorator at once, so a block that has one is
+/// complete by construction.
+function missingDecoratorImports(blocks) {
+  const out = [];
+  for (const block of blocks) {
+    if (!RUST_INFO.test(block.info)) continue;
+    if (!/^\s*use\s+/m.test(block.body)) continue;
+    if (/prelude::\*/.test(block.body)) continue;
+    for (const { name, applied, imported } of DECORATOR_PATTERNS) {
+      if (!applied.test(block.body) || imported.test(block.body)) continue;
+      out.push(`#[${name}] is used but never imported — the block shows its other `
+        + `imports, so it reads as pasteable and is not`);
+    }
+  }
+  return out;
+}
+
+/// What the page's rust blocks *declare*: the types it defines (the only ones it
+/// owes an `impl Layer` for — a snippet illustrating the framework's own
+/// `AuthnGuard` names it without declaring it, and that impl lives in the
+/// framework) and every `impl <Trait> for <Type>` it writes.
+function rustDeclarations(blocks) {
+  const types = new Set();
+  const impls = [];
+  for (const block of blocks) {
+    if (!RUST_INFO.test(block.info)) continue;
+    for (const m of block.body.matchAll(
+      /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum)\s+(\w+)/gm)) types.add(m[1]);
+    for (const m of block.body.matchAll(
+      /^\s*impl(?:<[^>]*>)?\s+([A-Za-z_]\w*)\s+for\s+([A-Za-z_]\w*)/gm)) {
+      impls.push({ trait: m[1], type: m[2] });
+    }
+  }
+  return {
+    types,
+    impls,
+    implementorsOf: (t) => new Set(impls.filter((i) => i.trait === t).map((i) => i.type)),
+  };
+}
+
+/// An `ExceptionFilter` claims its exception by **downcast**, off an error that
+/// is already a `poem::Error` — so the exception type needs `ResponseError` to
+/// reach the chain at all. `/fundamentals/exception-filters/` shipped 2.0.0
+/// defining `DomainError` with the filter but never the impl, and never the
+/// handler that raises it; a reader following it got `E0277` on `IntoResult`,
+/// which names neither `ResponseError` nor the status it supplies. The demo's
+/// `PostError`, cited two sections below on the same page, has the impl.
+const EXCEPTION_ASSOC = /^\s*type\s+Exception\s*=\s*([A-Za-z_]\w*)\s*;/gm;
+
+/// `CLAUDE.md`: *metadata is mandatory — a bare log is a defect*, because those
+/// are the events queried under incident. The scaffolds hold this at zero
+/// (`nest-rs-cli/src/templates/mod.rs` asserts it over every template); the
+/// pages a reader copies from have to as well.
+///
+/// A match *is* the violation: the pattern runs from the macro call, past an
+/// optional `target:`, straight into the message literal, so anything between —
+/// `k = v`, the `%v`/`?v` sigils, the bare shorthand — makes it fail. `\s*`
+/// spans newlines deliberately: the corpus's multi-field logs are the ones
+/// rustfmt broke across lines, and they are where a dropped field would hide.
+/// Anchoring on the macro-call shape keeps prose mentioning `tracing::` out.
+const BARE_LOG = /tracing::\w+!\(\s*(?:target:\s*"([^"]*)"\s*,\s*)?"/g;
+
 /// Marks a snippet as a handler — the only layer where the check above applies.
 /// A **service** method returning `ServiceError` converts `DbErr` through `?`
 /// legitimately, and that is where the conversion belongs: the exemplar's
@@ -345,13 +510,14 @@ function guardedCurlRoot(command) {
   return m && GUARDED_ROUTE_ROOTS.has(m[1]) ? m[1] : null;
 }
 
-function walk(dir) {
+/// Every file under `dir` with one of `exts` — the docs corpus by default, and
+/// the framework's own sources for the checks that derive their rule from it.
+function walk(dir, exts = ['.md', '.mdx']) {
   const out = [];
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    const s = statSync(p);
-    if (s.isDirectory()) out.push(...walk(p));
-    else if (name.endsWith('.md') || name.endsWith('.mdx')) out.push(p);
+    if (statSync(p).isDirectory()) out.push(...walk(p, exts));
+    else if (exts.some((ext) => name.endsWith(ext))) out.push(p);
   }
   return out;
 }
@@ -463,7 +629,7 @@ function lintFile(absPath) {
     }
 
     // 11. A handler snippet that `?`s a `CrudService` read does not compile.
-    if (/^rust\b/.test(block.info) && HANDLER_SNIPPET.test(block.body)) {
+    if (RUST_INFO.test(block.info) && HANDLER_SNIPPET.test(block.body)) {
       for (const line of block.body.split('\n')) {
         if (UNMAPPED_CRUD_READ.test(line) && !line.includes('map_err')) {
           add('crud-error', `unmapped DbErr: ${line.trim()}`);
@@ -484,6 +650,55 @@ function lintFile(absPath) {
   // 13. Under `## Install`, the `cargo add` line and the `[dependencies]` block
   // say the same thing.
   for (const detail of installStanzaViolations(blocks)) add('install-stanza', detail);
+
+  // 14. A snippet that shows its imports imports the decorator it illustrates.
+  for (const detail of missingDecoratorImports(blocks)) add('decorator-import', detail);
+
+  // 15. A page-defined type implementing a Layer sub-trait carries `impl Layer`.
+  const rust = rustDeclarations(blocks);
+  const hasLayer = rust.implementorsOf('Layer');
+  for (const { trait: t, type } of rust.impls) {
+    if (!LAYER_SUBTRAITS.has(t) || !rust.types.has(type) || hasLayer.has(type)) continue;
+    add('layer-impl', `impl ${t} for ${type} without \`impl Layer for ${type} {}\` — `
+      + `${t} is declared \`: Layer\` and there is no blanket impl`);
+  }
+
+  // 16. An `ExceptionFilter`'s exception reaches the chain as a `poem::Error`.
+  const hasResponseError = rust.implementorsOf('ResponseError');
+  for (const m of src.matchAll(EXCEPTION_ASSOC)) {
+    const exception = m[1];
+    if (!rust.types.has(exception) || hasResponseError.has(exception)) continue;
+    add('exception-response-error', `${exception} is claimed by an ExceptionFilter but `
+      + `implements no ResponseError — the filter catches by downcast off an error that is `
+      + `already a poem-Error, so the handler raising it does not compile`);
+  }
+
+  // 17. Every documented log carries at least one structured field — a match on
+  // `BARE_LOG` is the violation itself.
+  for (const m of src.matchAll(BARE_LOG)) {
+    // No `::` in the detail — the console splits a violation on it.
+    const where = m[1] ? `on target ${m[1].replace(/::/g, '.')}` : 'with no target';
+    add('bare-log', `the log ${where} carries no structured field`);
+  }
+
+  // 18. A config-key table is exhaustive, and publishes both branches of a
+  // profile-dependent default.
+  const configTable = CONFIG_TABLES.get(rel);
+  if (configTable) {
+    const { fields, profileSplit } = configFields(configTable);
+    for (const field of fields) {
+      const key = field.toUpperCase();
+      if (!src.includes(`\`${key}\``)) {
+        add('config-table', `${configTable.struct}.${field} has no \`${key}\` row — the `
+          + 'table is published as the full key list');
+      }
+    }
+    if (profileSplit && !src.includes('staging/production')) {
+      // No `::` in the detail — the console splits a violation on it.
+      add('config-table', `${configTable.struct}'s defaults() branches on the profile, but `
+        + 'the page never names staging/production — it publishes the dev branch as the default');
+    }
+  }
 
   return v;
 }

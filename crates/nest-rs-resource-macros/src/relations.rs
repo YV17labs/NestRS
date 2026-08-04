@@ -21,7 +21,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{Ident, Type};
 
-use crate::attr::{RelationKind, ResourceField, ResourceModel, complexity_attr, is_uuid};
+use crate::attr::{
+    RelationKind, ResourceField, ResourceModel, complexity_attr, graphql_root, graphql_root_str,
+    is_uuid,
+};
 
 /// Default complexity expression for an auto-emitted `HasMany` field resolver.
 /// The loader caps each parent's children at
@@ -389,8 +392,10 @@ fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Resul
         return Ok(TokenStream2::new());
     }
     let wire = &model.output_ident;
+    let root = graphql_root();
+    let root_str = graphql_root_str();
     Ok(quote! {
-        #[::nest_rs_resource::graphql::async_graphql::ComplexObject]
+        #[#root::ComplexObject(crate = #root_str)]
         impl #wire {
             #(#methods)*
         }

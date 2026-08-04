@@ -127,12 +127,14 @@ instead of `#[injectable] + impl Interceptor`. The framework discovers
 it, builds it, and folds it around the assembled route tree in
 registration order — no `#[use_interceptors]` needed anywhere.
 
-```rust title="crates/nest-rs-seaorm/src/interceptor.rs"
-#[interceptor]
-pub(crate) struct DbContext {
+```rust title="crates/nest-rs-seaorm/src/http/interceptor.rs (abridged)"
+#[interceptor(priority = -10)]
+pub struct DbContext {
     #[inject]
     db: Arc<DatabaseConnection>,
 }
+
+impl Layer for DbContext {}
 
 #[async_trait]
 impl Interceptor for DbContext {

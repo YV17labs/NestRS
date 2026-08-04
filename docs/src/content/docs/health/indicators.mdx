@@ -57,6 +57,7 @@ pub struct UpstreamHealthModule;
 
 ```rust title="apps/api/src/module.rs"
 use features::upstream::UpstreamHealthModule;
+use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 
 #[module(imports = [HealthModule, UpstreamHealthModule])]
@@ -101,6 +102,7 @@ nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "health"]
 ```
 
 ```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
 use nest_rs::seaorm::{DatabaseHealthModule, DatabaseModule};
 use nest_rs::health::HealthModule;
 

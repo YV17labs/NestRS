@@ -15,6 +15,13 @@
 //! `::sea_orm`/`::uuid`/`::chrono`, whose expansions target the call-site
 //! prelude because the developer's own source writes them.
 //!
+//! `#[resolver]` **is** witnessed ([`resolver`]), and it is the case this file
+//! most needed: it wraps async-graphql's own `#[Object]`, a third-party macro
+//! that roots its expansion at whatever the *call site's* manifest declares.
+//! 2.0.0 shipped with that fallback live, so the lead snippet of `/graphql/`
+//! did not compile behind the documented install line; the `crate = ` override
+//! that fixes it is invisible to review and visible here.
+//!
 //! `#[controller]`/`#[routes]` **are** witnessed ([`controller`]).
 //! `#[routes]` emits its own `Endpoint` impl instead of wrapping poem's
 //! `#[handler]`, so nothing in the expansion resolves against the call-site
@@ -32,5 +39,6 @@ pub mod gateway;
 pub mod lifecycle;
 pub mod listener;
 pub mod module;
+pub mod resolver;
 pub mod tasks;
 pub mod tool;

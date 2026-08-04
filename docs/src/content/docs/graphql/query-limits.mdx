@@ -34,6 +34,7 @@ Keep both — depth alone misses wide queries, complexity alone misses
 queries that depth-bomb the parser before the visitor even runs.
 
 ```rust title="src/module.rs — production pin"
+use nest_rs::core::module;
 use nest_rs::graphql::{GraphqlConfig, GraphqlModule};
 
 #[module(imports = [

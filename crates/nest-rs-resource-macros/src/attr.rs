@@ -435,16 +435,50 @@ fn relation_cardinality(ty: &Type) -> Option<(Cardinality, Path)> {
     Some((card, target.path.clone()))
 }
 
+/// The framework's re-export of async-graphql — the root every emitted derive,
+/// attribute and `crate = ` override is pinned to.
+pub(crate) fn graphql_root() -> TokenStream2 {
+    quote!(::nest_rs_resource::graphql::async_graphql)
+}
+
+/// The same root as the **string** a `crate = ` argument takes, built from
+/// [`graphql_root`]'s tokens rather than re-typed.
+///
+/// The two forms must not drift: a path that no longer resolves is a compile
+/// error at the emit site, while a stale string parses fine and silently sends
+/// the expansion back to the call site's prelude — the failure this override
+/// exists to close.
+pub(crate) fn graphql_root_str() -> String {
+    graphql_root().into_iter().map(|t| t.to_string()).collect()
+}
+
 /// The trailing async-graphql derive (`SimpleObject` for output objects,
 /// `InputObject` for inputs) to splice into a `#[derive(...)]` list — present
-/// only when `#[expose(graphql)]` is on, empty otherwise. One home for the
-/// `async_graphql` derive path so the three emit sites don't each spell it out.
+/// only when `#[expose(graphql)]` is on, empty otherwise.
 pub(crate) fn graphql_object_derive(model: &ResourceModel, derive: &str) -> TokenStream2 {
     if !model.graphql {
         return TokenStream2::new();
     }
+    let root = graphql_root();
     let derive = format_ident!("{derive}");
-    quote! { ::nest_rs_resource::graphql::async_graphql::#derive, }
+    quote! { #root::#derive, }
+}
+
+/// The `crate = ` override those derives need.
+///
+/// An async-graphql derive roots its own expansion at whatever
+/// `proc-macro-crate` finds in the *call site's* manifest, falling back to a
+/// bare `::async_graphql`. Without this the entity crate would have to declare
+/// `async-graphql` — and pin its version by hand — for code it never wrote;
+/// same reason `#[expose]` already spells out serde's and schemars' overrides.
+/// The emitted `#[ComplexObject]` needs the same override, spelled as an
+/// argument rather than an attribute — see `relations::emit_field_resolvers`.
+pub(crate) fn graphql_crate_attr(model: &ResourceModel) -> TokenStream2 {
+    if !model.graphql {
+        return TokenStream2::new();
+    }
+    let root = graphql_root_str();
+    quote! { #[graphql(crate = #root)] }
 }
 
 /// `true` when the type's last path segment is `Uuid` (rendered as `String` on

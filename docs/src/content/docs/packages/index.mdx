@@ -205,10 +205,13 @@ are yours, and hiding them behind a re-export would cost you their feature flags
 and a truthful `cargo tree`. No Rust framework hides them; NestRS does not
 either.
 
-One capability cannot hold the one-dependency promise: **GraphQL** also needs
-`async-graphql`, because `#[resolver]` builds on that crate's own `#[Object]`
-macro and a third-party derive expands against your prelude, not ours. It is
-stated on the [GraphQL page](/graphql/) rather than smoothed over.
+**GraphQL** used to be the one exception, and no longer is: `#[resolver]` wraps
+async-graphql's `#[Object]`, but it now pins that expansion to the framework's
+own re-export, so `nest-rs --features graphql` alone compiles a resolver.
+`async-graphql` returns to the rule above — yours when your code names it,
+which for its *types* you can avoid entirely with
+`use nest_rs::graphql::async_graphql::{Context, Result};`, and for its *derives*
+you cannot, exactly as for `serde`.
 
 ## Going further
 

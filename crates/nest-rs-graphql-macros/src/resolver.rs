@@ -838,8 +838,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let query_block = root_object(&query_obj, &self_ty, &query_methods, quote!(Query));
     let mutation_block = root_object(&mutation_obj, &self_ty, &mutation_methods, quote!(Mutation));
     let field_blocks = field_groups.iter().map(|(parent_ty, methods)| {
+        let root = async_graphql_root();
+        let root_str = async_graphql_root_str();
         quote! {
-            #[::nest_rs_graphql::async_graphql::ComplexObject]
+            #[#root::ComplexObject(crate = #root_str)]
             impl #parent_ty {
                 #(#methods)*
             }
@@ -1042,6 +1044,24 @@ fn is_dataloader(ty: &Type) -> bool {
         .is_some_and(|s| s.ident == "DataLoader"))
 }
 
+/// The framework's re-export of async-graphql — the root every emitted
+/// async-graphql attribute is pinned to.
+fn async_graphql_root() -> TokenStream2 {
+    quote!(::nest_rs_graphql::async_graphql)
+}
+
+/// The same root as the **string** a `crate = ` argument takes, built from
+/// [`async_graphql_root`]'s tokens rather than re-typed: a path that no longer
+/// resolves is a compile error here, while a stale string parses fine and
+/// silently sends the expansion back to the call site's prelude — the failure
+/// the override exists to close.
+fn async_graphql_root_str() -> String {
+    async_graphql_root()
+        .into_iter()
+        .map(|t| t.to_string())
+        .collect()
+}
+
 fn root_object(
     obj: &Ident,
     self_ty: &Type,
@@ -1056,11 +1076,19 @@ fn root_object(
         .map(|i| i.to_string())
         .unwrap_or_else(|_| "resolver".to_string());
     let resolver_name = LitStr::new(&resolver_name, proc_macro2::Span::call_site());
+    let root = async_graphql_root();
+    let root_str = async_graphql_root_str();
     quote! {
         #[allow(non_camel_case_types)]
         pub struct #obj(::std::sync::Arc<#self_ty>);
 
-        #[::nest_rs_graphql::async_graphql::Object]
+        // `crate = ` pins async-graphql's own expansion to the umbrella's
+        // re-export. Without it the derive asks `proc-macro-crate` what the
+        // *call site* declared and falls back to a bare `::async_graphql`, so
+        // every app that installed `nest-rs` with the `graphql` feature — the
+        // documented line, and the only one — failed to compile inside this
+        // attribute. Witnessed by `nest-rs-macro-hygiene`'s `resolver` module.
+        #[#root::Object(crate = #root_str)]
         impl #obj {
             #(#methods)*
         }

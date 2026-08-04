@@ -34,7 +34,7 @@ pub struct DatabaseSetup {
 
 impl DynamicModule for DatabaseSetup {
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        install_request_layers(builder)
+        install_boot_audits(install_request_layers(builder))
     }
 
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
@@ -83,4 +83,16 @@ fn install_request_layers(builder: ContainerBuilder) -> ContainerBuilder {
     let snapshot = builder.snapshot();
     let job_context = crate::WorkerDbContext::from_container(&snapshot);
     builder.provide_dyn::<dyn nest_rs_worker::JobContext>(Arc::new(job_context))
+}
+
+/// Install the link-time invariant checks this import brings — providers that
+/// need neither config nor pool, only what the decorators submitted, and that
+/// refuse boot from `#[on_module_init]`.
+///
+/// Separate from the request layers above: these run once and touch no request.
+/// The audits ride `DatabaseModule` because an app without it has no
+/// `CrudService` to mis-wire; an app composing the ORM some other way calls the
+/// audit directly (`audit_soft_delete_bindings`).
+fn install_boot_audits(builder: ContainerBuilder) -> ContainerBuilder {
+    <crate::soft_delete::SoftDeleteAudit as nest_rs_core::Discoverable>::register(builder)
 }

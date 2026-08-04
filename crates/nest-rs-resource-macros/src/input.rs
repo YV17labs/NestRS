@@ -5,7 +5,7 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-use crate::attr::{ResourceField, ResourceModel, graphql_object_derive};
+use crate::attr::{ResourceField, ResourceModel, graphql_crate_attr, graphql_object_derive};
 
 pub fn emit(model: &ResourceModel) -> TokenStream2 {
     let create = input_struct(&model.create_ident, model, |f| f.in_create);
@@ -37,6 +37,7 @@ fn input_struct(
     });
 
     let graphql_derives = graphql_object_derive(model, "InputObject");
+    let graphql_crate = graphql_crate_attr(model);
 
     quote! {
         // Same routing as the wire DTO: these inputs are generated, so their
@@ -52,6 +53,7 @@ fn input_struct(
         #[serde(crate = "::nest_rs_resource::serde")]
         #[validate(crate = ::nest_rs_resource::validator)]
         #[schemars(crate = "::nest_rs_resource::schemars")]
+        #graphql_crate
         pub struct #name {
             #(#decls),*
         }

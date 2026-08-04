@@ -35,9 +35,16 @@ On conflict about prose, `STYLE.md` wins; about code or naming,
   users/orgs, chat/notify, audio, weather, media). The ban list
   (`items`, `products`, `artworks`, `file_assets`, `Ledger`, …) must
   stay at zero — never invent a feature.
-- **Three code-truth checks** — `version-pin`, `unauthed-curl`,
-  `crud-error` (STYLE.md § F). Each was a shipped defect on a released
-  page; the linter greps for all three.
+- **Code-truth checks** — `version-pin`, `unauthed-curl`, `crud-error`,
+  `bind-order`, `queue-name`, `install-stanza`, `otel-guard`,
+  `decorator-import`, `layer-impl`, `exception-response-error`,
+  `bare-log`, `config-table` (STYLE.md § F). Each was a shipped defect
+  on a released page. `decorator-import`, `layer-impl` and
+  `config-table` derive their rule from the framework's own source
+  (every `#[proc_macro_attribute]` under `crates/*-macros/`, every
+  `pub trait <T>: Layer` under `crates/`, a `#[config]` struct's fields)
+  rather than restating it; `bare-log` is the docs half of the
+  scaffold's own no-bare-log unit test.
 
 ## Gotchas no page shows
 

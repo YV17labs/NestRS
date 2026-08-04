@@ -17,6 +17,7 @@ rust-version = "1.96"
 [workspace.dependencies]
 anyhow = "1.0"
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }
@@ -37,6 +38,15 @@ strip = true        # drop symbols for a smaller binary
 debug = "line-tables-only"
 "#;
 
+/// The feature crate's manifest.
+///
+/// `tracing` and `anyhow` ship from the first `nestrs new`, not from the first
+/// `g queue`: a service logs at `debug` and a `#[hooks]` method returns a
+/// fallible `Result` — the two reflexes the framework's own observability and
+/// lifecycle rules prescribe, and the two crates the docs write in feature code
+/// without ever telling the reader to add them. A workspace that configures
+/// `tracing-subscriber` in `main` and cannot emit an event from a service is
+/// wired to log and unable to.
 pub const FEATURES_CARGO: &str = r#"[package]
 name = "features"
 version.workspace = true
@@ -45,6 +55,8 @@ publish = false
 
 [dependencies]
 nest-rs.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
 "#;
 
 /// The feature-crate root. Every workspace starts with the app's own `hello`

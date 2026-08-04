@@ -22,6 +22,7 @@ publish = false
 # umbrella's feature matrix, and it surfaces here before it reaches a user.
 nest-rs = { path = "../nest-rs", default-features = false, features = [
     "events",
+    "graphql",
     "http",
     "mcp",
     "schedule",

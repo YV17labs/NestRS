@@ -57,6 +57,13 @@ to require it, **stop and ask**.
   sub-crate `nest-rs-*` (paths `nest_rs_*`, span targets
   `nest_rs::<concern>`). The `nestrs` brand (CLI, `NESTRS_*` env,
   nestrs.dev) deliberately differs — accepted, not a bug to fix.
+- **No env-var name spelled as a literal.** `NESTRS` is the *app's*
+  default prefix, not a fixture: `env_prefix!("ACME")` renames every
+  framework variable at once. So a name is always built —
+  `nest_rs_config::var_name(ns, key)` or `EnvPrefix::var(name)`, never
+  `"NESTRS_AUTHN__SECRET"` in a message, a check or a template. Two
+  exceptions, both because they are not the app's: `RUST_LOG` (the
+  ecosystem's) and `NESTRS_NO_BOOTSTRAP` (the CLI tool's own).
 - **No collapsing the two workspaces.** `demo/apps/` and
   `demo/crates/features/` are fixed names.
 - **No feature flags for capabilities that don't exist yet.**

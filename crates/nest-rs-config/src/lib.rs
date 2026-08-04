@@ -6,9 +6,9 @@
 //! (the `.env` cascade + the namespaced reader) and registers each config as
 //! `Arc<C>` for injection.
 //!
-//! `<PREFIX>` is `NESTRS` out of the box. An app that wants its own brand on
-//! its deployment variables declares it once — `nest_rs::env_prefix!("ACME")` —
-//! and every name here follows, `ACME_DATABASE__URL` through `ACME_ENV`.
+//! `<PREFIX>` is `NESTRS` out of the box. A deployment that wants its own brand
+//! on its variables sets `NESTRS_ENV_PREFIX=ACME` on the process, and every name
+//! here follows, `ACME_DATABASE__URL` through `ACME_ENV`.
 #![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]
 

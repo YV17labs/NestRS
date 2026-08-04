@@ -78,7 +78,7 @@ impl Environment {
     }
 
     /// The variable this reads — `NESTRS_ENV`, or `<PREFIX>_ENV` under
-    /// [`env_prefix!`](nest_rs_core::env_prefix!). Public because a harness that
+    /// [`EnvPrefix::VAR`]. Public because a harness that
     /// must decide the environment before the framework does (`nest-rs-testing`)
     /// has to name the same variable, and a second literal there is exactly how
     /// a rename half-lands.

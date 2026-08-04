@@ -14,6 +14,11 @@ config struct, so anything here is also settable in code — and, because the
 override is per field, setting one here works even when the app pins its
 neighbours in `module.rs`.
 
+`NESTRS` is the default prefix. An app that declared its own
+([Your own prefix](/configuration/#your-own-prefix)) reads every name below
+with that prefix instead — `ACME_HTTP__PORT`, `ACME_LOG` — and the `NESTRS_`
+spellings resolve nothing.
+
 ## Logging — `NESTRS_LOG*`
 
 The baseline console logger is part of `nest-rs-core` — no module to

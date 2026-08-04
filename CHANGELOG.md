@@ -5,10 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-Headed for **2.0.0** — the workspace already carries that version; the entry
-below moves under it at tag time.
+## [2.0.0] - 2026-08-03
 
 **One dependency.** `nest-rs` with the feature for the capability becomes the
 whole install, on every page of the documentation and every crate's crates.io
@@ -194,6 +191,77 @@ claim. Both forms are now served — the path-aware one is advertised, the
 unsuffixed one stays for bare-origin resources and clients that skip the
 challenge — and a tail that is not this resource's path answers `404` rather
 than asserting an identity the deployment does not have.
+
+### Fixed — round-12 QA against the local 2.0.0
+
+The last pass before the tag read the released pages and pasted them. Six
+framework defects, each closed with the test that keeps it closed.
+
+- **GraphQL was still the one capability that could not hold "one
+  dependency".** `#[resolver]` wraps async-graphql's own `#[Object]`, and a
+  third-party macro roots its expansion at whatever `proc-macro-crate` finds in
+  the *call site's* manifest — falling back to a bare `::async_graphql`. So the
+  lead snippet of `/graphql/` did not compile behind the documented install
+  line, and the page said so instead of fixing it. Every async-graphql
+  attribute and derive the framework emits now carries a `crate = ` override
+  built from the re-export's own tokens rather than a re-typed string, so a path
+  that stops resolving is a compile error rather than a silent fallback.
+  `nest-rs-macro-hygiene` gains the `resolver` witness that fails the day the
+  override is dropped. `async-graphql` returns to the ordinary rule: yours when
+  *your* code writes its derives, and reachable as
+  `nest_rs::graphql::async_graphql` when you only need its types.
+- **`nest-rs-codegen` matched `crate = ` against a list of two derive names.**
+  The next wrapped third-party macro would have fallen back to the call site's
+  prelude unnoticed; it matches the shape at any position now, so a macro is
+  covered the day it lands.
+- **A half-wired tombstone is a boot refusal.** `#[expose(..., soft_delete)]` on
+  an entity whose service never overrode `CrudService::soft_delete_column`
+  answered `DELETE` with the same `204` a real tombstone answers, having
+  destroyed the row — no warning at boot, none at the delete, and a wire
+  response byte-for-byte identical to the successful case. `#[expose]` submits
+  the entity/service pair at link time and `DatabaseModule` refuses boot naming
+  both halves and both ways out. `audit_soft_delete_bindings` is public for an
+  app composing the ORM some other way.
+- **The scaffolded features crate declared neither `tracing` nor `anyhow`**, so
+  the first `#[hooks]` method a reader pastes out of `/fundamentals/lifecycle/`
+  failed on `E0433` — then failed again on `anyhow` once `tracing` had been
+  added by hand. Thirteen pages write `tracing::` in feature code and none says
+  to add it. Both ship from `nestrs new` now, standalone included, and an e2e
+  compiles that page's snippet in a freshly generated tree. `g feature` also
+  stopped printing a `Reference:` path that does not exist on the reader's disk.
+- **An exception type needs `ResponseError` to reach a filter at all.** A filter
+  claims by downcast off an error that is *already* a `poem::Error`, so the
+  natural `Result<_, DomainError>` out of a handler did not compile — with an
+  `E0277` on `IntoResult` naming neither the trait nor the default status it
+  supplies. The suite only ever raised hand-built `poem::Error`s, the one shape
+  that needs no impl, so it proved dispatch while never touching the requirement
+  a reader meets first. The page now shows the impl, the handler, and what the
+  same route answers with the filter unbound — the filter *replaces* that
+  status, it does not create it.
+- **The imperative-mount refusal had no proof it fires.** Nothing in the corpus
+  reaches `HttpTransport::mount`, so no QA pass could trigger the release's one
+  remaining fail-closed guard by following a page. `fail_secure` drives it and
+  the two controls that must still boot, and `/http/configuration/` says what an
+  imperative mount is — writing an application route is not how you get one.
+
+On the pages: **24 `rust` blocks imported their types and dropped the
+decorator** — `use nest_rs::openapi::OpenApiModule;` above a `#[module(...)]`,
+which is `cannot find attribute` on the first build — and `/configuration/` and
+`/http/configuration/` held seven between them, the pages a reader opens *to
+copy a stanza out of*. Two `Layer` impls were missing where the surrounding
+prose assumed them, one of them in a quote of a real framework file with the
+line stripped. `/storage/` published five of `StorageConfig`'s seven keys under
+a sentence calling the list exhaustive — the missing `ALLOW_HTTP` being the one
+that decides a boot refusal — and printed the dev branch of a profile-split
+default as *the* default, so a reader preparing a deployment concluded there
+was nothing to pose.
+
+`lint-docs.mjs` grows six checks so none of that recurs. Three **derive** their
+rule from the framework's own source — every `#[proc_macro_attribute]` under
+`crates/*-macros/`, every `pub trait <T>: Layer` under `crates/`, a `#[config]`
+struct's fields — rather than restating it, because a hand-written list is
+wrong the day a decorator or a sub-trait lands: the first cut of the `Layer`
+check listed four sub-traits and missed `GlobalPipe`.
 
 ### Fixed — round-9 QA against the local 2.0.0
 
@@ -1868,7 +1936,8 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
-[Unreleased]: https://github.com/YV17labs/NestRS/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/YV17labs/NestRS/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/YV17labs/NestRS/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/YV17labs/NestRS/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/YV17labs/NestRS/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/YV17labs/NestRS/compare/v1.1.0...v1.1.1

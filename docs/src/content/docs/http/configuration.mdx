@@ -25,6 +25,7 @@ pub struct HelloModule;
 ```
 
 ```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
 #[module(imports = [
@@ -89,6 +90,7 @@ Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
 tests (production deploys carry secrets in the environment):
 
 ```rust
+use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule, TlsConfig};
 
 let cert = std::fs::read("fullchain.pem")?;
@@ -123,6 +125,8 @@ NESTRS_HTTP__CORS_MAX_AGE=3600
 
 ```rust title="apps/api/src/module.rs"
 use std::time::Duration;
+
+use nest_rs::core::module;
 use nest_rs::http::{CorsConfig, HttpConfig, HttpModule};
 
 #[module(imports = [
@@ -159,6 +163,7 @@ NESTRS_HTTP__GLOBAL_PREFIX=/api
 or pin it in code with `with_global_prefix`:
 
 ```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
 #[module(imports = [
@@ -259,6 +264,23 @@ registered and an endpoint the transport can't shape (an imperative
 offending mount rather than silently serving it unguarded. Setting it to
 `false` downgrades that failure to a `warn` — a deliberate opt-out, not
 the default:
+
+An **imperative mount** is `HttpTransport::mount(path, |container| …)`:
+a raw poem endpoint handed to the transport, which can neither shape it
+(no `#[routes]` to run the guard pool through) nor introspect it (no
+`EdgePosture` to read). Writing an application route is not how you get
+one — `#[controller]` covers that, and a capability contributing its own
+surface (GraphQL, WebSockets, MCP, OpenAPI) self-mounts *with* a posture.
+It is the escape hatch for a hand-built endpoint, and the check exists
+because that hatch is the only hole a global guard pool cannot reach.
+The boot error names the path:
+
+```text frame="terminal"
+Error: fail-secure: imperative mount(...) endpoints bypass the global guard
+pool: /raw — route them through a #[controller], guard them explicitly, or
+opt out with HttpTransport::fail_secure_strict(false) /
+NESTRS_HTTP__FAIL_SECURE_STRICT=false
+```
 
 ```bash title=".env" frame="terminal"
 NESTRS_HTTP__FAIL_SECURE_STRICT=false

@@ -28,6 +28,7 @@ Add `OpenApiModule::for_root` to the app root, alongside the controllers it
 should document:
 
 ```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
 use nest_rs::openapi::OpenApiModule;
 
 #[module(

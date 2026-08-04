@@ -36,6 +36,21 @@ pub struct DomainError(pub String);
 #[error("infrastructure failure: {0}")]
 pub struct InfraError(pub String);
 
+/// R12 L-2. Every handler above raises its error by hand
+/// (`poem::Error::new(DomainError(…), status)`), which is the one shape that
+/// needs no `ResponseError` — so the suite proved dispatch while never touching
+/// the requirement a reader meets first. `/fundamentals/exception-filters/`
+/// shipped 2.0.0 defining `DomainError` with neither this impl nor a handler,
+/// and the natural `Result<_, DomainError>` return failed to compile with an
+/// `E0277` on `IntoResult` that names neither. The status here is the
+/// **default**; the filter replaces it, and
+/// [`raising_the_error_the_ordinary_way_reaches_the_filter`] pins both halves.
+impl poem::error::ResponseError for DomainError {
+    fn status(&self) -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
 // --- the filter under test ---------------------------------------------------
 
 #[injectable]
@@ -141,6 +156,30 @@ impl DupCtrlMethod {
     }
 }
 
+/// The page's own shape: `Result<T, DomainError>` straight out of the handler,
+/// no hand-built `poem::Error`. This is what the reader writes, so it is what
+/// the suite has to compile — the `?`/`Err` path only exists because
+/// `DomainError` implements `ResponseError`.
+#[controller(path = "/ordinary")]
+struct OrdinaryRaise;
+
+#[routes]
+impl OrdinaryRaise {
+    #[get("/filtered")]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn filtered(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("boom".into()))
+    }
+
+    /// The same error with no filter bound — it renders from its own
+    /// `ResponseError` status. The filter replaces that default; it does not
+    /// create it, and the page now says so.
+    #[get("/unfiltered")]
+    async fn unfiltered(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("boom".into()))
+    }
+}
+
 #[module(providers = [
     DomainErrorFilter,
     GlobalScope,
@@ -148,6 +187,7 @@ impl DupCtrlMethod {
     MethodScope,
     DupGlobalMethod,
     DupCtrlMethod,
+    OrdinaryRaise,
 ])]
 struct ExceptionFiltersModule;
 
@@ -196,6 +236,27 @@ async fn exception_filter_at_method_scope_catches_typed_error() {
     let resp = app.http().get("/method/domain").send().await;
     resp.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(catches(), 1);
+}
+
+#[tokio::test]
+async fn raising_the_error_the_ordinary_way_reaches_the_filter() {
+    let _gate = GATE.lock().await;
+    reset_counter();
+
+    let app = TestApp::for_module::<ExceptionFiltersModule>()
+        .await
+        .expect("boots");
+
+    let filtered = app.http().get("/ordinary/filtered").send().await;
+    filtered.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    filtered.assert_text("caught: domain failure: boom").await;
+    assert_eq!(catches(), 1);
+
+    // Unbind the filter and the same handler answers from the exception's own
+    // `ResponseError` status — the two halves the page has to keep distinct.
+    let unfiltered = app.http().get("/ordinary/unfiltered").send().await;
+    unfiltered.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(catches(), 1, "the unfiltered route reaches no filter");
 }
 
 #[tokio::test]

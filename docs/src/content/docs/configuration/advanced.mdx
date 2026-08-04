@@ -79,6 +79,7 @@ the same `Arc<IssuerConfig>` injection:
 
 ```rust title="crates/features/src/oauth/module.rs"
 use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
 use super::config::IssuerConfig;
 use super::service::OAuthFlow;
 
@@ -91,6 +92,7 @@ pub struct OAuthModule;
 
 ```rust title="apps/auth/src/module.rs"
 use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
 
 #[module(
     imports = [

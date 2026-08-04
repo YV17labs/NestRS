@@ -24,7 +24,6 @@ providers like any other struct.
 
 ```bash frame="terminal"
 cargo add nest-rs --features graphql,seaorm,authz
-cargo add async-graphql --features dataloader
 ```
 
 ```toml title="crates/features/Cargo.toml"
@@ -33,10 +32,20 @@ cargo add async-graphql --features dataloader
 # when the resolver binds an entity, `authz` when an operation carries
 # `#[authorize]` — features you enable because *your* code says so.
 nest-rs = { version = "2.0", features = ["graphql", "seaorm", "authz"] }
-# `#[resolver]` builds on async-graphql's `#[Object]`, and a third-party macro
-# expands against *your* prelude — the one dependency this page cannot absorb.
-async-graphql = { version = "7", features = ["dataloader"] }
 ```
+
+`#[resolver]` builds on async-graphql's own `#[Object]`, and a third-party
+macro expands against *your* prelude — so the decorator pins that expansion to
+the framework's re-export (`crate = "::nest_rs::graphql::async_graphql"`).
+Reach async-graphql's types the same way and the line above stays the only one:
+
+```rust
+use nest_rs::graphql::async_graphql::{Context, Result};
+```
+
+Declare `async-graphql = "7"` yourself only when you write **its derives** by
+hand (`#[derive(SimpleObject)]` on a type of your own) — a derive you wrote
+expands against your prelude, exactly like `serde`'s.
 
 ## The minimal resolver
 

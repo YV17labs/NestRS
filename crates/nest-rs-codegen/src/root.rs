@@ -233,11 +233,23 @@ fn walk(
     out
 }
 
-/// Whether this group's head names a derive whose `crate = ` override is
-/// spelled as a string — `serde` and `schemars`; validator's is a bare path and
-/// falls out of the ordinary segment branch.
+/// Whether this group carries a `crate = ` override spelled as a string.
+///
+/// Matched by **shape, at any position**, rather than by a list of derive
+/// names: `crate =` is what `#[serde(…)]`, `#[schemars(…)]` and async-graphql's
+/// `#[Object(crate = "…")]` / `#[graphql(crate = "…")]` all spell, so a
+/// newly-wrapped third-party macro is covered the day it lands instead of
+/// silently falling back to the call site's prelude. The walk re-asks on every
+/// group descent, so an override nested one group under its derive name arms
+/// the literal branch when that group is reached. Validator's override is a
+/// bare path and falls out of the ordinary segment branch either way.
 fn carries_a_crate_path(inner: &[TokenTree]) -> bool {
-    matches!(inner.first(), Some(TokenTree::Ident(id)) if id == "serde" || id == "schemars")
+    inner.windows(2).any(|pair| {
+        matches!(
+            (&pair[0], &pair[1]),
+            (TokenTree::Ident(id), TokenTree::Punct(p)) if id == "crate" && p.as_char() == '='
+        )
+    })
 }
 
 /// The single `compile_error!` naming every concern the call site cannot reach.

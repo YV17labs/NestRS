@@ -60,7 +60,9 @@ pub use service::{
     model_uuid,
 };
 pub use slug::resolve_unique_slug;
-pub use soft_delete::{SoftDeletable, live_condition};
+pub use soft_delete::{
+    SoftDeletable, SoftDeleteRegistration, audit_soft_delete_bindings, live_condition,
+};
 pub use time::now;
 pub use worker::WorkerDbContext;
 
@@ -78,3 +80,8 @@ pub use http::{Bind, DbContext};
 /// `nest-rs-http` re-exports `poem` and `nest-rs-graphql` re-exports
 /// `async_graphql`).
 pub use sea_orm;
+
+/// Re-exported so the `inventory::submit!` `#[expose(..., soft_delete)]` emits
+/// resolves through this crate — the entity crate declares neither `inventory`
+/// nor its version.
+pub use inventory;

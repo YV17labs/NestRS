@@ -77,6 +77,9 @@ serde_json.workspace = true
 schemars.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+# `#[expose(..., soft_delete)]` submits its entity/service pair here at link
+# time, so `SoftDeleteAudit` can refuse boot on a half-wired tombstone.
+inventory.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 # The ambient executor is carried in a `tokio::task_local!`.

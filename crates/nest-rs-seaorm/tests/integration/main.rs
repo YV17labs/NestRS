@@ -2,3 +2,4 @@
 //! Postgres-backed behaviour lives next door in `tests/e2e/`.
 
 mod diagnostics;
+mod soft_delete;

@@ -181,11 +181,20 @@ outer `Filter`, then to the transport's default renderer.
 ```rust
 use nest_rs::core::{Layer, injectable};
 use nest_rs::exception_filters::{ExceptionFilter, async_trait};
+use nest_rs::http::poem::error::ResponseError;
 use nest_rs::http::poem::{http::StatusCode, Response};
 
 #[derive(Debug, thiserror::Error)]
 #[error("domain failure: {0}")]
 pub struct DomainError(pub String);
+
+// The filter claims by downcast, so the error has to reach the chain as a
+// `poem::Error` first — that is what this impl is for.
+impl ResponseError for DomainError {
+    fn status(&self) -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
 
 #[injectable]
 #[derive(Default)]
@@ -208,7 +217,21 @@ impl ExceptionFilter for DomainErrorFilter {
 Bind it like any other layer: globally with
 `use_exception_filters_global([exception_filter::<DomainErrorFilter>()])`,
 on a controller with `#[use_exception_filters(DomainErrorFilter)]`, or
-beside a verb.
+beside a verb. The handler raises the exception the way it raises any
+other error:
+
+```rust
+#[get("/domain")]
+#[use_exception_filters(DomainErrorFilter)]
+async fn domain(&self) -> Result<&'static str, DomainError> {
+    Err(DomainError("boom".into()))
+}
+```
+
+That answers `422` with `caught: domain failure: boom`. Drop the
+`#[use_exception_filters]` line and the same handler answers `500` from
+its `ResponseError` status: the filter replaces the default, it does not
+create it.
 
 ## TypeId dedup — redeclaration is free
 

@@ -6,6 +6,7 @@ mod controller;
 mod diagnostics;
 mod edge;
 mod exclusive_paths;
+mod fail_secure;
 mod global_prefix;
 mod input;
 mod route_decorators;

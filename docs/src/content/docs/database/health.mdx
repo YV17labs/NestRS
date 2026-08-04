@@ -16,6 +16,7 @@ handler to write.
 Import `DatabaseHealthModule` alongside `HealthModule`:
 
 ```rust title="src/module.rs"
+use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::seaorm::DatabaseHealthModule;
 

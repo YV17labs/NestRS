@@ -81,9 +81,11 @@ const ASYNC_GRAPHQL: Dep = Dep {
     features: &[],
 };
 // Every adapter skeleton that logs (`queue`, `schedule`, `ws`) writes a
-// `tracing::` call in the handler body, and a workspace scaffolded by
-// `nestrs new` carries no `tracing` in its features crate — the first generated
-// adapter is usually the first code to reach for it.
+// `tracing::` call in the handler body, and `queue`/`schedule` return
+// `anyhow::Result`. `templates::workspace` now ships both from `nestrs new`, so
+// on a scaffolded tree these two entries are idempotent no-ops; they stay for
+// the workspace assembled by hand, where the generator is the only thing that
+// knows what its own skeleton names.
 const TRACING: Dep = Dep {
     name: "tracing",
     workspace_value: "\"0.1\"",

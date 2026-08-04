@@ -58,13 +58,23 @@ storage shape.
 Every field is settable via `NESTRS_STORAGE__*` env **or** a pinned
 `StorageConfig` — the framework-wide dual-path config rule.
 
+Two defaults below are **profile-dependent**, and both differences are
+security ones: outside dev/test the sentinel credentials are dropped and
+plain HTTP is off, so an unset key fails boot by name instead of
+authenticating with a public default.
+
 | Key | Default | Meaning |
 |---|---|---|
 | `ENDPOINT` | `http://rustfs:9000` | S3 endpoint; empty ⇒ real AWS S3 |
 | `REGION` | `us-east-1` | region |
-| `ACCESS_KEY` / `SECRET_KEY` | `nestrs` | static credentials |
+| `ACCESS_KEY` / `SECRET_KEY` | `nestrs`, **none outside dev/test** | static credentials |
 | `BUCKET` | `nestrs` | target bucket |
 | `FORCE_PATH_STYLE` | `true` | `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
+| `ALLOW_HTTP` | `true`, **`false` outside dev/test** | reach the endpoint over plain `http://` — see the caution below |
+
+So a staging or production deployment poses three keys at minimum: an
+`https://` `ENDPOINT` (the default is plain HTTP and refused there),
+`ACCESS_KEY` and `SECRET_KEY`.
 
 ## Presigned uploads
 
@@ -137,8 +147,35 @@ originals: a short-lived signed `GET` URL the client fetches directly.
 | `put_bytes(key, bytes, content_type)` | upload bytes — takes anything `Into<Bytes>`, so the `Bytes` from `get_bytes` composes without a copy |
 | `delete(key)` | remove an object; an absent key succeeds, so retention sweeps and failed-upload cleanup are idempotent |
 
-That is the whole surface. A `StorageError` converts into `std::io::Error`, so
-a `get_stream` feeds `poem::Body::from_bytes_stream` directly:
+That is the whole surface.
+
+`StorageError` is **not** a `ResponseError`: an infrastructure error does not
+get to pick its own HTTP status, so `?`-ing one straight out of a handler does
+not compile. Wrap it in the feature's own error, which is where the status
+belongs:
+
+```rust title="src/media/error.rs"
+use nest_rs::http::poem::error::ResponseError;
+use nest_rs::http::poem::http::StatusCode;
+use nest_rs::storage::StorageError;
+
+#[derive(Debug, thiserror::Error)]
+pub enum MediaError {
+    #[error("media storage operation failed")]
+    Storage(#[from] StorageError),
+}
+
+impl ResponseError for MediaError {
+    fn status(&self) -> StatusCode { StatusCode::INTERNAL_SERVER_ERROR }
+}
+```
+
+The handler then returns `Result<_, MediaError>` and `?` works. See
+[`audio/error.rs`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
+for the shape with a `ProblemDetails` body and the `error` log.
+
+A `StorageError` does convert into `std::io::Error`, so a `get_stream` feeds
+`poem::Body::from_bytes_stream` directly:
 
 ```rust
 let Some(stream) = self.storage.get_stream(key).await.ok() else {

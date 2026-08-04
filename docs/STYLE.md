@@ -163,6 +163,45 @@ greps for them:
   above a `validator = "0.20"` pin, a `/database/` `cargo add` with every feature dropped, and a
   `/mcp/` stanza naming neither crate `#[mcp]` expands to. Blocks written `workspace = true` are
   not install stanzas and are skipped.
+- **`decorator-import`** — a `rust` block that shows **any** `use` line imports every decorator
+  it applies. A block with no imports at all reads as a fragment; one that shows them reads as
+  pasteable, and 2.0.0 shipped 24 that imported their types and dropped the attribute —
+  `use nest_rs::openapi::OpenApiModule;` above a `#[module(...)]`, which is
+  `error: cannot find attribute 'module' in this scope` on the first build. `configuration/` held
+  four and `http/configuration.mdx` three: the pages a reader opens *to copy a stanza out of*.
+  The decorator list is **derived** — every `#[proc_macro_attribute]` under `crates/*-macros/` —
+  so the attributes an orchestrator consumes (`#[query]`, `#[get]`, `#[on_module_init]`) are
+  never demanded, and a decorator added tomorrow is covered today. A block with `prelude::*` is
+  complete by construction and skipped.
+- **`layer-impl`** — a type the page **defines** and implements a Layer sub-trait for carries
+  `impl Layer for T {}`. There is no blanket impl, and the omission surfaces as an `E0277` naming
+  `nest_rs_core::Layer`, which does not say "add a one-line impl". 2.0.0 shipped
+  `/fundamentals/middleware/` without it while the guard snippet *on the same page* had it, and
+  `/fundamentals/interceptors/` quoted a real framework file with the line stripped out. The
+  sub-trait list is **derived** — every `pub trait <T>: Layer` under `crates/` — because a
+  hand-written one is wrong the day a sub-trait lands: the first cut listed four and missed
+  `GlobalPipe`. Types the page only *names* (the framework's own `AuthnGuard`) are out of scope —
+  that impl lives in the framework.
+- **`exception-response-error`** — an exception type the page defines and claims via
+  `type Exception = E` implements `ResponseError`. An `ExceptionFilter` catches by **downcast off
+  an error that is already a `poem::Error`**, so without the impl the handler returning
+  `Result<_, E>` does not compile — and the compiler's message (`IntoResult`) names neither the
+  trait nor the default status it supplies. The filter *replaces* that status; it does not create
+  it. 2.0.0's `/fundamentals/exception-filters/` defined the type and the filter, showed no
+  handler, and left the impl behind in the demo file it cited two sections lower.
+- **`bare-log`** — a documented `tracing::<level>!` carries at least one structured field, in any
+  of the three spellings (`k = v`, `%v`/`?v`, the bare shorthand), whether or not it names a
+  `target:` and whether or not rustfmt broke it across lines. `CLAUDE.md`:
+  *metadata is mandatory — a bare log is a defect*, since those are the events queried under
+  incident. The scaffolds are already held at zero by a unit test over every template
+  (`nest-rs-cli/src/templates/mod.rs`); the pages a reader copies from are held to the same bar.
+- **`config-table`** — a page publishing a `#[config]` struct's key table lists **every** field,
+  and names `staging/production` whenever that struct's `defaults()` branches on the profile. The
+  fields are read out of the crate's `config.rs`, not restated. 2.0.0's `/storage/` published five
+  of `StorageConfig`'s seven keys under a sentence calling the list exhaustive — the missing
+  `ALLOW_HTTP` being the one that decides a boot refusal — and printed the dev branch of a
+  profile-split default as *the* default, so a reader preparing a deployment concluded there was
+  nothing to pose. Add a page to `CONFIG_TABLES` when it grows such a table.
 - **`otel-guard`** — a snippet binding `OpenTelemetry::init` uses the name the crate's own boot
   panic prescribes, read out of `nest-rs-opentelemetry`'s panic text rather than restated. 1.3.0
   corrected the panic to `let _otel =` and left the page's canonical `main` on

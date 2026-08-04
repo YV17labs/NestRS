@@ -24,6 +24,7 @@ The `social` feature implies `authn`: the authorization-code machinery
 `SocialModule` drives (`OAuth2Client`, `TokenSet`) arrives with it.
 
 ```rust
+use nest_rs::core::module;
 use nest_rs::social::SocialModule;
 
 #[module(imports = [SocialModule, OAuthHttpModule])]

@@ -60,5 +60,11 @@ fn print_next_steps(names: &Names) {
         names.kebab
     );
     println!("  DB-backed CRUD?   nestrs g resource {}", names.kebab);
-    println!("  Reference:        crates/features/src/users/");
+    // The exemplar lives in the *framework* repo, not in the workspace this
+    // just wrote — printing the bare `crates/features/src/users/` sent the
+    // reader to a path that does not exist on their disk. Same URL the
+    // scaffolded README cites (`templates::workspace::README`).
+    println!(
+        "  Reference:        https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users"
+    );
 }

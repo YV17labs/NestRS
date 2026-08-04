@@ -83,8 +83,8 @@ itself — a redirect-style flow (OAuth `/authorize`) is a plain handler,
 so authentication stays a pure request → principal mapping.
 
 ```rust
-use nest_rs::core::async_trait;
 use nest_rs::authn::{AuthError, PrincipalIdentity, Strategy};
+use nest_rs::core::{async_trait, injectable};
 use nest_rs::http::poem::Request;
 
 #[injectable]

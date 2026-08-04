@@ -31,13 +31,13 @@ pub struct BlogService;
 impl BlogService {
     #[on_application_bootstrap]
     async fn warm(&self) -> anyhow::Result<()> {
-        tracing::info!(target: "blog", "cache warmed");
+        tracing::info!(target: "features::blog", entries = 0, "cache warmed");
         Ok(())
     }
 
     #[on_application_shutdown]
     async fn flush(&self) {
-        tracing::info!(target: "blog", "buffers flushed");
+        tracing::info!(target: "features::blog", pending = 0, "buffers flushed");
     }
 }
 ```

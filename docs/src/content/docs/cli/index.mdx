@@ -332,6 +332,7 @@ When the cursor isn't inside an app, wire the edge module by hand:
 
 ```rust
 use features::posts::PostsHttpModule;
+use nest_rs::core::module;
 
 #[module(imports = [
     // …

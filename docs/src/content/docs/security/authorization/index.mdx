@@ -37,6 +37,7 @@ A minimal policy is one statement — "members read their org's users":
 
 ```rust title="crates/features/src/authz/ability.rs"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]

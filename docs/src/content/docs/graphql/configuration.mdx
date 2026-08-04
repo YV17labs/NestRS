@@ -64,6 +64,7 @@ off in `.env.production`.
 Every module's config follows this rule (framework-wide):
 
 ```rust title="src/module.rs — env-driven"
+use nest_rs::core::module;
 use nest_rs::graphql::GraphqlModule;
 
 #[module(imports = [GraphqlModule::for_root(None)])]
@@ -77,6 +78,7 @@ NESTRS_GRAPHQL__SCHEMA_PATH=./schema.graphql
 ```
 
 ```rust title="src/module.rs — pinned at the import site"
+use nest_rs::core::module;
 use nest_rs::graphql::{GraphqlConfig, GraphqlModule};
 use std::path::PathBuf;
 

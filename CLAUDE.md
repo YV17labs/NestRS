@@ -183,39 +183,28 @@ is broken.
 
 ## Naming — strict
 
-File name = role; folder = feature prefix (`users/service.rs`).
-Snake_case, no dotted variants. **One role → one file per folder.**
+**The model lives in `.claude/rules/architecture.md`** — four naming levels,
+crate types, the provider decision procedure, the role tables, precedence, and
+the reserved vocabulary. That file has no `paths:` header, so it is loaded in
+every session; read it there rather than restating it here.
 
-| Role | File |
-|---|---|
-| DI module (exactly one `#[module]` struct per file) | `module.rs` |
-| Folder index (`pub use` / `mod` only) | `mod.rs` |
-| Service | `service.rs` |
-| Controller (REST) / Resolver (GraphQL) / Gateway (WS) | `controller.rs` / `resolver.rs` / `gateway.rs` |
-| Processor (queue) / Scheduled tasks / Tool (MCP) | `processor.rs` / `tasks.rs` / `tool.rs` |
-| Event listener host | `events/listener.rs` |
-| Entity (ORM + `#[expose]`) | `entity.rs` / `entities/` |
-| Guard / Strategy | `guard.rs` / `strategy.rs` |
-| Domain-specific error / Static constants | `error.rs` / `constants.rs` |
+It is **one copy, not a description of one.** The file sits in
+`crates/nest-rs-cli/src/templates/` and is symlinked into `.claude/rules/`:
+the CLI embeds it with `include_str!` so that every scaffolded project's
+`AGENTS.md` carries the same bytes this repo works under. The real file is on
+the *build's* side and the symlink on `.claude/`'s — never the reverse, since a
+checkout without symlink support would then embed a filename into every
+generated project and still compile. **Editing the rules means editing that
+file** — a second copy anywhere is the defect it exists to prevent.
 
-- **`module.rs` is the DI module; `mod.rs` is the folder index.** Never
-  merge. **No `*_module.rs` ever.**
-- **`mod.rs` / `lib.rs` carry no business logic** — only `//!`, `mod`,
-  `pub use`. Exception: proc-macro entries (Rust forces them at the
-  crate root) must be thin delegations.
-- **A service's type ends in `Service`; one service per `service.rs`.**
-  A business-logic provider not ending in `Service` is mis-modeled.
-  Being injectable doesn't make a provider a service — a client, config,
-  guard, strategy or pipe is a *plain provider* with a role-descriptive
-  name.
-- **Injected service field = `svc`** when a struct has exactly one;
-  `<name>_svc` when several or ambiguous (`users_svc`, `jwt_svc`).
-  Non-service deps keep descriptive names (`db`, `queue`, `config`).
-- **Same-role plural ⇒ pluralized sub-folder** (`pipes/`,
-  `strategies/`); the singular trait file stays at the parent.
-- **No `interfaces/` directory** — a trait lives with its concern.
-- **Errors in `error.rs`** — not scattered inside `service.rs`.
-- **A file exists only if it has real content.**
+Three consequences are load-bearing enough to repeat here:
+
+- **The project name stops at the workspace.** No crate, app-level module or
+  provider below the composition root carries it.
+- **`module.rs` is the DI module; `mod.rs` is the folder index *and* the
+  export contract.** Never merged. **No `*_module.rs` ever.**
+- **A file exists only if it has real content**, and errors live in
+  `error.rs` — never scattered inside `service.rs`.
 
 ## Engineering posture
 
@@ -232,10 +221,21 @@ Snake_case, no dotted variants. **One role → one file per folder.**
 
 ## Observability
 
-- **Span targets dotted, lowercase, framework-prefixed**: `nest_rs::http`,
-  `nest_rs::orm`, `nest_rs::authn`, … One target per concern per crate.
-  App spans use the app name (`api::users`); the shared feature library
-  uses `features::<snake>` (the style the CLI scaffolds).
+- **Span targets are dotted, lowercase, and rooted at the crate that
+  emits them.** One target per concern per crate; the crate picks the
+  root, the concern picks the tail, and the table is closed:
+
+  | Emitting crate | Target |
+  |---|---|
+  | a `nest-rs-*` framework crate | `nest_rs::<concern>` — `nest_rs::http`, `nest_rs::orm` |
+  | the shared feature library | `features::<feature>` — `features::users` |
+  | an app crate, or a standalone crate | `<app>::<concern>` — `api::users` |
+
+  **The root is the crate, never the product.** A feature living in
+  `features` stays `features::…` even in a single-product repo whose
+  binary has another name — the target's one job is to say where the
+  event was emitted, and a product name over the wrong crate destroys
+  that.
 - **Level per layer.** Controllers/resolvers/gateways: `info` on success.
   Services: `debug`. `Repo`: `trace`. Denials/security: `warn`+.
   Unexpected errors: `error`.

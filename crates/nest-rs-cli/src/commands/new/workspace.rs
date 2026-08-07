@@ -9,7 +9,7 @@ use crate::scaffold::{Renderer, Scaffold, ensure_lines, rustfmt};
 use crate::templates::{hello, shared, workspace};
 
 use super::command::with_env_prefix;
-use super::queue_env_files;
+use super::{queue_agent_files, queue_env_files};
 
 const HELLO_APP_PORT: u16 = 3000;
 
@@ -33,6 +33,14 @@ pub fn scaffold_root(
         r.render(shared::RUST_TOOLCHAIN),
     );
     s.create(root.join("README.md"), r.render(workspace::README));
+    // A workspace writes its domain logic in the shared feature library, so the
+    // span-target example is rooted there rather than at the app.
+    queue_agent_files(
+        &mut s,
+        &root,
+        &r.clone().with("span_target", "features::users"),
+        shared::AGENTS_WORKSPACE_HEAD,
+    );
     s.create(
         root.join("crates/features/Cargo.toml"),
         r.render(workspace::FEATURES_CARGO),

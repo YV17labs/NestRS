@@ -224,6 +224,204 @@ async fn hello_endpoint_greets() {
 }
 "#;
 
+/// `AGENTS.md`, in two pieces: a layout header per shape, then the shared
+/// conventions body ([`AGENTS_BODY`]).
+///
+/// Scaffolded because the conventions are **not inferable from the code**. A
+/// tree of four files shows no rule for the fifth: which tier a new type
+/// belongs to, what a provider that is not a service is called, where a second
+/// service goes. A project without this file re-derives all of it — differently
+/// — the first time it grows, and both a human and an agent read it as license.
+/// Every rule below is the framework's own (`CLAUDE.md`, `features.md`),
+/// restated for a project that does not have those files.
+/// The title and the one paragraph both layouts open with. Split out because
+/// a fix applied to one head would otherwise ship silently one-sided — nothing
+/// compares the two.
+pub const AGENTS_INTRO: &str = r#"# AGENTS.md — {{pascal}}
+
+How this project is laid out and named. `nestrs new` wrote this file; it is
+yours to edit. Read it before adding a file: the conventions below cannot be
+inferred from the tree, and drifting from them is what turns a slice into a
+folder nobody can navigate.
+
+"#;
+
+pub const AGENTS_STANDALONE_HEAD: &str = r#"## Layout — one crate
+
+```
+src/
+  main.rs        boot only — App::builder().module::<{{module}}>()
+  lib.rs         `mod` + `pub use`, no logic
+  module.rs      the root DI module — composition
+  service.rs     domain logic
+  controller.rs  the HTTP edge, thin
+tests/
+  integration/   in-process, no live infrastructure
+  e2e/           needs Postgres / Redis / object storage
+```
+
+A concern that grows past one service and one handler moves into its own
+folder — `src/<feature>/{module,service,controller}.rs` — and `src/module.rs`
+imports it. `nestrs g` needs a workspace, so features here are written by
+hand; run `nestrs new <name>` beside this crate to grow into one once a second
+binary needs the same logic.
+"#;
+
+pub const AGENTS_WORKSPACE_HEAD: &str = r#"## Layout — two homes, and the rule that divides them
+
+```
+apps/<app>/src/     main.rs + module.rs only — pure composition
+crates/features/    the product's vertical slices, shared by every app
+```
+
+**`crates/features/` when any other app could reuse it; `apps/<app>/` only
+when this app's exposure decides something the feature cannot generalize.**
+
+A feature is a **port** plus one **adapter per transport**. The port sits at
+the feature root; each adapter gets a sub-folder with its own `module.rs`, and
+an app imports only the edges it actually serves.
+
+```
+crates/features/src/<feature>/
+  module.rs entity.rs service.rs dto.rs error.rs   the port
+  http/     module.rs controller.rs
+  graphql/  module.rs resolver.rs
+  ws/       module.rs gateway.rs
+  queue/    module.rs processor.rs
+  mcp/      module.rs tool.rs
+```
+
+`nestrs g feature|resource|http|graphql|ws|queue|schedule|mcp` writes that
+shape and performs the two wiring edits a copy cannot carry — the `pub mod`
+line in `crates/features/src/lib.rs` and the module entry in the serving app's
+`module.rs`. Prefer it over hand-copying.
+
+**The shape is invariant.** One transport, one adapter sub-folder, one
+`<Feature><Edge>Module`, every time. Never invert it into a single top-level
+edge folder that injects every domain service: that trades the module gate —
+an app importing exactly the edges it serves — for an adapter no app can
+subset. If a transport seems unable to host two features at one mount point,
+that is a framework defect worth reporting, not a reason to flatten.
+
+## Crates — a type, and a direction
+
+Every crate has a type, and the type decides what it may depend on. An arrow
+that points back up is a defect, not a trade-off. Cargo enforces most of this
+for you: a crate that does not list another as a dependency cannot reach it at
+all.
+
+| Crate | Type | May depend on |
+|---|---|---|
+| `apps/<app>` | composition | everything |
+| `crates/features` | feature | the framework, substrates |
+| a substrate (`crates/<name>`) | util | third parties only — **never** the framework, never features |
+| `crates/migrations`, `crates/seed` | tooling | binaries, outside the graph |
+"#;
+
+/// `CLAUDE.md`, which is *only* a pointer at `AGENTS.md`.
+///
+/// Two files rather than one because no single name is read by everything:
+/// `AGENTS.md` is the cross-tool convention, and Claude Code reads `CLAUDE.md`
+/// alone. An import keeps one source of truth without a second copy to drift.
+///
+/// An import rather than `ln -s AGENTS.md CLAUDE.md`: a symlink needs
+/// Administrator rights or Developer Mode on Windows, which a scaffold cannot
+/// require. The note is an HTML comment — stripped before the file enters an
+/// agent's context, so it costs no tokens and reads as intended by whoever
+/// opens the file.
+pub const CLAUDE_POINTER: &str = r#"@AGENTS.md
+
+<!--
+This project's conventions live in AGENTS.md, the format every coding agent
+reads. Claude Code reads CLAUDE.md only, so this file imports it: write the
+conventions in AGENTS.md and leave this one as the pointer. Instructions meant
+for Claude Code alone belong below the import.
+-->
+"#;
+
+/// The conventions, in two pieces.
+///
+/// The architecture model is `architecture.md` beside this file — one copy,
+/// embedded here and symlinked into `.claude/rules/`, so the rules this repo
+/// works under and the rules it ships are the same bytes.
+///
+/// **The real file is the build's, the symlink is `.claude/`'s**, and not the
+/// reverse: a checkout with `core.symlinks=false` (Windows without Developer
+/// Mode) materializes a link as a text file holding its target path, so an
+/// inverted arrangement would embed that path into every scaffolded
+/// `AGENTS.md` and compile clean. `.claude/` degrading there costs a session
+/// its rules; the build silently shipping a filename does not degrade, it
+/// lies. `cargo package` follows a symlink under the package root and archives
+/// its bytes, so publishing does not decide this — the failure mode does.
+///
+/// The split point is the symlink, not the placeholders: `render` runs over
+/// the whole document, so an embedded `{{key}}` would substitute fine. What it
+/// cannot do is read as rules through the raw symlink, where a placeholder
+/// stays literal — so everything per-project lives in the half below.
+/// `static`, not `const`: a `const` is re-materialized at every use site, and
+/// this one embeds ~9 KB from two modules that land in different codegen units.
+/// A `static` has one address, so the blob ships once however many scaffolds
+/// reference it.
+pub static AGENTS_BODY: &str = concat!(
+    "\n",
+    include_str!("architecture.md"),
+    r#"
+## Errors
+
+**`thiserror` in a library, `anyhow` at the binary's entry point.** A service
+returning `anyhow::Result` hands its caller a string: the transport can only
+stringify it, and no caller can tell "not found" from "the backend is down".
+Domain errors are an enum in `error.rs` — never scattered through
+`service.rs` — and they propagate as `Result` all the way to the transport
+boundary, which maps them to a status code.
+
+## Configuration
+
+Every module's config is settable **both** ways: from the environment and
+pinned in code. A field that only exists in one of the two is incomplete.
+
+**Never spell a variable name as a literal** — not in a message, not in a
+check, not in a doc comment. `{{env_prefix_var}}` is set on the process and
+renames every framework variable at once, so a name typed by hand points at
+nothing the day it changes, and the compiler never notices. Build it
+(`nest_rs_config::var_name`, `EnvPrefix::var`) or name the setting in words.
+
+## Dependencies
+
+**One framework line.** `cargo add nest-rs --features <capability>` — never a
+`nest-rs-*` sub-crate. The manifest names only what your own source names.
+
+## Observability
+
+A constant event-name message plus structured fields, never interpolation —
+the output is JSON. `tracing::info!(target: "{{span_target}}", user_id = %id,
+"created user")`, not a formatted sentence. **Every event carries at least one
+field**; a bare log is a defect, and the events queried under an incident are
+exactly the ones people emit bare. Controllers log `info` on success, services
+`debug`, denials and security events `warn` or above.
+
+**The target is rooted at the crate that emits, never at the product.** One
+target per concern per crate: `{{span_target}}` here. A crate whose name is
+not the product's keeps its own root anyway — the target's one job is to say
+where the event came from.
+
+## Testing
+
+A test target is always a directory — `tests/<suite>/main.rs`, even for one
+file. Exactly two suite names: **`integration`** (in process, no live infra)
+and **`e2e`** (needs infrastructure, selected by the nextest binary filter,
+never `#[ignore]`). Inside a suite the module tree mirrors `src/`, and
+`main.rs` holds the `mod` list and shared fixtures — no test function.
+Unit tests stay in `#[cfg(test)] mod tests` in the file under test.
+
+## Commands
+
+`nestrs run` is the single front door: `dev`, `start`, `build`, `lint`,
+`check`, `test <unit|e2e|cov|doc>`. This project's framework variables carry
+the `{{env_prefix}}_` prefix.
+"#
+);
+
 /// The `e2e` suite, scaffolded empty for every app in either layout.
 /// `nestrs run test unit` filters on `not binary(e2e)` and `test e2e` on
 /// `binary(e2e)` — nextest rejects a filterset naming a binary the workspace

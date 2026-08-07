@@ -14,7 +14,7 @@ code you never compile. Undecided? `--features full` turns everything on.
 
 ```toml
 [dependencies]
-nest-rs = { version = "3.0", features = ["http", "seaorm"] }
+nest-rs = { version = "3.1", features = ["http", "seaorm"] }
 ```
 
 [Documentation](https://nestrs.dev/) · [GitHub](https://github.com/YV17labs/NestRS)

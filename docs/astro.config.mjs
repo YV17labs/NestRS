@@ -81,7 +81,10 @@ export default defineConfig({
           description:
             'Scalable Rust backend apps with native performance — declarative framework, multi-transport, boot-time wiring checks, scoped data access by composition.',
           details:
-            'NestRS sits on top of hyper/tokio/poem. It is decorator-driven (procedural macros: #[module], #[controller], #[resolver], #[gateway], #[processor], #[scheduled], #[mcp]), with a flat type-id DI container verified at boot (the "access graph"), an ambient data context that installs a request-scoped executor and ability, row-level filtering and response masking via ability-based authorization, and per-binary subsets through module-gated discovery.',
+            'NestRS sits on top of hyper/tokio/poem. It is decorator-driven (procedural macros: #[module], #[controller], #[resolver], #[gateway], #[processor], #[scheduled], #[mcp]), with a flat type-id DI container verified at boot (the "access graph"), an ambient data context that installs a request-scoped executor and ability, row-level filtering and response masking via ability-based authorization, and per-binary subsets through module-gated discovery. NestRS is opinionated about layout and naming, and #[module] carries no "controllers" list, so a type\'s name is the only thing that says what it is for: read /architecture/ first and follow it when writing or reviewing NestRS code. A generated project commits the same rules as AGENTS.md at its root.',
+          // The plugin's own default is `['index*']`; naming any value replaces
+          // it, so the index has to be restated or it loses its lead position.
+          promote: ['index*', 'architecture'],
         }),
       ],
       logo: {
@@ -146,6 +149,7 @@ export default defineConfig({
         {
           label: 'Concepts',
           items: [
+            { label: 'Architecture and naming', slug: 'architecture' },
             { label: 'Fundamentals', items: [{ autogenerate: { directory: 'fundamentals' } }] },
             { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
           ],

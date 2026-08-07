@@ -67,6 +67,79 @@ function frameworkSource(rel) {
   return readFileSync(join(DOCS_ROOT, '..', ...rel.split('/')), 'utf8');
 }
 
+/// The architecture rules, as the CLI embeds them into every generated
+/// project's `AGENTS.md` (and as `.claude/rules/` symlinks them).
+const ARCHITECTURE_CANON = 'crates/nest-rs-cli/src/templates/architecture.md';
+
+/// Pages that restate a file the framework ships, keyed by rel like
+/// [`CONFIG_TABLES`]. Registering here is what makes the mirror *checked*, and
+/// the run asserts every entry was actually visited — rename or move the page
+/// and the build fails rather than the gate quietly ceasing to run.
+const MIRRORED_PAGES = new Map([['architecture.mdx', (src) => architectureDrift(src)]]);
+const MIRRORS_SEEN = new Set();
+
+/// Backticked file and folder roles — ``service.rs``, ``http/controller.rs``,
+/// ``services/`` — taken from **table rows only**. Row *labels* are free to
+/// read differently on the docs page than in the shipped file, and so is every
+/// sentence around the table: the page teaches in its own voice, and only the
+/// roles it tabulates have to agree.
+function roleTokens(src) {
+  const rows = src.split('\n').filter((l) => l.startsWith('|'));
+  return new Set(
+    [...rows.join('\n').matchAll(/`([a-z_]+\/)?[a-z_]+\.rs`|`[a-z_]+\/`/g)].map((m) => m[0]),
+  );
+}
+
+/// The fenced block listing the words a module may not be named after. Goes
+/// through `fencedBlocks` rather than its own fence regex, so it cannot skip
+/// past an intervening heading and compare an unrelated block.
+const RESERVED_SECTIONS = new Set(['Reserved vocabulary', 'What a folder may not be called']);
+function reservedWords(src) {
+  const block = fencedBlocks(src).find((b) => RESERVED_SECTIONS.has(b.section));
+  return block ? new Set(block.body.split(/\s+/).filter(Boolean)) : null;
+}
+
+/// Both directions of a set comparison, as the messages a reader acts on.
+function setDrift(canon, page, what) {
+  return [
+    ...[...canon].filter((x) => !page.has(x)).map((x) => `${what} missing from the page: ${x}`),
+    ...[...page].filter((x) => !canon.has(x)).map((x) => `${what} on the page, not in the rules: ${x}`),
+  ];
+}
+
+/// `/architecture/` deliberately restates the role table and the reserved
+/// vocabulary: they are what a reader opens the page for, and sending them to a
+/// file in the repo would be a worse page. Restating is fine, *drifting* is not
+/// — and only a check catches that, because both sides read plausibly on their
+/// own.
+///
+/// Fails closed on both sides. A canon that stops parsing throws (the rules
+/// moved and this check is now vacuous); a page that stops parsing reports the
+/// missing section **once**, rather than one line per token it can no longer
+/// find.
+function architectureDrift(src) {
+  const canon = frameworkSource(ARCHITECTURE_CANON);
+  const out = [];
+
+  const canonRoles = roleTokens(canon);
+  if (canonRoles.size === 0) {
+    throw new Error(`no role table in ${ARCHITECTURE_CANON} — teach \`architectureDrift\``);
+  }
+  const pageRoles = roleTokens(src);
+  if (pageRoles.size === 0) out.push('role table missing from the page');
+  else out.push(...setDrift(canonRoles, pageRoles, 'role'));
+
+  const canonWords = reservedWords(canon);
+  if (!canonWords) {
+    throw new Error(`no reserved-vocabulary block in ${ARCHITECTURE_CANON}`);
+  }
+  const pageWords = reservedWords(src);
+  if (!pageWords) out.push('reserved-vocabulary block missing from the page');
+  else out.push(...setDrift(canonWords, pageWords, 'reserved word'));
+
+  return out;
+}
+
 /// `major.minor` of the framework the repo currently builds — what every
 /// documented `nest-rs*` pin has to say, and what `nestrs g resource` writes
 /// into a generated manifest.
@@ -580,6 +653,13 @@ function lintFile(absPath) {
     if (!/^##\s+Going further\s*$/m.test(src)) add('going-further', 'missing closing block');
   }
 
+  // 4b. A page that restates a shipped file may not drift from it.
+  const mirror = MIRRORED_PAGES.get(rel);
+  if (mirror) {
+    MIRRORS_SEEN.add(rel);
+    for (const detail of mirror(src)) add('architecture-drift', detail);
+  }
+
   // 5. ≤3 Asides.
   const asides = (src.match(/<Aside\b/g) || []).length;
   if (asides > 3) add('asides', `${asides} > 3`);
@@ -705,6 +785,17 @@ function lintFile(absPath) {
 
 const files = walk(CONTENT).sort();
 const current = files.flatMap(lintFile).sort();
+
+// Fail closed: a registered mirror that no page matched means the page was
+// renamed or moved and its drift gate silently stopped running.
+for (const rel of MIRRORED_PAGES.keys()) {
+  if (!MIRRORS_SEEN.has(rel)) {
+    throw new Error(
+      `${rel} is registered in MIRRORED_PAGES but no such page exists — ` +
+        'point the entry at its new path, or drop it and say why the mirror no longer needs checking',
+    );
+  }
+}
 
 const update = process.argv.includes('--update-baseline');
 if (update) {

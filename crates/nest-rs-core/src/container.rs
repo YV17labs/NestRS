@@ -460,6 +460,25 @@ impl ContainerBuilder {
         self
     }
 
+    /// Metadata of type `M` attached **so far**, in attach order — the mid-build
+    /// read of what [`DiscoveryService::meta`](crate::DiscoveryService::meta)
+    /// exposes once the container is frozen.
+    ///
+    /// One caller shape needs it: a surface that **aggregates** several
+    /// providers onto one mount point. Each contributing provider's `register`
+    /// runs independently, yet exactly one of them may attach the mount — so it
+    /// asks whether a peer already claimed it. `nest-rs-mcp` is the first
+    /// (several `#[mcp]` hosts, one endpoint per path); the alternative was a
+    /// per-path marker provider, which pollutes the container to answer a
+    /// question the index already holds.
+    pub fn attached_meta<M: Any + Send + Sync>(&self) -> impl Iterator<Item = &M> {
+        self.metadata
+            .get(&TypeId::of::<M>())
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.meta.downcast_ref::<M>())
+    }
+
     /// Attach metadata not bound to a specific provider — e.g. a module-level
     /// descriptor a scanner aggregates globally.
     pub fn provide_meta<M: Any + Send + Sync>(mut self, meta: M) -> Self {

@@ -54,22 +54,32 @@
 //!
 #![warn(missing_docs)]
 
+mod composite;
 mod config;
 mod context;
 mod endpoint;
 mod guard;
 mod guards;
+mod host;
+mod identity;
 mod module;
 mod propagate;
+mod registry;
 mod scope;
 
+pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
 pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
 pub use guard::{BoxFuture, FallbackMcpGuard, McpOperationGuard};
 pub use guards::AllowAllMcpGuard;
+pub use host::McpHost;
+pub use identity::McpEndpoint;
 pub use module::{McpModule, McpSetup};
 pub use propagate::PropagatingHandler;
+#[doc(hidden)]
+pub use registry::{DefaultToolRouter, register_host};
+pub use registry::{McpHostMeta, declared_endpoint, hosts_on};
 /// Per-operation accessor for `#[injectable(scope = request)]` providers inside
 /// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;

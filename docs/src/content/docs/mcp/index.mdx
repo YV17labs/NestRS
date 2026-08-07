@@ -311,24 +311,112 @@ async fn current_weather(
 out-of-range values with `McpError::invalid_params` — the model sees a
 structured error and can retry with corrected inputs.
 
-## Multiple servers on one app
+## Several features on one endpoint
 
-A second server is a second `#[mcp]` struct on a different `path`. List both
-in the module's `providers` and each mounts on the HTTP transport independently
-— different tools, different injected dependencies, different authorization
-policy if you want one.
+Every shipped MCP client config points at a **single URL**, so a real product
+usually wants all its domains behind one path. It gets that without giving up
+one `mcp/` adapter per feature: **hosts that declare the same `path` aggregate
+onto one endpoint.**
 
 ```rust title="src/module.rs"
-#[module(
-    imports = [HttpModule::for_root(None), AuthzMcpModule],
-    providers = [HelloTool, WeatherTool],
-)]
+#[module(imports = [WeatherModule, AuthzMcpModule], providers = [WeatherTool])]
+pub struct WeatherMcpModule;   // #[mcp(path = "/mcp")]
+
+#[module(imports = [HelloModule, AuthzMcpModule], providers = [HelloTool])]
+pub struct HelloMcpModule;     // #[mcp(path = "/mcp")]
+
+#[module(imports = [
+    HttpModule::for_root(None),
+    WeatherMcpModule,
+    HelloMcpModule,
+])]
 pub struct AssistantModule;
 ```
 
-Namespacing is the URL: `/mcp` for `HelloTool`, `/weather` for `WeatherTool`.
-The MCP spec already namespaces tools per endpoint, so a second endpoint **is**
-the namespace — no extra primitive to learn.
+One client, one URL, both features' tools:
+
+```text frame="terminal"
+INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
+INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="WeatherTool" tools="current_weather"
+INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="HelloTool" tools="hello"
+```
+
+Nothing in a host changes: it stays a plain `ServerHandler` and never learns
+that it shares. `tools/list`, `prompts/list` and `resources/list` are the union
+of every host on the path; a `tools/call` is routed to the host that declares
+the name; the endpoint's advertised capabilities are the union of theirs.
+**A single host on a path is served verbatim** — the merge only engages beyond
+one.
+
+The one rule the merge adds: **two hosts on one path may not serve the same
+tool name**. MCP addresses a tool by bare name inside an endpoint, so the loser
+would be unreachable — it is a boot error naming the tool and both
+hosts:
+
+```text frame="terminal"
+duplicate MCP tool name on "/mcp": search (WeatherTool and HelloTool) — a tool is
+addressed by bare name within an endpoint, so rename one of them or give each
+host its own path
+```
+
+<Aside type="tip">
+Deliberately separate surfaces are still separate: give them different paths.
+`demo/apps/assistant` mounts `audio` + `users` on `/mcp` and `posts` on
+`/posts/mcp`, and the two endpoints list only their own tools.
+</Aside>
+
+## Name your endpoint
+
+An MCP endpoint is **one server** to every client that reaches it: the protocol
+carries one `serverInfo` and one `instructions`, on `initialize` and on
+`server/discover` alike — the same shape `new McpServer({ name, version })`
+builds in the TypeScript SDK, and the one a FastMCP parent keeps when it mounts
+children. A `#[mcp]` host owns a *feature*, so the app declares the endpoint:
+
+```rust title="src/module.rs"
+use nest_rs::core::module;
+use nest_rs::mcp::{McpEndpoint, McpModule};
+
+#[module(imports = [
+    HttpModule::for_root(None),
+    McpModule::endpoint(
+        McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))
+            .title("Acme assistant")
+            .instructions("Weather and greetings. Ask before writing anything."),
+    ),
+    WeatherMcpModule,
+    HelloMcpModule,
+])]
+pub struct AssistantModule;
+```
+
+**Identity is declared; capabilities are observed.** The declaration replaces
+what it states — `serverInfo` always, `instructions` when you write them — and
+can never claim a capability no host serves. Leave the instructions out and the
+hosts' own are joined instead of dropped.
+
+Chain `.endpoint(..)` for a second path, or start from
+`McpModule::for_root(config).endpoint(..)` when you also pin server options.
+Declaring a path no host serves fails boot: a declaration that reaches nothing
+is a typo, not a no-op.
+
+<Aside type="caution">
+Undeclared, an endpoint reports whatever its host does — and a host that never
+overrides `get_info` inherits rmcp's default, so it introduces itself to every
+client as **`rmcp`, at rmcp's version**. Two hosts and no declaration is worse
+still: the endpoint's name becomes a function of `imports = [..]` order. Both
+are reported at boot on `nest_rs::mcp`, with the remedy in the event.
+</Aside>
+
+## Multiple servers on one app
+
+The other direction: a second server is a second `path`. Each mounts on the
+HTTP transport independently — different tools, different injected
+dependencies, different authorization policy if you want one.
+
+Namespacing is the URL: `/mcp` for one endpoint, `/weather` for the other. The
+MCP spec already namespaces tools per endpoint, so a second endpoint **is** the
+namespace — no extra primitive to learn.
 
 ## Resources and prompts
 
@@ -479,7 +567,9 @@ the access graph rejects accidental coupling at boot.
   all three capabilities (tool, prompt, resources) over the same row-filtered
   service; `demo/crates/features/src/audio/mcp/` — a JWT-authenticated
   `transcode_status` tool over the Publish audio pipeline (no token ⇒ the
-  endpoint refuses).
+  endpoint refuses); `demo/crates/features/src/users/mcp/` — the second
+  feature sharing `/mcp` with `audio`, with `apps/assistant/tests/e2e/
+  shared_endpoint.rs` proving both list there and `posts` stays on its own path.
 - `crates/nest-rs-mcp/` — `#[mcp]`, `McpMount`, `McpConfig`, the
   streamable-HTTP endpoint factory, and the re-exported rmcp surface
   (`tool_router`/`tool`/`tool_handler`, `prompt_router`/`prompt`/
@@ -487,7 +577,10 @@ the access graph rejects accidental coupling at boot.
   `CallToolResult`, plus the whole `model` / `service` / `handler` /
   `transport` modules).
 - `crates/nest-rs-mcp/tests/integration/propagate.rs` — the proof that
-  every `ServerHandler` method reaches your host rather than an SDK default.
+  every `ServerHandler` method reaches your host rather than an SDK default;
+  `crates/nest-rs-mcp/tests/integration/registry.rs` — the proof that two
+  modules' hosts answer on one endpoint, that a second path stays its own, and
+  that a duplicate tool name fails boot.
 - `crates/nest-rs-authz/` (with the `mcp` feature) — `McpAbilityBridge`
   (masking inside a tool body is `masked_output_ambient`);
   `crates/nest-rs-seaorm/` (with the `mcp` feature) — `McpDataContext`. Both

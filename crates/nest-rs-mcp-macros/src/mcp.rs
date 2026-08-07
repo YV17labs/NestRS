@@ -20,6 +20,7 @@ pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     let name = item.ident.clone();
+    let host_name = name.to_string();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
     let injected = injected_method(&dep_keys);
@@ -37,22 +38,26 @@ pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
-                builder.attach_meta::<#name, ::nest_rs_http::HttpEndpointMeta>(
-                    ::nest_rs_http::HttpEndpointMeta::new(#path, "mcp", |__c, __r| {
-                        let __cc = __c.clone();
-                        // Guard (registered bridge → global guard pool →
-                        // deny-all), data context, `McpConfig` and any session
-                        // store resolve in one place — the crate — so the mount
-                        // policy is testable rather than macro-expanded.
-                        let __mount = ::nest_rs_mcp::McpMount::from_container(__c);
-                        __r.nest(
-                            #path,
-                            ::nest_rs_mcp::endpoint(
-                                __mount,
-                                move || <#name>::from_container(&__cc),
-                            ),
-                        )
-                    }).exempt(),
+                // Contribute to the endpoint at `path` — the *first* host on a
+                // path attaches the mount, every host attaches itself. Grouping,
+                // the merge, the guard/context/config resolution and the
+                // duplicate-tool boot check all live in the crate, so the mount
+                // policy is testable rather than macro-expanded.
+                ::nest_rs_mcp::register_host::<Self>(
+                    builder,
+                    #path,
+                    #host_name,
+                    |__c| -> ::std::sync::Arc<dyn ::nest_rs_mcp::McpHost> {
+                        ::std::sync::Arc::new(<Self>::from_container(__c))
+                    },
+                    || {
+                        // An inherent associated fn wins over a trait one, so
+                        // this is rmcp's `#[tool_router]`-generated router when
+                        // the host has one, and an empty stand-in when it does
+                        // not — no second decorator, no manifest line.
+                        use ::nest_rs_mcp::DefaultToolRouter as _;
+                        <Self>::tool_router().list_all()
+                    },
                 )
             }
         }

@@ -112,6 +112,40 @@ pub async fn open_session_with<E: Endpoint>(
     session
 }
 
+/// Run `initialize` and return the raw response body — for a suite asserting on
+/// what the handshake *advertises* (capabilities, instructions, protocol
+/// version) rather than on the session it opens.
+pub async fn initialize<E: Endpoint>(
+    client: &TestClient<E>,
+    path: &str,
+    bearer: Option<&str>,
+) -> String {
+    post_message(client, path, None, bearer, &initialize_request())
+        .await
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("an initialize response body")
+}
+
+/// Decode the JSON-RPC response carried by a body from any of the calls here.
+///
+/// Streamable HTTP answers as SSE, and the stream opens with an empty `data:`
+/// keep-alive frame — so the payload is the first frame that actually carries a
+/// `result` or an `error`, not the first frame. A suite that greps the raw body
+/// instead re-learns that, or silently asserts against the keep-alive.
+///
+/// Panics if no frame carries either, which is what a suite wants: the
+/// alternative is an assertion passing against a body it never parsed.
+pub fn result(body: &str) -> Value {
+    std::iter::once(body)
+        .chain(body.lines().filter_map(|line| line.strip_prefix("data: ")))
+        .filter_map(|frame| serde_json::from_str::<Value>(frame).ok())
+        .find(|value| value.get("result").is_some() || value.get("error").is_some())
+        .unwrap_or_else(|| panic!("a JSON-RPC result or error, got {body:?}"))
+}
+
 /// Send one JSON-RPC **request** on an open session and return the raw
 /// response body. `params` is the method's params object (`json!({})` when it
 /// takes none).

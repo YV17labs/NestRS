@@ -16,7 +16,12 @@ use the decorators. When a pattern recurs without one, write a new
 decorator — if it clears the bar below.
 
 A `proc-macro` crate can only export macros, so each decorator lives in
-a companion `*-macros` crate re-exported by its home crate. Shared token
+a companion `*-macros` crate re-exported by its home crate. **That is
+the one licensed exception to "`lib.rs` carries no logic"** — Rust
+forces `#[proc_macro_attribute]` items to the crate root, so a
+`*-macros` `lib.rs` holds them and they stay thin delegations into the
+crate's own modules. The rule shipped to products has no such carve-out,
+correctly: a generated project has no macro crate. Shared token
 helpers in `nest-rs-codegen`. A `*-macros` crate **must not** depend on
 its surface crate — emit absolute-path tokens; never rely on call-site
 scope. Testable form: **a `*-macros` crate emits only `::std`/`::core`
@@ -189,6 +194,83 @@ active, absent ⇒ inert + boot `warn`, partial/invalid ⇒ boot fails naming
 it. Never conflate the two — a capability that cannot be constructed is
 not "undiscovered".
 
+**Structural gating where discovery is metadata.** `ReachableProviders`
+exists because `inventory` is *link*-time: everything compiled is in the
+registry, imported or not. Metadata attached from `Discoverable::register`
+has no such gap — `register` only ever runs for a provider an imported
+module owns — so a metadata-discovered surface (`HttpEndpointMeta`,
+`McpHostMeta`) is gated by construction, with nothing to filter and no
+inert-entry `warn` to emit. Pick the mechanism, then take its gate; never
+bolt a `ReachableProviders` filter onto metadata to look symmetric.
+
+### A transport aggregates; owning a mount is the exception
+
+**A transport aggregates contributions from several providers onto one
+mount point.** Controllers mount routes flat into one `Route`; resolvers
+merge into one schema; `#[process]` collects per queue name;
+`#[scheduled]`, `#[on_event]` and `#[mcp]` the same. **Owning a whole
+mount is the exception and has to be justified** — because the moment one
+provider owns a mount, a product with two features on that mount has to
+fold them into a god-adapter, which inverts the layout
+`features.md` mandates. That inversion is always the framework's defect
+to fix, never the product's licence to flatten.
+
+Two shapes implement it, and the choice follows from where discovery
+lives:
+
+- **Merge a link-time registry** (`inventory`), filtered by
+  `ReachableProviders` — GraphQL, queue, schedule, events.
+- **Merge container metadata** — MCP. Each `#[mcp]` host attaches an
+  `McpHostMeta`; the *first* host on a path also attaches the one
+  `HttpEndpointMeta` that mounts them all, so the transport's
+  "a mount path is its owner's exclusive namespace" rule stays intact and
+  a real collision (an `#[mcp]` beside a `#[gateway]` on one path) still
+  fails boot naming both.
+
+Merging introduces exactly one new failure mode, and it must be a **boot**
+error naming both owners: two contributions claiming the same addressable
+name. For MCP that is a duplicate tool name within a path
+(`nest-rs-mcp/src/registry.rs`), because the protocol addresses a tool by
+bare name inside an endpoint and the loser would silently be unreachable.
+
+**And it raises exactly one new question: who *is* the mount?** A contribution
+answers for itself; the mount's own identity — what a client is told it is
+talking to — belongs to the **app**, never to whichever contribution
+registered first, or the answer becomes a function of `imports = [..]` order.
+So an aggregating surface whose protocol exposes a mount-level identity gives
+the app a seam to declare it (`McpModule::endpoint(McpEndpoint::new(..))`,
+provider-less metadata read back at mount), and:
+
+- **the declaration replaces only what it states** — identity is declared,
+  capabilities stay *observed* from the contributions, so an app can never
+  advertise a surface nobody implements;
+- **a declaration that reaches nothing fails boot**, and two that disagree
+  about one mount fail boot naming both;
+- **undeclared is reported, not guessed silently** — a shared mount falling
+  back to its first contribution, and a mount left at the *SDK's* own default
+  identity, are both boot `warn`s carrying the remedy. Compare against the
+  SDK's own constructor, never a literal, so the check cannot drift from the
+  version the framework builds against.
+
+This is the ecosystem's shape, not an invention: one server object created with
+its identity, contributions registered onto it (TypeScript SDK), and a parent
+that "retains its own name and serves as the orchestrator" when it mounts
+children (FastMCP).
+
+**WS is the one justified exception, audited and recorded.**
+`#[gateway(path)]` owns its mount: two gateways on one path is the
+transport's duplicate-self-mount boot error, and there is no seam to merge
+their `#[subscribe_message]` arms. It stays that way because nothing
+pushes a product to share a WS path the way MCP's clients push it to share
+a URL — a socket per feature costs a client one more connection and
+nothing structural, and the thing features actually need from each other
+across sockets (fan-out to connections another feature owns) is already
+solved by `WsServer<N>` namespaces *without* sharing a mount. So the
+adapter shape holds: one `<feature>/ws/gateway.rs` per feature, each on its
+own path. If a product ever genuinely needs two features' events on one
+socket, that is a framework change on this same pattern (route by event
+name, fail boot on a duplicate event) — reported, never worked around.
+
 ### Lifecycle hooks
 
 `#[hooks]` submits phase-tagged methods (`#[on_module_init]`,
@@ -230,6 +312,21 @@ name order; init failure aborts boot, shutdown is best-effort.
   (inheriting port/CORS/TLS). `#[messages]` orchestrates
   `#[subscribe_message]` + `#[on_connect]`/`#[on_disconnect]`; one
   envelope `{event, data}`. Per-gateway namespace via `WsServer<N>`.
+  A gateway **owns** its mount — the audited exception to *a transport
+  aggregates*, recorded above; sharing state across gateways is what
+  `WsServer<N>` is for, not sharing a path.
+- **`nest-rs-mcp`** — also not a `Transport`, also an HTTP self-mount, but
+  it **aggregates**: several `#[mcp(path = "/mcp")]` hosts merge into one
+  `CompositeHandler` behind one endpoint, because MCP namespaces tools per
+  endpoint and clients point at a single URL. One host on a path is served
+  verbatim; the merge only engages beyond that. A host contributes an
+  `McpHost` (the object-safe `ServerHandler` view) — it never has to know
+  it is sharing. Guard, `dyn McpToolContext` and `McpConfig` are container
+  bindings, so they resolve **once per path**, not per host. The endpoint's
+  *identity* is the app's: `McpModule::endpoint(McpEndpoint::new(path, name,
+  version))`, because one endpoint reports one `serverInfo` and one
+  `instructions` however many features share it. Identity is **not** config —
+  it has no `NESTRS_MCP__*` twin.
 - **`nest-rs-openapi`** — import `OpenApiModule`; self-mounts
   `GET /api-json` + offline Swagger UI at `GET /api`. Document
   **composed** from the route table. Schemas via **schemars**;

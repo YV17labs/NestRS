@@ -34,8 +34,12 @@ impl ShadowController {
 #[module(providers = [UsersController, ShadowController])]
 struct DuplicatePrefixModule;
 
-/// Two self-mounted endpoints (the shape `#[mcp]` / `#[gateway]` emit) sharing
-/// one path.
+/// Two self-mounted endpoints sharing one path — the shape `#[gateway]` emits,
+/// and the shape a *cross-family* clash makes (an `#[mcp]` mount beside a
+/// gateway on the same path). Two `#[mcp]` hosts on one path are **not** this
+/// case: `nest-rs-mcp` aggregates them behind a single `HttpEndpointMeta`, so
+/// they never reach this check. Attached by hand here because the rule belongs
+/// to the transport, not to whichever surface happens to emit the meta.
 struct FirstEndpoint;
 struct SecondEndpoint;
 
@@ -114,8 +118,8 @@ async fn two_controllers_on_one_prefix_fail_boot_naming_both() {
 
 #[tokio::test]
 async fn two_self_mounts_on_one_path_fail_boot_instead_of_panicking() {
-    // The regression this pins: a second `#[mcp(path = "/mcp")]` used to reach
-    // poem's route assembly and panic there, with no mention of either host.
+    // The regression this pins: a second self-mount on one path used to reach
+    // poem's route assembly and panic there, with no mention of either owner.
     let app = App::builder()
         .module::<DuplicateEndpointModule>()
         .build()

@@ -34,7 +34,7 @@ The port lives at the **root** — not in a `core/` sub-folder. Deliberate.
 
 | Path | Contents | Module struct |
 |---|---|---|
-| `users/` (root) | `entity.rs`/`entities/`, `service.rs`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `error.rs`, `module.rs` | `UsersModule` (port) |
+| `users/` (root) | `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `module.rs` | `UsersModule` (port) |
 | `users/http/` | `controller.rs` | `UsersHttpModule` |
 | `users/graphql/` | `resolver.rs` (field + root merged into `UsersResolver`) | `UsersGraphqlModule` |
 | `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `AuthzWsModule`, which brings `WsModule` transitively) |
@@ -48,15 +48,43 @@ inheritance. Importing only the port mounts no endpoint. **No umbrella
 module re-exporting every edge**: the app lists the edges it serves, so
 imports reflect what the binary actually exposes.
 
+### The adapter shape is invariant
+
+One transport, one adapter sub-folder, one `<Feature><Edge>Module` — for
+every feature, always. **A product never inverts it** into a single
+top-level edge folder injecting every domain service: that trades the
+module gate — an app importing exactly the edges it serves — for a
+god-adapter no app can subset, and it hides every tool or route behind
+one provider in the access graph.
+
+**A transport that cannot host two features at one mount point is a
+framework defect.** Report it and keep the shape; it is never a licence
+to invert. None is open today — MCP was the last one, and it is closed:
+several `#[mcp(path = "/mcp")]` hosts aggregate onto one endpoint, so a
+product serving several domains at the single URL its clients point at
+still writes one `mcp/` adapter per feature. `demo/apps/assistant` is
+the witness (`audio` + `users` on `/mcp`, `posts` on `/posts/mcp`).
+
 **One `#[module]` per folder.** The DI file is **always** `module.rs`;
 **exactly one** `#[module]` struct per file. Multiple modules per feature
 ⇒ multiple folders.
 
-**One `service.rs` per feature — don't fragment.** Don't split into
-`loader.rs`/`credential.rs` unless a second pattern appears twice. Extra
-`impl` blocks (`CrudService`, the opt-in `Creatable`/`Updatable`/
-`Deletable`, `#[dataloader]`, `#[hooks]`) are macro requirements, not
-extra files.
+**One `service.rs` per feature — don't fragment.** Extra `impl` blocks
+(`CrudService`, the opt-in `Creatable`/`Updatable`/`Deletable`,
+`#[dataloader]`, `#[hooks]`) are macro requirements, not extra files.
+
+Splitting is a **last** resort, and it takes one of two shapes — pick by
+the three questions in `architecture.md`, never by file size:
+
+- **The extracted thing dispatches nothing and owns no domain logic**
+  (a factory, a client, a seam, an enum). It is a custom-provider or
+  vocabulary file named for what it is, beside `service.rs`. This is the
+  common case, and it leaves the service count at one.
+- **The slice genuinely owns two services**, each with domain logic of
+  its own. Then and only then: `services/`, one **bare-named** file per
+  service (`services/input.rs` → `InputService`), flat re-export from
+  `mod.rs`. Two services because a name was hard to choose is a
+  mis-modeled slice, not a folder.
 
 ## Errors — the framework owns the plumbing
 

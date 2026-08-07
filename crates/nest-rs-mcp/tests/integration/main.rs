@@ -3,4 +3,5 @@
 mod endpoint;
 mod guard;
 mod propagate;
+mod registry;
 mod scope;

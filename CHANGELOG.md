@@ -5,6 +5,125 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### An MCP endpoint aggregates several features
+
+`#[mcp(path = "/mcp")]` used to mean *this struct owns that URL*. Hosts that
+declare the same path now merge into one endpoint, so a product exposing several
+domains over MCP keeps one `mcp/` adapter per feature instead of folding them
+into a single cross-domain host.
+
+- **Why it had to change.** MCP namespaces tools per endpoint and every shipped
+  client config points at a single URL. One host per path therefore made the
+  framework's own layout rule — one adapter sub-folder, one `<Feature><Edge>Module`
+  per transport — impossible to follow for any product with more than one domain
+  to expose. That was a framework defect, and it is closed.
+- **Nothing changes for a host.** It stays a plain `ServerHandler` and never
+  learns that it shares. A path with a single host is served **verbatim** — the
+  merge only engages beyond one.
+- **What merging means, per operation.** `tools/list`, `prompts/list`,
+  `resources/list` and `resources/templates/list` are the union of every host on
+  the path; `tools/call`, `prompts/get`, `resources/read`, `tasks/*` and custom
+  methods are routed to the host that owns the name; `logging/setLevel` and every
+  notification are broadcast; declared capabilities are unioned and protocol
+  versions intersected.
+- **One new failure mode, and it fails boot.** Two hosts on one path serving the
+  same tool name is a boot error naming the tool and both providers — MCP
+  addresses a tool by bare name within an endpoint, so the loser would silently
+  be unreachable, and which one lost would depend on registration order.
+- **Distinct paths stay distinct.** Grouping is by path, so an app that
+  deliberately serves two endpoints keeps their tool namespaces apart.
+  `demo/apps/assistant` mounts `audio` + `users` on `/mcp` and `posts` on
+  `/posts/mcp`.
+- **Module-gating is unchanged and structural**: a host whose module the app does
+  not import contributes nothing, because metadata is attached from `register`.
+- New public surface on `nest-rs-mcp`: `McpHost` (the object-safe `ServerHandler`
+  view a host is merged through), `CompositeHandler`, `McpHostMeta`, `hosts_on`.
+  New on `nest-rs-core`: `ContainerBuilder::attached_meta`, the mid-build read of
+  the metadata index a surface needs to attach an aggregated mount exactly once.
+
+### The app names its MCP endpoint
+
+An MCP endpoint is one server to every client that reaches it — the protocol
+carries one `serverInfo` and one `instructions`, whatever the endpoint is made
+of. That identity is now the app's to declare:
+
+```rust
+McpModule::endpoint(
+    McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))
+        .instructions("What this endpoint is for."),
+)
+```
+
+- **This is the ecosystem's shape**, not an invention: the TypeScript SDK creates
+  one server *with* its identity and registers tools onto it, and a FastMCP
+  parent "retains its own name and serves as the orchestrator" when it mounts
+  children. A `#[mcp]` host owns a feature, so on a shared path none of them can
+  speak for the endpoint.
+- **Identity is declared; capabilities are observed.** The declaration replaces
+  what it states — `serverInfo` always, `instructions` when written — and can
+  never claim a capability no host serves. Omit the instructions and the hosts'
+  own are joined rather than dropped.
+- **Optional and additive.** A lone host that names itself is a complete server
+  and nothing changed for it.
+- **Two boot `warn`s where the answer used to be silent**: a shared endpoint
+  nobody declared reports its *first* host's identity (a function of
+  `imports = [..]` order), and an endpoint no one named at all reports **rmcp's
+  own** name and version — `ServerInfo::new` leaves the SDK's build identity in
+  place, so an unnamed nestrs endpoint has been introducing itself to clients as
+  `rmcp`. Both events carry the remedy.
+- **Two boot errors**: an identity declared for a path no `#[mcp]` host serves
+  (a typo that would otherwise do nothing at all), and two declarations for one
+  path that disagree.
+- New public surface on `nest-rs-mcp`: `McpEndpoint`, `McpModule::endpoint`,
+  `McpSetup::endpoint`, `declared_endpoint`.
+
+### The invariant behind it
+
+**A transport aggregates contributions from several providers onto one mount
+point; owning a whole mount is the exception and has to be justified.** Six
+transports already honoured it. MCP was the exception and now aggregates; WS was
+audited and keeps its per-gateway mount deliberately — nothing pushes a product
+to share a socket path the way MCP clients push it to share a URL, and
+cross-gateway fan-out is already `WsServer<N>`'s job.
+
+### A new project ships the architecture rules it is built on
+
+`nestrs new` now writes `AGENTS.md` at the project root, plus a `CLAUDE.md` that
+imports it. Both are committed, so the layout and naming conventions reach every
+contributor — and every coding agent — without anyone having to look them up.
+
+- **Why the scaffold carries them.** A tree of four files says nothing about the
+  fifth. A project that has to re-derive where a second service goes, or what to
+  call a provider that is not a service, derives it differently each time; the
+  conventions were reachable only by reading the framework's own repository.
+- **What the file states.** Four naming levels and the rule that none overflows
+  into the next (the project's name stops at the workspace); the two module files
+  and their two jobs, with `mod.rs`'s `pub use` list named as the export contract
+  the framework has no `exports` key for; a three-question procedure for naming
+  any provider, since `#[module]` carries no `controllers` list and the name is
+  therefore the only thing that says what a type is for; the role table; what
+  happens when a role repeats; and the structural words a module may not take.
+- **One source, three readers.** The text lives once, in
+  `nest-rs-cli`'s templates: the CLI embeds it, this repository symlinks it into
+  `.claude/rules/`, and `/architecture/` restates its two tables under a docs-lint
+  check that fails when they drift. Two agent files were disagreeing about the
+  same rule before this; now they cannot.
+- **Two shapes, one body.** The crate-type table describes `apps/` plus
+  `crates/features`, so it belongs to the workspace layout header and is absent
+  from a standalone project — doctrine about a layout the reader does not have is
+  worse than none.
+- `--env-prefix` reaches the new files like every other artifact that names a
+  variable, and the span-target example is rooted at the crate that would emit
+  it: the shared feature library in a workspace, the app's own name standalone.
+
+### Documented — the conventions have a page
+
+`/architecture/` carries the model for a reader rather than for a generator, with
+the reasoning the shipped file leaves out. It is promoted in `llms.txt`, so a
+coding agent that finds the site reads the layout rules before anything else.
+
 ## [3.0.0] - 2026-08-04
 
 ### The env prefix is the deployment's, and it is one variable

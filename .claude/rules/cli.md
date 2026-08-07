@@ -30,7 +30,25 @@ refuses when a feature already owns that name.
 
 Templates are `const` strings with `{{placeholder}}`s in
 `src/templates/` (`hello`, `feature`, `resource`, `auth`, `migration`,
-`adapter`, `workspace`, `standalone`, `shared`). Rendering and
+`adapter`, `workspace`, `standalone`, `shared`).
+
+**One exception, and the criterion is narrow:** a template becomes a
+*file* only when a second consumer must read the **same bytes**. Today
+there is exactly one — `src/templates/architecture.md`, the architecture
+model, which `shared.rs` embeds with `include_str!` and
+`.claude/rules/architecture.md` symlinks, so the rules this repo works
+under and the rules it ships are identical. Carrying no placeholder is a
+*consequence* of that (a raw reader would show `{{key}}` literally), not
+the reason: a placeholder-free template with one consumer stays a const.
+
+**The real file is the build's side, the symlink is `.claude/`'s.** Not
+the reverse: under `core.symlinks=false` a link materializes as a text
+file holding its target path, so an inverted arrangement would embed a
+filename into every scaffolded `AGENTS.md` and still compile. Edit that
+file to change the rules; a second copy anywhere is the defect the
+arrangement exists to prevent.
+
+Rendering and
 auto-wiring live in `src/scaffold/`: `render.rs` fills placeholders,
 `wiring.rs` performs the edits a copy can't (`features/src/lib.rs`
 `pub mod` line + the module entry in the serving app's `module.rs`),
@@ -47,7 +65,8 @@ is not on disk yet.
 
 **A scaffold emits exactly what the rules mandate.** Templates must
 stay in lockstep with the `users/` exemplar and the layout rules
-(`features.md`, `apps.md`, naming in `CLAUDE.md`). Changing the
+(`features.md`, `apps.md`, naming in `architecture.md` — which is itself
+one of these templates). Changing the
 exemplar or a naming rule ⇒ update the matching template in the same
 task, and vice versa. A generator that emits a layout the rules forbid
 is a defect on par with breaking the exemplar itself.

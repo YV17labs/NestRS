@@ -6,7 +6,7 @@ use crate::scaffold::{Renderer, Scaffold, rustfmt};
 use crate::templates::{hello, shared, standalone};
 
 use super::command::with_env_prefix;
-use super::queue_env_files;
+use super::{queue_agent_files, queue_env_files};
 
 pub fn scaffold(output: &Path, names: &Names, env_prefix: &str, dry_run: bool) -> CliResult<()> {
     let root = output.join(&names.kebab);
@@ -27,6 +27,7 @@ pub fn scaffold(output: &Path, names: &Names, env_prefix: &str, dry_run: bool) -
     s.create(root.join("Justfile"), r.render(standalone::JUSTFILE));
     s.create(root.join("test.just"), r.render(standalone::TEST_JUSTFILE));
     s.create(root.join("README.md"), r.render(standalone::README));
+    queue_agent_files(&mut s, &root, &r, shared::AGENTS_STANDALONE_HEAD);
     s.create(root.join("Dockerfile"), r.render(standalone::DOCKERFILE));
     queue_env_files(&mut s, &root, &r, &names.kebab, shared::ENV);
 

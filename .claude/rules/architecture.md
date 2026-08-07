@@ -1,0 +1,1 @@
+../../crates/nest-rs-cli/src/templates/architecture.md

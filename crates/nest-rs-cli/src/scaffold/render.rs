@@ -47,6 +47,11 @@ impl Renderer {
         // The `nest-rs-*` version every generated manifest pins — derived from
         // the CLI's own version so it can never go stale (see `crate::version`).
         put("nestrs_version", crate::version::framework_req());
+        // The span-target root the conventions show an example under: the app's
+        // own name, which is what a single crate emits. A workspace overrides it
+        // to the shared feature library's root. Seeded here rather than only at
+        // that override, for the same reason as the two prefix keys below.
+        put("span_target", format!("{}::users", names.snake));
         // Every env-var name a template writes goes through these keys. The
         // framework default stands unless a caller that knows the project
         // (`nestrs new --env-prefix`) overrides it — a template must never spell

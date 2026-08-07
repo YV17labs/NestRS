@@ -35,6 +35,12 @@ fn new_standalone_hello_template() {
     assert!(app.join("Dockerfile").is_file());
     assert!(app.join(".dockerignore").is_file());
     assert!(app.join("rust-toolchain.toml").is_file());
+    assert_agents_md_carries_the_conventions(
+        &app,
+        "## Layout — one crate",
+        "demo_api::users",
+        false,
+    );
     assert!(app.join(".env").is_file());
     assert!(app.join(".env.development").is_file());
     let dev_env = fs::read_to_string(app.join(".env.development")).unwrap();
@@ -97,6 +103,72 @@ fn assert_cov_names_its_prerequisite(test_just: &str) {
     );
 }
 
+/// `AGENTS.md` is the only place a generated project states its layout and
+/// naming rules — a tree of four files teaches nothing about the fifth. A
+/// scaffold that drops it hands the next contributor, human or agent, a blank
+/// slate, and the conventions get re-derived differently in every project.
+///
+/// Asserts the load-bearing parts rather than the prose: the layout section for
+/// this shape, the four naming levels, the provider procedure, the reserved
+/// vocabulary, and a fully rendered span target (an unsubstituted placeholder
+/// would ship as advice).
+///
+/// `crate_table` is what keeps the shared half honest: the crate-type table
+/// describes `apps/` + `crates/features`, which a standalone project does not
+/// have, so it belongs to the workspace layout header and must be **absent**
+/// from the other. Shipping doctrine about a layout the reader does not have is
+/// worse than shipping none.
+#[track_caller]
+fn assert_agents_md_carries_the_conventions(
+    root: &std::path::Path,
+    layout_heading: &str,
+    span_target: &str,
+    crate_table: bool,
+) {
+    let agents = fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md is scaffolded");
+    assert!(agents.contains(layout_heading), "{agents}");
+    // Claude Code reads CLAUDE.md and nothing else, so the conventions reach it
+    // only through the import. A symlink would need Developer Mode on Windows.
+    let claude = fs::read_to_string(root.join("CLAUDE.md")).expect("CLAUDE.md is scaffolded");
+    assert!(claude.contains("@AGENTS.md"), "{claude}");
+    // Assert on a heading the conventions actually carry: a marker that appears
+    // in neither file passes whatever either one grows into.
+    assert!(
+        !claude.contains("## Reserved vocabulary"),
+        "CLAUDE.md is the pointer — duplicating the conventions is what drifts:\n{claude}"
+    );
+    for rule in [
+        // The four naming levels, the decision procedure, and the two rules a
+        // generated project cannot infer from four files: what a name may not
+        // be, and what happens when a role repeats.
+        "## Names — four levels",
+        "## Modules — two files, two jobs",
+        "## Providers — three questions",
+        "## Several of the same role",
+        "## Reserved vocabulary",
+        "`*_module.rs`",
+        "`config.rs`",
+    ] {
+        assert!(
+            agents.contains(rule),
+            "AGENTS.md is missing {rule}:\n{agents}"
+        );
+    }
+    assert_eq!(
+        agents.contains("## Crates — a type, and a direction"),
+        crate_table,
+        "the crate-type table belongs to the workspace layout only:\n{agents}"
+    );
+    assert!(
+        agents.contains(span_target),
+        "the span-target example must be rendered for this layout:\n{agents}"
+    );
+    assert!(
+        !agents.contains("{{"),
+        "an unrendered placeholder shipped into AGENTS.md:\n{agents}"
+    );
+}
+
 #[test]
 fn new_workspace_greenfield() {
     let dir = tempfile::tempdir().unwrap();
@@ -134,6 +206,12 @@ fn new_workspace_greenfield() {
     assert!(root.join("crates/migrations/src/bin/migrate.rs").is_file());
     assert!(root.join("crates/migrations/src/migrator.rs").is_file());
     assert!(root.join("crates/seed/src/main.rs").is_file());
+    assert_agents_md_carries_the_conventions(
+        &root,
+        "## Layout — two homes",
+        "features::users",
+        true,
+    );
     // No Dockerfile ships in workspace mode, so nothing to ignore for.
     assert!(!root.join(".dockerignore").exists());
     assert!(root.join("Justfile").is_file());

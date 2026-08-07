@@ -119,6 +119,24 @@ pub(crate) fn queue_env_files(
     s.create_if_missing(base.join(".env.example"), r.render(shared::ENV_EXAMPLE));
 }
 
+/// Queue the two files that carry the project's conventions: `AGENTS.md`, the
+/// format every coding agent reads, and a `CLAUDE.md` that imports it (Claude
+/// Code reads only the latter).
+///
+/// One helper rather than the same twelve lines in both scaffolds: the document
+/// is `INTRO + <layout head> + AGENTS_BODY`, and only the head differs. A third
+/// layout, or a rename, then lands in one place.
+pub(crate) fn queue_agent_files(s: &mut Scaffold, base: &Path, r: &Renderer, layout_head: &str) {
+    let body = format!(
+        "{}{}{}",
+        shared::AGENTS_INTRO,
+        layout_head,
+        shared::AGENTS_BODY
+    );
+    s.create(base.join("AGENTS.md"), r.render(&body));
+    s.create(base.join("CLAUDE.md"), r.render(shared::CLAUDE_POINTER));
+}
+
 pub fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
     let status = Command::new("cargo")
         .arg("check")

@@ -24,7 +24,7 @@ pub use config::{Config, Namespaced};
 pub use dotenv::load_cascade;
 pub use environment::Environment;
 pub use error::{ConfigError, Result};
-pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup};
+pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
 pub use service::{ConfigService, var_name};
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 

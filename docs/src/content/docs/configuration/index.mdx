@@ -177,14 +177,14 @@ GraphqlModule::for_root(None),                                  // all from the 
 HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
 ```
 
-A module that also carries a declaration with **no env twin** — an MCP
-endpoint's name and version — takes an `Options` struct instead, so the two
-still travel in one value:
+A module that also carries a declaration with **no env twin** — the app's own
+MCP name and version — takes an `Options` struct instead, so the two still
+travel in one value:
 
 ```rust title="src/module.rs"
 McpModule::for_root(McpOptions {
     config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
-    endpoints: vec![McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))],
+    server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
 }),
 ```
 

@@ -92,13 +92,10 @@ position without leaving the page.
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
-| `#[mcp]` | struct | Mounts an MCP handler over HTTP at a path | [MCP](/mcp/) |
-| `#[tool_router]` | impl block | Re-exported from rmcp: collects `#[tool]` methods into a router | [MCP](/mcp/) |
-| `#[tool_handler]` | impl block | Re-exported from rmcp: implements `ServerHandler` from the router | [MCP](/mcp/) |
-| `#[tool]` | method | Re-exported from rmcp: exposes the method as an MCP tool | [MCP](/mcp/) |
-| `#[prompt_router]` | impl block | Re-exported from rmcp: collects `#[prompt]` methods into a router | [MCP](/mcp/) |
-| `#[prompt_handler]` | impl block | Re-exported from rmcp: implements the prompt half of `ServerHandler` | [MCP](/mcp/) |
-| `#[prompt]` | method | Re-exported from rmcp: exposes the method as an MCP prompt | [MCP](/mcp/) |
+| `#[mcp]` | struct | Mounts an MCP endpoint over HTTP, at `/mcp` or a declared path | [MCP](/mcp/) |
+| `#[mcp]` | impl block | Serves the block's `#[tool]` and `#[prompt]` methods, deriving the advertised capabilities | [MCP](/mcp/) |
+| `#[tool]` | method | Exposes the method as an MCP tool; its doc comment is the description | [MCP](/mcp/) |
+| `#[prompt]` | method | Exposes the method as an MCP prompt; its doc comment is the description | [MCP](/mcp/) |
 
 ## Health
 

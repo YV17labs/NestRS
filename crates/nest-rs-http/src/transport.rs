@@ -84,6 +84,23 @@ fn normalize_global_prefix(raw: &str) -> Option<String> {
     Some(format!("/{trimmed}"))
 }
 
+/// The canonical form of a mount path: `"/x"`, with the root as `"/"`.
+///
+/// **A mount path is compared as a string before it is served.**
+/// [`claim_exclusive_path`] and the cross-family check key on it to report a
+/// collision by owner, and `Route::nest` appends a trailing `/` internally — so
+/// `"/x"` and `"/x/"` are two distinct owners here and one key inside poem. Left
+/// raw they pass the check that exists to catch exactly that, and poem panics
+/// during route assembly instead. Applied by [`HttpEndpointMeta::new`], so every
+/// self-mount — MCP, GraphQL (whose path is `NESTRS_GRAPHQL__PATH`, i.e.
+/// deployment input), WS, OpenAPI — is canonical before anything compares it.
+pub fn normalize_mount_path(raw: &str) -> String {
+    match normalize_global_prefix(raw) {
+        Some(path) => path,
+        None => "/".to_owned(),
+    }
+}
+
 /// Claim `path` for `owner`, or fail boot naming both claimants.
 ///
 /// A controller prefix and a self-mounted endpoint path are one rule in two

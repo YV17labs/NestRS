@@ -175,3 +175,27 @@ async fn a_self_mount_collision_names_the_owners_not_just_the_kind() {
         "both owners must be named, not repeated as a kind: {msg}",
     );
 }
+
+/// Two spellings of one mount are one owner.
+///
+/// `Route::nest` appends a trailing `/` internally, so `/x` and `/x/` collapse
+/// to one key inside poem and route assembly panics on the duplicate. Compared
+/// raw, they are two distinct strings — which walks straight past the boot check
+/// written to keep "neither reaches the opaque poem internal". Normalizing at
+/// `HttpEndpointMeta::new` is what makes the check see them, and it covers every
+/// self-mount at once: a GraphQL path is deployment input
+/// (`NESTRS_GRAPHQL__PATH`), not a literal an author controls.
+#[test]
+fn a_mount_path_is_canonical_before_anything_compares_it() {
+    let mount = |path: &'static str| HttpEndpointMeta::new(path, "probe", |_c, r| r);
+
+    assert_eq!(
+        mount("/x/").path(),
+        "/x",
+        "a trailing slash is not a second mount"
+    );
+    assert_eq!(mount("x").path(), "/x", "…nor a missing leading one");
+    assert_eq!(mount("  /x/  ").path(), "/x");
+    assert_eq!(mount("/").path(), "/", "the root stays reachable");
+    assert_eq!(mount("").path(), "/");
+}

@@ -46,7 +46,7 @@ pub use scope::Scoped;
 pub use security_headers::SecurityHeadersConfig;
 pub use shaper::{RouteResponseShaper, ShapedEndpoint};
 pub use tls::TlsConfig;
-pub use transport::{HttpTransport, join_path, version_path};
+pub use transport::{HttpTransport, join_path, normalize_mount_path, version_path};
 
 // Cross-crate wiring seams — `pub` by necessity (sibling framework crates and
 // macro-emitted code name them) but not public API: `#[doc(hidden)]` so they do

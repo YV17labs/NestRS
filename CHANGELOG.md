@@ -7,6 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A tool host writes one decorated `impl`
+
+MCP was the only edge in the framework that made a developer write three blocks
+and name a foreign trait. `#[mcp]` now decorates the `impl` too — the same name
+as on the struct, because it is one concern and because a `#[tools]` sitting a
+letter from the `#[tool]` beneath it would read as a typo.
+
+```rust
+#[mcp]
+#[derive(Clone)]
+pub struct UsersTool { #[inject] svc: Arc<UsersService> }
+
+#[mcp]
+impl UsersTool {
+    /// List the people the caller is allowed to see, by name.
+    #[tool]
+    async fn list_people(&self) -> Result<String, McpError> {
+        let rows = CrudService::list(&*self.svc).await.opaque()?;
+        Ok(rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join("\n"))
+    }
+}
+```
+
+Gone from the file: `#[tool_router]`, `#[prompt_router]`, `#[tool_handler]`,
+`#[prompt_handler]`, `impl ServerHandler`, `get_info`, `ServerCapabilities`,
+`ServerInfo`, `description = "…"` — and `use nest_rs::mcp::rmcp;`, the import
+whose only job was someone else's macro hygiene and which the CLI template
+shipped with three lines of comment explaining it.
+
+- **`use rmcp;` is gone for good, not hidden behind a prelude.** The expansion
+  emits rmcp's macros inside a private child module that carries the import.
+  Two Rust facts make it sound, both asserted in
+  `nest-rs-mcp/tests/integration/mcp_impl.rs`: an inherent impl may live in any
+  module of the defining crate and still reach the parent's private fields, and
+  an item's own visibility — not the module it sits in — decides who may name
+  it. `#[tool]` and `#[prompt]` reach `#[mcp]` as inert tokens, so they need no
+  import either.
+- **The second fact is load-bearing.** rmcp generates `tool_router()` without
+  `pub`, so reading it from the parent silently yields an empty tool list and
+  the duplicate-tool boot check would go blind. The expansion emits its own
+  `pub(crate)` accessor; `DefaultToolRouter` is replaced by
+  `DefaultDeclaredTools`.
+- **Capabilities are derived from the operations present.** A `#[tool]` method
+  advertises `tools`, a `#[prompt]` method `prompts`, and nothing claims a
+  surface no method serves. This closes a silent defect the CLI template itself
+  shipped: every scaffolded host declared `impl ServerHandler for T {}`, routing
+  tools it never advertised, so a client reading capabilities could decide never
+  to ask.
+- **Descriptions come from the doc comment.** The sentence was written twice —
+  once for a reader, once for the model — and two copies of one sentence drift.
+- **`Opaque::opaque` carries the log-real/return-opaque posture.** A tool body
+  talks to a language model, and a `DbErr`'s `Display` carries schema, column
+  names and sometimes values. Three features had hand-rolled the same four
+  lines; it is one call now, and the real error still reaches the operator at
+  `error` on `nest_rs::mcp`. A deliberate `McpError::invalid_params` is returned
+  directly and never routed through it.
+- **The escape hatch is explicit.** A host serving a hand-written
+  `ServerHandler` surface (resources, completion) cannot have a second one
+  generated beside it, so it stays on rmcp's raw shape; `#[mcp]` on a trait impl
+  is a compile error saying so. `demo`'s `posts` is that host, kept deliberately
+  as the witness of the raw form.
+
+### The endpoint is declared where the tools are
+
+An MCP host's `path` is now optional, and every argument that says what the
+endpoint *is* moved onto the decorator. A feature contributing tools to the
+app's server writes a bare `#[mcp]`; one that wants its own endpoint writes the
+whole URL path.
+
+```rust
+#[mcp]                                                  // → /mcp
+#[mcp(path = "/mcp/posts", name = "assistant-posts")]   // → /mcp/posts
+```
+
+- **The path is a join key, not a namespace.** Unlike a `#[controller]`'s,
+  nothing nests under it: it names the one endpoint the host joins, which is why
+  peers writing the same path share it. So it is written whole, the way a client
+  config carries it, and `nest_rs_mcp::DEFAULT_PATH` (`/mcp`) is what a bare
+  `#[mcp]` takes — a constant, not configuration, because no other mount path in
+  the framework is settable from the environment either.
+- **Two spellings of one mount are one owner.** `Route::nest` appends a trailing
+  `/` internally, so `/mcp` and `/mcp/` collapse to one key inside poem and route
+  assembly panics — while `claim_exclusive_path`, written to keep exactly that
+  from reaching poem, compared the two raw strings and saw two owners.
+  `HttpEndpointMeta::new` now normalizes, so every self-mount is canonical before
+  anything compares it: MCP, WS, OpenAPI, and GraphQL, whose path is deployment
+  input (`NESTRS_GRAPHQL__PATH`) rather than a literal an author controls. New
+  public surface on `nest-rs-http`: `normalize_mount_path`.
+
+- **Identity moved to its two real owners.** The app declares *itself* once,
+  through `McpOptions { server: Some(McpIdentity::new(name, version)) }` — its
+  `name`, `version`, branding, and the `instructions` a client may fold into the
+  model's system prompt. All of it is the app's because a shared feature library
+  knows neither the deployment's version nor, on an endpoint several features
+  share, what the whole surface is. A host declares only which endpoint stands
+  apart — `#[mcp(name = …, version = …, title = …)]`, each overriding the app's
+  per field.
+- **`instructions` is not a `#[mcp]` argument**, and writing one is a compile
+  error naming the seam that takes it. It describes the *server*; what each tool
+  does is already carried by its own `#[tool(description = "…")]`. Hosts that
+  write instructions through `ServerHandler::get_info` are still joined when the
+  app declares none — a fallback, not a second spelling.
+- **The per-path `McpOptions::endpoints` list is gone**, and with it
+  `McpEndpoint` and `declared_endpoint`. An app no longer restates, in its
+  composition root, a path its features already declare.
+- **Two boot errors, both naming what to fix**: two hosts on one path each
+  declaring an identity, and a host that names its endpoint in an app that
+  never named itself (a name with no version behind it). An identity declared
+  in an app with no `#[mcp]` host at all still fails boot.
+- **One boot `warn`, down from two**: an endpoint neither its hosts nor the app
+  named reports rmcp's own build identity, which is what a client would read.
+- Public surface: `McpIdentity`, `ResolvedIdentity`, `endpoint_identity`,
+  `DEFAULT_PATH`, `McpOptions::server`.
+- Migration: `#[mcp(path = "/mcp")]` becomes `#[mcp]`; any other path is
+  unchanged; an `endpoints` entry becomes either `server` (the app's name) or
+  arguments on the host (`instructions`, a distinct `name`).
+
 ### One seam per module: `for_root` takes one value
 
 Configuring a module had grown a second spelling. `McpModule` let you chain
@@ -28,7 +145,7 @@ the seam a *method*.
 
   ```rust
   McpModule::for_root(McpOptions {
-      endpoints: vec![McpEndpoint::new("/mcp", "assistant", env!("CARGO_PKG_VERSION"))],
+      server: Some(McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))),
       ..Default::default()
   })
   ```
@@ -138,7 +255,7 @@ into a single cross-domain host.
 - **Distinct paths stay distinct.** Grouping is by path, so an app that
   deliberately serves two endpoints keeps their tool namespaces apart.
   `demo/apps/assistant` mounts `audio` + `users` on `/mcp` and `posts` on
-  `/posts/mcp`.
+  `/mcp/posts`.
 - **Module-gating is unchanged and structural**: a host whose module the app does
   not import contributes nothing, because metadata is attached from `register`.
 - New public surface on `nest-rs-mcp`: `McpHost` (the object-safe `ServerHandler`
@@ -153,10 +270,10 @@ carries one `serverInfo` and one `instructions`, whatever the endpoint is made
 of. That identity is now the app's to declare:
 
 ```rust
-McpModule::endpoint(
-    McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))
-        .instructions("What this endpoint is for."),
-)
+McpModule::for_root(McpOptions {
+    server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
+    ..Default::default()
+})
 ```
 
 - **This is the ecosystem's shape**, not an invention: the TypeScript SDK creates
@@ -179,8 +296,8 @@ McpModule::endpoint(
 - **Two boot errors**: an identity declared for a path no `#[mcp]` host serves
   (a typo that would otherwise do nothing at all), and two declarations for one
   path that disagree.
-- New public surface on `nest-rs-mcp`: `McpEndpoint`, `McpModule::endpoint`,
-  `McpSetup::endpoint`, `declared_endpoint`.
+- New public surface on `nest-rs-mcp`: `McpIdentity`, `ResolvedIdentity`,
+  `endpoint_identity`.
 
 ### The invariant behind it
 

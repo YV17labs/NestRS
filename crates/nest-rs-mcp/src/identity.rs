@@ -28,14 +28,17 @@
 //! `warn` naming it.
 //!
 //! ```no_run
-//! use nest_rs_mcp::{McpEndpoint, McpModule};
+//! use nest_rs_mcp::{McpEndpoint, McpModule, McpOptions};
 //! use nest_rs_core::module;
 //!
 //! #[module(imports = [
-//!     McpModule::endpoint(
-//!         McpEndpoint::new("/mcp", "assistant", env!("CARGO_PKG_VERSION"))
-//!             .instructions("Search posts and people. Ask before writing."),
-//!     ),
+//!     McpModule::for_root(McpOptions {
+//!         endpoints: vec![
+//!             McpEndpoint::new("/mcp", "assistant", env!("CARGO_PKG_VERSION"))
+//!                 .instructions("Search posts and people. Ask before writing."),
+//!         ],
+//!         ..Default::default()
+//!     }),
 //! ])]
 //! struct AppModule;
 //! ```
@@ -46,10 +49,10 @@ use rmcp::model::{Icon, Implementation};
 
 /// The identity an app declares for the MCP endpoint at one path.
 ///
-/// Declared through [`McpModule::endpoint`](crate::McpModule::endpoint); read
-/// back with [`declared_endpoint`](crate::declared_endpoint). Declaring a path
-/// no `#[mcp]` host serves fails boot — a declaration that reaches nothing is a
-/// typo, not a no-op.
+/// Declared through [`McpOptions::endpoints`](crate::McpOptions::endpoints);
+/// read back with [`declared_endpoint`](crate::declared_endpoint). Declaring a
+/// path no `#[mcp]` host serves fails boot — a declaration that reaches nothing
+/// is a typo, not a no-op.
 #[derive(Clone, Debug, PartialEq)]
 pub struct McpEndpoint {
     path: Cow<'static, str>,

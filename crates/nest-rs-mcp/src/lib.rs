@@ -75,7 +75,7 @@ pub use guard::{BoxFuture, FallbackMcpGuard, McpOperationGuard};
 pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;
 pub use identity::McpEndpoint;
-pub use module::{McpModule, McpSetup};
+pub use module::{McpModule, McpOptions, McpSetup};
 pub use propagate::PropagatingHandler;
 #[doc(hidden)]
 pub use registry::{DefaultToolRouter, register_host};

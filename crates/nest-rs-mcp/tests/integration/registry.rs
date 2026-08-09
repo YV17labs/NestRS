@@ -27,8 +27,8 @@ use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
     AllowAllMcpGuard, CallToolResult, ContentBlock, McpEndpoint, McpError, McpModule,
-    McpOperationGuard, ServerHandler, hosts_on, mcp, prompt, prompt_handler, prompt_router, tool,
-    tool_handler, tool_router,
+    McpOperationGuard, McpOptions, McpSetup, ServerHandler, hosts_on, mcp, prompt, prompt_handler,
+    prompt_router, tool, tool_handler, tool_router,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -275,7 +275,16 @@ fn declared_identity() -> McpEndpoint {
         .instructions("Endpoint instructions.")
 }
 
-#[module(imports = [AlphaMcpModule, BetaMcpModule, McpModule::endpoint(declared_identity())])]
+/// The import site every declaration test below uses: identity only, server
+/// options left to the environment.
+fn declare(endpoint: McpEndpoint) -> McpSetup {
+    McpModule::for_root(McpOptions {
+        endpoints: vec![endpoint],
+        ..Default::default()
+    })
+}
+
+#[module(imports = [AlphaMcpModule, BetaMcpModule, declare(declared_identity())])]
 struct DeclaredEndpointApp;
 
 #[tokio::test]
@@ -432,7 +441,7 @@ const UNDECLARED_IDENTITY: &str = "several MCP hosts share an endpoint whose ide
 
 #[module(imports = [
     AlphaMcpModule,
-    McpModule::endpoint(McpEndpoint::new("/typo", "orphan", "1.0.0")),
+    declare(McpEndpoint::new("/typo", "orphan", "1.0.0")),
 ])]
 struct OrphanDeclarationApp;
 
@@ -455,8 +464,8 @@ async fn a_declaration_no_host_serves_fails_boot() {
 #[module(imports = [
     AlphaMcpModule,
     BetaMcpModule,
-    McpModule::endpoint(McpEndpoint::new(SHARED, "first-name", "1.0.0")),
-    McpModule::endpoint(McpEndpoint::new(SHARED, "second-name", "1.0.0")),
+    declare(McpEndpoint::new(SHARED, "first-name", "1.0.0")),
+    declare(McpEndpoint::new(SHARED, "second-name", "1.0.0")),
 ])]
 struct ContestedDeclarationApp;
 

@@ -21,7 +21,7 @@
 //!
 //! Identity is the one part a *host* cannot answer for, because an endpoint
 //! reports one `serverInfo` however many features share it — so the app
-//! declares it (`McpModule::endpoint`), and undeclared it falls back to the
+//! declares it (`McpOptions::endpoints`), and undeclared it falls back to the
 //! first host's with a boot `warn`. See [`McpEndpoint`].
 //!
 //! `tools/call` is routed through an index the mount builds once, name → host,

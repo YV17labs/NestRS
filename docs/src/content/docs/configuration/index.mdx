@@ -138,6 +138,62 @@ short-circuits the factory that resolves the config, so it is the one hard
 pin. See [Overriding in tests](/configuration/testing/).
 </Aside>
 
+## One seam per module
+
+`Module::for_root(x)` is the **only** way to configure a module, and `x` is
+**one** value carrying everything the app declares about it. There is no
+builder chain to continue on the result, and no second constructor on the
+module type — so "how do I configure this?" has one answer per module,
+readable in one expression.
+
+**`for_root` configures; `for_feature` registers.** They are not two ways to do
+one thing. `ConfigModule::for_feature::<C>()` takes no value on purpose: it
+declares that `C` must be loaded, and the module that owns `C` is where a base
+is pinned. A config reachable through two seams is a config whose value depends
+on import order.
+
+Every `nest-rs-*` module that owns a config writes both — `for_feature` in its
+`imports`, and a `for_root` for you to pin from.
+
+**Your own feature modules write only `for_feature`.** You own the struct, so
+its `impl Default` is already your in-code path; that is precisely what a
+framework module cannot offer, and what its `for_root` exists to replace. Add
+one the day another crate must pin your config — four lines with `ConfigSetup`
+— not before.
+
+The converse keeps the seam from spreading: a module that owns **no** config of
+its own gets no `for_root`. `SocialModule` is the case — each social provider
+carries its own `#[config]`, discovered along with the provider, so the module
+has nothing to be configured about and stays a bare import.
+
+You cannot get this wrong quietly. A pinned base supersedes the environment-only
+factory a bare import queues, wherever the two fall in `imports`; and two pinned
+bases for one config fail the boot naming it.
+
+Most modules take the config itself:
+
+```rust title="src/module.rs"
+GraphqlModule::for_root(None),                                  // all from the environment
+HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
+```
+
+A module that also carries a declaration with **no env twin** — an MCP
+endpoint's name and version — takes an `Options` struct instead, so the two
+still travel in one value:
+
+```rust title="src/module.rs"
+McpModule::for_root(McpOptions {
+    config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+    endpoints: vec![McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))],
+}),
+```
+
+The `config` field stays an `Option` for the reason the precedence table
+above gives: `None` means "nothing pinned", which lets the `.env` cascade
+outrank the defaults. Passing the bare config still works — `McpConfig`
+converts into `McpOptions` — so a call site that declares no identity reads
+exactly like every other module's.
+
 ## `ConfigService` API
 
 The reader handed to `from_env` is a thin wrapper around the namespace
@@ -191,18 +247,19 @@ use nest_rs::core::module;
 pub struct AppModule;
 ```
 
-- **`ConfigModule::for_root()`** goes first in the root module. It registers
-  `Arc<Environment>` — the active profile, read from `NESTRS_ENV` — which is
-  what selects the `.env` files every later `Config::load` resolves against.
-  It writes nothing to the process environment; see
-  [alternative sources](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade)
-  for which call does.
+- **`ConfigModule::for_root()`** registers `Arc<Environment>` — the active
+  profile, read from `NESTRS_ENV` — so a provider can inject it and branch. It
+  writes nothing to the process environment, and its position among the imports
+  carries no meaning: every module's `collect` runs before any config factory.
+  What makes the `.env` cascade readable is `Environment::init()` at the top of
+  `main`, which `nestrs new` scaffolds; see
+  [alternative sources](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade).
 - **`ConfigModule::for_feature::<C>()`** queues a factory in the boot's
   factory phase. The factory calls `C::load()` (= `from_env` over
   `C::defaults()`, then `validate`); on failure the boot aborts with the
-  variable named. A module's `for_root(cfg)` queues the same factory with
-  `cfg` as the base — one code path, so a field cannot be reachable one way
-  only.
+  variable named. Pass `Some(cfg)` to make `cfg` the base those variables
+  overlay, exactly as a module's `for_root(cfg)` does — one code path, so a
+  field cannot be reachable one way only.
 
 ## Inject it
 

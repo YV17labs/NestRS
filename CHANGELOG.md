@@ -5,6 +5,109 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### One seam per module: `for_root` takes one value
+
+Configuring a module had grown a second spelling. `McpModule` let you chain
+`for_root(None).endpoint(..)`, and added `McpModule::endpoint(..)` to soften
+the `None` — three ways to write one import, where every other module had
+exactly one. `StorageModule` had drifted the other way: it owned a `#[config]`
+with no `for_root` at all, so its config was reachable from the environment
+only.
+
+The rule is now written down (`.claude/rules/framework.md`, *`for_root` — one
+seam, one value, no chain*): **a module is configured in exactly one place, by
+exactly one value.** The `DynamicModule` it returns is opaque — no public
+method on a `*Setup`, no second constructor on the module type. A declaration
+that does not fit into the argument makes the argument grow a *field*, never
+the seam a *method*.
+
+- **`McpModule::for_root` takes an `McpOptions`.** Server options and endpoint
+  identity travel together:
+
+  ```rust
+  McpModule::for_root(McpOptions {
+      endpoints: vec![McpEndpoint::new("/mcp", "assistant", env!("CARGO_PKG_VERSION"))],
+      ..Default::default()
+  })
+  ```
+
+  `McpModule::endpoint(..)` and `McpSetup::endpoint(..)` are gone. An
+  `McpConfig` still converts into `McpOptions`, so a call site that pins only
+  server options is unchanged.
+- **`StorageModule::for_root(config)`** — the missing half of the dual-path
+  rule. Importing the bare `StorageModule` still declares the dependency and
+  leaves the config to `NESTRS_STORAGE__*`.
+- **`nest_rs_throttler::provide_guard` / `resolve`** are `#[doc(hidden)]` —
+  cross-crate seams for the store backends, never an app-facing way in.
+- **`ConfigSetup<M, C>`** is the shared `DynamicModule` behind a `for_root`
+  whose whole job is "pin the config, then recurse": `WsSetup` and
+  `StorageSetup` are now aliases for it. Built by `ConfigModule::setup` rather
+  than a `ConfigSetup::new`, so a shared setup stays as opaque as a
+  hand-written one. Modules whose `collect` queues a pool or whose `register`
+  does more than recurse keep their own type.
+
+### `for_root` configures, `for_feature` registers
+
+The two seams had started to overlap, and an overlap here is not cosmetic: two
+factories for one config type resolve by import order, silently. `imports =
+[AudioModule, StorageModule::for_root(cfg)]` dropped `cfg` on the floor,
+because `AudioModule` imports `StorageModule` and queued the environment-only
+factory first. No warning, and the app ran on defaults.
+
+nestrs now takes NestJS's split literally — `forRoot` configures a module,
+`forFeature` registers against an already-configured one — and enforces it:
+
+- **`ConfigModule::for_feature::<C>()` takes no value.** It declares that `C`
+  must load; the module that owns `C` is where a base is pinned. A config
+  reachable through two seams is a config whose value depends on import order.
+- **A pinned base supersedes a bare import's factory**, wherever the two fall
+  in `imports`. New `ContainerBuilder::provide_declared_factory` carries the
+  distinction.
+- **Two declarations for one type fail the boot** naming it
+  (`ContestedDeclarationError`), instead of letting position decide. Not
+  config-only: `ThrottlerModule` and `RedisThrottlerModule` both bind
+  `Arc<dyn ThrottlerStore>`, so importing both is now a named failure rather
+  than whichever `imports` listed first. Here we exceed NestJS deliberately,
+  which lets the last registration win in silence.
+- **The synchronous `App::new` refuses what it cannot resolve.** It runs
+  `register` but never the factory phase, so a `Module::for_root(cfg)` used to
+  boot with the config simply absent — visible only as a `None` at first read.
+  It now runs a dynamic import's `collect` (which is what made
+  `ConfigModule::for_root()` register `Environment` on that path at all) and
+  fails with `UnresolvedFactoryError` when a queued factory would never run.
+- **The `for_root` obligation stays scoped to `nest-rs-*`**, as the dual-path
+  rule always said. The split is who can edit the struct: you cannot touch
+  `HttpConfig::default`, so `HttpModule::for_root(cfg)` is your only in-code
+  path; your own `IssuerConfig` already has one in its `impl Default`. A
+  product's feature module writes `for_feature` and no seam.
+
+The ownership table lives in `architecture.md`, which every session loads and
+which the CLI embeds into each scaffolded project's `AGENTS.md`.
+
+Several module docs claimed a pinned config "wins over the environment". It
+does not: the deployment's real environment outranks a pin, which only
+outranks the `.env` cascade and the defaults. `seaorm`'s went further and
+offered the pin as a test hatch — that is the *seed*
+(`App::builder().provide(cfg)`), the one tier nothing overrides. Ten sites
+across `seaorm`, `graphql`, `openapi`, `throttler`, `redis` and the docs now
+match the precedence table.
+
+The rule has a converse, and `SocialModule` is what made it explicit: **a
+module that owns no `#[config]` gets no `for_root`.** A social provider carries
+its own config and its registry entry names it, so *discovering* a provider is
+what loads its credentials — the module never learns which providers exist, and
+has nothing to be configured about. `SocialModule` therefore stays a bare
+import: giving it a seam would force a list of mutually unrelated config types,
+hence type erasure, hence no duplicate detection and a hand-written `Debug` to
+keep a client secret out of the format — all to declare something discovery had
+already handled.
+
+`OpenTelemetry::init_with(config)` stays the one recorded exception: the
+global tracer must exist before any module registers, and its guard's `Drop`
+flushes, so it belongs to `main`.
+
 ## [3.1.0] - 2026-08-07
 
 ### An MCP endpoint aggregates several features

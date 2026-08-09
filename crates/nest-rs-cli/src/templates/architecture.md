@@ -40,6 +40,73 @@ decision, not plumbing.
 **No `*_module.rs`, ever.** One `#[module]` per file, one `module.rs` per
 folder; two modules in a feature means two folders.
 
+## Configuration — one seam per config, decided by ownership
+
+A `#[config]` is reached through **exactly one** seam. Which one follows from
+who owns it, and there is no judgement call:
+
+| Whose config | Seam | In-code path |
+|---|---|---|
+| a **library** module's, in its own namespace | `Module::for_root(cfg)` | `for_root` — the base the env overlays, per field |
+| **yours**, declared by your own module | `ConfigModule::for_feature::<C>()` | `impl Default` — you own the struct, so you edit it |
+| nobody's (a discovered plugin) | its registry entry reads its own namespace | none — credentials are deployment data |
+
+The split is *who can edit the struct*. You cannot touch `HttpConfig::default`,
+so `HttpModule::for_root(cfg)` is the only way to set a port from code — which
+is why the dual-path rule binds every `nest-rs-*` module. Your own
+`IssuerConfig` needs no seam: its `impl Default` **is** the in-code path, and
+adding a `for_root` nobody calls is speculative API in the exemplar people copy.
+Write one the day an app needs to pin your config from outside your crate.
+
+**`ConfigModule::for_root()` is the one homonym** — it takes no config and
+configures no module. It switches on the `.env` cascade, and goes first in the
+root's imports. Everything below is about `Module::for_root(x)`, which is a
+different thing wearing the same name (NestJS's, kept deliberately).
+
+**`for_root` configures; `for_feature` registers.** They are not two ways to do
+one thing, and `for_feature` deliberately takes no value: a config reachable
+through two seams is a config whose value depends on `imports = [..]` order.
+A library module therefore writes **both** — `for_feature` in its `imports` so
+the config always loads, and a `for_root` so a caller can pin it:
+
+```rust
+#[module(imports = [ConfigModule::for_feature::<StorageConfig>()], providers = [Storage])]
+pub struct StorageModule;
+
+impl StorageModule {
+    pub fn for_root(config: impl Into<Option<StorageConfig>>) -> StorageSetup {
+        ConfigModule::setup(config)
+    }
+}
+
+pub type StorageSetup = ConfigSetup<StorageModule, StorageConfig>;
+```
+
+That is the whole seam when `for_root` only pins — reach for `ConfigSetup`
+rather than hand-rolling a `*Setup`. Write your own only when `collect` queues
+more than the config (a pool, a client) or `register` does more than recurse.
+
+**The converse is load-bearing: a module that owns no config gets no
+`for_root`.** *Owns* means its own namespace, never a config belonging to
+something it merely discovers — `SocialModule` discovers providers that each
+carry their own `#[config]`, so it stays a bare import with no seam at all.
+Giving it one forces a list of unrelated config types, hence type erasure,
+hence no duplicate detection.
+
+**Pinning by seeding (`App::builder().provide(cfg)`) is not a seam** — a seed
+short-circuits the resolving factory and freezes that whole namespace against
+the deployment. It is the hermetic-test hatch, and nothing else.
+
+You cannot get any of this wrong silently — the boot enforces it:
+
+- a pinned base **supersedes** a bare import's env-only factory, wherever the
+  two fall in `imports`;
+- two pinned bases for one config **fail the boot** naming it
+  (`ContestedDeclarationError`) — as do two modules binding the same
+  implementation, which is how importing both throttler backends is caught;
+- a config the synchronous `App::new` could never resolve **fails the boot**
+  too (`UnresolvedFactoryError`), instead of surfacing as a `None` much later.
+
 ## Providers — three questions, in order
 
 `#[module]` takes only `imports` and `providers`. There is no `controllers`

@@ -81,6 +81,12 @@ to require it, **stop and ask**.
 - **No umbrella module re-exporting every edge of a feature.**
 - **No transport-level discovery without module-gating.**
 - **No two decorators for the same concern** — deprecate first.
+- **No second way to configure a module.** `Module::for_root(x)` takes one
+  value carrying everything the app declares; the `*Setup` it returns is
+  opaque. A builder chain on it, a second constructor on the module type,
+  or a `#[config]` reachable only through the environment are all the same
+  defect. See *`for_root` — one seam, one value, no chain* in
+  `.claude/rules/framework.md`.
 - **No new third-party crate without a release in ~12 months.** A
   failing candidate must be flagged explicitly, never adopted silently.
 - **No third-party version requirement outside `major.minor`.** Two

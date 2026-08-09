@@ -69,6 +69,15 @@ the witness (`audio` + `users` on `/mcp`, `posts` on `/posts/mcp`).
 **exactly one** `#[module]` struct per file. Multiple modules per feature
 ⇒ multiple folders.
 
+**A feature module with a `config.rs` writes `ConfigModule::for_feature::<C>()`
+in its imports, and no `for_root`.** `for_feature` **declares** that the config
+must load; it does not configure it. The in-code path for a config you own is
+its `impl Default`, which you can edit — that is what the dual-path rule buys a
+consumer of `nest-rs-*`, who cannot. A `for_root` nobody calls is speculative
+API in the exemplar people copy; add one the day an app must pin your config
+from outside your crate. `oauth/module.rs` and `audio/schedule/module.rs` are
+the exemplars. See *Configuration — one seam per config* in `architecture.md`.
+
 **One `service.rs` per feature — don't fragment.** Extra `impl` blocks
 (`CrudService`, the opt-in `Creatable`/`Updatable`/`Deletable`,
 `#[dataloader]`, `#[hooks]`) are macro requirements, not extra files.

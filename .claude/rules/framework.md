@@ -132,6 +132,115 @@ DI crate.** Extend ours.
   factory). Registration is **idempotent** (diamond imports build once);
   dynamic imports are **not** deduplicated.
 
+### `for_root` — one seam, one value, no chain
+
+**A module is configured in exactly one place, by exactly one value.**
+`Module::for_root(x)`, and `x` carries *everything* the app declares
+about that module. The `DynamicModule` it returns is **opaque**: no
+public method on a `*Setup`, no second constructor on the module type.
+A declaration that does not fit into `x` makes `x` grow a **field** —
+never the seam a **method**. A builder chain (`for_root(None).thing(t)`)
+is three spellings of one import, and the second constructor added to
+soften it (`Module::thing(t)`) is the fourth; both are defects.
+
+Testable form, both halves checkable: **`rg 'impl \w+Setup' crates/`
+returns nothing**, and **no module type has an inherent `pub fn` besides
+`for_root`** — with `ConfigModule` the single carve-out, because it is
+the config crate itself rather than a configurable module. Its
+`for_root` / `for_feature` / `provide_feature` / `setup` are the
+primitives every other module's seam is *built from*, and
+`provide_feature` is public API a third-party driver calls
+(`docs/…/database/writing-a-driver.mdx`). Nothing else gets that
+exemption: `nest_rs_throttler::provide_guard` / `resolve` are the same
+kind of cross-crate seam and they are `#[doc(hidden)]`.
+
+Two shapes for `x`, and only two:
+
+- **`impl Into<Option<C>>`**, `C` being the module's `#[config]` — the
+  default, and what almost every module wants. `None` ⇒ env over
+  `C::defaults()`; `Some(c)` ⇒ env over `c`, per field.
+- **`impl Into<MOptions>`**, where `MOptions { config: Option<C>, /* … */ }`
+  is a plain `Default` struct declared beside the setup in `module.rs` —
+  only when the module carries a declaration that genuinely has **no env
+  twin** (`McpEndpoint`). It keeps `From<C>` and `From<Option<C>>` so the
+  config-only call site reads exactly like every other module's.
+
+**Don't hand-write the setup when the shape is plain.** A `for_root` whose
+whole job is "pin the config, then recurse into my own wiring" returns
+`ConfigSetup<M, C>` — `pub type WsSetup = ConfigSetup<WsModule, WsConfig>;`
+plus a one-line `for_root` calling `ConfigModule::setup(config)`. Keep the
+alias: the name is what the docs and `for_root`'s signature reference. Write
+your own type only when `collect` queues more than the config (a pool, a
+client) or `register` does more than recurse (`McpSetup`, `HttpSetup`,
+`GraphqlSetup`, `OpenApiSetup`). The constructor lives on `ConfigModule`
+rather than as `ConfigSetup::new`, so a *shared* setup is as opaque as a
+hand-written one and the first half of the testable form still holds.
+
+The `Option` inside `MOptions` is load-bearing, not a habit: `Config::resolve`
+ranks the `.env` cascade *below* a pinned base and *above* `defaults()`, so
+flattening it to a bare `C` would silently demote the cascade.
+
+**This does not outlaw the bare import.** `imports = [WsModule]` is a
+*dependency declaration* — "my providers inject `Arc<WsServer>`" — and it
+configures nothing, so it is not a second seam. A module that must not be
+imported bare hides its `#[module]` behind a private host struct and
+exposes only the plain façade: `ProtectedResourceHost` /
+`ProtectedResourceModule` is the exemplar.
+
+**The ownership table — which config reaches which seam — is in
+`architecture.md`** (*Configuration — one seam per config*), because a product
+developer needs it too and that file is loaded in every session. Read it there.
+Its one line for this crate: **every `nest-rs-*` module owning a `#[config]`
+owns a `for_root`**, because a consumer cannot edit your `Default` and that seam
+is their only in-code path. The obligation stops at the crate boundary — a
+product's own module already has `impl Default`. Three points belong here, with
+the reasoning the table omits:
+
+**`for_root` configures; `for_feature` registers.** This is NestJS's split, and
+it is not stylistic: `forRoot` configures a module once, `forFeature` registers
+artifacts against an already-configured one (`TypeOrmModule.forFeature([User])`
+mounts repositories, it does not reopen the connection). Our `for_feature` takes
+no value for that reason. It briefly took a pinned base, and that was the defect
+— it made every module-owned config reachable two ways, which is the *second
+seam* this whole section forbids.
+
+**A module that owns no `#[config]` gets no `for_root`** — the sharper half.
+`SocialModule` is the case that proves it: a provider carries its own
+`#[config]` and the registry entry names it, so discovering the provider is what
+loads its credentials. The module never learns which providers exist, so there
+is nothing for it to be configured about. Giving it a `for_root` anyway forces a
+list of mutually unrelated config types, hence type erasure, hence no duplicate
+detection and a hand-written `Debug` to keep a client secret out of the format —
+all paying for a declaration the discovery seam already made unnecessary.
+
+**The rule is enforced, not merely written.** A value an import site *chose* is
+queued as a **declaration** (`ContainerBuilder::provide_declared_factory`,
+which takes the remedy sentence its error will print). Three consequences, each
+with a witness in `nest-rs-config`:
+
+- a declaration **supersedes** an ordinary factory for the same type, wherever
+  the two fall in `imports = [..]` — `a_pin_survives_a_bare_import_listed_before_it`;
+- two declarations for one type raise `ContestedDeclarationError` before any
+  factory runs — `two_pinned_bases_for_one_config_fail_the_boot`;
+- the synchronous `App::new` refuses a queued factory it could never drain
+  (`UnresolvedFactoryError`) — `the_synchronous_boot_refuses_a_config_it_could_never_resolve`.
+
+**It is not config-only.** Any module binding an implementation a *sibling
+module also binds* declares it, so importing both is a named boot failure
+rather than whichever `imports` listed first: `ThrottlerModule` and
+`RedisThrottlerModule` both bind `Arc<dyn ThrottlerStore>`, and they share one
+`BACKEND_REMEDY` constant so the two halves cannot drift.
+
+This is where we deliberately exceed NestJS, which lets the last registration
+win in silence — a dropped declaration is on the wrong side of *no silent
+failure*.
+
+**One recorded exception: `OpenTelemetry::init_with(config)`.** The global
+tracer and meter must exist *before* any module registers (the module panics
+otherwise) and the returned guard's `Drop` flushes, so it belongs to `main`
+and cannot be an import. Any other module claiming an exception is reported,
+not written.
+
 ### Access contract (compile-time + boot-time)
 
 - **Visibility is Rust's job.** Flat container ⇒ hide impls
@@ -238,7 +347,7 @@ answers for itself; the mount's own identity — what a client is told it is
 talking to — belongs to the **app**, never to whichever contribution
 registered first, or the answer becomes a function of `imports = [..]` order.
 So an aggregating surface whose protocol exposes a mount-level identity gives
-the app a seam to declare it (`McpModule::endpoint(McpEndpoint::new(..))`,
+the app a seam to declare it (`McpModule::for_root(McpOptions { endpoints, .. })`,
 provider-less metadata read back at mount), and:
 
 - **the declaration replaces only what it states** — identity is declared,
@@ -323,10 +432,12 @@ name order; init failure aborts boot, shutdown is best-effort.
   `McpHost` (the object-safe `ServerHandler` view) — it never has to know
   it is sharing. Guard, `dyn McpToolContext` and `McpConfig` are container
   bindings, so they resolve **once per path**, not per host. The endpoint's
-  *identity* is the app's: `McpModule::endpoint(McpEndpoint::new(path, name,
-  version))`, because one endpoint reports one `serverInfo` and one
-  `instructions` however many features share it. Identity is **not** config —
-  it has no `NESTRS_MCP__*` twin.
+  *identity* is the app's: `McpModule::for_root(McpOptions { endpoints:
+  vec![McpEndpoint::new(path, name, version)], .. })`, because one endpoint
+  reports one `serverInfo` and one `instructions` however many features share
+  it. Identity is **not** config — it has no `NESTRS_MCP__*` twin, which is why
+  it travels in `McpOptions` beside the config rather than through a second
+  call.
 - **`nest-rs-openapi`** — import `OpenApiModule`; self-mounts
   `GET /api-json` + offline Swagger UI at `GET /api`. Document
   **composed** from the route table. Schemas via **schemars**;
@@ -343,9 +454,12 @@ name order; init failure aborts boot, shutdown is best-effort.
   the single import. Within that gate, credentials decide: complete ⇒
   active, absent ⇒ inert + `warn`, partial/invalid ⇒ boot fails naming
   the provider. A duplicate key, or a registry key disagreeing with the
-  provider's own `key()`, **fails boot**. Pinning config in code is the
-  ordinary config seam (provide the `GithubSocialConfig` value), not a
-  second module. A third-party provider crate is therefore exactly two
+  provider's own `key()`, **fails boot**. **`SocialModule` takes no
+  configuration** — the entry names the provider's own `#[config]`, so
+  discovering a provider is what loads its credentials, and the module, which
+  never learns the provider exists, has nothing to declare. See the converse
+  corollary under *`for_root` — one seam, one value, no chain*.
+  A third-party provider crate is therefore exactly two
   files: `config.rs` (`#[config]` + `SocialProviderConfig`) and
   `provider.rs` (`SocialProvider` + `inventory::submit!` whose `build` is
   one `resolve_provider` call). Ships first-party GitHub + Google;

@@ -189,6 +189,47 @@ pub struct DuplicateProviderError {
     pub type_name: &'static str,
 }
 
+/// Two import sites each *declared* a value for the same type, and one of them
+/// would have to lose. Raised by `AppBuilder::build` before any factory runs.
+///
+/// The framework refuses to pick because both call sites are deliberate: the
+/// container resolves an ordinary collision by keeping the first factory
+/// queued, which would make the surviving value a function of `imports = [..]`
+/// order — silently dropped, on the wrong side of *no silent failure*. Only a
+/// **declaration** contests (`ContainerBuilder::provide_declared_factory`): a
+/// pinned config base, or a module binding an implementation a sibling module
+/// also binds. A module queuing the same default twice never does, so a diamond
+/// import stays legal.
+///
+/// `remedy` comes from the declaring call site, which is the only place that
+/// knows what the two sites were.
+#[derive(Debug, Error)]
+#[error("contested declaration: `{type_name}` is declared by two import sites. {remedy}")]
+pub struct ContestedDeclarationError {
+    /// The type declared more than once.
+    pub type_name: &'static str,
+    /// What the reader should do instead, supplied by the declaring seam.
+    pub remedy: &'static str,
+}
+
+/// A module queued an async factory, but the boot went through the synchronous
+/// [`App::new`](crate::App::new), which has no factory phase to drain it.
+///
+/// The value would simply never exist: a `Module::for_root(cfg)` whose config
+/// resolves to nothing, a pool nobody opened. Injecting it fails the access
+/// graph, but reading it through `Container::get` would just return `None` —
+/// so the boot refuses instead of leaving the hole open.
+#[derive(Debug, Error)]
+#[error(
+    "`{type_name}` is provided by an async factory, which the synchronous `App::new` never runs. \
+     A module's `for_root(..)` and `ConfigModule::for_feature` both queue one. Boot with \
+     `App::builder().module::<M>().build().await` instead."
+)]
+pub struct UnresolvedFactoryError {
+    /// The type whose factory nothing would drain.
+    pub type_name: &'static str,
+}
+
 /// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider
 /// registered as global infrastructure (a seed or a factory output). Raised at
 /// boot by the keyed pass of the access-graph validation. Unlike a bare

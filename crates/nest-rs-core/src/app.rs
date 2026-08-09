@@ -12,10 +12,10 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    AccessError, DuplicateProviderError, ProviderOrder, ReachableProviders, ResolverSchemaActive,
-    UnreachableResolversError, provider_order_from_inventory,
-    reachable_provider_ids_from_inventory, unreachable_resolvers_from_inventory,
-    validate_from_inventory, validate_keyed_from_inventory,
+    AccessError, ContestedDeclarationError, DuplicateProviderError, ProviderOrder,
+    ReachableProviders, ResolverSchemaActive, UnreachableResolversError, UnresolvedFactoryError,
+    provider_order_from_inventory, reachable_provider_ids_from_inventory,
+    unreachable_resolvers_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
     warn_unreachable_resolvers_from_inventory,
 };
 use crate::container::ProviderKey;
@@ -46,6 +46,25 @@ fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
     Ok(())
 }
 
+/// Fail the boot when two import sites each declared a value for one type —
+/// neither may silently win on queue position.
+fn check_contested_declarations(builder: &ContainerBuilder) -> Result<()> {
+    if let Some((type_name, remedy)) = builder.contested_factories().first() {
+        return Err(ContestedDeclarationError { type_name, remedy }.into());
+    }
+    Ok(())
+}
+
+/// Fail the synchronous boot when a module queued an async factory: `App::new`
+/// has no factory phase, so the value would never be built and the hole would
+/// only surface as a `None` at first read.
+fn check_no_queued_factories(builder: &ContainerBuilder) -> Result<()> {
+    if let Some(type_name) = builder.queued_factory_names().first() {
+        return Err(UnresolvedFactoryError { type_name }.into());
+    }
+    Ok(())
+}
+
 impl App {
     /// Build the container from the root module synchronously. Every wiring
     /// failure is a `Result`: a cross-module reach returns
@@ -72,6 +91,10 @@ impl App {
         // imperatively-provided values) — consulted so a dependency provided
         // outside the declarative graph is not misreported as unmet.
         check_duplicate_providers(&builder)?;
+        // `register` ran but `collect` did not, so anything a module queued as an
+        // async factory is unreachable on this path — refuse rather than boot a
+        // container with the hole in it.
+        check_no_queued_factories(&builder)?;
         let registered = builder.registered_ids();
         validate_from_inventory(&roots, &global, &registered).map_err(AccessError::into_anyhow)?;
         // Keyed providers are configured imperatively; the sync path seeds none
@@ -379,10 +402,13 @@ impl AppBuilder {
         for hooks in &modules {
             builder = (hooks.collect)(builder);
         }
+        // Before any factory runs: two import sites declared the same type and
+        // one would have to lose silently.
+        check_contested_declarations(&builder)?;
         // A factory whose output type a seed already supplies is skipped, so a
         // seed wins over a module's `for_root` factory — the path a test takes
         // to boot against a pre-built resource.
-        for (type_id, factory) in builder.take_factories() {
+        for (type_id, _name, factory) in builder.take_factories() {
             if builder.contains(type_id) {
                 continue;
             }

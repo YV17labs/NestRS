@@ -52,4 +52,4 @@ mod module;
 pub use client::{HeadMetadata, Storage};
 pub use config::StorageConfig;
 pub use error::{Result, StorageError};
-pub use module::StorageModule;
+pub use module::{StorageModule, StorageSetup};

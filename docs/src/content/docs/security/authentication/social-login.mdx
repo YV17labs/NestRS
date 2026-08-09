@@ -62,8 +62,23 @@ Three outcomes per provider, and no fourth:
 
 Real credentials are a deployment's explicit intent, so a provider never
 activates by accident; and a half-configured login never starts serving
-silently. Pinning config in code is the ordinary config seam — provide a
-`GithubSocialConfig` value and it wins over the environment.
+silently.
+
+Note what you do **not** write: `SocialModule` takes no configuration. Each
+provider carries its own `#[config]`, and its registry entry names it — so
+discovering a provider is what loads its credentials. The module never learns
+which providers are linked, which is exactly why it has nothing to declare
+about them — the import at the top of this page is the whole wiring, whether
+one provider is linked or five.
+
+Adding a provider is adding its crate to `Cargo.toml` and its credentials to
+the environment. No import changes, no list to keep in sync.
+
+A provider's credentials are deployment data — the client id, the secret and the
+redirect URL all differ between your laptop and production — so they have no
+pinned-in-code path, and that is deliberate rather than missing. A test that
+must not read the ambient environment seeds the config on the builder, the same
+hard pin every other config uses.
 
 ## The request flow
 

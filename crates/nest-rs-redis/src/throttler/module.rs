@@ -25,7 +25,7 @@ pub struct RedisThrottlerModule;
 
 impl RedisThrottlerModule {
     /// Pass `None` to load [`ThrottlerConfig`] from `NESTRS_THROTTLER__*`, or a
-    /// [`ThrottlerConfig`] to pin it in code (wins over the environment).
+    /// [`ThrottlerConfig`] to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<ThrottlerConfig>>) -> RedisThrottlerSetup {
         RedisThrottlerSetup {
             pinned: config.into(),
@@ -45,8 +45,9 @@ impl DynamicModule for RedisThrottlerSetup {
         // Same `Arc<dyn ThrottlerStore>` factory-output binding the in-memory
         // module registers — a factory output so the guard's
         // `#[inject] Arc<dyn ThrottlerStore>` resolves as global infrastructure.
-        let builder =
-            builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|container| async move {
+        let builder = builder.provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(
+            nest_rs_throttler::BACKEND_REMEDY,
+            |container| async move {
                 let config = container
                     .get::<ThrottlerConfig>()
                     .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
@@ -61,7 +62,8 @@ impl DynamicModule for RedisThrottlerSetup {
                 })?;
                 Ok(Arc::new(RedisThrottler::new((*conn).clone(), default))
                     as Arc<dyn ThrottlerStore>)
-            });
+            },
+        );
         // The guard rides with the store on every backend — swapping the store
         // must not also change what a controller has to list in `providers`.
         nest_rs_throttler::provide_guard(builder)

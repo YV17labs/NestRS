@@ -24,7 +24,7 @@ pub struct ThrottlerModule;
 
 impl ThrottlerModule {
     /// Pass `None` to load [`ThrottlerConfig`] from `NESTRS_THROTTLER__*`, or a
-    /// [`ThrottlerConfig`] to pin it in code (wins over the environment).
+    /// [`ThrottlerConfig`] to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<ThrottlerConfig>>) -> ThrottlerSetup {
         ThrottlerSetup {
             pinned: config.into(),
@@ -46,16 +46,25 @@ impl DynamicModule for ThrottlerSetup {
         // infrastructure (the guard's `#[inject] Arc<dyn ThrottlerStore>`
         // resolves). An alternative backend (`RedisThrottlerModule`) supplies
         // the same binding from its own factory; import exactly one.
-        let builder =
-            builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|container| async move {
+        let builder = builder.provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(
+            BACKEND_REMEDY,
+            |container| async move {
                 let config = container
                     .get::<ThrottlerConfig>()
                     .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
                 Ok(Arc::new(InMemoryThrottler::new(resolve(&config))) as Arc<dyn ThrottlerStore>)
-            });
+            },
+        );
         provide_guard(builder)
     }
 }
+
+/// What the boot tells you when two backends both bound the store. Shared with
+/// `nest-rs-redis` so the two halves of the rule cannot drift.
+#[doc(hidden)]
+pub const BACKEND_REMEDY: &str = "Import exactly one throttler backend: `ThrottlerModule` keeps \
+                                  counters in this process, `RedisThrottlerModule` shares them \
+                                  across instances.";
 
 /// Register [`ThrottlerGuard`] as global infrastructure, next to whichever
 /// `dyn ThrottlerStore` binding the caller just registered.
@@ -72,6 +81,10 @@ impl DynamicModule for ThrottlerSetup {
 /// Every store backend calls this, so the two never drift: an app that swaps
 /// `ThrottlerModule` for `RedisThrottlerModule` changes the store and nothing
 /// else, exactly as the guard's own doc promises.
+///
+/// A cross-crate seam for the backends, not an app-facing one: `for_root` is
+/// the only way an app wires throttling.
+#[doc(hidden)]
 pub fn provide_guard(builder: ContainerBuilder) -> ContainerBuilder {
     builder.provide_factory::<ThrottlerGuard, _, _>(|container| async move {
         let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
@@ -86,7 +99,8 @@ pub fn provide_guard(builder: ContainerBuilder) -> ContainerBuilder {
 
 /// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] every
 /// [`ThrottlerStore`] backend needs. Shared so the in-memory and Redis modules
-/// resolve config identically.
+/// resolve config identically — a cross-crate seam, not an app-facing one.
+#[doc(hidden)]
 pub fn resolve(config: &ThrottlerConfig) -> Throttle {
     let limit = config.limit.unwrap_or(DEFAULT_THROTTLE.limit);
     let window = config

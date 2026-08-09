@@ -1,16 +1,3 @@
-//! The MCP edge of `users` — a second feature's tools on the **same** endpoint
-//! as `audio`'s.
-//!
-//! `assistant` mounts `AudioMcpModule` and `UsersMcpModule`, both at `/mcp`,
-//! because every shipped MCP client config points at a single URL. Each keeps
-//! its own `mcp/` adapter folder and its own `<Feature>McpModule`: the endpoint
-//! aggregates them, so the layout never has to be inverted into one
-//! cross-domain host.
-//!
-//! The tool reads through `UsersService`, so it is row-filtered by the caller's
-//! ability exactly like the HTTP edge — a caller from another organisation
-//! lists nothing, without this file writing a check.
-
 use std::sync::Arc;
 
 use nest_rs::mcp::rmcp;

@@ -1,24 +1,9 @@
-//! Two features' tools on one MCP endpoint, and a second endpoint that stays
-//! its own.
-//!
-//! `assistant` mounts `AudioMcpModule` **and** `UsersMcpModule` at `/mcp`, and
-//! `PostsMcpModule` at `/posts/mcp`. Both halves matter: an MCP client config
-//! points at a single URL, so a product needs several features on one path; and
-//! the spec namespaces tools per endpoint, so an app that deliberately serves
-//! two paths must keep them apart.
-//!
-//! What this proves that the framework suite cannot: the merge holds with the
-//! **real** authz bridge in front of it — the ambient ability reaches a tool
-//! body that was reached through the composite, so row filtering is not lost in
-//! the routing.
-
 use nest_rs::mcp::declared_endpoint;
 use nest_rs::testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use serde_json::json;
 
 use crate::*;
 
-/// The tools each feature contributes, by the endpoint they contribute to.
 const SHARED_TOOLS: [&str; 2] = ["transcode_status", "list_people"];
 const POSTS_TOOL: &str = "list_posts";
 
@@ -77,13 +62,6 @@ async fn the_second_endpoint_serves_only_its_own_feature() {
     }
 }
 
-/// A client sees **one** server on `/mcp`, so the app names it — otherwise the
-/// endpoint would introduce itself as whichever feature `imports = [..]` listed
-/// first, and hand the model that one feature's instructions for the whole
-/// surface.
-///
-/// Asserted against the declaration read back from the container, never a
-/// literal copied out of `module.rs`: a copy passes while the two drift.
 #[tokio::test]
 async fn the_app_names_the_endpoint_its_features_share() {
     let (_db, app) = boot().await;
@@ -111,9 +89,6 @@ async fn the_app_names_the_endpoint_its_features_share() {
     );
 }
 
-/// The merged endpoint keeps the guarantee a single host had: the tool reads
-/// through `Repo`, so the caller's ability filters the rows — the composite
-/// routes the call, it does not sit between the body and its ambient state.
 #[tokio::test]
 async fn a_merged_endpoint_still_row_filters_the_tool_body() {
     let (db, app) = boot().await;

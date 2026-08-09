@@ -1,5 +1,3 @@
-//! e2e suite root: the module list plus the fixtures the siblings share.
-
 mod audio;
 mod graphql;
 mod health;
@@ -107,7 +105,6 @@ pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> Strin
     id
 }
 
-/// The `Location` header, lifted out before `json()` consumes the response.
 pub(crate) fn location_of(resp: &TestResponse) -> Option<String> {
     resp.0
         .headers()
@@ -116,9 +113,6 @@ pub(crate) fn location_of(resp: &TestResponse) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// R9-4: a `201` names what it created (RFC 9110 §15.3.2) — the collection the
-/// caller posted to plus the new id. Asserted here rather than in each test, so
-/// every generated create route the suite drives is covered by construction.
 #[track_caller]
 pub(crate) fn assert_created_location(location: Option<&str>, collection: &str, id: &str) {
     assert_eq!(

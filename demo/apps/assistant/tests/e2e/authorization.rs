@@ -1,6 +1,3 @@
-//! The assistant as an OAuth 2.1 resource server: an unauthenticated MCP call
-//! hands back everything a client needs to go get a token.
-
 use nest_rs::http::poem::http::{StatusCode, header};
 use serde_json::Value;
 

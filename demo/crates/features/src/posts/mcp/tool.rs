@@ -1,12 +1,3 @@
-//! The MCP edge of `posts` — one host serving three capabilities.
-//!
-//! Tools, prompts and resources all read through `PostsService`, so all three
-//! are row-filtered by the caller's ability: the framework re-installs the
-//! ambient executor and ability around **every** MCP operation, not just
-//! `tools/call`. A caller from another organisation reads an empty list from
-//! the tool, gets an empty prompt, and gets `404` on a resource — without any
-//! of the three writing a check.
-
 use std::sync::Arc;
 
 use nest_rs::authz::Action;
@@ -26,7 +17,6 @@ use uuid::Uuid;
 
 use crate::posts::PostsService;
 
-/// The `resources/list` + `resources/read` URI scheme this host serves.
 const POST_URI_PREFIX: &str = "post://";
 
 #[mcp(path = "/posts/mcp")]
@@ -37,9 +27,6 @@ pub struct PostsTool {
 }
 
 impl PostsTool {
-    /// A `DbErr` never reaches the caller as prose: it is logged by the data
-    /// layer and reported as an opaque protocol error, the same posture the
-    /// HTTP edge takes.
     fn opaque(err: sea_orm::DbErr) -> McpError {
         tracing::error!(target: "features::posts", error = %err, "mcp operation failed");
         McpError::internal_error("internal error".to_owned(), None)
@@ -68,8 +55,6 @@ impl PostsTool {
 
 #[prompt_router]
 impl PostsTool {
-    /// A prompt is a *read* of the same rows the tool lists, so it inherits the
-    /// same row filtering — the reason this is worth showing next to the tool.
     #[prompt(
         description = "Draft a follow-up post, primed with the titles the caller \
                        can already read."

@@ -66,8 +66,6 @@ mod tests {
         ability_scoped(roles, org_id, constants::all())
     }
 
-    /// The rules as built for a token carrying exactly `scopes` — the shape a
-    /// delegated (MCP) client holds.
     fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Ability {
         let claims = Claims {
             sub: Some(Uuid::nil()),

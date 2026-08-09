@@ -1,18 +1,3 @@
-//! OAuth scopes narrowing a token, end to end against the real app and DB.
-//!
-//! The scenario is the one MCP made ordinary: a user hands a third-party client
-//! a token minted for *part* of what they can do. Roles still say who the caller
-//! is; the scope says how much of that identity this particular token may
-//! exercise. A read-only delegation must therefore read — and be refused, in a
-//! way it can act on, the moment it tries to write.
-//!
-//! The `WWW-Authenticate: … error="insufficient_scope"` challenge that carries
-//! that refusal back is asserted in the framework's own suite
-//! (`crates/nest-rs-authn/tests/integration/resource/scope.rs`), where the app
-//! composes `ProtectedResourceModule`. This app is not the demo's resource
-//! server — `assistant` is — so what it proves here is the half that belongs to
-//! it: the enforcement.
-
 use features::authz::constants;
 use features::testing::{ORG_ID, token_with_scopes};
 use nest_rs::testing::TestApp;
@@ -22,11 +7,6 @@ use uuid::Uuid;
 
 use crate::*;
 
-/// A bearer token for `org_id`, subject `sub`, delegated exactly `scopes`.
-///
-/// The subject is not optional here: `PostAuthorGuard` refuses a subjectless
-/// token outright, and a test whose write failed for *that* reason would look
-/// like a scope refusal while proving nothing about scopes.
 fn narrow_bearer(org_id: &str, sub: Uuid, scopes: &[&str]) -> String {
     format!(
         "Bearer {}",
@@ -39,7 +19,6 @@ fn narrow_bearer(org_id: &str, sub: Uuid, scopes: &[&str]) -> String {
     )
 }
 
-/// An org with one user in it — the author every post write needs.
 async fn org_with_author(app: &TestApp, label: &str) -> (String, Uuid) {
     let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
     let org = create_org(app, &bootstrap, label).await;

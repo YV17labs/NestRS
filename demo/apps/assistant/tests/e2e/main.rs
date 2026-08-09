@@ -17,6 +17,10 @@ use uuid::Uuid;
 
 use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
 
+pub(crate) const SHARED_ENDPOINT: &str = "/mcp";
+
+pub(crate) const POSTS_ENDPOINT: &str = "/mcp/posts";
+
 pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await

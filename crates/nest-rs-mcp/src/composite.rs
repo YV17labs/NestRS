@@ -17,12 +17,13 @@
 //! | **Listing** | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list` | Every host is asked; the entries are concatenated in registration order onto the first host's envelope. |
 //! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that owns the name; failing that, offered to each host in turn until one does not answer *not-found*. |
 //! | **Broadcast** | `logging/setLevel`, every notification | Delivered to every host. |
-//! | **Declaration** | `initialize`, `discover`, `get_info`, `supported_protocol_versions` | The declared [`McpEndpoint`] states the identity; capabilities are unioned, protocol versions intersected, instructions declared-or-joined. |
+//! | **Declaration** | `initialize`, `discover`, `get_info`, `supported_protocol_versions` | The resolved [`ResolvedIdentity`] states the identity; capabilities are unioned, protocol versions intersected, instructions declared-or-joined. |
 //!
-//! Identity is the one part a *host* cannot answer for, because an endpoint
-//! reports one `serverInfo` however many features share it — so the app
-//! declares it (`McpOptions::endpoints`), and undeclared it falls back to the
-//! first host's with a boot `warn`. See [`McpEndpoint`].
+//! Identity is the one part several hosts cannot each answer for, because an
+//! endpoint reports one `serverInfo` however many features share it — so the
+//! app names itself once (`McpOptions::server`) and at most one host on the
+//! path refines that (`#[mcp(name = …, instructions = …)]`). Undeclared, it
+//! falls back to the hosts' own with a boot `warn`. See [`crate::McpIdentity`].
 //!
 //! `tools/call` is routed through an index the mount builds once, name → host,
 //! from what each host's `#[tool_router]` declares — deliberately *not* by
@@ -64,7 +65,7 @@ use rmcp::service::{NotificationContext, RequestContext, RoleServer, Subscriptio
 use crate::McpError;
 use crate::guard::BoxFuture;
 use crate::host::McpHost;
-use crate::identity::McpEndpoint;
+use crate::identity::ResolvedIdentity;
 use crate::registry::{McpHostMeta, ToolIndex};
 
 /// One host as the mount resolved it: the name a diagnostic prints, and the
@@ -82,19 +83,21 @@ pub struct CompositeHandler {
     hosts: Vec<MountedHost>,
     /// Tool name → position in [`hosts`](Self::hosts), built once at mount.
     tools: Arc<ToolIndex>,
-    /// What the app declared this endpoint to be, when it declared anything.
-    identity: Option<Arc<McpEndpoint>>,
-    path: &'static str,
+    /// What this endpoint was declared to be, app and host merged.
+    identity: Arc<ResolvedIdentity>,
+    /// Fixed at mount and only ever read by a diagnostic, so it is shared
+    /// rather than copied — `build` runs once per MCP session.
+    path: Arc<str>,
 }
 
 impl CompositeHandler {
     /// Build one instance of every host contributing to a path.
     pub(crate) fn build(
         container: &Container,
-        path: &'static str,
+        path: Arc<str>,
         hosts: &[Arc<McpHostMeta>],
         tools: Arc<ToolIndex>,
-        identity: Option<Arc<McpEndpoint>>,
+        identity: Arc<ResolvedIdentity>,
     ) -> Self {
         Self {
             hosts: hosts
@@ -113,13 +116,13 @@ impl CompositeHandler {
     /// Whether the *endpoint* answers a declaration question, rather than the
     /// host that happens to serve it.
     ///
-    /// True once the app declared an [`McpEndpoint`] — it said what this
-    /// endpoint is — or once several hosts share the path, where no single one
-    /// of them can speak for it. False for the lone undeclared host, which *is*
+    /// True once something declared what this endpoint is — the app, or a host
+    /// speaking for the path — or once several hosts share it, where no single
+    /// one of them can speak for it. False for the lone undeclared host, which *is*
     /// the endpoint: its own `initialize` / `discover` override is the answer,
     /// and rebuilding one from `get_info` would silently discard it.
     fn declares_itself(&self) -> bool {
-        self.identity.is_some() || self.hosts.len() > 1
+        self.identity.is_declared() || self.hosts.len() > 1
     }
 
     /// The endpoint's first host — whose own declaration stands in for the
@@ -185,7 +188,7 @@ impl CompositeHandler {
     fn warn_cursor(&self, host: &MountedHost, method: &str) {
         tracing::warn!(
             target: "nest_rs::mcp",
-            path = self.path,
+            path = &*self.path,
             host = host.name,
             method,
             reason = "pagination_across_hosts",
@@ -579,19 +582,17 @@ impl ServerHandler for CompositeHandler {
 
     /// What the endpoint says it is.
     ///
-    /// **Identity is declared, capabilities are observed.** A declared
-    /// [`McpEndpoint`] replaces exactly what it states — `serverInfo` always,
-    /// `instructions` when it wrote any — because those are the app's word about
-    /// its own server. It can never add a capability: those stay the union of
-    /// what the hosts actually serve, so the endpoint cannot advertise a surface
-    /// nobody implements.
+    /// **Identity is declared, capabilities are observed.** A declaration
+    /// replaces exactly what it states — `serverInfo` when the app or a host
+    /// named the server, `instructions` when one of them wrote any. It can never
+    /// add a capability: those stay the union of what the hosts actually serve,
+    /// so the endpoint cannot advertise a surface nobody implements.
     ///
     /// Undeclared, the endpoint borrows its first host's identity and joins the
     /// hosts' instructions rather than dropping all but one. That is a fallback,
-    /// and a shared path taking it is reported at boot
-    /// (`registry::warn_undeclared_identity`) — at N=1 it is not a fallback at
-    /// all: one host alone *is* the server, which is the shape every MCP SDK
-    /// builds.
+    /// and a path taking it is reported at boot (`registry::check_identity`) —
+    /// at N=1 with a host that overrode `get_info` it is not a fallback at all:
+    /// one host alone *is* the server, which is the shape every MCP SDK builds.
     fn get_info(&self) -> ServerInfo {
         let mut infos = self.hosts.iter().map(|host| host.host.get_info());
         let Some(mut merged) = infos.next() else {
@@ -604,11 +605,11 @@ impl ServerHandler for CompositeHandler {
         }
         merged.instructions = (!instructions.is_empty()).then(|| instructions.join("\n\n"));
 
-        if let Some(identity) = &self.identity {
-            merged.server_info = identity.implementation().clone();
-            if let Some(declared) = identity.declared_instructions() {
-                merged.instructions = Some(declared.to_owned());
-            }
+        if let Some(info) = self.identity.implementation() {
+            merged.server_info = info.clone();
+        }
+        if let Some(declared) = self.identity.instructions() {
+            merged.instructions = Some(declared.to_owned());
         }
         merged
     }

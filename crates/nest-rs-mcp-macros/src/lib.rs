@@ -4,17 +4,33 @@
 use proc_macro::TokenStream;
 
 mod mcp;
+mod mcp_impl;
 
 /// Mark a struct as an MCP server handler that self-mounts over HTTP.
 ///
 /// Behaves like `#[injectable]` for construction and emits a `Discoverable`
-/// that attaches an `HttpEndpointMeta` at `path`. The struct must carry the
-/// `rmcp` `#[tool_router]` / `#[tool_handler]` impls. The factory runs per
-/// session, so per-session state stays fresh.
+/// that attaches an `HttpEndpointMeta`. The struct must carry the `rmcp`
+/// `#[tool_router]` / `#[tool_handler]` impls. The factory runs per session, so
+/// per-session state stays fresh.
+///
+/// Every argument is optional. `path` is the **whole URL path** — omit it to
+/// serve `nest_rs_mcp::DEFAULT_PATH` (`/mcp`), which is what a feature
+/// contributing tools to this app's server wants. Unlike a controller's, the
+/// path is not a namespace the host owns: nothing nests under it, it names the
+/// one endpoint the host joins, and peers that write the same one share it.
+/// `name` / `version` / `title` declare which endpoint stands apart from the
+/// app's default, overriding `McpOptions::server` per field; `version` needs a
+/// `name` beside it, and two hosts on one path both declaring fails boot.
+/// `instructions` is **not** an argument: it describes the *server*, so it is
+/// declared once on `McpOptions::server`, and what each tool does belongs to
+/// its own `#[tool(description = "…")]`.
 ///
 /// ```ignore
-/// #[mcp(path = "/mcp")]
+/// #[mcp]
 /// struct MyHandler { #[inject] svc: Arc<MyService> }
+///
+/// #[mcp(path = "/mcp/posts", name = "assistant-posts")]
+/// struct PostsHandler { #[inject] svc: Arc<PostsService> }
 /// ```
 ///
 /// # Why not `#[tools]`?
@@ -31,16 +47,22 @@ mod mcp;
 /// # Expands to
 ///
 /// The struct unchanged, a `from_container` constructor, and an `impl
-/// Discoverable` whose `register` attaches an exempt `HttpEndpointMeta` that
-/// nests the rmcp endpoint (behind the MCP operation guard) at `path`.
+/// Discoverable` whose `register` hands the host to `nest_rs_mcp::register_host`
+/// — which resolves the path (the default when the host declared none), records
+/// the contribution, and (for the first host on a path) attaches the exempt
+/// `HttpEndpointMeta` that nests the rmcp endpoint behind the MCP operation
+/// guard.
 ///
 /// ```ignore
 /// struct MyHandler { /* … */ }
 /// impl MyHandler { fn from_container(c) -> Self { /* … */ } }
 /// impl ::nest_rs_core::Discoverable for MyHandler {
 ///     fn register(b) -> ContainerBuilder {
-///         b.attach_meta::<MyHandler, ::nest_rs_http::HttpEndpointMeta>(
-///             ::nest_rs_http::HttpEndpointMeta::new("/mcp", "mcp", |c, r| { /* nest guarded endpoint */ }).exempt(),
+///         ::nest_rs_mcp::register_host::<Self>(
+///             b, "", "MyHandler",
+///             ::nest_rs_mcp::McpIdentity::declared(None, None, None),
+///             |c| Arc::new(Self::from_container(c)),
+///             || Self::tool_router().list_all(),
 ///         )
 ///     }
 /// }

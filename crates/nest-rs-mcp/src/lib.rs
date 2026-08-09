@@ -5,7 +5,13 @@
 //! mounts under the HTTP server. Apps activate MCP by listing the
 //! `#[mcp]`-decorated provider — there is no `<Transport>Module` activation
 //! seam to import, and no `Transport` impl. [`McpModule`] exists only to
-//! configure the streamable-HTTP server ([`McpConfig`]); it activates nothing.
+//! configure the streamable-HTTP server ([`McpConfig`]) and name the app
+//! ([`McpIdentity`]); it activates nothing.
+//!
+//! A host's `path` is the whole URL path: omit it for [`DEFAULT_PATH`]
+//! (`/mcp`), or write one to serve a second endpoint. It is not a namespace the
+//! host owns the way a `#[controller]`'s is — nothing nests under it, it names
+//! the one endpoint the host joins, and peers writing the same path share it.
 //!
 //! # Every capability, not just tools
 //!
@@ -58,6 +64,7 @@ mod composite;
 mod config;
 mod context;
 mod endpoint;
+mod error;
 mod guard;
 mod guards;
 mod host;
@@ -71,15 +78,16 @@ pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
 pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
+pub use error::Opaque;
 pub use guard::{BoxFuture, FallbackMcpGuard, McpOperationGuard};
 pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;
-pub use identity::McpEndpoint;
+pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpOptions, McpSetup};
 pub use propagate::PropagatingHandler;
+pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
 #[doc(hidden)]
 pub use registry::{DefaultToolRouter, register_host};
-pub use registry::{McpHostMeta, declared_endpoint, hosts_on};
 /// Per-operation accessor for `#[injectable(scope = request)]` providers inside
 /// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;
@@ -137,11 +145,12 @@ pub use rmcp::transport::streamable_http_server::{
 ///
 /// * **Macro hygiene.** rmcp's `#[tool]` / `#[tool_router]` / `#[tool_handler]`
 ///   / `#[prompt]` family expands to bare `rmcp::` paths resolved against the
-///   *call site's* scope. `use nest_rs::mcp::rmcp;` in a host file supplies that
-///   name, so the host's manifest needs no `rmcp` entry and cannot drift from
-///   the major the framework built against. It is one `use` beside the ones the
-///   host already writes — deliberately explicit rather than emitted by
-///   `#[mcp]`, because two hosts in one module would then collide on the name.
+///   *call site's* scope. `#[mcp]` on an impl block carries that import for you,
+///   inside a module named for the host — so two hosts in one file cannot
+///   collide on the name, and the host's file writes no `use rmcp` at all. A
+///   host that hand-writes `ServerHandler` is outside that expansion and imports
+///   this itself, which is also what keeps its manifest free of an `rmcp` entry
+///   that could drift from the major the framework built against.
 /// * **Reaching anything not re-exported above** — a newer rmcp item, or one
 ///   this crate has no opinion about.
 pub use rmcp;

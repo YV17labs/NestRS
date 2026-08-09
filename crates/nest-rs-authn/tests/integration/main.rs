@@ -49,7 +49,7 @@ pub fn challenge(resp: &poem::Response) -> String {
 /// rmcp's own host macros expand against the call site's scope; the `rmcp`
 /// re-export imported above is what supplies that name without an `rmcp`
 /// manifest entry.
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 pub struct EchoTool;
 

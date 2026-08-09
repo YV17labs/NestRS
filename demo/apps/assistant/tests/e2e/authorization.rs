@@ -3,13 +3,13 @@ use serde_json::Value;
 
 use features::testing::AUDIENCE as RESOURCE;
 
-use crate::boot;
+use crate::{SHARED_ENDPOINT, boot};
 
 #[tokio::test]
 async fn an_unauthenticated_tool_call_points_at_the_metadata_document() {
     let (_db, app) = boot().await;
 
-    let resp = app.http().post("/mcp").send().await;
+    let resp = app.http().post(SHARED_ENDPOINT).send().await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
 
     let challenge = resp
@@ -68,7 +68,7 @@ async fn discovery_is_reachable_without_a_token_but_tools_are_not() {
         .assert_status_is_ok();
 
     app.http()
-        .post("/mcp")
+        .post(SHARED_ENDPOINT)
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);

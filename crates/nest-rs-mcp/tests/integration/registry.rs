@@ -26,21 +26,24 @@ use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
-    AllowAllMcpGuard, CallToolResult, ContentBlock, McpEndpoint, McpError, McpModule,
+    AllowAllMcpGuard, CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule,
     McpOperationGuard, McpOptions, McpSetup, ServerHandler, hosts_on, mcp, prompt, prompt_handler,
     prompt_router, tool, tool_handler, tool_router,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
 
-/// The shared endpoint both `audio`-shaped and `posts`-shaped hosts below mount
-/// on — one path, the way a client config points at one URL.
+/// The endpoint both `audio`-shaped and `posts`-shaped hosts below mount on:
+/// the prefix itself, which is where a bare `#[mcp]` lands and where a client
+/// config points. Spelled out rather than read from `McpConfig` on purpose — a
+/// test that computed it from the same source as the code would pass through a
+/// change to the default.
 const SHARED: &str = "/mcp";
 
 // --- two features, one endpoint --------------------------------------------
 
 /// Stands in for a feature that serves tools only.
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 struct AlphaTool;
 
@@ -64,7 +67,7 @@ impl ServerHandler for AlphaTool {
 
 /// Stands in for a feature that serves all three capabilities, so the merge is
 /// exercised beyond `tools/call`.
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 struct BetaTool;
 
@@ -264,34 +267,31 @@ async fn initialize_advertises_the_union_of_capabilities_and_instructions() {
 // carries one `serverInfo` and one `instructions`, on `initialize` and on
 // `server/discover` alike — the same shape `new McpServer({name, version})`
 // builds in the TypeScript SDK and a FastMCP parent keeps when it mounts
-// children. A `#[mcp]` host owns a *feature*, so on a shared path none of them
-// can speak for the endpoint; the app declares it.
+// children. Two owners answer for it, and neither can shadow the other: the app
+// names itself once, and at most one host on a path refines that for its own
+// endpoint.
 
-/// The identity `SharedEndpointApp` above deliberately leaves undeclared, so
-/// both shapes are witnessed against the same two hosts.
-fn declared_identity() -> McpEndpoint {
-    McpEndpoint::new(SHARED, "composition-witness", "9.9.9")
-        .title("Composition witness")
-        .instructions("Endpoint instructions.")
-}
-
-/// The import site every declaration test below uses: identity only, server
-/// options left to the environment.
-fn declare(endpoint: McpEndpoint) -> McpSetup {
+/// The app naming itself once — what every endpoint it exposes reports unless a
+/// host on that endpoint says otherwise.
+fn app_identity() -> McpSetup {
     McpModule::for_root(McpOptions {
-        endpoints: vec![endpoint],
+        server: Some(
+            McpIdentity::new("composition-witness", "9.9.9")
+                .title("Composition witness")
+                .instructions("Endpoint instructions."),
+        ),
         ..Default::default()
     })
 }
 
-#[module(imports = [AlphaMcpModule, BetaMcpModule, declare(declared_identity())])]
+#[module(imports = [AlphaMcpModule, BetaMcpModule, app_identity()])]
 struct DeclaredEndpointApp;
 
 #[tokio::test]
-async fn a_declared_identity_is_what_the_endpoint_reports() {
+async fn the_app_identity_is_what_a_shared_endpoint_reports() {
     let app = TestApp::for_module::<DeclaredEndpointApp>()
         .await
-        .expect("a declared endpoint boots");
+        .expect("a named app boots");
 
     let body = initialize(app.http(), SHARED, None).await;
     let advertised = &result(&body)["result"];
@@ -315,8 +315,9 @@ async fn a_declared_identity_is_what_the_endpoint_reports() {
     assert_eq!(
         advertised["instructions"].as_str(),
         Some("Endpoint instructions."),
-        "declared instructions *replace* the hosts', rather than being appended \
-         to a blurb no one wrote: {advertised}",
+        "the app's instructions *replace* the hosts' own blurbs — on a shared \
+         endpoint no host can see the whole, so nobody speaks for it but the \
+         app: {advertised}",
     );
 
     assert!(
@@ -328,13 +329,13 @@ async fn a_declared_identity_is_what_the_endpoint_reports() {
     );
 }
 
-/// Every operation still routes across both hosts: naming the endpoint is a
+/// Every operation still routes across both hosts: naming the app is a
 /// declaration, not a takeover.
 #[tokio::test]
 async fn declaring_an_identity_changes_nothing_about_routing() {
     let app = TestApp::for_module::<DeclaredEndpointApp>()
         .await
-        .expect("a declared endpoint boots");
+        .expect("a named app boots");
 
     let alpha = call_tool(app.http(), SHARED, "alpha_ping", None).await;
     let beta = call_tool(app.http(), SHARED, "beta_ping", None).await;
@@ -344,10 +345,256 @@ async fn declaring_an_identity_changes_nothing_about_routing() {
     );
 }
 
-/// The fallback is order-dependent by construction — `imports = [..]` decides
-/// whose name a client sees — so a shared endpoint that takes it is reported,
-/// with the remedy in the event. A lone host *is* its endpoint, so the ordinary
-/// single-host mount stays silent.
+// --- a host declaring for its own endpoint ------------------------------------
+
+/// The path `OwnedTool` lands on — its own second endpoint, written whole.
+const OWNED: &str = "/mcp/owned";
+
+/// A feature whose endpoint stands apart. It renames the server — but
+/// deliberately not the version, which is the binary's and which a shared
+/// feature library cannot know, nor the instructions, which describe the server.
+#[mcp(path = "/mcp/owned", name = "witness-owned")]
+#[derive(Clone)]
+struct OwnedTool;
+
+#[tool_router]
+impl OwnedTool {
+    #[tool(description = "The tool of a self-framing endpoint.")]
+    async fn owned_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("owned")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for OwnedTool {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("Host blurb nobody should read.")
+    }
+}
+
+#[module(providers = [OwnedTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct OwnedMcpModule;
+
+#[module(imports = [OwnedMcpModule, app_identity()])]
+struct OwnedEndpointApp;
+
+/// The whole point of declaring at the host: a feature names the endpoint it
+/// owns, in the file that serves it, and inherits everything it cannot know.
+#[tokio::test]
+async fn a_host_declares_its_own_endpoint_and_inherits_the_rest() {
+    let app = TestApp::for_module::<OwnedEndpointApp>()
+        .await
+        .expect("a self-declaring host boots");
+
+    let body = initialize(app.http(), OWNED, None).await;
+    let advertised = &result(&body)["result"];
+
+    assert_eq!(
+        advertised["serverInfo"]["name"].as_str(),
+        Some("witness-owned"),
+        "the host's own name wins for its endpoint: {advertised}",
+    );
+    assert_eq!(
+        advertised["serverInfo"]["version"].as_str(),
+        Some("9.9.9"),
+        "…while the version stays the app's, which is the only place that knows \
+         it: {advertised}",
+    );
+    assert_eq!(
+        advertised["serverInfo"]["title"].as_str(),
+        Some("Composition witness"),
+        "a field the host left out keeps the app's: {advertised}",
+    );
+    assert_eq!(
+        advertised["instructions"].as_str(),
+        Some("Endpoint instructions."),
+        "…and the app's instructions reach it too, replacing the host's own \
+         blurb rather than being appended to it: {advertised}",
+    );
+}
+
+/// A host may name its endpoint in an app that named itself — but not in one
+/// that did not, because the version would then be nobody's.
+#[module(imports = [OwnedMcpModule])]
+struct UnbackedNameApp;
+
+#[tokio::test]
+async fn a_name_with_no_version_behind_it_fails_boot() {
+    let err = match TestApp::for_module::<UnbackedNameApp>().await {
+        Ok(_) => panic!("a named endpoint with no version anywhere must not boot"),
+        Err(err) => err.to_string(),
+    };
+
+    assert!(
+        err.contains("OwnedTool") && err.contains("witness-owned"),
+        "the failure names the host and what it called itself: {err}",
+    );
+    assert!(
+        err.contains("McpIdentity::new"),
+        "…and carries the remedy at the seam that fixes it: {err}",
+    );
+}
+
+// --- two hosts declaring one endpoint ----------------------------------------
+
+/// A peer of `OwnedTool` on the same path, also declaring. One endpoint reports
+/// one `serverInfo`, so this is the ambiguity the framework refuses to resolve
+/// silently.
+#[mcp(path = "/mcp/owned", name = "witness-contender")]
+#[derive(Clone)]
+struct ContendingTool;
+
+#[tool_router]
+impl ContendingTool {
+    #[tool(description = "A peer that also wants to name the endpoint.")]
+    async fn contending_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            "contending",
+        )]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for ContendingTool {}
+
+#[module(providers = [ContendingTool])]
+struct ContendingMcpModule;
+
+#[module(imports = [OwnedMcpModule, ContendingMcpModule, app_identity()])]
+struct ContestedDeclarationApp;
+
+/// Picking one silently would put the endpoint's name back where declaring it
+/// was meant to take it from: import order.
+#[tokio::test]
+async fn two_hosts_declaring_one_endpoint_fail_boot() {
+    let err = match TestApp::for_module::<ContestedDeclarationApp>().await {
+        Ok(_) => panic!("two hosts naming one endpoint must not boot"),
+        Err(err) => err.to_string(),
+    };
+
+    assert!(
+        err.contains("OwnedTool") && err.contains("ContendingTool"),
+        "the failure names both claimants: {err}",
+    );
+    assert!(err.contains(OWNED), "…and the endpoint they contest: {err}",);
+}
+
+// --- a declaration that reaches nothing ---------------------------------------
+
+#[module(imports = [app_identity()])]
+struct OrphanDeclarationApp;
+
+/// A declaration is a statement about a real server. With no `#[mcp]` host in
+/// the app it would otherwise do nothing at all — the one answer a declaration
+/// must never silently get.
+#[tokio::test]
+async fn an_identity_no_host_serves_fails_boot() {
+    let err = match TestApp::for_module::<OrphanDeclarationApp>().await {
+        Ok(_) => panic!("an identity declared with no host at all must not boot"),
+        Err(err) => err.to_string(),
+    };
+
+    assert!(
+        err.contains("no #[mcp] host"),
+        "the failure says the declaration reaches nothing: {err}",
+    );
+}
+
+// --- two apps' worth of identity, and a path that means the same thing --------
+
+/// A second, disagreeing `for_root`. The app identity carries no path, so no
+/// per-path check can see this one: without its own check, `declared_server`
+/// would take whichever the import graph reached first and the endpoint's name
+/// would depend on `imports = [..]` order — the accident the seam removes.
+#[module(imports = [
+    AlphaMcpModule,
+    app_identity(),
+    McpModule::for_root(McpOptions {
+        server: Some(McpIdentity::new("second-witness", "0.0.1")),
+        ..Default::default()
+    }),
+])]
+struct ContestedServerApp;
+
+#[tokio::test]
+async fn two_disagreeing_server_identities_fail_boot() {
+    let err = match TestApp::for_module::<ContestedServerApp>().await {
+        Ok(_) => panic!("two different server identities must not boot"),
+        Err(err) => err.to_string(),
+    };
+
+    assert!(
+        err.contains("composition-witness") && err.contains("second-witness"),
+        "the failure names both claimants: {err}",
+    );
+}
+
+/// Importing one `for_root` twice is not a conflict — `DynamicModule`
+/// registration is deliberately not deduplicated, so the same declaration
+/// arriving twice must stay silent.
+#[module(imports = [AlphaMcpModule, app_identity(), app_identity()])]
+struct RepeatedServerApp;
+
+#[tokio::test]
+async fn the_same_identity_declared_twice_is_not_a_conflict() {
+    TestApp::for_module::<RepeatedServerApp>()
+        .await
+        .expect("one declaration imported twice boots");
+}
+
+/// `/mcp/` and `/mcp` are one endpoint to a client and two strings here. Left
+/// alone they would each claim a mount, and poem's `Route::nest` panics on the
+/// duplicate rather than reporting it — so the trailing slash is normalized
+/// away and the host simply joins its peers.
+#[mcp(path = "/mcp/")]
+#[derive(Clone)]
+struct TrailingSlashTool;
+
+#[tool_router]
+impl TrailingSlashTool {
+    #[tool(description = "A tool whose path was written with a trailing slash.")]
+    async fn trailing_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            "trailing",
+        )]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for TrailingSlashTool {}
+
+#[module(providers = [TrailingSlashTool])]
+struct TrailingSlashModule;
+
+#[module(imports = [AlphaMcpModule, TrailingSlashModule])]
+struct TrailingSlashApp;
+
+#[tokio::test]
+async fn a_trailing_slash_names_the_same_endpoint() {
+    let app = TestApp::for_module::<TrailingSlashApp>()
+        .await
+        .expect("a path written with a trailing slash boots rather than panicking");
+
+    let names: Vec<&str> = hosts_on(app.container(), SHARED)
+        .iter()
+        .map(|meta| meta.host())
+        .collect();
+    assert_eq!(
+        names,
+        ["AlphaTool", "TrailingSlashTool"],
+        "the two spellings claim one mount, so the hosts merge",
+    );
+
+    let body = call_tool(app.http(), SHARED, "trailing_ping", None).await;
+    assert!(
+        body.contains("trailing"),
+        "…and the endpoint serves both: {body}",
+    );
+}
+
+// --- nobody naming it at all --------------------------------------------------
+
 /// A host that names itself is a whole server on its own path — the shape every
 /// MCP SDK builds — so the framework has nothing to say about it.
 #[mcp(path = "/named")]
@@ -389,10 +636,18 @@ async fn a_lone_host_that_names_itself_needs_no_declaration() {
     );
 }
 
+/// The two messages the check below carries — one per fact, because a single
+/// message covering both would contradict its own `reports_as` field the moment
+/// a host had named itself.
+const SDK_DEFAULT_IDENTITY: &str = "an MCP endpoint introduces itself with the SDK's own name and \
+     version — neither its hosts nor the app named it";
+const UNDECLARED_IDENTITY: &str = "several MCP hosts share an endpoint whose identity nobody \
+     declared — it reports the first host's";
+
 /// rmcp's `ServerInfo::new` leaves `serverInfo` at the **SDK's** build identity,
-/// so a host that never names itself makes its endpoint introduce itself to
-/// every client as `rmcp`, at rmcp's version. Nothing fails, which is exactly
-/// why it has to be said out loud at boot.
+/// so an endpoint nobody named introduces itself to every client as `rmcp`, at
+/// rmcp's version. Nothing fails, which is exactly why it has to be said out
+/// loud at boot.
 #[tokio::test]
 async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
     let logs = LogCapture::install();
@@ -402,7 +657,7 @@ async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
 
     let event = logs.expect_one("nest_rs::mcp", SDK_DEFAULT_IDENTITY);
     assert_eq!(event.level, "warn");
-    assert_eq!(event.field("host").as_deref(), Some("AlphaTool"));
+    assert_eq!(event.field("hosts").as_deref(), Some("AlphaTool"));
     assert_eq!(
         event.field("reports_as"),
         Some(
@@ -416,77 +671,96 @@ async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
     );
 }
 
-/// The message the check above carries.
-const SDK_DEFAULT_IDENTITY: &str = "an MCP endpoint introduces itself with the SDK's own name and \
-     version — neither the host nor the app named it";
-
 #[tokio::test]
 async fn an_undeclared_shared_endpoint_is_reported_at_boot() {
     let logs = LogCapture::install();
     let _app = shared_app().await;
 
+    // Neither Alpha nor Beta names itself, so the SDK-default fact is the true
+    // one here — and it is the only message emitted.
+    let event = logs.expect_one("nest_rs::mcp", SDK_DEFAULT_IDENTITY);
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("hosts").as_deref(),
+        Some("AlphaTool, BetaTool"),
+        "the event names every host that could have spoken for the endpoint",
+    );
+}
+
+/// The other branch, and the reason there are two messages: with hosts that
+/// *did* name themselves, the endpoint answers with whichever registered first.
+/// Reporting that as "introduces itself as the SDK" would be contradicted by the
+/// event's own `reports_as` field.
+#[mcp(path = "/mcp/self-named-peers")]
+#[derive(Clone)]
+struct FirstNamedTool;
+
+#[tool_router]
+impl FirstNamedTool {
+    #[tool(description = "First of two self-named peers.")]
+    async fn first_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("first")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for FirstNamedTool {
+    fn get_info(&self) -> ServerInfo {
+        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+        info.server_info = Implementation::new("first-peer", "1.0.0");
+        info
+    }
+}
+
+#[mcp(path = "/mcp/self-named-peers")]
+#[derive(Clone)]
+struct SecondNamedTool;
+
+#[tool_router]
+impl SecondNamedTool {
+    #[tool(description = "Second of two self-named peers.")]
+    async fn second_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("second")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for SecondNamedTool {
+    fn get_info(&self) -> ServerInfo {
+        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+        info.server_info = Implementation::new("second-peer", "1.0.0");
+        info
+    }
+}
+
+#[module(providers = [FirstNamedTool, SecondNamedTool])]
+struct SelfNamedPeersModule;
+
+#[tokio::test]
+async fn self_named_peers_are_told_the_endpoint_reports_the_first() {
+    let logs = LogCapture::install();
+    let _app = TestApp::for_module::<SelfNamedPeersModule>()
+        .await
+        .expect("two self-named peers boot");
+
     let event = logs.expect_one("nest_rs::mcp", UNDECLARED_IDENTITY);
     assert_eq!(event.level, "warn");
     assert_eq!(
         event.field("reports_as").as_deref(),
-        Some("AlphaTool"),
-        "the event names the host whose identity the endpoint borrowed",
+        Some("first-peer"),
+        "the message and the field say the same thing",
     );
-}
-
-/// The message the warn above carries, kept next to both assertions so they
-/// cannot drift from each other.
-const UNDECLARED_IDENTITY: &str = "several MCP hosts share an endpoint whose identity nobody declared — it reports the first \
-     host's";
-
-#[module(imports = [
-    AlphaMcpModule,
-    declare(McpEndpoint::new("/typo", "orphan", "1.0.0")),
-])]
-struct OrphanDeclarationApp;
-
-/// A declaration is a statement about a real endpoint. Pointed at a path no
-/// host serves it would otherwise do nothing at all — the one answer a
-/// declaration must never silently get.
-#[tokio::test]
-async fn a_declaration_no_host_serves_fails_boot() {
-    let err = match TestApp::for_module::<OrphanDeclarationApp>().await {
-        Ok(_) => panic!("an identity declared for a path nobody serves must not boot"),
-        Err(err) => err.to_string(),
-    };
-
     assert!(
-        err.contains("\"/typo\""),
-        "the failure names the path that reaches nothing: {err}",
-    );
-}
-
-#[module(imports = [
-    AlphaMcpModule,
-    BetaMcpModule,
-    declare(McpEndpoint::new(SHARED, "first-name", "1.0.0")),
-    declare(McpEndpoint::new(SHARED, "second-name", "1.0.0")),
-])]
-struct ContestedDeclarationApp;
-
-/// One endpoint reports one `serverInfo`, so two declarations that disagree are
-/// a question the framework cannot answer — and picking one silently would put
-/// the endpoint's name back where declaring it was meant to take it from:
-/// import order.
-#[tokio::test]
-async fn two_disagreeing_declarations_for_one_path_fail_boot() {
-    let err = match TestApp::for_module::<ContestedDeclarationApp>().await {
-        Ok(_) => panic!("two identities for one endpoint must not boot"),
-        Err(err) => err.to_string(),
-    };
-
-    assert!(
-        err.contains("first-name") && err.contains("second-name"),
-        "the failure names both claimants: {err}",
+        logs.find("nest_rs::mcp", SDK_DEFAULT_IDENTITY).is_empty(),
+        "…and the fact that is *not* true here is not claimed: {:#?}",
+        logs.events(),
     );
 }
 
 // --- a host that declares no router ------------------------------------------
+
+/// Where the hand-written host and its router-backed peer share a mount.
+const MANUAL: &str = "/manual";
 
 /// A host that hand-writes `call_tool`/`list_tools` instead of using
 /// `#[tool_router]`. `#[mcp]` must sit on it unchanged: the expansion asks
@@ -580,13 +854,13 @@ async fn a_host_without_a_tool_router_still_serves_beside_one_that_has() {
         .await
         .expect("a hand-written host and a router-backed one share a path");
 
-    let manual = call_tool(app.http(), "/manual", "manual_ping", None).await;
+    let manual = call_tool(app.http(), MANUAL, "manual_ping", None).await;
     assert!(
         manual.contains("manual here"),
         "a name no host claims through `get_tool` is offered to each in turn: {manual}",
     );
 
-    let routed = call_tool(app.http(), "/manual", "routed_ping", None).await;
+    let routed = call_tool(app.http(), MANUAL, "routed_ping", None).await;
     assert!(
         routed.contains("routed"),
         "…and the router-backed peer is still routed by name: {routed}",
@@ -595,7 +869,11 @@ async fn a_host_without_a_tool_router_still_serves_beside_one_that_has() {
 
 // --- distinct paths stay distinct -------------------------------------------
 
-#[mcp(path = "/other/mcp")]
+/// Where `OtherTool` lands: a second endpoint beside the default, the shape a
+/// product reaches for when one feature deserves its own URL.
+const OTHER: &str = "/mcp/other";
+
+#[mcp(path = "/mcp/other")]
 #[derive(Clone)]
 struct OtherTool;
 
@@ -632,21 +910,13 @@ async fn a_second_path_is_a_second_endpoint() {
         "the shared path still carries both of its hosts",
     );
     assert_eq!(
-        hosts_on(app.container(), "/other/mcp").len(),
+        hosts_on(app.container(), OTHER).len(),
         1,
         "the second path carries only its own",
     );
 
-    let session = open_session(app.http(), "/other/mcp", None).await;
-    let body = call_method(
-        app.http(),
-        "/other/mcp",
-        &session,
-        None,
-        "tools/list",
-        json!({}),
-    )
-    .await;
+    let session = open_session(app.http(), OTHER, None).await;
+    let body = call_method(app.http(), OTHER, &session, None, "tools/list", json!({})).await;
     assert!(
         body.contains("other_ping") && !body.contains("alpha_ping"),
         "the second endpoint lists its own tools and nobody else's: {body}",
@@ -736,4 +1006,57 @@ async fn a_duplicate_tool_name_on_one_path_fails_boot() {
         err.contains("FirstClashingTool") && err.contains("SecondClashingTool"),
         "…and both owning providers: {err}",
     );
+}
+
+// --- where a host lands -------------------------------------------------------
+//
+// A `#[mcp]` path is the whole URL path, and omitting it takes the framework's
+// default — a client is configured with a URL, not a prefix plus a segment.
+
+/// The default is what an app that writes no path gets — including an app that
+/// never imports `McpModule` at all, which is why it lives on the crate rather
+/// than in configuration.
+#[tokio::test]
+async fn a_bare_host_serves_the_default_endpoint() {
+    let app = TestApp::for_module::<AlphaOnlyApp>()
+        .await
+        .expect("an app with no McpModule import boots");
+
+    assert_eq!(mcp_mount_paths(&app), [DEFAULT_PATH]);
+    assert_eq!(
+        DEFAULT_PATH, SHARED,
+        "the suite's own constant and the crate's cannot drift",
+    );
+
+    let body = call_tool(app.http(), DEFAULT_PATH, "alpha_ping", None).await;
+    assert!(
+        body.contains("alpha here"),
+        "the default endpoint answers on the wire, not just in the meta: {body}",
+    );
+}
+
+/// A second endpoint is a second path, written whole — and it does not have to
+/// sit under the first. Nothing nests below an MCP mount, so a host is free to
+/// name any URL its clients will be configured with.
+#[tokio::test]
+async fn a_declared_path_is_served_verbatim() {
+    let app = TestApp::for_module::<TwoPathApp>()
+        .await
+        .expect("two paths boot");
+
+    let paths = mcp_mount_paths(&app);
+    assert!(
+        paths.contains(&SHARED.to_owned()) && paths.contains(&OTHER.to_owned()),
+        "each host lands exactly where it said: {paths:?}",
+    );
+}
+
+/// Every MCP mount an app assembled, as the transport sees it.
+fn mcp_mount_paths(app: &TestApp) -> Vec<String> {
+    DiscoveryService::new(app.container())
+        .meta::<HttpEndpointMeta>()
+        .into_iter()
+        .filter(|discovered| discovered.meta.label() == "mcp")
+        .map(|discovered| discovered.meta.path().to_owned())
+        .collect()
 }

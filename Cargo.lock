@@ -2957,6 +2957,7 @@ name = "nest-rs-mcp-macros"
 version = "3.1.0"
 dependencies = [
  "nest-rs-codegen",
+ "proc-macro2",
  "quote",
  "syn 3.0.3",
 ]

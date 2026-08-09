@@ -52,7 +52,15 @@ fn patch_to_working_tree(workspace: &Path) {
     std::fs::write(&manifest, raw).expect("the manifest is writable");
 }
 
-/// `cargo check --workspace` over the generated tree.
+/// `cargo clippy --workspace --all-targets -- -D warnings` over the generated
+/// tree — **the gate the generated project sets for itself**.
+///
+/// It used to be a bare `cargo check`, and that gap shipped two defects: a
+/// template importing a name no rendered body used, and a borrow the lint
+/// rejects. Both compiled, so both reached a user on their first `just lint` and
+/// nowhere earlier. A generator that emits code failing the lint it also emits
+/// is a generator defect, so the e2e holds it to the same bar rather than a
+/// lower one.
 ///
 /// The target directory is shared with the repo's own so the framework's
 /// artifacts are reused rather than rebuilt from scratch per run — the
@@ -60,7 +68,14 @@ fn patch_to_working_tree(workspace: &Path) {
 /// `target/`, so it is already ignored by git.
 fn cargo_check(workspace: &Path) -> Result<(), String> {
     let output = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args(["check", "--workspace"])
+        .args([
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ])
         .current_dir(workspace)
         .env("CARGO_TARGET_DIR", repo().join("target/scaffold-check"))
         .output()

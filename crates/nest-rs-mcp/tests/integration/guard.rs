@@ -162,7 +162,7 @@ async fn an_operation_guards_around_installs_ambient_state_with_no_tool_context(
 
 // --- the global-pool fallback ---------------------------------------------
 
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 struct PoolTool;
 

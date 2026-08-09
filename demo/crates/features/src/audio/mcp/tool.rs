@@ -1,53 +1,41 @@
 use std::sync::Arc;
 
-use nest_rs::mcp::mcp;
-use nest_rs::mcp::rmcp;
-use nest_rs::mcp::{
-    CallToolResult, ContentBlock, McpError, Parameters, ServerHandler, tool, tool_handler,
-    tool_router,
-};
+use nest_rs::mcp::{McpError, Opaque, Parameters, mcp};
 use validator::Validate;
 
 use crate::audio::{AudioService, TranscodeDto};
 
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 pub struct AudioTool {
     #[inject]
     svc: Arc<AudioService>,
 }
 
-#[tool_router]
+#[mcp]
 impl AudioTool {
     #[tool(
         description = "Report whether an uploaded audio file has been transcoded. \
                        Takes the source object key returned at upload time; answers \
-                       `pending` while the worker has not produced the derived object, \
-                       or `ready` with a short-lived download URL once it has."
+                       `pending` while the worker has not produced the derived \
+                       object, or `ready` with a short-lived download URL once it has."
     )]
     async fn transcode_status(
         &self,
         Parameters(params): Parameters<TranscodeDto>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<String, McpError> {
         params
             .validate()
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
-        let status = self.svc.presign_result(&params.file).await.map_err(|e| {
-            tracing::error!(target: "features::audio", error = ?e, "audio tool status lookup failed");
-            McpError::internal_error("audio operation failed", None)
-        })?;
-
-        let summary = match status {
-            Some(ticket) => format!("ready — download (15 min): {}", ticket.url),
-            None => format!("pending — no transcoded object for {} yet", params.file),
-        };
-        Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
+        Ok(
+            match self.svc.presign_result(&params.file).await.opaque()? {
+                Some(ticket) => format!("ready — download (15 min): {}", ticket.url),
+                None => format!("pending — no transcoded object for {} yet", params.file),
+            },
+        )
     }
 }
-
-#[tool_handler]
-impl ServerHandler for AudioTool {}
 
 #[cfg(test)]
 mod tests {

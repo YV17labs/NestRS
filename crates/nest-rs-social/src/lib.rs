@@ -17,10 +17,13 @@
 //! discovery is module-gated by it exactly like any other concern — no app
 //! imports `SocialModule`, no entry is ever considered.
 //!
-//! Within that gate, what decides a provider's fate is **configuration**, the
-//! same dual-path `#[config]` rule every `nest-rs-*` module follows:
+//! Within that gate, what decides a provider's fate is **configuration** — and
+//! the configuration is the *provider's own*, never the module's. Each entry
+//! names its `#[config]` type ([`SocialProviderEntry::config_namespace`]), so
+//! discovering a provider is what loads its credentials; [`SocialModule`] takes
+//! no configuration at all, because it never learns which providers exist.
 //!
-//! | `NESTRS_SOCIAL__<KEY>__*` (or a provided [`SocialProviderConfig`]) | Outcome |
+//! | `NESTRS_SOCIAL__<KEY>__*`, over any base the provider's config resolved | Outcome |
 //! |---|---|
 //! | complete | active |
 //! | absent entirely | inert, one boot `warn` — its routes 404 like an unknown key |
@@ -28,9 +31,7 @@
 //!
 //! Real credentials are a deployment's explicit intent, so activation never
 //! happens by accident, and a half-configured login is never silently dropped.
-//! Pinning config in code is the ordinary config seam — provide the
-//! `GithubSocialConfig` value; it wins over the environment. A duplicate key,
-//! or a registry key that disagrees with the provider's own
+//! A duplicate key, or a registry key that disagrees with the provider's own
 //! [`SocialProvider::key`], **fails boot**.
 //!
 //! The contract is **flow-owning**: [`SocialProvider::authorize`] and

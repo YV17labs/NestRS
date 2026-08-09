@@ -10,7 +10,7 @@ async fn a_repo_backed_tool_reads_rows_through_the_ambient_executor() {
 
     let body = call_tool(
         app.http(),
-        "/posts/mcp",
+        POSTS_ENDPOINT,
         "list_posts",
         Some(&bearer_for(&org_id.to_string())),
     )
@@ -32,7 +32,7 @@ async fn a_tool_never_sees_another_orgs_rows() {
 
     let body = call_tool(
         app.http(),
-        "/posts/mcp",
+        POSTS_ENDPOINT,
         "list_posts",
         Some(&bearer_for(&acme.to_string())),
     )
@@ -57,10 +57,10 @@ async fn a_prompt_is_row_filtered_like_a_tool() {
     seed_org_with_post(&conn, "Globex", "globex-only-post").await;
 
     let bearer = bearer_for(&acme.to_string());
-    let session = open_session(app.http(), "/posts/mcp", Some(&bearer)).await;
+    let session = open_session(app.http(), POSTS_ENDPOINT, Some(&bearer)).await;
     let body = call_method(
         app.http(),
-        "/posts/mcp",
+        POSTS_ENDPOINT,
         &session,
         Some(&bearer),
         "prompts/get",
@@ -88,10 +88,10 @@ async fn a_resource_read_cannot_reach_another_orgs_row() {
     let globex = seed_org_with_post(&conn, "Globex", "globex-only-post").await;
 
     let acme_bearer = bearer_for(&acme.to_string());
-    let session = open_session(app.http(), "/posts/mcp", Some(&acme_bearer)).await;
+    let session = open_session(app.http(), POSTS_ENDPOINT, Some(&acme_bearer)).await;
     let listed = call_method(
         app.http(),
-        "/posts/mcp",
+        POSTS_ENDPOINT,
         &session,
         Some(&acme_bearer),
         "resources/list",
@@ -111,10 +111,10 @@ async fn a_resource_read_cannot_reach_another_orgs_row() {
         .to_owned();
 
     let globex_bearer = bearer_for(&globex.to_string());
-    let session = open_session(app.http(), "/posts/mcp", Some(&globex_bearer)).await;
+    let session = open_session(app.http(), POSTS_ENDPOINT, Some(&globex_bearer)).await;
     let denied = call_method(
         app.http(),
-        "/posts/mcp",
+        POSTS_ENDPOINT,
         &session,
         Some(&globex_bearer),
         "resources/read",

@@ -91,7 +91,7 @@ impl Guard for AbilityInjector {
 /// Reports whether the ambient `Ability` reached the tool body. No
 /// `McpToolContext` is registered anywhere in this suite — the guard's `around`
 /// is the only thing that could have installed it.
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 struct AbilityProbeTool;
 

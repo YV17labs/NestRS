@@ -2,6 +2,7 @@
 
 mod endpoint;
 mod guard;
+mod mcp_impl;
 mod propagate;
 mod registry;
 mod scope;

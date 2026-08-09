@@ -9,7 +9,7 @@ use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 struct EchoTool;
 

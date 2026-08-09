@@ -26,7 +26,17 @@ pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, St
         return vec![
             ("op", "count".to_owned()),
             ("op_body", String::new()),
-            ("op_value", "&self.svc.count()".to_owned()),
+            // An MCP tool answers with an owned `String`, so it renders the
+            // conversion rather than a borrow the generated project's own
+            // `clippy -D warnings` would reject.
+            (
+                "op_value",
+                match transport {
+                    Transport::Mcp => "self.svc.count().to_string()",
+                    _ => "&self.svc.count()",
+                }
+                .to_owned(),
+            ),
             ("op_description", "Count {{kebab}} items.".to_owned()),
         ];
     }
@@ -65,6 +75,7 @@ pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, St
     };
     let value = match transport {
         Transport::Ws => "&Vec::<String>::new()",
+        Transport::Mcp => "\"[]\".to_owned()",
         _ => "\"[]\".to_string()",
     };
     vec![

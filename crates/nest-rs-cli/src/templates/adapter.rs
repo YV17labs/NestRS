@@ -266,33 +266,27 @@ pub const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //! field-level masking.
 use std::sync::Arc;
 
-use nest_rs::mcp::mcp;
-// `#[tool_router]` / `#[tool_handler]` are rmcp's own macros and expand to
-// relative `rmcp::` paths; this import resolves them, so the manifest needs no
-// `rmcp` entry and cannot drift from the major the framework built against.
-use nest_rs::mcp::rmcp;
-use nest_rs::mcp::{CallToolResult, ContentBlock, McpError, ServerHandler, tool, tool_handler, tool_router};
+// A fallible service call goes through `Opaque` — `use nest_rs::mcp::Opaque;`
+// then `.opaque()?` — which logs the real error for the operator and hands the
+// model a constant one. An error's `Display` reaches a language model verbatim.
+use nest_rs::mcp::{McpError, mcp};
 
 use crate::{{snake}}::{{service}};
 
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 pub struct {{tool}} {
     #[inject]
     svc: Arc<{{service}}>,
 }
 
-#[tool_router]
+#[mcp]
 impl {{tool}} {
-    #[tool(description = "{{op_description}}")]
-    async fn {{op}}(&self) -> Result<CallToolResult, McpError> {
+    /// {{op_description}}
+    #[tool]
+    async fn {{op}}(&self) -> Result<String, McpError> {
 {{op_body}}
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            {{op_value}},
-        )]))
+        Ok({{op_value}})
     }
 }
-
-#[tool_handler]
-impl ServerHandler for {{tool}} {}
 "#;

@@ -25,7 +25,7 @@ async fn audio_tool_self_mounts_the_mcp_endpoint() {
     assert!(
         endpoints
             .iter()
-            .any(|d| d.meta.label() == "mcp" && d.meta.path() == "/mcp"),
+            .any(|d| d.meta.label() == "mcp" && d.meta.path() == SHARED_ENDPOINT),
         "the #[mcp] AudioTool self-mounts an MCP endpoint at /mcp",
     );
 }
@@ -33,7 +33,14 @@ async fn audio_tool_self_mounts_the_mcp_endpoint() {
 #[tokio::test]
 async fn mcp_endpoint_refuses_an_unauthenticated_request() {
     let (_db, app) = boot().await;
-    let resp = post_message(app.http(), "/mcp", None, None, &initialize_request()).await;
+    let resp = post_message(
+        app.http(),
+        SHARED_ENDPOINT,
+        None,
+        None,
+        &initialize_request(),
+    )
+    .await;
     assert_eq!(
         resp.0.status(),
         StatusCode::UNAUTHORIZED,
@@ -47,7 +54,7 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
     ensure_bucket().await;
     let auth = bearer();
 
-    let session = open_session(app.http(), "/mcp", Some(&auth)).await;
+    let session = open_session(app.http(), SHARED_ENDPOINT, Some(&auth)).await;
 
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -65,7 +72,7 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
 
     let pending = post_message(
         app.http(),
-        "/mcp",
+        SHARED_ENDPOINT,
         Some(&session),
         Some(&auth),
         &call(2, file.clone()),
@@ -89,7 +96,7 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
 
     let ready = post_message(
         app.http(),
-        "/mcp",
+        SHARED_ENDPOINT,
         Some(&session),
         Some(&auth),
         &call(3, file.clone()),

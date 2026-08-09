@@ -64,7 +64,7 @@ impl ParityResolver {
     }
 }
 
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone)]
 struct ParityTool;
 

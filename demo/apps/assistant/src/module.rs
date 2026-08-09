@@ -6,10 +6,17 @@ use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::mcp::{McpEndpoint, McpModule, McpOptions};
+use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
 use nest_rs::redis::QueueModule;
 use nest_rs::seaorm::DatabaseModule;
 use nest_rs::server_timing::ServerTimingModule;
+
+const SERVER_NAME: &str = "nestrs-assistant";
+const SERVER_TITLE: &str = "nestrs demo assistant";
+const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped to the \
+                            caller's token — an empty result means not authorized, not \
+                            absent, never that the record does not exist. What each tool \
+                            does is in its own description.";
 
 #[module(
     imports = [
@@ -18,18 +25,11 @@ use nest_rs::server_timing::ServerTimingModule;
         HealthModule,
         HttpModule::for_root(HttpConfig { port: 3003, ..Default::default() }),
         McpModule::for_root(McpOptions {
-            endpoints: vec![
-                McpEndpoint::new("/mcp", "nestrs-assistant", env!("CARGO_PKG_VERSION"))
-                    .title("nestrs demo assistant")
-                    .instructions(
-                        "Tools over the demo's own data. `transcribe_audio` queues a \
-                         transcription and returns its job id; `list_people` reads the \
-                         directory. Every call is scoped to the caller's token — an \
-                         empty result means not authorized, not absent.",
-                    ),
-                McpEndpoint::new("/posts/mcp", "nestrs-assistant-posts", env!("CARGO_PKG_VERSION"))
-                    .title("nestrs demo assistant — posts"),
-            ],
+            server: Some(
+                McpIdentity::new(SERVER_NAME, env!("CARGO_PKG_VERSION"))
+                    .title(SERVER_TITLE)
+                    .instructions(INSTRUCTIONS),
+            ),
             ..Default::default()
         }),
         ProtectedResourceModule::for_root(None),

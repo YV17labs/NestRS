@@ -9,7 +9,7 @@ use nest_rs::mcp::model::{
 use nest_rs::mcp::rmcp;
 use nest_rs::mcp::service::{RequestContext, RoleServer};
 use nest_rs::mcp::{
-    CallToolResult, ContentBlock, McpError, ServerHandler, mcp, prompt, prompt_handler,
+    CallToolResult, ContentBlock, McpError, Opaque, ServerHandler, mcp, prompt, prompt_handler,
     prompt_router, tool, tool_handler, tool_router,
 };
 use nest_rs::seaorm::{Access, CrudService};
@@ -19,18 +19,15 @@ use crate::posts::PostsService;
 
 const POST_URI_PREFIX: &str = "post://";
 
-#[mcp(path = "/posts/mcp")]
+#[mcp(
+    path = "/mcp/posts",
+    name = "nestrs-assistant-posts",
+    title = "nestrs demo assistant — posts"
+)]
 #[derive(Clone)]
 pub struct PostsTool {
     #[inject]
     svc: Arc<PostsService>,
-}
-
-impl PostsTool {
-    fn opaque(err: sea_orm::DbErr) -> McpError {
-        tracing::error!(target: "features::posts", error = %err, "mcp operation failed");
-        McpError::internal_error("internal error".to_owned(), None)
-    }
 }
 
 #[tool_router]
@@ -40,7 +37,7 @@ impl PostsTool {
                        recent first. Scoped to the caller's organization."
     )]
     async fn list_posts(&self) -> Result<CallToolResult, McpError> {
-        let rows = CrudService::list(&*self.svc).await.map_err(Self::opaque)?;
+        let rows = CrudService::list(&*self.svc).await.opaque()?;
 
         let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
         Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -60,7 +57,7 @@ impl PostsTool {
                        can already read."
     )]
     async fn draft_follow_up(&self) -> Result<GetPromptResult, McpError> {
-        let rows = CrudService::list(&*self.svc).await.map_err(Self::opaque)?;
+        let rows = CrudService::list(&*self.svc).await.opaque()?;
         let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
 
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(
@@ -89,7 +86,6 @@ impl ServerHandler for PostsTool {
                 .enable_resources()
                 .build(),
         )
-        .with_instructions("Read and draft posts within the caller's organization.")
     }
 
     async fn list_resources(
@@ -97,7 +93,7 @@ impl ServerHandler for PostsTool {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        let rows = CrudService::list(&*self.svc).await.map_err(Self::opaque)?;
+        let rows = CrudService::list(&*self.svc).await.opaque()?;
 
         Ok(ListResourcesResult {
             resources: rows
@@ -123,7 +119,7 @@ impl ServerHandler for PostsTool {
 
         let post = match CrudService::access(&*self.svc, Action::Read, id)
             .await
-            .map_err(Self::opaque)?
+            .opaque()?
         {
             Access::Found(post) => post,
             Access::Denied | Access::Missing => {

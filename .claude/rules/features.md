@@ -60,10 +60,11 @@ one provider in the access graph.
 **A transport that cannot host two features at one mount point is a
 framework defect.** Report it and keep the shape; it is never a licence
 to invert. None is open today — MCP was the last one, and it is closed:
-several `#[mcp(path = "/mcp")]` hosts aggregate onto one endpoint, so a
-product serving several domains at the single URL its clients point at
-still writes one `mcp/` adapter per feature. `demo/apps/assistant` is
-the witness (`audio` + `users` on `/mcp`, `posts` on `/posts/mcp`).
+several bare `#[mcp]` hosts aggregate onto one endpoint, so a product
+serving several domains at the single URL its clients point at still
+writes one `mcp/` adapter per feature. `demo/apps/assistant` is the
+witness (`audio` + `users` on `/mcp` through a bare `#[mcp]`, `posts` on
+`/mcp/posts` through its own `#[mcp(path = "/mcp/posts")]`).
 
 **One `#[module]` per folder.** The DI file is **always** `module.rs`;
 **exactly one** `#[module]` struct per file. Multiple modules per feature

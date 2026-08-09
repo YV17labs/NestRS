@@ -26,7 +26,7 @@ pub struct GraphqlModule;
 
 impl GraphqlModule {
     /// Pass `None` to load [`GraphqlConfig`] from `NESTRS_GRAPHQL__*`, or a
-    /// `GraphqlConfig` to pin it (wins over the environment).
+    /// `GraphqlConfig` to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<GraphqlConfig>>) -> GraphqlSetup {
         GraphqlSetup {
             pinned: config.into(),

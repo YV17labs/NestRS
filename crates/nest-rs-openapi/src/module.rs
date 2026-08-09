@@ -37,7 +37,7 @@ pub struct OpenApiModule;
 
 impl OpenApiModule {
     /// Pass `None` to load [`OpenApiConfig`] from `NESTRS_OPENAPI__*`, or an
-    /// `OpenApiConfig` to pin it in code (wins over the environment).
+    /// `OpenApiConfig` to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<OpenApiConfig>>) -> OpenApiSetup {
         OpenApiSetup {
             pinned: config.into(),

@@ -16,8 +16,12 @@ pub struct DatabaseModule;
 
 impl DatabaseModule {
     /// Configure the database. Pass `None` to load [`DatabaseConfig`] from
-    /// `NESTRS_DATABASE__*`, or a `DatabaseConfig` to pin it in code (wins
-    /// over the environment — handy for tests).
+    /// `NESTRS_DATABASE__*`, or a `DatabaseConfig` to pin as the base those
+    /// variables overlay, per field.
+    ///
+    /// A pin is not a test hatch: the deployment's real environment still wins
+    /// over it. A test that must not read the ambient environment seeds the
+    /// value instead — `App::builder().provide(cfg)` short-circuits the factory.
     pub fn for_root(config: impl Into<Option<DatabaseConfig>>) -> DatabaseSetup {
         DatabaseSetup {
             pinned: config.into(),
@@ -27,7 +31,7 @@ impl DatabaseModule {
 
 /// The configured import produced by [`DatabaseModule::for_root`]. Queues the
 /// async pool factory and installs the request layers when registered; a pinned
-/// `DatabaseConfig` overrides the environment (handy for tests).
+/// `DatabaseConfig` is the base `NESTRS_DATABASE__*` overlays, per field.
 pub struct DatabaseSetup {
     pinned: Option<DatabaseConfig>,
 }

@@ -375,15 +375,18 @@ children. A `#[mcp]` host owns a *feature*, so the app declares the endpoint:
 
 ```rust title="src/module.rs"
 use nest_rs::core::module;
-use nest_rs::mcp::{McpEndpoint, McpModule};
+use nest_rs::mcp::{McpEndpoint, McpModule, McpOptions};
 
 #[module(imports = [
     HttpModule::for_root(None),
-    McpModule::endpoint(
-        McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))
-            .title("Acme assistant")
-            .instructions("Weather and greetings. Ask before writing anything."),
-    ),
+    McpModule::for_root(McpOptions {
+        endpoints: vec![
+            McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))
+                .title("Acme assistant")
+                .instructions("Weather and greetings. Ask before writing anything."),
+        ],
+        ..Default::default()
+    }),
     WeatherMcpModule,
     HelloMcpModule,
 ])]
@@ -395,10 +398,10 @@ what it states — `serverInfo` always, `instructions` when you write them — a
 can never claim a capability no host serves. Leave the instructions out and the
 hosts' own are joined instead of dropped.
 
-Chain `.endpoint(..)` for a second path, or start from
-`McpModule::for_root(config).endpoint(..)` when you also pin server options.
-Declaring a path no host serves fails boot: a declaration that reaches nothing
-is a typo, not a no-op.
+A second path is a second entry in `endpoints`, and server options go in the
+same value's `config` field — `McpModule::for_root` is the only seam, and
+`McpOptions` is everything it takes. Declaring a path no host serves fails
+boot: a declaration that reaches nothing is a typo, not a no-op.
 
 <Aside type="caution">
 Undeclared, an endpoint reports whatever its host does — and a host that never
@@ -485,6 +488,17 @@ on the defaults.
     McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
 ])]
 pub struct AssistantModule;
+```
+
+Pinning options *and* naming an endpoint is the same one call — an `McpConfig`
+converts into an `McpOptions` whose `endpoints` list is empty, so write the
+whole value out when you need both:
+
+```rust title="src/module.rs"
+McpModule::for_root(McpOptions {
+    config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+    endpoints: vec![McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))],
+}),
 ```
 
 | Variable | Default | What it controls |

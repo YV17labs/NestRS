@@ -56,7 +56,19 @@ storage shape.
 ## Configuration
 
 Every field is settable via `NESTRS_STORAGE__*` env **or** a pinned
-`StorageConfig` — the framework-wide dual-path config rule.
+`StorageConfig` — the framework-wide dual-path config rule. Pin it at the
+composition root; the environment still overlays it per field, so a bucket
+in the source does not freeze the credentials against the deployment:
+
+```rust title="src/module.rs"
+StorageModule::for_root(StorageConfig {
+    bucket: "acme-media".into(),
+    ..Default::default()
+}),
+```
+
+Importing the bare `StorageModule` — what a feature module does — leaves the
+whole config to the environment.
 
 Two defaults below are **profile-dependent**, and both differences are
 security ones: outside dev/test the sentinel credentials are dropped and

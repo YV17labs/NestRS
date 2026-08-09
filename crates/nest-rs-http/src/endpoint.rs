@@ -57,7 +57,12 @@ impl HttpEndpointMeta {
         F: Fn(&Container, Route) -> Route + Send + Sync + 'static,
     {
         Self {
-            path: path.into(),
+            // Canonical before anything compares it — see
+            // `normalize_mount_path`. A surface that hands over a path from
+            // configuration (GraphQL's `NESTRS_GRAPHQL__PATH`) or from a
+            // decorator literal cannot make the collision check blind by
+            // spelling the same mount two ways.
+            path: crate::normalize_mount_path(&path.into()).into(),
             label: label.into(),
             owner: None,
             posture: EdgePosture::Guarded,

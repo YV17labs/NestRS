@@ -67,8 +67,10 @@ pub struct SocialProviderEntry {
 }
 
 /// The standard [`SocialProviderEntry::build`]: a provider already in the
-/// container wins, then a config in the container (pinned in code or seeded in
-/// a test), then the environment.
+/// container wins, then a config in the container — one a `ConfigModule` factory
+/// resolved for that namespace, or a test's seed — then the provider's own
+/// environment. The entry names `C`, so discovery is what loads the credentials;
+/// nothing upstream has to know which config type this provider uses.
 ///
 /// `make` turns a validated config into the concrete provider — for the shared
 /// OAuth2 flow that is one `OAuth2Client::new` call.

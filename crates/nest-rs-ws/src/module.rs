@@ -15,8 +15,8 @@
 //! overlay, so a field pinned in code is still overridable per field by the
 //! deployment (see `nest_rs_config::Config`).
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Module, module};
+use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::module;
 
 use crate::config::WsConfig;
 use crate::namespace::WsNamespaces;
@@ -34,9 +34,7 @@ impl WsModule {
     /// [`WsServer`] registry is provided, so this is a drop-in replacement for
     /// importing the bare [`WsModule`].
     pub fn for_root(config: impl Into<Option<WsConfig>>) -> WsSetup {
-        WsSetup {
-            pinned: config.into(),
-        }
+        ConfigModule::setup(config)
     }
 }
 
@@ -45,19 +43,10 @@ impl WsModule {
 /// [`WsServer`] registry). This factory is queued first, so it wins over — and
 /// skips — the plain env factory the base module queues; registering the server
 /// dedups with any gateway's own `WsModule` import.
-pub struct WsSetup {
-    pinned: Option<WsConfig>,
-}
-
-impl DynamicModule for WsSetup {
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder)
-    }
-
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        <WsModule as Module>::register(builder)
-    }
-}
+///
+/// Pin-and-recurse is the whole behaviour, so it is [`ConfigSetup`] rather than
+/// a type of its own.
+pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
 
 #[cfg(test)]
 mod tests {

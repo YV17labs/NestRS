@@ -15,13 +15,6 @@ pub struct Claims {
     pub sub: Option<Uuid>,
     pub org_id: Uuid,
     pub roles: Vec<Role>,
-    /// What the authorization server delegated to this token, from the standard
-    /// space-delimited `scope` claim.
-    ///
-    /// Roles say who the caller *is*; scopes say how much of that identity this
-    /// particular token may exercise. They narrow, never widen — an admin token
-    /// issued without `posts:write` cannot write posts — which is what makes a
-    /// token safe to hand to an MCP client.
     #[serde(
         default,
         rename = "scope",
@@ -43,10 +36,6 @@ impl nest_rs::authn::PrincipalIdentity for Claims {
         self.sub.map(|sub| sub.to_string())
     }
 
-    /// `Some`, always — this is an OAuth credential, so a token carrying no
-    /// `scope` claim was delegated nothing and every scoped rule is withheld.
-    /// Returning `None` here would mean "scope does not apply to this
-    /// principal", which for a bearer token is the fail-open reading.
     fn scopes(&self) -> Option<&[String]> {
         Some(&self.scopes)
     }

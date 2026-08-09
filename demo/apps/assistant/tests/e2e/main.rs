@@ -1,5 +1,3 @@
-//! e2e suite root: the module list plus the fixtures the siblings share.
-
 mod authorization;
 mod posts_tool;
 mod shared_endpoint;

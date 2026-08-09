@@ -300,12 +300,6 @@ async fn has_many_relation_load_is_capped_at_relation_load_cap() {
     );
 }
 
-/// A member holds `Read` on users restricted to `.fields([Id, Name])`, and the
-/// exposed `User` types every column non-null. Masking cannot null a non-null
-/// field, so the selection set decides: the granted columns are served, and
-/// asking for `email` is refused by name. Before that, a partial field grant
-/// took the whole entity offline over GraphQL while its HTTP twin still served
-/// the masked rows.
 #[tokio::test]
 async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
     let (_db, app) = boot().await;
@@ -352,7 +346,6 @@ async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
     );
 }
 
-/// POST one query, returning the response body as plain JSON.
 async fn graphql(app: &nest_rs::testing::TestApp, bearer: &str, query: &str) -> serde_json::Value {
     let resp = app
         .http()
@@ -365,11 +358,6 @@ async fn graphql(app: &nest_rs::testing::TestApp, bearer: &str, query: &str) -> 
     serde_json::to_value(resp.json().await).expect("a GraphQL response is JSON")
 }
 
-/// D2: a rejected input must name the offending fields, exactly as the HTTP twin
-/// does. `/fundamentals/pipes/` promises every transport carries the structured
-/// field errors "under the name `errors`" — GraphQL carried no `extensions` at
-/// all, so the message was the constant `"validation failed"` and a client could
-/// only learn that *something* was wrong.
 #[tokio::test]
 async fn graphql_validation_errors_name_the_offending_fields() {
     let (_db, app) = boot().await;

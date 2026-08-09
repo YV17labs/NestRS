@@ -42,9 +42,9 @@ registration and fails the boot naming it.
 
 Passing `None` loads `ThrottlerConfig` from `NESTRS_THROTTLER__*`; the
 defaults (`60` requests per `60s` window) apply when nothing is set.
-Pass `Some(ThrottlerConfig { ... })` to pin the limit in code — the
-pinned value wins over the environment, on the same dual-path rule the
-rest of the framework follows.
+Pass `Some(ThrottlerConfig { ... })` to pin the limit in code — the pinned
+value is the base `NESTRS_THROTTLER__*` overlays, field by field, on the same
+dual-path rule the rest of the framework follows.
 
 ```bash frame="terminal"
 NESTRS_THROTTLER__LIMIT=120

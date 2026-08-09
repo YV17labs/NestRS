@@ -8,9 +8,9 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 `GraphqlModule::for_root(None)` reads `NESTRS_GRAPHQL__*` from the
-environment; `GraphqlModule::for_root(Some(config))` pins a value
-that wins over env. Every field is settable both ways — pin host
-behaviour in code, leave secrets and per-environment toggles to env.
+environment; `GraphqlModule::for_root(Some(config))` pins a *base* those
+variables still overlay, field by field. Every field is settable both ways —
+pin host behaviour in code, leave secrets and per-environment toggles to env.
 Defaults are production-safe: the playground stays off, the SDL emit
 stays off, the mount path is `/graphql`.
 

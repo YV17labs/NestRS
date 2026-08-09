@@ -182,7 +182,9 @@ OpenApiModule::for_root(OpenApiConfig {
 })
 ```
 
-The pinned struct wins over the environment when both are present.
+The pinned struct is the *base* `NESTRS_OPENAPI__*` overlays, field by field —
+so the deployment can still override any one of them. See the
+[precedence chain](/configuration/#the-dual-path-rule).
 
 ## Limits
 

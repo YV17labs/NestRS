@@ -83,7 +83,39 @@ role (`#[controller]` → `controller.rs`, `#[resolver]`, `#[gateway]`,
 `tool.rs`. Deliberate: `nest-rs-mcp` re-exports rmcp's own `#[tool]`, and
 the tool host carries both — a `#[tools]` one letter away from the
 `#[tool]` beneath it reads as a typo. The role word lives in the file name
-and the module instead. Do not "fix" this by adding a second decorator.
+and the module instead. **Do not "fix" this by adding a second decorator.**
+
+**`#[mcp]` decorates two item shapes, and that upholds the rule rather than
+bending it.** On the struct it declares the host and its endpoint; on the
+`impl` it declares the operations, the way `#[routes]` does for a controller.
+One name, so nothing sits a letter from `#[tool]`, and nothing new to learn.
+The impl form is what absorbs rmcp's three-block shape — `#[tool_router]`,
+`#[prompt_router]`, `#[tool_handler]`/`#[prompt_handler]`, `get_info` — into
+generated code, and it earns its keep three ways beyond the line count:
+
+- **`use rmcp;` leaves the developer's file.** rmcp's macros resolve bare
+  `rmcp::` paths against the call site, so a host had to carry an import whose
+  only job was someone else's hygiene. The expansion emits those impls inside a
+  private child module that carries the import itself. Two Rust facts make it
+  sound and both are asserted in `nest-rs-mcp/tests/integration/mcp_impl.rs`:
+  an inherent impl may live in any module of the defining crate (a descendant
+  still reaches the parent's private fields), and an item's **own visibility**,
+  not the module it sits in, decides who may name it.
+- **That second fact is load-bearing, not trivia.** rmcp generates
+  `tool_router()` *without* `pub`, so reading it from the parent silently yields
+  an empty tool list — the duplicate-tool boot check would go blind. The
+  expansion emits its own `pub(crate)` accessor beside it, and
+  `DefaultDeclaredTools` is the empty fallback for a host that has no decorated
+  impl.
+- **Capabilities are derived, never restated.** A `#[tool]` method advertises
+  `tools`, a `#[prompt]` method `prompts`. A host can no longer route
+  operations it forgot to declare — the defect the CLI template itself shipped.
+
+**The escape hatch is a host that owns its `ServerHandler`.** Resources,
+completion and the rest are hand-written trait methods, and the sugar cannot
+generate a second `impl ServerHandler`; such a host writes rmcp directly, and
+`#[mcp]` on a trait impl is a compile error saying so. `demo`'s `posts` is that
+host, deliberately kept as the witness of the raw shape.
 
 ### When (not) to write a decorator
 
@@ -162,7 +194,7 @@ Two shapes for `x`, and only two:
 - **`impl Into<MOptions>`**, where `MOptions { config: Option<C>, /* … */ }`
   is a plain `Default` struct declared beside the setup in `module.rs` —
   only when the module carries a declaration that genuinely has **no env
-  twin** (`McpEndpoint`). It keeps `From<C>` and `From<Option<C>>` so the
+  twin** (`McpIdentity`). It keeps `From<C>` and `From<Option<C>>` so the
   config-only call site reads exactly like every other module's.
 
 **Don't hand-write the setup when the shape is plain.** A `for_root` whose
@@ -347,19 +379,19 @@ answers for itself; the mount's own identity — what a client is told it is
 talking to — belongs to the **app**, never to whichever contribution
 registered first, or the answer becomes a function of `imports = [..]` order.
 So an aggregating surface whose protocol exposes a mount-level identity gives
-the app a seam to declare it (`McpModule::for_root(McpOptions { endpoints, .. })`,
-provider-less metadata read back at mount), and:
+the app a seam to declare it once (`McpModule::for_root(McpOptions { server, .. })`,
+provider-less metadata read back at mount) and lets **at most one** contribution
+refine it for its own mount, and:
 
 - **the declaration replaces only what it states** — identity is declared,
   capabilities stay *observed* from the contributions, so an app can never
   advertise a surface nobody implements;
-- **a declaration that reaches nothing fails boot**, and two that disagree
-  about one mount fail boot naming both;
-- **undeclared is reported, not guessed silently** — a shared mount falling
-  back to its first contribution, and a mount left at the *SDK's* own default
-  identity, are both boot `warn`s carrying the remedy. Compare against the
-  SDK's own constructor, never a literal, so the check cannot drift from the
-  version the framework builds against.
+- **a declaration that reaches nothing fails boot**, and two contributions
+  declaring one mount fail boot naming both;
+- **undeclared is reported, not guessed silently** — a mount left at the
+  *SDK's* own default identity is a boot `warn` carrying the remedy. Compare
+  against the SDK's own constructor, never a literal, so the check cannot drift
+  from the version the framework builds against.
 
 This is the ecosystem's shape, not an invention: one server object created with
 its identity, contributions registered onto it (TypeScript SDK), and a parent
@@ -425,19 +457,53 @@ name order; init failure aborts boot, shutdown is best-effort.
   aggregates*, recorded above; sharing state across gateways is what
   `WsServer<N>` is for, not sharing a path.
 - **`nest-rs-mcp`** — also not a `Transport`, also an HTTP self-mount, but
-  it **aggregates**: several `#[mcp(path = "/mcp")]` hosts merge into one
-  `CompositeHandler` behind one endpoint, because MCP namespaces tools per
-  endpoint and clients point at a single URL. One host on a path is served
-  verbatim; the merge only engages beyond that. A host contributes an
-  `McpHost` (the object-safe `ServerHandler` view) — it never has to know
-  it is sharing. Guard, `dyn McpToolContext` and `McpConfig` are container
-  bindings, so they resolve **once per path**, not per host. The endpoint's
-  *identity* is the app's: `McpModule::for_root(McpOptions { endpoints:
-  vec![McpEndpoint::new(path, name, version)], .. })`, because one endpoint
+  it **aggregates**: several `#[mcp]` hosts merge into one `CompositeHandler`
+  behind one endpoint, because MCP namespaces tools per endpoint and clients
+  point at a single URL. One host on a path is served verbatim; the merge only
+  engages beyond that. A host contributes an `McpHost` (the object-safe
+  `ServerHandler` view) — it never has to know it is sharing. Guard,
+  `dyn McpToolContext` and `McpConfig` are container bindings, so they resolve
+  **once per path**, not per host.
+
+  **A host's `path` is a join key, not a namespace.** Unlike a
+  `#[controller]`'s, nothing nests under it: it names the one endpoint the host
+  joins, which is why peers writing the same path share it. So it is written
+  whole — the URL a client config carries — and `DEFAULT_PATH` (`/mcp`) is what
+  a bare `#[mcp]` takes. It is a **constant, not config**: a path a *decorator*
+  declares is code everywhere here (`#[controller]`, `#[gateway]`), and
+  `HttpConfig.global_prefix` already moves the whole surface. (A module that
+  owns its whole mount *may* configure it — `NESTRS_GRAPHQL__PATH` does — which
+  is why `HttpEndpointMeta::new` normalizes every path it is handed rather than
+  trusting the caller.) A prefix was tried and removed — a prefix prefixes a
+  namespace, and there is none here.
+
+  **A host writes one decorated `impl`.** `#[mcp]` on the struct declares the
+  host; `#[mcp]` on its inherent impl declares the `#[tool]` / `#[prompt]`
+  operations, absorbing rmcp's routers, handler attributes and `get_info`, and
+  deriving the advertised capabilities from the roles present. Descriptions come
+  from the doc comment — the prose was being written twice. A host serving a
+  hand-written `ServerHandler` surface (resources, completion) stays on rmcp's
+  raw shape; see *Macros* above.
+
+  **A failing operation talks to a language model.** `Opaque::opaque` is the
+  framework's seam for that: the real error is logged at `error` on
+  `nest_rs::mcp`, the model gets a constant message. Never hand a `Display`
+  straight to a tool's caller — a `DbErr` carries schema, columns and sometimes
+  values. A deliberate `McpError::invalid_params` is the opposite case and is
+  returned directly.
+
+  **Identity has two owners, and neither can shadow the other.** One endpoint
   reports one `serverInfo` and one `instructions` however many features share
-  it. Identity is **not** config — it has no `NESTRS_MCP__*` twin, which is why
-  it travels in `McpOptions` beside the config rather than through a second
-  call.
+  it, so: the **app** declares itself once (`McpOptions { server }`) — `name`,
+  `version`, branding *and* `instructions`, because a feature library knows
+  neither the binary's version nor, on a shared endpoint, the whole surface —
+  and a **host** declares only which endpoint stands apart
+  (`#[mcp(name = …, title = …)]`, optional, overriding the app's per field).
+  `instructions` is deliberately not a `#[mcp]` argument; a host writing one is
+  a compile error, and per-tool prose belongs to `#[tool(description = …)]`.
+  Two hosts declaring one path fails boot naming both. Identity is **not**
+  config — it has no `NESTRS_MCP__*` twin, which is why it travels in
+  `McpOptions` beside the config rather than through a second call.
 - **`nest-rs-openapi`** — import `OpenApiModule`; self-mounts
   `GET /api-json` + offline Swagger UI at `GET /api`. Document
   **composed** from the route table. Schemas via **schemars**;

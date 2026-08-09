@@ -16,7 +16,9 @@
 //!
 //! Identity is **not** config: a server's name, version and instructions are
 //! part of what the app *is*, the same way a GraphQL schema's root type is, so
-//! they are declared in code and carry no `NESTRS_MCP__*` twin.
+//! they are declared in code and carry no `NESTRS_MCP__*` twin. That is why
+//! [`McpOptions`] exists — the two declarations travel together into the one
+//! `for_root` seam instead of the identity arriving through a second call.
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule, Module, module};
@@ -31,22 +33,58 @@ use crate::registry;
 pub struct McpModule;
 
 impl McpModule {
-    /// `None` ⇒ load [`McpConfig`] from `NESTRS_MCP__*` over its defaults;
-    /// `Some(cfg)` makes `cfg` the base those variables overlay.
+    /// Everything the app says about MCP, in one value — see [`McpOptions`].
     ///
-    /// Chain [`McpSetup::endpoint`] to also declare an endpoint's identity.
-    pub fn for_root(config: impl Into<Option<McpConfig>>) -> McpSetup {
+    /// An app that only pins server options passes an [`McpConfig`] (or `None`
+    /// for pure environment) exactly like every other module's `for_root`.
+    pub fn for_root(options: impl Into<McpOptions>) -> McpSetup {
         McpSetup {
-            pinned: config.into(),
-            endpoints: Vec::new(),
+            options: options.into(),
         }
     }
+}
 
-    /// Declare an endpoint's identity, leaving [`McpConfig`] to the environment
-    /// — shorthand for `for_root(None).endpoint(..)`, which is the common shape
-    /// for an app that names its endpoint but pins no server option.
-    pub fn endpoint(endpoint: McpEndpoint) -> McpSetup {
-        Self::for_root(None::<McpConfig>).endpoint(endpoint)
+/// What an app declares about MCP: the server options every mount runs on, and
+/// the identity of each endpoint it owns.
+///
+/// ```no_run
+/// use nest_rs_core::module;
+/// use nest_rs_mcp::{McpEndpoint, McpModule, McpOptions};
+///
+/// #[module(imports = [
+///     McpModule::for_root(McpOptions {
+///         endpoints: vec![McpEndpoint::new("/mcp", "assistant", "1.0.0")],
+///         ..Default::default()
+///     }),
+/// ])]
+/// struct AppModule;
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct McpOptions {
+    /// The base `NESTRS_MCP__*` overlays, per field. `None` ⇒ the environment
+    /// over [`McpConfig::default`]. It stays an `Option` because
+    /// `nest_rs_config::Config::resolve` ranks the `.env` cascade *below* a
+    /// pinned base and *above* the defaults — a bare `McpConfig` here would
+    /// demote the cascade for apps that pinned nothing.
+    pub config: Option<McpConfig>,
+    /// The identity of each endpoint this app owns, one entry per path.
+    /// Declaring a path no `#[mcp]` host serves fails boot — a declaration that
+    /// reaches nothing is a typo, not a no-op.
+    pub endpoints: Vec<McpEndpoint>,
+}
+
+impl From<McpConfig> for McpOptions {
+    fn from(config: McpConfig) -> Self {
+        Some(config).into()
+    }
+}
+
+impl From<Option<McpConfig>> for McpOptions {
+    fn from(config: Option<McpConfig>) -> Self {
+        Self {
+            config,
+            endpoints: Vec::new(),
+        }
     }
 }
 
@@ -55,22 +93,12 @@ impl McpModule {
 /// [`McpEndpoint`]. Queued first, so it wins over — and skips — the plain env
 /// factory the base module queues.
 pub struct McpSetup {
-    pinned: Option<McpConfig>,
-    endpoints: Vec<McpEndpoint>,
-}
-
-impl McpSetup {
-    /// Declare the identity of the endpoint at one path. Call once per path an
-    /// app owns; declaring a path no `#[mcp]` host serves fails boot.
-    pub fn endpoint(mut self, endpoint: McpEndpoint) -> Self {
-        self.endpoints.push(endpoint);
-        self
-    }
+    options: McpOptions,
 }
 
 impl DynamicModule for McpSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder)
+        ConfigModule::provide_feature(self.options.config.clone(), builder)
     }
 
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
@@ -79,6 +107,7 @@ impl DynamicModule for McpSetup {
         // attach it to and nothing for module-gating to gate — the import of
         // this module is itself the gate.
         let builder = self
+            .options
             .endpoints
             .into_iter()
             .fold(builder, ContainerBuilder::provide_meta);
@@ -119,5 +148,16 @@ mod tests {
             cfg.expect("pinned McpConfig resolves").allowed_hosts,
             ["mcp.example.com"],
         );
+    }
+
+    /// An app that pins no identity still calls `for_root` exactly like every
+    /// other module's — that is the whole reason `McpOptions` carries the
+    /// conversions rather than forcing a struct literal. `pinned_mcp` above is
+    /// the `Some` arm of the same claim, booted; this is the `None` one.
+    #[test]
+    fn a_config_only_call_site_needs_no_options_literal() {
+        let unpinned: McpOptions = McpModule::for_root(None).options;
+        assert!(unpinned.config.is_none());
+        assert!(unpinned.endpoints.is_empty());
     }
 }

@@ -203,7 +203,7 @@ pub fn register_host<P: 'static>(
 
 /// The identity the app declared for `path`, if it declared one.
 ///
-/// Provider-less metadata from [`McpModule::endpoint`](crate::McpModule::endpoint)
+/// Provider-less metadata from [`McpOptions::endpoints`](crate::McpOptions::endpoints)
 /// — the app's statement about the endpoint, read here and by the mount.
 pub fn declared_endpoint(container: &Container, path: &str) -> Option<Arc<McpEndpoint>> {
     DiscoveryService::new(container)
@@ -405,7 +405,8 @@ fn warn_undeclared_identity(container: &Container, path: &str, hosts: &[Resolved
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let hint = "declare it: McpModule::endpoint(McpEndpoint::new(path, name, version))";
+    let hint = "declare it: McpModule::for_root(McpOptions { \
+                endpoints: vec![McpEndpoint::new(path, name, version)], ..Default::default() })";
 
     if hosts.len() > 1 {
         tracing::warn!(

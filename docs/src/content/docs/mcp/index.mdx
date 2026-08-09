@@ -40,53 +40,36 @@ surface that gates it — including the fallback operation guard that lets a
 registered global pool gate `/mcp` instead of the endpoint staying deny-all.
 None of that is a line you write.
 
-`rmcp` is not a dependency either. Its `#[tool_router]` / `#[tool_handler]`
-macros expand to bare `rmcp::` paths, but those are **relative**, so one import
-resolves them:
-
-```rust
-use nest_rs::mcp::rmcp;
-```
-
-That keeps the SDK at the exact major `nest-rs` was built against — two majors
-in one graph put two `ServerHandler` traits in scope and every generated method
-mismatches. `nestrs g mcp <feature>` writes both the stanza and the import.
+`rmcp` is not a dependency either, and it is not an import: `#[mcp]` emits the
+SDK's own macros inside generated code that carries its own scope. That keeps
+the SDK at the exact major `nest-rs` was built against — two majors in one graph
+put two `ServerHandler` traits in scope and every generated method mismatches.
+A host that needs the raw SDK reaches it through `nest_rs::mcp::rmcp`.
 
 ## The smallest possible tool
 
 The fastest way to see the shape: one tool, one string in, one string out.
 
 ```rust title="src/hello/tool.rs"
-use nest_rs::mcp::{
-    mcp, tool, tool_handler, tool_router,
-    CallToolResult, ContentBlock, McpError, Parameters, ServerHandler,
-};
-use nest_rs::mcp::input;
+use nest_rs::mcp::{McpError, Parameters, input, mcp};
 
 #[input]
 pub struct HelloParams {
     pub name: String,
 }
 
-#[mcp(path = "/mcp")]
+#[mcp]
 #[derive(Clone, Default)]
 pub struct HelloTool;
 
-#[tool_router]
+#[mcp]
 impl HelloTool {
-    #[tool(description = "Say hello to someone by name.")]
-    async fn hello(
-        &self,
-        Parameters(params): Parameters<HelloParams>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "Hello, {}!", params.name,
-        ))]))
+    /// Say hello to someone by name.
+    #[tool]
+    async fn hello(&self, Parameters(params): Parameters<HelloParams>) -> Result<String, McpError> {
+        Ok(format!("Hello, {}!", params.name))
     }
 }
-
-#[tool_handler]
-impl ServerHandler for HelloTool {}
 ```
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
@@ -114,21 +97,27 @@ use crate::hello::tool::HelloTool;
 pub struct HelloModule;
 ```
 
-`#[mcp(path = "/mcp")]` mounts it on the existing HTTP transport — same port,
-same CORS, no second server. An MCP client pointed at
-`http://localhost:3003/mcp` sees one tool called `hello` and can invoke it. (To
-authenticate instead of opening it, see [Authorization](#authorization) below.)
+`#[mcp]` mounts it on the existing HTTP transport — same port, same CORS, no
+second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
+tool called `hello` and can invoke it. (To authenticate instead of opening it,
+see [Authorization](#authorization) below.)
 
-The three macros split the work:
+Two decorators, one name:
 
-- **`#[mcp(path = "...")]`** registers the struct as a discoverable provider
-  that mounts a streamable-HTTP endpoint at `path` on the HTTP transport.
-- **`#[tool_router]`** collects every `#[tool(...)]` method on the impl into the
-  router the MCP runtime calls when a client invokes a tool.
-- **`#[tool_handler]`** plugs that router into rmcp's `ServerHandler` trait.
+- **`#[mcp]` on the struct** registers it as a discoverable provider that mounts
+  a streamable-HTTP endpoint on the HTTP transport, at `/mcp`. An optional
+  `path` serves a different URL instead — write it whole, the way a client
+  config carries it.
+- **`#[mcp]` on the impl** declares the operations. Every `#[tool]` and
+  `#[prompt]` method is mounted, its **doc comment becomes the description** the
+  model reads, and the endpoint's advertised capabilities are derived from the
+  roles present — you cannot serve a tool you forgot to declare.
 
 The struct can take `#[inject]` fields like any other provider — `HelloTool` has
 none, real servers usually do.
+
+Note what the file does *not* name: no `rmcp`, no `ServerHandler`, no router, no
+`get_info`. Those are rmcp's, and the expansion keeps them in generated code.
 
 ## Run it
 
@@ -227,40 +216,39 @@ for why a resource server that skips it can be handed someone else's token.
 
 ## Multiple tools on one server
 
-Each method under `#[tool_router]` becomes its own callable. Share state
-through `&self` — `#[inject]` once, every tool reuses it.
+Each `#[tool]` method becomes its own callable. Share state through `&self` —
+`#[inject]` once, every tool reuses it.
 
 ```rust
-#[mcp(path = "/weather")]
+#[mcp(path = "/mcp/weather")]
 #[derive(Clone)]
 pub struct WeatherTool {
     #[inject]
     svc: Arc<dyn WeatherService>,
 }
 
-#[tool_router]
+#[mcp]
 impl WeatherTool {
-    #[tool(description = "Return the current temperature for a city.")]
+    /// Return the current temperature for a city.
+    #[tool]
     async fn current_temperature(
         &self,
         Parameters(p): Parameters<CityParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let t = self.svc.current(&p.city).await.map_err(internal)?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!("{t:.1}°C"))]))
+    ) -> Result<String, McpError> {
+        let t = self.svc.current(&p.city).await.opaque()?;
+        Ok(format!("{t:.1}°C"))
     }
 
-    #[tool(description = "Return the forecast for a city, N days out.")]
+    /// Return the forecast for a city, N days out.
+    #[tool]
     async fn forecast(
         &self,
         Parameters(p): Parameters<ForecastParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let f = self.svc.forecast(&p.city, p.days).await.map_err(internal)?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(f.summary())]))
+    ) -> Result<String, McpError> {
+        let f = self.svc.forecast(&p.city, p.days).await.opaque()?;
+        Ok(f.summary())
     }
 }
-
-#[tool_handler]
-impl ServerHandler for WeatherTool {}
 ```
 
 The client now sees two tools — `current_temperature` and `forecast` — both
@@ -293,7 +281,7 @@ pub struct Coords {
 async fn current_weather(
     &self,
     Parameters(params): Parameters<Coords>,
-) -> Result<CallToolResult, McpError> {
+) -> Result<String, McpError> {
     params
         .validate()
         .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
@@ -301,9 +289,9 @@ async fn current_weather(
     let report = self.svc
         .current(params.latitude, params.longitude)
         .await
-        .map_err(internal)?;
+        .opaque()?;
 
-    Ok(CallToolResult::success(vec![ContentBlock::text(report.summary())]))
+    Ok(report.summary())
 }
 ```
 
@@ -311,19 +299,39 @@ async fn current_weather(
 out-of-range values with `McpError::invalid_params` — the model sees a
 structured error and can retry with corrected inputs.
 
+## Failing without leaking
+
+A tool body talks to a **language model**, and an error's `Display` is handed to
+it verbatim: a `DbErr` carries schema, column names and sometimes row values.
+So a failure the model has no business reading goes through `opaque`:
+
+```rust
+let rows = self.svc.list().await.opaque()?;
+```
+
+The real error is logged at `error` on `nest_rs::mcp`, inside rmcp's own
+per-operation span; the model gets a constant `internal error`. A *deliberate*
+error is the opposite case — `McpError::invalid_params(...)` exists to be read,
+so return it directly and never route it through `opaque`.
+
 ## Several features on one endpoint
 
 Every shipped MCP client config points at a **single URL**, so a real product
 usually wants all its domains behind one path. It gets that without giving up
-one `mcp/` adapter per feature: **hosts that declare the same `path` aggregate
-onto one endpoint.**
+one `mcp/` adapter per feature: **hosts that write the same path aggregate onto
+one endpoint**, and a bare `#[mcp]` is how a feature says "the app's endpoint"
+without repeating the URL.
+
+A `#[mcp]` path is not a namespace the host owns the way a `#[controller]`'s
+is — nothing nests under it. It names the one endpoint the host joins, which is
+exactly why peers share it.
 
 ```rust title="src/module.rs"
 #[module(imports = [WeatherModule, AuthzMcpModule], providers = [WeatherTool])]
-pub struct WeatherMcpModule;   // #[mcp(path = "/mcp")]
+pub struct WeatherMcpModule;   // #[mcp]
 
 #[module(imports = [HelloModule, AuthzMcpModule], providers = [HelloTool])]
-pub struct HelloMcpModule;     // #[mcp(path = "/mcp")]
+pub struct HelloMcpModule;     // #[mcp]
 
 #[module(imports = [
     HttpModule::for_root(None),
@@ -360,9 +368,9 @@ host its own path
 ```
 
 <Aside type="tip">
-Deliberately separate surfaces are still separate: give them different paths.
+Deliberately separate surfaces are still separate: give one its own `path`.
 `demo/apps/assistant` mounts `audio` + `users` on `/mcp` and `posts` on
-`/posts/mcp`, and the two endpoints list only their own tools.
+`/mcp/posts`, and the two endpoints list only their own tools.
 </Aside>
 
 ## Name your endpoint
@@ -371,20 +379,23 @@ An MCP endpoint is **one server** to every client that reaches it: the protocol
 carries one `serverInfo` and one `instructions`, on `initialize` and on
 `server/discover` alike — the same shape `new McpServer({ name, version })`
 builds in the TypeScript SDK, and the one a FastMCP parent keeps when it mounts
-children. A `#[mcp]` host owns a *feature*, so the app declares the endpoint:
+children. Two declarations answer for it, each owned by whoever can know it.
+
+**The app says who it is and how its server is used**, once, for every endpoint
+it exposes:
 
 ```rust title="src/module.rs"
 use nest_rs::core::module;
-use nest_rs::mcp::{McpEndpoint, McpModule, McpOptions};
+use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
 
 #[module(imports = [
     HttpModule::for_root(None),
     McpModule::for_root(McpOptions {
-        endpoints: vec![
-            McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))
+        server: Some(
+            McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))
                 .title("Acme assistant")
-                .instructions("Weather and greetings. Ask before writing anything."),
-        ],
+                .instructions("Ask before writing anything. Every result is scoped to your token."),
+        ),
         ..Default::default()
     }),
     WeatherMcpModule,
@@ -393,66 +404,82 @@ use nest_rs::mcp::{McpEndpoint, McpModule, McpOptions};
 pub struct AssistantModule;
 ```
 
-**Identity is declared; capabilities are observed.** The declaration replaces
-what it states — `serverInfo` always, `instructions` when you write them — and
-can never claim a capability no host serves. Leave the instructions out and the
-hosts' own are joined instead of dropped.
+Both parts have to come from here. The version, because
+`env!("CARGO_PKG_VERSION")` written in a shared feature library is the library's
+version rather than the deployment's. The `instructions`, because they describe
+**the server** — a client may fold them into the model's system prompt — and on
+an endpoint several features share, no single host can see the whole.
 
-A second path is a second entry in `endpoints`, and server options go in the
-same value's `config` field — `McpModule::for_root` is the only seam, and
-`McpOptions` is everything it takes. Declaring a path no host serves fails
-boot: a declaration that reaches nothing is a typo, not a no-op.
+Keep them general: what a caller must know to use the surface at all. What each
+tool *does* is already carried by its own `#[tool(description = "…")]`, which is
+what the model reads when it chooses between them.
+
+**A host says which endpoint stands apart**, on the file that serves it:
+
+```rust title="src/weather/mcp/tool.rs"
+#[mcp(path = "/mcp/weather", name = "acme-weather")]
+#[derive(Clone)]
+pub struct WeatherTool { /* … */ }
+```
+
+`name`, `version` and `title` are optional and each overrides the app's per
+field, so the host above renames its endpoint while still inheriting the app's
+version, title and instructions. Two hosts on one path both declaring is a boot
+error naming both — otherwise the endpoint's name would depend on
+`imports = [..]` order.
+
+**Identity is declared; capabilities are observed.** A declaration replaces what
+it states and can never claim a capability no host serves. Declare no
+instructions at all and the hosts' own `get_info` blurbs are joined instead of
+dropped — a fallback, not a second way to write them.
 
 <Aside type="caution">
 Undeclared, an endpoint reports whatever its host does — and a host that never
 overrides `get_info` inherits rmcp's default, so it introduces itself to every
-client as **`rmcp`, at rmcp's version**. Two hosts and no declaration is worse
-still: the endpoint's name becomes a function of `imports = [..]` order. Both
-are reported at boot on `nest_rs::mcp`, with the remedy in the event.
+client as **`rmcp`, at rmcp's version**. That is reported at boot on
+`nest_rs::mcp`, with the remedy in the event. An identity declared in an app
+with no `#[mcp]` host at all fails boot outright.
 </Aside>
 
 ## Multiple servers on one app
 
-The other direction: a second server is a second `path`. Each mounts on the
-HTTP transport independently — different tools, different injected
+The other direction: a second server is a second `path` on a host. Each mounts
+on the HTTP transport independently — different tools, different injected
 dependencies, different authorization policy if you want one.
 
-Namespacing is the URL: `/mcp` for one endpoint, `/weather` for the other. The
-MCP spec already namespaces tools per endpoint, so a second endpoint **is** the
-namespace — no extra primitive to learn.
+Namespacing is the URL: `/mcp` for the app's own endpoint, whatever you write
+for the second. The MCP spec already namespaces tools per endpoint, so a second
+endpoint **is** the namespace — no extra primitive to learn, and no prefix the
+second path has to sit under.
 
 ## Resources and prompts
 
 MCP defines two primitives beyond tools: **prompts** (parameterized templates
 the user picks) and **resources** (documents the model can list and fetch).
 
-Prompts have their own decorator pair — `#[prompt_router]` collects
-`#[prompt]` methods exactly as `#[tool_router]` collects `#[tool]` ones. The
-two handler attributes stack on one `impl ServerHandler`:
+A prompt is a `#[prompt]` method in the same decorated block as your tools —
+one `impl`, both routers:
 
-```rust title="src/posts/mcp/tool.rs (abridged)"
-#[prompt_router]
-impl PostsTool {
-    #[prompt(description = "Draft a follow-up post, primed with the titles the caller can already read.")]
-    async fn draft_follow_up(&self) -> Result<GetPromptResult, McpError> {
-        let rows = CrudService::list(&*self.svc).await.map_err(Self::opaque)?;
-        let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
+```rust title="src/weather/mcp/tool.rs"
+#[mcp]
+impl WeatherTool {
+    /// Return the current temperature for a city.
+    #[tool]
+    async fn current_temperature(&self, /* … */) -> Result<String, McpError> { /* … */ }
 
-        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-            Role::User,
-            format!("Draft a follow-up post. Existing titles:\n{}", titles.join("\n")),
-        )]))
-    }
+    /// Draft a travel note for a city, primed with today's conditions.
+    #[prompt]
+    async fn travel_note(&self, /* … */) -> Result<GetPromptResult, McpError> { /* … */ }
 }
-
-#[tool_handler]
-#[prompt_handler]
-impl ServerHandler for PostsTool {}
 ```
 
-Resources have no decorator, because a resource surface is a mapping from URIs
-to rows rather than a set of methods: implement `list_resources` /
-`read_resource` / `list_resource_templates` on the same `impl ServerHandler`.
+Resources are the one surface with no decorator, because they are a mapping from
+URIs to rows rather than a set of methods. A host that serves them writes its own
+`impl ServerHandler` — `list_resources` / `read_resource` /
+`list_resource_templates` — and that is the documented way out of the sugar: it
+uses rmcp's `#[tool_router]` / `#[tool_handler]` directly, since `#[mcp]` cannot
+generate a second `ServerHandler` beside a hand-written one. `demo`'s
+`posts/mcp/tool.rs` is that host.
 
 Either way the guarantee is the same one the tool gets. `CrudService::list`
 above writes no organization filter — the ambient ability applies it, so a
@@ -490,14 +517,14 @@ on the defaults.
 pub struct AssistantModule;
 ```
 
-Pinning options *and* naming an endpoint is the same one call — an `McpConfig`
-converts into an `McpOptions` whose `endpoints` list is empty, so write the
-whole value out when you need both:
+Pinning options *and* declaring the app's identity is the same one call — an `McpConfig`
+converts into an `McpOptions` whose `server` is empty, so write the whole value
+out when you need both:
 
 ```rust title="src/module.rs"
 McpModule::for_root(McpOptions {
     config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
-    endpoints: vec![McpEndpoint::new("/mcp", "acme-assistant", env!("CARGO_PKG_VERSION"))],
+    server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
 }),
 ```
 
@@ -590,7 +617,10 @@ the access graph rejects accidental coupling at boot.
   `prompt_handler`, `ServerHandler`, `McpError`, `Parameters`, `Json`,
   `CallToolResult`, plus the whole `model` / `service` / `handler` /
   `transport` modules).
-- `crates/nest-rs-mcp/tests/integration/propagate.rs` — the proof that
+- `crates/nest-rs-mcp/tests/integration/mcp_impl.rs` — the proof that the
+  generated module still reaches a host's private fields, that the boot checks
+  still read its tool names, and that capabilities follow the operations
+  present; `crates/nest-rs-mcp/tests/integration/propagate.rs` — the proof that
   every `ServerHandler` method reaches your host rather than an SDK default;
   `crates/nest-rs-mcp/tests/integration/registry.rs` — the proof that two
   modules' hosts answer on one endpoint, that a second path stays its own, and

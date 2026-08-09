@@ -31,7 +31,7 @@ cargo add nest-rs --features graphql,seaorm,authz
 # `graphql` alone runs a resolver over a hand-written service. Add `seaorm`
 # when the resolver binds an entity, `authz` when an operation carries
 # `#[authorize]` — features you enable because *your* code says so.
-nest-rs = { version = "3.1", features = ["graphql", "seaorm", "authz"] }
+nest-rs = { version = "4.0", features = ["graphql", "seaorm", "authz"] }
 ```
 
 `#[resolver]` builds on async-graphql's own `#[Object]`, and a third-party

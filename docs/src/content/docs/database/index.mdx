@@ -29,7 +29,7 @@ Everything the entity below needs, in full:
 
 ```toml title="Cargo.toml"
 [dependencies]
-nest-rs = { version = "3.1", features = ["seaorm", "http"] }
+nest-rs = { version = "4.0", features = ["seaorm", "http"] }
 ```
 
 `#[expose]` generates the wire model, the create/update inputs and the
@@ -89,7 +89,7 @@ auto-resolve through dataloaders when the relation field carries `#[expose]`
 REST/OpenAPI adopters can compile without pulling in GraphQL:
 
 ```toml title="Cargo.toml"
-nest-rs = { version = "3.1", features = ["http", "seaorm", "resource", "authz"] }
+nest-rs = { version = "4.0", features = ["http", "seaorm", "resource", "authz"] }
 ```
 
 ```rust title="src/posts/entity.rs"
@@ -105,7 +105,7 @@ pub struct Model {
 GraphQL surface when you need it:
 
 ```toml
-nest-rs = { version = "3.1", features = ["resource", "graphql"] }
+nest-rs = { version = "4.0", features = ["resource", "graphql"] }
 ```
 
 ```rust

@@ -13,7 +13,7 @@ GraphQL schema.
 
 ```toml title="Cargo.toml"
 [dependencies]
-nest-rs = { version = "3.1", features = ["http", "seaorm", "graphql"] }
+nest-rs = { version = "4.0", features = ["http", "seaorm", "graphql"] }
 ```
 
 Undecided? `features = ["full"]` turns everything on — narrow it later without
@@ -176,7 +176,7 @@ Get the *dependency* wrong and the compiler says so in your own terms:
 error: this nestrs decorator expands into the framework, which this crate
        cannot reach. Add to Cargo.toml:
 
-           nest-rs = { version = "3.1", features = ["http"] }
+           nest-rs = { version = "4.0", features = ["http"] }
 ```
 
 Get the **feature** wrong — the likelier mistake, since the dependency is

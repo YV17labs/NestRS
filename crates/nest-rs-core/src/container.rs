@@ -287,7 +287,18 @@ pub struct ContainerBuilder {
     /// never copied into the [`Container`] or a [`snapshot`](Self::snapshot).
     /// The `TypeId` lets the build skip a factory whose output a seed already
     /// supplies (a test injecting a pre-built resource in place of a `for_root`).
-    factories: Vec<(TypeId, BoxedFactory)>,
+    /// The type name rides along so the synchronous boot can name what it
+    /// cannot resolve.
+    factories: Vec<(TypeId, &'static str, BoxedFactory)>,
+    /// Types queued by [`provide_declared_factory`](Self::provide_declared_factory)
+    /// — a call site chose a value rather than accepting the default. Kept so a
+    /// declaration supersedes an already-queued default instead of losing the
+    /// first-queued-wins race to it.
+    declared_factories: HashSet<TypeId>,
+    /// Two declarations for one type: neither may silently win, so the build
+    /// fails naming it (see [`ContestedDeclarationError`](crate::ContestedDeclarationError)).
+    /// Pairs of (type name, remedy).
+    contested_factories: Vec<(&'static str, &'static str)>,
     scoped: HashMap<TypeId, ScopedFactory>,
     transient: HashMap<TypeId, TransientFactory>,
     /// Concrete/keyed registrations that replaced an earlier one — a wiring
@@ -533,8 +544,10 @@ impl ContainerBuilder {
 
     /// Register phase for one dynamic import: consume the value the collect
     /// phase parked at this site, or build one from `fallback` when there was
-    /// no collect phase (the synchronous [`App::new`](crate::App::new) path).
-    /// Either way the import expression runs exactly once.
+    /// no collect phase (the synchronous [`App::new`](crate::App::new) path) —
+    /// and on that path, run its `collect` here too, so the import contributes
+    /// the same thing either way as far as synchronously is possible. Either
+    /// way the import expression runs exactly once.
     ///
     /// **Internal ABI** — emitted by `#[module]`, lockstep with
     /// `nest-rs-core-macros`; do not call by hand.
@@ -551,7 +564,17 @@ impl ContainerBuilder {
     {
         match self.dynamic_registrars.remove(&(module, index)) {
             Some(registrar) => registrar(self),
-            None => fallback().register(self),
+            None => {
+                // No collect phase ran, so run it here: its synchronous half
+                // (`ConfigRootSetup` registering `Environment`) would otherwise
+                // be skipped without a trace. Anything it queues as an async
+                // factory stays queued, which is exactly what lets
+                // `App::new` refuse instead of booting the hole
+                // (`UnresolvedFactoryError`).
+                let value = fallback();
+                let builder = value.collect(self);
+                value.register(builder)
+            }
         }
     }
 
@@ -593,16 +616,73 @@ impl ContainerBuilder {
         })
     }
 
+    /// Queue a factory that **supersedes** an ordinary one for the same type,
+    /// wherever the two happen to fall in import order.
+    ///
+    /// The plain [`provide_factory`](Self::provide_factory) queue is
+    /// first-queued-wins, which is right for a default that several modules
+    /// declare — a diamond import must not build twice. It is wrong for a value
+    /// an import site *chose*: `imports = [AudioModule, StorageModule::for_root(cfg)]`
+    /// would drop `cfg` on the floor, silently, because `AudioModule` imports
+    /// `StorageModule` and queued the environment-only factory first. A
+    /// declaration takes the slot instead, so the app gets what it wrote and the
+    /// order of `imports` stays a readability choice.
+    ///
+    /// Two declarations for one type contest, and the build fails naming it —
+    /// see [`ContestedDeclarationError`](crate::ContestedDeclarationError).
+    /// `remedy` is the sentence that error appends: the caller knows what the
+    /// two sites were and what the reader should do instead, and the container
+    /// does not.
+    ///
+    /// Not config-specific. Any module registering an implementation a *sibling
+    /// module also registers* — the in-memory and Redis throttler stores both
+    /// binding `Arc<dyn ThrottlerStore>` — belongs here, so importing both is a
+    /// named boot failure rather than whichever one `imports` happened to list
+    /// first.
+    pub fn provide_declared_factory<T, F, Fut>(self, remedy: &'static str, factory: F) -> Self
+    where
+        T: Any + Send + Sync,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.queue(Some(remedy), factory, |builder, value| {
+            builder.provide(value)
+        })
+    }
+
     /// The factory-queue protocol both public forms share: box the future,
     /// await it in the factory phase, and hand the awaited value to `install`,
     /// which decides under which name(s) it registers.
-    fn queue_factory<T, F, Fut, I>(mut self, factory: F, install: I) -> Self
+    fn queue_factory<T, F, Fut, I>(self, factory: F, install: I) -> Self
     where
         T: Any + Send + Sync,
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
         I: FnOnce(ContainerBuilder, T) -> ContainerBuilder + Send + 'static,
     {
+        self.queue(None, factory, install)
+    }
+
+    fn queue<T, F, Fut, I>(mut self, remedy: Option<&'static str>, factory: F, install: I) -> Self
+    where
+        T: Any + Send + Sync,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+        I: FnOnce(ContainerBuilder, T) -> ContainerBuilder + Send + 'static,
+    {
+        let id = TypeId::of::<T>();
+        let name = std::any::type_name::<T>();
+        // A default never displaces a declaration, whichever order they arrive
+        // in — the two `if`s here are what make the outcome order-independent.
+        if remedy.is_none() && self.declared_factories.contains(&id) {
+            return self;
+        }
+        if let Some(remedy) = remedy
+            && !self.declared_factories.insert(id)
+        {
+            self.contested_factories.push((name, remedy));
+            return self;
+        }
         let boxed: BoxedFactory = Box::new(move |container| {
             Box::pin(async move {
                 let value = factory(container).await?;
@@ -610,8 +690,17 @@ impl ContainerBuilder {
                 Ok(registrar)
             })
         });
-        self.factories.push((TypeId::of::<T>(), boxed));
+        if remedy.is_some() {
+            self.factories.retain(|(queued, _, _)| *queued != id);
+        }
+        self.factories.push((id, name, boxed));
         self
+    }
+
+    /// Types declared by more than one import site, with each site's remedy.
+    /// Checked by `AppBuilder::build` before any factory runs.
+    pub(crate) fn contested_factories(&self) -> &[(&'static str, &'static str)] {
+        &self.contested_factories
     }
 
     /// Register a request-scoped provider: `factory` builds a fresh `T` for
@@ -676,8 +765,15 @@ impl ContainerBuilder {
         self
     }
 
-    pub(crate) fn take_factories(&mut self) -> Vec<(TypeId, BoxedFactory)> {
+    pub(crate) fn take_factories(&mut self) -> Vec<(TypeId, &'static str, BoxedFactory)> {
         std::mem::take(&mut self.factories)
+    }
+
+    /// Types a module queued an async factory for. Non-empty at the end of the
+    /// synchronous [`App::new`](crate::App::new) register phase means those
+    /// values will never exist — nothing drains the queue on that path.
+    pub(crate) fn queued_factory_names(&self) -> Vec<&'static str> {
+        self.factories.iter().map(|(_, name, _)| *name).collect()
     }
 
     /// Provider keys registered so far. Snapshotted by `AppBuilder::build`

@@ -14,7 +14,7 @@
 //! and authz ability); `nest_rs_seaorm::mcp::McpDataContext` is the first-party one.
 //! List it `as dyn McpToolContext` on the tool host's module.
 
-use std::any::{Any, type_name};
+use std::any::{Any, TypeId, type_name};
 use std::sync::Arc;
 
 use nest_rs_core::RequestScope;
@@ -109,6 +109,10 @@ pub(crate) struct McpAmbient {
     /// [`McpOperationGuard`](crate::McpOperationGuard) snapshotted — the
     /// caller's ability, for the canonical bridge.
     pub(crate) guard_captured: Option<Captured>,
+    /// What the endpoint's [`McpOperationGuard`](crate::McpOperationGuard)
+    /// reported it already executed — computed once at mount, so carrying it is
+    /// one `Arc` clone per request.
+    pub(crate) already_ran: Option<Arc<[TypeId]>>,
 }
 
 impl McpAmbient {

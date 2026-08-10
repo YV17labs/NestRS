@@ -156,4 +156,10 @@ async fn a_merged_endpoint_still_row_filters_the_tool_body() {
         "row-level filtering must survive the merge — the tool writes no filter, \
          the ambient ability does. Body: {body}",
     );
+    assert!(
+        body.contains("structuredContent"),
+        "…and the rows travel as structured content (SEP-2106), which is what \
+         `#[authorize]`'s response mask has a shape to work on — a hand-joined \
+         string would ship the same rows past an inert mask: {body}",
+    );
 }

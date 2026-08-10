@@ -19,6 +19,9 @@ nest-rs-http.workspace = true
 nest-rs-config.workspace = true
 nest-rs-core.workspace = true
 nest-rs-mcp-macros.workspace = true
+# `Valid<T>` / `Piped<P, T>` on a tool argument: the `#[mcp]` expansion runs the
+# pipe over the wire value and renders a rejection as `invalid_params`.
+nest-rs-pipes.workspace = true
 poem.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
@@ -40,7 +43,12 @@ nest-rs-guards = { path = "../nest-rs-guards", features = ["mcp"] }
 # non-authn guard's `429` — the behaviour `/mcp` could not have before.
 nest-rs-throttler = { path = "../nest-rs-throttler" }
 nest-rs-testing = { path = "../nest-rs-testing" }
+# trybuild pins the wrong-item-shape diagnostics: `#[mcp]` and `#[tools]` each
+# name the sibling that belongs on the shape the developer reached for.
+trybuild.workspace = true
 poem = { workspace = true, features = ["test"] }
+# Asserting on the `data` a rejected pipe hands the model.
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -138,7 +138,7 @@ impl McpHostMeta {
 ///
 /// An inherent associated function wins over a trait one, so
 /// `<Host>::tool_router()` in the `#[mcp]` expansion resolves to the real router
-/// — emitted by the impl-level `#[mcp]` as `pub(crate)`, or written by hand with
+/// — emitted by `#[tools]` as `pub(crate)`, or written by hand with
 /// rmcp's own `#[tool_router]` — and to this empty stand-in when the host has
 /// neither. That is what lets the decorator sit on a hand-written
 /// `ServerHandler` without requiring the developer to declare anything.
@@ -154,6 +154,32 @@ pub trait DefaultToolRouter: Sized + Send + Sync + 'static {
 }
 
 impl<T: Send + Sync + 'static> DefaultToolRouter for T {}
+
+/// Empty fallback so the struct-level `#[mcp]` can ask **any** host which layers
+/// its operations declared.
+///
+/// Same mechanism as [`DefaultToolRouter`], for the same reason: `Discoverable`
+/// is emitted by the *struct* half — a host serving a hand-written
+/// `ServerHandler` has no decorated impl — while `#[use_guards]` beside a
+/// `#[tool]` is known only to the *impl* half. The decorated impl emits an
+/// inherent `__nestrs_mcp_operation_layers`, which wins; a host without one
+/// lands here and contributes nothing.
+///
+/// The two halves travel as one tuple rather than two functions because the
+/// access graph pairs `injected()[i]` with `injected_names()[i]`: index
+/// alignment that cannot be broken by editing one of two call sites.
+///
+/// **Internal ABI** — named by the `#[mcp]` expansion, lockstep with this
+/// crate; never implemented by hand.
+#[doc(hidden)]
+pub trait DefaultOperationLayers: Sized + 'static {
+    /// No decorated operations, so no per-operation layers.
+    fn __nestrs_mcp_operation_layers() -> (Vec<std::any::TypeId>, Vec<&'static str>) {
+        (Vec::new(), Vec::new())
+    }
+}
+
+impl<T: 'static> DefaultOperationLayers for T {}
 
 /// Record `P` as a host of the MCP endpoint at `path`, and — for the first host
 /// to claim that path — attach the endpoint itself plus its boot check.

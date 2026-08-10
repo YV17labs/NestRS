@@ -47,16 +47,20 @@ pub enum MaskReplyError {
 /// refuses are dropped, field grants strip columns, unexposed columns are
 /// strained out, and an irreconcilable body is an error, never a passthrough.
 ///
-/// # WS masking is opt-in — unlike HTTP and GraphQL (SEC-F1)
+/// # Not for a decorated handler — every edge arms its own mask
 ///
-/// HTTP arms an automatic response shaper (and a `MaskProbe` compile/boot net);
-/// GraphQL requires a `#[authorize]` that emits the mask. A WebSocket
-/// `#[subscribe_message]` handler has **no** such net: a reply returning entity
-/// data must call this helper itself and hand back the returned `Value`.
-/// **Forgetting it ships raw, unmasked rows** — treat every entity-bearing WS
-/// reply as requiring an explicit `masked_reply` call, and propagate the `Err`
-/// to an error frame (never fall back to the unmasked body). See the
-/// `demo/crates/features/src/users/ws/gateway.rs` exemplar.
+/// All four request-carrying transports now emit masking from the posture:
+/// `#[routes]` installs the HTTP response shaper, and `#[operations]`,
+/// `#[messages]` and `#[tools]` emit `masked_value_for` from an
+/// `#[authorize(Action, Entity)]`. So a `#[subscribe_message]` returning entity
+/// rows declares the posture and writes **no** masking call —
+/// `demo/crates/features/src/users/ws/gateway.rs` is the exemplar, and it used to
+/// be the counter-example.
+///
+/// What is left for this function is a surface **no decorator reaches**: a
+/// hand-built server push (`WsServer::emit`), a hand-written
+/// `ServerHandler`. There, forgetting it ships raw rows — so propagate the `Err`
+/// to the transport's error shape and never fall back to the unmasked body.
 pub fn masked_reply<S>(action: Action, wire: Value) -> Result<Value, MaskReplyError>
 where
     S: EntityTrait + WireModelDefaults,

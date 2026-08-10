@@ -50,6 +50,24 @@ pub async fn post_message<E: Endpoint>(
     bearer: Option<&str>,
     body: &Value,
 ) -> TestResponse {
+    post_message_with(client, path, session, bearer, &[], body).await
+}
+
+/// [`post_message`] carrying extra request headers.
+///
+/// The general form, for a suite whose guard chain reads something other than a
+/// bearer token — a tenant header, a test-only role. Hand-rolling the POST
+/// instead is what drops the `host` header rmcp's DNS-rebinding defence
+/// requires, and answers `400` for a reason that has nothing to do with the
+/// assertion.
+pub async fn post_message_with<E: Endpoint>(
+    client: &TestClient<E>,
+    path: &str,
+    session: Option<&str>,
+    bearer: Option<&str>,
+    headers: &[(&str, &str)],
+    body: &Value,
+) -> TestResponse {
     let mut request = client
         .post(path)
         .header("host", "localhost")
@@ -62,6 +80,9 @@ pub async fn post_message<E: Endpoint>(
     if let Some(bearer) = bearer {
         request = request.header("authorization", bearer);
     }
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
     request.send().await
 }
 
@@ -73,21 +94,24 @@ pub async fn open_session<E: Endpoint>(
     path: &str,
     bearer: Option<&str>,
 ) -> String {
-    open_session_with(client, path, bearer, json!({})).await
+    open_session_with(client, path, bearer, &[], json!({})).await
 }
 
-/// [`open_session`] declaring client `capabilities` on the handshake.
+/// [`open_session`] declaring client `capabilities` on the handshake, under
+/// caller-supplied `headers`.
 pub async fn open_session_with<E: Endpoint>(
     client: &TestClient<E>,
     path: &str,
     bearer: Option<&str>,
+    headers: &[(&str, &str)],
     capabilities: Value,
 ) -> String {
-    let init = post_message(
+    let init = post_message_with(
         client,
         path,
         None,
         bearer,
+        headers,
         &initialize_request_with(capabilities),
     )
     .await;
@@ -100,11 +124,12 @@ pub async fn open_session_with<E: Endpoint>(
         .expect("initialize returns a session id")
         .to_owned();
 
-    post_message(
+    post_message_with(
         client,
         path,
         Some(&session),
         bearer,
+        headers,
         &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
     )
     .await;
@@ -161,11 +186,25 @@ pub async fn call_method<E: Endpoint>(
     method: &str,
     params: Value,
 ) -> String {
-    let response = post_message(
+    call_method_with(client, path, session, bearer, &[], method, params).await
+}
+
+/// [`call_method`] carrying extra request headers.
+pub async fn call_method_with<E: Endpoint>(
+    client: &TestClient<E>,
+    path: &str,
+    session: &str,
+    bearer: Option<&str>,
+    headers: &[(&str, &str)],
+    method: &str,
+    params: Value,
+) -> String {
+    let response = post_message_with(
         client,
         path,
         Some(session),
         bearer,
+        headers,
         &json!({ "jsonrpc": "2.0", "id": 99, "method": method, "params": params }),
     )
     .await;
@@ -205,14 +244,41 @@ pub async fn call_tool<E: Endpoint>(
     tool: &str,
     bearer: Option<&str>,
 ) -> String {
-    let session = open_session(client, path, bearer).await;
-    call_method(
+    call_tool_with(client, path, tool, bearer, json!({})).await
+}
+
+/// [`call_tool`] with an `arguments` object — what a suite reaches for to drive
+/// an operation's input through its pipes.
+pub async fn call_tool_with<E: Endpoint>(
+    client: &TestClient<E>,
+    path: &str,
+    tool: &str,
+    bearer: Option<&str>,
+    arguments: Value,
+) -> String {
+    call_tool_as(client, path, tool, bearer, &[], arguments).await
+}
+
+/// [`call_tool_with`] under caller-supplied headers, applied to the handshake
+/// and the call alike — the driver for a suite whose guard chain identifies the
+/// caller by something other than a bearer token.
+pub async fn call_tool_as<E: Endpoint>(
+    client: &TestClient<E>,
+    path: &str,
+    tool: &str,
+    bearer: Option<&str>,
+    headers: &[(&str, &str)],
+    arguments: Value,
+) -> String {
+    let session = open_session_with(client, path, bearer, headers, json!({})).await;
+    call_method_with(
         client,
         path,
         &session,
         bearer,
+        headers,
         "tools/call",
-        json!({ "name": tool, "arguments": {} }),
+        json!({ "name": tool, "arguments": arguments }),
     )
     .await
 }

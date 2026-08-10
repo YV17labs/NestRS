@@ -3,30 +3,40 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{Expr, Item, ItemStruct, LitStr, Meta, Token};
+use syn::{Expr, ItemStruct, LitStr, Meta, Token};
 
 use nest_rs_codegen::{
-    InjectableBody, build_injectable_body, expr_str, from_container_method, injected_method,
+    DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
+    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
+    reject_http_only_layers, scoped_specs, take_path_list,
+};
+
+/// The MCP edge's pair. Naming the sibling is the whole point of the split: the
+/// shape the developer reached for exists, it is just spelled with the other
+/// decorator — and `parse_host` / `parse_operations` parse the item *before*
+/// complaining, which is what keeps a broken `impl` from being reported as
+/// "expected struct".
+pub(crate) const MCP_PAIR: DecoratorPair = DecoratorPair {
+    host: "#[mcp]",
+    subject: "host struct",
+    operations: "#[tools]",
+    collects: "#[tool] / #[prompt]",
 };
 
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
-    // One decorator, two item shapes: the struct is the host, the impl is its
-    // operations. Same name on both because they are one concern — and because
-    // a `#[tools]` sitting one letter from the `#[tool]` beneath it would read
-    // as a typo at every glance.
-    match syn::parse::<Item>(input) {
-        Ok(Item::Impl(item)) => crate::mcp_impl::mcp_impl(args, item),
-        Ok(Item::Struct(item)) => mcp_struct(args, item),
-        // Parsing once and naming both shapes keeps a broken `impl` from being
-        // reported as "expected struct" — the confusing-error-inside-a-macro
-        // failure every diagnostic in this crate works to avoid.
-        Ok(other) => syn::Error::new_spanned(
-            other,
-            "#[mcp] decorates a host struct or the inherent impl holding its \
-             #[tool] / #[prompt] methods",
-        )
-        .to_compile_error()
-        .into(),
+    match MCP_PAIR.parse_host(input.into()) {
+        Ok(item) => mcp_struct(args, item),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// `#[tools]` — the operations half, on the host's inherent impl. Named for
+/// what it collects, the way `#[routes]` and `#[messages]` are; it carries the
+/// `#[prompt]` methods too, since a prompt is an operation this same host
+/// serves and rmcp routes both through one `ServerHandler`.
+pub(crate) fn tools(args: TokenStream, input: TokenStream) -> TokenStream {
+    match MCP_PAIR.parse_operations(input.into()) {
+        Ok(item) => crate::mcp_impl::mcp_impl(args, item),
         Err(err) => err.to_compile_error().into(),
     }
 }
@@ -37,7 +47,31 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let InjectableBody { ctor, dep_keys, .. } = match build_injectable_body(&mut item) {
+    // Interceptors and filters have no per-operation seam on this transport, so
+    // binding one here would be a silent no-op — named compile error instead,
+    // the same answer GraphQL and WS give.
+    if let Err(err) = reject_http_only_layers(&item.attrs, "MCP", "host") {
+        return err.to_compile_error().into();
+    }
+    // Host-scope (provider) guard declarations — same shape and same mental
+    // model as `#[controller] struct` + `#[resolver] struct` + `#[gateway]
+    // struct`. Stored here so the impl-form macro folds them into every
+    // operation's chain at runtime through `__nestrs_mcp_host_guard_specs()`.
+    let guards = match take_path_list(&mut item.attrs, "use_guards", "guard") {
+        Ok(paths) => paths,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    // Host-scope guards fold into the same per-operation chain the operations'
+    // own do, so they run `Guard::check_mcp` and owe the same capability.
+    let capability_bounds =
+        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::McpGuard));
+
+    let InjectableBody {
+        ctor,
+        dep_keys,
+        dep_names,
+        ..
+    } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -46,7 +80,16 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let host_name = name.to_string();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    let injected = injected_method(&dep_keys);
+    // The struct's `#[inject]` keys + host-scope guards + whatever the decorated
+    // impl declared per operation. The last part is why this reads through
+    // `__nestrs_mcp_operation_layers()`: `#[mcp]` on the struct is what emits
+    // `Discoverable` (a host may serve a hand-written `ServerHandler` and have no
+    // decorated impl at all), so the per-operation guards have to arrive from the
+    // other half rather than be folded in here.
+    let layers = layer_deps(guards.iter());
+    let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
+    let injected_names = injected_names_with_layers(&dep_names, &layers);
+    let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
 
     // Empty stands for "the host declared none": the crate substitutes its
     // default endpoint. The decorator keeps no default of its own, so the path
@@ -61,12 +104,39 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     quote! {
         #item
 
+        #capability_bounds
+
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container
+
+            /// Host-scope `#[use_guards(...)]`, read by the impl-form macro on
+            /// the cache miss that composes an operation's chain. Empty when
+            /// none declared.
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_host_guard_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+            {
+                #guard_specs
+            }
         }
 
         impl #impl_generics ::nest_rs_core::Discoverable for #name #ty_generics #where_clause {
-            #injected
+            fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
+                // An inherent associated fn wins over a trait one, so this is
+                // the decorated impl's own list when there is one, and the
+                // fallback's empty pair when the host writes rmcp by hand.
+                use ::nest_rs_mcp::DefaultOperationLayers as _;
+                let mut __keys: ::std::vec::Vec<::core::any::TypeId> = #injected_keys;
+                __keys.extend(<Self>::__nestrs_mcp_operation_layers().0);
+                __keys
+            }
+
+            fn injected_names() -> ::std::vec::Vec<&'static str> {
+                use ::nest_rs_mcp::DefaultOperationLayers as _;
+                let mut __names: ::std::vec::Vec<&'static str> = #injected_names;
+                __names.extend(<Self>::__nestrs_mcp_operation_layers().1);
+                __names
+            }
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

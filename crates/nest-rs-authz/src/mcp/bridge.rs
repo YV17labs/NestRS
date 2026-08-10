@@ -1,12 +1,12 @@
-//! MCP surface for [`nest_rs_authz`](crate). Enabled by the `mcp` Cargo feature.
+//! [`McpAbilityBridge`] — the endpoint's operation guard.
 //!
 //! Authenticate MCP HTTP requests with the same guard chain controllers use,
 //! then install the caller's ambient [`Ability`] for the operation's duration.
-//!
-//! Field-level masking inside a tool body is [`crate::masked_output_ambient`] —
-//! MCP tool output is arbitrary JSON-RPC content, so it cannot be masked
-//! transparently the way the HTTP route shaper does.
+//! Everything a decorated operation then does — its `#[use_guards]` chain, its
+//! `#[authorize]` gate, its response mask — reads that ambient ability, so this
+//! is the one place the caller's authorization is decided on this transport.
 
+use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
@@ -27,6 +27,13 @@ pub struct McpAbilityBridge<A: Guard, G: Guard> {
 }
 
 impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
+    /// Exactly the two guards this bridge runs — and, just as load-bearing,
+    /// nothing else. A pooled guard the bridge never touched stays absent here,
+    /// so an operation declaring it still runs it.
+    fn already_ran(&self) -> Vec<TypeId> {
+        ::std::vec![TypeId::of::<A>(), TypeId::of::<G>()]
+    }
+
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             // Same ordering as the GraphQL bridge, from the same function; only

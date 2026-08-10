@@ -1,0 +1,21 @@
+error[E0277]: `HttpOnlyGuard` does not check MCP operations
+  --> tests/integration/diagnostics/http_only_guard_on_a_tool.rs:24:14
+   |
+24 | #[use_guards(HttpOnlyGuard)]
+   |              ^^^^^^^^^^^^^ this guard has no `check_mcp`
+   |
+help: the trait `McpGuard` is not implemented for `HttpOnlyGuard`
+  --> tests/integration/diagnostics/http_only_guard_on_a_tool.rs:12:1
+   |
+12 | struct HttpOnlyGuard;
+   | ^^^^^^^^^^^^^^^^^^^^
+   = note: a guard bound on an MCP host or operation runs `Guard::check_mcp`, whose default is `Ok(())` — binding one that does not override it passes every tool call silently
+   = note: override `check_mcp`, then declare `impl McpGuard for HttpOnlyGuard {}`; or bind this guard on an HTTP `#[controller]` / `#[routes]` instead
+note: required by a bound in `__nestrs_assert_guard_capability`
+  --> tests/integration/diagnostics/http_only_guard_on_a_tool.rs:23:1
+   |
+23 | #[mcp]
+   | ^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
+24 | #[use_guards(HttpOnlyGuard)]
+   |              ------------- required by a bound in this function
+   = note: this error originates in the attribute macro `mcp` (in Nightly builds, run with -Z macro-backtrace for more info)

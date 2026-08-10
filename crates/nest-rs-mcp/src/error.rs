@@ -22,18 +22,23 @@
 
 use std::fmt::Display;
 
+use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
 
-/// What the model is told when an operation fails for a reason that is none of
-/// its business. Constant on purpose: a message assembled from the error would
-/// leak by construction.
-const OPAQUE: &str = "internal error";
+/// What the model is told when a failure is none of its business. The value is
+/// `nest-rs-core`'s, shared with GraphQL and WS so a client cannot tell from the
+/// wording which transport it hit.
+use nest_rs_core::OPAQUE_CLIENT_MESSAGE as OPAQUE;
 
 /// Turn a failure the model must not read into one it may.
 ///
 /// Implemented for every `Result` whose error is printable, so it covers a
 /// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
 /// any of them having to know MCP exists.
+///
+/// The twin traits on GraphQL and WS are deliberately separate types rather than
+/// one trait generic over the error: the output is what lets `.opaque()?` infer
+/// from the enclosing function's return type. See `nest_rs_core::opaque`.
 pub trait Opaque<T> {
     /// Log the real error for the operator, hand the model an opaque one.
     fn opaque(self) -> Result<T, McpError>;
@@ -50,6 +55,38 @@ impl<T, E: Display> Opaque<T> for Result<T, E> {
             McpError::internal_error(OPAQUE, None)
         })
     }
+}
+
+/// Render a rejected pipe as the one MCP error a model can act on.
+///
+/// The opposite case to [`Opaque`], and deliberately so: a pipe rejects the
+/// model's *own* input, so the message is exactly what lets it retry with
+/// corrected arguments. The structured `details` — `ValidationPipe`'s field
+/// errors — ride along as the error's data, the same payload the HTTP `400` and
+/// the WS error frame carry.
+///
+/// Emitted by the `#[mcp]` expansion around every `Valid<T>` / `Piped<P, T>`
+/// argument; never written by hand.
+pub fn pipe_error(err: &PipeError) -> McpError {
+    McpError::invalid_params(err.message().to_owned(), err.details().cloned())
+}
+
+/// The failure a decorated operation reports when it declares guards and finds
+/// no app to resolve them from.
+///
+/// Only reachable through a mount built without a container — a hand-assembled
+/// endpoint, or [`McpMount::deny_all`](crate::McpMount). It fails **closed and
+/// named**: an unresolvable chain silently running zero guards is the fail-open
+/// reading of the same fact, and it is the reading that ships a tool surface
+/// nobody gated.
+pub fn unresolvable_chain(label: &'static str) -> McpError {
+    tracing::error!(
+        target: "nest_rs::mcp",
+        operation = label,
+        reason = "no_ambient_container",
+        "mcp operation declares guards but the mount carries no container",
+    );
+    McpError::internal_error(OPAQUE, None)
 }
 
 #[cfg(test)]
@@ -73,6 +110,22 @@ mod tests {
         assert!(
             rendered.contains(OPAQUE),
             "…and what it does say is the one constant message: {rendered}",
+        );
+    }
+
+    #[test]
+    fn a_rejected_pipe_tells_the_model_what_to_fix() {
+        let err = pipe_error(&PipeError::with_details(
+            "validation failed",
+            serde_json::json!({ "file": ["must not be empty"] }),
+        ));
+
+        assert_eq!(err.message, "validation failed");
+        assert_eq!(
+            err.data,
+            Some(serde_json::json!({ "file": ["must not be empty"] })),
+            "the field errors ride along so the model can correct the argument \
+             it got wrong, exactly as the HTTP 400 carries them",
         );
     }
 }

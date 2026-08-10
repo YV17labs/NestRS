@@ -1,12 +1,10 @@
 //! [`authorize`] — the class-level access gate, the GraphQL analog of
 //! [`crate::http::Authorize`].
 
-use std::any::TypeId;
-
-use nest_rs_graphql::async_graphql::{Context, Error, Result};
+use nest_rs_graphql::async_graphql::{Context, Result};
 
 use super::context::{ability, forbidden, insufficient_scope, unauthenticated};
-use crate::{ActionMarker, Subject};
+use crate::{ActionMarker, GateVerdict, Subject, gate};
 
 /// Class-level gate: require action `A` on subject `S`. Returns a GraphQL
 /// `forbidden` error (code `FORBIDDEN`) when the caller's ability does not grant
@@ -30,38 +28,20 @@ use crate::{ActionMarker, Subject};
 /// surfaces *only*.
 pub fn authorize<A: ActionMarker, S: Subject>(ctx: &Context<'_>) -> Result<()> {
     let ability = ability(ctx)?;
-    // Authentication first, and separately: an anonymous caller is refused for
-    // want of a principal, whatever the visitor branch granted.
-    if ability.is_visitor() {
-        return Err(deny::<A, S>("anonymous_caller", unauthenticated()));
-    }
-    if ability.can_class(A::ACTION, TypeId::of::<S>()) {
-        return Ok(());
-    }
-    // A refusal that a wider token would have fixed says so, on this transport
-    // too. GraphQL has no `401` for the resource-server interceptor to enrich,
-    // but a scope refusal is an ordinary error frame here — so the same fact
-    // reaches the client, in this transport's native shape.
-    let missing = ability.missing_scopes(A::ACTION, TypeId::of::<S>());
-    if missing.is_empty() {
-        return Err(deny::<A, S>("no_class_grant", forbidden()));
-    }
-    Err(deny::<A, S>(
-        "insufficient_scope",
-        insufficient_scope(&missing),
-    ))
-}
-
-/// The one `warn` every gate refusal passes through, so a denial cannot reach
-/// the client without leaving the queryable trace an incident is answered from.
-fn deny<A: ActionMarker, S: Subject>(reason: &'static str, error: Error) -> Error {
-    tracing::warn!(
-        target: "nest_rs::authz",
-        transport = "graphql",
-        action = ?A::ACTION,
-        subject = std::any::type_name::<S>(),
-        reason,
-        "authorization denied",
-    );
-    error
+    // The decision is `crate::gate`, shared with MCP so `#[authorize]` cannot
+    // come to mean two things; only the error frame below is GraphQL's.
+    let verdict = gate::<A, S>(&ability);
+    let error = match &verdict {
+        GateVerdict::Allowed => return Ok(()),
+        GateVerdict::Unauthenticated => unauthenticated(),
+        GateVerdict::Forbidden => forbidden(),
+        // A refusal that a wider token would have fixed says so on this
+        // transport too. GraphQL has no `401` for the resource-server
+        // interceptor to enrich, but a scope refusal is an ordinary error frame
+        // here — so the same fact reaches the client, in this transport's own
+        // shape.
+        GateVerdict::InsufficientScope(missing) => insufficient_scope(missing),
+    };
+    crate::gate::warn_denied::<A, S>("graphql", None, verdict.reason());
+    Err(error)
 }

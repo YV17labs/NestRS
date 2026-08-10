@@ -11,7 +11,7 @@ use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, MaskReplyError, Read, masked_reply, with_ability};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
-use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, resolver};
+use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
@@ -124,7 +124,7 @@ impl Guard for AbilityInjector {
 #[resolver]
 struct MaskResolver;
 
-#[resolver]
+#[operations]
 impl MaskResolver {
     #[query]
     #[authorize(Read, widget::Entity)]

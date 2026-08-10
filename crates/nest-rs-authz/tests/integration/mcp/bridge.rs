@@ -1,4 +1,4 @@
-//! Mirror test for `src/mcp.rs` — only compiled when the `mcp` feature is on.
+//! Mirror test for `src/mcp/bridge.rs`.
 //!
 //! `McpAbilityBridge` is the MCP twin of `GraphqlAbilityBridge`: it runs the
 //! same authn→authz chain (`run_ability_chain`) and installs the caller's
@@ -25,24 +25,7 @@ use nest_rs_mcp::{
 use nest_rs_testing::{TestApp, mcp::call_tool};
 use poem::http::{StatusCode, header};
 
-/// A throwaway SeaORM entity to act as the authorization `Subject`.
-mod widget {
-    use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-    #[sea_orm(table_name = "widgets")]
-    pub struct Model {
-        #[sea_orm(primary_key)]
-        pub id: i32,
-        pub name: String,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-}
+use super::widget;
 
 /// No-op stand-in for the bridge's authentication slot.
 #[injectable]

@@ -11,7 +11,7 @@ use poem::web::{Json, Query};
 use poem::{Body, Error, Response, Result};
 
 use super::extract::UploadedAudio;
-use super::guard::TranscodeGuard;
+use crate::audio::TranscodeGuard;
 use crate::audio::{AudioService, PresignedUrlDto, TranscodeDto, UploadRequestDto};
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;

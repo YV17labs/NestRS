@@ -1,4 +1,5 @@
-//! MCP — `#[mcp]` mounts a Model Context Protocol server on the HTTP transport.
+//! MCP — `#[mcp]` mounts a Model Context Protocol server on the HTTP transport,
+//! and `#[tools]` declares the operations it serves.
 //!
 //! MCP is **not a transport**, it is a graft on `HttpTransport` (the same
 //! pattern as WS): `#[mcp]` on a struct emits an [`endpoint`] factory that
@@ -12,6 +13,29 @@
 //! (`/mcp`), or write one to serve a second endpoint. It is not a namespace the
 //! host owns the way a `#[controller]`'s is — nothing nests under it, it names
 //! the one endpoint the host joins, and peers writing the same path share it.
+//!
+//! # An operation declares the same layers a `#[query]` does
+//!
+//! `#[tools]` is a request-layer site, not just a router: each
+//! `#[tool]` / `#[prompt]` takes `#[use_guards(...)]` / `#[force_guards(...)]`,
+//! a **mandatory** access posture (`#[authorize(Action, Entity)]` or
+//! `#[public]`), and a pipe on its arguments (`Parameters<Valid<T>>` /
+//! `Parameters<Piped<P, T>>`). They expand in that order, so a caller the class
+//! gate refuses never pays for validation.
+//!
+//! The host struct takes `#[use_guards(...)]` too, and both scopes compose into
+//! one chain per site. What the endpoint's [`McpOperationGuard`] reports it
+//! already executed ([`McpOperationGuard::already_ran`]) is dropped from that
+//! chain, so a guard the edge ran does not run twice — and, just as
+//! deliberately, one the edge did *not* run still runs, whatever the app-wide
+//! pool happens to contain.
+//!
+//! Two things this transport does not inherit, and both follow from the
+//! protocol rather than from a preference. Response masking has no selection set
+//! to excuse a stripped **required** field, so it fails *closed*; declare
+//! `unmasked` when a tool deliberately answers with a narrower projection. And
+//! `bind = Service` has no MCP form: an operation takes one `Parameters<T>`
+//! struct, not the named id argument the binding reads.
 //!
 //! # Every capability, not just tools
 //!
@@ -70,6 +94,7 @@ mod guards;
 mod host;
 mod identity;
 mod module;
+mod operation;
 mod propagate;
 mod registry;
 mod scope;
@@ -78,16 +103,17 @@ pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
 pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
-pub use error::Opaque;
+pub use error::{Opaque, pipe_error, unresolvable_chain};
 pub use guard::{BoxFuture, FallbackMcpGuard, McpOperationGuard};
 pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpOptions, McpSetup};
+pub use operation::{McpOperationContext, McpOperationKind, current_container, layers_already_run};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
 #[doc(hidden)]
-pub use registry::{DefaultToolRouter, register_host};
+pub use registry::{DefaultOperationLayers, DefaultToolRouter, register_host};
 /// Per-operation accessor for `#[injectable(scope = request)]` providers inside
 /// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;
@@ -145,8 +171,8 @@ pub use rmcp::transport::streamable_http_server::{
 ///
 /// * **Macro hygiene.** rmcp's `#[tool]` / `#[tool_router]` / `#[tool_handler]`
 ///   / `#[prompt]` family expands to bare `rmcp::` paths resolved against the
-///   *call site's* scope. `#[mcp]` on an impl block carries that import for you,
-///   inside a module named for the host — so two hosts in one file cannot
+///   *call site's* scope. `#[tools]` carries that import for you, inside a
+///   module named for the host — so two hosts in one file cannot
 ///   collide on the name, and the host's file writes no `use rmcp` at all. A
 ///   host that hand-writes `ServerHandler` is outside that expansion and imports
 ///   this itself, which is also what keeps its manifest free of an `rmcp` entry
@@ -159,4 +185,13 @@ pub use rmcp;
 /// here so a payload crossing this transport needs no `serde` of its own.
 pub use nest_rs_core::input;
 
-pub use nest_rs_mcp_macros::mcp;
+/// The two pipe carriers an operation's arguments go through, re-exported so a
+/// host file writing `Parameters<Valid<T>>` imports one path.
+///
+/// `Valid<T>` validates the deserialized arguments; `Piped<P, T>` runs any
+/// [`Pipe`](nest_rs_pipes::Pipe) over them. `#[tools]` strips the carrier from
+/// the wire signature — the tool's JSON Schema stays `T`'s — runs the pipe
+/// before the body, and answers a rejection with `invalid_params`.
+pub use nest_rs_pipes::{Piped, Valid};
+
+pub use nest_rs_mcp_macros::{mcp, tools};

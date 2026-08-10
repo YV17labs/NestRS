@@ -1,0 +1,6 @@
+error: #[tools] decorates the impl block holding the #[tool] / #[prompt] methods — the host struct itself takes #[mcp]
+ --> tests/integration/diagnostics/tools_on_struct.rs:7:1
+  |
+7 | / #[derive(Clone)]
+8 | | struct DemoTool;
+  | |________________^

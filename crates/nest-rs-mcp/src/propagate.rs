@@ -57,6 +57,7 @@ use rmcp::service::{
 use crate::McpError;
 use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
 use crate::guard::{BoxFuture, McpOperationGuard};
+use crate::operation::with_already_run;
 use crate::scope::maybe_with_request_scope;
 
 /// Wraps a tool host so each operation runs with the request scope, the
@@ -107,13 +108,17 @@ impl<H> PropagatingHandler<H> {
             scope,
             captured: context_captured,
             guard_captured,
+            already_ran,
         } = ambient;
 
         // One box, not two: the type erasure the guard's `around` needs and the
         // scope installation are the same future, and this runs on every MCP
         // operation.
+        //
+        // The edge report goes innermost, beside the scope a decorated
+        // operation's guard chain reads the app off.
         let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(async move {
-            maybe_with_request_scope(scope, inner)
+            maybe_with_request_scope(scope, with_already_run(already_ran, inner))
                 .await
                 .map(OperationValue::new)
         });

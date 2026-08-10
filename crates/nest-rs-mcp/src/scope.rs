@@ -41,6 +41,15 @@ pub(crate) async fn with_request_scope<F: Future>(scope: Arc<RequestScope>, fut:
     MCP_REQUEST_SCOPE.scope(scope, fut).await
 }
 
+/// The ambient per-operation scope, if one is installed.
+///
+/// The scope carries the app container it was built with, which is why this
+/// transport does not carry a second copy of it — see
+/// [`current_container`](crate::current_container).
+pub(crate) fn current_scope() -> Option<Arc<RequestScope>> {
+    MCP_REQUEST_SCOPE.try_with(Arc::clone).ok()
+}
+
 /// [`with_request_scope`] for the callers that may or may not have a scope —
 /// every mount path is optional here (an endpoint not nested under
 /// the transport edge has none). Kept next to the task-local so the

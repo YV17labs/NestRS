@@ -1,10 +1,10 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs::authz::{Ability, Action};
+use nest_rs::authz::{Ability, Action, current_ability};
 use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard};
-use nest_rs::http::async_trait;
+use nest_rs::guards::{Denial, Guard, McpGuard, async_trait};
+use nest_rs::mcp::McpOperationContext;
 use poem::Request;
 
 use crate::orgs::Entity as OrgEntity;
@@ -21,7 +21,21 @@ impl Guard for TranscodeGuard {
         let ability = req.extensions().get::<Arc<Ability>>().ok_or_else(|| {
             Denial::internal("TranscodeGuard requires AuthnGuard + AuthzGuard to run first")
         })?;
+        Self::decide(ability)
+    }
 
+    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+        let ability = current_ability().ok_or_else(|| {
+            Denial::internal("TranscodeGuard requires the MCP authz bridge to run first")
+        })?;
+        Self::decide(&ability)
+    }
+}
+
+impl McpGuard for TranscodeGuard {}
+
+impl TranscodeGuard {
+    fn decide(ability: &Ability) -> Result<(), Denial> {
         if ability.can_class(Action::Manage, TypeId::of::<OrgEntity>()) {
             return Ok(());
         }

@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Every top-level operation is an async method on a `#[resolver]` impl
+Every top-level operation is an async method on an `#[operations]` impl
 block, tagged with `#[query]` or `#[mutation]`. The method signature
 is the wire contract: parameters become GraphQL arguments, the return
 type becomes the response shape, and an error short-circuits with a
@@ -18,12 +18,12 @@ every decorated method in the running app.
 ## A simple query
 
 ```rust title="src/users/resolver.rs"
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
 #[resolver]
 pub struct UsersResolver;
 
-#[resolver]
+#[operations]
 impl UsersResolver {
     #[query]
     #[public]
@@ -68,7 +68,7 @@ Add typed parameters and they become required GraphQL arguments;
 `Option<T>` makes one nullable.
 
 ```rust
-#[resolver]
+#[operations]
 impl UsersResolver {
     #[query]
     #[public]
@@ -121,7 +121,7 @@ optionally an `InputObject` (input):
 
 ```rust
 use async_graphql::SimpleObject;
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
 #[derive(SimpleObject)]
 pub struct User {
@@ -133,7 +133,7 @@ pub struct User {
 #[resolver]
 pub struct UsersResolver;
 
-#[resolver]
+#[operations]
 impl UsersResolver {
     #[query]
     #[public]
@@ -162,7 +162,7 @@ operation root.
 
 ```rust
 use async_graphql::{InputObject, SimpleObject};
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
 #[derive(InputObject)]
 pub struct NewUserInput {
@@ -180,7 +180,7 @@ pub struct User {
 #[resolver]
 pub struct UsersResolver;
 
-#[resolver]
+#[operations]
 impl UsersResolver {
     #[mutation]
     #[public]
@@ -213,12 +213,12 @@ point to typed batch loaders.
 
 ```rust
 use async_graphql::{Context, Result};
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
 #[resolver]
 pub struct ProfileResolver;
 
-#[resolver]
+#[operations]
 impl ProfileResolver {
     #[query]
     #[public]
@@ -265,7 +265,7 @@ this is the same shape every adapter uses:
 use std::sync::Arc;
 use async_graphql::{Context, Result};
 use nest_rs::authz::{Create, Read};
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
@@ -280,7 +280,7 @@ pub struct UsersResolver {
     svc: Arc<UsersService>,
 }
 
-#[resolver]
+#[operations]
 impl UsersResolver {
     #[query]
     #[authorize(Read, UserEntity)]

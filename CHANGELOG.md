@@ -5,7 +5,252 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0] - 2026-08-09
+## [4.0.0] - 2026-08-10
+
+### A guard bound where it does not run is a compile error
+
+Every `Guard::check_*` defaults to `Ok(())` — right as "this guard does not apply
+to that transport", and also the reason this compiled, read as a protection, and
+throttled nothing:
+
+```rust
+#[resolver]
+#[use_guards(ThrottlerGuard)]   // ThrottlerGuard implements only check_http
+pub struct PostsResolver { /* … */ }
+```
+
+The per-operation chain called `check_graphql`, got the default, and passed. The
+fix is a bound rather than a boot check: it fails at the `#[use_guards]` line, and
+needs no plumbing into the four places each transport composes its chain.
+
+- **`GraphqlGuard` / `WsGuard` / `McpGuard`** in `nest-rs-guards`, each a marker a
+  guard declares beside the `check_*` it attests. `#[resolver]`/`#[operations]`,
+  `#[messages]` and `#[mcp]`/`#[tools]` emit one bound per declared guard;
+  `#[diagnostic::on_unimplemented]` names the missing method and the two remedies.
+  Three trybuild snapshots pin the wording.
+- **HTTP has no marker.** `check_http` is the trait's base entry — the one method
+  not behind a feature — so `HttpGuard` is blanket-implemented and the bound could
+  never fail. Emitting it would prove something already true, per route, per guard.
+- **A `#[gateway]`-struct guard is an HTTP guard**, and the bound is where that
+  stops being folklore: those run on the upgrade, which is a `GET`. Only a
+  `#[use_guards]` beside a `#[subscribe_message]` owes `WsGuard`.
+- **It found a live one on the first run.** `demo`'s three GraphQL resolvers bound
+  `#[use_guards(AuthnGuard, AuthzGuard)]`, and `AuthnGuard` has no `check_graphql`
+  — on a resolver it ran nothing, authentication having always been the bridge's
+  job in band. Dropped; the dependency lives on the bridge, which is what runs it.
+  All 88 demo e2e tests pass unchanged, which is the proof it was inert.
+
+### `Opaque` is on all three client-facing transports, not just MCP
+
+A handler's error type is the framework's only source for the message a client
+reads, and `Display` is the wrong default: a `DbErr` carries SQL, column names and
+sometimes row values. MCP had the seam because its reader is a language model that
+may repeat what it is told. A GraphQL error frame and a WS error frame are read by
+clients just as untrusted.
+
+- `nest_rs_graphql::Opaque` and `nest_rs_ws::Opaque` join `nest_rs_mcp::Opaque`:
+  `.opaque()?` logs the real error at `error` on the transport's own target and
+  substitutes the shared `nest_rs_core::OPAQUE_CLIENT_MESSAGE`.
+- **Three traits, one constant** — deliberately, and the reason is measured rather
+  than aesthetic. The trait's output *is* the transport's error type, which is what
+  lets `.opaque()?` infer from the enclosing function's return type; one trait
+  generic over the output has three applicable impls, so the receiver stops
+  deciding and every call site needs a turbofish. Sharing stops at the value the
+  three must agree on.
+- GraphQL's opaque error carries the same `INTERNAL` code an internal denial does,
+  so a client cannot tell an unexpected failure from a refusal it was owed no
+  explanation for.
+
+### WebSocket messages declare a posture, and the mask comes with it
+
+A `#[subscribe_message]` returning entity rows had to mask them by hand:
+
+```rust
+// before — the posture is an argument buried in a call nobody can `rg` for
+async fn list(&self) -> Result<Value, ServiceError> {
+    let rows = self.svc.list().await?;
+    let wire = serde_json::to_value(rows.iter().map(User::from).collect::<Vec<_>>())
+        .map_err(|e| ServiceError::Masking(e.to_string()))?;
+    masked_reply::<UserEntity>(Action::Read, wire)
+        .map_err(|e| ServiceError::Masking(e.to_string()))
+}
+
+// after — `#[messages]` emits the gate and the mask
+#[subscribe_message("users.list")]
+#[authorize(Read, UserEntity)]
+async fn list(&self) -> Result<Vec<User>, ServiceError> {
+    Ok(self.svc.list().await?.iter().map(User::from).collect())
+}
+```
+
+Two things were wrong with the old shape, and the second is the serious one. The
+posture was an `Action::Read` argument rather than a greppable `#[authorize]`,
+against this repo's rule that every authn/authz decision be findable at one of
+three sites. And a handler that simply *forgot* the call shipped unmasked rows and
+compiled — on GraphQL and MCP that is a compile error.
+
+- **Breaking, and deliberately loud.** Every `#[subscribe_message]` now declares
+  `#[authorize(Action, Entity)]` or `#[public]`; no posture is a compile error
+  naming both forms. `#[public]` used to be *rejected* on a message (there is no
+  anonymous fast-path to take on WS) — it is now the declaration that the posture
+  was decided and the message is deliberately ungated.
+- **`nest-rs-authz` gains a `ws` feature**: `ws::authorize` (the class gate, whose
+  decision is the same shared `gate` GraphQL and MCP use) and
+  `ws::masked_reply_for` (the reply mask). No `WsAbilityBridge` — a gateway is
+  `EdgePosture::Guarded`, so its upgrade already ran the real HTTP chain; the
+  ambient ability comes from `WsDataContext` as before.
+- **A gate refusal and a guard refusal reach the client through one frame**, via a
+  new `denial_to_ws_error` carrying `reason` and `requiredScopes` under
+  `data.errors` — where every other structured rejection on this transport rides.
+- **WS masks like HTTP, not like MCP.** GraphQL and MCP reconstruct the return type
+  after masking, so a stripped required key refuses the operation. A WS envelope
+  carries JSON and promises no schema, so the key is simply absent from the frame,
+  exactly as the HTTP response shaper omits it from a body — a field-restricted
+  caller reads a smaller object, and the reply type needs no `DeserializeOwned`.
+  Fail-closed is reserved for a missing ambient ability and a body that cannot be
+  reconciled with the entity at all.
+- One compile rule, whose reason is *not* masking: a masked message returns a
+  **literal** `Result<T, E>`, because the reply shape is decided syntactically and
+  a `Result` behind an alias would be masked as the `Result` itself — a
+  success-shaped frame carrying `{"Ok": …}`.
+- Ordering per message is chain → gate → pipes → call → mask, so a caller the
+  gate refuses never pays for validation.
+
+### Every decorator pair names its sibling on the wrong shape
+
+The rule shipped with the MCP pair; only GraphQL and MCP obeyed it.
+`#[controller]`/`#[routes]` and `#[gateway]`/`#[messages]` still reported syn's
+`expected struct` — the error the rule exists to forbid, since the shape the
+developer reached for does exist and is spelled with the other decorator.
+
+- All six pairs now parse through one `DecoratorPair` const per edge, read by
+  **both** halves, so the two sentences cannot drift into naming a decorator that
+  no longer exists. Eight trybuild snapshots (two per pair) pin the wording.
+- The impl-half decorators whose struct half is the generic `#[injectable]` —
+  `#[processor]`, `#[scheduled]`, `#[listeners]`, `#[indicators]`, `#[hooks]` —
+  get the same treatment through `DecoratorPair::on_provider`, naming
+  `#[injectable]` and the methods they collect instead of `expected impl`.
+- The posture grammar is deduplicated the same way: one `PostureRules` in
+  `nest-rs-codegen`, adopted by `#[tools]` and `#[messages]`. GraphQL keeps its
+  own parser, which carries `bind = Service` / `id_arg` that no other transport
+  can express.
+
+### One decorator, one item shape
+
+`#[resolver]` and `#[mcp]` each answered to two item shapes — the struct and its
+`impl` — and nothing else in the framework did. An attribute macro is a single
+path in the macro namespace: the shape is discriminated *after* `syn::parse`, so
+the name bought one rustdoc page for two argument grammars, one symbol for
+go-to-definition, and the same `in this expansion of #[mcp]` note on every error
+whichever half emitted it. `rg '#\[mcp\]'` could not tell a host from an
+operations block either — and this repo's security rules lean on exactly that
+kind of grep. Both are now pairs, like every other edge:
+
+| Edge | on the struct | on the impl |
+|---|---|---|
+| HTTP | `#[controller(path)]` | `#[routes]` |
+| WS | `#[gateway(path)]` | `#[messages]` |
+| GraphQL | `#[resolver]` | **`#[operations]`** |
+| MCP | `#[mcp]` | **`#[tools]`** |
+
+```rust
+#[mcp]
+#[use_guards(TenantGuard)]
+#[derive(Clone)]
+pub struct UsersTool { #[inject] svc: Arc<UsersService> }
+
+#[tools]                            // was: a second #[mcp]
+impl UsersTool { /* #[tool] / #[prompt] methods */ }
+```
+
+- **Breaking, with no shim.** Rename the impl-block attribute and add the
+  sibling to the import: `use nest_rs::graphql::{operations, resolver};`,
+  `use nest_rs::mcp::{mcp, tools};`. `#[crud]` is unchanged — it still stands in
+  for the impl-form decorator and now re-emits under `#[operations]`.
+- **The wrong shape names its sibling.** `#[mcp]` on an impl does not report
+  "expected struct"; it says the methods go under `#[tools]`, and vice versa.
+  Four trybuild snapshots pin the wording.
+- **The impl half is named for what it collects**, the way `#[routes]` and
+  `#[messages]` are. `#[tools]` carries `#[prompt]` methods too: rmcp routes both
+  through the one `ServerHandler` the expansion writes, so they are one host's
+  operations. MCP keeps the protocol's name on the struct — the role word moved
+  to the impl half, where a host's methods are.
+
+The rule is now in the hard "no" list, with a testable form: an entrypoint in a
+`*-macros` crate matches at most one `Item::` variant.
+
+### MCP operations take the request layers every other edge has
+
+`#[mcp]` mounted on the HTTP transport from the start, but an operation was the
+one handler in the framework that could not declare anything about itself: no
+guards, no access posture, no pipes. A tool wanting validation wrote
+`params.validate().map_err(…)?` by hand — the inline edge conversion the layer
+rules call drift — and a tool returning entity rows shipped them past a mask
+that was never armed. That is closed: an MCP operation now declares the same
+things a `#[query]` does, expanded in the same order.
+
+```rust
+#[mcp]
+#[use_guards(TenantGuard)]          // host scope, like a #[controller] / #[resolver]
+#[derive(Clone)]
+pub struct UsersTool { #[inject] svc: Arc<UsersService> }
+
+#[tools]
+impl UsersTool {
+    /// List the people the caller may see.
+    #[tool]
+    #[authorize(Read, UserEntity)]                   // class gate + response mask
+    async fn list_people(
+        &self,
+        Parameters(page): Parameters<Valid<PageDto>>, // validated before the body
+    ) -> Result<Json<Vec<User>>, McpError> { /* … */ }
+}
+```
+
+- **Posture is mandatory, and that is a breaking change.** A `#[tool]` /
+  `#[prompt]` carrying neither `#[authorize(Action, Entity)]` nor `#[public]` is
+  a compile error, for the reason it already was on a `#[query]`: an operation
+  nobody thought about must not ship ungated and unmasked to a language model.
+  Every existing host needs one line per operation.
+- **Guards bind per host and per operation.** `#[use_guards(...)]` on the struct
+  and beside an operation compose into one chain per site, memoized per app in
+  the `SiteChainCell` GraphQL already used — extracted rather than copied, since
+  this is the second in-band transport to need it. `Guard` grows `check_mcp`,
+  whose context carries the app and which operation is running; the caller's
+  `Ability` is ambient, so a capability-only guard reads it the same way it does
+  on HTTP.
+- **What the edge already ran is reported, not assumed.** `/mcp` gates the HTTP
+  request at its `McpOperationGuard`, so an operation's chain must not re-run
+  what that guard already did — but *which* layers those are depends on which
+  guard is registered: the no-bridge fallback runs the whole pool, a bridge runs
+  its own two and nothing else. `McpOperationGuard::already_ran` reports them and
+  the chain drops exactly that. The assumption-based reading — delete every
+  pooled entry — is a fail-open: a `#[use_guards]` naming a guard that merely
+  also appears in the pool would silently never run.
+- **Pipes reach the fifth transport.** `Parameters<Valid<T>>` /
+  `Parameters<Piped<P, T>>` expose `T` as the operation's JSON Schema — a client
+  never sees the carrier — and a rejection is `invalid_params` (`-32602`)
+  carrying the field errors, which is the one MCP error a model can act on.
+- **Response masking is automatic, and fails closed.** `#[authorize]` masks the
+  returned value through the caller's field grants, `Json<T>` unwrapped and
+  rewrapped so the structured content is what gets masked. MCP has no selection
+  set to excuse a stripped **required** field the way GraphQL does, so such a
+  mask refuses the operation rather than serving the row; `unmasked` is the
+  opt-out for a deliberate projection. `#[authorize]` on a `CallToolResult` is a
+  named compile error pointing at it, rather than a trait bound failing inside
+  the expansion.
+- **`bind = Service` has no MCP form, and says so.** A resolver exposes named
+  scalar arguments a wrapper can turn into an id; an operation takes one
+  `Parameters<T>` struct no macro may reach into.
+- **The authored method keeps its signature.** The expansion emits a delegating
+  wrapper carrying `#[tool(name = "…")]` rather than rewriting the body, so a
+  unit test still calls the method directly, the wire name stays the authored
+  one, and a compile error about the body points at the body.
+
+`nest-rs-macro-hygiene` now consumes the guard chain and the pipe carrier, still
+on its single `nest-rs` dependency — the compile-time proof that none of this
+puts a second line in a host's manifest.
+
 
 ### A tool host writes one decorated `impl`
 

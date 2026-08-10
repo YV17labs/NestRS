@@ -74,7 +74,7 @@ impl {{controller}} {
 pub const GRAPHQL_RESOLVER: &str = r#"use std::sync::Arc;
 
 use async_graphql::Result;
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
 use crate::{{snake}}::{{service}};
 
@@ -84,7 +84,7 @@ pub struct {{resolver}} {
     svc: Arc<{{service}}>,
 }
 
-#[resolver]
+#[operations]
 impl {{resolver}} {
     // SECURITY: scaffolded as #[public] because this port holds no entity.
     // Before serving real rows, declare #[authorize(Action, Entity)] instead
@@ -167,7 +167,13 @@ pub struct {{gateway}} {
 
 #[messages]
 impl {{gateway}} {
+    // Every message declares its access posture, and this scaffold's reply is a
+    // broadcast rather than entity rows — so `#[public]`: no gate, no mask, and
+    // the guards a gateway binds on its struct still run at the upgrade. A
+    // message that answers with entity rows takes
+    // `#[authorize(Read, Entity)]` instead, and the mask comes with it.
     #[subscribe_message("{{kebab}}.{{op}}")]
+    #[public]
     async fn {{op}}(&self, client: &WsClient) {
 {{op_body}}
         // Best-effort fan-out: a peer disconnecting mid-broadcast is normal, so
@@ -261,15 +267,29 @@ pub const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //! Security: the MCP endpoint gates through the app's `dyn McpOperationGuard`,
 //! else the global guard pool (`use_guards_global`), else deny-all. Wire your
 //! app's `McpAbilityBridge` (`features::authz::mcp`) as `dyn McpOperationGuard`
-//! so callers are authenticated and the ambient `Ability` is installed; return
-//! entity rows through `nest_rs::authz::masked_output_ambient` to apply
-//! field-level masking.
+//! so callers are authenticated and the ambient `Ability` is installed.
+//!
+//! Every operation then declares its own posture, exactly as a `#[query]` or an
+//! HTTP verb does:
+//!
+//! * `#[authorize(Action, Entity)]` — the class-level gate plus automatic
+//!   field-level masking of the value you return. Reach for it whenever the
+//!   answer is entity data, and return the `#[expose]`d wire type (`Json<T>`)
+//!   so the mask has a shape to work on.
+//! * `#[public]` — no gate and no mask. The endpoint still authenticated the
+//!   caller; this says only that *this* operation has no entity to gate. Pair it
+//!   with `#[use_guards(...)]` when the answer is a capability rather than a row.
+//!
+//! Arguments validate through the same pipes every other transport uses:
+//! `Parameters<Valid<T>>` runs `validator` before the body and answers a
+//! rejection with `invalid_params`, which is the one MCP error a model can act
+//! on.
 use std::sync::Arc;
 
 // A fallible service call goes through `Opaque` — `use nest_rs::mcp::Opaque;`
 // then `.opaque()?` — which logs the real error for the operator and hands the
 // model a constant one. An error's `Display` reaches a language model verbatim.
-use nest_rs::mcp::{McpError, mcp};
+use nest_rs::mcp::{McpError, mcp, tools};
 
 use crate::{{snake}}::{{service}};
 
@@ -280,10 +300,18 @@ pub struct {{tool}} {
     svc: Arc<{{service}}>,
 }
 
-#[mcp]
+#[tools]
 impl {{tool}} {
-    /// {{op_description}}
-    #[tool]
+    // The description is an argument, not a doc comment: it is the sentence a
+    // language model reads to choose this tool, so it is a value the decorator
+    // compiles in rather than prose a cleanup could delete. `#[tool]` accepts a
+    // doc comment as a fallback; an operation with neither does not compile.
+    #[tool(description = "{{op_description}}")]
+    // This operation answers with a plain summary, so there is no entity to gate
+    // or mask. The moment it returns rows, swap this for
+    // `#[authorize(Read, <Entity>)]` and return the `#[expose]`d wire type
+    // wrapped in `Json<...>`, which is what arms the field-level mask.
+    #[public]
     async fn {{op}}(&self) -> Result<String, McpError> {
 {{op_body}}
         Ok({{op_value}})

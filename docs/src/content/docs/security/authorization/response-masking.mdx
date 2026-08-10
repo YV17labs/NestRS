@@ -84,6 +84,15 @@ a **list** of the column names it refused:
   "extensions":{"code":"FORBIDDEN","fields":["email","name"]}}]}
 ```
 
+MCP takes the same declaration beside a `#[tool]` / `#[prompt]`, and pushes the
+schema constraint one step further: an operation returns one fixed Rust type to
+a model, with no selection set to excuse a stripped **required** field, so such
+a mask fails the operation closed. Leave a maskable column `Option` on the
+entity, or — when the tool deliberately answers with a projection narrower than
+every grant — declare `#[authorize(Action, Entity, unmasked)]` and let the
+projection be the field restriction. The gate and the row filter stay either
+way.
+
 ## What you get
 
 - **Field masking.** Restricted keys are stripped from the object (their

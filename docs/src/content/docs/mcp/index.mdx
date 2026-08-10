@@ -40,8 +40,8 @@ surface that gates it — including the fallback operation guard that lets a
 registered global pool gate `/mcp` instead of the endpoint staying deny-all.
 None of that is a line you write.
 
-`rmcp` is not a dependency either, and it is not an import: `#[mcp]` emits the
-SDK's own macros inside generated code that carries its own scope. That keeps
+`rmcp` is not a dependency either, and it is not an import: `#[tools]` emits
+the SDK's own macros inside generated code that carries its own scope. That keeps
 the SDK at the exact major `nest-rs` was built against — two majors in one graph
 put two `ServerHandler` traits in scope and every generated method mismatches.
 A host that needs the raw SDK reaches it through `nest_rs::mcp::rmcp`.
@@ -51,7 +51,7 @@ A host that needs the raw SDK reaches it through `nest_rs::mcp::rmcp`.
 The fastest way to see the shape: one tool, one string in, one string out.
 
 ```rust title="src/hello/tool.rs"
-use nest_rs::mcp::{McpError, Parameters, input, mcp};
+use nest_rs::mcp::{McpError, Parameters, input, mcp, tools};
 
 #[input]
 pub struct HelloParams {
@@ -62,15 +62,20 @@ pub struct HelloParams {
 #[derive(Clone, Default)]
 pub struct HelloTool;
 
-#[mcp]
+#[tools]
 impl HelloTool {
-    /// Say hello to someone by name.
-    #[tool]
+    #[tool(description = "Say hello to someone by name.")]
+    #[public]
     async fn hello(&self, Parameters(params): Parameters<HelloParams>) -> Result<String, McpError> {
         Ok(format!("Hello, {}!", params.name))
     }
 }
 ```
+
+Every operation declares its access posture, and one of the two forms is
+**required** — `#[public]` here because a greeting gates nothing. An operation
+nobody thought about does not compile, rather than shipping ungated to a model.
+[Authorization](#authorization) covers the other form.
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
 default**. The endpoint gates through the app's `dyn McpOperationGuard`; with
@@ -102,16 +107,22 @@ second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
 tool called `hello` and can invoke it. (To authenticate instead of opening it,
 see [Authorization](#authorization) below.)
 
-Two decorators, one name:
+Two decorators, one per item shape:
 
 - **`#[mcp]` on the struct** registers it as a discoverable provider that mounts
   a streamable-HTTP endpoint on the HTTP transport, at `/mcp`. An optional
   `path` serves a different URL instead — write it whole, the way a client
   config carries it.
-- **`#[mcp]` on the impl** declares the operations. Every `#[tool]` and
-  `#[prompt]` method is mounted, its **doc comment becomes the description** the
-  model reads, and the endpoint's advertised capabilities are derived from the
-  roles present — you cannot serve a tool you forgot to declare.
+- **`#[tools]` on the impl** declares the operations. Every `#[tool]` and
+  `#[prompt]` method is mounted, and the endpoint's advertised capabilities are
+  derived from the roles present — you cannot serve a tool you forgot to
+  declare. An operation declares the same request layers a `#[query]` does:
+  `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`, and a pipe on its
+  arguments.
+- **The description is `#[tool(description = "…")]`** — the sentence the model
+  reads to pick this tool, so it is a value the decorator compiles in rather
+  than commentary. Write a doc comment instead and it is used as a fallback, so
+  the prose is never written twice; write **neither and it does not compile**.
 
 The struct can take `#[inject]` fields like any other provider — `HelloTool` has
 none, real servers usually do.
@@ -187,6 +198,50 @@ policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
 [per-transport bridges](/security/authorization/per-transport-bridges/) page for
 the four-transport story.
 
+The bridge answers *who is calling*. Each operation then declares what it is,
+with the same two attributes a `#[query]` takes:
+
+```rust title="src/users/mcp/tool.rs"
+#[tools]
+impl UsersTool {
+    #[tool(description = "List the people the caller may see.")]
+    #[authorize(Read, UserEntity)]
+    async fn list_people(&self) -> Result<Json<Vec<User>>, McpError> {
+        Ok(Json(CrudService::list(&*self.svc).await.opaque()?
+            .iter().map(User::from).collect()))
+    }
+}
+```
+
+`#[authorize(Action, Entity)]` emits the class-level gate before the body and
+masks the returned value through the caller's field grants after it — the tool
+writes neither. `#[public]` is the other half: no gate, no mask, and the
+endpoint's own guard still authenticated the request.
+
+For an answer that is a **capability** rather than a row — a presigned URL, a
+computed report — there is no entity to gate, so bind a guard beside the
+operation instead. `#[use_guards(...)]` works per host and per operation, and a
+guard the endpoint's own gate already ran is dropped from that chain rather than
+run twice:
+
+```rust title="src/audio/mcp/tool.rs"
+    #[tool(description = "Report whether an uploaded file has been transcoded.")]
+    #[public]
+    #[use_guards(TranscodeGuard)]
+    async fn transcode_status(&self, /* … */) -> Result<String, McpError> { /* … */ }
+```
+
+One `Guard` impl serves both transports: `check_http` reads the ability off the
+request, `check_mcp` reads the ambient one the bridge installed.
+
+Masking round-trips the value through the entity model, so it needs the full
+`#[expose]` shape to reconcile against — and MCP has no selection set to excuse
+a stripped **required** field, so such a mask fails the operation closed. A
+column a field grant may mask should be `Option` on the entity. When a tool
+deliberately answers with a narrower projection, say
+`#[authorize(Action, Entity, unmasked)]`: the gate and the row filter stay, and
+the projection *is* the field restriction.
+
 Guarding the endpoint closes it; it does not tell a client how to open it. The
 MCP authorization spec requires the server to publish that, so add
 `ProtectedResourceModule` and name the deployment:
@@ -227,10 +282,10 @@ pub struct WeatherTool {
     svc: Arc<dyn WeatherService>,
 }
 
-#[mcp]
+#[tools]
 impl WeatherTool {
-    /// Return the current temperature for a city.
-    #[tool]
+    #[tool(description = "Return the current temperature for a city.")]
+    #[public]
     async fn current_temperature(
         &self,
         Parameters(p): Parameters<CityParams>,
@@ -239,8 +294,8 @@ impl WeatherTool {
         Ok(format!("{t:.1}°C"))
     }
 
-    /// Return the forecast for a city, N days out.
-    #[tool]
+    #[tool(description = "Return the forecast for a city, N days out.")]
+    #[public]
     async fn forecast(
         &self,
         Parameters(p): Parameters<ForecastParams>,
@@ -276,16 +331,17 @@ pub struct Coords {
 }
 ```
 
+Wrap the arguments in `Valid<T>` and the check runs before the body — the same
+[pipe](/fundamentals/pipes/) binding GraphQL, WebSockets and queue handlers use:
+
 ```rust title="src/weather/tool.rs (abridged)"
 #[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
+#[public]
 async fn current_weather(
     &self,
-    Parameters(params): Parameters<Coords>,
+    Parameters(params): Parameters<Valid<Coords>>,
 ) -> Result<String, McpError> {
-    params
-        .validate()
-        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-
+    let params = params.into_inner();
     let report = self.svc
         .current(params.latitude, params.longitude)
         .await
@@ -295,9 +351,18 @@ async fn current_weather(
 }
 ```
 
-`JsonSchema` derives the schema sent to the client; `validator` rejects
-out-of-range values with `McpError::invalid_params` — the model sees a
-structured error and can retry with corrected inputs.
+`JsonSchema` derives the schema sent to the client — from `Coords`, not from the
+carrier, so a client never sees `Valid` — and a rejection answers
+`invalid_params` carrying the field errors, which is the one MCP error a model
+can act on:
+
+```json
+{"code":-32602,"message":"validation failed",
+ "data":{"latitude":[{"code":"range"}]}}
+```
+
+`Piped<P, T>` runs any [pipe](/fundamentals/pipes/) in the same slot when the
+argument needs transforming rather than validating.
 
 ## Failing without leaking
 
@@ -461,14 +526,14 @@ A prompt is a `#[prompt]` method in the same decorated block as your tools —
 one `impl`, both routers:
 
 ```rust title="src/weather/mcp/tool.rs"
-#[mcp]
+#[tools]
 impl WeatherTool {
-    /// Return the current temperature for a city.
-    #[tool]
+    #[tool(description = "Return the current temperature for a city.")]
+    #[public]
     async fn current_temperature(&self, /* … */) -> Result<String, McpError> { /* … */ }
 
-    /// Draft a travel note for a city, primed with today's conditions.
-    #[prompt]
+    #[prompt(description = "Draft a travel note for a city, primed with today's conditions.")]
+    #[public]
     async fn travel_note(&self, /* … */) -> Result<GetPromptResult, McpError> { /* … */ }
 }
 ```
@@ -477,8 +542,8 @@ Resources are the one surface with no decorator, because they are a mapping from
 URIs to rows rather than a set of methods. A host that serves them writes its own
 `impl ServerHandler` — `list_resources` / `read_resource` /
 `list_resource_templates` — and that is the documented way out of the sugar: it
-uses rmcp's `#[tool_router]` / `#[tool_handler]` directly, since `#[mcp]` cannot
-generate a second `ServerHandler` beside a hand-written one. `demo`'s
+uses rmcp's `#[tool_router]` / `#[tool_handler]` directly, since `#[tools]`
+cannot generate a second `ServerHandler` beside a hand-written one. `demo`'s
 `posts/mcp/tool.rs` is that host.
 
 Either way the guarantee is the same one the tool gets. `CrudService::list`

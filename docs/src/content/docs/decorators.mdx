@@ -46,7 +46,8 @@ position without leaving the page.
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
-| `#[resolver]` | struct + impl block | Marks a resolver provider and orchestrates its operations | [GraphQL](/graphql/) |
+| `#[resolver]` | struct | Marks a resolver provider and declares its resolver-scope guards | [GraphQL](/graphql/) |
+| `#[operations]` | impl block | Orchestrates the block's `#[query]` / `#[mutation]` / `#[field_resolver]` methods | [GraphQL](/graphql/) |
 | `#[query]` | method | Root query operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[authorize]` | method | Access posture: gates the operation by ability (`Action`, `Entity`) and masks the response | [Queries and mutations](/graphql/queries-mutations/) |
@@ -93,9 +94,9 @@ position without leaving the page.
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[mcp]` | struct | Mounts an MCP endpoint over HTTP, at `/mcp` or a declared path | [MCP](/mcp/) |
-| `#[mcp]` | impl block | Serves the block's `#[tool]` and `#[prompt]` methods, deriving the advertised capabilities | [MCP](/mcp/) |
-| `#[tool]` | method | Exposes the method as an MCP tool; its doc comment is the description | [MCP](/mcp/) |
-| `#[prompt]` | method | Exposes the method as an MCP prompt; its doc comment is the description | [MCP](/mcp/) |
+| `#[tools]` | impl block | Serves the block's `#[tool]` and `#[prompt]` methods, deriving the advertised capabilities | [MCP](/mcp/) |
+| `#[tool]` | method | Exposes the method as an MCP tool; `description = "…"`, or the doc comment as a fallback | [MCP](/mcp/) |
+| `#[prompt]` | method | Exposes the method as an MCP prompt; `description = "…"`, or the doc comment as a fallback | [MCP](/mcp/) |
 
 ## Health
 

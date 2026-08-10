@@ -59,6 +59,7 @@ struct BareGateway;
 #[messages]
 impl BareGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self) -> &'static str {
         "pong"
     }
@@ -71,6 +72,7 @@ struct DupGateway;
 #[messages]
 impl DupGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self) -> &'static str {
         "pong"
     }

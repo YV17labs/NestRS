@@ -1,0 +1,5 @@
+error: #[messages] decorates the impl block holding the #[subscribe_message] / #[on_connect] / #[on_disconnect] methods — the gateway struct itself takes #[gateway]
+ --> tests/integration/diagnostics/messages_on_struct.rs:8:1
+  |
+8 | struct DemoGateway;
+  | ^^^^^^^^^^^^^^^^^^^

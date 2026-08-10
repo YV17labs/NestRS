@@ -12,13 +12,27 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{
-    FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Path, ReturnType, Type, parse_macro_input,
-};
+use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
 use nest_rs_codegen::{
-    PipeWrapper, impl_self_ident, injected_methods_with_layers, layer_deps, pipe_wrapper,
-    reject_http_only_layers, take_flag_attr, take_path_list,
+    PipeWrapper, Posture, PostureRules, guard_capability_bounds, impl_self_ident,
+    injected_methods_with_layers, layer_deps, pipe_wrapper, reject_http_only_layers,
+    take_flag_attr, take_path_list,
+};
+
+/// WS's half of the shared posture grammar. Mandatory per message for the same
+/// fail-secure reason it is on a `#[query]` and a `#[tool]`: a handler nobody
+/// decided a posture for must not compile, rather than reply with rows no ability
+/// ever filtered.
+const POSTURE: PostureRules = PostureRules {
+    operation: "#[subscribe_message]",
+    public_means: "no gate and no mask — the guards bound on the gateway and beside \
+                   the message still run, and the connection's upgrade already \
+                   authenticated it",
+    bind_unsupported: "`bind = Service` is not available on WebSockets — a message takes one \
+                       payload value, not the named id argument the binding reads. Keep \
+                       `#[authorize(Action, Entity)]` and load the subject in the body with \
+                       the service's `access`",
 };
 
 /// Split a `#[subscribe_message]` payload argument into (type to deserialize
@@ -34,7 +48,10 @@ fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
 }
 
 pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
-    let mut item = parse_macro_input!(input as ItemImpl);
+    let mut item = match crate::gateway::WS_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let self_ty = item.self_ty.clone();
 
     // Gateway struct name — logged as a structured field beside each mounted
@@ -100,20 +117,14 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        // `#[public]` is not honored on a per-message handler — unlike an HTTP
-        // route, a WS event has no public/anonymous fast-path; access is decided
-        // by the guards bound beside it. Reject it loudly rather than silently
-        // dropping a marker on an auth surface (the old behavior).
-        if let Some(attr) = method.attrs.iter().find(|a| a.path().is_ident("public")) {
-            return syn::Error::new_spanned(
-                attr,
-                "#[public] is not supported on a #[subscribe_message] handler; \
-                 WS per-message access is controlled by the guards bound beside it \
-                 (omit guards to leave an event ungated)",
-            )
-            .to_compile_error()
-            .into();
-        }
+        // The message's access posture, taken off the method so neither attribute
+        // reaches the compiler as unknown. `#[public]` is a *declaration* here,
+        // not a fast-path: unlike an HTTP route there is no anonymous shortcut to
+        // take, so what it buys is the statement that the posture was decided.
+        let posture = match POSTURE.take(method) {
+            Ok(posture) => posture,
+            Err(err) => return err.to_compile_error().into(),
+        };
         all_message_layers.extend(guards.iter().cloned());
         all_message_layers.extend(force_guards.iter().cloned());
 
@@ -205,10 +216,75 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             }
             None => quote! {},
         };
+        // Step 1 — the class gate, before the payload is deserialized or piped, so
+        // a caller the gate refuses never pays for validation and a validation
+        // message never doubles as an existence oracle. (The guard chain ran
+        // earlier still, in the dispatcher: a gateway is `Guarded`, so its
+        // upgrade already carried the real HTTP chain.)
+        let gate = match &posture {
+            Posture::Authorize { action, entity, .. } => quote! {
+                if let ::core::result::Result::Err(__denied) =
+                    ::nest_rs_authz::ws::authorize::<#action, #entity>(#event)
+                {
+                    return ::nest_rs_ws::WsReply::Error(__denied);
+                }
+            },
+            Posture::Public => quote! {},
+        };
+
         let call = quote! {
+            #gate
             #deser
             self.#method_name(#(#call_args),*).await
         };
+
+        // Step 2 — reply masking, armed by the same posture. The masked *JSON* is
+        // what ships, not a value round-tripped back through the handler's type:
+        // a WS envelope promises no schema, so a stripped key is simply absent
+        // from the frame, exactly as HTTP omits it from a body. See
+        // `nest_rs_authz::ws::mask` for why WS is HTTP's case here and not MCP's.
+        // `__ret` is the handler's `Ok` value, bound by the `Result` arm below —
+        // the only shape that reaches a mask, so this is a value rather than a
+        // function of one.
+        let reply = match &posture {
+            Posture::Authorize {
+                action,
+                entity,
+                unmasked: false,
+            } => quote! {
+                match ::nest_rs_authz::ws::masked_reply_for::<#action, #entity, _>(
+                    #event, &__ret,
+                ) {
+                    ::core::result::Result::Ok(__masked) => {
+                        ::nest_rs_ws::WsReply::Reply(__masked)
+                    }
+                    ::core::result::Result::Err(__failed) => {
+                        ::nest_rs_ws::WsReply::Error(__failed)
+                    }
+                }
+            },
+            _ => quote! { ::nest_rs_ws::WsReply::reply(&__ret) },
+        };
+
+        // A masked message says `Result` outright. Two reasons, and the first is
+        // the one a developer would not guess: the reply-shape decision is
+        // *syntactic*, so a `Result` behind an alias reads as an ordinary value
+        // here and would be masked as the `Result` itself — a frame shaped like a
+        // success carrying `{"Ok": …}`. The second is ordinary: a fail-closed mask
+        // needs an error channel.
+        if posture.masks() && matches!(return_kind, ReturnKind::Value | ReturnKind::Unit) {
+            return syn::Error::new_spanned(
+                &method.sig.output,
+                "a #[subscribe_message] declaring `#[authorize(Action, Entity)]` returns \
+                 `Result<T, E>`, spelled literally: the reply shape is decided \
+                 syntactically, so a `Result` behind an alias would be masked as the \
+                 `Result` itself, and a fail-closed mask needs an error channel. Return a \
+                 literal `Result`, or declare `#[authorize(Action, Entity, unmasked)]` and \
+                 mask in the body",
+            )
+            .to_compile_error()
+            .into();
+        }
 
         let arm_body = match return_kind {
             ReturnKind::Unit => quote! {
@@ -243,23 +319,33 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                         ::nest_rs_ws::WsReply::from_handler_error(#event, &__err),
                 }
             },
-            ReturnKind::Result => quote! {
-                match { #call } {
-                    ::core::result::Result::Ok(__ret) => ::nest_rs_ws::WsReply::reply(&__ret),
-                    ::core::result::Result::Err(__err) =>
-                        ::nest_rs_ws::WsReply::from_handler_error(#event, &__err),
+            ReturnKind::Result => {
+                quote! {
+                    match { #call } {
+                        ::core::result::Result::Ok(__ret) => { #reply }
+                        ::core::result::Result::Err(__err) =>
+                            ::nest_rs_ws::WsReply::from_handler_error(#event, &__err),
+                    }
                 }
-            },
+            }
         };
 
         arms.push(quote! { #event => { #arm_body } });
     }
 
+    // Per-message guards run `Guard::check_ws_message`, whose default is `Ok(())`.
+    // One bound each, at the `#[use_guards]` line. Guards on the `#[gateway]`
+    // struct are deliberately absent from this list: they run on the upgrade,
+    // which is an HTTP `GET`.
+    let capability_bounds =
+        guard_capability_bounds(all_message_layers.iter(), quote!(::nest_rs_guards::WsGuard));
     let message_layers = layer_deps(all_message_layers.iter());
     let injected_methods = injected_methods_with_layers(&self_ty, &message_layers);
 
     quote! {
         #item
+
+        #capability_bounds
 
         #[::nest_rs_ws::async_trait]
         impl ::nest_rs_ws::Gateway for #self_ty {

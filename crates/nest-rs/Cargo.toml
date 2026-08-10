@@ -80,14 +80,18 @@ graphql = [
     "nest-rs-resource?/graphql",
 ]
 # `#[messages]` names `GuardAsWsMessageCheck` and the per-message chain runner,
-# both behind guards' `ws`. The gateway reuses the HTTP guards, so authz's WS
-# binding rides its `http` feature.
+# both behind guards' `ws`. The gateway reuses the HTTP guards at the upgrade, so
+# authz's `http` binding is what runs there; `nest-rs-authz/ws` is the separate
+# per-message half `#[messages]` emits from an `#[authorize(Action, Entity)]` —
+# the class gate and the reply mask. Both, because a gateway needs the upgrade
+# chain *and* the posture.
 ws = [
     "dep:nest-rs-ws",
     "http",
     "nest-rs-guards/ws",
     "nest-rs-seaorm?/ws",
     "nest-rs-authz?/http",
+    "nest-rs-authz?/ws",
 ]
 # `#[mcp]` mounts through `HttpEndpointMeta` and resolves its operation guard
 # against the global pool, which guards' `mcp` feature seeds.

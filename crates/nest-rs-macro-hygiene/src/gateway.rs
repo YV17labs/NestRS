@@ -23,5 +23,6 @@ pub struct HygieneGateway;
 impl HygieneGateway {
     /// Payload-less, reply-less handler — the smallest legal shape.
     #[subscribe_message("hygiene.ping")]
+    #[public]
     async fn ping(&self) {}
 }

@@ -53,6 +53,11 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ... }`; the owned parameter is deserialized from `data`, the return value
 /// serialized back under the same event (`()` => no reply).
 ///
+/// Each handler declares an access posture — `#[authorize(Action, Entity)]` or
+/// `#[public]` — and the expansion runs, in order: the per-message guard chain,
+/// the class gate the posture emits, the argument pipes, the call, and the reply
+/// mask. Mandatory, so a message nobody decided a posture for does not compile.
+///
 /// `#[use_guards(...)]` beside a handler binds per-message guards that the
 /// Layer System dedups against the global chain. `#[on_connect]` /
 /// `#[on_disconnect]` are the lifecycle-hook analogs — `&self` with an

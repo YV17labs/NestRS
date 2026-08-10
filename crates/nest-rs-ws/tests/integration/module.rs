@@ -19,6 +19,7 @@ struct UnwiredGateway;
 #[messages]
 impl UnwiredGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self) -> String {
         "pong".into()
     }
@@ -54,6 +55,7 @@ struct WiredGateway;
 #[messages]
 impl WiredGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self) -> String {
         "pong".into()
     }
@@ -93,6 +95,7 @@ struct NamespacedGateway;
 #[messages]
 impl NamespacedGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self, client: &WsClient) -> String {
         let _ = client;
         "pong".into()
@@ -220,6 +223,7 @@ struct GuardedGateway;
 #[messages]
 impl GuardedGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self) -> String {
         "pong".into()
     }

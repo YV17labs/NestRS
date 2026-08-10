@@ -1,0 +1,7 @@
+error: #[gateway] decorates the gateway struct — its #[subscribe_message] / #[on_connect] / #[on_disconnect] methods go under #[messages] on the impl block
+  --> tests/integration/diagnostics/gateway_on_impl.rs:10:1
+   |
+10 | / impl DemoGateway {
+11 | |     async fn ping(&self) {}
+12 | | }
+   | |_^

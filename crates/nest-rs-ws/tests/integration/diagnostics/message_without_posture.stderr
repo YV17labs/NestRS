@@ -1,0 +1,5 @@
+error: every #[subscribe_message] declares its access posture: `#[authorize(Action, Entity)]` (class-level gate + automatic response masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` (no gate and no mask — the guards bound on the gateway and beside the message still run, and the connection's upgrade already authenticated it)
+  --> tests/integration/diagnostics/message_without_posture.rs:14:14
+   |
+14 |     async fn list(&self) -> Result<Vec<String>, String> {
+   |              ^^^^

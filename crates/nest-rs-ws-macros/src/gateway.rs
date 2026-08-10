@@ -6,12 +6,21 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{ItemStruct, LitStr, Meta, Path, Token, parse_macro_input};
+use syn::{LitStr, Meta, Path, Token};
 
 use nest_rs_codegen::{
-    InjectableBody, build_injectable_body, expr_str, from_container_method,
+    DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
     injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
     take_path_list,
+};
+
+/// The WS edge's pair, read by both halves so their wrong-shape diagnostics name
+/// each other rather than reporting syn's `expected struct`.
+pub(crate) const WS_PAIR: DecoratorPair = DecoratorPair {
+    host: "#[gateway]",
+    subject: "gateway struct",
+    operations: "#[messages]",
+    collects: "#[subscribe_message] / #[on_connect] / #[on_disconnect]",
 };
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -20,7 +29,10 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let path_lit = path;
-    let mut item = parse_macro_input!(input as ItemStruct);
+    let mut item = match WS_PAIR.parse_host(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     if let Err(err) = reject_http_only_layers(&item.attrs, "WebSockets", "gateway") {
         return err.to_compile_error().into();

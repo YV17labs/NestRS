@@ -11,6 +11,7 @@
 //!
 //! ```ignore
 //! #[subscribe_message("whoami")]
+//! #[public]
 //! async fn whoami(&self) -> Result<u64, nest_rs_ws::WsScopeError> {
 //!     let per_msg = nest_rs_ws::Scoped::<RequestSeq>::from_context()?;
 //!     Ok(per_msg.value())

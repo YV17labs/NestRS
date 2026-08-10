@@ -1,0 +1,22 @@
+error[E0277]: `HttpOnlyGuard` does not check WebSocket messages
+  --> tests/integration/diagnostics/http_only_guard_on_a_message.rs:33:18
+   |
+33 |     #[use_guards(HttpOnlyGuard)]
+   |                  ^^^^^^^^^^^^^ this guard has no `check_ws_message`
+   |
+help: the trait `WsGuard` is not implemented for `HttpOnlyGuard`
+  --> tests/integration/diagnostics/http_only_guard_on_a_message.rs:15:1
+   |
+15 | struct HttpOnlyGuard;
+   | ^^^^^^^^^^^^^^^^^^^^
+   = note: a guard bound beside a `#[subscribe_message]` runs `Guard::check_ws_message`, whose default is `Ok(())` — binding one that does not override it passes every message silently
+   = note: override `check_ws_message`, then declare `impl WsGuard for HttpOnlyGuard {}`; or move it to the `#[gateway]` struct, where guards run on the HTTP upgrade instead
+note: required by a bound in `__nestrs_assert_guard_capability`
+  --> tests/integration/diagnostics/http_only_guard_on_a_message.rs:29:1
+   |
+29 | #[messages]
+   | ^^^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
+...
+33 |     #[use_guards(HttpOnlyGuard)]
+   |                  ------------- required by a bound in this function
+   = note: this error originates in the attribute macro `messages` (in Nightly builds, run with -Z macro-backtrace for more info)

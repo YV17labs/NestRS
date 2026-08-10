@@ -17,9 +17,34 @@
 //! #[messages]
 //! impl ChatGateway {
 //!     #[subscribe_message("message")]
+//!     #[public]
 //!     async fn on_message(&self, msg: SendMessage) -> ChatMessage { /* ... */ }
+//!
+//!     #[subscribe_message("rooms.list")]
+//!     #[authorize(Read, rooms::Entity)]  // class gate + reply mask, both emitted
+//!     async fn rooms(&self) -> Result<Vec<Room>, ServiceError> { /* ... */ }
 //! }
 //! ```
+//!
+//! # Every message declares its access posture
+//!
+//! `#[authorize(Action, Entity)]` or `#[public]`, and **neither is optional** —
+//! a message with no posture does not compile, the same rule a `#[query]` and a
+//! `#[tool]` carry. `#[authorize]` emits the class gate
+//! (`nest_rs_authz::ws::authorize`) before the payload is deserialized and the
+//! reply mask (`nest_rs_authz::ws::masked_reply_for`) around the returned value,
+//! so a handler answering with entity rows writes no masking call. `#[public]`
+//! declares the message deliberately ungated: the guards bound on the gateway and
+//! beside the message still run.
+//!
+//! The mask acts on the **serialized** reply, so a withheld column is absent from
+//! the frame rather than an error — HTTP's behaviour, since an envelope promises no
+//! schema. Fail-closed is reserved for a missing ambient ability and a body that
+//! cannot be reconciled with the entity. `unmasked` keeps the gate and hands
+//! masking to the body, for a shape the round-trip cannot see through.
+//!
+//! One compile rule, and its reason is the alias hazard below rather than masking:
+//! a masked handler returns a **literal** `Result<T, E>`.
 //!
 //! # Return-type contract
 //!
@@ -32,8 +57,14 @@
 //! Detection is syntactic on the type's last path segment being `Result`: a
 //! type alias over `Result` is **not** detected and would leak the error
 //! variant on the wire. Always return `Result` (or `std::result::Result`)
-//! directly. `Display` for the error must be wire-safe — avoid
-//! `#[error(transparent)]` over an ORM/sqlx error.
+//! directly.
+//!
+//! **`Display` for the error must be wire-safe**, and [`Opaque`] is the seam that
+//! makes it so without the handler having to think about it: `.opaque()?` logs the
+//! real error at `error` on `nest_rs::ws` and hands the client a constant. Reach
+//! for it on any failure a client is not owed an explanation for — a `DbErr` above
+//! all, whose `Display` carries SQL. A rejection the client *can* act on is the
+//! opposite case and travels as itself.
 //!
 //! # Server→client push
 //!
@@ -79,6 +110,7 @@ mod gateway;
 mod guard;
 mod module;
 mod namespace;
+mod opaque;
 mod scope;
 mod server;
 
@@ -91,6 +123,7 @@ pub use gateway::{
 pub use guard::{EventLayerTable, WsMessageCheck};
 pub use module::{WsModule, WsSetup};
 pub use namespace::{WsNamespaceEntry, WsNamespaces};
+pub use opaque::Opaque;
 /// Per-message accessor for `#[injectable(scope = request)]` providers inside a
 /// WS message handler — the WS mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::{Scoped, WsScopeError};

@@ -39,11 +39,13 @@ impl ChatGateway {
     }
 
     #[subscribe_message("join")]
+    #[public]
     async fn join_room(&self, room: String, client: &WsClient) {
         client.join(&room);
     }
 
     #[subscribe_message("leave")]
+    #[public]
     async fn leave_room(&self, room: String, client: &WsClient) {
         client.leave(&room);
     }
@@ -73,6 +75,7 @@ on a slow client.
 
 ```rust
 #[subscribe_message("say")]
+#[public]
 async fn say(&self, msg: SendMessage, client: &WsClient) {
     let _ = client.broadcast("said", &msg);
     let _ = client.to("lobby", "said", &msg);
@@ -119,16 +122,19 @@ impl ChatGateway {
     }
 
     #[subscribe_message("message")]
+    #[public]
     async fn on_message(&self, msg: SendMessage) {
         self.svc.record(msg);
     }
 
     #[subscribe_message("history")]
+    #[public]
     async fn history(&self) -> Vec<ChatMessage> {
         self.svc.history()
     }
 
     #[subscribe_message("typing")]
+    #[public]
     async fn typing(&self, msg: SendMessage, client: &WsClient) {
         let _ = client.broadcast("typing", &msg);
     }

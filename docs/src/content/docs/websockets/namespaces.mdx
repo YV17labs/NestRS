@@ -49,6 +49,7 @@ pub struct NotifyGateway;
 #[messages]
 impl NotifyGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self, client: &WsClient) {
         let _ = client.broadcast("pong", &"hi");
     }

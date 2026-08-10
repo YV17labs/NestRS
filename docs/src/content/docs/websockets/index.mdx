@@ -56,6 +56,7 @@ pub struct PingGateway;
 #[messages]
 impl PingGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self) -> &'static str {
         "pong"
     }

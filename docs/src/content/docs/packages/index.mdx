@@ -205,7 +205,7 @@ are yours, and hiding them behind a re-export would cost you their feature flags
 and a truthful `cargo tree`. No Rust framework hides them; NestRS does not
 either.
 
-**GraphQL** used to be the one exception, and no longer is: `#[resolver]` wraps
+**GraphQL** used to be the one exception, and no longer is: `#[operations]` wraps
 async-graphql's `#[Object]`, but it now pins that expansion to the framework's
 own re-export, so `nest-rs --features graphql` alone compiles a resolver.
 `async-graphql` returns to the rule above — yours when your code names it,

@@ -50,7 +50,7 @@ resolver — carries across intact.
 | `@Inject('TOKEN')` provider token | inject `Arc<dyn Trait>`, provider listed `as dyn Trait` |
 | `@UseGuards(...)` | `#[use_guards(...)]` |
 | `@UseInterceptors(...)` / `@UseFilters(...)` | `#[use_interceptors(...)]` / `#[use_filters(...)]` |
-| `@Resolver()` operation | `#[resolver]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
+| `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
 | `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
 | `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `NESTRS_<NS>__<KEY>` |
 | `Test.createTestingModule(...)` | `TestApp` booting the real `AppModule` |

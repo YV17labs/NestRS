@@ -34,7 +34,7 @@ cargo add nest-rs --features graphql,seaorm,authz
 nest-rs = { version = "4.0", features = ["graphql", "seaorm", "authz"] }
 ```
 
-`#[resolver]` builds on async-graphql's own `#[Object]`, and a third-party
+`#[operations]` builds on async-graphql's own `#[Object]`, and a third-party
 macro expands against *your* prelude — so the decorator pins that expansion to
 the framework's re-export (`crate = "::nest_rs::graphql::async_graphql"`).
 Reach async-graphql's types the same way and the line above stays the only one:
@@ -50,12 +50,12 @@ expands against your prelude, exactly like `serde`'s.
 ## The minimal resolver
 
 ```rust title="src/greeting/resolver.rs"
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
 #[resolver]
 pub struct GreetingResolver;
 
-#[resolver]
+#[operations]
 impl GreetingResolver {
     #[query]
     #[public]
@@ -67,7 +67,8 @@ impl GreetingResolver {
 
 - **`#[resolver]`** on the struct registers it with the schema discovery
   registry.
-- **`#[resolver]`** on the impl block orchestrates the operations within.
+- **`#[operations]`** on the impl block orchestrates the operations within —
+  one decorator per item shape, exactly like `#[controller]` / `#[routes]`.
 - **`#[query]`** declares a top-level query. The method name becomes the
   field name (camelCased on the wire: `greeting`).
 - **`#[public]`** declares the operation's **access posture** —
@@ -78,10 +79,10 @@ impl GreetingResolver {
   becomes nullable.
 
 `#[query]`, `#[mutation]`, `#[field_resolver]`, `#[public]`,
-`#[authorize]` and `#[inject]` are **inner attributes** the `#[resolver]`
-macro consumes in place — there is nothing to import for them. Only
-`resolver` (and `crud` / `dataloader` on the pages that use them) comes
-from `nest_rs::graphql`.
+`#[authorize]` and `#[inject]` are **inner attributes** the two macros
+consume in place — there is nothing to import for them. Only `resolver`
+and `operations` (and `crud` / `dataloader` on the pages that use them)
+come from `nest_rs::graphql`.
 
 Mount the GraphQL transport once at the app root:
 
@@ -124,7 +125,7 @@ A resolver injects providers like any other struct:
 
 ```rust
 use std::sync::Arc;
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 use crate::greeting::service::GreetingService;
 
 #[resolver]
@@ -133,7 +134,7 @@ pub struct GreetingResolver {
     svc: Arc<GreetingService>,
 }
 
-#[resolver]
+#[operations]
 impl GreetingResolver {
     #[query]
     #[public]

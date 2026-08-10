@@ -208,7 +208,7 @@ When the unexposed relation opens the slot, write the replacement on the resolve
 
 ```rust title="src/orgs/graphql/resolver.rs"
 use async_graphql::{Context, Result, connection::*};
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
 use crate::orgs::Org;
 use crate::users::User;
@@ -219,7 +219,7 @@ pub struct OrgsResolver {
     users: Arc<crate::users::UsersService>,
 }
 
-#[resolver]
+#[operations]
 impl OrgsResolver {
     #[field_resolver]
     async fn users(

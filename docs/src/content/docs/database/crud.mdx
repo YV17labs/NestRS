@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 A REST CRUD or a GraphQL CRUD is **one attribute** on the controller or
 resolver impl block. `#[crud(...)]` reads the entity's [`CrudService`](/database/),
 synthesises every operation the developer did not hand-write, and re-emits
-the block under `#[routes]` (HTTP) or `#[resolver]` (GraphQL). Auth, row-level
+the block under `#[routes]` (HTTP) or `#[operations]` (GraphQL). Auth, row-level
 filtering, by-id binding and response masking come from the same data context
 described in [Database](/database/) and [Security](/security/) — `#[crud]`
 just wires the endpoints.

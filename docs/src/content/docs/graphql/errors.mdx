@@ -19,12 +19,12 @@ service result and the wire shape just works.
 
 ```rust
 use async_graphql::{Error, Result};
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
 #[resolver]
 pub struct PostsResolver;
 
-#[resolver]
+#[operations]
 impl PostsResolver {
     #[query]
     #[public]
@@ -110,9 +110,9 @@ A resolver propagates that into a GraphQL `Result<T>` with `?`:
 ```rust
 use async_graphql::Result;
 use nest_rs::authz::Read;
-use nest_rs::graphql::resolver;
+use nest_rs::graphql::{operations, resolver};
 
-#[resolver]
+#[operations]
 impl PostsResolver {
     #[query]
     #[authorize(Read, posts::Entity)]
@@ -152,6 +152,36 @@ async fn post(&self, id: String) -> Result<Post> {
 Same shape for `CredentialError` (always `UNAUTHENTICATED`) and
 `TokenError` (`UNAUTHENTICATED` with the RFC 6749 error code in a
 nested field if you need it).
+
+## An error the client is not owed
+
+`ServiceError` is wire-safe by construction — its `Db` variant displays as
+`"database error"`, never the `DbErr` underneath. **A feature's own error
+type has no such discipline imposed on it**, and a `Display` that wraps a
+driver error carries SQL, column names and sometimes row values into the
+error frame.
+
+`Opaque` is the seam for that, and it reads the same on all three
+client-facing transports:
+
+```rust
+use nest_rs::graphql::Opaque;
+
+#[query]
+#[authorize(Read, posts::Entity)]
+async fn post(&self, id: String) -> Result<Post> {
+    Ok(self.svc.find_by_id(&id).await.opaque()?)
+}
+```
+
+`.opaque()?` logs the real error at `error` on `nest_rs::graphql` and puts
+a constant message on the wire, under the same `INTERNAL` code an internal
+denial carries — so a client cannot tell an unexpected failure from a
+refusal it was owed no explanation for.
+
+Reach for it on a failure that is none of the caller's business. A
+validation rejection or an authorization denial is the opposite case:
+those exist to be read, and travel as themselves.
 
 ## Authorization denials
 

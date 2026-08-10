@@ -2,7 +2,7 @@
 //! [`crate::http::mask_entity_response`].
 //!
 //! The framework-carried path is [`masked_value_for`], emitted automatically by
-//! `#[resolver]` after every `#[authorize(Action, Entity)]`-declared operation —
+//! `#[operations]` after every `#[authorize(Action, Entity)]`-declared operation —
 //! a hand-written resolver never calls it.
 
 use nest_rs_graphql::async_graphql::{Context, Error};

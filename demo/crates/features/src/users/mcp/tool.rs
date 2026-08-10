@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use nest_rs::mcp::{McpError, Opaque, mcp};
+use nest_rs::authz::Read;
+use nest_rs::mcp::{Json, McpError, Opaque, mcp, tools};
 use nest_rs::seaorm::CrudService;
 
-use crate::users::UsersService;
+use crate::users::{Entity as UserEntity, PersonDto, UsersService};
 
 #[mcp]
 #[derive(Clone)]
@@ -12,21 +13,24 @@ pub struct UsersTool {
     svc: Arc<UsersService>,
 }
 
-#[mcp]
+#[tools]
 impl UsersTool {
     #[tool(
-        description = "List the people the caller is allowed to see, by name. \
-                       Scoped to the caller's organization."
+        description = "List the people the caller is allowed to see. Scoped to the caller's \
+                       organization."
     )]
-    async fn list_people(&self) -> Result<String, McpError> {
+    #[authorize(Read, UserEntity, unmasked)]
+    async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, McpError> {
         let rows = CrudService::list(&*self.svc).await.opaque()?;
 
-        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
-        Ok(if names.is_empty() {
-            "no readable people".to_owned()
-        } else {
-            names.join("\n")
-        })
+        Ok(Json(
+            rows.into_iter()
+                .map(|row| PersonDto {
+                    id: row.id,
+                    name: row.name,
+                })
+                .collect(),
+        ))
     }
 }
 

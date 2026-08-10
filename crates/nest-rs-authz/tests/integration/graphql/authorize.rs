@@ -13,7 +13,7 @@ use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
-use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, resolver};
+use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
@@ -96,7 +96,7 @@ impl nest_rs_resource::WireModelDefaults for widget::Entity {}
 #[resolver]
 struct WidgetResolver;
 
-#[resolver]
+#[operations]
 impl WidgetResolver {
     #[query]
     #[authorize(Read, widget::Entity)]

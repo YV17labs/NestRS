@@ -1,0 +1,10 @@
+error: #[mcp] decorates the host struct — its #[tool] / #[prompt] methods go under #[tools] on the impl block
+  --> tests/integration/diagnostics/mcp_on_impl.rs:13:1
+   |
+13 | / impl DemoTool {
+14 | |     #[tool]
+15 | |     #[public]
+16 | |     async fn ping(&self) -> Result<String, nest_rs_mcp::McpError> {
+...  |
+19 | | }
+   | |_^

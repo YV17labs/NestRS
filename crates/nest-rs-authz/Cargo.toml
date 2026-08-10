@@ -57,11 +57,30 @@ mcp = [
     "dep:nest-rs-mcp",
     "dep:nest-rs-guards",
     "nest-rs-guards/mcp",
+    # `masked_value_for` strains a masked row against the entity's statically
+    # known exposed columns, which is `WireModelDefaults::wire_keys`.
+    "dep:nest-rs-resource",
+    "dep:poem",
+]
+# WebSocket surface: the per-message class gate (`ws::authorize`) and reply mask
+# (`ws::masked_value_for`) that `#[messages]` emits from an
+# `#[authorize(Action, Entity)]`. There is no bridge here and deliberately so —
+# a gateway is `EdgePosture::Guarded`, so the upgrade already ran the real HTTP
+# chain; what a message needs re-established is the ambient ability, and that is
+# `nest_rs_seaorm::ws::WsDataContext`. `nest-rs-guards/ws` is forwarded for
+# `denial_to_ws_error`, so a gate refusal and a guard refusal reach the client
+# through one frame.
+ws = [
+    "dep:nest-rs-core",
+    "dep:nest-rs-ws",
+    "dep:nest-rs-guards",
+    "nest-rs-guards/ws",
+    "dep:nest-rs-resource",
     "dep:poem",
 ]
 # Enable every transport binding at once — useful for
 # `cargo test -p nest-rs-authz --features full`.
-full = ["http", "graphql", "mcp"]
+full = ["http", "graphql", "ws", "mcp"]
 
 [dependencies]
 # Engine: always required.
@@ -110,6 +129,9 @@ nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
+# The `ws` mirror suites declare a real `#[gateway]`, whose expansion names
+# `::nest_rs_ws::` paths at the call site.
+nest-rs-ws = { path = "../nest-rs-ws" }
 nest-rs-resource = { path = "../nest-rs-resource" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,

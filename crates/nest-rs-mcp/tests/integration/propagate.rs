@@ -368,7 +368,7 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
     ));
 
     // --- a legacy session: the capabilities reachable through `initialize` ---
-    let session = open_session_with(&client, "/", None, tasks_client_capabilities()).await;
+    let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
 
     let requests: &[(&str, serde_json::Value)] = &[
         ("ping", json!({})),

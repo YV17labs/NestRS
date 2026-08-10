@@ -83,6 +83,7 @@ Other guards on the same route still run.
 | `check_http` | HTTP | `&mut HttpRequest` — gate and mutate (attach context in extensions) |
 | `check_graphql` | GraphQL | `&GraphqlContext` — read-only; seed context upstream |
 | `check_ws_message` | WS | per inbound message, after the upgrade |
+| `check_mcp` | MCP | per operation, inside rmcp's dispatch — the ability is ambient |
 
 ```rust
 #[async_trait]
@@ -91,6 +92,7 @@ pub trait Guard: Layer {
     async fn check_graphql(&self, _ctx: &GraphqlContext<'_>) -> Result<(), Denial> { Ok(()) }
     async fn check_ws_message(&self, _client: &WsClient, _event: &str, _data: &Value)
         -> Result<(), Denial> { Ok(()) }
+    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> { Ok(()) }
 }
 ```
 
@@ -352,6 +354,10 @@ Each transport method runs at a different seam:
   is read-only).
 - `check_ws_message` — once per inbound message, after the connection
   upgrade.
+- `check_mcp` — once per `#[tool]` / `#[prompt]` operation, inside rmcp's
+  dispatch. The context carries the app and which operation is running; the
+  caller's `Ability` is ambient, so a capability-only guard reads it with
+  `current_ability()`.
 
 GraphQL, WS and MCP need a bridge one level above the resolver / gateway / tool
 because the per-operation context does not carry the poem request:
@@ -363,24 +369,34 @@ because the per-operation context does not carry the poem request:
 - **MCP** — an `McpOperationGuard` (e.g. `McpAbilityBridge`), the exact twin:
   same chain, same `around` installing `Ability` — here *inside* rmcp's
   spawned dispatch. With none registered the endpoint falls back to the global
-  pool, and with no pool either it is deny-all.
+  pool, and with no pool either it is deny-all. Above it, `#[use_guards(...)]`
+  binds ordinary guards per host and per operation; whatever the endpoint guard
+  reports it already ran is dropped from that chain, so a guard runs once and
+  one the endpoint never ran still runs.
 - **WS** — a `SocketContext` (e.g. `WsDataContext`) captures pool +
   `Ability` on upgrade and re-installs them around each message.
   Per-message gating goes through `check_ws_message`.
 
-On a resolver, `#[use_guards(...)]` carries a **marker guard** — a
-struct whose job is to declare a dependency on the seeded context so
-the access graph can validate it. Omitting the matching authz module
-fails boot with a clear error naming the missing guard.
+On a resolver, `#[use_guards(...)]` binds the **ability guard** — the one
+that has a `check_graphql`. Authentication is not bound here: the bridge
+already ran it in band before the operation, so listing an `AuthnGuard`
+on a resolver would bind a guard with nothing to do.
 
 ```rust
 #[resolver]
-#[use_guards(GraphqlAuthnGuard)]
+#[use_guards(AuthzGuard)] // AbilityGuard<AppAbility> — has check_graphql
 pub struct PostResolver { /* ... */ }
 ```
 
-WebSockets need no marker type — the upgrade is a real HTTP `GET`, so
-the gateway struct binds the **real** HTTP guards; they run once at
+The **marker** `GraphqlAuthnGuard` is not a guard and is never bound with
+`#[use_guards]`. It is a plain `#[injectable]` provider listed in
+`AuthzGraphqlModule`, named by `forward_principal!(Claims,
+GraphqlAuthnGuard)` as the owner of the context seed — so the seed only
+runs when that provider is reachable, which is how forgetting the authz
+module becomes a boot error instead of a silently unauthenticated schema.
+
+WebSockets need no marker type either — the upgrade is a real HTTP `GET`,
+so the gateway struct binds the **real** HTTP guards; they run once at
 the upgrade and are access-graph-validated the same way (omit
 `AuthzWsModule` and the guards are unreachable ⇒ boot fails). A
 per-message check binds a real `Guard` beside the
@@ -396,10 +412,44 @@ pub struct PostGateway { /* ... */ }
 #[messages]
 impl PostGateway {
     #[subscribe_message("comment")]
+    #[public]
     #[use_guards(AuthzGuard)] // re-checked per message via check_ws_message
     async fn comment(&self, msg: CommentInput) -> Reply { /* ... */ }
 }
 ```
+
+### A guard must declare the transports it checks
+
+Every `check_*` above defaults to `Ok(())` — right as "this guard does not
+apply to that transport", and the reason a guard bound where it has no
+entry used to compile and pass everything. Three marker traits close that:
+
+| Bound at | Requires | Because it runs |
+|---|---|---|
+| `#[resolver]` / `#[operations]` | `GraphqlGuard` | `check_graphql` |
+| beside a `#[subscribe_message]` | `WsGuard` | `check_ws_message` |
+| `#[mcp]` host / `#[tools]` operation | `McpGuard` | `check_mcp` |
+| `#[controller]` / `#[routes]`, `#[gateway]` struct | *nothing* | `check_http` |
+
+Declare the marker next to the `check_*` it attests — `impl GraphqlGuard
+for RequireAdmin {}` — and the binding compiles. Bind a guard that lacks
+one and it does not, with a diagnostic naming the missing method and the
+two ways out:
+
+```text frame="terminal"
+error[E0277]: `ThrottlerGuard` does not check GraphQL operations
+   |
+   | #[use_guards(ThrottlerGuard)]
+   |              ^^^^^^^^^^^^^^ this guard has no `check_graphql`
+   = note: override `check_graphql`, then declare `impl GraphqlGuard for ThrottlerGuard {}`;
+           or bind this guard on an HTTP `#[controller]` / `#[routes]` instead
+```
+
+HTTP takes no marker on purpose: `check_http` is the trait's base entry —
+the one method not behind a feature — so every `Guard` has it, and a
+bound there could never fail. A guard bound **globally** takes no marker
+either: `use_guards_global` runs on the underlying HTTP request, which is
+also why a global `ThrottlerGuard` does rate-limit `/graphql` and `/mcp`.
 
 See [Security / per-transport bridges](/security/authorization/per-transport-bridges/)
 for the full HTTP / GraphQL / WS wiring, and

@@ -42,7 +42,7 @@ scaffolded.
 |--------|----------|------------------|
 | `AuthzHttpModule` | `AuthzGuard` (`AbilityGuard<AppAbility>`) | The HTTP request — guard runs on `&mut Request`, attaches `Arc<Ability>` |
 | `AuthzGraphqlModule` | `AppGraphqlGuard` (`dyn OperationGuard`), `GraphqlAuthnGuard` (resolver marker), `LoaderScope` (`dyn BatchContext`) | Re-runs the HTTP guard chain on `/graphql`, scopes the operation, snapshots ability around dataloader batches |
-| `AuthzWsModule` | `WsDataContext` (`dyn SocketContext`) | Re-establishes the pool + ability per WS message |
+| `AuthzWsModule` | `WsDataContext` (`dyn SocketContext`) | Re-establishes the pool + ability per WS message — which is what the per-message `#[authorize]` gate and reply mask read |
 | `AuthzMcpModule` | `AppMcpGuard` (`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `McpDataContext` as `dyn McpToolContext` | Re-runs the HTTP guard chain on the MCP endpoint and installs the ability *inside* each tool dispatch; the data context adds the executor + per-operation transaction |
 
 A controller imports the matching module along with its feature
@@ -91,9 +91,18 @@ you write is unchanged in spirit: import `AuthzGraphqlModule`, bind the
 
 ```rust
 #[resolver]
-#[use_guards(GraphqlAuthnGuard)]
+#[use_guards(AuthzGuard)]
+pub struct UsersResolver { /* ... */ }
+
+#[operations]
 impl UsersResolver { /* #[authorize(Action, Entity)] or #[public] per op */ }
 ```
+
+`AuthzGuard` is the app's `AbilityGuard<AppAbility>` alias, and it is what
+`#[use_guards]` binds: it has a `check_graphql`, so it satisfies the
+`GraphqlGuard` bound `#[resolver]` emits. An `AuthnGuard` does **not** belong
+in that list — it has no `check_graphql`, so on a resolver it would run
+nothing; the bridge below already authenticated the request in band.
 
 The module those three providers live in is app code, like the rest of
 `authz/`: **`nestrs g graphql <feature>` writes it** into
@@ -103,13 +112,15 @@ four files are the ones sketched below —
 [`demo/crates/features/src/authz/graphql/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/authz/graphql)
 is the same thing under version control.
 
-That's the whole resolver-side surface. The marker exists for the access
-graph: HTTP guards run on `&mut Request` *before* the handler — they
-*are* the auth chain. GraphQL instead runs authn/ability **in-band** per
-operation and seeds the ability into per-operation context; the marker
-turns "this resolver depends on the seeded ability" into an `#[inject]`
-the access graph validates — omit the authz module and **boot fails**
-naming the missing guard, never a silently unauthenticated schema.
+That's the whole resolver-side surface. The marker `GraphqlAuthnGuard`
+exists for the access graph, and it is **a provider, not a bound guard** —
+a plain `#[injectable]` struct with no `Guard` impl. HTTP guards run on
+`&mut Request` *before* the handler; they *are* the auth chain. GraphQL
+instead runs authn/ability **in-band** per operation and seeds the ability
+into per-operation context, and `forward_principal!(Claims,
+GraphqlAuthnGuard)` names the marker as that seed's owner. The seed
+therefore only runs while the marker is a reachable provider — omit the
+authz module and **boot fails**, never a silently unauthenticated schema.
 
 ### Under the hood: the operation bridge
 
@@ -177,8 +188,9 @@ executor and the ambient `Ability` for every message — no per-message
 transaction (mutations are explicit in your service), no shared state
 across messages.
 
-Unlike GraphQL, WS has **no marker type** — it reuses the HTTP `Guard`
-trait directly. The gateway struct binds the real guards; because the
+Unlike GraphQL, WS has **no marker type** and **no bridge** — a gateway is
+`EdgePosture::Guarded`, so its upgrade already carried the real chain and there
+is nothing to re-run in band. It reuses the HTTP `Guard` trait directly. The gateway struct binds the real guards; because the
 upgrade is an HTTP `GET`, they run once on it, and the access graph
 validates them like any HTTP binding (omit `AuthzWsModule` ⇒ the
 guards are unreachable ⇒ boot fails). An optional per-message check
@@ -191,20 +203,36 @@ pub struct ChatGateway { /* ... */ }
 
 #[messages]
 impl ChatGateway {
-    #[subscribe_message]
-    #[use_guards(AuthzGuard)]
-    async fn send(&self, ...) -> Result<()> { /* ... */ }
+    #[subscribe_message("users.list")]
+    #[authorize(Read, users::Entity)]
+    async fn list(&self) -> Result<Vec<User>, ServiceError> {
+        Ok(self.svc.list().await?.iter().map(User::from).collect())
+    }
 }
 ```
 
-`AuthnGuard` + `AuthzGuard` run at the upgrade. The upgrade's
+`AuthnGuard` + `AuthzGuard` run at the upgrade — those are real HTTP
+guards on a real `GET`, so they need no capability marker. The upgrade's
 task-locals unwind before any message handler runs, so `WsDataContext`
-re-seeds the executor and ability around each message; a guard bound
-beside a `#[subscribe_message]` then runs through
-`Guard::check_ws_message`. `AuthzGuard`'s implementation fails closed:
-no ambient ability (say the app imported `AuthzHttpModule` instead of
-`AuthzWsModule`, so nothing re-seeded it) ⇒ the message is denied with
-a 401-shaped error frame, never silently passed through.
+re-seeds the executor and ability around each message.
+
+**Above that, a message declares its posture like an operation on any
+other transport**, and it is mandatory: `#[authorize(Action, Entity)]` or
+`#[public]`, or it does not compile. `#[authorize]` emits the class gate
+(`nest_rs::authz::ws::authorize`) before the payload is deserialized and
+the reply mask afterwards — so a handler answering with entity rows
+writes **no masking call**. It fails closed when no ambient ability is
+present, which is exactly the state of a gateway whose app imported
+`AuthzHttpModule` instead of `AuthzWsModule`.
+
+The mask acts on the serialized reply, so a withheld column is absent
+from the frame rather than an error — HTTP's behaviour, not GraphQL's,
+because an envelope promises no schema. See
+[WebSockets / Messages](/websockets/messages/) for the full contract.
+
+An optional per-message `#[use_guards(...)]` still adds event-level
+checks; such a guard runs `Guard::check_ws_message` and must declare
+`WsGuard` — see [WebSockets / Guards](/websockets/guards/).
 
 ## MCP — same shape as HTTP
 

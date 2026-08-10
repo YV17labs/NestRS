@@ -3,7 +3,7 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Context;
-use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
@@ -39,7 +39,7 @@ nest_rs_graphql::inventory::submit! {
     }
 }
 
-#[resolver]
+#[operations]
 impl TagResolver {
     #[query]
     #[public]

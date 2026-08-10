@@ -1,10 +1,10 @@
 //! `#[crud]` — synthesise the standard resolver operations the developer did
-//! not hand-write, then re-emit under `#[resolver]`. Every operation
+//! not hand-write, then re-emit under `#[operations]`. Every operation
 //! delegates to the entity's [`CrudService`] — never `Repo` directly.
 //! Override by writing the matching method.
 //!
 //! Each generated operation declares its posture with the same
-//! `#[authorize(Action, Entity)]` a hand-written one would — `#[resolver]`
+//! `#[authorize(Action, Entity)]` a hand-written one would — `#[operations]`
 //! emits the class gate and the response mask from it, so generated and
 //! hand-written operations share one mechanism. The by-id operations
 //! (`get`/`update`/`delete`) still row-gate through [`CrudService::access`];
@@ -17,12 +17,17 @@ use std::collections::HashSet;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
+use syn::{ImplItem, ItemImpl, parse_quote};
 
 use nest_rs_codegen::{Paginate, parse_crud_args, singular_of};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
-    let item = parse_macro_input!(input as ItemImpl);
+    // The generated spelling of the impl half, so it answers a wrong shape
+    // through the edge's one pair constant, exactly as `#[operations]` does.
+    let item = match crate::resolver::GRAPHQL_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     match crud(TokenStream2::from(args), item) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
@@ -266,7 +271,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     item.items = generated;
 
     Ok(quote! {
-        #[::nest_rs_graphql::resolver]
+        #[::nest_rs_graphql::operations]
         #item
     })
 }

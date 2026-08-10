@@ -1,0 +1,5 @@
+error: #[operations] decorates the impl block holding the #[query] / #[mutation] / #[field_resolver] methods — the resolver struct itself takes #[resolver]
+ --> tests/integration/diagnostics/operations_on_struct.rs:7:1
+  |
+7 | struct DemoResolver;
+  | ^^^^^^^^^^^^^^^^^^^^

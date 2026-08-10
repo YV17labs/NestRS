@@ -34,6 +34,7 @@ mod context;
 mod error;
 mod loader;
 mod module;
+mod opaque;
 mod resolver;
 mod scope;
 
@@ -50,6 +51,7 @@ pub use error::{FIELD_ERRORS_EXTENSION, pipe_error};
 pub use loader::{GraphqlBatchContext, GraphqlBatchFuture, GraphqlBatchSpawner};
 pub use loader::{GraphqlLoaderRegistration, batch_spawner};
 pub use module::{GraphqlModule, GraphqlSetup};
+pub use opaque::Opaque;
 pub use resolver::{GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration};
 /// Resolver-side accessor for `#[injectable(scope = request)]` providers — the
 /// GraphQL mirror of `nest_rs_http::Scoped<T>`. Reachable in resolver bodies,
@@ -70,10 +72,13 @@ pub use nest_rs_pipes::{MaybeValidateFallback, ValidateProbe};
 
 pub use nest_rs_graphql_macros::{crud, dataloader};
 
-/// The resolver decorator. `#[use_interceptors(...)]` / `#[use_filters(...)]`
-/// are **HTTP-only** — the per-operation GraphQL seam is reserved but not
-/// invoked, so binding one on a resolver is rejected at compile time instead of
-/// silently doing nothing:
+/// The operations decorator — `#[resolver]`'s impl-block half, the GraphQL
+/// counterpart of `#[routes]`.
+pub use nest_rs_graphql_macros::operations;
+/// The resolver decorator, for the struct. `#[use_interceptors(...)]` /
+/// `#[use_filters(...)]` are **HTTP-only** — the per-operation GraphQL seam is
+/// reserved but not invoked, so binding one on a resolver is rejected at compile
+/// time instead of silently doing nothing:
 ///
 /// ```compile_fail
 /// use nest_rs_graphql::resolver;

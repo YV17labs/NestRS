@@ -5,7 +5,7 @@
 //! `use_pipes_global` seeds. A rejection becomes a GraphQL error.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::{GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::pipe;
 use nest_rs_http::HttpTransport;
 use nest_rs_pipes::{GlobalPipe, PipeError};
@@ -36,7 +36,7 @@ impl GlobalPipe for VarPipe {
 #[resolver]
 struct EchoResolver;
 
-#[resolver]
+#[operations]
 impl EchoResolver {
     #[query]
     #[public]

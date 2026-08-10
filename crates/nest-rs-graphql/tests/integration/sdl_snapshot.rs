@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use async_graphql::SimpleObject;
 use nest_rs_core::module;
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
@@ -28,7 +28,7 @@ struct Widget {
 #[resolver]
 struct AlphaResolver;
 
-#[resolver]
+#[operations]
 impl AlphaResolver {
     #[query]
     #[public]
@@ -43,7 +43,7 @@ impl AlphaResolver {
 #[resolver]
 struct BetaResolver;
 
-#[resolver]
+#[operations]
 impl BetaResolver {
     #[query]
     #[public]

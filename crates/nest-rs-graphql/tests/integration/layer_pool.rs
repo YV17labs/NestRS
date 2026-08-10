@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
-use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, resolver};
+use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, operations, resolver};
 use nest_rs_guards::{Denial, Guard, guard};
 use nest_rs_http::async_trait;
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
@@ -84,7 +84,7 @@ impl GraphqlOperationGuard for NoopOpGuard {
 #[resolver]
 struct PingResolver;
 
-#[resolver]
+#[operations]
 impl PingResolver {
     #[query]
     #[public]

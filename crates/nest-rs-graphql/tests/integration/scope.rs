@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use nest_rs_core::{injectable, module};
 use nest_rs_graphql::async_graphql::Context;
-use nest_rs_graphql::{GraphqlModule, Scoped, resolver};
+use nest_rs_graphql::{GraphqlModule, Scoped, operations, resolver};
 use nest_rs_testing::TestApp;
 
 /// A singleton source of monotonic stamps — shared across every request, so a
@@ -49,7 +49,7 @@ impl Probe {
 #[resolver]
 struct ProbeResolver;
 
-#[resolver]
+#[operations]
 impl ProbeResolver {
     #[query]
     #[public]

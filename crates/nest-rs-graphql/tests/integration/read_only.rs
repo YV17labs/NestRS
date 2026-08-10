@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use nest_rs_core::{Layer, module};
 use nest_rs_database::{Executor, with_request_executor};
-use nest_rs_graphql::{GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::async_trait;
 use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
@@ -66,7 +66,7 @@ impl Interceptor for MarkerDbContext {
 #[resolver]
 struct ExecutorResolver;
 
-#[resolver]
+#[operations]
 impl ExecutorResolver {
     #[query]
     #[public]

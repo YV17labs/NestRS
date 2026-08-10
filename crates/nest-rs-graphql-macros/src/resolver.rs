@@ -1,43 +1,78 @@
-//! `#[resolver]`: construction on a struct, operation orchestration on its
-//! impl block.
+//! `#[resolver]`: construction on the struct. `#[operations]`: the
+//! orchestration of the `#[query]` / `#[mutation]` / `#[field_resolver]`
+//! methods on its impl block.
+//!
+//! Two decorators rather than one accepting two item shapes, because an
+//! attribute macro is a single path in the macro namespace: the shape is
+//! discriminated *after* `syn::parse`, so a shared name gives one rustdoc page
+//! for two argument grammars and annotates every expansion error with the same
+//! attribute whichever half emitted it. See the *one decorator, one item shape*
+//! rule in `CLAUDE.md`.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    Attribute, FnArg, Ident, ImplItem, Item, ItemImpl, ItemStruct, LitStr, Path, Signature, Token,
-    Type, parse_macro_input, parse_quote,
+    Attribute, FnArg, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path, Signature, Token, Type,
+    parse_quote,
 };
 
 use nest_rs_codegen::{
-    InjectableBody, PipeWrapper, build_injectable_body, force_guard_typeids, forwarded_arg_idents,
-    forwarded_idents, from_container_method, impl_self_ident, injected_keys_with_layers,
-    injected_methods_with_layers, injected_names_with_layers, layer_deps, normalize_forwarded_args,
-    pipe_wrapper, reject_http_only_layers, scoped_specs, take_flag_attr, take_path_list,
+    DecoratorPair, InjectableBody, PipeWrapper, build_injectable_body, force_guard_typeids,
+    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
+    impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    injected_names_with_layers, layer_deps, normalize_forwarded_args, pipe_wrapper,
+    reject_http_only_layers, scoped_specs, take_flag_attr, take_path_list,
+};
+
+/// The GraphQL edge's pair, read by `#[resolver]`, `#[operations]` and `#[crud]`.
+pub(crate) const GRAPHQL_PAIR: DecoratorPair = DecoratorPair {
+    host: "#[resolver]",
+    subject: "resolver struct",
+    operations: "#[operations]",
+    collects: "#[query] / #[mutation] / #[field_resolver]",
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = TokenStream2::from(args);
-    if !args.is_empty() {
-        return syn::Error::new_spanned(
-            &args,
-            "#[resolver] takes no arguments; tag methods with `#[query]` / `#[mutation]` / `#[field_resolver]`",
-        )
-        .to_compile_error()
-        .into();
+    if let Err(err) = reject_args(args, "resolver") {
+        return err.to_compile_error().into();
     }
 
-    match parse_macro_input!(input as Item) {
-        Item::Struct(item) => resolver_struct(item),
-        Item::Impl(item) => resolver_impl(item),
-        other => syn::Error::new_spanned(
-            other,
-            "#[resolver] applies to a struct (construction) or its impl block (query/mutation methods)",
-        )
-        .to_compile_error()
-        .into(),
+    // Naming the sibling is the whole point of the split: the shape a developer
+    // reached for exists, it is just spelled with the other decorator. Both
+    // halves read `GRAPHQL_PAIR`, so the two sentences cannot drift.
+    match GRAPHQL_PAIR.parse_host(input.into()) {
+        Ok(item) => resolver_struct(item),
+        Err(err) => err.to_compile_error().into(),
     }
+}
+
+pub(crate) fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
+    if let Err(err) = reject_args(args, "operations") {
+        return err.to_compile_error().into();
+    }
+
+    match GRAPHQL_PAIR.parse_operations(input.into()) {
+        Ok(item) => resolver_impl(item),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Neither half takes arguments — the operations are declared by the method
+/// attributes, not by the decorator.
+fn reject_args(args: TokenStream, decorator: &str) -> syn::Result<()> {
+    let args = TokenStream2::from(args);
+    if args.is_empty() {
+        return Ok(());
+    }
+    Err(syn::Error::new_spanned(
+        &args,
+        format!(
+            "#[{decorator}] takes no arguments; tag methods with `#[query]` / `#[mutation]` / \
+             `#[field_resolver]`"
+        ),
+    ))
 }
 
 /// `#[resolver]` on the struct: construction + provider-scope layer
@@ -82,6 +117,10 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
+    // Resolver-scope guards fold into the same per-operation chain, so they owe
+    // the same capability.
+    let capability_bounds =
+        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::GraphqlGuard));
 
     // Resolver-membership marker so the boot can require this resolver be
     // listed in a reachable module's `providers` (its schema presence is
@@ -102,6 +141,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 
     quote! {
         #item
+
+        #capability_bounds
 
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container
@@ -405,7 +446,7 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
 /// Emit the unified Layer System chain for a resolver operation: global +
 /// resolver-scope + per-method guards, deduped by `TypeId`. Resolver-scope
 /// guards are read at runtime via `<Self>::__nestrs_resolver_guard_specs()`
-/// — emitted by the struct-form `#[resolver]` macro, parallel to how
+/// — emitted by `#[resolver]` on the struct, parallel to how
 /// `#[controller]` exposes `__nestrs_controller_guard_specs()` for
 /// `#[routes]` to consume. This is what makes the declaration site uniform:
 /// the developer writes `#[use_guards(...)]` on the struct, same as for
@@ -439,16 +480,16 @@ fn layered_resolver_chain(
         {
             // Composed once per site against this container, then memoized —
             // the GraphQL analog of `RouteShaper`'s mount-time composition.
-            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::GraphqlChainCell =
-                ::nest_rs_guards::GraphqlChainCell::new();
+            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::SiteChainCell =
+                ::nest_rs_guards::SiteChainCell::new();
             let __container = #ctx.data_unchecked::<::nest_rs_core::Container>();
             ::nest_rs_guards::run_layered_graphql_chain(
                 #ctx,
                 __container,
                 &__NESTRS_GUARD_CHAIN,
                 #label_lit,
-                || ::nest_rs_guards::GraphqlChainSources {
-                    resolver: <#self_ty>::__nestrs_resolver_guard_specs(),
+                &|| ::nest_rs_guards::SiteChainSources {
+                    provider: <#self_ty>::__nestrs_resolver_guard_specs(),
                     method: #method_specs,
                     force: #force_typeids,
                 },
@@ -457,7 +498,7 @@ fn layered_resolver_chain(
     }
 }
 
-/// `#[resolver]` on the impl: split `#[query]`/`#[mutation]` methods into
+/// `#[operations]` on the impl: split `#[query]`/`#[mutation]` methods into
 /// generated `#[Object]` roots and register them.
 fn resolver_impl(item: ItemImpl) -> TokenStream {
     match resolver_impl_inner(item) {
@@ -466,7 +507,7 @@ fn resolver_impl(item: ItemImpl) -> TokenStream {
     }
 }
 
-/// The `#[resolver]`-on-impl expansion, returning `syn::Result<TokenStream2>`
+/// The `#[operations]` expansion, returning `syn::Result<TokenStream2>`
 /// so its gates are unit-testable without the `proc_macro` bridge —
 /// `resolver_impl` is the thin `proc_macro::TokenStream` wrapper, the same
 /// `entry`/`crud` split `#[crud]` uses. The mandatory-posture check below is
@@ -476,7 +517,7 @@ fn resolver_impl(item: ItemImpl) -> TokenStream {
 fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let self_ty = item.self_ty.clone();
 
-    let base = impl_self_ident(&self_ty, "#[resolver]")?;
+    let base = impl_self_ident(&self_ty, "#[operations]")?;
 
     // Module-gating uses `TypeId::of::<Self>()` so `Self` must be `'static`.
     // Reject generics here for a friendly span — otherwise the user sees a
@@ -484,7 +525,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     if !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.generics,
-            "`#[resolver] impl` must be on a concrete, `'static` self type — \
+            "`#[operations] impl` must be on a concrete, `'static` self type — \
              generic and lifetime parameters are not supported (the resolver's \
              `TypeId` is its container key, which requires `'static`)",
         ));
@@ -860,9 +901,18 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     layers.keys.extend(field_layers.keys);
     layers.labels.extend(field_layers.labels);
     let injected_methods = injected_methods_with_layers(&self_ty, &layers);
+    // Every guard declared at this site runs `Guard::check_graphql`, whose default
+    // is `Ok(())` — so one bound per guard, failing at the `#[use_guards]` line
+    // rather than passing every operation in silence.
+    let capability_bounds = guard_capability_bounds(
+        all_guard_paths.iter(),
+        quote!(::nest_rs_guards::GraphqlGuard),
+    );
 
     Ok(quote! {
         #item
+
+        #capability_bounds
 
         #query_block
         #mutation_block
@@ -1072,7 +1122,7 @@ fn root_object(
         return quote!();
     }
     // Resolver struct name, logged beside each mounted operation at boot.
-    let resolver_name = impl_self_ident(self_ty, "#[resolver]")
+    let resolver_name = impl_self_ident(self_ty, "#[operations]")
         .map(|i| i.to_string())
         .unwrap_or_else(|_| "resolver".to_string());
     let resolver_name = LitStr::new(&resolver_name, proc_macro2::Span::call_site());

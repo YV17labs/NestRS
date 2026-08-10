@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{Container, injectable, module};
 use nest_rs_graphql::async_graphql::{InputObject, Result as GqlResult};
-use nest_rs_graphql::{GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
 // Two `Valid` carriers by design (the orphan rule): the HTTP one wraps a poem
 // extractor, the value-form one wraps the wire value. Both are exercised here.
 use nest_rs_http::{HttpModule, Valid as HttpValid, controller, routes};
@@ -80,7 +80,7 @@ impl NotesController {
 #[resolver]
 struct NotesResolver;
 
-#[resolver]
+#[operations]
 impl NotesResolver {
     // `Valid<T>` destructures, and the SDL argument keeps the name the pattern
     // binds. `Piped<P, T>` carries a phantom marker for `P`, so it is not a
@@ -101,6 +101,7 @@ struct NotesGateway;
 #[messages]
 impl NotesGateway {
     #[subscribe_message("note.echo")]
+    #[public]
     async fn echo(&self, Valid(note): Valid<Note>) -> String {
         note.text.clone()
     }

@@ -12,6 +12,7 @@ pub struct NotifyGateway {}
 #[messages]
 impl NotifyGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self, client: &WsClient) {
         if let Err(e) = client.broadcast("pong", &"hi") {
             tracing::warn!(target: "live::notify", error = %e, "broadcast failed");

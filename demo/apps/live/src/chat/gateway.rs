@@ -29,6 +29,7 @@ impl ChatGateway {
     }
 
     #[subscribe_message("message")]
+    #[public]
     #[use_guards(ModeratedGuard)]
     async fn on_message(&self, message: SendMessageDto) -> Result<(), serde_json::Error> {
         self.svc.record(message)?;
@@ -36,21 +37,25 @@ impl ChatGateway {
     }
 
     #[subscribe_message("history")]
+    #[public]
     async fn history(&self) -> Vec<ChatMessageDto> {
         self.svc.history()
     }
 
     #[subscribe_message("presence")]
+    #[public]
     async fn presence(&self) -> usize {
         self.svc.present()
     }
 
     #[subscribe_message("seq")]
+    #[public]
     async fn seq(&self) -> Result<u64, WsScopeError> {
         Ok(Scoped::<RequestSeq>::from_context()?.value())
     }
 
     #[subscribe_message("typing")]
+    #[public]
     async fn typing(&self, message: SendMessageDto, client: &WsClient) {
         if let Err(e) = client.broadcast("typing", &message) {
             tracing::warn!(target: "live::chat", error = %e, "broadcast failed");

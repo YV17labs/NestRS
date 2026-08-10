@@ -49,48 +49,57 @@ pub struct TestGateway;
 #[messages]
 impl TestGateway {
     #[subscribe_message("ok")]
+    #[public]
     async fn ok_handler(&self) -> Result<String, std::io::Error> {
         Ok("yay".to_string())
     }
 
     #[subscribe_message("err")]
+    #[public]
     async fn err_handler(&self) -> Result<String, std::io::Error> {
         Err(std::io::Error::other("boom"))
     }
 
     #[subscribe_message("ok_unit")]
+    #[public]
     async fn ok_unit_handler(&self) -> Result<(), std::io::Error> {
         Ok(())
     }
 
     #[subscribe_message("err_unit")]
+    #[public]
     async fn err_unit_handler(&self) -> Result<(), std::io::Error> {
         Err(std::io::Error::other("boom-unit"))
     }
 
     #[subscribe_message("plain")]
+    #[public]
     async fn plain_handler(&self) -> String {
         "hello".to_string()
     }
 
     #[subscribe_message("nothing")]
+    #[public]
     async fn nothing_handler(&self) {}
 
     // `Piped<Trim, String>`: the wire payload is a `String`; the handler sees it
     // trimmed — the WS analog of the HTTP / GraphQL / queue pipe forms.
     #[subscribe_message("trim")]
+    #[public]
     async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
         name.into_inner()
     }
 
     // A rejecting pipe replies with an error frame, never reaching the body.
     #[subscribe_message("checked")]
+    #[public]
     async fn checked_handler(&self, name: Piped<Reject, String>) -> String {
         name.into_inner()
     }
 
     // `Valid<T>`: validates the deserialized payload before the handler runs.
     #[subscribe_message("named")]
+    #[public]
     async fn named_handler(&self, input: Valid<NameInput>) -> String {
         input.into_inner().name
     }
@@ -98,16 +107,19 @@ impl TestGateway {
     // The two spellings of one type. `literal` is what the macro can see; the
     // three `renamed_*` handlers are the same `Result` behind an alias.
     #[subscribe_message("literal")]
+    #[public]
     async fn literal_handler(&self) -> Result<String, DbFailure> {
         Err(failure())
     }
 
     #[subscribe_message("renamed")]
+    #[public]
     async fn renamed_handler(&self) -> ServiceResult<String> {
         Err(failure())
     }
 
     #[subscribe_message("renamed_ok")]
+    #[public]
     async fn renamed_ok_handler(&self) -> ServiceResult<String> {
         Ok("fine".to_string())
     }

@@ -1,0 +1,5 @@
+error: a #[subscribe_message] declaring `#[authorize(Action, Entity)]` returns `Result<T, E>`, spelled literally: the reply shape is decided syntactically, so a `Result` behind an alias would be masked as the `Result` itself, and a fail-closed mask needs an error channel. Return a literal `Result`, or declare `#[authorize(Action, Entity, unmasked)]` and mask in the body
+  --> tests/integration/diagnostics/authorize_on_a_bare_value.rs:17:26
+   |
+17 |     async fn list(&self) -> Vec<String> {
+   |                          ^^^^^^^^^^^^^^

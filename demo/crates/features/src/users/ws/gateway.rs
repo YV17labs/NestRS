@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use nest_rs::authz::{Action, masked_reply};
+use nest_rs::authz::Read;
 use nest_rs::seaorm::{CrudService, ServiceError};
 use nest_rs::ws::{gateway, messages};
-use serde_json::Value;
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -19,11 +18,8 @@ pub struct UsersGateway {
 #[messages]
 impl UsersGateway {
     #[subscribe_message("users.list")]
-    async fn list(&self) -> Result<Value, ServiceError> {
-        let rows = self.svc.list().await?;
-        let wire = serde_json::to_value(rows.iter().map(User::from).collect::<Vec<_>>())
-            .map_err(|e| ServiceError::Masking(e.to_string()))?;
-        masked_reply::<UserEntity>(Action::Read, wire)
-            .map_err(|e| ServiceError::Masking(e.to_string()))
+    #[authorize(Read, UserEntity)]
+    async fn list(&self) -> Result<Vec<User>, ServiceError> {
+        Ok(self.svc.list().await?.iter().map(User::from).collect())
     }
 }

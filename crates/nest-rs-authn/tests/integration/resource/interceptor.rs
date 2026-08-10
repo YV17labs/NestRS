@@ -117,6 +117,7 @@ struct ChatGateway;
 #[messages]
 impl ChatGateway {
     #[subscribe_message("ping")]
+    #[public]
     async fn ping(&self) -> String {
         "pong".into()
     }

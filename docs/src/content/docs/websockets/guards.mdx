@@ -73,7 +73,7 @@ handler the guard is attached to:
 use nest_rs::ws::{messages, WsClient};
 use nest_rs::ws::serde_json::Value;
 use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, async_trait};
+use nest_rs::guards::{Denial, Guard, WsGuard, async_trait};
 
 #[injectable]
 #[derive(Default)]
@@ -95,7 +95,35 @@ impl Guard for ModeratedGuard {
         }
     }
 }
+
+// The capability marker — see below. One line, right beside the method it attests.
+impl WsGuard for ModeratedGuard {}
 ```
+
+<Aside type="caution" title="A per-message guard must declare `WsGuard`">
+Every `Guard::check_*` defaults to `Ok(())`, which is right — "this guard
+does not apply to that transport" — and is also why binding a guard that
+only implements `check_http` beside a `#[subscribe_message]` used to
+compile, read as a protection, and pass every message.
+
+`#[messages]` now requires `WsGuard` of every guard in a per-message
+`#[use_guards]`. Declare it next to the `check_ws_message` it attests. If
+you get this error, the guard almost certainly belongs on the **gateway
+struct** instead, which the diagnostic says:
+
+```text frame="terminal"
+error[E0277]: `AuthnGuard` does not check WebSocket messages
+   |
+   |     #[use_guards(AuthnGuard)]
+   |                  ^^^^^^^^^^ this guard has no `check_ws_message`
+   = note: override `check_ws_message`, then declare `impl WsGuard for AuthnGuard {}`;
+           or move it to the `#[gateway]` struct, where guards run on the HTTP upgrade
+```
+
+**A guard on the `#[gateway]` struct needs no marker**: the upgrade is an
+HTTP `GET`, so those are HTTP guards and `check_http` is what runs. The
+bound is where that distinction stops being folklore.
+</Aside>
 
 Bind it beside the message it gates:
 
@@ -103,6 +131,7 @@ Bind it beside the message it gates:
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
+    #[public]
     #[use_guards(ModeratedGuard)]
     async fn on_message(&self, msg: SendMessageDto) {
         self.svc.record(msg);

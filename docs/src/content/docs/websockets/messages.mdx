@@ -27,6 +27,7 @@ envelope:
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
+    #[public]
     async fn on_message(&self, msg: SendMessageDto) -> ChatMessageDto {
         self.svc.record(msg)
     }
@@ -43,6 +44,68 @@ The macro reads three things from the signature:
 A `&WsClient` parameter is the [per-connection handle](/websockets/rooms/);
 it can appear in any position alongside the payload.
 
+The `#[public]` above is the message's **access posture**, and it is not
+optional — see the next section.
+
+## Every message declares its posture
+
+Each `#[subscribe_message]` carries exactly one of two attributes, and a
+message that carries neither **does not compile**:
+
+```rust
+#[subscribe_message("message")]
+#[public]                          // no gate, no mask
+async fn on_message(&self, msg: SendMessageDto) -> ChatMessageDto { /* ... */ }
+
+#[subscribe_message("users.list")]
+#[authorize(Read, users::Entity)]  // class gate + reply mask, both emitted
+async fn list(&self) -> Result<Vec<User>, ServiceError> {
+    Ok(self.svc.list().await?.iter().map(User::from).collect())
+}
+```
+
+This is the same rule a `#[query]` and a `#[tool]` carry, for the same
+reason: silence is not a decision. A handler nobody thought about the
+access of must not ship rows no ability ever filtered.
+
+**`#[authorize(Action, Entity)]` emits two things you would otherwise
+write by hand.** Before the payload is even deserialized, a class-level
+gate asks the caller's ambient `Ability` whether it may perform `Action`
+on `Entity`; a refusal is an error frame and the body never runs. After
+the handler returns, the reply is masked — rows the ability refuses are
+dropped, columns a field grant withholds are stripped. **You write no
+masking call.**
+
+**`#[public]` is a declaration, not a shortcut.** Unlike an HTTP route
+there is no anonymous fast path to take on WebSockets; what `#[public]`
+buys is the statement that the posture was decided. The guards bound on
+the gateway struct and beside the message still run.
+
+<Aside type="caution" title="A masked message returns a literal `Result`">
+The reply shape is decided **syntactically** on the return type, so a
+`Result` behind an alias (`type ServiceResult<T> = Result<T, MyError>`)
+reads as an ordinary value and would be masked as the `Result` itself —
+a success-shaped frame carrying `{"Ok": …}`. Writing `#[authorize]` on a
+handler that does not return a literal `Result` is therefore a named
+compile error. Use `unmasked` to keep the gate and mask in the body:
+`#[authorize(Read, users::Entity, unmasked)]`.
+</Aside>
+
+### What the mask does, and what it does not
+
+The mask acts on the **serialized** reply. A withheld column is
+absent from the frame — the same thing the HTTP response shaper does to a
+body, because a WS envelope promises no schema that a missing key would
+violate. This is where WebSockets differ from GraphQL and MCP, which
+reconstruct the operation's return type and fail the operation when a
+stripped key was required.
+
+Two cases stay fail-closed, and both are wiring or data faults rather
+than policy: **no ambient ability** (nothing decided what the caller may
+read — most often `AuthzWsModule` was never imported), and a body that
+cannot be reconciled with the entity at all. Both answer an error frame
+and log a `warn` on `nest_rs::authz`.
+
 ## The payload
 
 Whatever you put in `data` arrives in your handler typed. The macro
@@ -56,6 +119,7 @@ struct SendMessageDto {
 }
 
 #[subscribe_message("message")]
+#[public]
 async fn on_message(&self, msg: SendMessageDto) { /* ... */ }
 ```
 
@@ -68,6 +132,7 @@ is an error frame, and the handler body never runs.
 
 ```rust
 #[subscribe_message("trim")]
+#[public]
 async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
     name.into_inner()
 }
@@ -78,6 +143,7 @@ A handler that takes no payload accepts `null` or a missing `data` key
 
 ```rust
 #[subscribe_message("history")]
+#[public]
 async fn history(&self) -> Vec<ChatMessageDto> {
     self.svc.history()
 }
@@ -141,11 +207,30 @@ Result<T, MyError>` produces the identical error frame and the identical
 `warn`: the decision is made on the type, so however the return is spelled,
 an `Err` never reaches the reply `data`.
 
-<Aside type="caution">
-Keep `Display` for the error variant wire-safe: the frame carries
-`e.to_string()`, so avoid `#[error(transparent)]` over an ORM or `sqlx`
-error whose message can echo a query. The frame is the one place a typed
-error's `Display` becomes a client-visible string.
+<Aside type="caution" title="`Display` reaches the client — `Opaque` is the way out">
+The frame carries `e.to_string()`, so the frame is the one place a typed
+error's `Display` becomes a client-visible string. Avoid
+`#[error(transparent)]` over an ORM or `sqlx` error whose message can echo
+a query.
+
+When the failure is one the client is owed no explanation for, do not rely
+on the error type being polite — say so:
+
+```rust
+use nest_rs::ws::Opaque;
+
+#[subscribe_message("users.list")]
+#[authorize(Read, users::Entity)]
+async fn list(&self) -> Result<Vec<User>, WsError> {
+    let rows = self.svc.list().await.opaque()?;   // real error → the log
+    Ok(rows.iter().map(User::from).collect())
+}
+```
+
+`.opaque()?` logs the real error at `error` on `nest_rs::ws` — the operator
+loses nothing — and hands the client a constant. The same trait exists on
+GraphQL and MCP, spelled the same way. A rejection the client *can* act on
+is the opposite case and travels as itself.
 </Aside>
 
 ## Three handler patterns
@@ -155,6 +240,7 @@ no reply to the sender:
 
 ```rust
 #[subscribe_message("typing")]
+#[public]
 async fn typing(&self, msg: SendMessageDto, client: &WsClient) {
     let _ = client.broadcast("typing", &msg);
 }
@@ -169,6 +255,7 @@ event:
 
 ```rust
 #[subscribe_message("presence")]
+#[public]
 async fn presence(&self) -> usize {
     self.svc.present()
 }
@@ -197,6 +284,7 @@ enum SendError {
 }
 
 #[subscribe_message("send")]
+#[public]
 async fn send(&self, msg: SendMessageDto) -> Result<ChatMessageDto, SendError> {
     if msg.text.is_empty() {
         return Err(SendError::Empty);

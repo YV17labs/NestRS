@@ -17,6 +17,7 @@
 //! gate lives in the builder, which is the one place that knows whether the
 //! pool is empty; this guard therefore always has a chain to run.
 
+use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::Container;
@@ -51,6 +52,12 @@ impl GlobalPoolMcpGuard {
 }
 
 impl McpOperationGuard for GlobalPoolMcpGuard {
+    /// Every guard in the pool — this fallback runs the whole thing at the
+    /// edge, so an operation that also declares one of them must not re-run it.
+    fn already_ran(&self) -> Vec<TypeId> {
+        self.pool.type_ids()
+    }
+
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             // An empty pool must not read as "every guard passed": `/mcp`'s

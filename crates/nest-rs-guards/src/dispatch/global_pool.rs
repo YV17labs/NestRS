@@ -41,6 +41,14 @@ impl GlobalPoolChain {
         self.chain.is_empty()
     }
 
+    /// The `TypeId` of every guard this pool runs — what an `Exempt`-edge
+    /// transport reports as *already executed* so a per-operation chain does not
+    /// run the same guard a second time.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn type_ids(&self) -> Vec<std::any::TypeId> {
+        self.chain.iter().map(|entry| entry.type_id).collect()
+    }
+
     /// Run the pool, returning the first [`Denial`] **as the guard raised it**
     /// so the caller's mapping keeps its status (a pooled throttler's `429`
     /// stays a `429`).

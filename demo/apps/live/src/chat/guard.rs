@@ -1,5 +1,5 @@
 use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard};
+use nest_rs::guards::{Denial, Guard, WsGuard};
 use nest_rs::ws::serde_json::Value;
 use nest_rs::ws::{WsClient, async_trait};
 
@@ -32,6 +32,8 @@ impl Guard for ModeratedGuard {
         }
     }
 }
+
+impl WsGuard for ModeratedGuard {}
 
 #[cfg(test)]
 mod tests {

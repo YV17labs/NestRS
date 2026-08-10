@@ -6,12 +6,11 @@ use nest_rs::graphql::{crud, resolver};
 use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
-use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::posts::{Entity as PostEntity, Post, PostAuthorGuard, PostsService};
 
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct PostsResolver {
     #[inject]
     svc: Arc<PostsService>,

@@ -150,6 +150,16 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     }
 }
 
+/// `AbilityGuard` checks GraphQL: [`check_graphql`](Guard::check_graphql) refuses
+/// an operation no bridge installed an ability for. Declared so a resolver may
+/// bind it — the marker is what a `#[use_guards]` on a `#[resolver]` requires.
+#[cfg(feature = "graphql")]
+impl<F: AbilityFactory> nest_rs_guards::GraphqlGuard for AbilityGuard<F> {}
+
+/// And WebSocket messages, for the same reason: `check_ws_message` refuses a
+/// message whose connection never authenticated.
+impl<F: AbilityFactory> nest_rs_guards::WsGuard for AbilityGuard<F> {}
+
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;

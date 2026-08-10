@@ -9,7 +9,8 @@ import { Aside } from '@astrojs/starlight/components';
 
 A pipe runs **between extraction and the handler**: the transport pulls
 a value out of the request (a path segment, a query param, a JSON body,
-a GraphQL argument, a WS payload, a queued job), hands it to the pipe,
+a GraphQL argument, a WS payload, an MCP tool's arguments, a queued job),
+hands it to the pipe,
 and the pipe either returns the transformed value or rejects with a
 `PipeError` the transport renders as its native error.
 
@@ -18,11 +19,13 @@ argument on every transport**. Two forms, one surface:
 
 - **HTTP** wraps an *extractor*: `nest_rs::http::Piped<P, E>` /
   `Valid<E>` run the pipe over what `E` extracts.
-- **GraphQL, WebSockets, and queues** deserialize a single typed value,
-  so there is no extractor to wrap: `nest_rs::pipes::Piped<P, T>` /
+- **GraphQL, WebSockets, MCP, and queues** deserialize a single typed
+  value, so there is no extractor to wrap: `nest_rs::pipes::Piped<P, T>` /
   `Valid<T>` expose the wire type `T` and hand the handler the
-  transformed value. The transport macro (`#[resolver]`, `#[messages]`,
-  `#[processor]`) does the stripping and the call.
+  transformed value. The transport macro (`#[operations]`, `#[messages]`,
+  `#[tools]`, `#[processor]`) does the stripping and the call. On MCP the
+  carrier goes **inside** `Parameters<…>`, since that is what the protocol
+  deserializes an operation's arguments into.
 
 ```rust
 pub trait Pipe {
@@ -79,12 +82,13 @@ the handler body never runs:
 | HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7" }`) |
 | GraphQL | An error in the response's `errors` array |
 | WebSockets | An error frame on the socket (`{ event, data: { error, errors } }`) |
+| MCP | `invalid_params` (`-32602`), the field errors in the error's `data` |
 | Queue | A job error — the queue's retry/failure policy applies |
 
 `ValidationPipe<T>` attaches the structured field-level errors to the rejection,
 and **every** transport carries them through under the name `errors`: an RFC 9457
 extension member on HTTP, `extensions.errors` on GraphQL, `data.errors` on a
-WebSocket frame, and an `errors` field on the queue's
+WebSocket frame, the error `data` on MCP, and an `errors` field on the queue's
 `job dead-lettered` event. A client (or an operator reading a dead-letter log)
 can always tell which field was wrong, not merely that something was.
 
@@ -159,7 +163,7 @@ not a stringly-typed handler doing its own `parse::<Uuid>()`.
 
 ## The same pipe beyond HTTP
 
-On GraphQL, WebSockets, and queues the argument *is* the wire value, so
+On GraphQL, WebSockets, MCP, and queues the argument *is* the wire value, so
 the binding is `nest_rs::pipes::Piped<P, T>` / `Valid<T>` — `T` is what
 appears on the wire (the SDL argument type, the WS payload, the job
 payload); the handler body sees `P::Out` through `into_inner()` /
@@ -184,8 +188,22 @@ async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> 
 ```rust
 // WebSockets — the message payload is a `String`, piped before the handler.
 #[subscribe_message("trim")]
+#[public]
 async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
     name.into_inner()
+}
+```
+
+```rust
+// MCP — the tool's schema is `Coords`; the body sees it validated.
+#[tool]
+#[public]
+async fn current_weather(
+    &self,
+    Parameters(coords): Parameters<Valid<Coords>>,
+) -> Result<String, McpError> {
+    let coords = coords.into_inner();
+    /* ... */
 }
 ```
 

@@ -14,15 +14,19 @@
 
 mod args;
 mod attrs;
+mod capability;
 mod casing;
 mod crud;
 mod inject;
+mod pair;
+mod posture;
 mod root;
 mod specs;
 mod ty;
 
 pub use args::{parse_named_str_arg, require_str_lit};
 pub use attrs::{expr_str, reject_http_only_layers, take_flag_attr, take_path_list};
+pub use capability::guard_capability_bounds;
 pub use casing::{pascal_case, snake_case};
 pub use crud::{CrudConfig, Paginate, parse_crud_args, singular_of};
 pub use inject::{
@@ -32,6 +36,8 @@ pub use inject::{
     injected_methods_with_layers, injected_names_method, injected_names_with_layers, layer_deps,
     mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
 };
+pub use pair::DecoratorPair;
+pub use posture::{Posture, PostureRules};
 pub use root::reroot;
 pub use specs::{force_guard_typeids, scoped_specs};
 pub use ty::{

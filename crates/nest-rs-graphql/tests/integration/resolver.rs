@@ -2,14 +2,14 @@
 //! resolver in no reachable module is silently skipped.
 
 use nest_rs_core::module;
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
 #[resolver]
 struct LooseResolver;
 
-#[resolver]
+#[operations]
 impl LooseResolver {
     #[query]
     #[public]

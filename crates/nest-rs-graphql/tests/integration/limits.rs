@@ -4,7 +4,7 @@
 
 use async_graphql::SimpleObject;
 use nest_rs_core::{Module, module};
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
@@ -16,7 +16,7 @@ struct NestedNode {
 #[resolver]
 struct LimitsResolver;
 
-#[resolver]
+#[operations]
 impl LimitsResolver {
     #[query]
     #[public]

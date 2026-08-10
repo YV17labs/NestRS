@@ -1,6 +1,6 @@
 //! Runtime schema composition from a link-time resolver registry.
 //!
-//! `#[resolver]` splits its `#[query]`/`#[mutation]` methods into generated
+//! `#[operations]` splits its `#[query]`/`#[mutation]` methods into generated
 //! `#[Object]` structs and submits each to the [`inventory`] registry. The
 //! roots [`DiscoveredQuery`] / [`DiscoveredMutation`] are static types whose
 //! fields are merged from the registry at build time — the runtime analog of
@@ -68,7 +68,7 @@ impl<T: ContainerType + Send + Sync> GraphqlResolverObject for T {
     }
 }
 
-/// One generated resolver object, submitted by `#[resolver]`.
+/// One generated resolver object, submitted by `#[operations]`.
 /// `resolver_type_id` keys the entry against [`ReachableProviders`] for
 /// module-gating.
 #[doc(hidden)]

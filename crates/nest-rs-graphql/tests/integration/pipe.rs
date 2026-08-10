@@ -6,7 +6,7 @@
 
 use async_graphql::InputObject;
 use nest_rs_core::module;
-use nest_rs_graphql::{GraphqlModule, resolver};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::HttpTransport;
 use nest_rs_pipes::{Pipe, PipeError, Piped, Trim, Valid};
 use nest_rs_testing::TestApp;
@@ -32,7 +32,7 @@ struct NameInput {
 #[resolver]
 struct PipeResolver;
 
-#[resolver]
+#[operations]
 impl PipeResolver {
     /// `Piped<Trim, String>`: the SDL arg is `String`; the body sees it trimmed.
     #[query]

@@ -2,12 +2,12 @@
 //! compile — an operation the developer forgot to think about never ships
 //! ungated and unmasked.
 
-use nest_rs_graphql::resolver;
+use nest_rs_graphql::{resolver, operations};
 
 #[resolver]
 struct DemoResolver;
 
-#[resolver]
+#[operations]
 impl DemoResolver {
     #[query]
     async fn ping(&self) -> i32 {

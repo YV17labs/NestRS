@@ -1,8 +1,8 @@
 //! GraphQL decorator macros, re-exported by `nest-rs-graphql`. Generated code
 //! uses absolute paths, so this crate does not depend on the surface crate.
 //!
-//! Mirrors the HTTP `#[controller]`/`#[routes]` split: `#[resolver]` on a
-//! struct = construction (DI); on its impl =
+//! Mirrors the HTTP `#[controller]`/`#[routes]` split: `#[resolver]` on the
+//! struct = construction (DI); `#[operations]` on its impl =
 //! `#[query]`/`#[mutation]`/`#[field_resolver]` orchestration.
 #![warn(missing_docs)]
 
@@ -12,14 +12,44 @@ mod crud;
 mod dataloader;
 mod resolver;
 
-/// Mark a GraphQL resolver. On the struct: construction via the container
-/// (`from_container`). On its impl: `#[query]`/`#[mutation]` methods split
-/// into generated `#[Object]` roots and submitted to the link-time registry;
-/// `#[field_resolver]` methods become `#[ComplexObject]` impls on the parent type.
+/// Mark a GraphQL resolver **struct**: construction via the container
+/// (`from_container`) plus the resolver-scope layer declarations. The
+/// operations themselves go under [`macro@operations`] on the impl block —
+/// one decorator per item shape, the same split as
+/// `#[controller]`/`#[routes]`.
 ///
-/// `#[use_guards(...)]` on the impl block runs before every operation;
+/// `#[use_guards(...)]` here runs before every operation on the impl;
 /// per-method `#[use_guards(...)]` stacks inside it. A denial short-circuits
 /// as a GraphQL error.
+///
+/// # Expands to
+///
+/// The original struct, a `from_container` constructor, the
+/// `__nestrs_injected` / `__nestrs_resolver_guard_specs` helpers
+/// `#[operations]` reads back, and a resolver-membership descriptor.
+///
+/// ```text
+/// pub struct UsersResolver { /* … */ }
+/// impl UsersResolver {
+///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* … */ }
+///     pub fn __nestrs_injected() -> Vec<TypeId> { /* inject keys + guards */ }
+///     pub fn __nestrs_resolver_guard_specs() -> Vec<ScopedGuardSpec> { /* … */ }
+/// }
+/// ::nest_rs_core::inventory::submit! { ::nest_rs_core::ResolverDescriptor { … } }
+/// ```
+#[proc_macro_attribute]
+pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(resolver::resolver(args, input).into()).into()
+}
+
+/// Orchestrate a `#[resolver]` struct's operations on its **impl block**:
+/// `#[query]`/`#[mutation]` methods split into generated `#[Object]` roots and
+/// submitted to the link-time registry; `#[field_resolver]` methods become
+/// `#[ComplexObject]` impls on the parent type.
+///
+/// The GraphQL counterpart of `#[routes]` and `#[messages]` — named for what it
+/// collects, because the spec calls a query or a mutation an *operation*.
+/// `#[use_guards(...)]` belongs on the struct beside `#[resolver]`, not here.
 ///
 /// **Every `#[query]`/`#[mutation]` declares its access posture** — forgetting
 /// one is a compile error, never a silently ungated operation:
@@ -50,22 +80,7 @@ mod resolver;
 ///
 /// # Expands to
 ///
-/// On the struct: the original struct, a `from_container` constructor, the
-/// `__nestrs_injected` / `__nestrs_resolver_guard_specs` helpers `#[resolver]
-/// impl` reads back, and a resolver-membership descriptor.
-///
-/// ```text
-/// // struct form
-/// pub struct UsersResolver { /* … */ }
-/// impl UsersResolver {
-///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* … */ }
-///     pub fn __nestrs_injected() -> Vec<TypeId> { /* inject keys + guards */ }
-///     pub fn __nestrs_resolver_guard_specs() -> Vec<ScopedGuardSpec> { /* … */ }
-/// }
-/// ::nest_rs_core::inventory::submit! { ::nest_rs_core::ResolverDescriptor { … } }
-/// ```
-///
-/// On the impl: `#[query]`/`#[mutation]` methods split into hidden
+/// `#[query]`/`#[mutation]` methods split into hidden
 /// `__<Base>Query` / `__<Base>Mutation` `#[Object]` roots (each submitting a
 /// `GraphqlResolverRegistration` to the link-time registry), `#[field_resolver]`
 /// methods merge into one `#[ComplexObject]` impl per parent type, plus an
@@ -88,7 +103,6 @@ mod resolver;
 /// ```
 ///
 /// ```text
-/// // impl form
 /// pub struct __UsersResolverQuery(Arc<UsersResolver>);
 /// #[::nest_rs_graphql::async_graphql::Object]
 /// impl __UsersResolverQuery { /* delegating query methods */ }
@@ -100,13 +114,13 @@ mod resolver;
 /// impl ::nest_rs_core::Discoverable for UsersResolver { /* injected + no-op register */ }
 /// ```
 #[proc_macro_attribute]
-pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(resolver::resolver(args, input).into()).into()
+pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(resolver::operations(args, input).into()).into()
 }
 
-/// Generate a resolver's standard CRUD operations on a `#[resolver]`-shaped
-/// impl block. Operation names derive from the output type (`User` →
-/// `users`/`user`/`create_user`/…).
+/// Generate a resolver's standard CRUD operations on an `#[operations]`-shaped
+/// impl block — it stands in for `#[operations]`, never beside it. Operation
+/// names derive from the output type (`User` → `users`/`user`/`create_user`/…).
 ///
 /// `#[crud(entity = …::Entity, output = Dto, create = CreateDto, update =
 /// UpdateDto, ops = [list, get, ...], paginate = cursor|none)]`. Write a matching
@@ -127,11 +141,11 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// The missing operation methods — each delegating to the entity's
 /// `CrudService` and declaring its posture with `#[authorize(Action, Entity)]`
 /// exactly as a hand-written operation would (gate + response mask come from
-/// `#[resolver]`'s posture expansion, one mechanism for both) — prepended to
-/// the impl block, then the whole block re-emitted under `#[resolver]`.
+/// `#[operations]`' posture expansion, one mechanism for both) — prepended to
+/// the impl block, then the whole block re-emitted under `#[operations]`.
 ///
 /// ```ignore
-/// #[::nest_rs_graphql::resolver]
+/// #[::nest_rs_graphql::operations]
 /// impl UsersResolver {
 ///     #[query]    #[authorize(Read, Entity)]   async fn users(&self, first: Option<u64>, after: Option<String>) -> Result<Vec<User>> { /* CrudService::page */ }
 ///     #[query]    #[authorize(Read, Entity)]   async fn user(&self, id) -> Result<Option<User>> { /* CrudService::access */ }

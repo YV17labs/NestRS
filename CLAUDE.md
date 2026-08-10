@@ -81,6 +81,23 @@ to require it, **stop and ask**.
 - **No umbrella module re-exporting every edge of a feature.**
 - **No transport-level discovery without module-gating.**
 - **No two decorators for the same concern** — deprecate first.
+- **No decorator on two item shapes.** An attribute macro is one path in the
+  macro namespace: the shape is discriminated *after* `syn::parse`, so a name
+  worn by both a struct and its `impl` gives one rustdoc page for two argument
+  grammars, one symbol for go-to-definition, and the same
+  `in this expansion of #[x]` note whichever half actually failed — the
+  compiler cannot tell the reader which decorator it is looking at, and neither
+  can `rg`. So an edge is **two** decorators: the host on the struct, and on the
+  impl a sibling **named for what it collects** — `#[controller]`/`#[routes]`,
+  `#[gateway]`/`#[messages]`, `#[resolver]`/`#[operations]`, `#[mcp]`/`#[tools]`.
+  The wrong shape is a **compile error naming the sibling**, never "expected
+  struct". Testable form, both halves checkable: **both halves parse through one
+  `DecoratorPair` const** (`rg 'DecoratorPair' crates/*-macros/src/` names every
+  pair, and `nest_rs_codegen::pair` is the only place either sentence is worded),
+  and **each pair ships a trybuild snapshot per wrong shape**. An impl-half
+  decorator whose struct half is the generic `#[injectable]` — `#[processor]`,
+  `#[scheduled]`, `#[listeners]`, `#[indicators]`, `#[hooks]` — uses
+  `DecoratorPair::on_provider` and owes the same named error.
 - **No second way to configure a module.** `Module::for_root(x)` takes one
   value carrying everything the app declares; the `*Setup` it returns is
   opaque. A builder chain on it, a second constructor on the module type,
@@ -113,6 +130,34 @@ in `demo/` — the path dep pulls live framework source.
 **Dividing rule:** `demo/crates/features/` when *any other app could
 reuse it*; `demo/apps/<x>/` only when *this app's exposure decides
 something the feature can't generalize*.
+
+**`demo/` carries no comments. None — owner's rule, not a preference to
+weigh, and it has no exceptions.** No `//`, no `//!`, no `///`. This is
+demonstration code: the shorter it is, the better it reads for the
+developer copying it, and a comment there has always been something to
+delete. The framework explains itself in prose because it is a library
+whose *why* is not in the code; the product does not. If a line seems to
+need one, the code is wrong — rename it, split it, or move the decision
+into `CLAUDE.md` where decisions live. This binds the whole workspace:
+`apps/`, `crates/`, tests, `build.rs`.
+
+**Prose the framework compiles into behaviour is declared as an argument,
+never as a doc comment.** A `#[tool]` / `#[prompt]` description is the
+sentence a language model reads to choose the operation, so it cannot
+just be dropped — it moves to `#[tool(description = "…")]`, which the
+decorator accepts precisely so the prose is a value rather than a
+comment. Same for `#[api(summary = …, description = …)]`. In `demo/` that
+attribute form is the only form; a doc comment on an operation is the
+rule being broken, not the exception to it. **This is the rule for the
+code the repo writes and generates** — `demo/`, and every CLI template.
+
+The *framework* is one notch wider, and deliberately: `#[tool]` /
+`#[prompt]` fall back to the doc comment when the attribute states no
+`description`, so a consumer who does write comments never authors the
+sentence twice. The attribute always wins, and an operation with
+**neither is a compile error** — a description is not optional. Only
+these two decorators have that fallback; `#[api]` takes the argument or
+nothing.
 
 ## The umbrella is the front door
 

@@ -24,7 +24,7 @@ The verification alias and the policy live in `demo/crates/features`
 Authentication and authorization are decided in exactly one place: a
 `Guard` (`AuthnGuard`/`AuthzGuard`), bound by `#[use_guards(...)]` and —
 per operation — by a **visible** `#[authorize(Action, Entity)]` or
-`#[public]` that `#[resolver]`/`#[routes]` turns into the gate.
+`#[public]` that `#[operations]`/`#[routes]` turns into the gate.
 
 **A parameter type is never a posture.** `Authorized<A, E>`,
 `Bind`/`bind`, and the ability-scoped data layer are *enforcement
@@ -153,9 +153,9 @@ bring every layer they need).
 | Transport | Handler | Guard binding | Module import |
 |---|---|---|---|
 | HTTP | `#[controller]` | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct + per-route posture `#[authorize(Action, Entity)]` / `#[public]` — optional (a non-CRUD route gates through a capability-only guard instead) | `[<Feature>Module, AuthzHttpModule]` |
-| GraphQL | `#[resolver]` | `#[use_guards(...)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error** | `[<Feature>Module, AuthzGraphqlModule]` |
-| WS | `#[gateway]` + `#[messages]` | `#[use_guards(...)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]` | `[<Feature>Module, AuthzWsModule]` |
-| MCP | `#[mcp]` host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **none registered ⇒ the global guard pool, else deny-all** — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint | `[<Feature>Module, AuthzMcpModule]` |
+| GraphQL | `#[resolver]` + `#[operations]` | `#[use_guards(...)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error** | `[<Feature>Module, AuthzGraphqlModule]` |
+| WS | `#[gateway]` + `#[messages]` | `#[use_guards(...)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]`, plus a per-message posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error**, as on GraphQL and MCP | `[<Feature>Module, AuthzWsModule]` |
+| MCP | `#[mcp]` host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **none registered ⇒ the global guard pool, else deny-all** — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint. Above it: `#[use_guards(...)]` on the host struct and per operation, plus a per-operation posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error**, as on GraphQL | `[<Feature>Module, AuthzMcpModule]` |
 
 ### Why GraphQL uses a marker but WS binds real guards
 
@@ -177,7 +177,34 @@ upgrade's task-locals have unwound by the time a message handler runs,
 per-message `Guard`s (bound beside a `#[subscribe_message]`, reusing
 `Guard::check_ws_message`) add event-level checks when needed. There is
 **no** `WsAuthnGuard`/`MessageGuard` marker type — WS reuses the HTTP
-`Guard` trait directly.
+`Guard` trait directly, and **no `WsAbilityBridge`** either: a gateway is
+`EdgePosture::Guarded`, so there is no in-band chain to re-run. Hence the one
+asymmetry worth stating: on GraphQL and MCP the operation *guard* installs the
+ambient ability, on WS the *data context* does. `nest_rs_authz::ws::authorize`
+reads it the same way regardless, which is what lets one `#[authorize]` mean one
+thing on all four transports.
+
+**Above that, WS declares the same posture the other two do.** `#[messages]`
+emits, per message: the gate (`nest_rs_authz::ws::authorize`) before the payload
+is deserialized, then the argument pipes, then the reply mask
+(`nest_rs_authz::ws::masked_reply_for`). Mandatory, for the same fail-secure
+reason it is on a `#[query]`.
+
+**But WS masks like HTTP, not like MCP** — and that is a decision, not an
+oversight. GraphQL and MCP mask *and reconstruct* the operation's return type, so
+a stripped required key fails the operation (a non-nullable field; rmcp's
+`structuredContent`). A WS envelope carries whatever JSON the value serialized to
+and promises no schema, so the masked key is simply **absent from the frame**,
+exactly as `RouteResponseShaper` omits it from a body. Hence no `DeserializeOwned`
+on the reply type, and a field-restricted caller reads a smaller object rather
+than an error. What stays fail-closed is what should: no ambient ability, and a
+body that cannot be reconciled with the entity at all.
+
+One WS-only compile rule remains, and its reason is *not* the fail-closed one: a
+masked message returns a **literal** `Result<T, E>`, because the reply-shape
+decision is syntactic — a `Result` behind an alias reads as an ordinary value and
+would be masked as the `Result`, producing a success-shaped frame carrying
+`{"Ok": …}`.
 
 **MCP mirrors GraphQL, one seam for one seam.** Both are
 `EdgePosture::Exempt`, so both gate in-band through their own operation
@@ -190,6 +217,16 @@ anonymous operation through to the resolver gates, and `/mcp` does not — an
 unauthenticated tool call is refused; and MCP's *no-pool* tail is deny-all
 rather than pass-through, so the fallback can only ever widen what
 `use_guards_global` opted into.
+
+**Above the bridge, MCP declares the same layers GraphQL does.** `#[tools]` on
+the host's impl emits, in order: the guard chain (`run_layered_mcp_chain`), the class gate
+(`nest_rs_authz::mcp::authorize`), the argument pipes, and the response mask
+(`nest_rs_authz::mcp::masked_value_for`). Posture is mandatory per operation for
+the same fail-secure reason it is on a `#[query]`. Two deliberate MCP-only
+differences, both forced by the protocol: masking has no selection set to excuse
+a stripped required field, so it fails **closed** (`unmasked` is the opt-out for
+a deliberate projection); and `bind = Service` does not carry over — an operation
+takes one `Parameters<T>` struct, not the named id argument the binding reads.
 
 **The MCP bridge gates every capability, not `tools/call`.** rmcp 3.x replaced
 its single dispatch method with a `ServerHandler` trait, so `PropagatingHandler`

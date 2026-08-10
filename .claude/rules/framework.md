@@ -77,19 +77,34 @@ never catch a template that emits code the compiler rejects — only a user
 would find that. A template change is not done until the `e2e` suite has
 run; it shares the repo's target directory, so a warm run is seconds.
 
-**One naming exception, decided:** every host decorator is named for its
-role (`#[controller]` → `controller.rs`, `#[resolver]`, `#[gateway]`,
-`#[processor]`) **except `#[mcp]`**, whose file the role table names
-`tool.rs`. Deliberate: `nest-rs-mcp` re-exports rmcp's own `#[tool]`, and
-the tool host carries both — a `#[tools]` one letter away from the
-`#[tool]` beneath it reads as a typo. The role word lives in the file name
-and the module instead. **Do not "fix" this by adding a second decorator.**
+### One decorator, one item shape
 
-**`#[mcp]` decorates two item shapes, and that upholds the rule rather than
-bending it.** On the struct it declares the host and its endpoint; on the
-`impl` it declares the operations, the way `#[routes]` does for a controller.
-One name, so nothing sits a letter from `#[tool]`, and nothing new to learn.
-The impl form is what absorbs rmcp's three-block shape — `#[tool_router]`,
+**An edge is a pair of decorators, never one name worn twice.** The hard "no"
+in `CLAUDE.md` carries the reasoning; here is the table it binds, and it is
+closed:
+
+| Edge | on the struct | on the impl |
+|---|---|---|
+| HTTP | `#[controller(path)]` | `#[routes]` (or `#[crud]`, which re-emits under it) |
+| WS | `#[gateway(path)]` | `#[messages]` |
+| GraphQL | `#[resolver]` | `#[operations]` (or `#[crud]`) |
+| MCP | `#[mcp]` | `#[tools]` |
+| queue / schedule / events | `#[injectable]` — no mount, no provider-scope layers | `#[processor]` / `#[scheduled]` / `#[listeners]` |
+
+**The struct half is named for the host role; the impl half for what it
+collects.** `#[messages]` carrying `#[on_connect]` beside the message arms is
+the precedent for the dominant-unit reading, and it is why `#[tools]` is right
+for a block that also holds `#[prompt]` methods: rmcp routes both through the
+one `ServerHandler` the expansion writes, so they are one host's operations.
+
+**MCP is the one edge whose *struct* decorator is not its role word.** The role
+word went to the impl half, where a host's methods are; `#[mcp]` keeps the
+protocol's name, and cannot be misread as the `#[tool]` this crate re-exports
+and which the same file carries. The role word is in the file (`tool.rs`) and
+the module (`<Feature>McpModule`) too. Accepted asymmetry, not an oversight —
+and **not a licence to make either name cover both shapes again.**
+
+`#[tools]` is what absorbs rmcp's three-block shape — `#[tool_router]`,
 `#[prompt_router]`, `#[tool_handler]`/`#[prompt_handler]`, `get_info` — into
 generated code, and it earns its keep three ways beyond the line count:
 
@@ -103,19 +118,20 @@ generated code, and it earns its keep three ways beyond the line count:
   not the module it sits in, decides who may name it.
 - **That second fact is load-bearing, not trivia.** rmcp generates
   `tool_router()` *without* `pub`, so reading it from the parent silently yields
-  an empty tool list — the duplicate-tool boot check would go blind. The
-  expansion emits its own `pub(crate)` accessor beside it, and
-  `DefaultDeclaredTools` is the empty fallback for a host that has no decorated
-  impl.
+  an empty tool list — the duplicate-tool boot check would go blind. rmcp
+  answers that itself (`#[tool_router(vis = "pub(crate)")]`), and
+  `DefaultToolRouter` / `DefaultOperationLayers` are the empty fallbacks the
+  struct half falls through to for a host that has no `#[tools]` block.
 - **Capabilities are derived, never restated.** A `#[tool]` method advertises
   `tools`, a `#[prompt]` method `prompts`. A host can no longer route
   operations it forgot to declare — the defect the CLI template itself shipped.
 
 **The escape hatch is a host that owns its `ServerHandler`.** Resources,
 completion and the rest are hand-written trait methods, and the sugar cannot
-generate a second `impl ServerHandler`; such a host writes rmcp directly, and
-`#[mcp]` on a trait impl is a compile error saying so. `demo`'s `posts` is that
-host, deliberately kept as the witness of the raw shape.
+generate a second `impl ServerHandler`; such a host writes rmcp directly and has
+no `#[tools]` block at all — `#[tools]` on a trait impl is a compile error
+saying so. `demo`'s `posts` is that host, deliberately kept as the witness of
+the raw shape.
 
 ### When (not) to write a decorator
 
@@ -299,7 +315,7 @@ directly. **Inventory-based** — the module list *is* the decorated
 things; never enumerate controllers/providers by hand.
 
 **Orchestrator pattern for per-method aggregation:** `#[routes]` scans
-verbs, `#[resolver]` scans `#[query]`/`#[mutation]`/`#[field_resolver]`,
+verbs, `#[operations]` scans `#[query]`/`#[mutation]`/`#[field_resolver]`,
 `#[scheduled]` scans `#[every]`/`#[cron]`/`#[after]`, `#[processor]`
 scans `#[process(queue, ...)]`, `#[listeners]` scans `#[on_event]`,
 `#[hooks]` scans phase attrs. The host struct owns the single
@@ -412,6 +428,111 @@ own path. If a product ever genuinely needs two features' events on one
 socket, that is a framework change on this same pattern (route by event
 name, fail boot on a duplicate event) — reported, never worked around.
 
+### A new edge owes the same list — and the list is here
+
+The edge vocabulary is closed (`architecture.md`); the **form** is open, and this
+is what the form costs. Every line below is something all four request-carrying
+edges do today, with the grep or the test that proves it. Adding an edge means
+doing all of it or not shipping the edge — a transport that implements eight of
+these is not "a smaller transport", it is a hole a developer discovers at the
+worst moment, because the thing it left out is the thing they assumed.
+
+**Read the numbered list as the checklist and the parenthesis as the proof.** A
+line whose proof you cannot run is a line you have not done.
+
+1. **Two decorators, one item shape each** — the host on the struct, a sibling
+   named for what it collects on the impl. Both halves parse through one
+   `DecoratorPair` const (`rg 'DecoratorPair' crates/*-macros/src/` names every
+   pair), so the wrong shape is a compile error **naming the sibling**, and each
+   pair ships a trybuild snapshot **per** wrong shape.
+2. **Mandatory posture per operation** — `#[authorize(Action, Entity)]` or
+   `#[public]`, parsed by the shared `PostureRules` in `nest-rs-codegen`, with a
+   trybuild snapshot for the no-posture case. Silence is not a posture: the
+   refusal is what keeps *no authn/authz decision outside a guard* true, and it
+   is the one item on this list that is load-bearing on its own.
+3. **A class gate the posture emits** — `nest_rs_authz::<edge>::authorize`, whose
+   *decision* is the shared `gate` so `#[authorize]` cannot come to mean five
+   things. Missing ambient ability fails **closed**.
+4. **Response masking the same posture arms** — never hand-written at the use
+   site, and `unmasked` is the opt-out for a shape the value-level round-trip
+   cannot see through. Which of two shapes depends on what the edge does with the
+   value: `masked_value_for` when it must reconstruct the return type (GraphQL's
+   non-nullable schema, MCP's `structuredContent`), so a stripped required key
+   refuses the operation; `masked_reply_for` when it ships JSON (WS, and HTTP's
+   shaper), so the key is simply absent. **Pick by the protocol, not by
+   symmetry** — and either way, fail closed on a missing ambient ability. The
+   witness is a test in `nest-rs-authz/tests/integration/<edge>/mask.rs` asserting
+   a field grant strips a column **with no masking call in the handler body**.
+5. **Guards at two scopes** — `#[use_guards]` on the host and per operation, plus
+   `#[force_guards]`, composed once per site and deduped by `TypeId`. A denial
+   renders through one `denial_to_<edge>_error`, so a guard's refusal and a
+   gate's refusal reach the client identically.
+6. **A `Guard::check_<edge>` entry** on the trait, feature-gated like its
+   siblings — **plus a marker trait, and the bound the decorators emit for it.**
+   Every `check_*` defaults to `Ok(())`, so without the bound a guard bound where
+   it has no entry passes everything silently. The pattern is `<Edge>Guard: Guard`
+   in `nest-rs-guards` with a `#[diagnostic::on_unimplemented]` note, declared by a
+   guard beside the `check_*` it attests, and asserted per declared guard through
+   `nest_rs_codegen::guard_capability_bounds`. HTTP is the one edge with **no
+   marker at all**: `check_http` is the trait's base entry — the one method not
+   behind a feature — so every `Guard` has it and a bound there could never fail.
+   Declaring a blanket `HttpGuard` for symmetry is dead API, and it squats the name
+   the roadmap reserves for moving `check_http` off `Guard`. Witness: a trybuild
+   snapshot per marked edge binding an HTTP-only guard at that edge's site.
+7. **Per-argument pipes** — `Piped<P, T>` / `Valid<T>` stripped by the impl-half
+   decorator, rejection rendered as the edge's native error, and the pipe runs
+   **after** the gate so a refused caller never pays for validation and a
+   validation message never doubles as an existence oracle.
+8. **A named compile error for every layer family the edge does not bridge** —
+   `reject_http_only_layers`. A silently ignored `#[use_interceptors]` is the
+   defect that function exists to prevent; extend it rather than adding a second.
+9. **Request scope + a data context** — `Scoped<T>`, and an executor+ability
+   re-install per dispatch through `dispatch::with_data_context` so commit and
+   rollback semantics cannot drift from the other edges'.
+10. **`#[config]` + `for_root`** — one seam, one value, dual-path env.
+11. **Error opacity** — an `Opaque` trait beside the edge's error type, whose
+    `opaque()` logs the real error at `error` on `nest_rs::<edge>` and substitutes
+    `nest_rs_core::OPAQUE_CLIENT_MESSAGE`. **The trait is per edge and only the
+    constant is shared**, and that is a finding rather than a preference: the
+    trait's output *is* the edge's error type, which is what lets `.opaque()?`
+    infer from the enclosing function's return type. One trait generic over the
+    output has three applicable impls, the receiver stops deciding, and every call
+    site needs a turbofish.
+12. **Discovery and its gate** — `Discoverable`, `ReachableProviders` for a
+    link-time registry or structural gating for container metadata, and an
+    inert-entry `warn` either way.
+13. **Aggregation** — several providers at one mount, with a **boot** error naming
+    both owners on a duplicate addressable name. Owning a whole mount is the
+    exception and has to be argued (WS is the one audited case, above).
+14. **A mount** — a `Transport` via `TransportContribution`, or an HTTP self-mount
+    declaring its `EdgePosture`.
+15. **`nest_rs::<edge>` span target**, level per layer, ≥1 structured field per
+    event.
+16. **Four witnesses** — an `integration` suite covering guards / pipes / scope /
+    posture; a driver in `nest-rs-testing` if the protocol needs one; an adapter
+    in `demo/` (`<feature>/<edge>/`); and a use site in `nest-rs-macro-hygiene`
+    proving the decorators need no second manifest line.
+
+Then the packaging: *Shipping a new capability* in `CLAUDE.md` (umbrella feature,
+`pub use`, README + docs `## Install`, derive routing, its two witnesses). That
+list is about **reaching** the capability; this one is about the capability being
+the same shape as its peers once reached.
+
+**Two known asymmetries, both deliberate and both recorded above** rather than
+left for a reader to rediscover: a WS gateway owns its mount (audited exception
+to *a transport aggregates*), and on GraphQL and MCP the operation *guard*
+installs the ambient ability while on WS the *data context* does — because a
+gateway is `Guarded`, so its upgrade already ran the real chain and there is
+nothing to re-run in band.
+
+**One residual gap, and it is the small half of what used to be two.** A guard
+may declare a capability marker without overriding the matching `check_*`, and an
+empty `impl Guard for X {}` bound on an HTTP route still passes everything — HTTP
+carries no marker. Both are deliberate lines a reader can see, unlike the silence
+they replaced. Closing them fully would mean four `check_*`-carrying traits with
+no defaults, and then a guard serving three edges needs three container
+registrations: the remedy would cost more than the defect.
+
 ### Lifecycle hooks
 
 `#[hooks]` submits phase-tagged methods (`#[on_module_init]`,
@@ -428,13 +549,15 @@ name order; init failure aborts boot, shutdown is best-effort.
   applies to every `nest-rs-*` module.
 - **`nest-rs-pipes`** — transport-agnostic, **one Pipe per file**,
   stateless (`transform(In) -> Result<Out, _>`, never a DI provider).
-  Binds **per argument on all four transports**, two forms by design
+  Binds **per argument on all five transports**, two forms by design
   (orphan rule): HTTP wraps an extractor (`nest_rs_http::Piped<P, E>` /
-  `Valid<E>`); GraphQL, WS and queue wrap the wire value
+  `Valid<E>`); GraphQL, WS, MCP and queue wrap the wire value
   (`nest_rs_pipes::Piped<P, T>` / `Valid<T>`, stripped by
-  `#[resolver]`/`#[messages]`/`#[processor]`). A rejection surfaces as
-  the transport's native error (400 / GraphQL error / WS error frame /
-  job error). Global pipes exist on HTTP only. **Reusable pipes are
+  `#[operations]`/`#[messages]`/`#[tools]`/`#[processor]` — on MCP the carrier
+  goes *inside* `Parameters<…>`, which is what the protocol deserializes an
+  operation's arguments into). A rejection surfaces as the transport's native
+  error (400 / GraphQL error / WS error frame / `invalid_params` / job
+  error). Global pipes exist on HTTP only. **Reusable pipes are
   framework primitives — never define one in an app.**
 - **`nest-rs-schedule`** — `#[scheduled]` orchestrator; methods tagged
   with exactly one of `#[every]` / `#[cron]` (optional `tz`) /
@@ -477,20 +600,36 @@ name order; init failure aborts boot, shutdown is best-effort.
   trusting the caller.) A prefix was tried and removed — a prefix prefixes a
   namespace, and there is none here.
 
-  **A host writes one decorated `impl`.** `#[mcp]` on the struct declares the
-  host; `#[mcp]` on its inherent impl declares the `#[tool]` / `#[prompt]`
-  operations, absorbing rmcp's routers, handler attributes and `get_info`, and
-  deriving the advertised capabilities from the roles present. Descriptions come
-  from the doc comment — the prose was being written twice. A host serving a
+  **A host writes one decorated `impl`, carrying the same request layers every
+  other edge has.** `#[mcp]` on the struct declares the host and takes
+  `#[use_guards(...)]`; `#[tools]` on its inherent impl declares the `#[tool]` /
+  `#[prompt]` operations, absorbing rmcp's routers, handler attributes and
+  `get_info`, and deriving the advertised capabilities from the roles present.
+  Each operation takes `#[use_guards]`/`#[force_guards]`, a **mandatory**
+  posture (`#[authorize(Action, Entity)]` / `#[public]`) and per-argument pipes.
+  The expansion emits a delegating wrapper carrying `#[tool(name = …)]` rather
+  than rewriting the authored body, so the developer's method keeps its real
+  signature and the wire name stays the authored one. A description is
+  **`#[tool(description = "…")]`** — the declared form, because the sentence a
+  model reads is behaviour, not commentary, and a workspace that carries no
+  comments must still be able to state it. A doc comment is the *fallback* for a
+  codebase that does write them, so the prose is never authored twice; an
+  operation with neither **does not compile**. A host serving a
   hand-written `ServerHandler` surface (resources, completion) stays on rmcp's
   raw shape; see *Macros* above.
 
   **A failing operation talks to a language model.** `Opaque::opaque` is the
   framework's seam for that: the real error is logged at `error` on
-  `nest_rs::mcp`, the model gets a constant message. Never hand a `Display`
-  straight to a tool's caller — a `DbErr` carries schema, columns and sometimes
-  values. A deliberate `McpError::invalid_params` is the opposite case and is
-  returned directly.
+  `nest_rs::mcp`, the model gets `nest_rs_core::OPAQUE_CLIENT_MESSAGE`. Never hand
+  a `Display` straight to a tool's caller — a `DbErr` carries schema, columns and
+  sometimes values. A deliberate `McpError::invalid_params` is the opposite case
+  and is returned directly.
+
+  **The reasoning was never MCP's**, and the seam is no longer either: a GraphQL
+  error frame and a WS error frame are read by clients just as untrusted, so
+  `nest_rs_graphql::Opaque` and `nest_rs_ws::Opaque` are the same trait beside
+  their own error type. Three traits rather than one generic over the output, for
+  the inference reason under item 11 of *A new edge owes the same list*.
 
   **Identity has two owners, and neither can shadow the other.** One endpoint
   reports one `serverInfo` and one `instructions` however many features share

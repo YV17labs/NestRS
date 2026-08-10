@@ -9,6 +9,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nest_rs_core::Layer;
 use nest_rs_http::poem::Request as HttpRequest;
+#[cfg(feature = "mcp")]
+use nest_rs_mcp::McpOperationContext;
 #[cfg(feature = "ws")]
 use nest_rs_ws::{WsClient, WsMessageCheck};
 #[cfg(feature = "ws")]
@@ -94,6 +96,24 @@ pub trait Guard: Layer {
         Ok(())
     }
 
+    /// MCP per-operation entry. Default = no-op. Available with the `mcp`
+    /// feature on this crate.
+    ///
+    /// Runs inside rmcp's spawned dispatch, *after* the endpoint's
+    /// [`McpOperationGuard`](nest_rs_mcp::McpOperationGuard) has authenticated
+    /// the request and installed the caller's `Ability` — so a capability-only
+    /// guard reads the ability with `nest_rs_authz::current_ability` here, the
+    /// same way `check_http` reads it off the request.
+    ///
+    /// The context deliberately carries no arguments: rejecting a *payload* is
+    /// a pipe's job (`Valid<T>` / `Piped<P, T>` run on the wire value before the
+    /// body), and a guard that reads arguments is one step from deciding access
+    /// from them.
+    #[cfg(feature = "mcp")]
+    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
     /// The chain phase this guard declares. Boot-time validation refuses a
     /// chain listing an [`Authentication`](GuardPhase::Authentication) guard
     /// after an [`Authorization`](GuardPhase::Authorization) one.
@@ -115,6 +135,67 @@ pub trait Guard: Layer {
         None
     }
 }
+
+/// A guard that checks GraphQL operations — declared by overriding
+/// [`Guard::check_graphql`] and then writing `impl GraphqlGuard for X {}`.
+///
+/// Every `check_*` defaults to `Ok(())`, which is right ("does not apply to this
+/// transport") and was also the answer to a question nobody asked:
+/// `#[use_guards(ThrottlerGuard)]` beside a `#[query]` compiled, read as a
+/// protection, and throttled nothing — that guard implements only `check_http`, so
+/// the per-operation chain called the default and passed. `#[resolver]` and
+/// `#[operations]` now emit a bound against this marker for every guard declared
+/// at their site, so the mistake is a compile error at the `#[use_guards]` line.
+///
+/// Declaring the marker without overriding the method is the one mistake left. It
+/// is a deliberate line, written next to the method it should have been.
+#[cfg(feature = "graphql")]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not check GraphQL operations",
+    label = "this guard has no `check_graphql`",
+    note = "a guard bound on a resolver runs `Guard::check_graphql`, whose default is \
+            `Ok(())` — binding one that does not override it passes every operation silently",
+    note = "override `check_graphql`, then declare `impl GraphqlGuard for {Self} {{}}`; or bind \
+            this guard on an HTTP `#[controller]` / `#[routes]` instead"
+)]
+pub trait GraphqlGuard: Guard {}
+
+/// A guard that checks WebSocket messages — declared by overriding
+/// [`Guard::check_ws_message`] and then writing `impl WsGuard for X {}`.
+///
+/// Required by `#[messages]` of every guard in a `#[use_guards]` beside a
+/// `#[subscribe_message]`. **Not** of a `#[gateway]`-struct guard: those run on the
+/// upgrade, which is an HTTP `GET`, so they are HTTP guards — and that distinction
+/// is exactly what this bound makes visible instead of leaving to a reader.
+#[cfg(feature = "ws")]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not check WebSocket messages",
+    label = "this guard has no `check_ws_message`",
+    note = "a guard bound beside a `#[subscribe_message]` runs `Guard::check_ws_message`, \
+            whose default is `Ok(())` — binding one that does not override it passes every \
+            message silently",
+    note = "override `check_ws_message`, then declare `impl WsGuard for {Self} {{}}`; or move it \
+            to the `#[gateway]` struct, where guards run on the HTTP upgrade instead"
+)]
+pub trait WsGuard: Guard {}
+
+/// A guard that checks MCP operations — declared by overriding [`Guard::check_mcp`]
+/// and then writing `impl McpGuard for X {}`.
+///
+/// Required by `#[mcp]` of every host-scope guard and by `#[tools]` of every
+/// operation-scope one: both fold into the same per-operation chain, so both run
+/// `check_mcp`.
+#[cfg(feature = "mcp")]
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not check MCP operations",
+    label = "this guard has no `check_mcp`",
+    note = "a guard bound on an MCP host or operation runs `Guard::check_mcp`, whose default \
+            is `Ok(())` — binding one that does not override it passes every tool call \
+            silently",
+    note = "override `check_mcp`, then declare `impl McpGuard for {Self} {{}}`; or bind this \
+            guard on an HTTP `#[controller]` / `#[routes]` instead"
+)]
+pub trait McpGuard: Guard {}
 
 // Manual forwards, not `#[async_trait]`: the macro would wrap each inner
 // (already boxed) future in a second box, taxing every check made through an
@@ -162,6 +243,20 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
         Self: 'fut,
     {
         (**self).check_ws_message(client, event, data)
+    }
+
+    #[cfg(feature = "mcp")]
+    fn check_mcp<'s, 'c, 'o, 'fut>(
+        &'s self,
+        ctx: &'c McpOperationContext<'o>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
+    where
+        's: 'fut,
+        'c: 'fut,
+        'o: 'fut,
+        Self: 'fut,
+    {
+        (**self).check_mcp(ctx)
     }
 
     fn phase(&self) -> GuardPhase {

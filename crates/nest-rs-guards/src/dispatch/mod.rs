@@ -17,18 +17,23 @@
 //!
 //! ## GraphQL — inline chain call, composed once per site
 //!
-//! The `#[resolver]` macro emits a call to `run_layered_graphql_chain` at
+//! The `#[operations]` macro emits a call to `run_layered_graphql_chain` at
 //! the start of every handler method, beside a `static` [`GraphqlChainCell`]
 //! that memoizes the composed chain per container — GraphQL has no mount seam
 //! to bake a shaper into, so the site is its own. WS has no inline runner: the
 //! `#[messages]` macro composes its per-event guard table at gateway
 //! mount, wrapping each guard via `GuardAsWsMessageCheck`.
 
-// The GraphQL in-band chain runner lives here; only compiled when that
-// transport is served.
-#[cfg(feature = "graphql")]
+// The per-site chain the two in-band transports share — the memo cell, the
+// scope-tagged sources, and the composition. Only compiled when one of them is
+// served.
+#[cfg(any(feature = "graphql", feature = "mcp"))]
 mod chain;
 mod denial_convert;
+#[cfg(feature = "graphql")]
+mod graphql_chain;
+#[cfg(feature = "mcp")]
+mod mcp_chain;
 // The two in-band fallback operation guards, one per `Exempt`-edge transport,
 // over the pool they share.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
@@ -42,14 +47,22 @@ mod route_shaper;
 mod scoped_spec;
 mod validate;
 
-#[cfg(feature = "graphql")]
-pub use chain::{GraphqlChainCell, GraphqlChainSources, run_layered_graphql_chain};
+#[cfg(any(feature = "graphql", feature = "mcp"))]
+pub use chain::{SiteChainCell, SiteChainSources};
 #[cfg(feature = "graphql")]
 pub use denial_convert::denial_to_graphql_error;
+#[cfg(feature = "mcp")]
+pub use denial_convert::denial_to_mcp_error;
+#[cfg(feature = "ws")]
+pub use denial_convert::denial_to_ws_error;
 pub(crate) use denial_convert::deny_http;
 pub use denial_convert::{denial_to_http_error, denial_to_http_response};
 #[cfg(feature = "graphql")]
+pub use graphql_chain::run_layered_graphql_chain;
+#[cfg(feature = "graphql")]
 pub use graphql_operation_guard::GlobalPoolOperationGuard;
+#[cfg(feature = "mcp")]
+pub use mcp_chain::run_layered_mcp_chain;
 #[cfg(feature = "mcp")]
 pub use mcp_operation_guard::GlobalPoolMcpGuard;
 pub use route_layers::{RouteEndpoint, wrap_route_response_layers};

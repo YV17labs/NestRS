@@ -6,7 +6,7 @@
 //! transport runs through the chain.
 //!
 //! Plug-in point for the Layer System: every guard is a [`Layer`](nest_rs_core::Layer), so the
-//! `#[routes]` / `#[resolver]` / `#[messages]` shapers dedup by `TypeId` when
+//! `#[routes]` / `#[operations]` / `#[messages]` shapers dedup by `TypeId` when
 //! the same guard is declared at multiple sites (global + controller +
 //! method) — the broadest [`LayerSite`] wins and the
 //! rest log a `warn`. The framework runs guards in **declaration order**;
@@ -74,7 +74,7 @@
 //!
 //! ## Architecture
 //!
-//! `#[routes]` bakes a [`RouteShaper`] per route at mount; `#[resolver]`
+//! `#[routes]` bakes a [`RouteShaper`] per route at mount; `#[operations]`
 //! emits a `run_layered_graphql_chain` call at the start of every resolver
 //! method; `#[messages]` composes its per-event guard table at gateway
 //! mount (wrapping each guard via `GuardAsWsMessageCheck`) — the per-route
@@ -118,6 +118,15 @@ pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 pub use denial::Denial;
 pub use endpoint::{GuardEndpoint, GuardExt};
 pub use guard::{Guard, GuardPhase, PrincipalClaim};
+// Capability markers: which transports a guard actually checks. The impl-half
+// decorators emit a bound against these, so a guard bound where it has no
+// `check_*` is a compile error rather than a chain entry that passes everything.
+#[cfg(feature = "graphql")]
+pub use guard::GraphqlGuard;
+#[cfg(feature = "mcp")]
+pub use guard::McpGuard;
+#[cfg(feature = "ws")]
+pub use guard::WsGuard;
 pub use scope::{GrantedScopes, RequiredScopes};
 // The WS bridge the `#[messages]` macro wraps per-event guards in — only
 // exists (and is only needed) when the `ws` feature is on.
@@ -136,9 +145,15 @@ pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
 // the real cause is buried under four unrelated errors).
 pub use async_trait::async_trait;
 
-// Re-export dispatch helpers for macro-emitted code.
-#[cfg(feature = "graphql")]
-pub use dispatch::{
-    GraphqlChainCell, GraphqlChainSources, denial_to_graphql_error, run_layered_graphql_chain,
-};
+// Re-export dispatch helpers for macro-emitted code. The chain cell and its
+// sources are shared by the two in-band transports — one memo, one composition,
+// so a fix to either cannot land on only one of them.
+#[cfg(feature = "ws")]
+pub use dispatch::denial_to_ws_error;
 pub use dispatch::{RouteShaper, denial_to_http_error, denial_to_http_response};
+#[cfg(any(feature = "graphql", feature = "mcp"))]
+pub use dispatch::{SiteChainCell, SiteChainSources};
+#[cfg(feature = "graphql")]
+pub use dispatch::{denial_to_graphql_error, run_layered_graphql_chain};
+#[cfg(feature = "mcp")]
+pub use dispatch::{denial_to_mcp_error, run_layered_mcp_chain};

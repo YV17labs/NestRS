@@ -134,6 +134,79 @@ pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
     })
 }
 
+/// Convert a [`Denial`] to the JSON-RPC error one MCP operation answers with.
+///
+/// MCP has no status line, so the refusal has to *say* what it is: the code
+/// picks the closest JSON-RPC family (`invalid_request` for an unauthenticated
+/// or refused caller — the request cannot be served as made) and the `data`
+/// carries the machine-readable `reason`, plus `requiredScopes` when the denial
+/// names them, so a client can act on a scope refusal exactly as it does on the
+/// other three transports.
+///
+/// An internal denial is opaque here for the reason every MCP error is (see
+/// `nest_rs_mcp::Opaque`): the reader is a language model.
+#[cfg(feature = "mcp")]
+pub fn denial_to_mcp_error(denial: Denial) -> nest_rs_mcp::McpError {
+    use nest_rs_mcp::McpError;
+
+    if matches!(denial, Denial::Internal(_)) {
+        return McpError::internal_error(nest_rs_core::OPAQUE_CLIENT_MESSAGE, None);
+    }
+    McpError::invalid_request(
+        denial.message().to_owned(),
+        Some(serde_json::Value::Object(structured_reason(&denial))),
+    )
+}
+
+/// The machine-readable half of a refusal, for the two transports with no status
+/// line to carry it: the `reason` a client branches on, plus `requiredScopes`
+/// when the denial names them.
+///
+/// Shared because the two are byte-identical, and because the vocabulary is the
+/// thing that must not drift — a reason added for one transport and missed on the
+/// other is a client that can branch on `/mcp` and not on a socket.
+#[cfg(any(feature = "mcp", feature = "ws"))]
+fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Value> {
+    let reason = match denial {
+        Denial::InsufficientScope { .. } => "insufficient_scope",
+        _ => match denial.http_status() {
+            401 => "unauthenticated",
+            403 => "forbidden",
+            _ => "rate_limited",
+        },
+    };
+    let mut data = serde_json::Map::new();
+    data.insert("reason".to_owned(), serde_json::Value::from(reason));
+    let scopes = denial.required_scopes();
+    if !scopes.is_empty() {
+        data.insert("requiredScopes".to_owned(), serde_json::json!(scopes));
+    }
+    data
+}
+
+/// Convert a [`Denial`] to the error frame one WS message answers with.
+///
+/// A WS frame has no status line either, so the refusal says what it is the same
+/// way MCP's does: the message, plus `reason` and — when the denial names them —
+/// `requiredScopes` under the frame's `data.errors` member, which is where every
+/// other structured rejection detail on this transport already rides (a
+/// `Valid<T>` rejection puts its per-field errors there).
+///
+/// An internal denial is opaque, as on every transport: the operator gets the
+/// real reason from the `warn` the refusing layer emitted.
+#[cfg(feature = "ws")]
+pub fn denial_to_ws_error(denial: Denial) -> nest_rs_ws::WsError {
+    use nest_rs_ws::WsError;
+
+    if matches!(denial, Denial::Internal(_)) {
+        return WsError::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+    }
+    WsError::with_details(
+        denial.message().to_owned(),
+        serde_json::Value::Object(structured_reason(&denial)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

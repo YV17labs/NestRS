@@ -15,9 +15,13 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{ImplItem, ItemImpl, ReturnType, parse_macro_input};
+use syn::{ImplItem, ReturnType};
 
-use nest_rs_codegen::{impl_self_ident, payload_arg_type, snake_case};
+use nest_rs_codegen::{DecoratorPair, impl_self_ident, payload_arg_type, snake_case};
+
+/// The listener host keeps its own `#[injectable]`; this names the shape
+/// `#[listeners]` wants rather than reporting syn's `expected impl`.
+const LISTENERS_PAIR: DecoratorPair = DecoratorPair::on_provider("#[listeners]", "#[on_event]");
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
@@ -30,7 +34,10 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         .into();
     }
 
-    let mut item = parse_macro_input!(input as ItemImpl);
+    let mut item = match LISTENERS_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let self_ty = item.self_ty.clone();
     let provider_ident = match impl_self_ident(&self_ty, "#[listeners]") {
         Ok(ident) => ident,

@@ -11,20 +11,25 @@
 
 use std::str::FromStr;
 
-use nest_rs_codegen::{impl_self_ident, require_str_lit};
+use nest_rs_codegen::{DecoratorPair, impl_self_ident, require_str_lit};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{
-    Attribute, Expr, ExprLit, ImplItem, ItemImpl, Lit, LitStr, MetaNameValue, Token,
-    parse_macro_input,
-};
+use syn::{Attribute, Expr, ExprLit, ImplItem, Lit, LitStr, MetaNameValue, Token};
+
+/// The scheduled-tasks host keeps its own `#[injectable]`; this names the shape
+/// `#[scheduled]` wants rather than reporting syn's `expected impl`.
+const SCHEDULED_PAIR: DecoratorPair =
+    DecoratorPair::on_provider("#[scheduled]", "#[every] / #[cron] / #[after]");
 
 pub(crate) fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
-    let mut item = parse_macro_input!(input as ItemImpl);
+    let mut item = match SCHEDULED_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let self_ty = item.self_ty.clone();
     let provider_name = match impl_self_ident(&self_ty, "#[scheduled]") {
         Ok(ident) => ident.to_string(),

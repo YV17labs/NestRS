@@ -34,7 +34,7 @@ The port lives at the **root** — not in a `core/` sub-folder. Deliberate.
 
 | Path | Contents | Module struct |
 |---|---|---|
-| `users/` (root) | `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `module.rs` | `UsersModule` (port) |
+| `users/` (root) | `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `guard.rs` (only when **two** adapters bind it — one transport's guard stays in its adapter), `module.rs` | `UsersModule` (port) |
 | `users/http/` | `controller.rs` | `UsersHttpModule` |
 | `users/graphql/` | `resolver.rs` (field + root merged into `UsersResolver`) | `UsersGraphqlModule` |
 | `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `AuthzWsModule`, which brings `WsModule` transitively) |
@@ -150,7 +150,7 @@ genuine need appears.
 
 ## GraphQL composition is discovered, not listed
 
-Each `#[resolver]` submits its objects to `inventory`, merged into the
+Each `#[operations]` block submits its objects to `inventory`, merged into the
 schema at boot. The resolver struct is still listed in `providers` — for
 the access contract only. Batch field fetches with `#[dataloader]`
 (request-scoped) to avoid N+1.

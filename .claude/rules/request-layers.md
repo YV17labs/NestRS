@@ -41,8 +41,8 @@ chooses the **execution site**, matched to the family's nature:
 
 | Family | Site (global scope) | Site (controller/method) |
 |---|---|---|
-| Guard | `RouteShaper` (post-routing — reads `#[public]`); `Guarded` self-mount edge; in-band `/graphql` + `/mcp` op-guard | same sites |
-| Pipe | `RouteShaper` | `RouteShaper` |
+| Guard | `RouteShaper` (post-routing — reads `#[public]`); `Guarded` self-mount edge; in-band `/graphql` + `/mcp` op-guard | same sites, plus the per-operation chain on `/graphql` and `/mcp`, and the per-message table a gateway freezes at mount |
+| Pipe | `RouteShaper` | `RouteShaper`; per argument on graphql/ws/mcp/queue |
 | ExceptionFilter | route site (typed catch, closest to handler) | route site |
 | Interceptor | **transport edge** (band 90) — sees 404s, denials, self-mounts; runs *before* auth (no principal/ability/executor) | around the handler, *inside* guards |
 | Filter | **transport edge** (band 50) | around the handler, *inside* guards |
@@ -67,6 +67,21 @@ exception-filters closest to the handler.
 `#[interceptor]` = **infra** a module import brings (auto-mounted, off
 pool, fixed band — `DbContext`, tracing, timing).
 
+## The posture is the fifth site, and it is not a pool
+
+`#[authorize(Action, Entity)]` / `#[public]` is **not** a layer: it declares the
+operation's access posture, and the impl-half decorator turns it into a class gate
+plus a response mask. All four request-carrying edges emit it — `#[routes]` via
+the `Authorize<A, E>` shaper, `#[operations]` / `#[messages]` / `#[tools]` via
+`nest_rs_authz::<edge>::{authorize, masked_*}` — and on the last three it
+is **mandatory: no posture ⇒ compile error**. The grammar is one
+`PostureRules` in `nest-rs-codegen`, so the three cannot word the same rule three
+ways.
+
+Ordering inside an operation is fixed and load-bearing: **chain → gate → pipes →
+call → mask**. The gate precedes the pipes so a caller the gate refuses never pays
+for validation, and a validation message never doubles as an existence oracle.
+
 ## Guards
 
 A `Guard` borrows the request **mutably** — gates access (returns
@@ -86,6 +101,22 @@ active global guards fails boot too (`fail_secure_strict`, default
 Self-mounts declare an `EdgePosture`: `Guarded` (default — WS upgrade)
 gets the global chain at its edge; `Exempt` (graphql / mcp / openapi)
 gates in-band or is deliberately public.
+
+**The two in-band transports also run a per-operation chain**, composed once
+per site in a shared `SiteChainCell` (`nest-rs-guards/src/dispatch/chain.rs`)
+from the provider-scope `#[use_guards]` plus the operation's own. They differ in
+where their pool executes (`GlobalScope`): `/graphql` runs it at the resolver
+site, `/mcp` at its endpoint guard.
+
+**On `/mcp`, what the edge already ran is *reported*, never assumed.**
+`McpOperationGuard::already_ran` names the layers that guard executed, and those
+are dropped from every bucket **before** dedup. Both halves are load-bearing: a
+guard the edge ran must not run twice, and one it did *not* run must still run
+even when the app-wide pool contains it — a registered bridge runs its own two
+guards and nothing from the pool. Deleting pooled entries on the assumption the
+edge ran them silently drops a `#[use_guards]` the developer wrote, which is a
+fail-open; `operation::a_guard_the_edge_did_not_run_still_runs_per_operation`
+is the regression test.
 
 `/graphql` and `/mcp` stay fail-secure under `Exempt` through their
 **fallback operation guard**: with no registered

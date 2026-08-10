@@ -109,7 +109,7 @@ hidden. Fail-secure on schema evolution: a column added by a later
 migration never leaks by omission. The entity *is* the wire contract —
 no hand-written per-transport DTO to forget to update.
 
-## Response masking — one shared core, two transports
+## Response masking — one shared core, every transport
 
 `nest-rs-authz` `wire_mask`, value-level and **fail-closed**. After
 success: parse the wire JSON → build `Model` via `wire_to_model` (filling
@@ -119,7 +119,8 @@ WireModelDefaults for Entity` emitted by the macro) → `Ability::mask` /
 (`retain_static_keys`/`retain_body_keys` — unrestricted field grants
 can't leak unexposed columns). Handlers return the `#[expose]` output
 (e.g. `Json<User>`), not `Model`. An irreconcilable body ⇒ fail
-**closed** (HTTP `500`, GraphQL error).
+**closed** on every transport (HTTP `500`, GraphQL error, MCP opaque error, WS
+error frame), as does a missing ambient ability.
 
 Reconstruction needs a default for every unexposed column: the macro
 provides one for safe scalars (`String`/`Option`/`bool`/numbers); a
@@ -138,7 +139,7 @@ filtering rows).
   plumbing, not something to hand-write; the decorator is what makes the
   posture greppable and impossible to disarm by renaming an import.
 - **GraphQL**: `#[authorize(Action, Entity)]` beside a
-  `#[query]`/`#[mutation]` is the same declaration — `#[resolver]` emits
+  `#[query]`/`#[mutation]` is the same declaration — `#[operations]` emits
   the class gate before the call and `masked_value_for` around the
   returned value (wire DTO, `Option`, `Vec`; scalars pass). `unmasked`
   opts a custom shape (cursor connection) out of the automatic mask;
@@ -147,6 +148,25 @@ filtering rows).
   masked-out **non-nullable** field (HTTP just omits the key), so the
   whole operation fails closed — a column a field-grant may mask should
   be `Option` on the entity (nullable on the wire).
+- **MCP**: the same declaration again, `#[tools]` emitting
+  `nest_rs_authz::mcp::masked_value_for`. It shares GraphQL's fail-closed caveat
+  and has **no** selection set to soften it: a mask that strips a key the return
+  type requires refuses the operation, because rmcp needs the typed value back for
+  `structuredContent`.
+- **WS**: `#[messages]` emitting `nest_rs_authz::ws::masked_reply_for` — and this
+  one masks like **HTTP**, not like MCP. A WS envelope carries JSON and promises no
+  schema, so a stripped key is simply omitted from the frame rather than refused,
+  and the reply type needs no `DeserializeOwned`. Fail-closed is reserved for a
+  missing ambient ability and an irreconcilable body. The one compile rule is
+  unrelated to masking: a masked message returns a *literal* `Result`, since the
+  reply shape is decided syntactically and a `Result` behind an alias would be
+  masked as the `Result` itself.
+
+`masked_reply` / `masked_output_ambient` are what remain for surfaces **no
+decorator reaches** — a hand-built `WsServer::emit` push, a hand-written MCP
+`ServerHandler`. Inside a decorated handler they are the rule being bypassed: the
+posture is what makes the check greppable, and a masking call in a body is a
+posture nobody can `rg` for.
 
 ## Extractors
 
@@ -158,8 +178,10 @@ an `AbilityGuard`.
 Same transparency past HTTP via authz/ORM-agnostic seams. `nest-rs-authz`
 exposes authz bridges behind features — `http` (`Authorize`,
 `AbilityGuard`, `Scope`), `graphql` (`GraphqlAbilityBridge`, `authorize`,
-`ability`), `mcp` (`McpAbilityBridge`; masking inside a tool body is the
-transport-free `masked_output_ambient`); data-layer bridges live in `nest-rs-seaorm` behind matching
+`ability`), `mcp` (`McpAbilityBridge`, `authorize`, `masked_value_for`), `ws`
+(`authorize`, `masked_reply_for` — **no bridge**: a gateway is `Guarded`, so its
+upgrade already ran the real chain and only the ambient ability needs
+re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
 `http`/`graphql`/`ws`/`mcp` features (`Bind`, GraphQL `bind`, `LoaderScope`,
 `WsDataContext`, `McpDataContext`) — **the split avoids a circular dep.**
 

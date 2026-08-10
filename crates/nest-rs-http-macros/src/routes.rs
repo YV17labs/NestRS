@@ -6,10 +6,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
-use syn::{
-    Attribute, Expr, FnArg, ImplItem, ItemImpl, LitStr, Path, ReturnType, Token, Type,
-    parse_macro_input, parse_quote,
-};
+use syn::{Attribute, Expr, FnArg, ImplItem, LitStr, Path, ReturnType, Token, Type, parse_quote};
 
 use nest_rs_codegen::{
     expr_str, force_guard_typeids, impl_self_ident, injected_methods_with_layers, layer_deps,
@@ -58,7 +55,10 @@ struct RouteHandler {
 type RoutesByPath = Vec<(LitStr, Vec<RouteHandler>)>;
 
 pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
-    let mut item = parse_macro_input!(input as ItemImpl);
+    let mut item = match crate::controller::HTTP_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let self_ty = item.self_ty.clone();
 
     // Default OpenAPI tag — routes group by controller unless `#[api(tags(...))]` overrides.

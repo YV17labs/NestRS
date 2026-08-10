@@ -14,15 +14,25 @@
 //! emission targets through the same import root regardless of which
 //! backend integration (nest-rs-redis, …) is wired in.
 
-use nest_rs_codegen::{PipeWrapper, impl_self_ident, payload_arg_type, pipe_wrapper, snake_case};
+use nest_rs_codegen::{
+    DecoratorPair, PipeWrapper, impl_self_ident, payload_arg_type, pipe_wrapper, snake_case,
+};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, ImplItem, ItemImpl, LitInt, LitStr, Token, Type, parse_macro_input};
+use syn::{Ident, ImplItem, LitInt, LitStr, Token, Type};
+
+/// A queue processor has no edge struct decorator — the host keeps its own
+/// `#[injectable]` — but reaching for `#[processor]` on the struct still deserves
+/// a sentence naming what to write instead of syn's `expected impl`.
+const PROCESSOR_PAIR: DecoratorPair = DecoratorPair::on_provider("#[processor]", "#[process]");
 
 pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
-    let mut item = parse_macro_input!(input as ItemImpl);
+    let mut item = match PROCESSOR_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let self_ty = item.self_ty.clone();
     let provider_ident = match impl_self_ident(&self_ty, "#[processor]") {
         Ok(ident) => ident,

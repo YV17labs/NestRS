@@ -1,0 +1,7 @@
+error: #[controller] decorates the controller struct — its #[get] / #[post] / #[put] / #[patch] / #[delete] methods go under #[routes] on the impl block
+  --> tests/integration/diagnostics/controller_on_impl.rs:10:1
+   |
+10 | / impl DemoController {
+11 | |     async fn ping(&self) {}
+12 | | }
+   | |_^

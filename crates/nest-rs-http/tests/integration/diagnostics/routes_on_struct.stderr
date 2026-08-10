@@ -1,0 +1,5 @@
+error: #[routes] decorates the impl block holding the #[get] / #[post] / #[put] / #[patch] / #[delete] methods — the controller struct itself takes #[controller]
+ --> tests/integration/diagnostics/routes_on_struct.rs:8:1
+  |
+8 | struct DemoController;
+  | ^^^^^^^^^^^^^^^^^^^^^^

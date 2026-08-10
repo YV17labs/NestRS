@@ -7,12 +7,22 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{ItemStruct, LitStr, Meta, Token, parse_macro_input};
+use syn::{LitStr, Meta, Token};
 
 use nest_rs_codegen::{
-    InjectableBody, build_injectable_body, expr_str, from_container_method,
+    DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
     injected_keys_with_layers, injected_names_with_layers, layer_deps, scoped_specs,
     take_path_list,
+};
+
+/// The HTTP edge's pair. Read by `#[controller]` here and by `#[routes]` /
+/// `#[crud]` next door, so reaching for either half on the wrong shape names the
+/// other one instead of reporting syn's `expected struct`.
+pub(crate) const HTTP_PAIR: DecoratorPair = DecoratorPair {
+    host: "#[controller]",
+    subject: "controller struct",
+    operations: "#[routes]",
+    collects: "#[get] / #[post] / #[put] / #[patch] / #[delete]",
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -24,7 +34,10 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         Some(v) => quote! { ::core::option::Option::Some(#v) },
         None => quote! { ::core::option::Option::None },
     };
-    let mut item = parse_macro_input!(input as ItemStruct);
+    let mut item = match HTTP_PAIR.parse_host(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     // Inert class-level attributes consumed here; each must sit below `#[controller]`.
     let interceptors = match take_path_list(&mut item.attrs, "use_interceptors", "entry") {

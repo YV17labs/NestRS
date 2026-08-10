@@ -10,12 +10,17 @@ use std::collections::HashSet;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{ImplItem, ItemImpl, parse_macro_input, parse_quote};
+use syn::{ImplItem, ItemImpl, parse_quote};
 
 use nest_rs_codegen::{Paginate, UUID_V7_REQUIRED, impl_self_ident, parse_crud_args};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
-    let item = parse_macro_input!(input as ItemImpl);
+    // `#[crud]` is the generated spelling of the impl half, so it answers a wrong
+    // shape exactly as `#[routes]` does — through the edge's one pair constant.
+    let item = match crate::controller::HTTP_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     match crud(args.into(), item) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),

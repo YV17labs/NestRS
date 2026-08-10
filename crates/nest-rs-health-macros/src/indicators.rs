@@ -8,12 +8,17 @@
 //! it. Inventory is exactly the seam `#[hooks]`, `#[scheduled]`, and
 //! `#[processor]` use, for the same reason.
 
-use nest_rs_codegen::impl_self_ident;
+use nest_rs_codegen::{DecoratorPair, impl_self_ident};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{ImplItem, ItemImpl, ReturnType, parse_macro_input};
+use syn::{ImplItem, ReturnType};
+
+/// The indicator host keeps its own `#[injectable]`; this names the shape
+/// `#[indicators]` wants rather than reporting syn's `expected impl`.
+const INDICATORS_PAIR: DecoratorPair =
+    DecoratorPair::on_provider("#[indicators]", "#[liveness] / #[readiness] / #[startup]");
 
 const PROBE_ATTRS: [(&str, &str); 3] = [
     ("liveness", "Liveness"),
@@ -33,7 +38,10 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
         .into();
     }
 
-    let mut item = parse_macro_input!(input as ItemImpl);
+    let mut item = match INDICATORS_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let self_ty = item.self_ty.clone();
     let provider_name = match impl_self_ident(&self_ty, "#[indicators]") {
         Ok(ident) => ident.to_string(),

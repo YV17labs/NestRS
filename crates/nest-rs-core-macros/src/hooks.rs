@@ -1,9 +1,16 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{ImplItem, ItemImpl, ReturnType, parse_macro_input};
+use syn::{ImplItem, ReturnType};
 
-use nest_rs_codegen::impl_self_ident;
+use nest_rs_codegen::{DecoratorPair, impl_self_ident};
+
+/// A lifecycle host keeps its own `#[injectable]`; this names the shape
+/// `#[hooks]` wants rather than reporting syn's `expected impl`.
+const HOOKS_PAIR: DecoratorPair = DecoratorPair::on_provider(
+    "#[hooks]",
+    "#[on_module_init] / #[on_application_bootstrap] / #[on_module_destroy]",
+);
 
 const HOOK_ATTRS: [(&str, &str); 5] = [
     ("on_module_init", "OnModuleInit"),
@@ -25,7 +32,10 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
         .into();
     }
 
-    let mut item = parse_macro_input!(input as ItemImpl);
+    let mut item = match HOOKS_PAIR.parse_operations(input.into()) {
+        Ok(item) => item,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let self_ty = item.self_ty.clone();
     let base = match impl_self_ident(&self_ty, "#[hooks]") {
         Ok(base) => base,

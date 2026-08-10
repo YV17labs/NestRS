@@ -74,6 +74,7 @@ pub mod lifecycle;
 pub(crate) mod logging;
 pub mod metadata;
 pub mod module;
+mod opaque;
 pub mod panic;
 pub mod request_scope;
 pub mod transport;
@@ -94,6 +95,7 @@ pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
 pub use metadata::{HandlerMetadata, MappedError, Public};
 pub use module::{DynamicModule, Module};
+pub use opaque::OPAQUE_CLIENT_MESSAGE;
 pub use panic::panic_message;
 pub use request_scope::{
     RequestScope, current_body_limit, current_request_scope, with_request_scope,

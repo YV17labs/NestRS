@@ -161,8 +161,8 @@ type has no such discipline imposed on it**, and a `Display` that wraps a
 driver error carries SQL, column names and sometimes row values into the
 error frame.
 
-`Opaque` is the seam for that, and it reads the same on all three
-client-facing transports:
+`Opaque` is the seam for that, and it reads the same on every client-facing
+transport — HTTP, GraphQL, WebSockets and MCP:
 
 ```rust
 use nest_rs::graphql::Opaque;

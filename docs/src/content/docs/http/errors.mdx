@@ -129,6 +129,37 @@ automatically; an absent `detail` or `instance` is omitted from the body
 A feature's own error type is the canonical home. `ProblemDetails` is
 the right tool for the leftovers — never the goal.
 
+## An error the client is not owed
+
+Everything above decides how an error is *shaped*. `Opaque` decides whether
+the client sees it at all.
+
+`ServiceError` is wire-safe by construction — its `Db` variant displays as
+`"database error"`, never the `DbErr` underneath. **A feature's own error
+type has no such discipline imposed on it**, and a `Display` that wraps a
+driver error carries SQL, column names and sometimes row values into the
+response body.
+
+```rust
+use nest_rs::http::Opaque;
+
+#[get("/reports/:id")]
+#[authorize(Read, reports::Entity)]
+async fn report(&self, Path(id): Path<Uuid>) -> Result<Json<Report>> {
+    Ok(Json(self.svc.render(id).await.opaque()?))
+}
+```
+
+`.opaque()?` logs the real error at `error` on `nest_rs::http` and returns a
+`ProblemDetails` 500 carrying a constant message. The envelope is deliberate:
+a client parses the same document whether or not it was told why, so an
+opaque failure is not identifiable by its shape alone.
+
+Reach for it on a failure that is none of the caller's business. A validation
+rejection or an authorization denial is the opposite case: those exist to be
+read, and travel as themselves. The same seam reads identically on
+[GraphQL](/graphql/errors/), [WebSockets](/websockets/messages/) and MCP.
+
 ## Framework errors carry their own mapping
 
 The framework's error types carry their own HTTP mapping, so they surface
